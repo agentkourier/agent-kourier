@@ -172,7 +172,7 @@ upstream webhook trigger stays compatible with courier.
 | D18 | Output | Live-updating message |
 | D19 | Language | Go |
 | D20 | Positioning | Build courier rather than extend klaus-gateway or contribute to kagent; rationale in 2.3 (added v0.2) |
-| D21 | Reply while busy | Queue the reply and send it when the active task finishes (added v0.2) |
+| D21 | Reply while busy | Queue the reply and send it when the active task finishes or a pause ends (answered, timed out or cancelled); a reply never lands while an interaction is pending (added v0.2; pause rule from the WP-28 split) |
 | D22 | Alert path | Courier is an additional Alertmanager receiver (`continue: true`). Existing notifications are unchanged. Investigation threads go to a dedicated channel and link back to the alert. (v0.3) |
 | D23 | First agent | Read-only investigation agent: queries metrics, logs, and Kubernetes state; recommends, never changes. (v0.3) |
 | D24 | Pilot environment | Production runs kagent 0.10.x. The pilot uses a separate kagent 1.0 alpha install with a read-only agent holding production read credentials, fed by production Alertmanager. Courier moves to production kagent at 1.0 GA. (v0.3) |
@@ -510,8 +510,11 @@ expired thread (notice) from a reply in a thread it never owned (ignored).
 **Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
 activity, and a reply at any point in that window resumes the same `contextId`. kagent
 suspends and resumes idle sessions on its own. If the backend reports that the session
-no longer exists, courier says so in the thread and the next @mention starts a new
-session. After `threadTTL`, a reply gets the same notice.
+no longer exists, courier says so in the thread, clears the stored context, and the next
+message in the thread starts a fresh context. Courier treats `TaskNotFound` for a recorded
+task, or a first response whose `contextId` differs from the stored one, as the session no
+longer existing (UNCONFIRMED: kagent's signal for a lost session is not measured). After
+`threadTTL`, a reply gets the same notice.
 
 **Reply while a task is running.** kagent allows one active task per session and
 rejects a new message while one runs, with JSON-RPC `-32004` "resource conflict" (inside
@@ -520,9 +523,14 @@ it unchanged, with the same `messageId`, after the active task ends (cancelled o
 completed) starts a new task in the same context (WP-02, measured). A queued reply
 therefore keeps its `messageId`, and a resend that still gets `-32004` stays queued. Courier queues the reply per session, marks it
 with a reaction, and sends queued replies in order, one per turn, when the active task
-reaches a terminal or `input-required` state. A reply sent while an interaction is
-pending is queued the same way; it is not treated as the interaction's answer.
-A user can stop the active task from the thread; the stop control calls `CancelTask`.
+reaches a terminal state, or when a pause ends (answered, timed out or cancelled). A reply
+sent while an interaction is pending is held the same way; it is neither sent nor treated as
+the interaction's answer. A user can stop the active task from the thread; the stop control
+calls `CancelTask`, and queued replies then proceed. A turn's `messageId` is
+`slack:<connection>:<channel>:<ts>`, so the `app_mention` and `message` events for one
+message are one turn. When `-32004` comes from a task courier did not record, courier
+resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
+never drops the reply.
 
 ### 8.3 Streaming and long-running tasks
 
@@ -694,7 +702,8 @@ this with an outbox:
 - **Network path.** Production Alertmanager must reach courier's webhook endpoint over
   TLS. During the pilot courier runs alongside the kagent 1.0 alpha install.
 - **Failure behavior.** If the backend is unreachable, courier retries with backoff and
-  posts a visible notice in the thread. Events are never dropped silently.
+  posts a visible notice in the thread. After 15 minutes (`sendGiveUp`) the turn fails with
+  a notice and the queue moves on. Events are never dropped silently.
 
 ## 12. Phases
 
@@ -782,7 +791,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R12 | **Sparse or biased feedback.** Few votes, or votes only on bad answers, skew the go/no-go. | Medium | Minimum of 20 rated investigations. Weekly review. Engagement is measured alongside ratings. |
 | R13 | **kagent 1.0 GA slips or changes shape**, stranding courier on an alpha. | Medium | The pilot is explicitly disposable. Changes stay in the dialect. The go/no-go is about value, independent of GA timing. |
 | R14 | A team forgets `continue: true`, putting courier in its paging path. | Medium | Runbook check before enabling a route during the pilot. In hardening, the controller reads `AlertmanagerConfig` resources that target courier's webhook URL and sets a warning condition on the Binding when a route lacks `continue: true`. |
-| R17 | **A malformed HITL reply wedges the kagent task** in `WORKING` (WP-02: an empty answer list or a wrong request id; still `WORKING` after 20 s, and every send to the session, including a new turn, gets `-32004`). `CancelTask` recovers it; other recovery is untested. After a courier crash, a wedged task is indistinguishable from a long-running one. | Medium | The dialect validates answers before sending (6.3); on `-32603` from an answer, courier cancels the task and tells the thread; restart reconciliation (WP-28) applies a maximum WORKING age. Consider an upstream issue. |
+| R17 | **A malformed HITL reply wedges the kagent task** in `WORKING` (WP-02: an empty answer list or a wrong request id; still `WORKING` after 20 s, and every send to the session, including a new turn, gets `-32004`). `CancelTask` recovers it; other recovery is untested. After a courier crash, a wedged task is indistinguishable from a long-running one. | Medium | The dialect validates answers before sending (6.3); on `-32603` from an answer, courier cancels the task and tells the thread; a maximum WORKING age (`maxWorkingAge`, default 1 h, from the task's status timestamp on courier's clock) cancels a WORKING task as wedged at restart reconciliation, after a lost stream and when an answer gets `-32004`; it never cuts a live stream, which the inactivity watchdog covers. Consider an upstream issue. |
 | R18 | **kagent has two agent runtimes that validate differently.** WP-02 measured the Go ADK runtime only. From alpha5 source (not measured), the harness runtime (`go/harness/runtime/a2a/executor.go`, `validateRequest`) refuses a plain user message unless it has exactly one text part. | Medium | Attribution goes into the first text part (8.5, WP-25c). The dialect's wire-shape tests pin the single-text-part shape. Measure against the harness runtime before any pilot agent uses it. |
 | R16 | A crash between `chat.startStream` returning and courier recording the stream's ts leaves a duplicate message and an orphaned stream (8.6 step 6). | Low | ts recorded immediately; window is one local write. WP-04 checks whether startStream accepts metadata, which would close it. |
 | R15 | ~~kagent 1.0 needs Agent Substrate with gVisor, which may not run in kind on Docker Desktop for Mac.~~ **Resolved by WP-01:** the full tier runs on macOS on Apple silicon (arm64; gVisor uses the systrap platform, no KVM), about 1.9 to 2.1 GiB idle, up in about three minutes (148 to 180 s measured). amd64 and Linux are expected from kagent's own CI but not measured. | Low | Pins matter (kagent 1.0.0-alpha5, Substrate 0.3.0-alpha1). |
