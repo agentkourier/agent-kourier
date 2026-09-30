@@ -169,7 +169,7 @@ func TestRunClosesConnectionsThatOutlastTheGrace(t *testing.T) {
 	if err := result(t, done, "Run"); err != nil {
 		t.Fatalf("Run = %v, want nil", err)
 	}
-	if took := time.Since(cancelled); took < grace || took > 5*time.Second {
+	if took := time.Since(cancelled); took < grace || took > 2*time.Second {
 		t.Errorf("Run returned %v after the context ended, want just after the %v grace", took, grace)
 	}
 	if err := result(t, cut, "the hung request"); err == nil {
