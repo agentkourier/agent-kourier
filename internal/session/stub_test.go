@@ -300,3 +300,55 @@ func TestStubBadAnswerWedgesAndIsCancelled(t *testing.T) {
 		t.Errorf("audits = %+v; want the rejected answer, then the cancel Agent.Answer made", e.audits)
 	}
 }
+
+// S2, from the session's side: courier restarts while a task runs. A new manager over the same
+// store, and the same agent, recovers: it follows the task, renders its output once, marked
+// recovered, and the conversation then continues in the same context with a reply.
+func TestStubRestartMidTask(t *testing.T) {
+	e := newStubEnv(t)
+	e.stub.Next(stubagent.Hold("crash"), stubagent.Text("the answer, after the restart"))
+	if _, err := e.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	before, _ := e.session()
+	if err := e.close(); err != nil { // courier goes down; the agent's task does not
+		t.Fatal(err)
+	}
+	sink := &fakeSink{finals: make(chan struct{}, 16)}
+	cfg := e.m.cfg
+	cfg.Sink = sink
+	m2, err := New(cfg) // courier comes back, over the same store and the same agent
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = m2.Close(ctx)
+	})
+	if err := m2.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.Release("crash")
+	if task := sink.finalTask(t, 1); task.Status.State != a2a.TaskStateCompleted || !says(task, "the answer, after the restart") {
+		t.Fatalf("recovered output = %+v; want the task's answer", task)
+	}
+	eventually(t, "the task to be cleared", func() bool { return e.taskID() == "" })
+	e.stub.Next(stubagent.Text("and on it goes"))
+	if _, err := m2.Submit(t.Context(), inbound("2")); err != nil {
+		t.Fatal(err)
+	}
+	if second := sink.finalTask(t, 1); !says(second, "and on it goes") {
+		t.Errorf("reply after the restart = %+v", second)
+	}
+	after, _ := e.session()
+	if after.ContextID == "" || after.ContextID != before.ContextID {
+		t.Errorf("context %q after the restart, %q before; want the same: the conversation continues", after.ContextID, before.ContextID)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 2 || !sink.refs[0].Recovered || sink.refs[1].Recovered {
+		t.Errorf("turn refs = %+v; want the recovered output once, then the reply", sink.refs)
+	}
+}
