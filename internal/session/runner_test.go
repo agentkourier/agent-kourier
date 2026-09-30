@@ -601,7 +601,7 @@ func TestTransientBindingErrorLeavesTheTurnQueued(t *testing.T) {
 	f.bindingErr = errors.New("config reload in progress")
 	f.amu.Unlock()
 	f.m.start(key)
-	time.Sleep(100 * time.Millisecond)
+	f.retired(t) // the runner gives up on this wake, leaving the turn queued
 	if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != inbound("1").MessageID || len(sink.noticesOf(NoticeBindingGone)) != 0 {
 		t.Errorf("queue head %+v, %v; want the turn still queued and no notice", next, err)
 	}

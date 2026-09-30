@@ -456,3 +456,28 @@ func TestPauseEventFollowedByALostStreamLeavesNoStalePause(t *testing.T) {
 		t.Errorf("parked %q, %d signals buffered; want none", c.parked, len(c.resume))
 	}
 }
+
+// A pause that is ended from inside the renderer's handler is accepted, and its release is
+// buffered for the runner to take. If the stream then fails, the park is wiped, and so is that
+// buffered release: it must not wait to free a later pause.
+func TestReleaseOfAPauseInAFailedStreamIsDrained(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	waits := f.countWaits()
+	var callErr error
+	sink.onFinal = func(task *a2a.Task) { callErr = f.m.endPause(context.Background(), key, task.ID) }
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		h(agent.FinalEvent{Task: &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}})
+		return &agent.StreamLostError{TaskID: "t1", ContextID: "c1", Err: errors.New("connection reset")}
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	if c := f.m.convos[key]; callErr != nil || len(c.resume) != 0 || c.parked != "" {
+		t.Errorf("call = %v, %d signals buffered, parked %q; want it accepted, then nothing left over", callErr, len(c.resume), c.parked)
+	}
+}

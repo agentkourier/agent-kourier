@@ -748,37 +748,9 @@ func TestNotSentDoesNotForgetAnEarlierUnknownOutcome(t *testing.T) {
 	}
 }
 
-// A turn the agent has, or whose session is busy, is never given up on: however long the
-// lookups fail, it is not failed, and is followed or sent when the agent answers.
-func TestPatientTurnsNeverGiveUp(t *testing.T) {
-	t.Run("a busy session whose lookups keep failing", func(t *testing.T) {
-		f := newFixture(t)
-		sink := f.live()
-		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
-		lookups := 0
-		f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
-			if n == 1 { // turn 2 is refused as busy once, then the lookups start to fail
-				return fmt.Errorf("send message: %w", agent.ErrBusy)
-			}
-			return turn(h, n, a2a.TaskStateCompleted)
-		}
-		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
-			if lookups++; lookups < 4 {
-				f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano()) // well past SendGiveUp
-				return nil, nil, errors.New("agent unreachable")
-			}
-			return nil, nil, nil
-		}
-		for _, ts := range []string{"1", "2"} {
-			if _, err := f.submit(inbound(ts)); err != nil {
-				t.Fatal(err)
-			}
-			waitFinal(t, sink)
-		}
-		if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
-			t.Errorf("failed notices = %+v; a busy session's turn is never given up on", got)
-		}
-	})
+// A turn the agent may have taken is never given up on: however long the lookups fail, it is not
+// failed, and is followed when the agent answers.
+func TestHeldTurnNeverGivesUp(t *testing.T) {
 	t.Run("a held turn whose lookups keep failing", func(t *testing.T) {
 		f := newFixture(t)
 		sink := f.live()
@@ -801,4 +773,121 @@ func TestPatientTurnsNeverGiveUp(t *testing.T) {
 			t.Errorf("failed notices = %+v; a turn the agent has is never given up on", got)
 		}
 	})
+}
+
+// One -32004 must not make an unreachable agent patient for ever: a busy session means the agent
+// answered, which starts the give-up clock over (and the thread is told the reply is queued), but
+// a turn that then cannot reach the agent is failed after sendGiveUp, as section 11 says.
+func TestBusyThenUnreachableStillGivesUp(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = func(_ context.Context, n int, _ agent.Handler) error {
+		if n == 0 {
+			return fmt.Errorf("send message: %w", agent.ErrBusy)
+		}
+		f.now.Store(t0.Add(time.Duration(n) * time.Hour).UnixNano()) // an hour for every attempt
+		return fmt.Errorf("%w: down", agent.ErrNotSent)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
+	f.retired(t)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 1 {
+		t.Errorf("failed notices = %+v; want exactly one", got)
+	}
+}
+
+// A failed reset is retried, also for a thread with a single turn, where nothing else keeps the
+// runner alive: the notice and the move on wait for the reset, whichever way the loss is found.
+func TestSessionGoneSurvivesAFailedResetWithOneTurn(t *testing.T) {
+	notFound := a2a.NewError(a2a.ErrTaskNotFound, "task not found")
+	for _, tc := range []struct {
+		name   string
+		script func(context.Context, int, agent.Handler) error
+	}{
+		{"found while following the lost stream", lost(errors.New("connection reset"))},
+		{"found in the lost stream's own error", func(_ context.Context, n int, h agent.Handler) error {
+			accepted(h, n)
+			return &agent.StreamLostError{TaskID: "t1", ContextID: "c1", Err: notFound}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			f.st.fail["reset"] = errors.New("database is locked")
+			f.agent.script = tc.script
+			f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, notFound }
+			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return notFound }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "the session to be reset", func() bool {
+				sess, _ := f.session()
+				return sess.ContextID == "" && sess.TaskID == "" && len(sink.noticesOf(NoticeSessionGone)) == 1
+			})
+		})
+	}
+}
+
+// A silent task that is WORKING but does nothing is presumed wedged even though every follow
+// begins by replaying its snapshot (R17). What a snapshot replays is not new life: only an event
+// that differs from what courier already holds (a new state, new text, a new tool call) is.
+func TestSilentTaskIsCancelledDespiteSnapshotsReplayedByEachFollow(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		h(agent.TextEvent{ArtifactID: "a", Text: "so far"})
+		return &agent.StreamLostError{TaskID: "t1", ContextID: "c1", Err: errors.New("connection reset")}
+	}
+	f.agent.get = working(t0.Add(-2 * time.Hour)) // WORKING for ever, says nothing
+	f.agent.follow = func(id a2a.TaskID, h agent.Handler) error {
+		f.now.Store(time.Unix(0, f.now.Load()).Add(10 * time.Minute).UnixNano())      // each look is ten minutes on
+		h(agent.StateEvent{TaskID: id, ContextID: "c1", State: a2a.TaskStateWorking}) // the snapshot, replayed
+		h(agent.TextEvent{ArtifactID: "a", Text: "so far"})
+		return &agent.StreamLostError{TaskID: id, ContextID: "c1", Err: errors.New("connection reset")}
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the silent task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
+		t.Errorf("cancelled %v; want t1 once", got)
+	}
+}
+
+// A state with no timestamp counts from the last event of the task, else from the loss. A
+// timestamp in the future stops protecting a task once it has passed.
+func TestAgeWithoutAUsableTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		get  func(a2a.TaskID) (*a2a.Task, error)
+	}{
+		{"no timestamp", func(id a2a.TaskID) (*a2a.Task, error) {
+			return &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil
+		}},
+		{"a timestamp in the future, since passed", working(t0.Add(30 * time.Minute))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			inner := lost(errors.New("connection reset")) // the task is named at t0
+			f.agent.script = func(ctx context.Context, n int, h agent.Handler) error {
+				err := inner(ctx, n, h)
+				f.now.Store(t0.Add(2 * time.Hour).UnixNano()) // and nothing is heard for two hours
+				return err
+			}
+			f.agent.get = tc.get
+			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "the task to be presumed wedged", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
+		})
+	}
 }

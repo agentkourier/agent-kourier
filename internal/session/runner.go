@@ -23,10 +23,10 @@ type convo struct {
 	since      time.Time     // when the first of them failed, for SendGiveUp
 	notified   bool          // the thread was told courier is retrying, for this run of trouble
 	busyNoted  bool          // the thread was told the reply is queued behind a task nobody recorded
-	lastTask   a2a.TaskID    // the task courier last saw an event of ...
-	lastSeen   time.Time     // ... and when: the later of this and the status timestamp is its age (R17)
+	lastSeen   time.Time     // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
+	life       life          // what courier already holds of that task, so a replayed snapshot is not life
 	cancelFrom time.Time     // when the first attempt to cancel a wedged task was made, for SendGiveUp
-	patient    bool          // the turn is never given up on: the agent has it, or its session is busy
+	patient    bool          // the turn is never given up on: the agent may have taken it
 	follow     *tstate       // the turn whose task is followed again, after its stream was lost
 	ttl        time.Duration // the Binding's threadTTL, for end
 	parked     a2a.TaskID    // the task the runner waits on, while it waits for input
@@ -81,7 +81,10 @@ var ErrNotParked = errors.New("session: no pause of that task to end")
 // endPause tells the runner of key that the pause of taskID ended (answered and finished, timed
 // out, or cancelled): it clears the task and sends what was held. A call that arrives while
 // the runner is not parked on taskID, or repeats one already made, is dropped with ErrNotParked:
-// it must never release the next pause. With no runner (after a restart), a call for the task
+// it must never release the next pause. (A pause ended from inside the renderer's handler, in
+// a stream that then fails, is wiped with the park: if the task followed turns out still to wait
+// for input, the runner parks again and waits for the pause's own timeout. Rare, and bounded.)
+// With no runner (after a restart), a call for the task
 // recorded in the session clears it and starts one, without checking that the task was
 // paused, so callers call it only for a pause.
 func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) error {
@@ -243,6 +246,51 @@ func (m *Manager) unpark(c *convo) {
 	}
 }
 
+// life is what courier holds of one task: its state, the text of each artifact, and the tool
+// calls and results seen. An event that adds nothing to it (the replay of a snapshot) shows no
+// sign that the task is alive.
+type life struct {
+	task  a2a.TaskID
+	state a2a.TaskState
+	text  map[a2a.ArtifactID]string
+	tools map[string]bool
+}
+
+// renews records e, and reports whether it was new: a first look at a task, a change of state,
+// text that differs from what was held, or a tool call or result not seen before.
+func (l *life) renews(e agent.Event) bool {
+	switch ev := e.(type) {
+	case agent.StateEvent:
+		if ev.TaskID != l.task {
+			*l = life{task: ev.TaskID, state: ev.State, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
+			return true
+		}
+		old := l.state
+		l.state = ev.State
+		return ev.State != old
+	case agent.TextEvent:
+		old, had := l.text[ev.ArtifactID]
+		if l.text != nil {
+			l.text[ev.ArtifactID] = ev.Text
+		}
+		return !had || old != ev.Text
+	case agent.ToolCallEvent:
+		return l.tool("call " + ev.CallID)
+	case agent.ToolResultEvent:
+		return l.tool("result " + ev.CallID)
+	}
+	return false
+}
+
+func (l *life) tool(key string) bool {
+	if l.tools == nil {
+		return true // a tool event before any state: nothing is held yet
+	}
+	seen := l.tools[key]
+	l.tools[key] = true
+	return !seen
+}
+
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
 	follow bool       // the attempt follows a task instead of sending
@@ -275,10 +323,12 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	var recordErr error
 	named := false
 	err = send(func(e agent.Event) {
-		c.lastSeen = m.cfg.Now() // the task is alive: its age counts from here (R17)
+		if c.life.renews(e) { // only what is new counts: a follow replays the snapshot it began with
+			c.lastSeen = m.cfg.Now()
+		}
 		switch ev := e.(type) {
 		case agent.StateEvent:
-			c.lastTask, t.taskID = ev.TaskID, ev.TaskID
+			t.taskID = ev.TaskID
 			if !named { // the agent has named the task: record it before anyone renders it
 				named = true
 				c.settle()
@@ -299,7 +349,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 				// The pause is rendered inside this handler, and whoever renders it may end it at
 				// once: the runner must already be parked on this task.
 				m.mu.Lock()
-				c.parked, c.released = final.ID, false
+				c.parked = final.ID
 				m.mu.Unlock()
 			}
 		}
@@ -390,18 +440,24 @@ func (m *Manager) resume(c *convo) (outcome, error) {
 
 // wedgedByAge reports whether a WORKING task has gone too long without life (R17): it counts
 // from the later of the task's status timestamp and the last event courier saw of it, so a
-// healthy task that streamed for hours and then dropped is followed. A state with no timestamp,
-// or one in the future, says nothing about age.
+// healthy task that streamed for hours and then dropped is followed. A state with no timestamp
+// counts from the last event courier saw, else from the loss; a timestamp in the future protects
+// the task only until it has passed. What a follow replays from its snapshot is not new life.
 func (m *Manager) wedgedByAge(c *convo, task *a2a.Task) bool {
-	ts := task.Status.Timestamp
-	if !running(task) || ts == nil {
+	if !running(task) {
 		return false
 	}
-	alive := *ts
-	if c.lastTask == task.ID && c.lastSeen.After(alive) {
+	var alive time.Time // the latest sign of life: the status timestamp, or what courier saw
+	if ts := task.Status.Timestamp; ts != nil {
+		alive = *ts
+	}
+	if c.life.task == task.ID && c.lastSeen.After(alive) {
 		alive = c.lastSeen
 	}
-	return m.cfg.Now().Sub(alive) > m.cfg.MaxWorkingAge
+	if alive.IsZero() {
+		alive = c.since // no timestamp and nothing seen: count from the loss
+	}
+	return !alive.IsZero() && m.cfg.Now().Sub(alive) > m.cfg.MaxWorkingAge
 }
 
 // running reports whether a task is being worked on: not ended, and not waiting for input.
@@ -415,7 +471,8 @@ func running(t *a2a.Task) bool {
 // the session; one that cannot be cancelled has ended, so it is read once more and its end
 // rendered; a refused credential or identity fails; anything else is retried until SendGiveUp,
 // then reported. Every way out lets the queue go on, except where the task stays recorded and
-// the turns behind it stay held for reconciliation.
+// the turns behind it stay held until the Stop control or a restart's reconciliation releases
+// the session.
 func (m *Manager) wedged(t *tstate) (outcome, error) {
 	c := t.c
 	if c.cancelFrom.IsZero() {
@@ -443,7 +500,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case errors.Is(err, agent.ErrForbidden), m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
 		m.audit(t, t.call(err))
 		c.follow = nil
-		return m.fail(t, "the wedged task could not be cancelled", err)
+		return m.fail(t, "the wedged task could not be cancelled; stop it from the thread, or restart courier to reconcile it", err)
 	}
 	c.tries++
 	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
@@ -465,8 +522,7 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 			m.notice(t, NoticeQueued, "")
 		}
 		t.c.tries++
-		t.c.patient = true
-		t.c.since = time.Time{} // and the agent answered: its unreachable time starts over
+		t.c.since = time.Time{} // the agent answered: its unreachable time starts over, and a turn that then fails to send is given up on as usual
 		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 	case errors.Is(err, agent.ErrOutcomeUnknown): // the agent may have taken it: looked up before any resend
 		m.mu.Lock()
