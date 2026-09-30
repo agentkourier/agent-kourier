@@ -31,6 +31,7 @@ type Store interface {
 	store.Sessions
 	store.ReplyQueue
 	store.SessionTasks
+	store.Recovery
 }
 
 // AgentAPI is the part of *agent.Agent the manager uses.
@@ -80,6 +81,9 @@ type Users interface {
 type TurnRef struct {
 	Key       Key
 	MessageID string
+	// Recovered says the output is of a task found again after a restart: some of it may already
+	// be in the thread, so the renderer updates what it posted before, or posts the whole.
+	Recovered bool
 }
 
 // NoticeKind is what a Notice tells the thread.

@@ -51,19 +51,29 @@ const (
 
 // start is the wake hook: it makes sure a runner is draining key's queue.
 func (m *Manager) start(key Key) {
+	m.startWith(key, nil)
+}
+
+// startWith is start, and for a conversation with no runner runs init on its state before the
+// runner begins. It reports whether it made the runner; a conversation that has one is only woken.
+func (m *Manager) startWith(key Key, init func(*convo)) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return
+		return false
 	}
 	if c, ok := m.convos[key]; ok {
 		c.again = true
-		return
+		return false
 	}
 	c := &convo{resume: make(chan struct{}, 1), answers: make(chan *a2a.Message, 1)}
+	if init != nil {
+		init(c)
+	}
 	m.convos[key] = c
 	m.wg.Add(1)
 	go m.run(key, c)
+	return true
 }
 
 // retire ends key's runner unless a wake arrived since it last looked at the queue.
@@ -324,17 +334,18 @@ func (l *life) tool(key string) bool {
 
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
-	follow bool       // the attempt follows a task instead of sending
-	answer bool       // the attempt answers the paused task
-	nid    string     // what a notice of this attempt is named after, if not the turn
-	taskID a2a.TaskID // the task the agent named, or the one followed or answered
-	op     audit.Op   // the call audit rows name, when not a send
-	system bool       // courier made the call itself: no person, no turn
-	key    Key
-	c      *convo
-	r      store.Reply
-	sess   store.Session
-	b      Backend
+	follow    bool       // the attempt follows a task instead of sending
+	answer    bool       // the attempt answers the paused task
+	nid       string     // what a notice of this attempt is named after, if not the turn
+	taskID    a2a.TaskID // the task the agent named, or the one followed or answered
+	op        audit.Op   // the call audit rows name, when not a send
+	system    bool       // courier made the call itself: no person, no turn
+	recovered bool       // the task was found again after a restart
+	key       Key
+	c         *convo
+	r         store.Reply
+	sess      store.Session
+	b         Backend
 }
 
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
@@ -352,7 +363,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	sctx := context.WithoutCancel(m.ctx)
 	h := func(agent.Event) {}
 	if m.cfg.Sink != nil {
-		if sh := m.cfg.Sink.Turn(m.ctx, TurnRef{key, r.ID}); sh != nil {
+		if sh := m.cfg.Sink.Turn(m.ctx, TurnRef{Key: key, MessageID: r.ID, Recovered: t.recovered}); sh != nil {
 			h = sh
 		}
 	}
@@ -378,7 +389,11 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 				if t.sess.ContextID == "" {
 					t.sess.ContextID = ev.ContextID // a first turn learns its context here
 				}
-				if recordErr = m.accept(sctx, r, ev); recordErr == nil {
+				recordErr = m.accept(sctx, r, ev)
+				if t.recovered && errors.Is(recordErr, store.ErrNotFound) {
+					recordErr = nil // the turn of a recovered task may have no queue row to mark
+				}
+				if recordErr == nil {
 					m.mu.Lock()
 					delete(m.attempted, key) // taken and recorded: never a resend
 					m.mu.Unlock()

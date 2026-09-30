@@ -1,0 +1,90 @@
+package session
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+// Recover reconciles the conversations a restart found in the store (spec 8.2, 8.3): every
+// session with an active task, and every one with a queued reply. It returns at once, after two
+// lists; each conversation is taken up by its own goroutine, which a backend that is down does
+// not stop (it is asked again, with a backoff). Call it before anything else wakes the manager, at
+// startup. A second call starts nothing for a conversation that already has its runner.
+//
+// A conversation with a recorded task is followed from where the task stands: the agent says
+// whether it ended (its output is rendered, marked recovered), waits for input (the pause is shown
+// again and the runner parks), runs (it is followed), has run too long without word (R17: it is
+// cancelled), or is gone (the session is reset). Sessions past their threadTTL, and ones whose
+// Binding left the config, are left exactly as they are. A queued turn of a conversation with a
+// context may have been sent before the crash, so it is looked up before it is sent.
+func (m *Manager) Recover(ctx context.Context) error {
+	active, err := m.cfg.Store.ListActiveSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("list active sessions: %w", err)
+	}
+	queued, err := m.cfg.Store.ListQueuedSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("list queued sessions: %w", err)
+	}
+	seen := map[Key]bool{}
+	var keys []Key
+	for _, s := range active {
+		keys, seen[s.Key] = append(keys, s.Key), true
+	}
+	for _, k := range queued {
+		if !seen[k] {
+			keys = append(keys, k)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("session: the manager is closed")
+	}
+	for _, k := range keys {
+		m.wg.Add(1)
+		go m.recoverKey(k) //nolint:contextcheck // the goroutine belongs to the manager, and outlives the caller
+	}
+	return nil
+}
+
+// recoverKey takes up one conversation.
+func (m *Manager) recoverKey(key Key) {
+	defer m.wg.Done()
+	log := m.cfg.Logger.With("key", key)
+	sess, err := m.cfg.Store.GetSession(m.ctx, key, readAll, m.cfg.Now())
+	if err != nil {
+		log.Error("recover: read session", "error", err)
+		return
+	}
+	backend, err := m.cfg.Bindings.Backend(sess.Binding)
+	if err != nil {
+		log.Warn("recover: skipping a session whose Binding is not configured", "binding", sess.Binding, "error", err)
+		return
+	}
+	if _, err := m.cfg.Store.GetSession(m.ctx, key, backend.ThreadTTL, m.cfg.Now()); errors.Is(err, store.ErrExpired) {
+		log.Info("recover: skipping an expired session")
+		return
+	} else if err != nil {
+		log.Error("recover: read session", "error", err)
+		return
+	}
+	if sess.TaskID == "" {
+		m.start(key)
+		return
+	}
+	// A task is recorded. The runner follows it first, before anything queued is sent.
+	t := &tstate{key: key, r: store.Reply{ID: "task:" + sess.TaskID, Key: key}, sess: sess, b: backend,
+		follow: true, taskID: a2a.TaskID(sess.TaskID), recovered: true}
+	started := m.startWith(key, func(c *convo) {
+		t.c, c.follow, c.ttl, c.since = c, t, backend.ThreadTTL, m.cfg.Now()
+	})
+	if !started {
+		log.Info("recover: the conversation already has a runner")
+	}
+}
