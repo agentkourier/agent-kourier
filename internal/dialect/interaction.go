@@ -47,3 +47,20 @@ type Interaction struct {
 	Tools     []Tool     // ToolApproval
 	Nested    *Nested    // nil unless a sub-agent raised it
 }
+
+// Decision is a person's verdict on one tool call.
+type Decision struct {
+	ToolID   string // Tool.ID
+	Approved bool
+	Reason   string // why it was rejected; ignored when approved
+}
+
+// Answer is a person's reply to an Interaction.
+type Answer struct {
+	// RequestID echoes Interaction.RequestID, so a reply to an older pause is refused.
+	RequestID string
+	// Answers holds, for each question in order, the chosen choices or the free text.
+	Answers [][]string
+	// Decisions holds one verdict for each tool of a ToolApproval.
+	Decisions []Decision
+}

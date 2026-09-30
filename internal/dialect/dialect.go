@@ -58,4 +58,8 @@ type Dialect interface {
 	// ParseInteraction returns the interaction a paused task waits on. It reports false for
 	// a task that is not paused on one, and for a payload it cannot use.
 	ParseInteraction(task a2a.Task) (*Interaction, bool)
+	// BuildResponse returns the message that answers in. It validates the answer itself
+	// (backends accept incomplete ones, or wedge on them) and returns an error, having
+	// built nothing, unless every question is answered or every tool decided.
+	BuildResponse(in Interaction, answer Answer) (a2a.Message, error)
 }

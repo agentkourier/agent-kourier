@@ -92,7 +92,8 @@ func (*Dialect) Authenticate(req *http.Request, creds dialect.Credentials) error
 // the first text part (its own part only when the message has no text). It changes msg in
 // place, so call it once per message. Names come from users, so the prefix
 // drops control and format characters (bidi overrides, zero-width) and brackets, and is
-// cut short. An actor with no ID is ignored.
+// cut short. An actor with no ID is ignored. A HITL answer (see BuildResponse) gets the
+// metadata but no text part.
 func (*Dialect) Attribute(msg *a2a.Message, actor dialect.User) {
 	if actor.ID == "" {
 		return
@@ -108,6 +109,9 @@ func (*Dialect) Attribute(msg *a2a.Message, actor dialect.User) {
 		msg.Metadata = map[string]any{}
 	}
 	msg.Metadata[ActorMetadataKey] = meta
+	if _, reply := msg.Metadata[HITLExtension]; reply {
+		return // a structured answer keeps its one measured shape; the actor is in metadata
+	}
 	msg.Parts = withPrefix(msg.Parts, "[Slack: "+who+"]")
 }
 
