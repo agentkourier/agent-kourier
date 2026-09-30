@@ -24,9 +24,11 @@ func WithPingInterval(d time.Duration) Option { return func(s *Server) { s.pingE
 // sockets is the fake's Socket Mode state.
 type sockets struct {
 	mu       sync.Mutex
-	conns    []*sockConn    // oldest first; guarded by mu
-	shutdown bool           // set by Close, guarded by mu
-	wg       sync.WaitGroup // the handler and ping goroutines
+	conns    []*sockConn          // oldest first; guarded by mu
+	shutdown bool                 // set by Close, guarded by mu
+	issued   int                  // envelopes issued, guarded by mu
+	pending  map[string]*envelope // every envelope sent, by envelope_id; guarded by mu
+	wg       sync.WaitGroup       // the handler and ping goroutines
 }
 
 // sockConn is one client websocket. gorilla allows one writer at a time, so
@@ -94,9 +96,11 @@ func (s *Server) serveSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	for {
-		if _, _, err := ws.ReadMessage(); err != nil {
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
 			return
 		}
+		sk.ack(msg)
 	}
 }
 

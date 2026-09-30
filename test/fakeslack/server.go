@@ -19,7 +19,14 @@
 //     invalid_auth for the wrong token type, where Slack may say
 //     not_allowed_token_type.
 //   - Socket Mode (socketmode.go): the websocket path and its lack of a
-//     ticket; and the content of hello.
+//     ticket; the content of hello; envelopes going to the newest connection
+//     only, where Slack spreads them over up to 10; and unacked envelopes
+//     never being redelivered, where Slack retries.
+//   - User actions (control.go): the order of the app_mention and message
+//     events for a mention, and both being sent; the fields of each event,
+//     which are the ones courier needs; a reply that mentions the bot getting
+//     no app_mention event; and no message events for the bot's own posts,
+//     which Slack sends.
 //   - Bot identity: a bot post carrying user, bot_id and app_id together, with
 //     no subtype.
 //   - Content limits (validate.go): 50 blocks; 40000 characters of message
@@ -82,6 +89,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
+	events   int                   // Events API events issued, guarded by mu
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
@@ -103,6 +111,7 @@ func NewHandler(opts ...Option) *Server {
 		now:       time.Now,
 		pingEvery: defaultPingInterval,
 		bot:       botIdentity{user: "UFAKEBOT", id: "BFAKEBOT", app: "AFAKEAPP"},
+		sock:      sockets{pending: map[string]*envelope{}},
 		channels:  map[string][]*Message{},
 		users:     map[string]User{},
 		members:   map[string][]string{},
