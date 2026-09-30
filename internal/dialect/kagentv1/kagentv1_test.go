@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // canary stands in for a secret: it must never appear in an error, a log line, or a
@@ -24,6 +25,11 @@ import (
 const canary = "CANARY-fake-token-0000"
 
 var agent = v1alpha1.AgentRef{Name: "spike-ask", Namespace: "kagent"}
+
+// hdr returns static headers holding one value, under the name exactly as given.
+func hdr(name, value string) dialect.Headers {
+	return dialect.Headers{name: {secret.New(value)}}
+}
 
 func TestEndpoint(t *testing.T) {
 	for _, tc := range []struct {
@@ -56,7 +62,7 @@ func TestEndpoint(t *testing.T) {
 }
 
 func TestAuthenticate(t *testing.T) {
-	bearer := dialect.Credentials{Token: canary, UserID: "courier-sre"}
+	bearer := dialect.Credentials{Token: secret.New(canary), UserID: "courier-sre"}
 	for _, tc := range []struct {
 		name       string
 		creds      dialect.Credentials
@@ -69,19 +75,19 @@ func TestAuthenticate(t *testing.T) {
 		{name: "token wins and no X-User-Id", creds: bearer, preset: http.Header{"X-User-Id": {"old"}}, wantAuth: "Bearer " + canary},
 		{name: "user id only", creds: dialect.Credentials{UserID: "courier-sre"}, wantUser: "courier-sre"},
 		{name: "stale identity headers are replaced", creds: dialect.Credentials{UserID: "courier-sre"}, preset: http.Header{"Authorization": {"Bearer old"}}, wantUser: "courier-sre"},
-		{name: "static headers apply", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Team": {"sre"}}}, wantUser: "u", wantStatic: "sre"},
+		{name: "static headers apply", creds: dialect.Credentials{UserID: "u", Headers: hdr("X-Team", "sre")}, wantUser: "u", wantStatic: "sre"},
 		{name: "no identity", creds: dialect.Credentials{}, wantErr: true},
-		{name: "static Authorization", creds: dialect.Credentials{Token: "t", Headers: http.Header{"Authorization": {canary}}}, wantErr: true},
-		{name: "static x-user-id, any case", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"x-user-id": {canary}}}, wantErr: true},
-		{name: "static Proxy-Authorization", creds: dialect.Credentials{Token: "t", Headers: http.Header{"Proxy-Authorization": {canary}}}, wantErr: true},
-		{name: "static cookie, any case", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"cOOkie": {canary}}}, wantErr: true},
-		{name: "static X-Agent-Name", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Agent-Name": {canary}}}, wantErr: true},
-		{name: "static x-agent-name, any case", creds: dialect.Credentials{Token: "t", Headers: http.Header{"x-agent-name": {canary}}}, wantErr: true},
-		{name: "static X-Share-Token", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Share-Token": {canary}}}, wantErr: true},
-		{name: "static x-share-token", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"x-share-token": {canary}}}, wantErr: true},
-		{name: "static X-Kagent-Insecure-Runtime-Identity", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Kagent-Insecure-Runtime-Identity": {canary}}}, wantErr: true},
-		{name: "static x-kagent-insecure-runtime-identity", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"x-kagent-insecure-runtime-identity": {canary}}}, wantErr: true},
-		{name: "token with a line break", creds: dialect.Credentials{Token: canary + "\r\nX-Evil: 1"}, wantErr: true},
+		{name: "static Authorization", creds: dialect.Credentials{Token: secret.New("t"), Headers: hdr("Authorization", canary)}, wantErr: true},
+		{name: "static x-user-id, any case", creds: dialect.Credentials{UserID: "u", Headers: hdr("x-user-id", canary)}, wantErr: true},
+		{name: "static Proxy-Authorization", creds: dialect.Credentials{Token: secret.New("t"), Headers: hdr("Proxy-Authorization", canary)}, wantErr: true},
+		{name: "static cookie, any case", creds: dialect.Credentials{UserID: "u", Headers: hdr("cOOkie", canary)}, wantErr: true},
+		{name: "static X-Agent-Name", creds: dialect.Credentials{UserID: "u", Headers: hdr("X-Agent-Name", canary)}, wantErr: true},
+		{name: "static x-agent-name, any case", creds: dialect.Credentials{Token: secret.New("t"), Headers: hdr("x-agent-name", canary)}, wantErr: true},
+		{name: "static X-Share-Token", creds: dialect.Credentials{UserID: "u", Headers: hdr("X-Share-Token", canary)}, wantErr: true},
+		{name: "static x-share-token", creds: dialect.Credentials{UserID: "u", Headers: hdr("x-share-token", canary)}, wantErr: true},
+		{name: "static X-Kagent-Insecure-Runtime-Identity", creds: dialect.Credentials{UserID: "u", Headers: hdr("X-Kagent-Insecure-Runtime-Identity", canary)}, wantErr: true},
+		{name: "static x-kagent-insecure-runtime-identity", creds: dialect.Credentials{UserID: "u", Headers: hdr("x-kagent-insecure-runtime-identity", canary)}, wantErr: true},
+		{name: "token with a line break", creds: dialect.Credentials{Token: secret.New(canary + "\r\nX-Evil: 1")}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://fd/", http.NoBody)
@@ -117,7 +123,7 @@ func TestAuthenticate(t *testing.T) {
 
 func TestAuthenticateTwiceDoesNotDoubleStaticHeaders(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://fd/", http.NoBody)
-	creds := dialect.Credentials{UserID: "u", Headers: http.Header{"X-Team": {"sre"}}}
+	creds := dialect.Credentials{UserID: "u", Headers: hdr("X-Team", "sre")}
 	for range 2 {
 		if err := (&Dialect{}).Authenticate(req, creds); err != nil {
 			t.Fatal(err)
@@ -129,7 +135,7 @@ func TestAuthenticateTwiceDoesNotDoubleStaticHeaders(t *testing.T) {
 }
 
 func TestCredentialsNeverPrint(t *testing.T) {
-	creds := dialect.Credentials{Token: canary, UserID: "courier-sre", Headers: http.Header{"X-Team": {canary}}}
+	creds := dialect.Credentials{Token: secret.New(canary), UserID: "courier-sre", Headers: hdr("X-Team", canary)}
 	type holder struct{ C dialect.Credentials } // an exported field: fmt and json reach it
 	values := map[string]any{"value": creds, "pointer": &creds, "exported field": holder{creds}, "pointer to holder": &holder{creds}}
 	leaks := func(s string) bool { return strings.Contains(s, canary) || strings.Contains(s, "courier-sre") }

@@ -54,6 +54,10 @@ func (v Value) Reveal() string {
 	return *v.v
 }
 
+// IsEmpty reports whether the value is empty, which the zero Value is. It answers without
+// handing out the bytes, so a check for a missing token need not Reveal it.
+func (v Value) IsEmpty() bool { return v.v == nil || *v.v == "" }
+
 // String returns "[redacted]".
 func (Value) String() string { return redacted }
 

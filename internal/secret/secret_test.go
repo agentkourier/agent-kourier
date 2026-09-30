@@ -31,6 +31,23 @@ func TestReveal(t *testing.T) {
 	}
 }
 
+func TestIsEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		v    Value
+		want bool
+	}{
+		{"zero Value", Value{}, true},
+		{"empty string", New(""), true},
+		{"one byte", New("x"), false},
+		{"whitespace", New(" "), false},
+	} {
+		if got := tc.v.IsEmpty(); got != tc.want {
+			t.Errorf("%s: IsEmpty = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestFormattingRedacts(t *testing.T) {
 	v := New(canary)
 	verbs := []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%t", "%10s", "%-10v", "%.3s", "%08x"}

@@ -15,20 +15,28 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // Credentials are what Authenticate puts on a request. The caller resolves them from the
-// Binding's identity and the AgentBackend's headers; they hold secret values, so they
-// never print, log, or marshal. Never hold Credentials in an unexported field of a type
-// that is formatted or logged: fmt cannot call String on it and prints the secrets.
+// Binding's identity and the AgentBackend's headers. The token and the header values are
+// secret.Values, which no formatting path can print, so Credentials holds no secret that
+// fmt, slog or an error chain can reach, in an exported field or an unexported one. Only
+// Reveal reads them: Authenticate, to set the headers, and the Pool's seal, to tell that
+// they changed.
 type Credentials struct {
-	// UserID is the Binding's X-User-Id, for an insecure-mode backend.
+	// UserID is the Binding's X-User-Id, for an insecure-mode backend. It names the Binding
+	// and is not a secret, so an unexported field of this type may print it.
 	UserID string `json:"-"`
 	// Token is the Binding's OIDC bearer token. When set it is used and UserID is not.
-	Token string `json:"-"`
+	Token secret.Value `json:"-"`
 	// Headers are the AgentBackend's static headers with secret values already read.
-	Headers http.Header `json:"-"`
+	Headers Headers `json:"-"`
 }
+
+// Headers are static request headers. Each value is a secret.Value, as a header often
+// carries an API key. The names are not secret and print.
+type Headers map[string][]secret.Value
 
 // String hides the secrets, so %v and %+v are safe.
 func (Credentials) String() string { return "dialect.Credentials{redacted}" }

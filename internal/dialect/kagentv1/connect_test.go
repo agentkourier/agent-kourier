@@ -24,6 +24,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 const agentPath = "/agents/kagent/spike-ask"
@@ -117,7 +118,7 @@ func ask(ctx context.Context, fd *frontDoor, creds dialect.Credentials) (*a2a.Ta
 
 func TestConnectOverridesCardURL(t *testing.T) {
 	fd := newFrontDoor(t, true, nil, nil)
-	if _, err := ask(t.Context(), fd, dialect.Credentials{Token: canary}); err != nil {
+	if _, err := ask(t.Context(), fd, dialect.Credentials{Token: secret.New(canary)}); err != nil {
 		t.Fatalf("ask: %v (the card's :8083 URL, or its REST interface, was used)", err)
 	}
 	if n := len(fd.seen(http.MethodPost)); n != 1 {
@@ -132,7 +133,7 @@ func TestConnectHITLHeader(t *testing.T) {
 	}{{"card lists the extension", true}, {"card lists no extension", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			fd := newFrontDoor(t, tc.listed, nil, nil)
-			task, err := ask(t.Context(), fd, dialect.Credentials{Token: canary})
+			task, err := ask(t.Context(), fd, dialect.Credentials{Token: secret.New(canary)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -151,7 +152,7 @@ func TestConnectIdentityOnTheWire(t *testing.T) {
 		creds              dialect.Credentials
 		wantAuth, wantUser string
 	}{
-		{"oidc", dialect.Credentials{Token: canary, UserID: "courier-sre"}, "Bearer " + canary, ""},
+		{"oidc", dialect.Credentials{Token: secret.New(canary), UserID: "courier-sre"}, "Bearer " + canary, ""},
 		{"insecure", dialect.Credentials{UserID: "courier-sre"}, "", "courier-sre"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +177,7 @@ func TestNon2xxResponseIsAnHTTPStatusError(t *testing.T) {
 	for _, code := range []int{http.StatusUnauthorized, http.StatusNotFound, http.StatusBadGateway, http.StatusTemporaryRedirect} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			fd := newFrontDoor(t, true, nil, func(w http.ResponseWriter, _ *http.Request) { http.Error(w, canary, code) })
-			_, err := ask(t.Context(), fd, dialect.Credentials{Token: canary})
+			_, err := ask(t.Context(), fd, dialect.Credentials{Token: secret.New(canary)})
 			var hs *dialect.HTTPStatusError
 			if !errors.As(err, &hs) || hs.Code != code {
 				t.Fatalf("err = %v, want an *HTTPStatusError with code %d", err, code)
@@ -211,7 +212,7 @@ func TestHTTPStatusErrorCarriesRetryAfter(t *testing.T) {
 				}
 				http.Error(w, canary, http.StatusTooManyRequests)
 			})
-			_, err := ask(t.Context(), fd, dialect.Credentials{Token: canary})
+			_, err := ask(t.Context(), fd, dialect.Credentials{Token: secret.New(canary)})
 			var hs *dialect.HTTPStatusError
 			if !errors.As(err, &hs) || hs.RetryAfter < tc.min || hs.RetryAfter > tc.max || strings.Contains(err.Error(), canary) {
 				t.Errorf("err = %v (%+v), want RetryAfter of %v to %v and no body", err, hs, tc.min, tc.max)
@@ -228,15 +229,15 @@ func TestConnectFailuresLeakNothing(t *testing.T) {
 		card  http.HandlerFunc
 		send  http.HandlerFunc
 	}{
-		{"reserved static header", dialect.Credentials{Token: canary, Headers: http.Header{"Authorization": {canary}}}, nil, nil},
-		{"token with a line break", dialect.Credentials{Token: canary + "\n"}, nil, nil},
-		{"card rejects the token", dialect.Credentials{Token: canary}, func(w http.ResponseWriter, _ *http.Request) { http.Error(w, canary, http.StatusUnauthorized) }, nil},
-		{"card redirects elsewhere", dialect.Credentials{Token: canary}, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, http.StatusFound) }, nil},
-		{"send redirects elsewhere", dialect.Credentials{Token: canary}, nil, func(w http.ResponseWriter, r *http.Request) {
+		{"reserved static header", dialect.Credentials{Token: secret.New(canary), Headers: hdr("Authorization", canary)}, nil, nil},
+		{"token with a line break", dialect.Credentials{Token: secret.New(canary + "\n")}, nil, nil},
+		{"card rejects the token", dialect.Credentials{Token: secret.New(canary)}, func(w http.ResponseWriter, _ *http.Request) { http.Error(w, canary, http.StatusUnauthorized) }, nil},
+		{"card redirects elsewhere", dialect.Credentials{Token: secret.New(canary)}, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, http.StatusFound) }, nil},
+		{"send redirects elsewhere", dialect.Credentials{Token: secret.New(canary)}, nil, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect) // a 307 would replay the POST and its headers
 		}},
-		{"card is not JSON", dialect.Credentials{Token: canary}, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(canary)) }, nil},
-		{"card lists only a REST interface", dialect.Credentials{Token: canary}, func(w http.ResponseWriter, _ *http.Request) {
+		{"card is not JSON", dialect.Credentials{Token: secret.New(canary)}, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(canary)) }, nil},
+		{"card lists only a REST interface", dialect.Credentials{Token: secret.New(canary)}, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"supportedInterfaces":[{"url":"http://x","protocolBinding":"HTTP+JSON","protocolVersion":"1.0"}]}`))
 		}, nil},
 	} {
@@ -318,7 +319,7 @@ func TestConnectPointsEveryJSONRPCInterfaceAtTheFrontDoor(t *testing.T) {
 		c.Capabilities.Streaming = true
 		_ = json.NewEncoder(w).Encode(c)
 	}
-	if _, err := ask(t.Context(), newFrontDoor(t, false, card, nil), dialect.Credentials{Token: canary}); err != nil {
+	if _, err := ask(t.Context(), newFrontDoor(t, false, card, nil), dialect.Credentials{Token: secret.New(canary)}); err != nil {
 		t.Fatal(err)
 	}
 	if n := hits.Load(); n != 0 {
@@ -336,7 +337,7 @@ func TestCredentialsGoOnlyToTheFrontDoor(t *testing.T) {
 		{"same host, https configured, http request: no downgrade", url.URL{Scheme: "https", Host: foreign.Listener.Addr().String()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			hc := New(0).httpClient(dialect.Credentials{Token: canary}, &tc.frontDoor)
+			hc := New(0).httpClient(dialect.Credentials{Token: secret.New(canary)}, &tc.frontDoor)
 			body := &spyBody{Reader: strings.NewReader("x")}
 			req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, foreign.URL, body)
 			resp, err := hc.Do(req)

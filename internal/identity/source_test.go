@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,13 +122,13 @@ func TestCredentials(t *testing.T) {
 		headers []v1alpha1.Header
 		want    dialect.Credentials
 	}{
-		{"token, read in the Binding's namespace", v1alpha1.Identity{TokenSecretRef: tokenRef()}, nil, dialect.Credentials{Token: "tok"}},
+		{"token, read in the Binding's namespace", v1alpha1.Identity{TokenSecretRef: tokenRef()}, nil, dialect.Credentials{Token: secret.New("tok")}},
 		{"user ID only", v1alpha1.Identity{UserID: "svc"}, nil, dialect.Credentials{UserID: "svc"}},
-		{"token and user ID", v1alpha1.Identity{UserID: "svc", TokenSecretRef: tokenRef()}, nil, dialect.Credentials{UserID: "svc", Token: "tok"}},
+		{"token and user ID", v1alpha1.Identity{UserID: "svc", TokenSecretRef: tokenRef()}, nil, dialect.Credentials{UserID: "svc", Token: secret.New("tok")}},
 		{
 			"headers, the secret one read in the backend's namespace",
 			v1alpha1.Identity{TokenSecretRef: tokenRef()}, []v1alpha1.Header{secretHeader, plainHeader},
-			dialect.Credentials{Token: "tok", Headers: http.Header{"X-Api-Key": {"gwkey"}, "X-Team": {"sre"}}},
+			dialect.Credentials{Token: secret.New("tok"), Headers: dialect.Headers{"X-Api-Key": {secret.New("gwkey")}, "X-Team": {secret.New("sre")}}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,9 +138,8 @@ func TestCredentials(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Token != tc.want.Token || got.UserID != tc.want.UserID || fmt.Sprint(got.Headers) != fmt.Sprint(tc.want.Headers) {
-				t.Errorf("Credentials mismatch: token %q userID %q headers %v; want token %q userID %q headers %v",
-					got.Token, got.UserID, got.Headers, tc.want.Token, tc.want.UserID, tc.want.Headers)
+			if g, w := plain(got), plain(tc.want); g != w {
+				t.Errorf("Credentials = %s; want %s", g, w)
 			}
 		})
 	}
@@ -209,7 +207,7 @@ func TestUnreadableSecretFailsTheTurn(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.names) || !strings.Contains(err.Error(), `"token"`) {
 				t.Errorf("error %q does not name the Secret %s and its key", err, tc.names)
 			}
-			if got.UserID != "" || got.Token != "" || got.Headers != nil {
+			if got.UserID != "" || !got.Token.IsEmpty() || got.Headers != nil {
 				t.Error("a failed Credentials returned something usable; it must fall back to nothing")
 			}
 
@@ -236,8 +234,8 @@ func TestEmptyTokenFromAnySourceFailsTheTurn(t *testing.T) {
 	if !errors.Is(err, agent.ErrTokenUnreadable) || !errors.Is(err, secret.ErrEmptyValue) {
 		t.Fatalf("Credentials err = %v, want ErrTokenUnreadable wrapping ErrEmptyValue", err)
 	}
-	if got.UserID != "" || got.Token != "" {
-		t.Errorf("Credentials = %q, %q, want nothing usable", got.UserID, got.Token)
+	if got.UserID != "" || !got.Token.IsEmpty() {
+		t.Errorf("Credentials = %q and a token %v, want nothing usable", got.UserID, !got.Token.IsEmpty())
 	}
 }
 
@@ -278,8 +276,8 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 	f.backend.Namespace = "sre" // header secrets live beside the backend
 	s := mustNew(t, f.binding, f.backend, r, audit.New(f.store, audit.Options{}), Options{})
 	before, err := s.Credentials(t.Context())
-	if err != nil || before.Token != "old-token" || before.Headers.Get("X-Api-Key") != "old-key" {
-		t.Fatalf("first Credentials = %v, %v", before.Token, err)
+	if err != nil || before.Token.Reveal() != "old-token" || header(before, "X-Api-Key") != "old-key" {
+		t.Fatalf("first Credentials = %s, %v", plain(before), err)
 	}
 	if _, err := client.CoreV1().Secrets("sre").Update(t.Context(), sec("new-token", "new-key"), metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
@@ -290,7 +288,7 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Token == "new-token" && got.Headers.Get("X-Api-Key") == "new-key" {
+		if got.Token.Reveal() == "new-token" && header(got, "X-Api-Key") == "new-key" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -298,7 +296,7 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if before.Token != "old-token" {
+	if before.Token.Reveal() != "old-token" {
 		t.Error("credentials returned earlier changed")
 	}
 }
@@ -431,8 +429,8 @@ func TestAnyTokenSourceFitsTheSeam(t *testing.T) {
 	ft := &fakeToken{token: "minted"}
 	s := mustNew(t, f.binding, f.backend, f.reader, audit.New(f.store, audit.Options{}), Options{Token: ft})
 	got, err := s.Credentials(t.Context())
-	if err != nil || got.Token != "minted" {
-		t.Fatalf("Credentials = %q, %v", got.Token, err)
+	if err != nil || got.Token.Reveal() != "minted" {
+		t.Fatalf("Credentials = %s, %v", plain(got), err)
 	}
 	if !s.Target().TokenRequired {
 		t.Error("TokenRequired is false with a TokenSource")
@@ -460,8 +458,8 @@ func TestSecretValuesNeverPrinted(t *testing.T) {
 		seen = append(seen, fmt.Sprintf("%s: %v %+v %#v %s %q %x", what, v, v, v, v, v, v))
 	}
 	creds, err := s.Credentials(ctx)
-	if err != nil || creds.Token != canary || creds.Headers.Get("X-Api-Key") != canary {
-		t.Fatalf("Credentials = %v, %v", err, creds.Headers)
+	if err != nil || creds.Token.Reveal() != canary || header(creds, "X-Api-Key") != canary {
+		t.Fatalf("Credentials = %v, %v", err, creds)
 	}
 	note("credentials", creds)
 	note("source", s)
@@ -508,4 +506,24 @@ func TestSecretValuesNeverPrinted(t *testing.T) {
 	if !strings.Contains(strings.Join(seen, "\n"), "audit write failed") {
 		t.Error("the failing audit write was not logged; the log was not exercised")
 	}
+}
+
+// header returns the first value of a static header. Tests may Reveal; the code under test
+// may not.
+func header(c dialect.Credentials, name string) string {
+	if v := c.Headers[name]; len(v) > 0 {
+		return v[0].Reveal()
+	}
+	return ""
+}
+
+// plain renders c with its secrets revealed, to compare two Credentials in a test.
+func plain(c dialect.Credentials) string {
+	h := map[string][]string{}
+	for name, vals := range c.Headers {
+		for _, v := range vals {
+			h[name] = append(h[name], v.Reveal())
+		}
+	}
+	return fmt.Sprintf("token %q userID %q headers %q", c.Token.Reveal(), c.UserID, h)
 }

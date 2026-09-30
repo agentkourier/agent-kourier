@@ -102,13 +102,13 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 		if err != nil {
 			return dialect.Credentials{}, err
 		}
-		if tok.Reveal() == "" { // whatever the source, an empty token must not leave the userId
+		if tok.IsEmpty() { // whatever the source, an empty token must not leave the userId
 			return dialect.Credentials{}, fmt.Errorf("%w: %w", agent.ErrTokenUnreadable, secret.ErrEmptyValue)
 		}
-		c.Token = tok.Reveal()
+		c.Token = tok
 	}
 	for _, h := range s.backend.Spec.Headers {
-		val := h.Value
+		val := secret.New(h.Value)
 		if ref := h.ValueSecretRef; ref != nil {
 			key := cmp.Or(ref.Key, v1alpha1.DefaultSecretKey)
 			v, err := s.reader.Value(ctx, s.backend.Namespace, ref.Name, key)
@@ -118,12 +118,13 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 			if err != nil {
 				return dialect.Credentials{}, fmt.Errorf("%w: header %q: %w", agent.ErrHeaderUnreadable, h.Name, err)
 			}
-			val = v.Reveal()
+			val = v
 		}
 		if c.Headers == nil {
-			c.Headers = http.Header{}
+			c.Headers = dialect.Headers{}
 		}
-		c.Headers.Add(h.Name, val)
+		name := http.CanonicalHeaderKey(h.Name) // as http.Header.Add did, so two spellings share one key
+		c.Headers[name] = append(c.Headers[name], val)
 	}
 	return c, nil
 }

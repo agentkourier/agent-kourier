@@ -64,10 +64,11 @@ func (*Dialect) Authenticate(req *http.Request, creds dialect.Credentials) error
 		}
 	}
 	hasControl := func(s string) bool { return strings.ContainsFunc(s, unicode.IsControl) }
+	token := creds.Token.Reveal() // read here, where the header is set, and nowhere else
 	switch {
-	case creds.Token == "" && creds.UserID == "":
+	case token == "" && creds.UserID == "":
 		return errors.New("credentials carry no identity: set a token or a user ID")
-	case hasControl(creds.Token) || hasControl(creds.UserID):
+	case hasControl(token) || hasControl(creds.UserID):
 		return errors.New("credentials contain a control character")
 	}
 	for name := range creds.Headers { // set, not add, so a second call changes nothing
@@ -75,13 +76,13 @@ func (*Dialect) Authenticate(req *http.Request, creds dialect.Credentials) error
 	}
 	for name, values := range creds.Headers {
 		for _, v := range values {
-			req.Header.Add(name, v)
+			req.Header.Add(name, v.Reveal())
 		}
 	}
 	req.Header.Del("Authorization")
 	req.Header.Del("X-User-Id")
-	if creds.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+creds.Token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
 		req.Header.Set("X-User-Id", creds.UserID)
 	}

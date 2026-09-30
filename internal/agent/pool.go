@@ -137,7 +137,7 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials of binding %s: %w", t.Binding, err)
 	}
-	if t.TokenRequired && creds.Token == "" {
+	if t.TokenRequired && creds.Token.IsEmpty() {
 		return nil, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
 	}
 	e := p.entry(poolKey{t.Binding, t.Agent})
@@ -196,7 +196,7 @@ func (p *Pool) seal(backendURL string, c dialect.Credentials) [sha256.Size]byte 
 	h := hmac.New(sha256.New, p.key[:])
 	put := func(s string) { _, _ = fmt.Fprintf(h, "%d:%s", len(s), s) }
 	put(backendURL)
-	put(c.Token)
+	put(c.Token.Reveal())
 	put(c.UserID)
 	names := slices.Sorted(maps.Keys(c.Headers))
 	put(strconv.Itoa(len(names)))
@@ -204,7 +204,7 @@ func (p *Pool) seal(backendURL string, c dialect.Credentials) [sha256.Size]byte 
 		put(name)
 		put(strconv.Itoa(len(c.Headers[name])))
 		for _, v := range c.Headers[name] {
-			put(v)
+			put(v.Reveal())
 		}
 	}
 	return [sha256.Size]byte(h.Sum(nil))

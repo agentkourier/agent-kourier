@@ -14,12 +14,15 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
 
 func token(tok string) CredentialsFunc {
-	return func(context.Context) (dialect.Credentials, error) { return dialect.Credentials{Token: tok}, nil }
+	return func(context.Context) (dialect.Credentials, error) {
+		return dialect.Credentials{Token: secret.New(tok)}, nil
+	}
 }
 
 func targetFor(fa *fakeAgent, binding string, creds CredentialsFunc) Target {
@@ -90,7 +93,7 @@ func TestCredentialsAreResolvedPerCallAndRotationReconnects(t *testing.T) {
 	var resolved atomic.Int32
 	creds := func(context.Context) (dialect.Credentials, error) {
 		resolved.Add(1)
-		return dialect.Credentials{Token: tok.Load().(string)}, nil
+		return dialect.Credentials{Token: secret.New(tok.Load().(string))}, nil
 	}
 	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
 	agent := p.Agent(targetFor(fa, "team/sre", creds))
@@ -112,7 +115,7 @@ func TestCredentialsAreResolvedPerCallAndRotationReconnects(t *testing.T) {
 func TestReconnectUsesTheCurrentToken(t *testing.T) {
 	var lookups atomic.Int32
 	creds := func(context.Context) (dialect.Credentials, error) {
-		return dialect.Credentials{Token: "tok-" + string(rune('0'+lookups.Add(1)))}, nil
+		return dialect.Credentials{Token: secret.New("tok-" + string(rune('0'+lookups.Add(1))))}, nil
 	}
 	fa, p := newFakeAgent(t, resumeAfterFirstTick(t, false)), newPool(t)
 	if err := p.Agent(targetFor(fa, "team/sre", creds)).Send(t.Context(), message("go slowly"), nil); err != nil {
@@ -221,10 +224,10 @@ func (fa *fakeAgent) lastCard() http.Header {
 // a static header (they hold secrets too), the backend URL. The last two rows are pairs
 // that a lazy encoding of the headers maps to one digest.
 func TestSealCoversEveryCredentialInput(t *testing.T) {
-	hdr := func(kv ...string) http.Header {
-		h := http.Header{}
+	hdr := func(kv ...string) dialect.Headers {
+		h := dialect.Headers{}
 		for i := 0; i < len(kv); i += 2 {
-			h[kv[i]] = append(h[kv[i]], kv[i+1])
+			h[kv[i]] = append(h[kv[i]], secret.New(kv[i+1]))
 		}
 		return h
 	}
@@ -234,11 +237,11 @@ func TestSealCoversEveryCredentialInput(t *testing.T) {
 		wantHeader    string // on the new client's card fetch
 		wantValues    []string
 	}{
-		{"token", dialect.Credentials{Token: "a"}, dialect.Credentials{Token: "b"}, "Authorization", []string{"Bearer b"}},
+		{"token", dialect.Credentials{Token: secret.New("a")}, dialect.Credentials{Token: secret.New("b")}, "Authorization", []string{"Bearer b"}},
 		{"user ID", dialect.Credentials{UserID: "a"}, dialect.Credentials{UserID: "b"}, "X-User-Id", []string{"b"}},
-		{"static header", dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k1")}, dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k2")}, "X-Api-Key", []string{"k2"}},
-		{"one value split in two", dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k1 k2")}, dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k1", "X-Api-Key", "k2")}, "X-Api-Key", []string{"k1", "k2"}},
-		{"a header hidden in a value", dialect.Credentials{Token: "t", Headers: hdr("X-A", "1] X-B:[2")}, dialect.Credentials{Token: "t", Headers: hdr("X-A", "1", "X-B", "2")}, "X-B", []string{"2"}},
+		{"static header", dialect.Credentials{Token: secret.New("t"), Headers: hdr("X-Api-Key", "k1")}, dialect.Credentials{Token: secret.New("t"), Headers: hdr("X-Api-Key", "k2")}, "X-Api-Key", []string{"k2"}},
+		{"one value split in two", dialect.Credentials{Token: secret.New("t"), Headers: hdr("X-Api-Key", "k1 k2")}, dialect.Credentials{Token: secret.New("t"), Headers: hdr("X-Api-Key", "k1", "X-Api-Key", "k2")}, "X-Api-Key", []string{"k1", "k2"}},
+		{"a header hidden in a value", dialect.Credentials{Token: secret.New("t"), Headers: hdr("X-A", "1] X-B:[2")}, dialect.Credentials{Token: secret.New("t"), Headers: hdr("X-A", "1", "X-B", "2")}, "X-B", []string{"2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
