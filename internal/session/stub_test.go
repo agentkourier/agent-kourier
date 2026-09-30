@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,9 +42,9 @@ type stubEnv struct {
 	agent *countingAgent
 }
 
-func newStubEnv(t *testing.T) *stubEnv {
+func newStubEnv(t *testing.T, opts ...stubagent.Option) *stubEnv {
 	t.Helper()
-	srv := stubagent.New()
+	srv := stubagent.New(opts...)
 	t.Cleanup(srv.Close)
 	pool := agent.NewPool(kagentv1.New(0), agent.Config{})
 	t.Cleanup(pool.Close)
@@ -169,5 +170,25 @@ func TestStubBusySessionIsRetriedUntilItIsFree(t *testing.T) {
 	}
 	if _, holders, _ := e.agent.Agent.FindTask(t.Context(), sess.ContextID, inbound("2").MessageID); len(holders) != 1 {
 		t.Errorf("turn 2 ran %d times; want once", len(holders))
+	}
+}
+
+// The front door refuses the Binding's credentials, here as a 401 at the card fetch: the turn
+// fails at once, with no retry, the identity Source's Rejected is called (which writes the
+// only audit row), and the thread is told (D34, spec 8.2).
+func TestStubRefusedCredentialsFailTheTurn(t *testing.T) {
+	e := newStubEnv(t, stubagent.WithRequiredAuth()) // the fixture's credentials carry no token
+	if _, err := e.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the failure notice", func() bool { return len(e.sink.noticesOf(NoticeFailed)) == 1 })
+	time.Sleep(100 * time.Millisecond) // a retry would show by now
+	e.amu.Lock()
+	defer e.amu.Unlock()
+	if len(e.rejected) != 1 || !errors.Is(e.rejected[0].Err, agent.ErrCredentialsRejected) || len(e.audits) != 0 {
+		t.Errorf("Rejected calls %+v, audits %+v; want one Rejected call and no other audit", e.rejected, e.audits)
+	}
+	if sends := e.agent.sends.Load(); sends != 1 {
+		t.Errorf("%d sends; want one: a refused credential is not retried", sends)
 	}
 }
