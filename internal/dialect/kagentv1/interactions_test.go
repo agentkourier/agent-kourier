@@ -86,23 +86,37 @@ func TestParseInteraction(t *testing.T) {
 		})
 	}
 
-	// Payloads not captured at alpha5. The nested shape is from kagent's source types
-	// (go/api/a2a/hitl.go), not from a live run.
-	inner := map[string]any{"id": "inner-1", "call_id": "c9", "name": "delete_file", "args": map[string]any{"path": "/x"}}
-	nested := func(tools ...any) map[string]any {
-		return map[string]any{"subagent_name": "k8s-agent", "task_id": "sub-task", "context_id": "sub-ctx", "tools": tools}
-	}
-	wantNested := &dialect.Nested{Subagent: "k8s-agent", TaskID: "sub-task", ContextID: "sub-ctx"}
+	// Payloads not captured at alpha5. The nested ones are built the way kagent
+	// v1.0.0-alpha5's BuildHITLStatusMessage builds them (go/adk/pkg/a2a/hitl.go), not
+	// taken from a live run: WP-02 could not capture a nested case.
 	askReq := map[string]any{"type": "ask_user_request", "id": "r1", "questions": []any{map[string]any{"question": "Region?", "choices": []any{"east"}}}}
+	wantNested := &dialect.Nested{Subagent: "k8s-agent", TaskID: "sub-task", ContextID: "sub-ctx"}
+	wantInner := dialect.Tool{ID: "inner-1", CallID: "c9", Name: "delete_file", Args: map[string]any{"path": "/x"}}
 	sources := []struct {
 		name    string
 		payload map[string]any
 		want    *dialect.Interaction
 	}{
-		{"nested ask-user", merge(askReq, "nested", nested()), &dialect.Interaction{
-			Kind: dialect.AskUser, RequestID: "r1", Nested: wantNested, Questions: []dialect.Question{q("Region?", false, "east")}}},
-		{"nested tool approval decides the inner tools", map[string]any{"type": "tool_approval_request", "tools": []any{map[string]any{"id": "outer"}}, "nested": nested(inner)},
-			&dialect.Interaction{Kind: dialect.ToolApproval, Nested: wantNested, Tools: []dialect.Tool{{ID: "inner-1", CallID: "c9", Name: "delete_file", Args: map[string]any{"path": "/x"}}}}},
+		{"nested ask-user is answered by the child tool's id", adkNestedAskUser(), &dialect.Interaction{
+			Kind: dialect.AskUser, RequestID: "adk-child-ask", Nested: wantNested, Questions: []dialect.Question{q("Region?", false, "east")}}},
+		{"nested tool approval decides the inner tools", adkNestedApproval(), &dialect.Interaction{
+			Kind: dialect.ToolApproval, Nested: wantNested, Tools: []dialect.Tool{wantInner}}},
+		{"nested ask-user without a subagent task", withNested(adkNestedAskUser(), "task_id", ""), nil},
+		{"nested ask-user without a subagent name", withNested(adkNestedAskUser(), "subagent_name", ""), nil},
+		{"nested ask-user without a child tool", withNested(adkNestedAskUser(), "tools", []any{}), nil},
+		{"nested ask-user with two child tools", withNested(adkNestedAskUser(), "tools", []any{
+			map[string]any{"id": "a", "name": "ask_user"}, map[string]any{"id": "b", "name": "ask_user"}}), nil},
+		{"nested ask-user whose child tool is not ask_user", withNested(adkNestedAskUser(), "tools", []any{map[string]any{"id": "a", "name": "delete_file"}}), nil},
+		{"nested ask-user whose child tool has no id", withNested(adkNestedAskUser(), "tools", []any{map[string]any{"name": "ask_user"}}), nil},
+		{"nested ask-user without a parent id", merge(adkNestedAskUser(), "id", ""), nil},
+		{"nested ask-user with an empty nested object", merge(adkNestedAskUser(), "nested", map[string]any{}), nil},
+		{"nested approval without inner tools does not fall back to the outer ones", withNested(adkNestedApproval(), "tools", []any{}), nil},
+		{"nested approval without a subagent task", withNested(adkNestedApproval(), "task_id", ""), nil},
+		{"nested approval without a subagent name", withNested(adkNestedApproval(), "subagent_name", ""), nil},
+		{"nested approval with an inner tool without an id", withNested(adkNestedApproval(), "tools", []any{map[string]any{"name": "x"}}), nil},
+		{"nested approval with two outer tools", merge(adkNestedApproval(), "tools", []any{map[string]any{"id": "p1"}, map[string]any{"id": "p2"}}), nil},
+		{"nested approval with no outer tool", merge(adkNestedApproval(), "tools", []any{}), nil},
+		{"nested approval whose outer tool has no id", merge(adkNestedApproval(), "tools", []any{map[string]any{"name": "k8s-agent"}}), nil},
 		{"several tools in one pause", map[string]any{"type": "tool_approval_request", "tools": []any{map[string]any{"id": "a", "name": "x"}, map[string]any{"id": "b", "name": "y"}}},
 			&dialect.Interaction{Kind: dialect.ToolApproval, Tools: []dialect.Tool{{ID: "a", Name: "x"}, {ID: "b", Name: "y"}}}},
 		{"unknown type", map[string]any{"type": "surprise"}, nil},
@@ -131,6 +145,40 @@ func TestParseInteraction(t *testing.T) {
 	working.Status.State = a2a.TaskStateWorking
 	if _, ok := (&Dialect{}).ParseInteraction(working); ok {
 		t.Error("a task that is not input-required parsed")
+	}
+}
+
+// withNested returns a copy of an ADK nested payload with key of its nested object set to v.
+func withNested(payload map[string]any, key string, v any) map[string]any {
+	return merge(payload, "nested", merge(payload["nested"].(map[string]any), key, v))
+}
+
+// adkNestedAskUser is a sub-agent's ask-user pause as kagent v1.0.0-alpha5's
+// BuildHITLStatusMessage builds it (go/adk/pkg/a2a/hitl.go): the top-level id is the
+// parent's confirmation call, and the child ask_user tool carries the id the answer echoes.
+func adkNestedAskUser() map[string]any {
+	questions := []any{map[string]any{"question": "Region?", "choices": []any{"east"}, "multiple": false}}
+	return map[string]any{
+		"type": "ask_user_request", "id": "adk-parent-ask", "questions": questions,
+		"nested": map[string]any{
+			"subagent_name": "k8s-agent", "task_id": "sub-task", "context_id": "sub-ctx",
+			"tools": []any{map[string]any{"id": "adk-child-ask", "call_id": "adk-child-ask", "name": "ask_user",
+				"args": map[string]any{"questions": questions}}},
+		},
+	}
+}
+
+// adkNestedApproval is a sub-agent's tool-approval pause as BuildHITLStatusMessage builds
+// it at alpha5: one outer tool (the parent's confirmation of the sub-agent call) and the
+// inner tools to decide.
+func adkNestedApproval() map[string]any {
+	return map[string]any{
+		"type": "tool_approval_request", "hint": "Approval is required for tool(s): delete_file",
+		"tools": []any{map[string]any{"id": "adk-parent-tool", "call_id": "call-parent", "name": "k8s-agent", "args": map[string]any{}}},
+		"nested": map[string]any{
+			"subagent_name": "k8s-agent", "task_id": "sub-task", "context_id": "sub-ctx",
+			"tools": []any{map[string]any{"id": "inner-1", "call_id": "c9", "name": "delete_file", "args": map[string]any{"path": "/x"}}},
+		},
 	}
 }
 

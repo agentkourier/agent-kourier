@@ -132,6 +132,8 @@ func TestBuildResponseRefusesIncompleteAnswers(t *testing.T) {
 		{"a tool decided twice", *tools, dialect.Answer{Decisions: []dialect.Decision{yes("a"), yes("a")}}},
 		{"an unknown tool (kagent wedges)", *tools, dialect.Answer{Decisions: []dialect.Decision{yes("a"), yes("nope")}}},
 		{"answers for a tool approval", *tools, wrongKind},
+		{"an ask-user with no questions (answers: null wedges kagent)", dialect.Interaction{Kind: dialect.AskUser, TaskID: "t", RequestID: "r"}, dialect.Answer{RequestID: "r"}},
+		{"a tool approval with no tools (approvals: null is plain text)", dialect.Interaction{Kind: dialect.ToolApproval, TaskID: "t"}, dialect.Answer{}},
 		{"unknown kind", dialect.Interaction{Kind: "surprise", TaskID: "t"}, dialect.Answer{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,6 +159,35 @@ func TestBuildResponseToolApprovalsFollowTheRequestOrder(t *testing.T) {
 	}}
 	if got := plain(t, msg.Metadata[HITLExtension]); !reflect.DeepEqual(got, want) {
 		t.Errorf("payload = %v\nwant      %v", got, want)
+	}
+}
+
+// The ids a nested answer carries are the ones kagent v1.0.0-alpha5 matches
+// (processNestedAskUser, processNestedApproval), on payloads shaped as its source builds
+// them, since no nested capture exists.
+func TestBuildResponseNestedIDs(t *testing.T) {
+	d := &Dialect{}
+	ask, _ := d.ParseInteraction(pausedOn(adkNestedAskUser()))
+	msg, err := d.BuildResponse(*ask, dialect.Answer{RequestID: ask.RequestID, Answers: [][]string{{"east"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"type": "ask_user_response", "id": "adk-child-ask", "answers": []any{map[string]any{"answer": []any{"east"}}}}
+	if got := plain(t, msg.Metadata[HITLExtension]); !reflect.DeepEqual(got, want) {
+		t.Errorf("ask-user payload = %v\nwant             %v", got, want)
+	}
+
+	approval, _ := d.ParseInteraction(pausedOn(adkNestedApproval()))
+	msg, err = d.BuildResponse(*approval, dialect.Answer{Decisions: []dialect.Decision{{ToolID: "inner-1", Approved: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string]any{"type": "tool_approval_response", "approvals": []any{map[string]any{"id": "inner-1", "approved": true}}}
+	if got := plain(t, msg.Metadata[HITLExtension]); !reflect.DeepEqual(got, want) {
+		t.Errorf("approval payload = %v\nwant                %v", got, want)
+	}
+	if _, err := d.BuildResponse(*approval, dialect.Answer{Decisions: []dialect.Decision{{ToolID: "adk-parent-tool", Approved: true}}}); err == nil {
+		t.Error("a decision naming the outer tool was built; kagent matches only the inner tools")
 	}
 }
 

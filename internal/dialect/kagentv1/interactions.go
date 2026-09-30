@@ -55,8 +55,13 @@ type hitlRequest struct {
 // question, and a tool-approval request needs tools that each have an id. A pause without
 // the extension header has no payload and is not parsed (the header comes from Connect).
 //
-// For a nested tool approval, the tools to decide are the nested request's, which is where
-// kagent's source matches decisions; that is unconfirmed against a live run.
+// A nested request (a sub-agent's) is usable only when kagent's resume code can correlate
+// the answer (v1.0.0-alpha5 go/adk/pkg/a2a/hitl.go, source only, never captured). It
+// needs the sub-agent's name and task. A nested ask-user needs exactly one child ask_user
+// tool, whose id, not the top-level one, is what the answer echoes
+// (processNestedAskUser). A nested tool approval decides only the nested tools, with no
+// fallback to the top-level ones, and needs exactly one top-level tool
+// (processNestedApproval).
 func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, bool) {
 	msg := task.Status.Message
 	if task.Status.State != a2a.TaskStateInputRequired || msg == nil || msg.Metadata[HITLExtension] == nil {
@@ -69,11 +74,20 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, bool) {
 	}
 	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID}
 	if n := req.Nested; n != nil {
+		if n.TaskID == "" || n.SubagentName == "" {
+			return nil, false
+		}
 		in.Nested = &dialect.Nested{Subagent: n.SubagentName, TaskID: n.TaskID, ContextID: n.ContextID}
 	}
 	switch req.Type {
 	case askUserRequest:
 		in.Kind, in.RequestID = dialect.AskUser, req.ID
+		if n := req.Nested; n != nil {
+			if len(n.Tools) != 1 || n.Tools[0].Name != "ask_user" || n.Tools[0].ID == "" || req.ID == "" {
+				return nil, false
+			}
+			in.RequestID = n.Tools[0].ID
+		}
 		for _, q := range req.Questions {
 			in.Questions = append(in.Questions, dialect.Question{Text: q.Question, Choices: append([]string(nil), q.Choices...), Multiple: q.Multiple})
 		}
@@ -84,8 +98,11 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, bool) {
 	case toolApprovalRequest:
 		in.Kind = dialect.ToolApproval
 		tools := req.Tools
-		if req.Nested != nil && len(req.Nested.Tools) > 0 {
-			tools = req.Nested.Tools
+		if n := req.Nested; n != nil {
+			if len(req.Tools) != 1 || req.Tools[0].ID == "" {
+				return nil, false
+			}
+			tools = n.Tools
 		}
 		for _, w := range tools {
 			if w.ID == "" {
@@ -101,28 +118,10 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, bool) {
 	return nil, false
 }
 
-// wireAnswer, wireApproval and the two response payloads are what kagent accepts as a
-// reply (measured at alpha5, WP-02). The nested shapes are the same (kagent source).
-type wireAnswer struct {
-	Answer []string `json:"answer"`
-}
-
-type askUserResponse struct {
-	Type    string       `json:"type"`
-	ID      string       `json:"id"`
-	Answers []wireAnswer `json:"answers"`
-}
-
-type wireApproval struct {
-	ID              string `json:"id"`
-	Approved        bool   `json:"approved"`
-	RejectionReason string `json:"rejection_reason,omitempty"`
-}
-
-type toolApprovalResponse struct {
-	Type      string         `json:"type"`
-	Approvals []wireApproval `json:"approvals"`
-}
+// The response payloads are plain maps, as kagent's AttachHitlExtension stores them in
+// message metadata. Their shapes are what kagent accepts as a reply (measured at alpha5,
+// WP-02). A nested reply has the same shapes (kagent source); what differs is the id an
+// ask-user reply echoes, which Interaction.RequestID already holds.
 
 // BuildResponse returns the user message that answers in: the task and context of the
 // pause, the HITL extension, and the payload kagent expects. It checks the answer first,
@@ -135,7 +134,7 @@ func (*Dialect) BuildResponse(in dialect.Interaction, answer dialect.Answer) (a2
 	if in.TaskID == "" {
 		return a2a.Message{}, errors.New("interaction has no task to answer")
 	}
-	var payload any
+	var payload map[string]any
 	var text string
 	var err error
 	switch in.Kind {
@@ -156,27 +155,31 @@ func (*Dialect) BuildResponse(in dialect.Interaction, answer dialect.Answer) (a2
 	return *msg, nil
 }
 
-func askUserAnswer(in dialect.Interaction, a dialect.Answer) (askUserResponse, string, error) {
+func askUserAnswer(in dialect.Interaction, a dialect.Answer) (map[string]any, string, error) {
+	// An Interaction is reloaded from the store, so its own checks come first: no
+	// questions would build answers: null, which wedges kagent.
 	switch {
 	case in.RequestID == "":
-		return askUserResponse{}, "", errors.New("interaction has no request id")
+		return nil, "", errors.New("interaction has no request id")
+	case len(in.Questions) == 0:
+		return nil, "", errors.New("interaction has no questions")
 	case a.RequestID != in.RequestID:
-		return askUserResponse{}, "", errors.New("answer is for a different request")
+		return nil, "", errors.New("answer is for a different request")
 	case len(a.Decisions) > 0:
-		return askUserResponse{}, "", errors.New("tool decisions cannot answer questions")
+		return nil, "", errors.New("tool decisions cannot answer questions")
 	case len(a.Answers) != len(in.Questions):
-		return askUserResponse{}, "", fmt.Errorf("%d of %d questions answered", len(a.Answers), len(in.Questions))
+		return nil, "", fmt.Errorf("%d of %d questions answered", len(a.Answers), len(in.Questions))
 	}
-	resp := askUserResponse{Type: "ask_user_response", ID: in.RequestID}
-	var flat []string
+	answers := make([]any, 0, len(in.Questions))
+	flat := make([]string, 0, len(in.Questions))
 	for i, q := range in.Questions {
 		if err := checkAnswer(q, a.Answers[i]); err != nil {
-			return askUserResponse{}, "", fmt.Errorf("question %d: %w", i+1, err)
+			return nil, "", fmt.Errorf("question %d: %w", i+1, err)
 		}
-		resp.Answers = append(resp.Answers, wireAnswer{Answer: a.Answers[i]})
+		answers = append(answers, map[string]any{"answer": a.Answers[i]})
 		flat = append(flat, strings.Join(a.Answers[i], ", "))
 	}
-	return resp, strings.Join(flat, "; "), nil
+	return map[string]any{"type": "ask_user_response", "id": in.RequestID, "answers": answers}, strings.Join(flat, "; "), nil
 }
 
 // checkAnswer reports why vals does not answer q.
@@ -200,31 +203,36 @@ func checkAnswer(q dialect.Question, vals []string) error {
 	return nil
 }
 
-func toolApprovalAnswer(in dialect.Interaction, a dialect.Answer) (toolApprovalResponse, string, error) {
-	if len(a.Answers) > 0 {
-		return toolApprovalResponse{}, "", errors.New("question answers cannot decide tool calls")
-	}
-	if len(a.Decisions) != len(in.Tools) {
-		return toolApprovalResponse{}, "", fmt.Errorf("%d of %d tool calls decided", len(a.Decisions), len(in.Tools))
+func toolApprovalAnswer(in dialect.Interaction, a dialect.Answer) (map[string]any, string, error) {
+	switch {
+	case len(in.Tools) == 0: // approvals: null is read by kagent as plain text, and the tool does not run
+		return nil, "", errors.New("interaction has no tool calls")
+	case len(a.Answers) > 0:
+		return nil, "", errors.New("question answers cannot decide tool calls")
+	case len(a.Decisions) != len(in.Tools):
+		return nil, "", fmt.Errorf("%d of %d tool calls decided", len(a.Decisions), len(in.Tools))
 	}
 	byID := make(map[string]dialect.Decision, len(a.Decisions))
 	for _, d := range a.Decisions {
 		if !slices.ContainsFunc(in.Tools, func(t dialect.Tool) bool { return t.ID == d.ToolID }) {
-			return toolApprovalResponse{}, "", errors.New("decision for a tool call that is not pending")
+			return nil, "", errors.New("decision for a tool call that is not pending")
 		}
 		if _, twice := byID[d.ToolID]; twice {
-			return toolApprovalResponse{}, "", errors.New("a tool call is decided twice")
+			return nil, "", errors.New("a tool call is decided twice")
 		}
 		byID[d.ToolID] = d
 	}
-	resp, text := toolApprovalResponse{Type: "tool_approval_response"}, "approved"
+	approvals, text := make([]any, 0, len(in.Tools)), "approved"
 	for _, t := range in.Tools { // in request order, one decision each
 		d := byID[t.ID]
-		w := wireApproval{ID: t.ID, Approved: d.Approved}
+		w := map[string]any{"id": t.ID, "approved": d.Approved}
 		if !d.Approved {
-			w.RejectionReason, text = d.Reason, "rejected"
+			text = "rejected"
+			if d.Reason != "" {
+				w["rejection_reason"] = d.Reason
+			}
 		}
-		resp.Approvals = append(resp.Approvals, w)
+		approvals = append(approvals, w)
 	}
-	return resp, text, nil
+	return map[string]any{"type": "tool_approval_response", "approvals": approvals}, text, nil
 }
