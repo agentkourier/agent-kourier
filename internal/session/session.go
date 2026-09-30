@@ -4,11 +4,16 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -23,12 +28,20 @@ var ErrUnknownBinding = errors.New("session: unknown Binding")
 type Store interface {
 	store.Sessions
 	store.ReplyQueue
+	store.SessionTasks
+}
+
+// AgentAPI is the part of *agent.Agent the manager uses.
+type AgentAPI interface {
+	Send(ctx context.Context, msg *a2a.Message, h agent.Handler) error
 }
 
 // Backend is what the manager needs to know about one Binding.
 type Backend struct {
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
+	// Agent runs the Binding's turns. Its credentials resolve on every call.
+	Agent AgentAPI
 }
 
 // Bindings resolves a Binding by its namespace/name.
@@ -37,17 +50,38 @@ type Bindings interface {
 	Backend(name string) (Backend, error)
 }
 
-// Config configures a Manager. Store and Bindings are required; Now defaults to time.Now.
+// TurnRef names the turn a Sink is asked to render.
+type TurnRef struct {
+	Key       Key
+	MessageID string
+}
+
+// Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
+// handler for one turn's events, FinalEvent included, or nil.
+type Sink interface {
+	Turn(ctx context.Context, t TurnRef) agent.Handler
+}
+
+// Config configures a Manager. Store and Bindings are required; a nil Sink drops the output.
 type Config struct {
 	Store    Store
 	Bindings Bindings
+	Sink     Sink
 	Now      func() time.Time
+	Logger   *slog.Logger
 }
 
 // Manager owns the sessions of every conversation. It is safe for concurrent use.
 type Manager struct {
 	cfg  Config
-	wake func(Key) // tells the runner that Key has a turn waiting
+	wake func(Key)       // tells the runner that Key has a turn waiting
+	ctx  context.Context // bounds every turn; Close cancels it
+	stop context.CancelFunc
+	wg   sync.WaitGroup // the runners
+
+	mu     sync.Mutex
+	convos map[Key]*convo // conversations with a runner
+	closed bool
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
@@ -64,7 +98,13 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Manager{cfg: cfg, wake: func(Key) {}}, nil
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}}
+	m.ctx, m.stop = context.WithCancel(context.Background())
+	m.wake = m.start
+	return m, nil
 }
 
 // SlackMessageID derives the A2A messageId of a Slack message from where it is, not from

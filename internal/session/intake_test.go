@@ -3,7 +3,10 @@ package session
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,18 +24,23 @@ var (
 // over a real SQLite store.
 type spyStore struct {
 	Store
+	mu      sync.Mutex
 	touches int
 	fail    map[string]error
 }
 
 func (s *spyStore) failOnce(call string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	err := s.fail[call]
 	delete(s.fail, call)
 	return err
 }
 
 func (s *spyStore) TouchSession(ctx context.Context, k Key, at time.Time) error {
+	s.mu.Lock()
 	s.touches++
+	s.mu.Unlock()
 	if err := s.failOnce("touch"); err != nil {
 		return err
 	}
@@ -53,16 +61,6 @@ func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error
 	return s.Store.EnqueueReply(ctx, r)
 }
 
-// fakeBindings maps Binding names to their threadTTL.
-type fakeBindings map[string]time.Duration
-
-func (b fakeBindings) Backend(name string) (Backend, error) {
-	if ttl, ok := b[name]; ok {
-		return Backend{ThreadTTL: ttl}, nil
-	}
-	return Backend{}, ErrUnknownBinding
-}
-
 type fixture struct {
 	t      *testing.T
 	st     *spyStore
@@ -70,6 +68,16 @@ type fixture struct {
 	woke   int
 	onWake func()
 	now    atomic.Int64 // the clock, in Unix nanoseconds
+	agent  *fakeAgent
+}
+
+// Backend makes the fixture the Bindings: ns/b1 has a threadTTL of 1 h, ns/b2 of 1000 h.
+func (f *fixture) Backend(name string) (Backend, error) {
+	ttl, ok := map[string]time.Duration{"ns/b1": time.Hour, "ns/b2": 1000 * time.Hour}[name]
+	if !ok {
+		return Backend{}, ErrUnknownBinding
+	}
+	return Backend{ThreadTTL: ttl, Agent: f.agent}, nil
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -79,9 +87,9 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}}}
+	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Bindings: fakeBindings{"ns/b1": time.Hour, "ns/b2": 1000 * time.Hour}, Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	f.m, err = New(Config{Store: f.st, Bindings: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
