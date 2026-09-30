@@ -183,7 +183,7 @@ upstream webhook trigger stays compatible with courier.
 | D29 | Alert routing | Teams route alerts to their Binding through their own prometheus-operator `AlertmanagerConfig`. The webhook token is a Secret in the Binding's namespace. Cluster-level alerts go to a platform-team Binding through the central Alertmanager config. (v0.3) |
 | D30 | Config loading | Resources are Go types with kubebuilder markers from day one, loaded from YAML files in Phases 1 to 3. CRDs and the controller land in hardening. (v0.3) |
 | D31 | Spend cap | `maxRunsPerDay` per Binding, in addition to the rate limit. (v0.3) |
-| D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Courier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). NetworkPolicies restrict the controller port to that front door and kagent's own components, and fence each relay to the controller (the kagent UI) to its own verifying proxy (the chart's oauth2-proxy), which must not accept the Binding's audience. The cluster's CNI must enforce NetworkPolicy. (v0.3, corrected after WP-01, WP-01b and their reviews) |
+| D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Courier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). NetworkPolicies restrict the controller port to that front door and kagent's own components, and fence each relay to the controller (the kagent UI) to its own verifying proxy (the chart's oauth2-proxy), which must not accept the Binding's audience. The front door strips `X-Agent-Name` and `X-User-Id` from every request, because kagent lets them select the acting user (WP-03). The cluster's CNI must enforce NetworkPolicy. (v0.3, corrected after WP-01, WP-01b, WP-03 and their reviews) |
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 
 ## 6. Architecture
@@ -341,7 +341,7 @@ spec:
   dialect: kagent-v1                 # a2a | kagent-v1
   url: https://kagent-frontdoor.kagent-pilot     # verifying proxy, never :8083 (D32)
   headers: []                        # static headers, values may come from Secrets;
-                                     # Authorization and X-User-Id are reserved (D14)
+                                     # Authorization, X-User-Id and X-Agent-Name are reserved (D14, D32)
   allowedNamespaces: ["sre", "payments"]
 ---
 kind: ChatConnection
@@ -490,8 +490,16 @@ is itself a live stream of the same task and context: a `WORKING` snapshot with 
 so far, then the remaining deltas, the `lastChunk` chunk and the final task. After the
 task has ended, the replay returns one snapshot of that task. Either way the task shows a
 single run (one history message, one artifact); whether the model was called a second
-time is not measured. A replay carrying a `contextId` while the task runs (a crash during
-a thread reply) is not yet measured (WP-03). An expired session is kept, not deleted, so courier can tell a reply in an
+time is not measured. A resend carrying a `contextId` (a crash during a thread reply) is not
+deduplicated (WP-03): while the task runs it gets `-32004`, not a live join, and after the
+task ends it starts a second full task. Courier never blindly resends into an existing
+context. Before resending a turn whose task it has not recorded, it calls `ListTasks` with
+the `contextId`, follows `nextPageToken` to the end, and looks for a task whose history
+holds the turn's `messageId` (kagent records it there). Found: reconcile as in 8.3
+(`GetTask`, then `SubscribeToTask` if not terminal). Absent: send. A `-32004` on that send
+means some task is active, possibly an `input-required` pause, so the turn is queued as
+below and the lookup repeats when the active task ends. Whether the model runs twice for a
+duplicate task is not measured; the second task runs in full. An expired session is kept, not deleted, so courier can tell a reply in an
 expired thread (notice) from a reply in a thread it never owned (ignored).
 
 **Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
@@ -571,7 +579,12 @@ other identity. Courier therefore runs every turn in a Binding, chat or alert, a
 Binding's single service identity (`spec.identity`).
 
 - **Backend identity:** the Binding identity, as a bearer token in OIDC mode or
-  `X-User-Id` in insecure mode.
+  `X-User-Id` in insecure mode. The owner is the token's `userIdClaim` (`email` in the
+  pilot), else its `sub`, so the token must carry the same owner claim on every mint.
+- **Ownership is not a boundary on its own.** kagent lets any caller that sends
+  `X-Agent-Name` choose the acting user with `X-User-Id` or `?user_id=`, even alongside a
+  valid token (WP-03). Isolation between Bindings holds only because the front door strips
+  both headers (D32) and courier never sends them.
 - **Attribution:** the Slack user who typed or clicked is resolved (`users.info`,
   cached) and attached by the dialect as message metadata and a prefix the agent can
   see. The prefix is informational; agents must not treat it as authorization, which is
@@ -649,7 +662,7 @@ this with an outbox:
 | Pilot environment | The kagent 1.0 alpha install holds production read credentials. Courier reaches it only through a verifying front door; NetworkPolicies restrict the controller port to that door and kagent's own components, and fence the kagent UI to its own verifying proxy (the UI's nginx relays `/mcp` and `/api` to the controller). The pilot cluster's CNI must enforce NetworkPolicy, or none of these fences exist; whose nginx forwards `/mcp` and `/api` with `Authorization` intact (D32). The agent's credentials are read-only. |
 | Paging path | Every route to courier uses `continue: true`; courier never replaces an existing receiver (D22). |
 | Slack authenticity | Signing secret verification with timestamp check for HTTP mode. Socket Mode uses the app token. |
-| Backend trust | kagent's controller port (8083) trusts identity without verifying it: in insecure mode via `X-User-Id`, and in OIDC mode by decoding the JWT without checking its signature (a forged `alg: none` token was accepted in WP-01). Courier must therefore call a verifying front door (oauth2-proxy or agentgateway) that validates the Binding's token, never 8083 directly. A NetworkPolicy limits 8083 to that front door and kagent's own components (UI, Substrate egress for TaskStore traffic), and a second policy fences the UI (8080) to its own oauth2-proxy, because its nginx relays `/mcp` and `/api` to 8083 with `Authorization` intact. That UI proxy must not accept the Binding's audience; otherwise the Binding token is valid through a second, wider door (WP-01b removed `oidc-extra-audience: courier-binding` for this reason). |
+| Backend trust | kagent's controller port (8083) trusts identity without verifying it: in insecure mode via `X-User-Id`, and in OIDC mode by decoding the JWT without checking its signature (a forged `alg: none` token was accepted in WP-01). It also takes the acting user from `X-User-Id` or `?user_id=` whenever `X-Agent-Name` is present, even with a valid token (WP-03). Courier must therefore call a verifying front door (oauth2-proxy or agentgateway) that validates the Binding's token and strips `X-Agent-Name` and `X-User-Id`, never 8083 directly. The chart's UI nginx already strips both in trusted-proxy mode (source). A NetworkPolicy limits 8083 to that front door and kagent's own components (UI, Substrate egress for TaskStore traffic), and a second policy fences the UI (8080) to its own oauth2-proxy, because its nginx relays `/mcp` and `/api` to 8083 with `Authorization` intact. That UI proxy must not accept the Binding's audience; otherwise the Binding token is valid through a second, wider door (WP-01b removed `oidc-extra-audience: courier-binding` for this reason). |
 | Binding identity scope | Each Binding identity gets only the permissions every member of its channel is trusted with. Separate Bindings, not one shared identity, for channels with different trust levels. |
 | Secrets | Read from Kubernetes Secrets by reference. Never written to CRD status, logs, or the audit table. |
 | Tenancy | Namespaced Bindings with explicit `allowedNamespaces` on shared resources. |
@@ -746,7 +759,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). Phase 5 cannot exit without a recorded R1 decision. `interactions.approverGroups` is reserved in the schema so it can be added without a breaking change. |
 | R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, webhook auth, rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
-| R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode. | High | Courier talks only to a verifying front door (oauth2-proxy or agentgateway); NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. |
+| R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode, and in OIDC mode `X-Agent-Name` plus `X-User-Id` or `?user_id=`, which selects the acting user even with a valid token (WP-03: oauth2-proxy forwards them). | High | Courier talks only to a verifying front door (oauth2-proxy or agentgateway) that strips `X-Agent-Name` and `X-User-Id`; NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. Open until WP-01d: `verify.sh` must show both spoof forms end in `-31403` through the door, while the Binding's own send, SSE and `GetTask` still work. |
 | R5 | No stream replay in kagent. Text produced during a disconnect may be lost from the live view. | Medium | Reconcile from `GetTask` on reconnect and render the final task output. |
 | R6 | Slack rate limits on message edits under many concurrent streams. | Medium | Per-message throttle, global limiter, fall back to `final` output under pressure. |
 | R7 | SQLite limits the default install to one replica. | Low | Documented. Postgres path for HA. |
@@ -768,13 +781,13 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 |---|---|---|
 | Q1 | ~~Does the A2A Go SDK support negotiating the kagent HITL extension?~~ **Resolved (WP-02):** through a2a-go v2.6.0 with `a2aext.NewActivator`, the structured payload arrives; a2a-go v2.6.0's `a2aext.NewActivator` sends `A2A-Extensions` when, and only when, the agent card lists the URI; without the activator, or with a card listing no extension, no header is sent and no payload arrives (measured with controls; matches `a2aext/activator.go`). Payloads are untyped, so courier defines its own structs. Pass the full `.well-known/agent-card.json` URL to `agentcard.Resolve`, and override the card's in-cluster URL with the front door. | Phase 0 |
 | Q2 | What are the rate limits of `chat.startStream` and `chat.update` under many concurrent threads? (Method choice resolved in 8.3.) | Phase 0 |
-| Q3 | How does kagent 1.0 OIDC mode authenticate a non-human service identity, and what claim becomes the session owner? **Partly answered (WP-02):** with `userIdClaim: email` the owner is the `email` claim, and a different email gets `-31403` (for both send and `GetTask`; a token with no `email` is also refused); the default is `sub` (from source). WP-03 confirms with a second real identity behind the front door. | Phase 0 |
+| Q3 | How does kagent 1.0 OIDC mode authenticate a non-human service identity, and what claim becomes the session owner? **Answered (WP-02, WP-03):** kagent has no notion of a service identity. The session owner is a string from the token: the `userIdClaim` claim (`email` in the pilot), else `sub`. Through the front door with real Dex tokens, a second identity gets `-31403` on send, stream, `GetTask`, `SubscribeToTask`, `CancelTask` and `ListTasks` by `contextId`, including while the task runs. An unfiltered `ListTasks` lists only the caller's tasks. The same email with a different `sub` owns the same sessions. A token without `email` passes the door and is owned by its `sub`, so it and the same user's `email` token cannot touch each other's sessions: a Binding's token must carry the same owner claim on every mint. This isolation holds only while the front door strips `X-Agent-Name` and `X-User-Id` (R4). | Phase 0 (closed by WP-01d) |
 | Q4 | Final API group name and project license for the OSS release. | Phase 6 |
 | Q6 | Is one Binding per channel too restrictive for teams wanting several agents in one channel? | Pilot review |
 | Q7 | Which team runs the pilot, and which alerts (by name and severity) are routed first? | Before Phase 2 |
 | Q8 | Where does the pilot kagent install run, and how does production Alertmanager reach courier over TLS? | Phase 0 |
 | Q10 | How does courier obtain and refresh the Binding's OIDC bearer token? A token stored in a Secret expires (Dex: 24 h) and needs external rotation; alternatively courier holds client credentials and mints tokens itself (client-credentials grant; see Q9). Also: courier needs Secret VALUES (Slack tokens, webhook tokens, header values, identity credentials), but the WP-21d resolver returns key names only by design. | Phase 0, after WP-03 |
-| Q9 | Which OIDC provider issues Binding service tokens? It must support the client-credentials grant (Dex does not); otherwise a static service user with the password grant, which is weaker. Client-credentials tokens often lack an `email` claim: the front door must accept them (oauth2-proxy may need `oidc-email-claim`), and kagent falls back to `sub` for identity. | Phase 0 (H-02) |
+| Q9 | Which OIDC provider issues Binding service tokens? It must support the client-credentials grant (Dex does not); otherwise a static service user with the password grant, which is weaker. Client-credentials tokens often lack an `email` claim. The front door accepts one with no configuration change (`oidc-email-claim` is not needed), and kagent then owns sessions by `sub` (WP-03, measured). From source only, for H-02 to check against the real provider: the token must be a signed JWT (an opaque access token fails at the door and at kagent); `aud` must contain the door's client ID or an `--oidc-extra-audience` (`--oidc-audience-claim` selects `azp` if the provider puts the client there); `email_verified: false` is refused unless `--insecure-oidc-allow-unverified-email` is set; the issuer must match discovery. | Phase 0 (H-02) |
 
 Q5 (queue rate-limited alerts) was resolved in v0.3 by D26: digest line, no queue.
 
