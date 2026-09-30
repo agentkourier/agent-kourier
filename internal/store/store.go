@@ -29,6 +29,7 @@ type Store interface {
 	Queue
 	Outbox
 	Sessions
+	SessionTasks
 	Interactions
 	ReplyQueue
 	Audit
