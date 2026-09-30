@@ -151,12 +151,13 @@ func TestFollowKeepsTheErrorsTheCallerActsOn(t *testing.T) {
 		name    string
 		err     error
 		is      []error
-		notLost bool // the agent answered: the stream was not lost
+		notLost bool // the agent answered or refused: the stream was not lost
 	}{
 		{"task not found", a2a.NewError(a2a.ErrTaskNotFound, "task not found"), []error{a2a.ErrTaskNotFound}, true},
 		{"not the owner", a2a.NewError(a2a.ErrUnauthorized, "no"), []error{ErrForbidden}, true},
-		{"401", fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: http.StatusUnauthorized}), []error{ErrCredentialsRejected, ErrStreamLost}, false},
-		{"403", fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: http.StatusForbidden}), []error{ErrCredentialsRejected, ErrStreamLost}, false},
+		{"401", fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: http.StatusUnauthorized}), []error{ErrCredentialsRejected}, true},
+		{"403", fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: http.StatusForbidden}), []error{ErrCredentialsRejected}, true},
+		{"404", fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: http.StatusNotFound}), nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -167,8 +168,13 @@ func TestFollowKeepsTheErrorsTheCallerActsOn(t *testing.T) {
 						t.Errorf("err = %v, want it to match %v", err, want)
 					}
 				}
-				if tc.notLost && errors.Is(err, ErrStreamLost) {
-					t.Errorf("err = %v: the agent answered, so this is not a lost stream", err)
+				var lost *StreamLostError
+				if tc.notLost && (errors.Is(err, ErrStreamLost) || errors.As(err, &lost)) {
+					t.Errorf("err = %v: the agent answered or refused, so this is not a lost stream", err)
+				}
+				var sent, got *dialect.HTTPStatusError
+				if errors.As(tc.err, &sent) && (!errors.As(err, &got) || got.Code != sent.Code) {
+					t.Errorf("err = %v, want the HTTP status %d kept", err, sent.Code)
 				}
 				if n := countOf(m.calls(), "get t1"); n != 1 {
 					t.Errorf("%d GetTask calls, want 1: retrying an answer or a refusal cannot help", n)
@@ -176,6 +182,39 @@ func TestFollowKeepsTheErrorsTheCallerActsOn(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A 429 or 503 is worth the whole budget, and running out of it loses the stream.
+func TestFollowRetriesATransientRefusal(t *testing.T) {
+	for _, code := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		synctest.Test(t, func(t *testing.T) {
+			m := newMemConn(t, nil, nil, getResult{err: fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: code})})
+			err := followAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 })).result()
+			var lost *StreamLostError
+			if !errors.As(err, &lost) || countOf(m.calls(), "get t1") != 3 {
+				t.Errorf("%d: err = %v after %d GetTasks; want a StreamLostError after 3", code, err, countOf(m.calls(), "get t1"))
+			}
+		})
+	}
+}
+
+// Restart-time Follow is how a wedged task (R17) is picked up again: SubscribeToTask opens
+// with the WORKING snapshot and then says nothing, and the watchdog must cut it, or Follow
+// never returns.
+func TestFollowGivesUpOnASilentSubscription(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		subs := []chan item{make(chan item), make(chan item), make(chan item)}
+		m := newMemConn(t, nil, subs, getResult{task: task(a2a.TaskStateWorking, "")})
+		f := followAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 }))
+		for _, sub := range subs {
+			feed(t, sub, item{ev: task(a2a.TaskStateWorking, "")}, f.done) // the opening snapshot, then silence
+		}
+		err := f.result()
+		var lost *StreamLostError
+		if !errors.As(err, &lost) || lost.TaskID != "t1" || countOf(m.calls(), "subscribe t1") != 3 {
+			t.Errorf("err = %v after %d subscribes; want a StreamLostError for t1 after 3", err, countOf(m.calls(), "subscribe t1"))
+		}
+	})
 }
 
 func TestFollowFailsWithoutAConnectionOrATask(t *testing.T) {

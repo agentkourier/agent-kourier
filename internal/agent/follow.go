@@ -21,9 +21,12 @@ import (
 //     a2a.ErrTaskNotFound) when it no longer knows the task (the session may be gone),
 //     ErrForbidden when the caller does not own it.
 //   - A stream that drops is resumed up to MaxReconnects times in a row, then Follow returns
-//     a *StreamLostError carrying the task ID, so the caller may follow again later.
-//   - A 401 or 403 also comes back as a *StreamLostError, and matches ErrCredentialsRejected:
-//     the caller re-mints the credential (D34).
+//     a *StreamLostError carrying the task ID, so the caller may follow again later. That
+//     includes a 429 or 503 that outlasts the reconnects.
+//   - A request the backend refuses (a 4xx other than 429) is not a lost stream: it comes
+//     back at once, typed, and does not match ErrStreamLost. A 401 or 403 matches
+//     ErrCredentialsRejected: the caller re-mints the credential (D34), and already holds
+//     the task ID.
 //
 // h may be nil. A task ID is required.
 func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) error {
@@ -36,20 +39,23 @@ func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) error {
 	}
 	asm := newAssembler(h, a.tool)
 	asm.taskID = id
-	switch err = a.resume(ctx, conn, asm); {
-	case err == nil:
-		return nil
-	case !dropped(ctx, err):
-		if ctx.Err() == nil { // the agent answered; a cancelled caller keeps its own error
+	fail := func(err error) error { // the agent answered, or refused, or the caller gave up
+		if ctx.Err() == nil {
 			err = typed(err, false)
 		}
 		return fmt.Errorf("follow task %s: %w", id, err)
 	}
+	switch err = a.resume(ctx, conn, asm); {
+	case err == nil:
+		return nil
+	case !dropped(ctx, err):
+		return fail(err)
+	}
 	switch err = a.reconnect(ctx, asm, err); {
 	case err == nil:
 		return nil
-	case ctx.Err() != nil:
-		return fmt.Errorf("follow task %s: %w", id, err)
+	case ctx.Err() != nil || permanent(err):
+		return fail(err)
 	}
 	return &StreamLostError{TaskID: id, ContextID: asm.contextID, Err: typed(err, false)}
 }
