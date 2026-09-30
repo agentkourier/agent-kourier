@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 )
 
 // StateValues is what a user entered in a message's input elements: block_id,
@@ -164,7 +165,9 @@ func findElements(blocks json.RawMessage) elements {
 // over it.
 //
 // UNCONFIRMED(WP-04): the name of each element type's value field (unlisted
-// types use "value"), and that Slack sends unanswered inputs this way.
+// types use "value"); that Slack sends unanswered inputs this way; and that
+// multi-answer elements (checkboxes and the multi_* selects) are sent as an
+// empty list where the others are null.
 func (es elements) state(values StateValues) (StateValues, error) {
 	out, defs := StateValues{}, map[[2]string]map[string]any{}
 	for _, e := range es {
@@ -176,7 +179,12 @@ func (es elements) state(values StateValues) (StateValues, error) {
 			out[e.blockID] = map[string]map[string]any{}
 		}
 		actionID := e.element["action_id"].(string)
-		out[e.blockID][actionID] = map[string]any{"type": typ, valueField(typ): nil}
+		field := valueField(typ)
+		var unanswered any // null, or an empty list where the field holds several answers
+		if strings.HasSuffix(field, "s") {
+			unanswered = []any{}
+		}
+		out[e.blockID][actionID] = map[string]any{"type": typ, field: unanswered}
 		defs[[2]string{e.blockID, actionID}] = e.element
 	}
 	for blockID, actions := range values {
@@ -208,6 +216,22 @@ func valueField(typ string) string {
 		return "selected_date"
 	case "timepicker":
 		return "selected_time"
+	case "datetimepicker":
+		return "selected_date_time"
+	case "users_select":
+		return "selected_user"
+	case "multi_users_select":
+		return "selected_users"
+	case "conversations_select":
+		return "selected_conversation"
+	case "multi_conversations_select":
+		return "selected_conversations"
+	case "channels_select":
+		return "selected_channel"
+	case "multi_channels_select":
+		return "selected_channels"
+	case "rich_text_input":
+		return "rich_text_value"
 	}
 	return "value"
 }

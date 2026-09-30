@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"testing"
@@ -167,6 +168,9 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 		{"misspelled field", "/_control/mention", `{"chanel": "C1"}`, 400},
 		{"a field of another endpoint", "/_control/reply", `{"channel": "C1", "message_ts": "1.2", "user": "U1"}`, 400},
 		{"trailing garbage", "/_control/dm", `{"user": "U1", "text": "hi"} {"user": "U2"}`, 400},
+		{"user without an id", "/_control/users", `{"name": "ada"}`, 400},
+		{"members without a channel", "/_control/members", `{"users": ["U1"]}`, 400},
+		{"dm without text", "/_control/dm", `{"user": "U1"}`, 400},
 		{"mention without a channel", "/_control/mention", map[string]string{"user": "U1", "text": mentionText}, 400},
 		{"submit an option the select does not offer", "/_control/submit", map[string]any{"user": "U1", "message_ts": ask, "action_id": "submit",
 			"values": map[string]any{"q2": map[string]any{"pick": map[string]any{"selected_option": map[string]string{"value": "zzz"}}}}}, 400},
@@ -257,15 +261,22 @@ func TestCloseEndsAckWaits(t *testing.T) {
 		t.Fatalf("SendEnvelope: %v", err)
 	}
 	waitEvent(t, smc, socketmode.EventTypeSlashCommand) // delivered, and never acked
-	polled := make(chan struct{})
+	polled, sent := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(polled)
-		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, fake.URL()+"/_control/acks/"+id+"?timeout=30s", nil)
+		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { close(sent) }})
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fake.URL()+"/_control/acks/"+id+"?timeout=30s", nil)
 		if resp, err := http.DefaultClient.Do(req); err == nil {
 			_ = resp.Body.Close()
+		} else {
+			select {
+			case <-sent:
+			default:
+				close(sent) // the request never went out; do not hang the test
+			}
 		}
 	}()
-	time.Sleep(100 * time.Millisecond) // let the poll start waiting
+	<-sent // the poll is on its way to the server
 	start := time.Now()
 	fake.Close()
 	<-polled

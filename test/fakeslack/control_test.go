@@ -120,6 +120,7 @@ func TestUserActionsRefuseWhatSlackWouldNotSend(t *testing.T) {
 		{"mention with no user", func() (fakeslack.UserMessage, error) { return fake.Mention("C1", "", mentionText) }},
 		{"reply with no thread", func() (fakeslack.UserMessage, error) { return fake.Reply("C1", "", "U1", "x") }},
 		{"reply with no user", func() (fakeslack.UserMessage, error) { return fake.Reply("C1", root, "", "x") }},
+		{"reply with no text", func() (fakeslack.UserMessage, error) { return fake.Reply("C1", root, "U1", "") }},
 		{"DM from no user", func() (fakeslack.UserMessage, error) { return fake.DM("", "x") }},
 	}
 	for _, tc := range tests {

@@ -103,8 +103,8 @@ func (s *Server) channelType(channel string) string {
 // leaves after that check, the message stays stored and the error is
 // ErrNoConnection: the event is lost, as it would be in Slack.
 func (s *Server) userMessage(channel, threadTS, user, text string) (UserMessage, error) {
-	if channel == "" || user == "" {
-		return UserMessage{}, invalid("fakeslack: a user message needs a channel and a user")
+	if channel == "" || user == "" || text == "" {
+		return UserMessage{}, invalid("fakeslack: a user message needs a channel, a user and text")
 	}
 	if s.Connections() == 0 {
 		return UserMessage{}, ErrNoConnection

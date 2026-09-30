@@ -21,14 +21,21 @@ func isControlPath(p string) bool { return p == "/_control" || strings.HasPrefix
 // The JSON bodies of the control endpoints. Each endpoint takes exactly the
 // fields of its Go method, and refuses any others.
 type (
-	mentionReq struct{ Channel, User, Text string }
-	replyReq   struct {
+	mentionReq struct {
+		Channel string `json:"channel"`
+		User    string `json:"user"`
+		Text    string `json:"text"`
+	}
+	replyReq struct {
 		Channel  string `json:"channel"`
 		ThreadTS string `json:"thread_ts"`
 		User     string `json:"user"`
 		Text     string `json:"text"`
 	}
-	dmReq    struct{ User, Text string }
+	dmReq struct {
+		User string `json:"user"`
+		Text string `json:"text"`
+	}
 	clickReq struct {
 		User      string `json:"user"`
 		MessageTS string `json:"message_ts"`
@@ -103,8 +110,17 @@ func (s *Server) newControlRoutes() controlRoutes {
 	mux.HandleFunc("POST /_control/submit", post(func(q submitReq) (any, error) {
 		return envelopeID(s.Submit(q.User, q.MessageTS, q.ActionID, q.Values))
 	}))
-	mux.HandleFunc("POST /_control/users", post(func(u User) (any, error) { s.AddUser(u); return struct{}{}, nil }))
+	mux.HandleFunc("POST /_control/users", post(func(u User) (any, error) {
+		if u.ID == "" {
+			return nil, invalid("fakeslack: a user needs an id")
+		}
+		s.AddUser(u)
+		return struct{}{}, nil
+	}))
 	mux.HandleFunc("POST /_control/members", post(func(q membersReq) (any, error) {
+		if q.Channel == "" {
+			return nil, invalid("fakeslack: a channel's members need a channel")
+		}
 		s.SetMembers(q.Channel, q.Users...)
 		return struct{}{}, nil
 	}))
@@ -155,7 +171,9 @@ func (s *Server) controlAck(w http.ResponseWriter, r *http.Request) {
 }
 
 // post wraps a control call as a handler. It decodes the JSON body strictly: a
-// field the endpoint does not take, or anything after the body, is a 400.
+// field the endpoint does not take, or anything after the body, is a 400. It
+// inherits encoding/json's rules, which are that keys match field names without
+// regard to case and that a key given twice takes its last value.
 func post[T any](call func(T) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in T
