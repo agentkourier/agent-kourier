@@ -1,25 +1,28 @@
-# Fence the kagent controller. Port 8083 serves the public A2A gateway and, on the same
-# listener, the actors' private TaskStore gRPC (it arrives via Substrate's egress gateway),
-# so those callers must stay admitted or no task ever completes. In trusted-proxy mode the
-# controller does not verify JWTs, so this policy is the only thing between another pod and
-# any identity (spec section 10, "Backend trust").
+# Three policies that make the verifying front door (frontdoor.yaml) the only route from courier
+# to the kagent controller. kagent's controller does not verify JWTs (WP-01, spec D32/R4), so
+# these policies decide who is trusted; the front door decides whether a token is genuine.
+#   1. the controller (8083) admits the front door, the UI nginx, and Substrate's egress gateway;
+#   2. the UI (8080) admits only the UI's own oauth2-proxy, because its nginx relays /mcp, /api/
+#      and /a2a/ to 8083 with Authorization intact and would otherwise be a way around the door;
+#   3. the front door (4180) admits only courier pods.
+# What is left: a pod that can carry these labels in these namespaces (in kagent, or in courier
+# with the courier label) is trusted, and the actors' TaskStore calls arrive unauthenticated via
+# atenet-egress (kagent #1660, spec R11). Namespace RBAC has to keep that set small.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: controller-admit-courier-only
+  name: controller-admit-frontdoor-only
   namespace: kagent
 spec:
   podSelector:
     matchLabels: {app.kubernetes.io/component: controller}
   policyTypes: [Ingress]
   ingress:
-    - from: # courier, in its own namespace ("courier" is kind-only; the spec examples use courier-system)
-        - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: courier}
-          podSelector:
-            matchLabels: {app.kubernetes.io/name: courier}
-      ports: [{port: 8083, protocol: TCP}]
-    - from: # kagent's UI nginx (behind oauth2-proxy) and Substrate's egress gateway
+    # Port 8083 also carries the actors' private TaskStore gRPC, which arrives via Substrate's
+    # egress gateway; without that source no task ever completes (WP-01 finding 2).
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: kagent-frontdoor}
         - podSelector:
             matchLabels: {app.kubernetes.io/component: ui}
         - namespaceSelector:
@@ -27,3 +30,35 @@ spec:
           podSelector:
             matchLabels: {app: atenet-egress}
       ports: [{port: 8083, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ui-admit-oauth2-proxy-only
+  namespace: kagent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: ui}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: oauth2-proxy}
+      ports: [{port: 8080, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontdoor-admit-courier-only
+  namespace: kagent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: kagent-frontdoor}
+  policyTypes: [Ingress]
+  ingress:
+    - from: # courier, in its own namespace ("courier" is kind-only; the spec examples use courier-system)
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: courier}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: courier}
+      ports: [{port: 4180, protocol: TCP}]

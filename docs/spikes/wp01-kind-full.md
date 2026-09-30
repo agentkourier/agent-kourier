@@ -7,15 +7,17 @@ Run 2026-09-29 on Docker Desktop for Mac (Docker 29.8.0, aarch64, LinuxKit kerne
 
 The full tier runs reproducibly on macOS. `make e2e-full-up` builds it from nothing and
 proves the acceptance criteria itself (`hack/kind/full/verify.sh`); three clean runs passed
-(178 s, 148 s, and 180 s after the review fixes). gVisor is not the problem: Substrate's
+(178 s, 148 s, and 180 s after the review fixes). WP-01b replaced the security checks in
+`verify.sh` and added a front door; its clean run took 223 s and a re-run 95 s (below). gVisor is not the problem: Substrate's
 atelet downloads the aarch64 `runsc`, and actors run under it, checkpoint, and restore. The
 golden snapshot became Ready and an A2A `SendMessage` returned the mock model's answer. No
 isolation-weakening workaround was used.
 
-Evidence, verbatim from the final run:
+Evidence, an excerpt from the final WP-01 run (its `verify.sh` checks were superseded by
+WP-01b's, see the last section):
 
 ```
-I0930 02:12:02.877670      21 config.go:554] Platform: systrap          # worker pod, runsc
+I0930 02:12:02.877670      21 config.go:554] Platform: systrap
 == labelled pod: agent card and SendMessage through the controller
 ok: card served and mock answer returned
 == unlabelled pod: connection to port 8083 must time out
@@ -24,6 +26,8 @@ ok: unlabelled pod cannot reach the controller
 proxy: real=200 forged=403; controller: forged=200
 full tier up in 180s (context kind-courier-full)
 ```
+
+The `Platform: systrap` line is from the worker pod's runsc log.
 
 `Platform: systrap` means gVisor needs no KVM here.
 
@@ -46,23 +50,25 @@ Findings that change the design, in order of importance:
    trusted-proxy` decodes the bearer JWT without checking signature or expiry
    (`docs/architecture/oidc-proxy-authentication.md`, read from source docs and confirmed
    by measurement). Measured: an unsigned `alg: none` token claiming `mallory@evil.test`
-   gets 200 on the controller's port 8083, and `verify.sh` keeps that as a canary. The same
-   token through oauth2-proxy (port 4180) gets 403; that shows the proxy rejects an unsigned
-   token, not that it checks signatures (a token forged from a real one is not yet tested).
-   Spec section 10 says "OIDC mode with per-Binding service tokens"; straight to 8083 the
-   token proves nothing and the NetworkPolicy is the only control.
-   **oauth2-proxy does not yet give courier a working, verified A2A path.** The UI nginx at
-   alpha5 has no `/agents/` location (it forwards `/a2a/`, `/mcp`, `/api/` to 8083 with
-   `Authorization` intact), so the 200 the proxy returns for `/agents/...` with a real token
-   is the SPA shell, not the agent card. Earlier drafts of this note claimed the proxy
-   routes `/agents/`; that was wrong. Also, the UI pod carries no NetworkPolicy, so any pod
-   can use the UI relay to reach 8083 with its own headers. WP-01b (a courier front door
-   that routes A2A, a UI relay fence, and forged tokens derived from the real token) closes
-   these.
+   gets 200 on the controller's port 8083. Spec section 10 says "OIDC mode with per-Binding
+   service tokens"; straight to 8083 the token proves nothing and the NetworkPolicy is the
+   only control. WP-01 left three sub-findings open; WP-01b closed them (evidence in the last
+   section):
+   - *No working, verified A2A path.* The UI nginx at alpha5 has no `/agents/` location, so the
+     200 the UI's oauth2-proxy returned for `/agents/...` with a real token was the SPA shell,
+     not the card (earlier drafts of this note said the proxy routes `/agents/`; that was
+     wrong). **Closed:** a dedicated front door forwards `/agents/` to the controller; card,
+     `SendMessage`, HITL payloads, and SSE streaming pass through it.
+   - *The UI relay was unfenced.* The UI pod had no NetworkPolicy, so any pod could use its
+     nginx to reach 8083 with its own headers. **Closed:** a policy admits only the UI's
+     oauth2-proxy pods to 8080.
+   - *Signature checking was not tested.* A 403 for an unsigned token shows the proxy rejects
+     it, not that it checks signatures. **Closed:** tokens forged from a real one (real
+     signature with an altered payload; `alg: none` with the real payload) are refused.
 2. **Port 8083 is not only the A2A port.** The actors' private TaskStore gRPC lands on the
    same listener, arriving from Substrate's `atenet-egress` pod. A policy admitting only
    courier makes every send fail with `KAGENT_SEND_NOT_ACCEPTED` (measured). The shipped
-   policy admits courier (namespace `courier`), the kagent UI, and `atenet-egress`. Also:
+   policy admits the front door, the kagent UI, and `atenet-egress`. Also:
    kagent's e2e README says TaskStore currently trusts an unsigned identity header in every
    deployment (#1660), so any pod that can reach 8083 is trusted. This sharpens R11.
 3. **Dex has no `client_credentials` grant** (v2.45.1 supports authorization code, refresh,
@@ -89,6 +95,8 @@ Findings that change the design, in order of importance:
 | Dex | `ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd6...808462` (tag and digest) |
 | mockllm | `kagent-dev/mockllm` commit `35792a0` (tag `v0.1.0`), built locally as `courier-e2e/mockllm:v0.1.0`; build image `golang:1.25.14@sha256:69933...dc80`, runtime image `gcr.io/distroless/static-debian12@sha256:d75cdd...43f2` |
 | CNI | kindnet `v20251212-v0.29.0-alpha-105-g20ccfc88`, bundled in the node image |
+| Front door | `quay.io/oauth2-proxy/oauth2-proxy:v7.15.3@sha256:10a11657...f1f561` (index digest; the chart's tag) |
+| Streaming test model | `python:3.13-alpine@sha256:79e7a9b9...120e6f` (tag and digest), serving `slow-agent`'s model from a ConfigMap |
 | Probe image | `curlimages/curl:8.11.1@sha256:c1fe1679...9a69` (tag and digest) |
 | Host tools | kind v0.33.0 and helm v4.3.0 were used; the scripts check that the tools exist, not their versions |
 
@@ -97,9 +105,10 @@ Substrate's newest tag (v0.3.0-alpha3): kagent has not been tested against later
 
 ## Measurements
 
-- **Bring-up from nothing:** 178 s, 148 s, and 180 s (host has the node image and a warm Go
-  builder layer cache; ghcr images are pulled fresh each time). Idempotent re-run: 24 s
-  (measured before the review fixes, which add a mockllm rebuild and restart).
+- **Bring-up from nothing:** 178 s, 148 s, and 180 s; 223 s with WP-01b (front door, second
+  agent, and a longer verify). Host has the node image and a warm Go builder layer cache;
+  ghcr images are pulled fresh each time. Idempotent re-run: 95 s with WP-01b (24 s in
+  WP-01, before the review fixes added a mockllm rebuild and restart).
 - **Memory:** kind node container 1.90 to 2.14 GiB of 7.65 GiB across five samples. Largest
   working sets: kube-apiserver 381 MiB, atelet 119, kube-controller-manager 95, rustfs 81,
   etcd 62, kagent Postgres 59, Substrate Postgres 52, kagent controller 48.
@@ -109,9 +118,9 @@ Substrate's newest tag (v0.3.0-alpha3): kagent has not been tested against later
 ## Network policy
 
 kindnet enforces NetworkPolicy in this node image, so no CNI was installed. Evidence: with
-no policy an unlabelled pod reached the controller; with `controller-admit-courier-only`
-applied the same probe exits 28 (timeout) while a pod labelled
-`app.kubernetes.io/name=courier` still gets the card and the answer. Established
+no policy an unlabelled pod reached the controller; with the controller policy
+applied the same probe exits 28 (timeout) while an admitted pod still gets the card and the
+answer (WP-01 used `controller-admit-courier-only`; WP-01b's policies are described below). Established
 connections survive a new policy (conntrack): restart the controller and `atenet-egress`
 before believing a negative result. Send `messageId` must be unique per test run; kagent
 replays the stored task for a repeated one, which hid a blocked path once.
@@ -135,13 +144,15 @@ replays the stored task for a repeated one, which hid a blocked path once.
 
 ## Not verified
 
-Streaming, HITL payloads, busy rejection, session ownership across identities, and behavior
-across controller restarts. Those belong to WP-14 and the Phase 0 spike.
+Busy rejection, session ownership across identities, and behavior across controller restarts
+(WP-02 measured the first two behind a port-forward; WP-03 repeats ownership through the front
+door), and token expiry and issuer checks at the front door. Streaming and the HITL header
+are covered by the WP-01b section.
 
 ## Reproduce
 
 ```
-make e2e-full-up   # about 3 minutes; runs hack/kind/full/verify.sh last
+make e2e-full-up   # about 4 minutes; runs hack/kind/full/verify.sh last
 make e2e-down      # deletes only the courier-full cluster and the mockllm image
 ```
 
@@ -152,3 +163,105 @@ script"; both messages were exercised against a decoy cluster and a stopped node
 tier fits a Docker host: the node is annotated with the creating checkout, and both scripts
 warn when another checkout reuses or deletes it. Not removed by `e2e-down`: the host's
 `kindest/node` image and the cached `bin/kubectl-ate-*`.
+
+## WP-01b: courier's verifying front door
+
+Run 2026-09-30 on the same host: a clean `make e2e-full-up` (223 s), then a re-run (95 s).
+Everything is **measured** unless marked *inferred*.
+
+**What was built.** A second oauth2-proxy (`full/frontdoor.yaml`, image v7.15.3, the chart's
+version) in front of `kagent-controller:8083`. The chart's `extraArgs` map cannot repeat
+`upstream`, hence a separate instance; agentgateway was not chosen because the image and the
+token logic are already in this cluster, and the Binding needs one route. It runs with
+`--skip-jwt-bearer-tokens`, `--client-id=courier-binding` as the only audience,
+`--force-json-errors` (a JSON 401 instead of a login redirect), `--pass-authorization-header`,
+`--flush-interval=100ms`, and `--upstream=http://kagent-controller...:8083/agents/`. The
+proxy logged `mapping path "/agents/" => upstream ".../agents/"`, so anything else (`/api/`,
+`/mcp`, `/`) is a 404 at the door (`/api/agents` is asserted; the others were seen while building). Three NetworkPolicies (`full/networkpolicy.yaml`):
+the controller admits the front door, the UI nginx, and `atenet-egress`; the UI (8080) admits
+only the UI's oauth2-proxy; the front door admits only courier pods.
+
+**`verify.sh` from the clean run** (every line is an assertion on a body, a status code, or a
+curl exit code; only exit 28, a timeout, counts as "refused"):
+
+```
+== courier pod: A2A through the front door, nothing else reachable
+ok: card served through the front door
+ok: SendMessage answered
+ok: A2A-Extensions reaches the controller: HITL payload present
+ok: without the header the payload is absent
+ok: front door forwards only /agents/
+ok: SSE stream complete
+ok: SSE events arrive incrementally (5 s apart)
+ok: no route to the controller on 8083
+ok: no route to the kagent UI relay on 8080
+== courier pod: forged, foreign-audience, and missing tokens
+ok: forgery A has a different payload
+ok: real token accepted at the front door
+ok: A: real signature, altered email, refused
+ok: B: alg none, real payload, refused
+ok: token minted for another client (audience) refused
+ok: no token refused
+ok: UI door refuses the Binding's token
+ok: UI door serves a UI-audience token through the fenced UI
+== canary: the controller does not verify JWTs (kagent 1.0.0-alpha5)
+ok: controller accepted both forgeries (expected at alpha5)
+== courier-labelled pod in another namespace: no route to the controller, the front door, or the UI
+ok: control: the pod itself has network (Dex answers)
+ok: no route to http://kagent-controller.kagent.svc.cluster.local:8083/agents/kagent/test-agent/.well-known/agent-card.json
+ok: no route to http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/test-agent/.well-known/agent-card.json
+ok: no route to http://kagent-ui.kagent.svc.cluster.local:8080/mcp
+== unlabelled pod: no route to the controller, the front door, or the UI
+ok: control: the pod itself has network (Dex answers)
+ok: no route to http://kagent-controller.kagent.svc.cluster.local:8083/agents/kagent/test-agent/.well-known/agent-card.json
+ok: no route to http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/test-agent/.well-known/agent-card.json
+ok: no route to http://kagent-ui.kagent.svc.cluster.local:8080/mcp
+```
+
+**What each closed finding rests on.**
+
+- *A2A path.* The card body names `test_agent` and `SendMessage` returns "The answer is 4."
+  through the door. `A2A-Extensions` survives the hop: with the header the reply to an
+  ask-user prompt carries the `ask_user_request` payload, without it the payload is absent
+  (this is why `mockllm.yaml` gained a scripted `ask_user` answer). Streaming: a second agent
+  (`slow-agent`) whose model emits a chunk a second for five seconds; through the door the
+  first and last SSE events arrived 5 s apart (asserted at least 3 s), so nothing buffers.
+  Not exercised: a non-streaming call longer than the door's `--upstream-timeout=10m`, which
+  is a choice, not a measurement.
+- *Forgery.* A real Dex token was re-encoded two ways: the real header and signature with
+  the payload's `email` changed to `mallory@evil.test`, and `{"alg":"none"}` with the real
+  payload and no signature. Both get 401 at the door; the real token gets 200. A token Dex
+  minted for the other client (audience `kagent-ui`) and a missing token also get 401, so
+  the audience is enforced. Signature and audience are measured. **Issuer and expiry are
+  not tested** (Dex's ID tokens live 24 h); that oauth2-proxy checks them is *inferred* from
+  its OIDC verifier.
+- *Canary.* Both forgeries get 200 on the controller's 8083 from a pod the policy admits
+  (labelled as the UI nginx, in `kagent`). kagent alpha5 still does not verify; the check
+  fails with "kagent now verifies JWTs on 8083; revisit D32/R4" if that changes.
+- *UI relay.* Before the fence (checked while building this, not in `verify.sh`), an
+  unlabelled pod in `default` with a forged `alg: none` token got 200 from
+  `kagent-ui:8080/api/agents`, `/api/sessions`, and the agent card under `/a2a/`, so the
+  relay does forward a forged identity to 8083 (`GET /mcp` gave 405, not a refusal). With
+  the policy the same requests time out. `verify.sh` asserts exit 28 to the UI for a
+  courier pod, a courier-labelled pod in `default`, and an unlabelled pod, and the Dex
+  control request in each probe shows the pod itself had network.
+- *Label spoofing.* A pod labelled `app.kubernetes.io/name=courier` in `default` reaches
+  neither 8083 (no policy admits a courier pod there) nor the front door (its policy selects
+  the `courier` namespace as well as the label).
+
+**A second door, closed.** The UI's oauth2-proxy accepted the Binding's token because
+`kagent-values.yaml` set `oidc-extra-audience: courier-binding`, which would have let courier
+reach `/api/`, `/mcp`, and `/a2a/` through the UI. That line is removed; the UI door now
+answers 403 to the Binding's token and 200 to a `kagent-ui` token (both asserted).
+
+**Residual risk (not fixed here).**
+- The trust set is labels: a pod that can be created in `kagent` with the controller-admitted
+  labels, or in `courier` with the courier label, is trusted. Namespace RBAC has to keep both
+  small. *Inferred:* a pilot CNI must enforce NetworkPolicy; kindnet does here.
+- TaskStore trusts an unsigned identity header from actors (kagent #1660); the policy admits
+  `atenet-egress` to 8083 because actors need it. R11 stands.
+- `kubectl port-forward` reaches 8083 without passing a NetworkPolicy (WP-02 relied on it);
+  whoever holds that RBAC can already act as anyone.
+- The card advertises `http://kagent-controller.kagent.svc:8083/agents/...` as its interface
+  URL, so an SDK client that follows the card lands on the blocked port. Courier must
+  replace the URL with the front door's (WP-25).

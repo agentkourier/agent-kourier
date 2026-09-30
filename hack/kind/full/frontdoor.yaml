@@ -1,0 +1,60 @@
+# The courier front door: a second oauth2-proxy that verifies the Binding's Dex token (signature
+# by the issuer's keys, issuer, audience = courier-binding, expiry) and forwards only /agents/ to
+# the kagent controller. kagent's own OIDC mode decodes JWTs without verifying them, so courier
+# must never reach port 8083 except through this pod (spec D32, R4). A separate instance because
+# the chart's oauth2-proxy has one `upstream` (the UI) and its extraArgs map cannot repeat it.
+# Chosen over agentgateway because the image and the token logic are already in this cluster.
+# TEST ONLY: fake client secret; a pilot install issues its own and terminates TLS in front.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kagent-frontdoor
+  namespace: kagent
+spec:
+  selector: {app.kubernetes.io/name: kagent-frontdoor}
+  ports: [{port: 4180, targetPort: 4180}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-frontdoor
+  namespace: kagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: kagent-frontdoor}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: kagent-frontdoor}
+    spec:
+      containers:
+        - name: oauth2-proxy
+          # Index digest of v7.15.3, the version the kagent chart ships.
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=oidc
+            - --oidc-issuer-url=http://dex.dex.svc.cluster.local:5556/dex
+            - --client-id=courier-binding # the only accepted audience: no --oidc-extra-audience
+            - --email-domain=*
+            # Bearer JWTs only. A request without a verified one gets a JSON 401, not a login redirect.
+            - --skip-jwt-bearer-tokens=true
+            - --force-json-errors=true
+            # /agents/ is the whole A2A surface (send, stream, card); /api, /mcp and the rest are 404 here.
+            - --upstream=http://kagent-controller.kagent.svc.cluster.local:8083/agents/
+            # The controller derives the session owner from the bearer token, so it must arrive intact.
+            - --pass-authorization-header=true
+            # SSE: flush every chunk; long timeout because a non-streaming send waits for the model.
+            - --flush-interval=100ms
+            - --upstream-timeout=10m
+            - --cookie-secure=false
+            - --silence-ping-logging=true
+          env:
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: kagent-frontdoor, key: client-secret}}
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: kagent-frontdoor, key: cookie-secret}}
+          ports: [{containerPort: 4180}]
+          readinessProbe:
+            httpGet: {path: /ping, port: 4180}
+            periodSeconds: 3

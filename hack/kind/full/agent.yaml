@@ -23,4 +23,5 @@ spec:
         # bundled Substrate stores snapshots in RustFS (S3, bucket ate-snapshots), and atelet
         # logs show objects landing under the key prefix kagent/. The gs:// form is what
         # kagent's own CI uses with the same Substrate defaults; other values are untested.
+        # A real cluster (WP-05) sets a location in a bucket it owns, never this one.
         location: gs://ate-snapshots/kagent/

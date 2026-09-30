@@ -1,9 +1,8 @@
 # TEST ONLY: disposable kind cluster. kagent 1.0.0-alpha5 values for the full E2E tier.
 # A pilot install must replace, at least:
 #   - controller.auth trusted-proxy: the controller does not verify JWTs, so it needs a
-#     verifying front door and a fenced port 8083 (docs/spikes/wp01-kind-full.md)
+#     verifying front door (frontdoor.yaml) and fenced ports 8083 and 8080 (networkpolicy.yaml)
 #   - oauth2-proxy cookie-secure: false, the http:// Dex issuer, and the localhost redirect
-#   - oidc-extra-audience: courier-binding, a Dex test client
 #   - providers.openAI apiKey (fake) and config.baseUrl (mockllm) with the real model
 # Substrate is installed separately (up-full.sh), as in kagent's own CI, so the chart's
 # substrate subchart stays off. up-full.sh passes substrateWorkerPool.workerImage so the
@@ -32,7 +31,7 @@ providers:
       baseUrl: http://mockllm.kagent.svc.cluster.local:8080/v1
 controller:
   # "OIDC mode" is trusted-proxy: the controller decodes the bearer JWT WITHOUT verifying it,
-  # so oauth2-proxy must validate every request and NetworkPolicy must fence port 8083.
+  # so a verifying proxy must validate every request and NetworkPolicy must fence port 8083.
   auth:
     mode: trusted-proxy
     userIdClaim: email
@@ -48,6 +47,6 @@ oauth2-proxy:
     oidc-issuer-url: http://dex.dex.svc.cluster.local:5556/dex
     redirect-url: http://localhost:4180/oauth2/callback
     upstream: http://kagent-ui:8080
-    # Accept ID tokens minted for the Binding's Dex client as well as the proxy's own.
-    oidc-extra-audience: courier-binding
+    # No oidc-extra-audience: this UI door takes only the UI's own tokens. The Binding's token
+    # (audience courier-binding) belongs to the front door, which forwards /agents/ alone.
     cookie-secure: false

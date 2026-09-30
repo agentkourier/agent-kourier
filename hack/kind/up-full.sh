@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Bring up the full E2E tier from nothing: kind, Agent Substrate (gVisor), kagent 1.0 alpha in
-# OIDC mode behind Dex, mockllm as the model, one test agent, and the controller NetworkPolicy.
+# OIDC mode behind Dex, mockllm as the model, two test agents, courier's verifying front door,
+# and the NetworkPolicies that make that door the only way in.
 # Safe to re-run. Findings and workarounds: docs/spikes/wp01-kind-full.md.
 # One full tier per Docker host: the cluster name is fixed, so parallel worktrees share it.
 set -eEuo pipefail
 
 # Pinned versions. Substrate must be the version kagent pins (its go.mod replace directive).
-# Dex and the probe image are pinned in full/dex.yaml and full/verify.sh.
+# Dex, the front door, and the probe image are pinned in full/dex.yaml, full/frontdoor.yaml, full/verify.sh.
 NODE_IMAGE=kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 SUBSTRATE_VERSION=0.3.0-alpha1
 KAGENT_VERSION=1.0.0-alpha5
@@ -139,6 +140,10 @@ kind load docker-image "${MOCKLLM_IMAGE}" --name "${CLUSTER}"
 "${K[@]}" -n kagent get secret kagent-oidc >/dev/null 2>&1 ||
   "${K[@]}" -n kagent create secret generic kagent-oidc --from-literal=client-id=kagent-ui \
     --from-literal=client-secret=fake-oauth2-proxy-secret --from-literal=cookie-secret="$(openssl rand -hex 16)"
+# The front door's credentials: the courier-binding client from dex.yaml, its own cookie key.
+"${K[@]}" -n kagent get secret kagent-frontdoor >/dev/null 2>&1 ||
+  "${K[@]}" -n kagent create secret generic kagent-frontdoor --from-literal=client-secret=fake-courier-binding-secret \
+    --from-literal=cookie-secret="$(openssl rand -hex 16)"
 
 step "kagent ${KAGENT_VERSION}"
 "${H[@]}" upgrade --install kagent-crds "${KAGENT_OCI}/kagent-crds" --namespace kagent --version "${KAGENT_VERSION}" \
@@ -148,9 +153,12 @@ step "kagent ${KAGENT_VERSION}"
   --set-string "substrateWorkerPool.workerImage=ghcr.io/kagent-dev/substrate/ateom-gvisor:v${SUBSTRATE_VERSION}" \
   --wait --timeout 8m >/dev/null
 
-step "test agent and NetworkPolicy"
-"${K[@]}" apply -f "${FULL}/agent.yaml" -f "${FULL}/networkpolicy.yaml" >/dev/null
-"${K[@]}" -n kagent wait --for=condition=Ready agent/test-agent --timeout=300s
+step "test agents, front door, NetworkPolicy"
+"${K[@]}" apply -f "${FULL}/agent.yaml" -f "${FULL}/slow-agent.yaml" -f "${FULL}/frontdoor.yaml" -f "${FULL}/networkpolicy.yaml" >/dev/null
+# WP-01's policy had another name and apply does not prune; left in place it would still admit courier.
+"${K[@]}" -n kagent delete networkpolicy controller-admit-courier-only --ignore-not-found >/dev/null
+"${K[@]}" -n kagent rollout status deploy/slowllm deploy/kagent-frontdoor --timeout=180s
+"${K[@]}" -n kagent wait --for=condition=Ready agent/test-agent agent/slow-agent --timeout=300s
 
 step "verify"
 "${FULL}/verify.sh"

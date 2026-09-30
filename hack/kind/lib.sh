@@ -6,7 +6,6 @@ CLUSTER=courier-full
 # Set on the kind node by full/kind-config.yaml; proves this tooling created the cluster.
 OWNER_LABEL=courier.agent-courier.dev/owner=up-full
 # Set by up-full.sh after creation; records which checkout owns the cluster.
-# shellcheck disable=SC2034 # read by up-full.sh
 CHECKOUT_KEY=courier.agent-courier.dev/checkout
 
 die() {
@@ -17,7 +16,9 @@ die() {
 # node_kubectl ARGS...: kubectl against the courier-full cluster using kind's own kubeconfig
 # for it, never the host's current context.
 node_kubectl() {
-  kubectl --kubeconfig <(kind get kubeconfig --name "${CLUSTER}") --request-timeout=20s "$@"
+  # kind's stderr is dropped: callers report failure themselves, and its message must not
+  # read as advice (the ERR trap in up-full.sh prints the recovery step).
+  kubectl --kubeconfig <(kind get kubeconfig --name "${CLUSTER}" 2>/dev/null) --request-timeout=20s "$@"
 }
 
 cluster_exists() {
@@ -36,7 +37,8 @@ assert_owned() {
 # owner_checkout: the checkout path recorded on the node, or "unknown".
 owner_checkout() {
   local path
+  # jsonpath wants the dots in the annotation key escaped.
   path=$(node_kubectl get nodes -l "${OWNER_LABEL}" \
-    -o "jsonpath={.items[0].metadata.annotations.courier\.agent-courier\.dev/checkout}" 2>/dev/null) || path=
+    -o "jsonpath={.items[0].metadata.annotations.${CHECKOUT_KEY//./\\.}}" 2>/dev/null) || path=
   echo "${path:-unknown}"
 }

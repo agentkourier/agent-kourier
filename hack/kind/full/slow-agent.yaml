@@ -1,0 +1,77 @@
+# A test agent whose model streams one chunk a second for five seconds, so verify.sh can tell an
+# SSE stream that reaches courier incrementally from one a proxy buffered (mockllm cannot delay
+# chunks). The model server is inline Python: nothing to build.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: slowllm, namespace: kagent}
+data:
+  server.py: |
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    def chunk(text, finish="null"):
+        return ('data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-4.1-mini","choices":'
+                '[{"index":0,"delta":{"role":"assistant","content":"%s"},"finish_reason":%s}]}\n\n' % (text, finish))
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for i in range(1, 6):
+                self.wfile.write(chunk("tick %d " % i).encode())
+                self.wfile.flush()
+                time.sleep(1)
+            self.wfile.write((chunk("", '"stop"') + "data: [DONE]\n\n").encode())
+
+    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: slowllm, namespace: kagent}
+spec:
+  selector: {matchLabels: {app: slowllm}}
+  template:
+    metadata: {labels: {app: slowllm}}
+    spec:
+      containers:
+        - name: slowllm
+          image: python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f
+          command: ["python", "/app/server.py"]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: slowllm}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: slowllm, namespace: kagent}
+spec: {selector: {app: slowllm}, ports: [{port: 8080}]}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: slow-model, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: gpt-4.1-mini
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  openAI: {baseUrl: "http://slowllm.kagent.svc.cluster.local:8080/v1"}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: slow-agent, namespace: kagent}
+spec:
+  template:
+    modelConfig: {name: slow-model}
+    description: Streams five chunks a second apart
+    systemPrompt: Reply.
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef: {name: kagent-default}
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see agent.yaml
