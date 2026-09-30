@@ -395,7 +395,9 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 				}
 				if recordErr == nil {
 					m.mu.Lock()
-					delete(m.attempted, key) // taken and recorded: never a resend
+					if m.attempted[key].id == r.ID { // this turn's own record: taken, so never a resend
+						delete(m.attempted, key)
+					}
 					m.mu.Unlock()
 				}
 			}

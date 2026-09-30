@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -165,4 +166,107 @@ func TestRecoverSkipsExpiredSessionsAndUnknownBindings(t *testing.T) {
 			}
 		})
 	}
+}
+
+// queuedBeforeTheRestart queues turn 1 on the conversation, with no runner to take it.
+func queuedBeforeTheRestart(t *testing.T, f *fixture) {
+	t.Helper()
+	wake := f.m.wake
+	f.m.wake = func(Key) {}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	f.m.wake = wake
+}
+
+func (f *fixture) queueEmpty() bool {
+	_, err := f.st.NextReply(f.t.Context(), key)
+	return errors.Is(err, store.ErrNotFound)
+}
+
+// A crash between recording the task and marking the turn delivered leaves a session with a
+// task and a head that is that very task's turn. The history says so (FindTask): the head is
+// marked delivered by following the task, and never sent again, or the turn would run twice.
+func TestRecoverTakesTheHeadForTheRunningTurn(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	f.agent.find = func(_, id string) (*a2a.Task, []a2a.TaskID, error) {
+		if id != inbound("1").MessageID {
+			t.Errorf("looked up %s; want the head", id)
+		}
+		return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	eventually(t, "the head to be delivered", f.queueEmpty)
+	if sends, _, _ := f.agent.counts(); sends != 0 {
+		t.Errorf("%d sends; want none: the head is the running turn", sends)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) == 0 || sink.refs[0].MessageID != inbound("1").MessageID {
+		t.Errorf("turn refs = %+v; want the output under the head's turn", sink.refs)
+	}
+}
+
+// A head that is a later reply, queued behind the running task, waits for it, and is then looked
+// up once more, as any turn that may have been sent before the crash, before it goes out.
+func TestRecoverKeepsAHeadBehindTheRunningTask(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	f.recover(t)
+	waitFinal(t, sink) // the task t1 ends
+	waitFinal(t, sink) // then the head, sent
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if want := "[find follow find send]"; fmt.Sprint(f.agent.seq) != want {
+		t.Errorf("calls = %v; want %s: the head is matched, the task followed, the head looked up, then sent once", f.agent.seq, want)
+	}
+}
+
+// With no task recorded, a head of a conversation that has a context may have been sent before
+// the crash: it is looked up, and followed if found, sent only if absent. A first turn has no
+// context to look in, and is sent at once, for the agent deduplicates it by messageId.
+func TestRecoverLooksUpAQueuedHeadBeforeSendingIt(t *testing.T) {
+	setup := func(t *testing.T, noTask bool) (*fixture, *fakeSink) {
+		f, sink := restarted(t)
+		if noTask {
+			if err := f.st.SetSessionTask(t.Context(), key, "", ""); err != nil { // context c1 stays
+				t.Fatal(err)
+			}
+		}
+		queuedBeforeTheRestart(t, f)
+		return f, sink
+	}
+	t.Run("absent: sent", func(t *testing.T) {
+		f, sink := setup(t, true)
+		f.recover(t)
+		waitFinal(t, sink)
+		f.agent.mu.Lock()
+		defer f.agent.mu.Unlock()
+		if want := "[find send]"; fmt.Sprint(f.agent.seq) != want {
+			t.Errorf("calls = %v; want %s", f.agent.seq, want)
+		}
+	})
+	t.Run("found: followed, not sent", func(t *testing.T) {
+		f, sink := setup(t, true)
+		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+			return &a2a.Task{ID: "t7", ContextID: "c1"}, []a2a.TaskID{"t7"}, nil
+		}
+		f.recover(t)
+		waitFinal(t, sink)
+		if sends, _, follows := f.agent.counts(); sends != 0 || follows != 1 {
+			t.Errorf("%d sends, %d follows; want the found task followed and nothing sent", sends, follows)
+		}
+	})
+	t.Run("a first turn, with no context: sent at once", func(t *testing.T) {
+		f := newFixture(t)
+		sink := f.live()
+		queuedBeforeTheRestart(t, f) // Submit made the session, with no context
+		f.recover(t)
+		waitFinal(t, sink)
+		if sends, finds, _ := f.agent.counts(); sends != 1 || finds != 0 {
+			t.Errorf("%d sends, %d lookups; want one send and no lookup", sends, finds)
+		}
+	})
 }

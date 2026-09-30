@@ -74,12 +74,30 @@ func (m *Manager) recoverKey(key Key) {
 		log.Error("recover: read session", "error", err)
 		return
 	}
+	// The in-memory record of what was sent is gone, so a head of a conversation with a context may
+	// have been sent before the crash: it is looked up before it is sent. A first turn has no
+	// context to look in, and its resend is deduplicated by the agent.
+	head, herr := m.cfg.Store.NextReply(m.ctx, key)
+	if herr == nil && sess.ContextID != "" {
+		m.mu.Lock()
+		m.attempted[key] = attempt{id: head.ID, unknown: true}
+		m.mu.Unlock()
+	}
 	if sess.TaskID == "" {
 		m.start(key)
 		return
 	}
-	// A task is recorded. The runner follows it first, before anything queued is sent.
-	t := &tstate{key: key, r: store.Reply{ID: "task:" + sess.TaskID, Key: key}, sess: sess, b: backend,
+	// A task is recorded. The runner follows it first, before anything queued is sent. If the head
+	// is that task's own turn (a crash between recording the task and marking the turn delivered),
+	// the task's history says so: the turn is then the task's, marked delivered by following it, and
+	// never sent again.
+	turnRow := store.Reply{ID: "task:" + sess.TaskID, Key: key}
+	if herr == nil && sess.ContextID != "" {
+		if task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID); err == nil && task != nil && string(task.ID) == sess.TaskID {
+			turnRow = head
+		}
+	}
+	t := &tstate{key: key, r: turnRow, sess: sess, b: backend,
 		follow: true, taskID: a2a.TaskID(sess.TaskID), recovered: true}
 	started := m.startWith(key, func(c *convo) {
 		t.c, c.follow, c.ttl, c.since = c, t, backend.ThreadTTL, m.cfg.Now()
