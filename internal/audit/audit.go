@@ -357,18 +357,20 @@ func orElse[T ~string](have, fallback T) T {
 	return fallback
 }
 
-// gluedBearer catches what store.RedactSecrets, which needs whitespace after "bearer", misses:
+// gluedBearer catches what store.RedactSecrets, which needs a gap after "bearer", misses:
 // a colon separator ("Bearer: X"), and a token glued to the scheme after a format character
 // (a zero-width space, say) vanished. The glued form needs a run of 8 or more characters
 // starting with a letter or digit, so an identifier such as "ns/bearer-gateway" survives.
+// The store now treats Unicode gaps as whitespace itself (WP-23c); the cleaning here is
+// defence in depth, and the store holds without it.
 var gluedBearer = regexp.MustCompile(`(?i)bearer(?::\s*\S+|[A-Za-z0-9]\S{7,})`)
 
 // clean makes s safe for a row: it deletes format characters, turns control characters and
 // every Unicode space into an ASCII space, redacts secrets, and caps s at limit bytes,
-// ending in "..." when it cut. The order matters. Spaces become ASCII first because
-// RedactSecrets' \s matches only ASCII whitespace, so a token behind a no-break space
-// would survive. Redaction runs before the cut, so a token cannot be cut short of its
-// pattern.
+// ending in "..." when it cut. The order matters. Format characters are deleted and spaces
+// unified first, as defence in depth: the store's RedactSecrets handles Unicode gaps on its
+// own since WP-23c, and the redaction does not depend on this step. Redaction runs before the
+// cut, so a token cannot be cut short of its pattern.
 func clean(s string, limit int) string {
 	s = strings.Map(func(r rune) rune {
 		switch {
