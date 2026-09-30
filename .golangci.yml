@@ -26,11 +26,11 @@ linters:
   settings:
     depguard:
       rules:
-        fakeslack-is-test-only:
+        test-code-is-test-only:
           files: ["$all", "!$test", "!**/test/**"]
           deny:
-            - pkg: github.com/agentkourier/agent-kourier/test/fakeslack
-              desc: the fake Slack is for tests; import it only from _test.go files and under test/
+            - pkg: github.com/agentkourier/agent-kourier/test/
+              desc: packages under test/ (fakes, stubs, e2e helpers) are for tests; import them only from _test.go files and under test/
     nolintlint:
       require-explanation: true
       require-specific: true
