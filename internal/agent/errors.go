@@ -28,25 +28,34 @@ var (
 	ErrStreamLost = errors.New("agent: stream ended before the task did")
 )
 
-// sendError types the error that ended a send. taskID is the task the agent named, if any.
-// answer is true when the message answered an interaction.
-func sendError(ctx context.Context, err error, taskID a2a.TaskID, answer bool) error {
-	var rpcErr *a2a.Error
+// typed maps the agent's JSON-RPC errors to this package's; other errors pass through.
+// answer is true when the call was an answer to an interaction.
+func typed(err error, answer bool) error {
 	switch {
-	case ctx.Err() != nil:
-		return fmt.Errorf("send message: %w", err)
-	case errors.As(err, &rpcErr):
-		switch {
-		case errors.Is(err, a2a.ErrUnsupportedOperation):
-			return fmt.Errorf("%w: %w", ErrBusy, err)
-		case errors.Is(err, a2a.ErrUnauthorized):
-			return fmt.Errorf("%w: %w", ErrForbidden, err)
-		case answer && errors.Is(err, a2a.ErrInternalError):
-			return fmt.Errorf("%w: %w", ErrAnswerRejected, err)
-		}
-		return fmt.Errorf("send message: %w", err)
-	case taskID != "":
-		return fmt.Errorf("%w: %w", ErrStreamLost, err)
+	case errors.Is(err, a2a.ErrUnsupportedOperation):
+		return fmt.Errorf("%w: %w", ErrBusy, err)
+	case errors.Is(err, a2a.ErrUnauthorized):
+		return fmt.Errorf("%w: %w", ErrForbidden, err)
+	case answer && errors.Is(err, a2a.ErrInternalError):
+		return fmt.Errorf("%w: %w", ErrAnswerRejected, err)
+	}
+	return err
+}
+
+// isProtocol reports whether err is one the agent itself returned, as opposed to a
+// dropped connection: the task is not "lost", the agent said no.
+func isProtocol(err error) bool {
+	var rpcErr *a2a.Error
+	return errors.As(err, &rpcErr)
+}
+
+// sendError types the error that ended a send. taskID is the task the agent named, if any.
+func sendError(ctx context.Context, err error, taskID a2a.TaskID, answer bool) error {
+	switch {
+	case ctx.Err() == nil && isProtocol(err):
+		err = typed(err, answer)
+	case ctx.Err() == nil && taskID != "":
+		err = fmt.Errorf("%w: %w", ErrStreamLost, err)
 	}
 	return fmt.Errorf("send message: %w", err)
 }

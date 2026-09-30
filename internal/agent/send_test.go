@@ -110,14 +110,14 @@ func TestLostStream(t *testing.T) {
 		serve    func(http.ResponseWriter)
 		wantLost bool
 	}{
-		{"reset after the task began", func(w http.ResponseWriter) { sse(t, w, "livestream/01-slow-stream.response.sse", 4); drop() }, true},
-		{"ended cleanly before the task settled", func(w http.ResponseWriter) { sse(t, w, "livestream/01-slow-stream.response.sse", 4) }, true},
+		{"reset after the task began, and no reconnect works", func(w http.ResponseWriter) { sse(t, w, "livestream/01-slow-stream.response.sse", 4); drop() }, true},
+		{"ended cleanly before the task settled, and no reconnect works", func(w http.ResponseWriter) { sse(t, w, "livestream/01-slow-stream.response.sse", 4) }, true},
 		{"reset before any event", func(http.ResponseWriter) { drop() }, false},
 		{"server error", func(w http.ResponseWriter) { http.Error(w, "boom", http.StatusBadGateway) }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { tc.serve(w) })
-			err := fa.agent(t).Send(t.Context(), message("hi"), nil)
+			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { tc.serve(w) }) // reconnects get the same
+			err := fa.agentWith(t, quick).Send(t.Context(), message("hi"), nil)
 			if err == nil || errors.Is(err, ErrStreamLost) != tc.wantLost {
 				t.Errorf("err = %v, want ErrStreamLost = %v (only once the agent has named a task)", err, tc.wantLost)
 			}
@@ -140,7 +140,7 @@ func TestSendReturnsTheContextError(t *testing.T) {
 
 func TestSendFailsWhenThereIsNoConnection(t *testing.T) {
 	boom := errors.New("no token")
-	err := New(func(context.Context) (Conn, error) { return nil, boom }).Send(t.Context(), message("hi"), nil)
+	err := New(func(context.Context) (Conn, error) { return nil, boom }, Config{}).Send(t.Context(), message("hi"), nil)
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the source's error", err)
 	}
