@@ -73,6 +73,13 @@ func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID 
 	return s.Store.SetSessionTask(ctx, k, contextID, taskID)
 }
 
+func (s *spyStore) ResetSession(ctx context.Context, k Key) error {
+	if err := s.failOnce("reset"); err != nil {
+		return err
+	}
+	return s.Store.ResetSession(ctx, k)
+}
+
 func (s *spyStore) MarkReplyDelivered(ctx context.Context, id string, at time.Time) error {
 	if err := s.failOnce("mark"); err != nil {
 		return err
@@ -119,7 +126,8 @@ type fixture struct {
 	amu              sync.Mutex
 	rejected, audits []audit.Call // what Rejected and the Auditor were given
 	attr             func(*a2a.Message, dialect.User)
-	noRejected       bool // the Backend has no identity Source to call Rejected on
+	bindingErr       error // when set, every Binding lookup fails with it (guarded by amu)
+	noRejected       bool  // the Backend has no identity Source to call Rejected on
 }
 
 func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
@@ -139,6 +147,12 @@ func (f *fixture) AgentCall(_ context.Context, _ audit.Actor, c audit.Call) erro
 
 // Backend makes the fixture the Bindings: ns/b1 has a threadTTL of 1 h, ns/b2 of 1000 h.
 func (f *fixture) Backend(name string) (Backend, error) {
+	f.amu.Lock()
+	err := f.bindingErr
+	f.amu.Unlock()
+	if err != nil {
+		return Backend{}, err
+	}
 	ttl, ok := map[string]time.Duration{"ns/b1": time.Hour, "ns/b2": 1000 * time.Hour}[name]
 	if !ok {
 		return Backend{}, ErrUnknownBinding
@@ -412,5 +426,21 @@ func TestSubmitBindingGone(t *testing.T) {
 	res, err := f.submit(inbound("1700.01"))
 	if got, _ := f.session(); err != nil || res.Disposition != BindingGone || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
 		t.Errorf("Submit = %+v, %v; session %+v, %d touches, woke %d; want BindingGone and no change", res, err, got, f.st.touches, f.woke)
+	}
+}
+
+// A Binding lookup that fails for any reason but ErrUnknownBinding (a config reload, say) is an
+// error, not a removed Binding: nothing is written, queued or woken, and the queue handler
+// retries.
+func TestSubmitTransientBindingErrorIsNotBindingGone(t *testing.T) {
+	f := newFixture(t)
+	seeded := f.seed("ns/b1", 0)
+	reload := errors.New("config reload in progress")
+	f.amu.Lock()
+	f.bindingErr = reload
+	f.amu.Unlock()
+	res, err := f.submit(inbound("1700.01"))
+	if got, _ := f.session(); !errors.Is(err, reload) || res.Disposition == BindingGone || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
+		t.Errorf("Submit = %+v, %v; want the lookup's own error and nothing written", res, err)
 	}
 }

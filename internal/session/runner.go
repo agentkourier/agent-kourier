@@ -182,6 +182,8 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	if errors.Is(err, ErrUnknownBinding) { // it left the config since the turn was queued: no retry loop
 		t := &tstate{key: key, c: c, r: r, sess: sess}
 		m.notice(t, NoticeBindingGone, "")
+		// Delivered_at on this row means dropped, not sent: recovery and audit readers must not
+		// take it for a turn the agent received.
 		return ended, m.cfg.Store.MarkReplyDelivered(sctx, r.ID, m.cfg.Now())
 	} else if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
@@ -334,10 +336,17 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 // reset, context and task together, so the next turn starts a fresh session. The thread stays
 // owned. UNCONFIRMED: what kagent answers for a task or session it dropped (spec 8.2).
 func (m *Manager) gone(t *tstate) (outcome, error) {
-	m.notice(t, NoticeSessionGone, "")
+	if err := m.cfg.Store.ResetSession(context.WithoutCancel(m.ctx), t.key); err != nil {
+		// Not reset, so not told and not moved on: the task is followed again, which finds it gone
+		// again and retries the reset, or the session would keep its dead context for ever.
+		t.c.follow, t.follow = t, true
+		t.c.tries++
+		return blocked, fmt.Errorf("reset session: %w", err)
+	}
+	m.notice(t, NoticeSessionGone, "") // its ID names the turn, so a repeat after a retry is harmless
 	t.c.follow = nil
 	t.c.settle()
-	return ended, m.cfg.Store.ResetSession(context.WithoutCancel(m.ctx), t.key)
+	return ended, nil
 }
 
 // resume follows the task of a turn whose stream was lost. A task WORKING for longer than

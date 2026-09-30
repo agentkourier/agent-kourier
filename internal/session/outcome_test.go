@@ -402,34 +402,44 @@ func TestSessionGoneStartsAFreshContext(t *testing.T) {
 		{"GetTask does not know the task", notFound, nil},
 		{"Follow does not know the task", nil, notFound},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t)
-			sink := f.live()
-			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
-			f.agent.script = lost(errors.New("connection reset"))
-			f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) { return working(t0)(id) }
-			if tc.get != nil {
-				f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, tc.get }
+		for _, resetFails := range []bool{false, true} { // a failed reset is retried, not forgotten
+			tc, resetFails := tc, resetFails
+			name := tc.name
+			if resetFails {
+				name += ", and the reset fails once"
 			}
-			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return tc.followTo }
-			for _, ts := range []string{"1", "2"} {
-				if _, err := f.submit(inbound(ts)); err != nil {
-					t.Fatal(err)
+			t.Run(name, func(t *testing.T) {
+				f := newFixture(t)
+				if resetFails {
+					f.st.fail["reset"] = errors.New("database is locked")
 				}
-			}
-			waitFinal(t, sink) // turn 2
-			if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "1" {
-				t.Errorf("session-gone notices = %+v; want one, for turn 1", got)
-			}
-			f.agent.mu.Lock()
-			defer f.agent.mu.Unlock()
-			if second := f.agent.msgs[1]; second.ContextID != "" {
-				t.Errorf("turn 2 was sent in context %q; want none: a fresh session", second.ContextID)
-			}
-			if sess, _ := f.session(); sess.Binding != "ns/b1" || !sess.LastActivity.Equal(t0) {
-				t.Errorf("session = %+v; want the Binding and activity kept", sess)
-			}
-		})
+				sink := f.live()
+				f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+				f.agent.script = lost(errors.New("connection reset"))
+				f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) { return working(t0)(id) }
+				if tc.get != nil {
+					f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, tc.get }
+				}
+				f.agent.follow = func(a2a.TaskID, agent.Handler) error { return tc.followTo }
+				for _, ts := range []string{"1", "2"} {
+					if _, err := f.submit(inbound(ts)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				waitFinal(t, sink) // turn 2
+				if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "1" {
+					t.Errorf("session-gone notices = %+v; want one, for turn 1", got)
+				}
+				f.agent.mu.Lock()
+				defer f.agent.mu.Unlock()
+				if second := f.agent.msgs[1]; second.ContextID != "" {
+					t.Errorf("turn 2 was sent in context %q; want none: a fresh session", second.ContextID)
+				}
+				if sess, _ := f.session(); sess.Binding != "ns/b1" || !sess.LastActivity.Equal(t0) {
+					t.Errorf("session = %+v; want the Binding and activity kept", sess)
+				}
+			})
+		}
 	}
 }
 

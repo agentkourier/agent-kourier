@@ -586,3 +586,22 @@ func (f *fixture) cancelled() []a2a.TaskID {
 	defer f.agent.mu.Unlock()
 	return append([]a2a.TaskID(nil), f.agent.cancels...)
 }
+
+// A Binding lookup that fails for another reason than a removed Binding must never drop a live
+// turn: it stays queued, with no notice.
+func TestTransientBindingErrorLeavesTheTurnQueued(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.wake = func(Key) {}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	f.amu.Lock()
+	f.bindingErr = errors.New("config reload in progress")
+	f.amu.Unlock()
+	f.m.start(key)
+	time.Sleep(100 * time.Millisecond)
+	if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != inbound("1").MessageID || len(sink.noticesOf(NoticeBindingGone)) != 0 {
+		t.Errorf("queue head %+v, %v; want the turn still queued and no notice", next, err)
+	}
+}
