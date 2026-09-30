@@ -98,27 +98,48 @@ func TestUnusablePause(t *testing.T) {
 		got.Outcome != "unusable_pause: parse: unusable pause: no request id" {
 		t.Errorf("row = %+v, want the pause with its reason", got)
 	}
+	for _, c := range []struct {
+		err  error
+		want string
+	}{{nil, "unusable_pause_cancel: ok"}, {errors.New("boom"), "unusable_pause_cancel: failed"}} {
+		if err := w.UnusablePauseCancel(ctx, who, "t1", "c1", c.err); err != nil {
+			t.Fatalf("UnusablePauseCancel: %v", err)
+		}
+		last := rows(t, s)
+		if last := last[len(last)-1]; last.Outcome != c.want || last.Subject != "task=t1 context=c1" || last.Kind != store.AuditAgentCall {
+			t.Errorf("last row = %+v, want %q on the pause's subject", last, c.want)
+		}
+	}
 	if err := w.UnusablePause(ctx, who, "", "", cause); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("UnusablePause naming no task or context = %v, want ErrInvalid", err)
 	}
 }
 
+// bearerVariants hide a token behind a separator that a naive strip would glue shut or
+// that Go's ASCII-only \s would not match.
+var bearerVariants = []string{
+	"Bearer\tSECRETA1", "Authorization: Bearer\nSECRETA2", "Bearer\u200bSECRETA3", "Bearer\u00a0SECRETA4", "Bearer\u2003SECRETA5",
+	"Bearer\u00a0 SECRETA6", "Bearer\u200b SECRETA7", // each needs its own layer: the space map, the format-character delete
+}
+
 func TestNoSecretsInStoredRows(t *testing.T) {
-	w, s := newWriter(t)
 	ctx := context.Background()
-	canary := strings.Join(fakes, " ")
-	leaky := Actor{User: canary, Email: canary, Identity: canary, Binding: canary}
-	_ = w.Event(ctx, leaky, SourceSlack, canary, EventAccepted)
-	_ = w.UnusablePause(ctx, leaky, a2a.TaskID(canary), canary, fmt.Errorf("%w: %s", dialect.ErrUnusablePause, canary))
-	got := rows(t, s)
-	if len(got) != 2 {
-		t.Fatalf("got %d rows, want 2", len(got))
-	}
-	for _, e := range got {
-		all := fmt.Sprintf("%+v", e)
-		for _, secret := range append(fakes, "canary.fake.token") {
-			if strings.Contains(all, secret) {
-				t.Errorf("%s row holds %q: %+v", e.Kind, secret, e)
+	for _, canary := range append([]string{strings.Join(fakes, " ")}, bearerVariants...) {
+		w, s := newWriter(t)
+		leaky := Actor{User: canary, Email: canary, Identity: canary, Binding: canary}
+		_ = w.Event(ctx, leaky, SourceSlack, canary, EventAccepted)
+		_ = w.UnusablePause(ctx, leaky, a2a.TaskID(canary), canary, fmt.Errorf("%w: %s", dialect.ErrUnusablePause, canary))
+		_ = w.UnusablePauseCancel(ctx, leaky, a2a.TaskID(canary), canary, errors.New(canary))
+		got := rows(t, s)
+		if len(got) != 3 {
+			t.Fatalf("%q: got %d rows, want 3", canary, len(got))
+		}
+		for _, e := range got {
+			all := fmt.Sprintf("%+v", e)
+			for _, secret := range append(fakes, "canary.fake.token", "SECRETA") {
+				if strings.Contains(all, secret) {
+					t.Errorf("%q: %s row holds %q: %+v", canary, e.Kind, secret, e)
+				}
 			}
 		}
 	}
@@ -138,25 +159,46 @@ func TestAgentTextIsCapped(t *testing.T) {
 	}
 }
 
-type failing struct{ store.Audit }
-
-func (failing) AppendAudit(context.Context, store.AuditEntry) error {
-	return errors.New("disk full " + fakes[0])
+type failing struct {
+	store.Audit
+	err error
 }
 
+func (f failing) AppendAudit(context.Context, store.AuditEntry) error { return f.err }
+
 func TestWriteFailureIsReturnedLoggedAndMetered(t *testing.T) {
-	var logs bytes.Buffer
-	var metered []store.AuditKind
-	w := New(failing{}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil)), OnFailure: func(k store.AuditKind) { metered = append(metered, k) }})
-	err := w.Event(context.Background(), who, SourceAlert, "evt-1", EventAccepted)
-	if err == nil || !strings.Contains(err.Error(), "disk full") {
-		t.Fatalf("Event = %v, want the store's error wrapped", err)
+	for _, secret := range append([]string{fakes[0]}, bearerVariants...) {
+		var logs bytes.Buffer
+		var metered []store.AuditKind
+		w := New(failing{err: errors.New("disk full " + secret)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+			OnFailure: func(k store.AuditKind) { metered = append(metered, k) }})
+		err := w.Event(context.Background(), who, SourceAlert, "evt-1", EventAccepted)
+		if err == nil || !strings.Contains(err.Error(), "disk full") || strings.Contains(err.Error(), "SECRETA") || strings.Contains(err.Error(), fakes[0]) {
+			t.Fatalf("%q: Event = %v, want the store's error wrapped, with no secret", secret, err)
+		}
+		if len(metered) != 1 || metered[0] != store.AuditEvent {
+			t.Errorf("metered = %v, want one event failure", metered)
+		}
+		out := logs.String()
+		if !strings.Contains(out, "audit write failed") || strings.Contains(out, fakes[0]) || strings.Contains(out, "SECRETA") || strings.Contains(out, "evt-1") {
+			t.Errorf("%q: log = %q, want a failure line with neither the entry nor a secret", secret, out)
+		}
 	}
-	if len(metered) != 1 || metered[0] != store.AuditEvent {
-		t.Errorf("metered = %v, want one event failure", metered)
-	}
-	if out := logs.String(); !strings.Contains(out, "audit write failed") || strings.Contains(out, fakes[0]) || strings.Contains(out, "evt-1") {
-		t.Errorf("log = %q, want a failure line with neither the entry nor a secret", out)
+}
+
+func TestReturnedErrorsAreCleanAndStillUnwrap(t *testing.T) {
+	w, _ := newWriter(t)
+	ctx := context.Background()
+	leaky := "Bearer SECRETA1"
+	for name, err := range map[string]error{
+		"event outcome":   w.Event(ctx, who, SourceAlert, leaky, "bogus"),
+		"event binding":   w.Event(ctx, Actor{}, SourceAlert, leaky, EventAccepted),
+		"pause subject":   w.UnusablePause(ctx, who, "", "", errors.New(leaky)),
+		"pause cause nil": w.UnusablePause(ctx, who, "t1", "", nil),
+	} {
+		if !errors.Is(err, store.ErrInvalid) || strings.Contains(err.Error(), "SECRETA") {
+			t.Errorf("%s: err = %v, want ErrInvalid with no secret in its text", name, err)
+		}
 	}
 }
 

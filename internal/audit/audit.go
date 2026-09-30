@@ -1,26 +1,26 @@
 // Package audit is the typed writer over the audit store (spec G8, sections 8.4, 8.5, 10).
 //
 // The router, the session manager and the interaction flow call it, so no caller builds a
-// store.AuditEntry by hand. It takes identifiers and typed outcomes, never payloads, and
-// renders an outcome from the error's type, never its text, so a token or header value in
-// an error message cannot reach a row. Every string that does reach a row (identifiers,
-// an unusable pause's reason) is stripped of control characters, run through
-// store.RedactSecrets and capped, because the store redacts only Subject and Outcome.
+// store.AuditEntry by hand. It takes identifiers and typed outcomes, never payloads. Every
+// string that reaches a row (identifiers, and an unusable pause's reason, which is fixed
+// dialect text, spec 8.4 step 1) is cleaned, run through store.RedactSecrets and capped,
+// because the store redacts only Subject and Outcome. Returned errors and the failure log
+// are cleaned the same way.
 //
-// Failure policy. The spec says every event, call and decision is audited (G8) and that
-// events are never dropped silently (section 11), but is silent on a failed audit write.
-// This package never drops one silently: each failure is logged (without the entry),
-// counted through Options.OnFailure, and returned, wrapped. The caller decides. The
-// intended split: a record that authorizes an action (Event before enqueueing, Decision
-// before sending the answer) fails the operation, because an unaudited approval must not
-// take effect; a record of something already done (AgentCall, UnusablePause) must not
-// stop the follow-up, above all the cancel of an unusable pause.
+// Failure policy (spec 8.6 step 7). No write is dropped silently: each failure is logged
+// (without the entry), counted through Options.OnFailure, and returned. The caller then
+// follows the spec. A record that authorizes an action fails the action: Event before the
+// event is queued (the webhook answers 5xx, so Alertmanager retries) and Decision before
+// the answer is sent. A record of something already done (AgentCall, UnusablePause and
+// its cancel, UnusablePauseCancel) is logged, metered and returned, and never blocks the
+// follow-up, above all the cancel.
 package audit
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -34,6 +34,7 @@ import (
 const (
 	maxField  = 256 // longest identifier kept, in bytes
 	maxReason = 120 // longest agent-derived reason kept, in bytes
+	maxError  = 300 // longest returned error text, in bytes
 )
 
 // Actor is who an entry is attributed to, where known (spec 8.5): the Slack user, their
@@ -104,22 +105,42 @@ func (w *Writer) Event(ctx context.Context, a Actor, src Source, eventID string,
 	switch outcome {
 	case EventAccepted, EventDeduped, EventRateLimited, EventDailyCapped, EventDenied:
 	default:
-		return fmt.Errorf("audit event %q: unknown outcome %q: %w", eventID, outcome, store.ErrInvalid)
+		return fail(store.ErrInvalid, "audit event %q: unknown outcome %q", eventID, outcome)
 	}
 	if a.Binding == "" {
-		return fmt.Errorf("audit event %q: a Binding is required: %w", eventID, store.ErrInvalid)
+		return fail(store.ErrInvalid, "audit event %q: a Binding is required", eventID)
 	}
 	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), clean(eventID, maxField), string(src)+": "+string(outcome))
 }
 
-// UnusablePause records a pause the dialect could not use (cause wraps
-// dialect.ErrUnusablePause, spec 8.4 step 1). Record its cancel with AgentCall and OpCancel.
+// UnusablePause records a pause the dialect could not use (spec 8.4 step 1). cause wraps
+// dialect.ErrUnusablePause, whose text is fixed by the dialect and never repeats what the
+// agent sent, so the reason is stored, cleaned and capped like every other string. Record
+// the cancel that follows with UnusablePauseCancel.
 func (w *Writer) UnusablePause(ctx context.Context, a Actor, taskID a2a.TaskID, contextID string, cause error) error {
-	subj := subject(taskID, contextID, "")
-	if subj == "" || cause == nil {
-		return fmt.Errorf("audit unusable pause: a task or context ID and a cause are required: %w", store.ErrInvalid)
+	if cause == nil {
+		return fail(store.ErrInvalid, "audit unusable pause: a cause is required")
 	}
-	return w.append(ctx, store.AuditAgentCall, a, w.opts.Now(), subj, "unusable_pause: "+clean(cause.Error(), maxReason))
+	return w.pause(ctx, a, taskID, contextID, "unusable_pause: "+clean(cause.Error(), maxReason))
+}
+
+// UnusablePauseCancel records the cancel of an unusable pause: ok when cancelErr is nil,
+// failed otherwise. Its text is never stored. A failed write here must not stop the cancel
+// (spec 8.6 step 7), so call it after the cancel, whatever the write returns.
+func (w *Writer) UnusablePauseCancel(ctx context.Context, a Actor, taskID a2a.TaskID, contextID string, cancelErr error) error {
+	outcome := "unusable_pause_cancel: ok"
+	if cancelErr != nil {
+		outcome = "unusable_pause_cancel: failed"
+	}
+	return w.pause(ctx, a, taskID, contextID, outcome)
+}
+
+func (w *Writer) pause(ctx context.Context, a Actor, taskID a2a.TaskID, contextID, outcome string) error {
+	subj := subject(taskID, contextID, "")
+	if subj == "" {
+		return fail(store.ErrInvalid, "audit unusable pause: a task or context ID is required")
+	}
+	return w.append(ctx, store.AuditAgentCall, a, w.opts.Now(), subj, outcome)
 }
 
 // append cleans a's fields and writes the entry, detached from ctx's cancellation.
@@ -133,9 +154,24 @@ func (w *Writer) append(ctx context.Context, kind store.AuditKind, a Actor, at t
 		if w.opts.OnFailure != nil {
 			w.opts.OnFailure(kind)
 		}
-		return fmt.Errorf("audit %s: %w", kind, err)
+		return fail(err, "audit %s", kind)
 	}
 	return nil
+}
+
+// cleanError carries a cleaned message and still unwraps to its cause, so errors.Is works
+// and the text of a store error, which may quote a secret, is not returned.
+type cleanError struct {
+	msg   string
+	cause error
+}
+
+func (e *cleanError) Error() string { return e.msg }
+func (e *cleanError) Unwrap() error { return e.cause }
+
+// fail returns "<format>: <cause>" as a cleanError.
+func fail(cause error, format string, args ...any) error {
+	return &cleanError{msg: clean(fmt.Sprintf(format, args...)+": "+cause.Error(), maxError), cause: cause}
 }
 
 // subject joins the identifiers present, or returns "" when there are none.
@@ -149,18 +185,28 @@ func subject(task a2a.TaskID, contextID, messageID string) string {
 	return strings.Join(parts, " ")
 }
 
-// clean strips control and format characters, redacts secrets, and caps s at limit bytes,
-// ending in "..." when it cut. Redaction runs after the strip, so a token cannot hide
-// behind an invisible character, and before the cut, so a token cannot be cut short of
-// the pattern.
+// gluedBearer catches a bearer credential whose separator was a format character (a
+// zero-width space, say) and so vanished; store.RedactSecrets needs whitespace between the
+// scheme and the token. It over-redacts words that merely start with "bearer".
+var gluedBearer = regexp.MustCompile(`(?i)bearer\S+`)
+
+// clean makes s safe for a row: it deletes format characters, turns control characters and
+// every Unicode space into an ASCII space, redacts secrets, and caps s at limit bytes,
+// ending in "..." when it cut. The order matters. Spaces become ASCII first because
+// RedactSecrets' \s matches only ASCII whitespace, so a token behind a no-break space
+// would survive. Redaction runs before the cut, so a token cannot be cut short of its
+// pattern.
 func clean(s string, limit int) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		switch {
+		case unicode.Is(unicode.Cf, r):
 			return -1
+		case unicode.IsControl(r) || unicode.IsSpace(r):
+			return ' '
 		}
 		return r
 	}, s)
-	s = store.RedactSecrets(s)
+	s = gluedBearer.ReplaceAllString(store.RedactSecrets(s), "[redacted]")
 	if len(s) <= limit {
 		return s
 	}
