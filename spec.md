@@ -452,13 +452,17 @@ untrusted data. See risk R2.
 
 | Trigger | Behavior |
 |---|---|
-| @mention in a bound channel | New thread, new session |
-| Reply in a thread courier owns | Continues that session. No mention needed. |
-| Reply in any other thread | Ignored |
+| @mention in a bound channel (not in a thread) | New thread, new session |
+| Reply in a thread courier owns, with or without an @mention | Continues that session |
+| @mention inside a thread courier doesn't own, in a bound channel | New session anchored to that thread; courier owns it from then on |
+| Reply without an @mention in any other thread | Ignored |
+| Any message posted by courier itself (including `message_changed` from its own edits) | Ignored |
 | DM | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. |
 
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
-is derived from the Slack event ID for idempotency.
+is derived from the Slack message itself, `(channel, message ts)`, not the event ID:
+Slack delivers an @mention as both an `app_mention` and a `message` event with different
+event IDs, and both must map to one turn.
 
 The session row is written before the first A2A call, holding the key and the Binding;
 `contextId` is filled in from the backend's first response. If courier crashes in
