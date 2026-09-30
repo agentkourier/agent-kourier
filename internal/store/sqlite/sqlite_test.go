@@ -86,24 +86,31 @@ func TestEvents(t *testing.T) {
 
 func TestMigrateAppliesInOrderOnceAndRollsBackFailures(t *testing.T) {
 	ctx := context.Background()
-	s := openTemp(t)
-	fsys := fstest.MapFS{
-		"migrations/0002_a.sql": {Data: []byte("CREATE TABLE a (x INTEGER);")},
-		"migrations/0003_b.sql": {Data: []byte("CREATE TABLE b (x INTEGER); NOT SQL;")},
+	// A bare pool, so the fake versions cannot collide with the real migrations.
+	db, err := openPool(ctx, filepath.Join(t.TempDir(), "migrate.db"), 1, "journal_mode(WAL)")
+	if err != nil {
+		t.Fatalf("openPool: %v", err)
 	}
-	if err := migrate(ctx, s.write, fsys); err == nil {
+	t.Cleanup(func() { _ = db.Close() })
+	good := fstest.MapFS{"migrations/0001_a.sql": {Data: []byte("CREATE TABLE a (x INTEGER);")}}
+	broken := fstest.MapFS{
+		"migrations/0001_a.sql": good["migrations/0001_a.sql"],
+		"migrations/0002_b.sql": {Data: []byte("CREATE TABLE b (x INTEGER); NOT SQL;")},
+	}
+	if err := migrate(ctx, db, broken); err == nil {
 		t.Fatal("migrate with a broken migration returned nil")
 	}
-	if err := migrate(ctx, s.write, migrationFiles); err != nil {
-		t.Fatalf("re-running applied migrations: %v", err)
+	if err := migrate(ctx, db, good); err != nil { // idempotent: 0001 is already applied
+		t.Fatalf("re-running an applied migration: %v", err)
 	}
-	var v1, v2, hasB int
-	err := s.read.QueryRowContext(ctx, `SELECT
+	var v1, v2, hasA, hasB int
+	err = db.QueryRowContext(ctx, `SELECT
 		(SELECT count(*) FROM schema_migrations WHERE version = 1),
 		(SELECT count(*) FROM schema_migrations WHERE version = 2),
-		(SELECT count(*) FROM sqlite_master WHERE name = 'b')`).Scan(&v1, &v2, &hasB)
-	if err != nil || v1 != 1 || v2 != 1 || hasB != 0 {
-		t.Fatalf("migrations applied v1=%d v2=%d tableB=%d, %v; want 1, 1, 0", v1, v2, hasB, err)
+		(SELECT count(*) FROM sqlite_master WHERE name = 'a'),
+		(SELECT count(*) FROM sqlite_master WHERE name = 'b')`).Scan(&v1, &v2, &hasA, &hasB)
+	if err != nil || v1 != 1 || v2 != 0 || hasA != 1 || hasB != 0 {
+		t.Fatalf("v1=%d v2=%d tableA=%d tableB=%d, %v; want 1, 0, 1, 0", v1, v2, hasA, hasB, err)
 	}
 }
 

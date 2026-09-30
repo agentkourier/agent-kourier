@@ -11,8 +11,8 @@ import (
 
 // CreateOutbox implements store.Outbox.
 func (s *Store) CreateOutbox(ctx context.Context, o store.OutboxEntry) (bool, error) {
-	if o.ID == "" || o.EventID == "" || o.Channel == "" || o.CreatedAt.IsZero() {
-		return false, fmt.Errorf("create outbox %q: ID, EventID, Channel and CreatedAt are required: %w", o.ID, store.ErrInvalid)
+	if o.ID == "" || o.EventID == "" || o.Channel == "" || o.CreatedAt.IsZero() || !o.Role.Valid() {
+		return false, fmt.Errorf("create outbox %q: ID, EventID, a valid Role, Channel and CreatedAt are required: %w", o.ID, store.ErrInvalid)
 	}
 	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
 		VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,

@@ -34,10 +34,11 @@ func TestOutbox(t *testing.T) {
 	}
 	a := store.OutboxEntry{ID: "ev1/root", EventID: "ev1", Role: "root", Channel: "C1", CreatedAt: t0}
 	b := store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: "reply", Channel: "C1", ThreadTS: "1.1", CreatedAt: t0.Add(time.Second)}
-	base := store.OutboxEntry{ID: "x", EventID: "e", Role: "notice", Channel: "C", CreatedAt: t0}
+	base := store.OutboxEntry{ID: "x", EventID: "e", Role: store.OutboxNotice, Channel: "C", CreatedAt: t0}
 	for _, mutate := range []func(*store.OutboxEntry){
 		func(o *store.OutboxEntry) { o.ID = "" }, func(o *store.OutboxEntry) { o.EventID = "" },
-		func(o *store.OutboxEntry) { o.Channel = "" }, func(o *store.OutboxEntry) { o.CreatedAt = time.Time{} },
+		func(o *store.OutboxEntry) { o.Role = "bogus" }, func(o *store.OutboxEntry) { o.Channel = "" },
+		func(o *store.OutboxEntry) { o.CreatedAt = time.Time{} },
 	} {
 		bad := base
 		mutate(&bad)
@@ -52,6 +53,14 @@ func TestOutbox(t *testing.T) {
 	}
 	if c, err := s.CreateOutbox(ctx, a); err != nil || c {
 		t.Fatalf("duplicate create = %v, %v; want false, nil", c, err)
+	}
+	// The database guards the role set even when Go validation is bypassed.
+	if _, err := s.write.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
+		VALUES ('raw', 'e', 'bogus', 'C', '', 1)`); err == nil {
+		t.Fatal("database accepted an insert with an invalid outbox role")
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE outbox SET role = 'bogus' WHERE id = ?`, a.ID); err == nil {
+		t.Fatal("database accepted an invalid outbox role")
 	}
 	if l := list(); len(l) != 2 || l[0] != a || l[1] != b {
 		t.Fatalf("unposted = %+v; want a then b", l)
@@ -139,7 +148,7 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	if _, err := s.AppendEvent(ctx, store.Event{ID: "ev1", Kind: "alert", ReceivedAt: t0}); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
-	if _, err := s.CreateOutbox(ctx, store.OutboxEntry{ID: "o1", EventID: "ev1", Role: "root", Channel: "C1", CreatedAt: t0}); err != nil {
+	if _, err := s.CreateOutbox(ctx, store.OutboxEntry{ID: "o1", EventID: "ev1", Role: store.OutboxRoot, Channel: "C1", CreatedAt: t0}); err != nil {
 		t.Fatalf("CreateOutbox: %v", err)
 	}
 	if err := s.UpsertSession(ctx, sess); err != nil {
@@ -160,8 +169,8 @@ func TestPersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("session after reopen = %+v, %v", got, err)
 	}
 	var n int
-	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 2 {
-		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 2", n, err)
+	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 3 {
+		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 3", n, err)
 	}
 }
 
@@ -177,7 +186,7 @@ func TestConcurrentWrites(t *testing.T) {
 				id := fmt.Sprintf("w%d-%d", w, i)
 				_, err := s.AppendEvent(ctx, store.Event{ID: id, Kind: "alert", ReceivedAt: t0})
 				errs <- err
-				_, err = s.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: id, Role: "root", Channel: "C1", CreatedAt: t0})
+				_, err = s.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: id, Role: store.OutboxRoot, Channel: "C1", CreatedAt: t0})
 				errs <- err
 				errs <- s.UpsertSession(ctx, store.Session{Key: store.ConversationKey{Connection: "c", Channel: "C", ThreadTS: id}, Binding: "ns/b", LastActivity: t0})
 			}
