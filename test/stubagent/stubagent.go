@@ -19,9 +19,13 @@
 // result.task) and its ignoring of params.configuration, a contextId that names no session
 // opening one, the errors for cancelling or replying to a task that has ended (-32002 and
 // -32004), a reply to a task that is not waiting, several tools in one approval pause, a new
-// task in a session with a paused one, and the 401 of WithRequiredAuth. The envelope errors
-// (-32600, -32601, -32602, -32700) follow a2a-go v2.6.0, not kagent, which vendors a2a-go
-// v2.5.0.
+// task in a session with a paused one, and the 401 of WithRequiredAuth. Identity adds more:
+// only a send and GetTask were measured refused for another identity, so the refusal of a
+// HITL reply, a replay, SubscribeToTask and CancelTask is a guess; so are a sub-only token
+// owning its session by the sub, the owner check running before the busy and wedged checks,
+// the 401 for a bearer token with neither an email nor a sub, and an anonymous owner, which
+// matches no real kagent mode. The envelope errors (-32600, -32601, -32602, -32700) follow
+// a2a-go v2.6.0, not kagent, which vendors a2a-go v2.5.0.
 //
 // Command test/stubagent/cmd/stubagent serves the agents of SpikeAgents so that the WP-02
 // spike can run against the stub.
@@ -184,15 +188,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	a := s.agents[parts[1]+"/"+parts[2]]
 	s.mu.Unlock()
-	switch _, ok := bearer(r); {
-	case s.requireAuth && !ok:
+	owner, authorized := identify(r, s.requireAuth)
+	switch {
+	case !authorized:
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	case a == nil:
 		http.NotFound(w, r)
 	case len(parts) == 4 && parts[3] == cardFile && r.Method == http.MethodGet:
 		a.serveCard(w)
 	case len(parts) == 3 && r.Method == http.MethodPost:
-		a.serveRPC(w, r)
+		a.serveRPC(w, r, owner)
 	default:
 		http.NotFound(w, r)
 	}

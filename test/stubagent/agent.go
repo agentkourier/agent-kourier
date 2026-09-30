@@ -81,14 +81,14 @@ func (a *Agent) serveCard(w http.ResponseWriter) {
 }
 
 // serveRPC decodes one JSON-RPC call and dispatches it.
-func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request, owner string) {
 	var req struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Method  string          `json:"method"`
 		Params  json.RawMessage `json:"params"`
 	}
-	o := &rw{s: a.s, w: w, owner: ownerOf(r), ext: namesHITL(r.Header)}
+	o := &rw{s: a.s, w: w, owner: owner, ext: namesHITL(r.Header)}
 	// The envelope checks and their messages follow a2a-go v2.6.0 a2asrv/jsonrpc.go ServeHTTP
 	// and handleUnmarshalError.
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

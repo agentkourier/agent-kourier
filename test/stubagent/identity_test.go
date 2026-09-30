@@ -106,20 +106,63 @@ func TestEveryMethodChecksTheOwner(t *testing.T) {
 	}
 }
 
-func TestAnonymousRequestsShareOneOwner(t *testing.T) {
+// TestStrangerCannotAnswerAPausedTask: UNCONFIRMED: kagent's answer to another identity's reply
+// to a HITL pause; the stub refuses it like any other use of the session, and the script never
+// runs.
+func TestStrangerCannotAnswerAPausedTask(t *testing.T) {
 	_, agent, c := newAgent(t)
-	agent.Next()
+	called := false
+	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step { called = true; return nil }))
+	owner := withHITL(c.as(unsigned(t, obj{"email": "a@example.test"})))
+	_, taskID, ctxID, request := paused(t, owner)
+	stranger := withHITL(c.as(unsigned(t, obj{"email": "b@example.test"})))
+
+	_, got := stranger.call("SendStreamingMessage", reply("m2", "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"})))
+
+	if dig(got, "error", "code") != float64(-31403) || called {
+		t.Errorf("a stranger's answer = %v, script called %v; want -31403 and the script not called", got, called)
+	}
+}
+
+func TestRequestsWithNoTokenShareTheAnonymousOwner(t *testing.T) {
+	_, agent, c := newAgent(t)
 	agent.Next()
 	agent.Next()
 	_, sent := c.call("SendMessage", msg("m1", "hi", ""))
 	ctxID := task(t, sent)["contextId"].(string)
 
-	_, notJWT := c.as("fake-not-a-jwt").call("SendMessage", msg("m2", "hi", ctxID))
-	_, again := c.call("SendMessage", msg("m3", "hi", ctxID))
-	_, named := c.as(unsigned(t, obj{"email": "a@example.test"})).call("SendMessage", msg("m4", "hi", ctxID))
+	_, again := c.call("SendMessage", msg("m2", "hi", ctxID))
+	_, named := c.as(unsigned(t, obj{"email": "a@example.test"})).call("SendMessage", msg("m3", "hi", ctxID))
 
-	if dig(notJWT, "error") != nil || dig(again, "error") != nil || dig(named, "error", "code") != float64(-31403) {
-		t.Errorf("no token and a token with no claims share an owner, a named email does not: %v, %v, %v", notJWT, again, named)
+	// UNCONFIRMED: no real kagent mode has an anonymous owner: with OIDC on, a request with no
+	// token is refused, and in insecure mode it names its user in X-User-Id.
+	if dig(again, "error") != nil || dig(named, "error", "code") != float64(-31403) {
+		t.Errorf("no token twice, then a named email: %v, %v; want the first to work and the second denied", again, named)
+	}
+}
+
+// TestUnreadableTokenIsUnauthorized: a bearer token that yields neither an email nor a sub is
+// refused with HTTP 401, with or without WithRequiredAuth, and not treated as anonymous.
+// UNCONFIRMED: kagent's answer; the 401 for a missing token was seen with curl (WP-02) and no
+// fixture shows an unreadable one.
+func TestUnreadableTokenIsUnauthorized(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"not a JWT", "fake-not-a-jwt"},
+		{"a payload that is not base64", "a.@@@.b"},
+		{"a payload that is not JSON", "a." + base64.RawURLEncoding.EncodeToString([]byte("nope")) + ".b"},
+		{"a JWT with no email and no sub", unsigned(t, obj{"iss": "https://issuer.example.test"})},
+	} {
+		s, agent, c := newAgent(t)
+		agent.Next()
+		hdr := http.Header{"Authorization": {"Bearer " + tc.token}}
+
+		rpc, _ := do(t, http.MethodPost, s.AgentURL("kagent", "test"), obj{"jsonrpc": "2.0", "id": "1", "method": "GetTask"}, hdr)
+		card, _ := do(t, http.MethodGet, s.AgentURL("kagent", "test")+"/.well-known/agent-card.json", nil, hdr)
+		_, ok := c.as(unsigned(t, obj{"sub": "s"})).call("SendMessage", msg("m1", "hi", ""))
+
+		if rpc != http.StatusUnauthorized || card != http.StatusUnauthorized || dig(ok, "error") != nil {
+			t.Errorf("%s: RPC HTTP %d, card HTTP %d; want 401 and 401 (and a token with a sub alone accepted: %v)", tc.name, rpc, card, ok)
+		}
 	}
 }
 
@@ -127,12 +170,12 @@ func TestRequiredAuthRefusesRequestsWithoutABearerToken(t *testing.T) {
 	s, agent, c := newAgent(t, stubagent.WithRequiredAuth())
 	agent.Next()
 	cardURL := s.AgentURL("kagent", "test") + "/.well-known/agent-card.json"
+	token := unsigned(t, obj{"email": "a@example.test"})
 
 	cardStatus, _ := do(t, http.MethodGet, cardURL, nil, http.Header{})
 	rpcStatus, _ := do(t, http.MethodPost, s.AgentURL("kagent", "test"), obj{"jsonrpc": "2.0", "id": "1", "method": "GetTask"}, http.Header{})
-	withToken := http.Header{"Authorization": {"Bearer fake-token"}}
-	cardOK, _ := do(t, http.MethodGet, cardURL, nil, withToken)
-	_, sent := c.as("fake-token").call("SendMessage", msg("m1", "hi", ""))
+	cardOK, _ := do(t, http.MethodGet, cardURL, nil, http.Header{"Authorization": {"Bearer " + token}})
+	_, sent := c.as(token).call("SendMessage", msg("m1", "hi", ""))
 
 	if cardStatus != http.StatusUnauthorized || rpcStatus != http.StatusUnauthorized || cardOK != http.StatusOK || dig(sent, "error") != nil {
 		t.Errorf("without a token: card HTTP %d, RPC HTTP %d; with one: card HTTP %d, send %v; want 401, 401, 200 and a send that works",

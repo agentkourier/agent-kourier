@@ -25,15 +25,20 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18083", "address to listen on; the spike's default -base is this")
 	tick := flag.Duration("tick", 300*time.Millisecond, "pause between the text chunks of a turn; the spike's slow agent needs it long enough to act between chunks")
+	requireAuth := flag.Bool("require-auth", false, "answer 401 to a request with no bearer token, as kagent in OIDC mode does; the spike's -no-auth mode then fails")
 	flag.Parse()
-	if err := run(*addr, *tick); err != nil {
+	if err := run(*addr, *tick, *requireAuth); err != nil {
 		fmt.Fprintln(os.Stderr, "stubagent:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr string, tick time.Duration) error {
-	stub := stubagent.NewHandler(stubagent.WithTick(tick))
+func run(addr string, tick time.Duration, requireAuth bool) error {
+	opts := []stubagent.Option{stubagent.WithTick(tick)}
+	if requireAuth {
+		opts = append(opts, stubagent.WithRequiredAuth())
+	}
+	stub := stubagent.NewHandler(opts...)
 	defer stub.Close()
 	stubagent.SpikeAgents(stub)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
