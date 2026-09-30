@@ -147,6 +147,14 @@ type Config struct {
 	SendGiveUp time.Duration
 }
 
+// attempt is a head turn that was sent and not yet taken and recorded. unknown says an earlier
+// send of it ended with an unknown outcome, which only a lookup that finds the turn, or the turn
+// being recorded, settles: a lookup that finds nothing does not, for the send may still land.
+type attempt struct {
+	id      string
+	unknown bool
+}
+
 // Manager owns the sessions of every conversation. It is safe for concurrent use.
 type Manager struct {
 	cfg  Config
@@ -162,7 +170,7 @@ type Manager struct {
 	unrecorded map[Key]string
 	// attempted holds, per conversation, the head turn that was sent and not yet taken and
 	// recorded: a send of it again is a resend, and is looked up first.
-	attempted map[Key]string
+	attempted map[Key]attempt
 	closed    bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
@@ -200,7 +208,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]string{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil

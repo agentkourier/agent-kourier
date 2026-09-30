@@ -558,6 +558,7 @@ func TestTurnWithNoNamedTaskIsLookedUpNotResent(t *testing.T) {
 	if sends, _, _ := f.agent.counts(); sends != 2 {
 		t.Errorf("%d sends; want turn 1, and turn 2 once", sends)
 	}
+	eventually(t, "the hold to be lifted", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.unrecorded) == 0 })
 }
 
 // A turn queued for a session whose Binding then left the config is not retried: the thread is

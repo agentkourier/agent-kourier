@@ -22,6 +22,7 @@ type convo struct {
 	tries      int           // sends of the head turn that failed in a way to retry, in a row
 	since      time.Time     // when the first of them failed, for SendGiveUp
 	notified   bool          // the thread was told courier is retrying, for this run of trouble
+	busyNoted  bool          // the thread was told the reply is queued behind a task nobody recorded
 	lastTask   a2a.TaskID    // the task courier last saw an event of ...
 	lastSeen   time.Time     // ... and when: the later of this and the status timestamp is its age (R17)
 	cancelFrom time.Time     // when the first attempt to cancel a wedged task was made, for SendGiveUp
@@ -194,8 +195,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	send := func(h agent.Handler) error { return backend.Agent.Send(m.ctx, m.message(r, sess, backend), h) }
 	hold := m.held(key, r.ID, sess)
 	m.mu.Lock()
-	resend := m.attempted[key] == r.ID // sent before, and not known to have been taken
-	m.attempted[key] = r.ID
+	prev := m.attempted[key]
+	resend := prev.id == r.ID // sent before, and not known to have been taken
+	m.attempted[key] = attempt{id: r.ID, unknown: resend && prev.unknown}
 	m.mu.Unlock()
 	if hold != nil || resend {
 		// The agent may already have this turn, and a resend into an existing context is not
@@ -227,7 +229,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 
 // settle forgets the retry state of the head turn: it was taken, failed for good, or ended.
 func (c *convo) settle() {
-	c.tries, c.since, c.patient, c.notified, c.cancelFrom = 0, time.Time{}, false, false, time.Time{}
+	c.tries, c.since, c.patient, c.notified, c.busyNoted, c.cancelFrom = 0, time.Time{}, false, false, false, time.Time{}
 }
 
 // unpark forgets a pause the runner turned out not to be parked on, and any signal for it.
@@ -458,15 +460,24 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 		m.audit(t, t.call(err))
 		return m.fail(t, "the agent refused the Binding's identity for this session", err)
 	case errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later, never give up
+		if !t.c.busyNoted { // Submit saw no task recorded, so it did not mark the reply queued: do it now
+			t.c.busyNoted = true
+			m.notice(t, NoticeQueued, "")
+		}
 		t.c.tries++
 		t.c.patient = true
 		t.c.since = time.Time{} // and the agent answered: its unreachable time starts over
 		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 	case errors.Is(err, agent.ErrOutcomeUnknown): // the agent may have taken it: looked up before any resend
-		return m.retry(t, err)
-	case errors.Is(err, agent.ErrNotSent): // nothing left, so nothing to look up: safe to retry
 		m.mu.Lock()
-		delete(m.attempted, t.key)
+		m.attempted[t.key] = attempt{id: t.r.ID, unknown: true}
+		m.mu.Unlock()
+		return m.retry(t, err)
+	case errors.Is(err, agent.ErrNotSent): // nothing left, so nothing new to look up: safe to retry
+		m.mu.Lock()
+		if !m.attempted[t.key].unknown { // but an earlier unknown outcome still needs its lookup
+			delete(m.attempted, t.key)
+		}
 		m.mu.Unlock()
 		return m.retry(t, err)
 	}

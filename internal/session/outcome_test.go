@@ -694,3 +694,111 @@ func TestTaskWithRecentLifeIsNotPresumedWedged(t *testing.T) {
 		})
 	}
 }
+
+// A reply that keeps getting -32004 from a task courier never recorded is queued behind it,
+// though nothing recorded says so (Submit answered Queued=false): the thread is told once, with
+// the same stable ID Submit's own queued notice has, so a renderer posts it at most once.
+func TestBusyFromAnUnrecordedBlockerTellsTheThread(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n < 4 {
+			return fmt.Errorf("send message: %w", agent.ErrBusy)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	in := inbound("1")
+	if _, err := f.submit(in); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	got := sink.noticesOf(NoticeQueued)
+	if len(got) != 1 || got[0].ID != in.MessageID+"/queued" || got[0].MessageTS != "1" {
+		t.Errorf("queued notices = %+v; want one, named like Submit's own, after four -32004", got)
+	}
+}
+
+// An unknown outcome is not settled by a lookup that finds nothing: the send may still be
+// recorded late. So a later not-sent does not make the next attempt blind: it looks the turn up
+// first, however the earlier attempts ended.
+func TestNotSentDoesNotForgetAnEarlierUnknownOutcome(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		switch n {
+		case 1:
+			return fmt.Errorf("%w: the stream ended", agent.ErrOutcomeUnknown)
+		case 2:
+			return fmt.Errorf("%w: down", agent.ErrNotSent)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if want := "[send send find send find send]"; fmt.Sprint(f.agent.seq) != want {
+		t.Errorf("calls = %v; want %s: a lookup before each resend of turn 2", f.agent.seq, want)
+	}
+}
+
+// A turn the agent has, or whose session is busy, is never given up on: however long the
+// lookups fail, it is not failed, and is followed or sent when the agent answers.
+func TestPatientTurnsNeverGiveUp(t *testing.T) {
+	t.Run("a busy session whose lookups keep failing", func(t *testing.T) {
+		f := newFixture(t)
+		sink := f.live()
+		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+		lookups := 0
+		f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+			if n == 1 { // turn 2 is refused as busy once, then the lookups start to fail
+				return fmt.Errorf("send message: %w", agent.ErrBusy)
+			}
+			return turn(h, n, a2a.TaskStateCompleted)
+		}
+		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+			if lookups++; lookups < 4 {
+				f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano()) // well past SendGiveUp
+				return nil, nil, errors.New("agent unreachable")
+			}
+			return nil, nil, nil
+		}
+		for _, ts := range []string{"1", "2"} {
+			if _, err := f.submit(inbound(ts)); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+		}
+		if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+			t.Errorf("failed notices = %+v; a busy session's turn is never given up on", got)
+		}
+	})
+	t.Run("a held turn whose lookups keep failing", func(t *testing.T) {
+		f := newFixture(t)
+		sink := f.live()
+		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+		f.seed("ns/b1", 0) // a task t1 is recorded, so the head is held until it is looked up
+		lookups := 0
+		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+			if lookups++; lookups < 4 {
+				f.now.Store(t0.Add(time.Duration(lookups) * 10 * time.Minute).UnixNano())
+				return nil, nil, errors.New("agent unreachable")
+			}
+			return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
+		}
+		f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+		if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+			t.Errorf("failed notices = %+v; a turn the agent has is never given up on", got)
+		}
+	})
+}
