@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -21,6 +24,8 @@ var (
 	// when the task ends, and the dialect's response-header timeout (30 s) would cut every
 	// long task. Courier refuses such an agent instead.
 	ErrStreamingUnsupported = errors.New("agent: the agent card does not advertise streaming")
+	// ErrTokenRequired means a Target with TokenRequired got credentials without a token.
+	ErrTokenRequired = errors.New("agent: the Binding requires a bearer token and the credentials carry none")
 	// ErrPoolClosed is returned by a call made after Pool.Close.
 	ErrPoolClosed = errors.New("agent: pool is closed")
 )
@@ -37,6 +42,10 @@ type Target struct {
 	Backend     *v1alpha1.AgentBackend
 	Agent       v1alpha1.AgentRef
 	Credentials CredentialsFunc
+	// TokenRequired is set when the Binding names a token secret (identity.tokenSecretRef).
+	// The Pool then refuses credentials with an empty Token before connecting: defense in
+	// depth against a provider that would downgrade to X-User-Id.
+	TokenRequired bool
 }
 
 type poolKey struct {
@@ -60,6 +69,7 @@ type Pool struct {
 	bg      context.Context // ends the warm-ups when the pool closes
 	stop    context.CancelFunc
 	warming sync.WaitGroup
+	key     [32]byte // keys the seal
 
 	mu      sync.Mutex
 	entries map[poolKey]*entry
@@ -69,7 +79,9 @@ type Pool struct {
 // NewPool returns a Pool that connects through d. cfg applies to every Agent it returns.
 func NewPool(d dialect.Dialect, cfg Config) *Pool {
 	bg, stop := context.WithCancel(context.Background())
-	return &Pool{dialect: d, cfg: cfg.withDefaults(), bg: bg, stop: stop, entries: map[poolKey]*entry{}}
+	p := &Pool{dialect: d, cfg: cfg.withDefaults(), bg: bg, stop: stop, entries: map[poolKey]*entry{}}
+	_, _ = rand.Read(p.key[:]) // never fails: Go crashes the program if the system has no randomness
+	return p
 }
 
 // Agent returns an Agent for t. It is cheap and connects on first use.
@@ -118,13 +130,19 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials of binding %s: %w", t.Binding, err)
 	}
+	if t.TokenRequired && creds.Token == "" {
+		return nil, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
+	}
 	e, err := p.entry(poolKey{t.Binding, t.Agent})
 	if err != nil {
 		return nil, err
 	}
-	seal := seal(t.Backend.Spec.URL, creds)
+	seal := p.seal(t.Backend.Spec.URL, creds)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if p.isClosed() { // Close may have run while this call waited for a connect to finish
+		return nil, ErrPoolClosed
+	}
 	if e.client != nil && e.seal == seal {
 		return e.client, nil
 	}
@@ -134,6 +152,8 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
 	}
+	// UNCONFIRMED: no fixture holds kagent 1.0.0-alpha5's card, so whether it sets
+	// capabilities.streaming is not known. If it does not, this refuses every kagent agent.
 	if !client.Card().Capabilities.Streaming {
 		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
 	}
@@ -155,13 +175,31 @@ func (p *Pool) entry(k poolKey) (*entry, error) {
 	return e, nil
 }
 
+func (p *Pool) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
+}
+
 // seal digests the backend URL and credentials so the Pool can tell that they changed
-// without keeping them: Credentials redacts itself in logs, and a Pool field would not.
-// The digest is not reversible and is never used to authenticate anything.
-func seal(backendURL string, c dialect.Credentials) [sha256.Size]byte {
-	h := sha256.New()
-	for _, s := range []string{backendURL, c.Token, c.UserID, fmt.Sprint(c.Headers)} { // fmt sorts map keys
-		_, _ = fmt.Fprintf(h, "%d:%s", len(s), s) // length-prefixed, so fields cannot run together
+// without keeping them: Credentials redacts itself in logs, and a Pool field would not. It
+// is an HMAC under a key made in NewPool, so the digest is worthless outside this process,
+// and it is never used to authenticate anything. The encoding is canonical: every field is
+// length-prefixed, the header names are sorted, and each name is followed by its value count.
+func (p *Pool) seal(backendURL string, c dialect.Credentials) [sha256.Size]byte {
+	h := hmac.New(sha256.New, p.key[:])
+	put := func(s string) { _, _ = fmt.Fprintf(h, "%d:%s", len(s), s) }
+	put(backendURL)
+	put(c.Token)
+	put(c.UserID)
+	names := slices.Sorted(maps.Keys(c.Headers))
+	put(strconv.Itoa(len(names)))
+	for _, name := range names {
+		put(name)
+		put(strconv.Itoa(len(c.Headers[name])))
+		for _, v := range c.Headers[name] {
+			put(v)
+		}
 	}
 	return [sha256.Size]byte(h.Sum(nil))
 }

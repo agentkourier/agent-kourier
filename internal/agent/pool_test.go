@@ -200,3 +200,118 @@ func TestCloseStopsWarmUpsAndRefusesNewCalls(t *testing.T) {
 	fa.Close()
 	goleak.VerifyNone(t)
 }
+
+// lastCard returns the headers of the most recent card fetch fa got.
+func (fa *fakeAgent) lastCard() http.Header {
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	for _, c := range slices.Backward(fa.calls) {
+		if c.Method == "card" {
+			return c.Header
+		}
+	}
+	return nil
+}
+
+// Anything that changes what a request carries must get a new client: a token, a user ID,
+// a static header (they hold secrets too), the backend URL. The last two rows are pairs
+// that a lazy encoding of the headers maps to one digest.
+func TestSealCoversEveryCredentialInput(t *testing.T) {
+	hdr := func(kv ...string) http.Header {
+		h := http.Header{}
+		for i := 0; i < len(kv); i += 2 {
+			h[kv[i]] = append(h[kv[i]], kv[i+1])
+		}
+		return h
+	}
+	for _, tc := range []struct {
+		name          string
+		before, after dialect.Credentials
+		wantHeader    string // on the new client's card fetch
+		wantValues    []string
+	}{
+		{"token", dialect.Credentials{Token: "a"}, dialect.Credentials{Token: "b"}, "Authorization", []string{"Bearer b"}},
+		{"user ID", dialect.Credentials{UserID: "a"}, dialect.Credentials{UserID: "b"}, "X-User-Id", []string{"b"}},
+		{"static header", dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k1")}, dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k2")}, "X-Api-Key", []string{"k2"}},
+		{"one value split in two", dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k1 k2")}, dialect.Credentials{Token: "t", Headers: hdr("X-Api-Key", "k1", "X-Api-Key", "k2")}, "X-Api-Key", []string{"k1", "k2"}},
+		{"a header hidden in a value", dialect.Credentials{Token: "t", Headers: hdr("X-A", "1] X-B:[2")}, dialect.Credentials{Token: "t", Headers: hdr("X-A", "1", "X-B", "2")}, "X-B", []string{"2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
+			cur := tc.before
+			agent := p.Agent(targetFor(fa, "team/sre", func(context.Context) (dialect.Credentials, error) { return cur, nil }))
+			for range 2 {
+				if err := agent.Send(t.Context(), message("hi"), nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := fa.count("card"); n != 1 {
+				t.Fatalf("%d card fetches for unchanged credentials, want 1", n)
+			}
+			cur = tc.after
+			if err := agent.Send(t.Context(), message("hi"), nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := fa.lastCard().Values(tc.wantHeader); fa.count("card") != 2 || !slices.Equal(got, tc.wantValues) {
+				t.Errorf("%d card fetches, %s = %q; want a second fetch with %q", fa.count("card"), tc.wantHeader, got, tc.wantValues)
+			}
+		})
+	}
+}
+
+func TestBackendURLChangeGetsANewClient(t *testing.T) {
+	first, second := newFakeAgent(t, liveStream(t)), newFakeAgent(t, liveStream(t))
+	p, tg := newPool(t), targetFor(first, "team/sre", token("t"))
+	for _, fa := range []*fakeAgent{first, second} {
+		tg.Backend = &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: fa.URL}}
+		if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if first.count("card") != 1 || second.count("card") != 1 || second.count("SendStreamingMessage") != 1 {
+		t.Errorf("cards: %d and %d, sends to the new URL: %d; want 1, 1, 1", first.count("card"), second.count("card"), second.count("SendStreamingMessage"))
+	}
+}
+
+// Defense in depth: a Binding with tokenSecretRef never reaches the agent as an X-User-Id,
+// whatever the provider returns.
+func TestTokenRequiredRefusesAnEmptyToken(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
+	tg := targetFor(fa, "team/sre", func(context.Context) (dialect.Credentials, error) { return dialect.Credentials{UserID: "courier"}, nil })
+	tg.TokenRequired = true
+	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); !errors.Is(err, ErrTokenRequired) || len(fa.auths()) != 0 {
+		t.Errorf("err = %v, requests = %q; want ErrTokenRequired and nothing sent", err, fa.auths())
+	}
+	tg.Credentials = token("tok")
+	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); err != nil {
+		t.Errorf("with a token: %v", err)
+	}
+}
+
+// A caller that was waiting for a connect when the pool closed must not start one.
+func TestCallWaitingOnAConnectDoesNotConnectAfterClose(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
+	entered := make(chan struct{})
+	tg := targetFor(fa, "team/sre", func(ctx context.Context) (dialect.Credentials, error) {
+		close(entered)
+		return token("t")(ctx)
+	})
+	e, err := p.entry(poolKey{tg.Binding, tg.Agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock() // a connect in progress
+	got, closing := make(chan error, 1), make(chan struct{})
+	go func() { _, err := p.conn(t.Context(), tg); got <- err }()
+	<-entered
+	time.Sleep(20 * time.Millisecond) // let the caller reach the entry's lock, ahead of Close
+	go func() { p.Close(); close(closing) }()
+	for !p.isClosed() {
+		time.Sleep(time.Millisecond)
+	}
+	e.mu.Unlock()
+	if err := <-got; !errors.Is(err, ErrPoolClosed) || fa.count("card") != 0 {
+		t.Errorf("err = %v, card fetches = %d; want ErrPoolClosed and none", err, fa.count("card"))
+	}
+	<-closing
+}
