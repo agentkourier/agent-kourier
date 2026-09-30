@@ -3,6 +3,7 @@ package stubagent
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"time"
 )
@@ -54,12 +55,53 @@ type rw struct {
 	w      http.ResponseWriter
 	id     json.RawMessage
 	stream bool
+	ext    bool // the request names the HITL extension
 	held   obj  // a non-streaming call answers with the last result it was given
 	failed bool // an error has been written
 }
 
+// view is a result as this client sees it. The HITL request in a paused task's status message,
+// and the extension URI listing it, are there only for a client that named the extension.
+func (o *rw) view(res obj) obj {
+	if o.ext {
+		return res
+	}
+	if _, ok := res["status"]; ok { // GetTask and CancelTask: the result is the task
+		return withoutHITL(res)
+	}
+	out := maps.Clone(res)
+	for kind, v := range res { // task and statusUpdate results
+		if e, ok := v.(obj); ok {
+			out[kind] = withoutHITL(e)
+		}
+	}
+	return out
+}
+
+// withoutHITL returns a task or status update without the HITL parts of its status message.
+func withoutHITL(e obj) obj {
+	status, _ := e["status"].(obj)
+	message, _ := status["message"].(obj)
+	if message["extensions"] == nil {
+		return e
+	}
+	message = maps.Clone(message)
+	delete(message, "extensions")
+	if metadata, ok := message["metadata"].(obj); ok {
+		metadata = maps.Clone(metadata)
+		delete(metadata, HITLExtension)
+		message["metadata"] = metadata
+	}
+	status = maps.Clone(status)
+	status["message"] = message
+	out := maps.Clone(e)
+	out["status"] = status
+	return out
+}
+
 // event delivers a result: at once when streaming, else it replaces the pending answer.
 func (o *rw) event(res obj) {
+	res = o.view(res)
 	if o.stream {
 		o.write(obj{"jsonrpc": "2.0", "id": o.id, "result": res})
 		return

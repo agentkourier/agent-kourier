@@ -78,7 +78,7 @@ func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request) {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params"`
 	}
-	o := &rw{s: a.s, w: w}
+	o := &rw{s: a.s, w: w, ext: strings.Contains(r.Header.Get("A2A-Extensions"), HITLExtension)}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		o.fail(&rpcError{codeParse, "parse error", "PARSE_ERROR"})
 		return

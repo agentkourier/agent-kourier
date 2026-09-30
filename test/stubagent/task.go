@@ -8,6 +8,8 @@ const (
 	working   = "TASK_STATE_WORKING"
 	completed = "TASK_STATE_COMPLETED"
 	canceled  = "TASK_STATE_CANCELED"
+
+	inputRequired = "TASK_STATE_INPUT_REQUIRED"
 )
 
 // adkExtension is the marker ADK's A2A server puts in the metadata of tasks and updates.
@@ -29,6 +31,7 @@ type task struct {
 	updated string
 	state   string
 	history []obj
+	pause   *pause // what the task is waiting for, while it is INPUT_REQUIRED
 	arts    []*artifact
 	log     []event            // every stream event so far, in order; followers read from an index
 	changed chan struct{}      // closed and replaced whenever log grows
@@ -71,10 +74,14 @@ func (t *task) setState(state, stamp string) {
 
 // snapshot is the task as GetTask returns it.
 func (t *task) snapshot() obj {
+	status := obj{"state": t.state, "timestamp": t.updated}
+	if t.pause != nil {
+		status["message"] = t.pause.message(t)
+	}
 	snap := obj{
 		"id":        t.id,
 		"contextId": t.sess.id,
-		"status":    obj{"state": t.state, "timestamp": t.updated},
+		"status":    status,
 		"history":   t.history,
 		"metadata":  obj{adkExtension: true, "kagent.dev/a2a/task-created-at": t.created},
 	}

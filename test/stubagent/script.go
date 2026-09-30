@@ -121,6 +121,16 @@ func (r *run) endText() bool {
 	return r.emit(func(t *task) (obj, bool) { return t.artifactEvent(a, a.parts, false, true), false })
 }
 
+// pause ends the turn with the task INPUT_REQUIRED, the snapshot as the last event.
+func (r *run) pause(p *pause) bool {
+	return r.emit(func(t *task) (obj, bool) {
+		p.stamp = r.s.stamp()
+		t.pause = p
+		t.setState(inputRequired, p.stamp)
+		return obj{"task": t.snapshot()}, true
+	})
+}
+
 // finish ends the turn in a final state, with the task snapshot as the last event.
 func (r *run) finish(state string) {
 	if !r.endText() {
