@@ -16,6 +16,8 @@ var (
 	ErrNotFound = errors.New("store: not found")
 	// ErrInvalid is returned when an argument is not a legal value.
 	ErrInvalid = errors.New("store: invalid argument")
+	// ErrExpired is returned with the row when a session is older than its TTL.
+	ErrExpired = errors.New("store: expired")
 	// ErrConflict is returned when a row exists but is not in a state that
 	// allows the requested change.
 	ErrConflict = errors.New("store: conflict")
@@ -25,6 +27,8 @@ var (
 type Store interface {
 	Events
 	Queue
+	Outbox
+	Sessions
 	io.Closer
 }
 

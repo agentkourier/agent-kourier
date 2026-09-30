@@ -71,13 +71,39 @@ func (s *Store) Close() error {
 func ts(t time.Time) int64     { return t.UnixNano() }
 func fromTS(n int64) time.Time { return time.Unix(0, n).UTC() }
 
-// exec runs a write and reports the number of rows it changed.
-func (s *Store) exec(ctx context.Context, query string, args ...any) (int64, error) {
-	res, err := s.write.ExecContext(ctx, query, args...)
+// execer is implemented by *sql.DB and *sql.Tx.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// execRows runs a write on e and reports the number of rows it changed. Pass a
+// *sql.Tx to run several statements atomically (see inTx).
+func execRows(ctx context.Context, e execer, query string, args ...any) (int64, error) {
+	res, err := e.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// exec runs a single-statement write on the write pool.
+func (s *Store) exec(ctx context.Context, query string, args ...any) (int64, error) {
+	return execRows(ctx, s.write, query, args...)
+}
+
+// inTx runs fn in a transaction on the write pool, committing if fn returns
+// nil and rolling back on an error or panic. The pool has one connection, so fn must use tx and never s.write or
+// s.exec, which would block until the context ends.
+func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit; also covers a panic in fn
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // errIfUnchanged turns "no rows changed" into ErrNotFound.
