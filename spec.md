@@ -313,9 +313,8 @@ metadata: { name: kagent-pilot, namespace: courier-system }
 spec:
   dialect: kagent-v1                 # a2a | kagent-v1
   url: http://kagent-controller.kagent-pilot:8083
-  headers: []                        # static headers, values may come from Secrets
-  auth:
-    bearerTokenSecretRef: null       # for backends behind agentgateway
+  headers: []                        # static headers, values may come from Secrets;
+                                     # Authorization and X-User-Id are reserved (D14)
   allowedNamespaces: ["sre", "payments"]
 ---
 kind: ChatConnection
@@ -387,10 +386,13 @@ spec:
 Rules:
 
 - **Secret keys.** A single-value Secret reference (`alerts.tokenSecretRef`,
-  `identity.tokenSecretRef`, `auth.bearerTokenSecretRef`, and a header's
-  `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
+  `identity.tokenSecretRef`, and a header's `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
   fixed keys: `botToken`, `appToken` (Socket Mode), and `signingSecret` (HTTP mode).
 - An empty namespace in a reference means the referring resource's namespace.
+- **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
+  header. `AgentBackend` has no credentials of its own; a gateway in front of the
+  backend, such as agentgateway, validates the Binding's OIDC token. Static headers may
+  not set `Authorization` or `X-User-Id`.
 - One channel maps to at most one Binding. A second Binding for the same channel is
   rejected with a status condition.
 - Each Binding with `alerts` gets its own webhook path. Alertmanager routing decides
