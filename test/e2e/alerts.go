@@ -22,20 +22,22 @@ type Alert struct {
 // Alertmanager posts alerts to Alertmanager's API, so they go through real grouping, routing,
 // repeats and resolves (spec 12.1).
 type Alertmanager struct {
-	c   *client
-	run string
+	c      *client
+	suffix string // per client: Name appends it
 }
 
-// NewAlertmanager returns a client for the Alertmanager at baseURL, with a new run ID.
+// NewAlertmanager returns a client for the Alertmanager at baseURL, with a new name suffix. Build
+// one per scenario and use it for every alert of that scenario, the resolve included: a second
+// client names the same base differently.
 func NewAlertmanager(baseURL string) *Alertmanager {
 	return &Alertmanager{newClient(baseURL), fmt.Sprintf("%x-%s", time.Now().Unix(), strings.ToLower(rand.Text()[:6]))}
 }
 
-// Name returns base made unique to this run, for an alertname or any label. Alertmanager does not
-// notify again for a firing alert it already sent, so a bare name would show nothing on a second
-// run against the same cluster. Within one client a base always gives the same name, so a resolve
-// matches the alert that fired.
-func (a *Alertmanager) Name(base string) string { return base + "-" + a.run }
+// Name returns base made unique to this client (a time and a random string), for an alertname or
+// any label. Alertmanager does not notify again for a firing alert it already sent, so a bare name
+// would show nothing on a second run against the same cluster. A client always gives the same name
+// for a base, so a resolve matches the alert that fired.
+func (a *Alertmanager) Name(base string) string { return base + "-" + a.suffix }
 
 // Post sends alerts with POST /api/v2/alerts.
 func (a *Alertmanager) Post(ctx context.Context, alerts ...Alert) error {

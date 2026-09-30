@@ -41,10 +41,10 @@ func TestAlertmanagerPost(t *testing.T) {
 	}
 }
 
-func TestAlertNamesAreUniquePerRunAndStableWithinOne(t *testing.T) {
+func TestAlertNamesAreUniquePerClientAndStableWithinOne(t *testing.T) {
 	a, b := NewAlertmanager("http://x"), NewAlertmanager("http://x")
 	first, again := a.Name("Burst"), a.Name("Burst")
 	if first != again || first == b.Name("Burst") || first == a.Name("Other") {
-		t.Errorf("names %q, %q (same client), %q (another run), %q (another base)", first, again, b.Name("Burst"), a.Name("Other"))
+		t.Errorf("names %q, %q (same client), %q (another client), %q (another base)", first, again, b.Name("Burst"), a.Name("Other"))
 	}
 }
