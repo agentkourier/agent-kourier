@@ -17,3 +17,13 @@ func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, c
 		taskID, contextID, contextID, key.Connection, key.Channel, key.ThreadTS)
 	return errIfUnchanged(n, err, fmt.Sprintf("set session task %+v", key))
 }
+
+// ResetSession implements store.SessionTasks.
+func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) error {
+	if !validKey(key) {
+		return fmt.Errorf("reset session %+v: the key is incomplete: %w", key, store.ErrInvalid)
+	}
+	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = ''
+		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.ThreadTS)
+	return errIfUnchanged(n, err, fmt.Sprintf("reset session %+v", key))
+}

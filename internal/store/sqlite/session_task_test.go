@@ -43,7 +43,37 @@ func TestSetSessionTask(t *testing.T) {
 			t.Errorf("%s: session = %+v; want context %q, task %q, the Binding and the touched activity kept", tc.name, got, tc.wantContext, tc.wantTask)
 		}
 	}
+	for range 2 { // a repeat of the same call is not an error, though no row changes
+		if err := s.SetSessionTask(ctx, key, "c2", "t3"); err != nil {
+			t.Errorf("repeated set = %v; want nil", err)
+		}
+	}
 	if err := s.SetSessionTask(ctx, store.ConversationKey{}, "c", "t"); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("set with an empty key = %v; want ErrInvalid", err)
+	}
+}
+
+// ResetSession forgets the agent's session, and only that: the Binding and the activity stay,
+// so the thread is still owned, and the next turn starts a fresh context (spec 8.2).
+func TestResetSession(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	if err := s.ResetSession(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("reset of a missing session = %v; want ErrNotFound", err)
+	}
+	if err := s.UpsertSession(ctx, store.Session{Key: key, ContextID: "c1", TaskID: "t1", Binding: "ns/b", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // and again: a repeat changes nothing
+		if err := s.ResetSession(ctx, key); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.GetSession(ctx, key, 1000*time.Hour, t0)
+		if want := (store.Session{Key: key, Binding: "ns/b", LastActivity: t0}); err != nil || got != want {
+			t.Fatalf("session = %+v, %v; want %+v", got, err, want)
+		}
+	}
+	if err := s.ResetSession(ctx, store.ConversationKey{}); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("reset with an empty key = %v; want ErrInvalid", err)
 	}
 }

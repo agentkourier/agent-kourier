@@ -10,4 +10,9 @@ type SessionTasks interface {
 	// Nothing else changes, LastActivity included. It returns ErrNotFound if the session
 	// does not exist and ErrInvalid for an incomplete key.
 	SetSessionTask(ctx context.Context, key ConversationKey, contextID, taskID string) error
+	// ResetSession forgets the agent's session: it clears both the contextId and the active
+	// task in one UPDATE, and leaves the Binding and LastActivity alone, so the thread stays
+	// owned and its next turn starts a fresh context. SetSessionTask cannot do this: it never
+	// clears a contextId. Errors are as for SetSessionTask.
+	ResetSession(ctx context.Context, key ConversationKey) error
 }
