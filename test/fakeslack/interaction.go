@@ -50,7 +50,7 @@ func (s *Server) Submit(user, messageTS, submitActionID string, values StateValu
 	for blockID, actions := range values {
 		for actionID := range actions {
 			if !blocks.has(blockID, actionID) {
-				return "", fmt.Errorf("fakeslack: message %s has no element %q in block %q", messageTS, actionID, blockID)
+				return "", fmt.Errorf("fakeslack: message %s has no element %q in block %q: %w", messageTS, actionID, blockID, ErrNotFound)
 			}
 		}
 	}
@@ -106,7 +106,7 @@ func (s *Server) findMessage(ts string) (channel string, m Message, blocks eleme
 			}
 		}
 	}
-	return "", Message{}, nil, fmt.Errorf("fakeslack: no message with ts %q", ts)
+	return "", Message{}, nil, fmt.Errorf("fakeslack: no message with ts %q: %w", ts, ErrNotFound)
 }
 
 // element is an object with an action_id, and the block_id of the block that
@@ -168,5 +168,5 @@ func (es elements) button(actionID string) (element, error) {
 			return e, nil
 		}
 	}
-	return element{}, fmt.Errorf("fakeslack: message has no element with action_id %q", actionID)
+	return element{}, fmt.Errorf("fakeslack: message has no element with action_id %q: %w", actionID, ErrNotFound)
 }

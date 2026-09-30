@@ -3,7 +3,9 @@
 // through slack-go's slack.OptionAPIURL(fake.URL() + "/"), or, when the fake
 // runs behind another listener, by serving the Server as an http.Handler.
 // Socket Mode clients connect with an xapp- token; apps.connections.open
-// answers with a websocket URL on the same listener.
+// answers with a websocket URL on the same listener. The same handler serves a
+// JSON control surface under /_control/ (controlhttp.go), which needs no Slack
+// token and is only for tests inside a cluster.
 //
 // It is built from Slack's API documentation and slack-go's request and
 // response types, not from captured traffic. Comments name the docs page for
@@ -92,6 +94,7 @@ type Server struct {
 	pingEvery time.Duration
 	bot       botIdentity
 	sock      sockets
+	control   http.Handler // the /_control/ routes
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
@@ -125,6 +128,7 @@ func NewHandler(opts ...Option) *Server {
 	for _, o := range opts {
 		o(s)
 	}
+	s.control = s.newControlMux()
 	return s
 }
 
@@ -161,8 +165,12 @@ type response map[string]any
 // ServeHTTP authenticates a request, dispatches it to its method, and writes
 // Slack's envelope: HTTP 200 with ok=true, or ok=false and an error code.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == socketPath {
+	switch {
+	case r.URL.Path == socketPath:
 		s.serveSocket(w, r)
+		return
+	case isControlPath(r.URL.Path):
+		s.control.ServeHTTP(w, r)
 		return
 	}
 	out, code := s.dispatch(r)

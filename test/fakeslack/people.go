@@ -8,12 +8,12 @@ import (
 // User is a workspace member registered with AddUser. DisplayName is often
 // empty on real Slack, so it is separate from Name and defaults to empty.
 type User struct {
-	ID          string
-	Name        string
-	DisplayName string
-	RealName    string
-	Email       string
-	IsBot       bool
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	RealName    string `json:"real_name"`
+	Email       string `json:"email"`
+	IsBot       bool   `json:"is_bot"`
 }
 
 // AddUser registers (or replaces) a user for users.info.

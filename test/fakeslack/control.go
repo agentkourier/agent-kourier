@@ -1,6 +1,7 @@
 package fakeslack
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -11,9 +12,14 @@ const teamID = "TFAKE"
 // UserMessage is a message a test posted as a user: where it was stored, and
 // the envelope_id of each event delivered for it. Pass Envelopes to WaitAck.
 type UserMessage struct {
-	Channel, TS string
-	Envelopes   []string
+	Channel   string   `json:"channel"`
+	TS        string   `json:"ts"`
+	Envelopes []string `json:"envelopes"`
 }
+
+// ErrNotFound is wrapped by the errors for a message, thread, or action that
+// does not exist.
+var ErrNotFound = errors.New("fakeslack: not found")
 
 // Mention posts text in channel as user and delivers an app_mention event and
 // a message event for it. The text must mention the bot, as <@UFAKEBOT> by
@@ -67,7 +73,11 @@ func (s *Server) userMessage(channel, threadTS, user, text string, eventTypes ..
 	s.mu.Lock()
 	code := s.addLocked(channel, m)
 	s.mu.Unlock()
-	if code != "" {
+	switch code {
+	case "":
+	case "thread_not_found":
+		return UserMessage{}, fmt.Errorf("fakeslack: posting as %s in %s: %w", user, channel, ErrNotFound)
+	default:
 		return UserMessage{}, fmt.Errorf("fakeslack: posting as %s in %s: %s", user, channel, code)
 	}
 
