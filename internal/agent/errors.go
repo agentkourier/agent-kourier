@@ -53,6 +53,11 @@ var (
 	// WORKING and refuses every message, so Answer cancels it (R17); a cancel that failed
 	// is joined to this error.
 	ErrAnswerRejected = errors.New("agent: the answer was rejected and the task is wedged")
+	// ErrCancelFailed is joined to ErrAnswerRejected when Answer's automatic cancel of the
+	// wedged task failed too: the task is still wedged, and every send to its session will get
+	// -32004 until something cancels it (R17). The caller keeps the task recorded, and cancels it
+	// again.
+	ErrCancelFailed = errors.New("agent: the cancel of the wedged task failed")
 	// ErrStreamLost means the stream ended before the task reached an end state, and the
 	// reconnects did not get it there. The agent had named the task, so a StreamLostError
 	// carries its ID and its state can still be read with GetTask.

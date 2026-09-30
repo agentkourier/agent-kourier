@@ -158,3 +158,22 @@ func TestCancelOfWedgedTaskIgnoresTheCallersCancellation(t *testing.T) {
 		}
 	})
 }
+
+// Answer's automatic cancel can fail, and then the wedge persists: every send to the session
+// gets -32004. The caller must be able to tell that from a cancel that worked, so the failure is
+// typed, joined to the rejection, and keeps the cancel's own error.
+func TestFailedAutoCancelOfAWedgedTaskIsTyped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		send := make(chan item)
+		m := newMemConn(t, []chan item{send}, nil)
+		m.cancelErr = errors.New("agent unreachable")
+		done := make(chan error, 1)
+		go func() { done <- memAgent(t, m, nil).Answer(t.Context(), message(""), nil) }()
+		feed(t, send, item{ev: working()}, done)
+		feed(t, send, item{err: a2a.NewError(a2a.ErrInternalError, "wedged")}, done)
+		err := <-done
+		if !errors.Is(err, ErrAnswerRejected) || !errors.Is(err, ErrCancelFailed) {
+			t.Errorf("err = %v; want ErrAnswerRejected and ErrCancelFailed", err)
+		}
+	})
+}

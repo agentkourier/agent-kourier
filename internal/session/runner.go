@@ -26,6 +26,7 @@ type convo struct {
 	lastSeen   time.Time         // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
 	life       life              // what courier already holds of that task, so a replayed snapshot is not life
 	cancelFrom time.Time         // when the first attempt to cancel a wedged task was made, for SendGiveUp
+	cancelNow  bool              // the task is known to be wedged: cancel it at once, without waiting for its age
 	patient    bool              // the turn is never given up on: the agent may have taken it
 	follow     *tstate           // the turn whose task is followed again, after its stream was lost
 	paused     *tstate           // the turn whose task waits for input, while it does
@@ -255,7 +256,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 
 // settle forgets the retry state of the head turn: it was taken, failed for good, or ended.
 func (c *convo) settle() {
-	c.tries, c.since, c.patient, c.notified, c.busyNoted, c.cancelFrom = 0, time.Time{}, false, false, false, time.Time{}
+	c.tries, c.since, c.patient, c.notified, c.busyNoted, c.cancelFrom, c.cancelNow = 0, time.Time{}, false, false, false, time.Time{}, false
 }
 
 // drives records the task the runner is streaming or following, for endPause and the controls.
@@ -440,14 +441,24 @@ func (m *Manager) answer(c *convo, msg *a2a.Message) (outcome, error) {
 // wedged its task, which Agent.Answer has already cancelled (R17). A busy one is read (see
 // busyAnswer). Any other failure leaves the task paused, so the person can answer again.
 func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
-	call := audit.Call{Op: audit.OpAnswer, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.nid, Err: err}
 	switch {
 	case errors.Is(err, agent.ErrAnswerRejected):
 		m.notice(t, NoticeAnswerRejected, "")
-		m.audit(t, call)
+		m.audit(t, audit.Call{Op: audit.OpAnswer, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.nid, Err: err})
+		if errors.Is(err, agent.ErrCancelFailed) {
+			// The wedge persists, and would refuse every send for ever: keep the task recorded and
+			// cancel it again, classified and bounded, as any wedged task is.
+			t.c.follow, t.follow, t.c.cancelNow = t, true, true
+			return m.wedged(t)
+		}
+		// Agent.Answer cancelled the wedged task itself: record that call, made by no person.
+		m.auditCall(m.ctx, t.key, audit.Actor{Binding: t.sess.Binding, Identity: t.b.Identity},
+			audit.Call{Op: audit.OpCancel, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.nid})
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 	case errors.Is(err, agent.ErrBusy):
-		return m.busyAnswer(t)
+		return m.readAnswered(t, true)
+	case errors.Is(err, agent.ErrOutcomeUnknown):
+		return m.readAnswered(t, false)
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		m.rejected(t, err)
 	}
@@ -455,19 +466,33 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	return m.repark(t), nil
 }
 
-// busyAnswer reads the task an answer got -32004 for, which is busy, wedged, or ended: an
-// ended one drops the answer; a WORKING one past maxWorkingAge is cancelled (R17); any other
-// is busy with something else, and stays paused for another try.
-func (m *Manager) busyAnswer(t *tstate) (outcome, error) {
+// readAnswered reads the task an answer may or may not have reached: it got -32004 (busy, wedged,
+// or ended), or its outcome is unknown (it may have been delivered). An ended task drops the
+// answer; a WORKING one past maxWorkingAge that refused it is cancelled (R17); any other WORKING
+// one is followed, so its end is seen and the queue goes on (the thread is told when it refused
+// the answer); one still waiting for input reopens the pause.
+func (m *Manager) readAnswered(t *tstate, busy bool) (outcome, error) {
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
-	case err == nil && task.Status.State.Terminal():
+	case err != nil:
+		m.notice(t, NoticeFailed, "the answer could not be delivered")
+		return m.repark(t), nil
+	case task.Status.State.Terminal():
 		m.notice(t, NoticeAnswerDropped, "")
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
-	case err == nil && running(task) && task.Status.Timestamp != nil && m.cfg.Now().Sub(*task.Status.Timestamp) > m.cfg.MaxWorkingAge:
-		return m.wedged(t)
+	case running(task):
+		if busy && m.wedgedByAge(t.c, task) {
+			return m.wedged(t)
+		}
+		if busy {
+			m.notice(t, NoticeFailed, "the agent is busy with the task, and did not take the answer")
+		}
+		t.c.follow, t.follow = t, true
+		return m.resume(t.c)
 	}
-	m.notice(t, NoticeFailed, "the agent is busy with the task, and did not take the answer")
+	if busy {
+		m.notice(t, NoticeFailed, "the agent is busy with the task, and did not take the answer")
+	}
 	return m.repark(t), nil
 }
 
@@ -531,6 +556,9 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 func (m *Manager) resume(c *convo) (outcome, error) {
 	t := c.follow
 	m.drives(c, t.taskID)
+	if c.cancelNow { // the wedge is known, so there is nothing to read first
+		return m.wedged(t)
+	}
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
 	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, a2a.ErrTaskNotFound):

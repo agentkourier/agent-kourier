@@ -130,13 +130,13 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 
 // cancelWedged cancels the task a rejected answer left in WORKING, which refuses every
 // message until then (R17). It runs detached from ctx, so the caller giving up does not
-// leave the task wedged; UnaryTimeout bounds it. A failed cancel is joined to rejected.
+// leave the task wedged; UnaryTimeout bounds it. A failed cancel is joined to rejected, typed ErrCancelFailed.
 func (a *Agent) cancelWedged(ctx context.Context, rejected error, id a2a.TaskID) error {
 	if id == "" {
 		return rejected
 	}
 	if _, err := a.CancelTask(context.WithoutCancel(ctx), id); err != nil {
-		return errors.Join(rejected, err)
+		return errors.Join(rejected, fmt.Errorf("%w: %w", ErrCancelFailed, err))
 	}
 	return rejected
 }

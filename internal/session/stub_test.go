@@ -296,7 +296,7 @@ func TestStubBadAnswerWedgesAndIsCancelled(t *testing.T) {
 	}
 	e.amu.Lock()
 	defer e.amu.Unlock()
-	if len(e.audits) != 1 || e.audits[0].Op != audit.OpAnswer {
-		t.Errorf("audits = %+v; want the rejected answer", e.audits)
+	if len(e.audits) != 2 || e.audits[0].Op != audit.OpAnswer || e.audits[1].Op != audit.OpCancel {
+		t.Errorf("audits = %+v; want the rejected answer, then the cancel Agent.Answer made", e.audits)
 	}
 }

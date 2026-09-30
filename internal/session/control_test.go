@@ -219,14 +219,126 @@ func TestRejectedAnswerIsReportedAndTheQueueGoesOn(t *testing.T) {
 	}
 	f.amu.Lock()
 	defer f.amu.Unlock()
-	if len(f.audits) != 1 || f.audits[0].Op != audit.OpAnswer || !errors.Is(f.audits[0].Err, agent.ErrAnswerRejected) {
-		t.Errorf("audits = %+v; want the answer, rejected", f.audits)
+	// The answer's rejection, and the cancel Agent.Answer made of the wedged task, are two rows:
+	// the cancel is a call courier's agent layer made, under no person.
+	if len(f.audits) != 2 || f.audits[0].Op != audit.OpAnswer || !errors.Is(f.audits[0].Err, agent.ErrAnswerRejected) ||
+		f.audits[1].Op != audit.OpCancel || f.audits[1].Err != nil || f.actors[1].User != "" {
+		t.Errorf("audits = %+v by %+v; want the rejected answer, then the cancel, by no person", f.audits, f.actors)
 	}
+}
+
+// An answer that the agent rejects after it names the task again is not a lost stream: kagent
+// says -32603 over an SSE event that follows a WORKING update. The rejection is what happened, so
+// the thread is told, the call is audited, the task is cleared and the held reply goes out.
+func TestAnswerRejectedAfterTheTaskIsNamedAgainIsNotALostStream(t *testing.T) {
+	f, sink := pausedFirst(t, func(_ *a2a.Message, h agent.Handler) error {
+		h(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateWorking})
+		return fmt.Errorf("send message: %w", agent.ErrAnswerRejected)
+	})
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Errorf("sent %s after the rejected answer; want %s", id, want)
+	}
+	if got := sink.noticesOf(NoticeAnswerRejected); len(got) != 1 {
+		t.Errorf("notices = %+v; want one", got)
+	}
+	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	if len(f.audits) == 0 || f.audits[0].Op != audit.OpAnswer {
+		t.Errorf("audits = %+v; want the rejected answer", f.audits)
+	}
+}
+
+// If Agent.Answer's own cancel of the wedged task failed too (ErrCancelFailed), the task is still
+// wedged: it stays recorded, and courier cancels it again, classified and bounded, until it is
+// gone. Clearing it would leave every send getting -32004 for ever.
+func TestWedgeWithAFailedAutoCancelIsCancelledAgain(t *testing.T) {
+	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error {
+		return errors.Join(fmt.Errorf("send message: %w", agent.ErrAnswerRejected), fmt.Errorf("%w: down", agent.ErrCancelFailed))
+	})
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.mu.Lock()
+	f.agent.cancelErr = func(n int) error { // the first two tries fail, as the agent's own did
+		if n <= 2 {
+			return errors.New("agent unreachable")
+		}
+		return nil
+	}
+	f.agent.mu.Unlock()
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Errorf("sent %s after the wedge was cancelled; want %s", id, want)
+	}
+	if got := f.cancelled(); len(got) != 3 {
+		t.Errorf("cancelled %v; want three tries of t1", got)
+	}
+	if got := sink.noticesOf(NoticeAnswerRejected); len(got) != 1 {
+		t.Errorf("answer-rejected notices = %+v; want one", got)
+	}
+}
+
+// An answer whose outcome is unknown may have been delivered, so the task is read before anything
+// is said or reparked: still waiting for input, it reopens; WORKING, it is followed; ended, the
+// answer is dropped with a notice. A failure that never left keeps the plain reopening.
+func TestAnswerOfUnknownOutcomeReadsTheTask(t *testing.T) {
+	unknown := func(*a2a.Message, agent.Handler) error {
+		return fmt.Errorf("%w: the stream ended", agent.ErrOutcomeUnknown)
+	}
+	state := func(s a2a.TaskState) func(a2a.TaskID) (*a2a.Task, error) {
+		return func(id a2a.TaskID) (*a2a.Task, error) {
+			return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: s, Timestamp: &t0}}, nil
+		}
+	}
+	t.Run("still waiting: the pause reopens", func(t *testing.T) {
+		f, _ := pausedFirst(t, unknown)
+		f.agent.mu.Lock()
+		f.agent.get = state(a2a.TaskStateInputRequired)
+		f.agent.mu.Unlock()
+		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the pause to reopen", func() bool { return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil })
+	})
+	t.Run("working: the answer went through, and the task is followed", func(t *testing.T) {
+		f, sink := pausedFirst(t, unknown)
+		f.agent.mu.Lock()
+		f.agent.get = state(a2a.TaskStateWorking)
+		f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+		f.agent.mu.Unlock()
+		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+			t.Fatal(err)
+		}
+		if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+			t.Errorf("sent %s; want the held reply %s", id, want)
+		}
+		if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+			t.Errorf("failed notices = %+v; want none: the answer was delivered", got)
+		}
+	})
+	t.Run("ended: the answer is dropped", func(t *testing.T) {
+		f, sink := pausedFirst(t, unknown)
+		f.agent.mu.Lock()
+		f.agent.get = state(a2a.TaskStateCompleted)
+		f.agent.mu.Unlock()
+		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeAnswerDropped)) == 1 })
+		if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+			t.Errorf("sent %s; want the held reply %s", id, want)
+		}
+	})
 }
 
 // -32004 on an answer means busy, wedged, or ended. The task is read: ended, and the answer is
 // dropped with a notice; WORKING past maxWorkingAge, and it is cancelled (R17); otherwise it is
-// busy with something else, the thread is told, and the pause stays open for another try.
+// busy with something else: the thread is told, and the task is followed, so its end is seen and
+// the queue goes on, not parked on a task that runs.
 func TestBusyAnswerReadsTheTask(t *testing.T) {
 	busy := func(*a2a.Message, agent.Handler) error { return fmt.Errorf("send message: %w", agent.ErrBusy) }
 	ended := func(id a2a.TaskID) (*a2a.Task, error) {
@@ -237,28 +349,24 @@ func TestBusyAnswerReadsTheTask(t *testing.T) {
 		get    func(a2a.TaskID) (*a2a.Task, error)
 		notice NoticeKind
 		cancel bool // and the queue goes on
-		open   bool // the pause stays open
 	}{
-		{"the task ended", ended, NoticeAnswerDropped, false, false},
-		{"wedged past maxWorkingAge", working(t0.Add(-2 * time.Hour)), NoticeWedged, true, false},
-		{"busy for now", working(t0), NoticeFailed, false, true},
+		{"the task ended", ended, NoticeAnswerDropped, false},
+		{"wedged past maxWorkingAge", working(t0.Add(-2 * time.Hour)), NoticeWedged, true},
+		{"busy for now: it is followed, to its end", working(t0.Add(2 * time.Hour)), NoticeFailed, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink := pausedFirst(t, busy)
+			f.agent.mu.Lock()
 			f.agent.get = tc.get
-			f.now.Store(t0.Add(30 * time.Minute).UnixNano())
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+			f.agent.mu.Unlock()
+			f.now.Store(t0.Add(2 * time.Hour).UnixNano())
 			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "the notice", func() bool { return len(sink.noticesOf(tc.notice)) == 1 })
 			if got := len(f.cancelled()) == 1; got != tc.cancel {
 				t.Errorf("cancelled %v; want a cancel: %v", f.cancelled(), tc.cancel)
-			}
-			if tc.open { // the same task may be answered again
-				eventually(t, "the pause to reopen", func() bool {
-					return f.m.Answer(t.Context(), key, answerMsg("ans-2")) == nil
-				})
-				return
 			}
 			if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 				t.Errorf("sent %s; want the held reply %s", id, want)

@@ -318,7 +318,7 @@ func errorTags(err error) []string {
 	}{
 		{agent.ErrCredentialsRejected, "credentials_rejected"}, {agent.ErrNotSent, "not_sent"},
 		{agent.ErrOutcomeUnknown, "outcome_unknown"}, {agent.ErrStreamLost, "stream_lost"}, {agent.ErrBusy, "busy"},
-		{agent.ErrForbidden, "forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrTokenRequired, "token_required"},
+		{agent.ErrForbidden, "forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrCancelFailed, "cancel_failed"}, {agent.ErrTokenRequired, "token_required"},
 		{agent.ErrTokenUnreadable, "token_unreadable"}, {agent.ErrHeaderUnreadable, "header_unreadable"},
 		{agent.ErrPoolClosed, "pool_closed"}, {agent.ErrStreamingUnsupported, "streaming_unsupported"},
 		// Answer's automatic cancel (R17) can fail and is joined to ErrAnswerRejected: a wedged task must not read as cleared.
