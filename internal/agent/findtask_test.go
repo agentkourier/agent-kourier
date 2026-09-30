@@ -96,6 +96,30 @@ func TestFindTaskFollowsPagesWithoutRelyingOnOrder(t *testing.T) {
 	})
 }
 
+// While the list shifts under the walk (a task ends and moves), one task can show on two
+// pages. It is one holder, not a duplicate run, and the newest copy is the one returned.
+func TestFindTaskCountsATaskOnTwoPagesOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		at := func(task *a2a.Task, ts time.Time) *a2a.Task { task.Status.Timestamp = &ts; return task }
+		now := time.Now()
+		pages := map[string]*a2a.ListTasksResponse{
+			"":   listOf("p2", at(holding("t1", a2a.TaskStateWorking, "turn"), now)),
+			"p2": listOf("", at(holding("t1", a2a.TaskStateCompleted, "turn"), now.Add(time.Second))),
+		}
+		m := newMemConn(t, nil, nil)
+		m.list = func(_ context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+			return pages[req.PageToken], nil
+		}
+		task, holders, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
+		if err != nil || task == nil || task.Status.State != a2a.TaskStateCompleted {
+			t.Errorf("task = %+v, %v; want the newer copy, COMPLETED", task, err)
+		}
+		if !slices.Equal(holders, []a2a.TaskID{"t1"}) {
+			t.Errorf("holders = %v, want t1 once: one task is not a duplicate run", holders)
+		}
+	})
+}
+
 // A page token seen before is a loop: fail at once, not after the page bound.
 func TestFindTaskFailsAtOnceOnARepeatedPageToken(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

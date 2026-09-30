@@ -24,7 +24,8 @@ const maxListPages = 100
 // when the active task ends.
 //
 // It follows nextPageToken to the end and does not rely on page order. Of several holders it
-// returns one that has not ended, else the earliest, and lists the rest in that order. Each
+// returns one that has not ended, else the earliest, and lists the rest in that order. A
+// task that shows on two pages, as the list shifts, counts once, as its newest copy. Each
 // page is a unary call under UnaryTimeout. A page token seen before fails the lookup at
 // once. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
 // kagent's page size of 50 is not measured.
@@ -39,6 +40,7 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a
 		return nil, nil, fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
 	var holders []*a2a.Task
+	byID := map[a2a.TaskID]int{} // index in holders
 	seen := map[string]bool{}
 	req := &a2a.ListTasksRequest{ContextID: contextID}
 	for range maxListPages {
@@ -47,8 +49,14 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a
 			return nil, nil, err
 		}
 		for _, task := range page.Tasks {
-			if task != nil && holds(task, messageID) {
+			if task == nil || !holds(task, messageID) {
+				continue
+			}
+			if i, seen := byID[task.ID]; !seen { // a task can show on two pages while the list shifts
+				byID[task.ID] = len(holders)
 				holders = append(holders, task)
+			} else if old := holders[i].Status.Timestamp; old == nil || (task.Status.Timestamp != nil && !task.Status.Timestamp.Before(*old)) {
+				holders[i] = task // keep the newest copy
 			}
 		}
 		switch next := page.NextPageToken; {

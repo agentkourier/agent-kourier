@@ -152,7 +152,8 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
 	}
-	// WP-01d measured kagent 1.0.0-alpha5's card: it sets capabilities.streaming to true.
+	// WP-01d measured kagent 1.0.0-alpha5's card: capabilities.streaming is true
+	// (test/fixtures/kagent/card/test-agent.card.json).
 	if !client.Card().Capabilities.Streaming {
 		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
 	}
