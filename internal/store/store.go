@@ -29,6 +29,7 @@ type Store interface {
 	Queue
 	Outbox
 	Sessions
+	Interactions
 	io.Closer
 }
 

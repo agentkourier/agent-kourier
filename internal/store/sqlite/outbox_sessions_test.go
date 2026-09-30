@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,11 +57,11 @@ func TestOutbox(t *testing.T) {
 	}
 	// The database guards the role set even when Go validation is bypassed.
 	if _, err := s.write.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
-		VALUES ('raw', 'e', 'bogus', 'C', '', 1)`); err == nil {
-		t.Fatal("database accepted an insert with an invalid outbox role")
+		VALUES ('raw', 'e', 'bogus', 'C', '', 1)`); err == nil || !strings.Contains(err.Error(), "invalid outbox role") {
+		t.Fatalf("insert with an invalid outbox role = %v; want the trigger's error", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE outbox SET role = 'bogus' WHERE id = ?`, a.ID); err == nil {
-		t.Fatal("database accepted an invalid outbox role")
+	if _, err := s.write.ExecContext(ctx, `UPDATE outbox SET role = 'bogus' WHERE id = ?`, a.ID); err == nil || !strings.Contains(err.Error(), "invalid outbox role") {
+		t.Fatalf("update to an invalid outbox role = %v; want the trigger's error", err)
 	}
 	if l := list(); len(l) != 2 || l[0] != a || l[1] != b {
 		t.Fatalf("unposted = %+v; want a then b", l)
@@ -169,8 +170,8 @@ func TestPersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("session after reopen = %+v, %v", got, err)
 	}
 	var n int
-	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 3 {
-		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 3", n, err)
+	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 4 {
+		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 4", n, err)
 	}
 }
 

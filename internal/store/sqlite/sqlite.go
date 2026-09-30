@@ -92,8 +92,9 @@ func (s *Store) exec(ctx context.Context, query string, args ...any) (int64, err
 }
 
 // inTx runs fn in a transaction on the write pool, committing if fn returns
-// nil and rolling back on an error or panic. The pool has one connection, so fn must use tx and never s.write or
-// s.exec, which would block until the context ends.
+// nil and rolling back on an error or panic. The pool has one connection, so
+// fn must use tx and never s.write or s.exec, which would block until the
+// context ends.
 func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
