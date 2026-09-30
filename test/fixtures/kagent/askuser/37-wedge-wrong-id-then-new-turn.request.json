@@ -1,0 +1,17 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "contextId": "01a0f05b-3a3a-7a7c-9324-708911998adf",
+   "messageId": "spike-1790738926036572000",
+   "parts": [
+    {
+     "text": "x"
+    }
+   ],
+   "role": "ROLE_USER"
+  }
+ }
+}

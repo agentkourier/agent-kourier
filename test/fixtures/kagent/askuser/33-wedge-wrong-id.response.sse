@@ -1,0 +1,6 @@
+id: 2dd399e5-7a9b-48ea-847b-b1d4615316ca
+data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":{"contextId":"01a0f05b-3a3a-7a7c-9324-708911998adf","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T03:28:25.979529094Z"},"taskId":"01a0f05b-3af4-7658-9476-5cddeb7e372b"}}}
+
+id: b63bc83a-c952-4a8a-9750-7b7897db0dba
+data: {"jsonrpc":"2.0","id":"1","error":{"code":-32603,"message":"ask_user decision is missing approval correlation or answers","data":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","domain":"a2a-protocol.org","metadata":{"timestamp":"2026-09-30T03:28:25Z"},"reason":"INTERNAL_ERROR"}]}}
+

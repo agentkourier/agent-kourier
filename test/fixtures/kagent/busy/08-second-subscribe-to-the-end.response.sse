@@ -1,0 +1,30 @@
+id: da1de4f2-c090-46dc-9ea3-be775646f1e0
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f05a-482b-797f-8e11-506b9619869f","artifacts":[{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:23.729614801Z"},"parts":[{"text":"tick 1 "}]}],"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","history":[{"messageId":"spike-1790738843529081000","contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","parts":[{"text":"go slowly"}],"role":"ROLE_USER","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true},"status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T03:27:23.708946551Z"}}}}
+
+id: 1dabd01a-ccae-4537-a01d-442a67791f56
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:24.733932889Z"},"parts":[{"text":"tick 2 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: 1d1b861a-8c30-4b8d-82b4-7cbc944528d9
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:25.733861851Z"},"parts":[{"text":"tick 3 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: e6fbc0ce-25d0-4c0c-b19c-0c5318acb969
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:26.735281291Z"},"parts":[{"text":"tick 4 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: da1bef69-2094-418b-b52e-8be92c102e7b
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:27.735738426Z"},"parts":[{"text":"tick 5 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: 87307d3d-78bc-4b28-8565-ed8072e68ab1
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:28.737425672Z"},"parts":[{"text":"tick 6 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: 2ce2f95e-4514-4f60-9b17-4f8c0190fd76
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:29.73743959Z"},"parts":[{"text":"tick 7 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: a4fb0904-9e0f-4ad2-a195-1710fa4110df
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"append":true,"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:30.739091965Z"},"parts":[{"text":"tick 8 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: a96aa7de-6e5c-48f6-bc29-ae51b8a62f5c
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"artifact":{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:31.739758Z"},"parts":[{"text":"tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 tick 8 "}]},"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","lastChunk":true,"taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}}}
+
+id: 0797eaf7-2687-419a-b157-756a8edd6c88
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f05a-482b-797f-8e11-506b9619869f","artifacts":[{"artifactId":"01a0f05a-4851-7bd6-a77f-3c5d2e35c8f5","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:31.739758Z"},"parts":[{"text":"tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 tick 8 "}]}],"contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","history":[{"messageId":"spike-1790738843529081000","contextId":"01a0f05a-478a-73be-8db8-2ddb65d69202","parts":[{"text":"go slowly"}],"role":"ROLE_USER","taskId":"01a0f05a-482b-797f-8e11-506b9619869f"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true,"kagent.dev/a2a/task-created-at":"2026-09-30T03:27:23.70008Z"},"status":{"state":"TASK_STATE_COMPLETED","timestamp":"2026-09-30T03:27:31.750664756Z"}}}}
+

@@ -1,0 +1,34 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "contextId": "01a0f05b-8a21-72fb-9f10-3afe7a33e81c",
+   "extensions": [
+    "https://kagent.dev/extensions/hitl/v1"
+   ],
+   "messageId": "spike-1790738926506845000",
+   "metadata": {
+    "https://kagent.dev/extensions/hitl/v1": {
+     "answers": [
+      {
+       "answer": [
+        "east"
+       ]
+      }
+     ],
+     "id": "adk-a80b11e7-3305-45cf-85b4-378644236931",
+     "type": "ask_user_response"
+    }
+   },
+   "parts": [
+    {
+     "text": "east"
+    }
+   ],
+   "role": "ROLE_USER",
+   "taskId": "01a0f05b-8b2b-7a4b-b407-236e3b34bd6d"
+  }
+ }
+}

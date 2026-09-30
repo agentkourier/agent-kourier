@@ -1,0 +1,8 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "CancelTask",
+ "params": {
+  "id": "01a0f05a-276d-7cb2-94d4-2b8227782221"
+ }
+}

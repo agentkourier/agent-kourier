@@ -1,0 +1,3 @@
+id: 1b3a8cd3-803f-4411-a14a-9a72669acea9
+data: {"jsonrpc":"2.0","id":"1","error":{"code":-32004,"message":"resource conflict","data":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","domain":"a2a-protocol.org","metadata":{"timestamp":"2026-09-30T03:28:46Z"},"reason":"UNSUPPORTED_OPERATION"}]}}
+

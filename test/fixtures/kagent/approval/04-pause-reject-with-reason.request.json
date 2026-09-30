@@ -1,0 +1,16 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "messageId": "spike-1790738930121189000",
+   "parts": [
+    {
+     "text": "Use the tool to add 3 and 5"
+    }
+   ],
+   "role": "ROLE_USER"
+  }
+ }
+}

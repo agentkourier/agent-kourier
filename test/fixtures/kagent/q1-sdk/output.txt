@@ -1,0 +1,11 @@
+card extensions: [{Description:Human approval and user input Params:map[] Required:false URI:https://kagent.dev/extensions/hitl/v1}]
+== activator, card lists the extension
+   wire A2A-Extensions per request: [[https://kagent.dev/extensions/hitl/v1] [https://kagent.dev/extensions/hitl/v1]]
+   first send: state=TASK_STATE_INPUT_REQUIRED, HITL request in metadata=true
+   after the answer: state=TASK_STATE_COMPLETED
+== no activator, card lists the extension
+   wire A2A-Extensions per request: [[]]
+   first send: state=TASK_STATE_INPUT_REQUIRED, HITL request in metadata=false
+== activator, card lists no extension
+   wire A2A-Extensions per request: [[]]
+   first send: state=TASK_STATE_INPUT_REQUIRED, HITL request in metadata=false

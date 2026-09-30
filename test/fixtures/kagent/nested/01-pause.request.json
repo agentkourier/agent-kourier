@@ -1,0 +1,16 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "messageId": "spike-1790738926113704000",
+   "parts": [
+    {
+     "text": "Ask the specialist"
+    }
+   ],
+   "role": "ROLE_USER"
+  }
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "messageId": "spike-1790738810063439000",
+   "parts": [
+    {
+     "text": "go slowly"
+    }
+   ],
+   "role": "ROLE_USER"
+  }
+ }
+}

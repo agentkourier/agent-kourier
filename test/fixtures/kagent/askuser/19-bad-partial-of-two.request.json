@@ -1,0 +1,34 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "contextId": "01a0f05a-ce25-7685-ad81-f6e3005c2eb2",
+   "extensions": [
+    "https://kagent.dev/extensions/hitl/v1"
+   ],
+   "messageId": "spike-1790738878274208000",
+   "metadata": {
+    "https://kagent.dev/extensions/hitl/v1": {
+     "answers": [
+      {
+       "answer": [
+        "PostgreSQL"
+       ]
+      }
+     ],
+     "id": "adk-41c0f536-4c43-4fa1-bfed-e944ac155ed4",
+     "type": "ask_user_response"
+    }
+   },
+   "parts": [
+    {
+     "text": "x"
+    }
+   ],
+   "role": "ROLE_USER",
+   "taskId": "01a0f05a-cec5-7d74-a842-e8df03dc4b24"
+  }
+ }
+}

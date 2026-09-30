@@ -1,0 +1,18 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "contextId": "01a0f05a-972f-75ac-b4ac-8c122c4b3327",
+   "messageId": "spike-1790738864278684000",
+   "parts": [
+    {
+     "text": "PostgreSQL"
+    }
+   ],
+   "role": "ROLE_USER",
+   "taskId": "01a0f05a-97d2-72ca-ae02-12263992116a"
+  }
+ }
+}

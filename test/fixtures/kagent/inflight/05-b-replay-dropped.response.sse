@@ -1,0 +1,3 @@
+id: f741c6dd-eaa4-47f7-8eac-53c3a7f4a13c
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f05a-068f-7c82-9802-3edf224729c2","artifacts":[{"artifactId":"01a0f05a-06af-7d35-b4dc-2e74c61b7738","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T03:27:06.927673626Z"},"parts":[{"text":"tick 1 "}]}],"contextId":"01a0f05a-05f3-7eaa-a730-6ffd11c9eccc","history":[{"messageId":"spike-1790738826739936000","contextId":"01a0f05a-05f3-7eaa-a730-6ffd11c9eccc","parts":[{"text":"go slowly"}],"role":"ROLE_USER","taskId":"01a0f05a-068f-7c82-9802-3edf224729c2"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true},"status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T03:27:06.911239043Z"}}}}
+

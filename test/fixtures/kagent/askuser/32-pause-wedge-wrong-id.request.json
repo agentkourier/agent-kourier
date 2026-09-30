@@ -1,0 +1,16 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "messageId": "spike-1790738905658624000",
+   "parts": [
+    {
+     "text": "Which database should we use for storage?"
+    }
+   ],
+   "role": "ROLE_USER"
+  }
+ }
+}

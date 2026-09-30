@@ -1,0 +1,32 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "contextId": "01a0f05b-8c26-7536-bacc-ee39fd43dbc7",
+   "extensions": [
+    "https://kagent.dev/extensions/hitl/v1"
+   ],
+   "messageId": "spike-1790738926974445000",
+   "metadata": {
+    "https://kagent.dev/extensions/hitl/v1": {
+     "approvals": [
+      {
+       "approved": true,
+       "id": "adk-eaf5e6dc-d569-4784-91af-2420f1eb0c97"
+      }
+     ],
+     "type": "tool_approval_response"
+    }
+   },
+   "parts": [
+    {
+     "text": "yes"
+    }
+   ],
+   "role": "ROLE_USER",
+   "taskId": "01a0f05b-8cc4-772c-ab9c-2506b13dbd40"
+  }
+ }
+}

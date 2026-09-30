@@ -1,0 +1,6 @@
+id: fcb34162-2a0b-4b8f-b81e-e20a9913470f
+data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":{"contextId":"01a0f05b-b5f9-71d6-a058-ef5c73b5215e","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T03:28:57.668462053Z"},"taskId":"01a0f05b-b699-72fa-967f-516705d280ae"}}}
+
+id: 0e31fd7a-480d-442a-8750-2b9aa197b835
+data: {"jsonrpc":"2.0","id":"1","error":{"code":-32603,"message":"tool approval response is missing id adk-434aac8c-cc4f-405e-b007-43027a02abef","data":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","domain":"a2a-protocol.org","metadata":{"timestamp":"2026-09-30T03:28:57Z"},"reason":"INTERNAL_ERROR"}]}}
+

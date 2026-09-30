@@ -1,0 +1,9 @@
+id: 13d280e1-3d2a-4754-bcb1-cda7adc12cc1
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f05a-276d-7cb2-94d4-2b8227782221","contextId":"01a0f05a-2666-7203-a561-8382aa2571cf","history":[{"messageId":"spike-1790738835045596000","contextId":"01a0f05a-2666-7203-a561-8382aa2571cf","parts":[{"text":"go slowly"}],"role":"ROLE_USER"}],"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: 2158d3e7-9f34-410f-92cd-d352a40a35fc
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f05a-276d-7cb2-94d4-2b8227782221","contextId":"01a0f05a-2666-7203-a561-8382aa2571cf","history":[{"messageId":"spike-1790738835045596000","contextId":"01a0f05a-2666-7203-a561-8382aa2571cf","parts":[{"text":"go slowly"}],"role":"ROLE_USER"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true},"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: e8d6233d-781a-45a5-9b29-bad01e454243
+data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":{"contextId":"01a0f05a-2666-7203-a561-8382aa2571cf","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T03:27:15.353890089Z"},"taskId":"01a0f05a-276d-7cb2-94d4-2b8227782221","metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true}}}}
+
