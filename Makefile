@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test build tidy e2e-fast-up e2e-fast e2e-full-up e2e-full e2e-down
+.PHONY: help fmt lint test build tidy stub-oracle e2e-fast-up e2e-fast e2e-full-up e2e-full e2e-down
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -22,6 +22,9 @@ build: ## Build bin/courier
 
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
+
+stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and with -no-auth (about 2 minutes)
+	hack/stub-oracle.sh
 
 e2e-fast-up: ## Bring up the fast E2E tier (stub)
 	@echo "not implemented yet (see WP-13)"

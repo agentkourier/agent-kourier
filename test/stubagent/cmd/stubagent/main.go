@@ -7,6 +7,8 @@
 //
 // TOKEN is an unsigned JWT with an email claim, which the identity case needs; -no-auth in
 // place of -token skips that case. Never point the spike's -out at test/fixtures/kagent.
+// `make stub-oracle` does all of this and checks the result. The server stops on SIGINT or
+// SIGTERM.
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/test/stubagent"
@@ -41,7 +44,7 @@ func run(addr string, tick time.Duration, requireAuth bool) error {
 	stub := stubagent.NewHandler(opts...)
 	defer stub.Close()
 	stubagent.SpikeAgents(stub)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv := &http.Server{Addr: addr, Handler: stub, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
