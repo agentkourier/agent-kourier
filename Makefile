@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test build tidy stub-oracle e2e-fast-up e2e-fast e2e-full-up e2e-full e2e-down
+.PHONY: help fmt lint test build tidy stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -32,11 +32,17 @@ e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub
 e2e-fast: ## Run the fast E2E tier (stub)
 	@echo "not implemented yet (see WP-14)"
 
+e2e-fast-down: ## Tear down the fast E2E tier only
+	hack/kind/down.sh fast
+
 e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm)
 	hack/kind/up-full.sh
 
 e2e-full: ## Run the full E2E tier (stub)
 	@echo "not implemented yet (see WP-14)"
 
-e2e-down: ## Tear down both E2E tiers (hack/kind/down.sh fast for the fast tier only)
+e2e-full-down: ## Tear down the full E2E tier only
+	hack/kind/down.sh full
+
+e2e-down: ## Tear down both E2E tiers
 	hack/kind/down.sh

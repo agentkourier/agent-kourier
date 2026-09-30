@@ -153,7 +153,7 @@ are covered by the WP-01b section.
 
 ```
 make e2e-full-up   # about 4 minutes; runs hack/kind/full/verify.sh last
-make e2e-down      # deletes only the courier-full cluster and the mockllm image
+make e2e-full-down # deletes only the courier-full cluster and the mockllm image (e2e-down also removes the fast tier)
 ```
 
 Both scripts refuse to touch a `courier-full` cluster whose node lacks the label

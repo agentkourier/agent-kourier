@@ -6,7 +6,8 @@
 # One full tier per Docker host: the cluster name is fixed, so parallel worktrees share it.
 set -eEuo pipefail
 
-# Pinned versions (the kind node image and the runtime image are in lib.sh). Substrate must be the version kagent pins (its go.mod replace directive).
+# Pinned versions. Substrate must be the version kagent pins (its go.mod replace directive).
+# The kind node image and the runtime image are pinned in lib.sh.
 # Dex, the front door, and the probe image are pinned in full/dex.yaml, full/frontdoor.yaml, full/verify.sh.
 SUBSTRATE_VERSION=0.3.0-alpha1
 KAGENT_VERSION=1.0.0-alpha5
@@ -32,7 +33,7 @@ step() {
   echo "==> $*"
 }
 on_error() {
-  echo "error: step '${STEP}' failed (line $1). Recover with: make e2e-down && make e2e-full-up" >&2
+  echo "error: step '${STEP}' failed (line $1). Recover with: hack/kind/down.sh full && make e2e-full-up" >&2
 }
 trap 'on_error $LINENO' ERR
 

@@ -21,6 +21,7 @@ spec:
     metadata:
       labels: {app: fakeslack}
     spec:
+      automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: fakeslack
@@ -55,6 +56,7 @@ spec:
     metadata:
       labels: {app: stubagent}
     spec:
+      automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stubagent
@@ -88,6 +90,7 @@ spec:
     metadata:
       labels: {app: sink}
     spec:
+      automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: sink
