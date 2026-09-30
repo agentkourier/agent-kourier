@@ -22,8 +22,8 @@ import (
 //     ErrForbidden when the caller does not own it.
 //   - A stream that drops is resumed up to MaxReconnects times in a row, then Follow returns
 //     a *StreamLostError carrying the task ID, so the caller may follow again later. That
-//     includes a 429 or 503 that outlasts the reconnects.
-//   - A request the backend refuses (a 4xx other than 429) is not a lost stream: it comes
+//     includes a 408, 429 or 503 that outlasts the reconnects.
+//   - A request the backend refuses (a 4xx other than 408 or 429) is not a lost stream: it comes
 //     back at once, typed, and does not match ErrStreamLost. A 401 or 403 matches
 //     ErrCredentialsRejected: the caller re-mints the credential (D34), and already holds
 //     the task ID.

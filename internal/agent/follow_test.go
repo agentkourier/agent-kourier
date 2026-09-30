@@ -184,9 +184,9 @@ func TestFollowKeepsTheErrorsTheCallerActsOn(t *testing.T) {
 	}
 }
 
-// A 429 or 503 is worth the whole budget, and running out of it loses the stream.
+// A 408, 429 or 503 is worth the whole budget, and running out of it loses the stream.
 func TestFollowRetriesATransientRefusal(t *testing.T) {
-	for _, code := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+	for _, code := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		synctest.Test(t, func(t *testing.T) {
 			m := newMemConn(t, nil, nil, getResult{err: fmt.Errorf("get: %w", &dialect.HTTPStatusError{Code: code})})
 			err := followAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 })).result()

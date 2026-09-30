@@ -23,7 +23,7 @@ var (
 	// (a configured token could not be read, say), or the backend answered the send with a
 	// 4xx status before any event. Retrying is safe, after fixing what the error names: that
 	// is inferred (a front door that refuses a request does not pass it on), not measured.
-	// A 429 or 503 must be retried with backoff, no sooner than the RetryAfter of the
+	// A 408, 429 or 503 must be retried with backoff, no sooner than the RetryAfter of the
 	// dialect.HTTPStatusError in the chain.
 	ErrNotSent = errors.New("agent: the message was not sent")
 	// ErrCredentialsRejected is joined to an error whose HTTP status is 401 or 403: the front
@@ -108,9 +108,12 @@ func refused(err error) bool {
 	return code >= 400 && code < 500
 }
 
-// permanent reports whether a request that got err would get it again: a 4xx, but not a 429,
-// which says to slow down, not no.
-func permanent(err error) bool { return refused(err) && httpStatus(err) != http.StatusTooManyRequests }
+// permanent reports whether a request that got err would get it again: a 4xx, but not a 408
+// (the request timed out) or a 429 (slow down), which say try again, not no.
+func permanent(err error) bool {
+	code := httpStatus(err)
+	return refused(err) && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
+}
 
 // retryAfter returns the delay the backend asked for in err's HTTP status, or 0.
 func retryAfter(err error) time.Duration {
