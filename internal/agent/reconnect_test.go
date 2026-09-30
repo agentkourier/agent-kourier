@@ -2,9 +2,11 @@ package agent
 
 import (
 	"errors"
+	"io"
 	"net/http"
-	"sync/atomic"
+	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -53,6 +55,8 @@ func finalText(t *testing.T, got []Event) {
 	}
 }
 
+// The wire tests check that a real HTTP stream is dropped or cancelled and resumed as the
+// recorded calls show. The timing-dependent behavior is tested below, on a fake clock.
 func TestReconnectAfterDropContinuesWithoutDuplicates(t *testing.T) {
 	fa := newFakeAgent(t, resumeAfterFirstTick(t, false))
 	h, got := collector()
@@ -67,10 +71,10 @@ func TestReconnectAfterDropContinuesWithoutDuplicates(t *testing.T) {
 	}
 }
 
-func TestWatchdogCancelsASilentStreamAndReconnects(t *testing.T) {
+func TestWatchdogCancelsASilentHTTPStreamAndReconnects(t *testing.T) {
 	fa := newFakeAgent(t, resumeAfterFirstTick(t, true))
 	cfg := quick
-	cfg.InactivityTimeout = 150 * time.Millisecond
+	cfg.InactivityTimeout = 300 * time.Millisecond // the stream never speaks again, so the window only sets the delay
 	h, got := collector()
 	if err := fa.agentWith(t, cfg).Send(t.Context(), message("go slowly"), h); err != nil {
 		t.Fatal(err)
@@ -85,83 +89,101 @@ func TestWatchdogCancelsASilentStreamAndReconnects(t *testing.T) {
 
 // The watchdog measures silence, not the length of the stream.
 func TestWatchdogResetsOnEveryEvent(t *testing.T) {
-	fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) {
-		for _, ev := range sseEvents(t, "livestream/01-slow-stream.response.sse") {
-			write(w, ev)
-			time.Sleep(60 * time.Millisecond) // 14 events, far longer than the window
+	synctest.Test(t, func(t *testing.T) {
+		ch := make(chan item)
+		m := &memConn{sends: []chan item{ch}}
+		result, _ := sendAsync(t, memAgent(m, nil))
+		for range 6 {
+			time.Sleep(6 * time.Second) // 36 s in all, far past the 10 s window
+			ch <- item{ev: delta("x")}
+		}
+		ch <- item{ev: task(a2a.TaskStateCompleted, "xxxxxx")}
+		if err := result(); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := m.calls(), []string{"send", "send ended"}; !slices.Equal(got, want) {
+			t.Errorf("calls = %q, want %q: the watchdog fired on a stream that was never silent", got, want)
 		}
 	})
-	cfg := quick
-	cfg.InactivityTimeout = 250 * time.Millisecond
-	h, got := collector()
-	if err := fa.agentWith(t, cfg).Send(t.Context(), message("go slowly"), h); err != nil {
-		t.Fatal(err)
-	}
-	if finalText(t, *got); fa.count("GetTask") != 0 {
-		t.Error("the watchdog fired on a stream that was never silent")
-	}
+}
+
+// Silence past the window cancels the stream, and only then is the task reconciled: GetTask,
+// then SubscribeToTask (spec 8.3).
+func TestWatchdogCancelsASilentStreamThenReconciles(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		send, sub := make(chan item), make(chan item)
+		m := &memConn{sends: []chan item{send}, subs: []chan item{sub}, gets: []getResult{{task: task(a2a.TaskStateWorking, "tick 1 ")}}}
+		result, events := sendAsync(t, memAgent(m, nil))
+		send <- item{ev: working()}
+		send <- item{ev: delta("tick 1 ")}
+		time.Sleep(11 * time.Second) // silence past the window
+		sub <- item{ev: delta("tick 2")}
+		sub <- item{ev: task(a2a.TaskStateCompleted, "tick 1 tick 2")}
+		if err := result(); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"send", "send ended", "get", "subscribe", "subscribe ended"}
+		if got := m.calls(); !slices.Equal(got, want) {
+			t.Errorf("calls = %q, want %q", got, want)
+		}
+		if got, want := texts(events()), []string{"tick 1 ", "tick 1 tick 2"}; !slices.Equal(got, want) {
+			t.Errorf("texts = %q, want %q", got, want)
+		}
+	})
 }
 
 // If GetTask finds the task over, there is nothing to subscribe to.
 func TestReconnectStopsAtAFinishedTask(t *testing.T) {
-	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
-		switch call.Method {
-		case "SendStreamingMessage":
-			sse(t, w, "reconnect/01-stream-dropped.response.sse", -1)
-			drop()
-		case "GetTask":
-			reply(t, w, "reconnect/04-gettask-final.response.json")
+	synctest.Test(t, func(t *testing.T) {
+		send := make(chan item)
+		m := &memConn{sends: []chan item{send}, gets: []getResult{{task: task(a2a.TaskStateCompleted, "ab")}}}
+		result, events := sendAsync(t, memAgent(m, nil))
+		send <- item{ev: delta("a")}
+		send <- item{err: io.ErrUnexpectedEOF}
+		if err := result(); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := m.calls(), []string{"send", "send ended", "get"}; !slices.Equal(got, want) {
+			t.Errorf("calls = %q, want %q", got, want)
+		}
+		if _, ok := events()[len(events())-1].(FinalEvent); !ok || !slices.Equal(texts(events()), []string{"a", "ab"}) {
+			t.Errorf("events = %#v, want the text a then ab, and the final task", events())
 		}
 	})
-	h, got := collector()
-	if err := fa.agentWith(t, quick).Send(t.Context(), message("go slowly"), h); err != nil {
-		t.Fatal(err)
-	}
-	if finalText(t, *got); fa.count("SubscribeToTask") != 0 {
-		t.Error("subscribed to a finished task")
-	}
 }
 
-// MaxReconnects counts failures in a row: a stream that made progress starts the count over.
-func TestReconnectBudgetResetsOnProgress(t *testing.T) {
-	var subscribes atomic.Int32
-	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
-		switch {
-		case call.Method == "SubscribeToTask" && subscribes.Add(1) == 1:
-			sse(t, w, "reconnect/03-subscribe.response.sse", 3) // the snapshot and two deltas
-			drop()
-		default:
-			resumeAfterFirstTick(t, false)(call, w)
+// MaxReconnects counts failures in a row: a stream that changed something starts the count over.
+func TestReconnectBudgetResetsWhenAStreamChangesSomething(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		send, sub1, sub2 := make(chan item), make(chan item), make(chan item)
+		m := &memConn{sends: []chan item{send}, subs: []chan item{sub1, sub2}, gets: []getResult{{task: task(a2a.TaskStateWorking, "a")}}}
+		result, events := sendAsync(t, memAgent(m, func(c *Config) { c.MaxReconnects = 1 }))
+		send <- item{ev: delta("a")}
+		send <- item{err: io.ErrUnexpectedEOF}
+		sub1 <- item{ev: delta("b")}
+		sub1 <- item{err: io.ErrUnexpectedEOF}
+		sub2 <- item{ev: task(a2a.TaskStateCompleted, "abc")}
+		if err := result(); err != nil {
+			t.Fatalf("Send: %v (two drops with progress between them fit a budget of one)", err)
+		}
+		if got, want := texts(events()), []string{"a", "ab", "abc"}; !slices.Equal(got, want) {
+			t.Errorf("texts = %q, want %q", got, want)
 		}
 	})
-	cfg := quick
-	cfg.MaxReconnects = 1
-	h, got := collector()
-	if err := fa.agentWith(t, cfg).Send(t.Context(), message("go slowly"), h); err != nil {
-		t.Fatalf("Send: %v (two drops with progress between them fit a budget of one)", err)
-	}
-	// The recorded snapshot is older than what the first resume delivered, so it replaces
-	// newer text; only the end state is comparable.
-	if all := texts(*got); all[len(all)-1] != ticks {
-		t.Errorf("last text = %q, want %q", all[len(all)-1], ticks)
-	}
 }
 
 func TestReconnectGivesUp(t *testing.T) {
-	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
-		if call.Method == "SendStreamingMessage" {
-			sse(t, w, "reconnect/01-stream-dropped.response.sse", -1)
-			drop()
+	synctest.Test(t, func(t *testing.T) {
+		send := make(chan item)
+		m := &memConn{sends: []chan item{send}, gets: []getResult{{err: errors.New("down")}}}
+		result, _ := sendAsync(t, memAgent(m, func(c *Config) { c.MaxReconnects = 2 }))
+		send <- item{ev: working()}
+		send <- item{err: io.ErrUnexpectedEOF}
+		if err := result(); !errors.Is(err, ErrStreamLost) {
+			t.Errorf("err = %v, want ErrStreamLost", err)
 		}
-		http.Error(w, "down", http.StatusServiceUnavailable)
+		if n := len(m.calls()) - 2; n != 2 { // the send and its end
+			t.Errorf("%d GetTask calls, want 2, one per reconnect", n)
+		}
 	})
-	cfg := quick
-	cfg.MaxReconnects = 2
-	err := fa.agentWith(t, cfg).Send(t.Context(), message("go slowly"), nil)
-	if !errors.Is(err, ErrStreamLost) {
-		t.Errorf("err = %v, want ErrStreamLost", err)
-	}
-	if n := fa.count("GetTask"); n != 2 {
-		t.Errorf("GetTask called %d times, want 2, one per reconnect", n)
-	}
 }
