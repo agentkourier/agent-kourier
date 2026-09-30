@@ -82,6 +82,15 @@ func TestRedactSecrets(t *testing.T) {
 		// Prose and identifiers that merely mention the keys survive.
 		{"keys in prose", "the access token is valid; rotate clientSecret, then accessToken. See getAccessToken() and idTokenHint", "the access token is valid; rotate clientSecret, then accessToken. See getAccessToken() and idTokenHint"},
 		{"identifiers that extend a key", "accessTokenTTL=30 access_tokens=3 client-secret-ref: name refresh-tokens=2 tokenSecretRef: s", "accessTokenTTL=30 access_tokens=3 client-secret-ref: name refresh-tokens=2 tokenSecretRef: s"},
+		// Go's %q, %+q and %#v print invisible characters as literal escapes
+		// (a backslash and t, x00, u00a0), which are gaps too.
+		{"bearer across literal escapes", `Bearer\tFAKE Bearer\nFAKE Bearer\x00FAKE Bearer\u00a0FAKE Bearer\u200bFAKE Bearer\U000e0001FAKE Bearer\0FAKE`, "[redacted] [redacted] [redacted] [redacted] [redacted] [redacted] [redacted]"},
+		{"bearer with literal escapes in the scheme", `Bea\u200brer FAKE and B\x00earer FAKE`, "[redacted] and [redacted]"},
+		{"basic across literal escapes", `Basic\u00a0` + b64 + ` Basic\t` + b64, "[redacted] [redacted]"},
+		{"slack token with a literal escape in the prefix", `xo\u200bxb-FAKE xapp\u2060-1-FAKE xox\u200bb-FAKE xoxb\u200b-FAKE`, "[redacted] [redacted] [redacted] [redacted]"},
+		{"jwt with literal escapes", `eyJhbGci\u200bOiJub25lIn0.eyJzdWIiOiJ4In0\u2060.sig\u00ad`, "[redacted]"},
+		{"oauth key and padding with literal escapes", `access\u200b_token\t:\tFAKE id\x00Token=FAKE2 client_secret\t= FAKE3`, `access\u200b_token\t:\t[redacted] id\x00Token=[redacted] client_secret\t= [redacted]`},
+		{"literal escapes that are not gaps", `Bearer\d FAKE bearer\u12 and x\q`, `Bearer\d FAKE bearer\u12 and x\q`},
 		// Identifiers that merely contain "bearer" keep their names.
 		{"bearer inside identifiers", "task=abc-bearer-xyz12345 payments/bearer-gateway bearer_gateway.svc bearer.example.com", "task=abc-bearer-xyz12345 payments/bearer-gateway bearer_gateway.svc bearer.example.com"},
 		// Prose stays readable: only the credential goes.
@@ -119,6 +128,12 @@ func TestRedactSecretsAnyGapRune(t *testing.T) {
 			in := "x " + scheme + string(r) + token + " y"
 			if got := RedactSecrets(in); got != "x [redacted] y" {
 				t.Errorf("RedactSecrets(%q) = %q; want the credential redacted (U+%04X)", in, got, r)
+			}
+			// Go's quoting turns an invisible rune into a literal escape.
+			for _, verb := range []string{"%q", "%+q"} {
+				if got, want := RedactSecrets(fmt.Sprintf(verb, in)), `"x [redacted] y"`; got != want {
+					t.Errorf("RedactSecrets(%s of %q) = %s; want %s (U+%04X)", verb, in, got, want, r)
+				}
 			}
 		}
 		// The same runes may pad an OAuth key from its colon and its value.
@@ -160,6 +175,7 @@ func TestRedactSecretsKnownLimits(t *testing.T) {
 		{"escaped quote inside a value", `{"access_token":"FA\"KE"}`, `KE`},
 		{"url-encoded json", `%7B%22access_token%22%3A%22FAKE%22%7D`, "FAKE"},
 		{"html-encoded json", `{&quot;access_token&quot;:&quot;FAKE&quot;}`, "FAKE"},
+		{"escape inside a credential", `Bearer FA\u200bKE`, "KE"},
 		{"password", `password=FAKE {"password":"FAKE"}`, "FAKE"},
 		{"fullwidth scheme", "\uff22earer FAKE", "FAKE"},
 		{"spaced equals with a non-empty value after it", "client_secret= \"FAKE\"", "FAKE"},

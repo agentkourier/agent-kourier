@@ -183,6 +183,18 @@ func TestAuditRedactsEveryFieldAgainstCanaries(t *testing.T) {
 	add("escaped-quote json xapp", `{\"auth\":\"xapp-1-`+token+`\",\"user\":\"U1\"}`, token, `\"user\":\"U1\"`)
 	add("empty value keeps the next word", "client_secret= nextword", "", "nextword")
 	add("empty json value keeps the next field", `{"access_token":"","user":"U1"}`, "", `"user":"U1"`)
+	// Every canary again as Go prints it with %q and %+q (and %#v of a map),
+	// which turns invisible gap characters into literal escapes (\t, \x00,
+	// \u00a0, \u200b). The survivor rows are skipped: quoting rewrites their text.
+	for _, c := range append([]canary(nil), cs...) {
+		if survivors[c.name] != "" {
+			continue
+		}
+		cs = append(cs,
+			canary{c.name + " as %q", fmt.Sprintf("%q", c.in), c.secret},
+			canary{c.name + " as %+q", fmt.Sprintf("%+q", c.in), c.secret},
+			canary{c.name + " as %#v of a map", fmt.Sprintf("%#v", map[string]string{"k": c.in}), c.secret})
+	}
 
 	ctx := context.Background()
 	s := openTemp(t)

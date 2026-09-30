@@ -20,9 +20,18 @@ const (
 	// characters, so NUL, ESC and the C1 set cannot split a scheme from its
 	// credential either.
 	blank = space + format + `\p{Cc}`
-	// sep separates a scheme from its credential: any run of blank characters,
-	// colons ("Bearer: X"), or a percent-encoded space ("Bearer%20X").
-	sep = `(?:[` + blank + `:]|%20)+`
+	// esc is a literal escape sequence of the kind Go's %q, %+q and %#v print
+	// for a character they cannot show: a backslash and t, x00, u00a0 or
+	// U000e0001. An audit field that holds quoted text carries an invisible
+	// gap as one of these, so they count as format and blank characters.
+	esc = `\\(?:[abfnrtv0]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`
+	// gap is what may hide inside a word: format characters or escapes.
+	gap = `(?:` + format + `|` + esc + `)*`
+	// pad is one character of padding: a blank character or an escape.
+	pad = `(?:[` + blank + `]|` + esc + `)`
+	// sep separates a scheme from its credential: any run of blank characters
+	// or escapes, colons ("Bearer: X"), or a percent-encoded space ("Bearer%20X").
+	sep = `(?:[` + blank + `:]|%20|` + esc + `)+`
 	// stop ends a credential that may sit inside JSON, a list or a header: a
 	// quote, comma, semicolon, closing brace, or the backslash of an escaped
 	// quote (what %q prints inside a string).
@@ -32,22 +41,26 @@ const (
 	// but cannot start with a separator or stop character, so a scheme followed
 	// by nothing but padding, or by the end of a JSON string, is left alone.
 	credential = `\\*["']?[^` + blank + `:` + stop + `][^` + space + stop + `]*`
+	// jwtChar is one character of a JWT segment: base64url, a format character
+	// or an escape.
+	jwtChar = `(?:[\w\p{Cf}-]|` + esc + `)`
 	// value is the value of an OAuth field: it stops at white space, a stop,
 	// or a query delimiter.
 	value = `[^` + space + stop + `&]+`
 )
 
-// spell returns a pattern for s that tolerates format characters between its
-// letters ("xo<ZWSP>xb-").
+// spell returns a pattern for s that tolerates format characters and escapes
+// between its letters ("xo<ZWSP>xb-", `xo\u200bxb-`).
 func spell(s string) string {
-	return strings.Join(strings.Split(s, ""), format+"*")
+	return strings.Join(strings.Split(s, ""), gap)
 }
 
 // pair returns a pattern for a two-word field name: the words joined by an
 // optional underscore or hyphen (access_token, access-token, accessToken),
-// with format characters tolerated anywhere. Callers match it case-insensitively.
+// with format characters and escapes tolerated anywhere. Callers match it
+// case-insensitively.
 func pair(a, b string) string {
-	return spell(a) + format + `*[_-]?` + format + `*` + spell(b)
+	return spell(a) + gap + `[_-]?` + gap + spell(b)
 }
 
 var (
@@ -58,10 +71,10 @@ var (
 	// Slack tokens and Bearer credentials end at a stop, so compact JSON keeps
 	// its next field. Compiled once and never modified.
 	secretPattern = regexp.MustCompile(
-		spell("xox") + format + `*[a-z]` + format + `*-[^` + space + stop + `]+` +
+		spell("xox") + gap + `[a-z]` + gap + `-[^` + space + stop + `]+` +
 			`|` + spell("xapp-") + `[^` + space + stop + `]+` +
 			`|(?i:` + spell("bearer") + `)(?:` + sep + credential + `|[A-Za-z0-9][\w~+/=.\p{Cf}-]{6,})` +
-			`|` + spell("eyJ") + `[\w\p{Cf}-]+\.[\w\p{Cf}-]+\.[\w\p{Cf}-]*`)
+			`|` + spell("eyJ") + jwtChar + `+\.` + jwtChar + `+\.` + jwtChar + `*`)
 
 	// oauthPattern matches an OAuth token or secret field, as key=value or as
 	// JSON "key":"value", plain or with the quotes escaped (\"key\":\"value\").
@@ -71,7 +84,7 @@ var (
 	// ("key = value"), so "key= next" reads as an empty value, not as "next".
 	oauthPattern = regexp.MustCompile(`((?i:` +
 		pair("access", "token") + `|` + pair("refresh", "token") + `|` + pair("id", "token") + `|` + pair("client", "secret") +
-		`)\\*["']?(?:[` + blank + `]*:[` + blank + `]*|[` + blank + `]*=|[` + blank + `]+=[` + blank + `]+)\\*["']?)(` + value + `)`)
+		`)\\*["']?(?:` + pad + `*:` + pad + `*|` + pad + `*=|` + pad + `+=` + pad + `+)\\*["']?)(` + value + `)`)
 
 	// basicPattern matches "Basic" and a base64 credential of at least 8
 	// characters (user:pass encodes to that or longer). Basic is a common
@@ -86,7 +99,10 @@ var (
 // or Basic credential, a JWT, or the value of an OAuth access_token,
 // refresh_token, id_token or client_secret field with "[redacted]". Schemes
 // and credentials may be separated by any Unicode white space, format or
-// control character, a colon, or "%20". Field names match in any case, with an
+// control character, a colon, or "%20", and each of those may also appear as
+// the literal escape Go's %q, %+q and %#v print for it (\t, \x00, \u00a0,
+// \u200b). Field names match in any case, anywhere in a word (validtoken=x
+// redacts on purpose: a left boundary would miss x_access_token), with an
 // underscore, a hyphen or nothing between the words (accessToken), and in JSON
 // with escaped quotes, as %q prints a token-endpoint body. A Bearer or Slack
 // credential, and a field value, end at a quote, comma, semicolon, closing
@@ -104,6 +120,8 @@ var (
 //   - password fields are not matched: the name is too common to redact by key.
 //   - An equals sign padded only after it (client_secret= "x") is read as an
 //     empty value followed by text, so the text survives.
+//   - A format or control character inside a credential or value, printed by
+//     %q as an escape, ends it at the backslash; the rest survives.
 //   - A Basic credential under 8 base64 characters survives (it would collide
 //     with ordinary words).
 //   - A scheme or key written in fullwidth or other compatibility forms (U+FF22
