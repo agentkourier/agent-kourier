@@ -13,6 +13,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -86,6 +87,84 @@ func TestEvent(t *testing.T) {
 	}
 }
 
+func TestAgentCall(t *testing.T) {
+	notSent401 := fmt.Errorf("send: %w", errors.Join(agent.ErrNotSent, agent.ErrCredentialsRejected, &dialect.HTTPStatusError{Code: 401}))
+	lost := &agent.StreamLostError{TaskID: "t-lost", ContextID: "c-lost", Err: errors.New("dropped")}
+	for _, c := range []struct {
+		name        string
+		call        Call
+		subject     string
+		wantOutcome string
+	}{
+		{"ok", Call{Op: OpSend, TaskID: "t1", ContextID: "c1", MessageID: "m1"}, "task=t1 context=c1 message=m1", "send: ok"},
+		{"credentials rejected (D34)", Call{Op: OpSend, MessageID: "m1", Err: notSent401}, "message=m1",
+			"send: failed credentials_rejected,not_sent,http_401"},
+		{"outcome unknown", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", agent.ErrOutcomeUnknown)}, "message=m1", "send: failed outcome_unknown"},
+		{"stream lost names its task", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", lost)}, "task=t-lost context=c-lost message=m1", "send: failed stream_lost"},
+		{"answer rejected", Call{Op: OpAnswer, TaskID: "t1", Err: agent.ErrAnswerRejected}, "task=t1", "answer: failed answer_rejected"},
+		{"cancel busy", Call{Op: OpCancel, TaskID: "t1", Err: agent.ErrBusy}, "task=t1", "cancel: failed busy"},
+		{"other error", Call{Op: OpCancel, TaskID: "t1", Err: errors.New("boom")}, "task=t1", "cancel: failed error"},
+		{"find task absent", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1"}, "context=c1 message=m1", "find_task: absent"},
+		{"find task found", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"ta"}}, "task=ta context=c1 message=m1", "find_task: found"},
+		{"find task duplicate run", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"ta", "tb"}},
+			"task=ta context=c1 message=m1", "find_task: duplicate_run holders=2 ids=ta,tb"},
+		{"find task many holders", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"t1", "t2", "t3", "t4", "t5", "t6", "t7"}},
+			"task=t1 context=c1 message=m1", "find_task: duplicate_run holders=7 ids=t1,t2,t3,t4,t5"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, s := newWriter(t)
+			if err := w.AgentCall(context.Background(), who, c.call); err != nil {
+				t.Fatalf("AgentCall: %v", err)
+			}
+			got := only(t, s)
+			if got.Kind != store.AuditAgentCall || got.Subject != c.subject || got.Outcome != c.wantOutcome ||
+				got.User != "U1" || got.Email != "u1@example.com" || got.Identity != "sa/investigator" || got.Binding != "ns/b" {
+				t.Errorf("row = %+v, want subject %q outcome %q with the actor", got, c.subject, c.wantOutcome)
+			}
+		})
+	}
+	w, _ := newWriter(t)
+	if err := w.AgentCall(context.Background(), who, Call{Op: OpSend}); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("a call naming no task, context or message = %v, want ErrInvalid", err)
+	}
+}
+
+func TestDecision(t *testing.T) {
+	decided := t0.Add(-time.Minute)
+	for _, c := range []struct {
+		name   string
+		d      Decision
+		wantAt time.Time
+		want   string
+	}{
+		{"ask user", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered, At: decided,
+			Answer: &dialect.Answer{Answers: [][]string{{"a"}, {"free text " + fakes[0]}}}}, decided, "answered questions=2"},
+		{"tool approval", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered,
+			Answer: &dialect.Answer{Decisions: []dialect.Decision{{ToolID: "x", Approved: true}, {ToolID: "y", Reason: "my reason " + fakes[1]}}}}, t0, "answered approved=1 denied=1"},
+		{"incomplete", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionIncomplete}, t0, "incomplete"},
+		{"timed out", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionTimedOut, At: decided}, decided, "timed_out"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, s := newWriter(t)
+			if err := w.Decision(context.Background(), who, c.d); err != nil {
+				t.Fatalf("Decision: %v", err)
+			}
+			got := only(t, s)
+			if got.Kind != store.AuditInteractionDecision || got.Subject != "interaction=i1 task=t1" || got.Outcome != c.want ||
+				!got.At.Equal(c.wantAt) || got.User != "U1" || got.Binding != "ns/b" {
+				t.Errorf("row = %+v, want outcome %q at %v", got, c.want, c.wantAt)
+			}
+			if strings.Contains(got.Outcome, "free text") || strings.Contains(got.Outcome, "my reason") {
+				t.Errorf("outcome %q holds the person's text", got.Outcome)
+			}
+		})
+	}
+	w, _ := newWriter(t)
+	if err := w.Decision(context.Background(), who, Decision{InteractionID: "i1", Result: "bogus"}); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("Decision with an unknown result = %v, want ErrInvalid", err)
+	}
+}
+
 func TestUnusablePause(t *testing.T) {
 	w, s := newWriter(t)
 	ctx := context.Background()
@@ -128,15 +207,19 @@ func TestNoSecretsInStoredRows(t *testing.T) {
 		w, s := newWriter(t)
 		leaky := Actor{User: canary, Email: canary, Identity: canary, Binding: canary}
 		_ = w.Event(ctx, leaky, SourceSlack, canary, EventAccepted)
+		_ = w.AgentCall(ctx, leaky, Call{Op: OpSend, TaskID: a2a.TaskID(canary), ContextID: canary, MessageID: canary,
+			Err: errors.Join(agent.ErrNotSent, errors.New("Authorization: canary-plain-header-value")), Holders: []a2a.TaskID{a2a.TaskID(canary), "b"}})
+		_ = w.Decision(ctx, leaky, Decision{InteractionID: canary, TaskID: a2a.TaskID(canary), Result: DecisionAnswered,
+			Answer: &dialect.Answer{Answers: [][]string{{canary}}, Decisions: []dialect.Decision{{Reason: canary}}}})
 		_ = w.UnusablePause(ctx, leaky, a2a.TaskID(canary), canary, fmt.Errorf("%w: %s", dialect.ErrUnusablePause, canary))
 		_ = w.UnusablePauseCancel(ctx, leaky, a2a.TaskID(canary), canary, errors.New(canary))
 		got := rows(t, s)
-		if len(got) != 3 {
-			t.Fatalf("%q: got %d rows, want 3", canary, len(got))
+		if len(got) != 5 {
+			t.Fatalf("%q: got %d rows, want 5", canary, len(got))
 		}
 		for _, e := range got {
 			all := fmt.Sprintf("%+v", e)
-			for _, secret := range append(fakes, "canary.fake.token", "SECRETA") {
+			for _, secret := range append(fakes, "canary.fake.token", "canary-plain-header-value", "SECRETA") {
 				if strings.Contains(all, secret) {
 					t.Errorf("%q: %s row holds %q: %+v", canary, e.Kind, secret, e)
 				}
