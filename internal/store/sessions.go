@@ -17,7 +17,9 @@ type Session struct {
 	Key ConversationKey
 	// ContextID is empty until the agent assigns one in its first response.
 	ContextID string
-	// TaskID is empty when no task has run yet.
+	// TaskID is the active task: the one that runs or waits for input. The session
+	// manager clears it when the task ends, so it is empty when no task is active, and
+	// Recovery.ListActiveSessions finds the sessions a restart must reconcile by it.
 	TaskID       string
 	Binding      string
 	LastActivity time.Time

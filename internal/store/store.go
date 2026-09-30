@@ -32,6 +32,7 @@ type Store interface {
 	Interactions
 	ReplyQueue
 	Audit
+	Recovery
 	io.Closer
 }
 

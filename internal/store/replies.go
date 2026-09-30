@@ -8,7 +8,9 @@ import (
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
 type Reply struct {
-	// ID is the Slack event ID; it makes enqueueing idempotent.
+	// ID is the turn's messageId, derived from the Slack message (spec 8.2), not the event
+	// ID: an @mention arrives as two events with different IDs, and both must be one turn.
+	// It makes enqueueing idempotent, and the agent sees it as the A2A messageId.
 	ID  string
 	Key ConversationKey
 	// Sequence orders replies within a session. The store assigns it on
