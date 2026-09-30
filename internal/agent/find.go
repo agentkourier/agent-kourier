@@ -52,7 +52,7 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a
 			if task == nil || !holds(task, messageID) {
 				continue
 			}
-			if i, seen := byID[task.ID]; !seen { // a task can show on two pages while the list shifts
+			if i, known := byID[task.ID]; !known { // a task can show on two pages while the list shifts
 				byID[task.ID] = len(holders)
 				holders = append(holders, task)
 			} else if old := holders[i].Status.Timestamp; old == nil || (task.Status.Timestamp != nil && !task.Status.Timestamp.Before(*old)) {

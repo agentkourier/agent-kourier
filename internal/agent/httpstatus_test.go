@@ -7,17 +7,18 @@ import (
 	"net/http"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
 // A reconnect request the backend refuses (4xx) will be refused again, so the send stops at
-// once and keeps the status. A 5xx is worth the whole budget.
+// once and keeps the status. A 5xx, and a 429 (slow down, not no), are worth the whole budget.
 func TestReconnectStopsOnARefusedRequest(t *testing.T) {
 	for _, tc := range []struct {
 		code      int
 		wantCalls int
-	}{{401, 1}, {403, 1}, {404, 1}, {429, 1}, {503, 3}} {
+	}{{401, 1}, {403, 1}, {404, 1}, {429, 3}, {503, 3}} {
 		t.Run(http.StatusText(tc.code), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				send := make(chan item)
@@ -36,6 +37,34 @@ func TestReconnectStopsOnARefusedRequest(t *testing.T) {
 				}
 				if n := countOf(m.calls(), "get t1"); n != tc.wantCalls {
 					t.Errorf("%d GetTask calls, want %d", n, tc.wantCalls)
+				}
+			})
+		})
+	}
+}
+
+// A 429 or 503 that names a delay is waited out: the pause before each reconnect is the
+// longer of ReconnectDelay and the Retry-After.
+func TestReconnectWaitsForRetryAfter(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		retryAfter time.Duration
+		wantWait   time.Duration // from the cut to the give-up: the first pause follows the drop, which names no delay
+	}{{"no Retry-After", 0, 2 * time.Second}, {"shorter than ReconnectDelay", time.Millisecond, 2 * time.Second}, {"longer", 30 * time.Second, 31 * time.Second}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				send := make(chan item)
+				slow := &dialect.HTTPStatusError{Code: 429, RetryAfter: tc.retryAfter}
+				m := newMemConn(t, []chan item{send}, nil, getResult{err: slow})
+				s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 }))
+				s.feed(send, item{ev: working()})
+				s.feed(send, item{err: io.ErrUnexpectedEOF})
+				cutAt := time.Now()
+				if err := s.result(); !errors.Is(err, ErrStreamLost) {
+					t.Fatalf("err = %v, want ErrStreamLost", err)
+				}
+				if waited := time.Since(cutAt); waited != tc.wantWait {
+					t.Errorf("waited %v across two reconnects, want %v", waited, tc.wantWait)
 				}
 			})
 		})

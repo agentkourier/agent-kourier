@@ -144,7 +144,12 @@ func TestCancelOfWedgedTaskIgnoresTheCallersCancellation(t *testing.T) {
 		go func() { done <- agent.Answer(ctx, message(""), nil) }()
 		feed(t, send, item{ev: working()}, done)
 		feed(t, send, item{err: a2a.NewError(a2a.ErrInternalError, "wedged")}, done)
-		err := <-done
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(time.Minute):
+			t.Fatalf("Answer never returned")
+		}
 		if !errors.Is(err, ErrAnswerRejected) || errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want ErrAnswerRejected alone: the cancel ran on a context detached from the caller's", err)
 		}

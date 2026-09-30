@@ -37,7 +37,8 @@ type Config struct {
 	// MaxReconnects is how many reconnects in a row may fail, without a stream delivering an
 	// event in between, before the send fails with ErrStreamLost. Default 5.
 	MaxReconnects int
-	// ReconnectDelay is the pause before each reconnect. Default 1s.
+	// ReconnectDelay is the pause before each reconnect, or the backend's Retry-After if
+	// that is longer. Default 1s.
 	ReconnectDelay time.Duration
 	// ConnectTimeout bounds a Pool's connect, which fetches the agent card. Default 30s.
 	ConnectTimeout time.Duration
@@ -145,11 +146,11 @@ func (a *Agent) cancelWedged(ctx context.Context, rejected error, id a2a.TaskID)
 // not count), and on an error that is not a lost connection.
 func (a *Agent) reconnect(ctx context.Context, asm *assembler, err error) error {
 	for failures := 0; err != nil; {
-		if failures++; !dropped(ctx, err) || refused(err) || failures > a.cfg.MaxReconnects {
+		if failures++; !dropped(ctx, err) || permanent(err) || failures > a.cfg.MaxReconnects {
 			return err
 		}
 		select {
-		case <-time.After(a.cfg.ReconnectDelay):
+		case <-time.After(max(a.cfg.ReconnectDelay, retryAfter(err))):
 		case <-ctx.Done():
 			return ctx.Err()
 		}

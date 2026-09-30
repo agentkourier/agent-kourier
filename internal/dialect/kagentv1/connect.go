@@ -146,8 +146,10 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func retryAfter(h http.Header) time.Duration {
 	const day = 24 * time.Hour
 	v := h.Get("Retry-After")
-	if secs, err := strconv.Atoi(v); err == nil {
-		return min(max(time.Duration(min(secs, 86400))*time.Second, 0), day)
+	// RFC 9110 delay-seconds is digits only, so ParseUint, which rejects a sign. A value too
+	// large for a uint64 is a very long delay: it takes the cap, not 0.
+	if secs, err := strconv.ParseUint(v, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		return time.Duration(min(secs, uint64(day/time.Second))) * time.Second
 	}
 	if at, err := http.ParseTime(v); err == nil {
 		return min(max(time.Until(at), 0), day)

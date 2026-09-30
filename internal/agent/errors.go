@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -105,6 +106,19 @@ func httpStatus(err error) int {
 func refused(err error) bool {
 	code := httpStatus(err)
 	return code >= 400 && code < 500
+}
+
+// permanent reports whether a request that got err would get it again: a 4xx, but not a 429,
+// which says to slow down, not no.
+func permanent(err error) bool { return refused(err) && httpStatus(err) != http.StatusTooManyRequests }
+
+// retryAfter returns the delay the backend asked for in err's HTTP status, or 0.
+func retryAfter(err error) time.Duration {
+	var hs *dialect.HTTPStatusError
+	if errors.As(err, &hs) {
+		return hs.RetryAfter
+	}
+	return 0
 }
 
 // beforeAnyEvent types an error that ended a send before the agent named a task: a 4xx

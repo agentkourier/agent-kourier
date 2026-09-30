@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -76,7 +77,9 @@ func TestWatchdogCancelsASilentHTTPStreamAndReconnects(t *testing.T) {
 	cfg := quick
 	cfg.InactivityTimeout = time.Second // the stream never speaks again, so the window only sets the delay
 	h, got := collector()
-	if err := fa.agentWith(t, cfg).Send(t.Context(), message("go slowly"), h); err != nil {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // bounds a Send whose watchdog never fires
+	defer cancel()
+	if err := fa.agentWith(t, cfg).Send(ctx, message("go slowly"), h); err != nil {
 		t.Fatal(err)
 	}
 	finalText(t, *got)
