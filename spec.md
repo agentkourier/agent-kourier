@@ -538,6 +538,9 @@ this with an outbox:
    reads recent channel or thread history with metadata included and adopts a matching
    message instead of posting again.
 4. Edits (`chat.update`) are naturally idempotent and need no reconciliation.
+5. Interaction prompts (8.4) are posts too, so they go through the outbox with role
+   `reply` and the interaction ID as the source ID. Outbox IDs derive from source and
+   role, so they cannot collide with agent replies.
 
 ### 8.7 Feedback
 
