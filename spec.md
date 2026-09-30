@@ -341,7 +341,7 @@ spec:
   dialect: kagent-v1                 # a2a | kagent-v1
   url: https://kagent-frontdoor.kagent-pilot     # verifying proxy, never :8083 (D32)
   headers: []                        # static headers, values may come from Secrets;
-                                     # Authorization, X-User-Id and X-Agent-Name are reserved (D14, D32)
+                                     # identity headers are reserved; see section 7
   allowedNamespaces: ["sre", "payments"]
 ---
 kind: ChatConnection
@@ -422,9 +422,13 @@ Rules:
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
   backend, such as agentgateway, validates the Binding's OIDC token. Static headers may
-  not set `Authorization`, `Proxy-Authorization`, `Cookie`, or `X-User-Id`. If a Binding
-  sets `identity.tokenSecretRef` and the token cannot be read, the turn fails; it never
-  falls back to `userId` alone.
+  not set any header that carries or selects identity: `Authorization`,
+  `Proxy-Authorization`, `Cookie`, `X-User-Id`, `X-Agent-Name`, `X-Share-Token`, or
+  `X-Kagent-Insecure-Runtime-Identity` (D14, D32; kagent alpha5 honours the last four,
+  WP-03 and the WP-20c review). If a Binding sets `identity.tokenSecretRef` and the token
+  cannot be read, the turn fails; it never falls back to `userId` alone. A Binding with
+  `tokenSecretRef` must target an OIDC-mode backend: kagent's insecure mode ignores the
+  token and, with no `X-User-Id`, runs every turn as `admin@kagent.dev` (source).
 - One channel maps to at most one Binding. A second Binding for the same channel is
   rejected with a status condition.
 - Each Binding with `alerts` gets its own webhook path. Alertmanager routing decides
