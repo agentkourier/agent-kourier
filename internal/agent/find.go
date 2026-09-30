@@ -14,45 +14,74 @@ import (
 const maxListPages = 100
 
 // FindTask returns the task in contextID whose history holds messageID, or nil if there is
-// none. It is how the caller finds a turn whose task it never recorded, for example after a
+// none, and the IDs of every task that holds it, the returned one first. More than one ID
+// means the turn already ran twice: the caller should tell the thread. It is how the caller
+// finds a turn whose task it never recorded, for example after a
 // crash: kagent does not deduplicate a resend that carries a contextId (WP-03, spec 8.2), so
 // resending blindly would run the turn twice. Found: reconcile with GetTask, then
 // SubscribeToTask if the task has not ended. Absent: send. A -32004 on that send means some
 // task is active, possibly an input-required pause, so queue the turn and repeat the lookup
 // when the active task ends.
 //
-// It follows nextPageToken to the end and does not rely on page order. If several tasks
-// hold the messageId (the turn already ran twice), it returns one that has not ended, else
-// the earliest. Each page is a unary call under UnaryTimeout. UNCONFIRMED: WP-03 measured
-// the lookup on a context of three tasks; paging past kagent's page size of 50 is not measured.
-func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a.Task, error) {
+// It follows nextPageToken to the end and does not rely on page order. Of several holders it
+// returns one that has not ended, else the earliest, and lists the rest in that order. Each
+// page is a unary call under UnaryTimeout. A page token seen before fails the lookup at
+// once. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
+// kagent's page size of 50 is not measured.
+func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
 	if contextID == "" || messageID == "" {
-		return nil, errors.New("find task: a contextId and a messageId are both required")
+		return nil, nil, errors.New("find task: a contextId and a messageId are both required")
 	}
 	sctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	conn, err := a.source(sctx)
 	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("connect to agent: %w", err)
+		return nil, nil, fmt.Errorf("connect to agent: %w", err)
 	}
-	var found *a2a.Task
+	var holders []*a2a.Task
+	seen := map[string]bool{}
 	req := &a2a.ListTasksRequest{ContextID: contextID}
 	for range maxListPages {
 		page, err := a.listTasks(ctx, conn, req)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, task := range page.Tasks {
-			if task != nil && holds(task, messageID) && earlier(task, found) {
-				found = task
+			if task != nil && holds(task, messageID) {
+				holders = append(holders, task)
 			}
 		}
-		if page.NextPageToken == "" {
-			return found, nil
+		switch next := page.NextPageToken; {
+		case next == "":
+			return preferred(holders)
+		case seen[next]:
+			return nil, nil, fmt.Errorf("find task: the task list of context %s repeats page token %q", contextID, next)
+		default:
+			seen[next], req.PageToken = true, next
 		}
-		req.PageToken = page.NextPageToken
 	}
-	return nil, fmt.Errorf("find task: the task list of context %s ran past %d pages", contextID, maxListPages)
+	return nil, nil, fmt.Errorf("find task: the task list of context %s ran past %d pages", contextID, maxListPages)
+}
+
+// preferred orders the holders by earlier, and returns the first with every ID.
+func preferred(holders []*a2a.Task) (*a2a.Task, []a2a.TaskID, error) {
+	if len(holders) == 0 {
+		return nil, nil, nil
+	}
+	slices.SortStableFunc(holders, func(a, b *a2a.Task) int {
+		switch {
+		case earlier(a, b):
+			return -1
+		case earlier(b, a):
+			return 1
+		}
+		return 0
+	})
+	ids := make([]a2a.TaskID, len(holders))
+	for i, h := range holders {
+		ids[i] = h.ID
+	}
+	return holders[0], ids, nil
 }
 
 func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
@@ -69,12 +98,9 @@ func holds(task *a2a.Task, messageID string) bool {
 	return slices.ContainsFunc(task.History, func(m *a2a.Message) bool { return m != nil && m.ID == messageID })
 }
 
-// earlier reports whether task should replace best as FindTask's answer: a task that has
-// not ended beats one that has, then the earlier status timestamp wins, then the lower ID.
+// earlier reports whether task ranks before best in FindTask's answer: a task that has not
+// ended beats one that has, then the earlier status timestamp wins, then the lower ID.
 func earlier(task, best *a2a.Task) bool {
-	if best == nil {
-		return true
-	}
 	if live, bestLive := !task.Status.State.Terminal(), !best.Status.State.Terminal(); live != bestLive {
 		return live
 	}

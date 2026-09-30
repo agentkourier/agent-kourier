@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -21,6 +22,7 @@ const (
 	m1            = "spike-1790763791916730000"
 	m2            = "spike-1790763808395539000"
 	m1Original    = a2a.TaskID("01a0f1d6-f6bc-722e-9f5a-0def1120ba8a")
+	m1Copy        = a2a.TaskID("01a0f1d7-16aa-725e-9e33-15f01645b861")
 	m2Running     = a2a.TaskID("01a0f1d7-36bf-771b-acc3-ded7148eac42")
 )
 
@@ -32,13 +34,14 @@ func TestFindTaskFindsATurnByMessageID(t *testing.T) {
 		name, messageID string
 		want            a2a.TaskID // empty: absent
 		wantState       a2a.TaskState
+		wantHolders     []a2a.TaskID
 	}{
-		{"a running turn", m2, m2Running, a2a.TaskStateWorking},
-		{"a duplicated turn: the original, not the copy", m1, m1Original, a2a.TaskStateCompleted},
-		{"a turn the agent never saw", "spike-0", "", ""},
+		{"a running turn", m2, m2Running, a2a.TaskStateWorking, []a2a.TaskID{m2Running}},
+		{"a duplicated turn: the original, then the copy", m1, m1Original, a2a.TaskStateCompleted, []a2a.TaskID{m1Original, m1Copy}},
+		{"a turn the agent never saw", "spike-0", "", "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			task, err := fa.agentWith(t, quick).FindTask(t.Context(), replayContext, tc.messageID)
+			task, holders, err := fa.agentWith(t, quick).FindTask(t.Context(), replayContext, tc.messageID)
 			switch {
 			case err != nil:
 				t.Fatal(err)
@@ -46,6 +49,9 @@ func TestFindTaskFindsATurnByMessageID(t *testing.T) {
 				t.Errorf("found task %s, want none", task.ID)
 			case tc.want != "" && (task == nil || task.ID != tc.want || task.Status.State != tc.wantState):
 				t.Errorf("task = %+v, want %s in %s", task, tc.want, tc.wantState)
+			}
+			if !slices.Equal(holders, tc.wantHolders) {
+				t.Errorf("holders = %v, want %v: the caller must see a duplicate run", holders, tc.wantHolders)
 			}
 		})
 	}
@@ -76,9 +82,12 @@ func TestFindTaskFollowsPagesWithoutRelyingOnOrder(t *testing.T) {
 			tokens = append(tokens, req.PageToken)
 			return pages[req.PageToken], nil
 		}}
-		task, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
+		task, holders, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
 		if err != nil || task == nil || task.ID != "t4" {
 			t.Errorf("task = %+v, %v; want t4: a running holder wins over a finished one on an earlier page", task, err)
+		}
+		if !slices.Equal(holders, []a2a.TaskID{"t4", "t2"}) {
+			t.Errorf("holders = %v, want the preferred one first, then the rest", holders)
 		}
 		if !slices.Equal(tokens, []string{"", "p2", "p3"}) {
 			t.Errorf("page tokens = %q, want the lookup to follow nextPageToken to the end", tokens)
@@ -86,13 +95,31 @@ func TestFindTaskFollowsPagesWithoutRelyingOnOrder(t *testing.T) {
 	})
 }
 
-func TestFindTaskGivesUpOnAListThatNeverEnds(t *testing.T) {
+// A page token seen before is a loop: fail at once, not after the page bound.
+func TestFindTaskFailsAtOnceOnARepeatedPageToken(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := &memConn{list: func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 			return listOf("again", holding("t1", a2a.TaskStateCompleted, "x")), nil
 		}}
-		if task, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil {
-			t.Errorf("task = %+v, want an error once the pages run past any sane bound", task)
+		if _, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil {
+			t.Error("want an error for a token that repeats")
+		}
+		if n := countOf(m.calls(), "list"); n != 2 {
+			t.Errorf("%d pages fetched, want 2: the second page repeats the first token", n)
+		}
+	})
+}
+
+// Fresh tokens for ever are stopped by the page bound.
+func TestFindTaskGivesUpOnAListThatNeverEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var n int
+		m := &memConn{list: func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+			n++
+			return listOf(fmt.Sprint("page", n), holding("t1", a2a.TaskStateCompleted, "x")), nil
+		}}
+		if _, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil || n != maxListPages {
+			t.Errorf("err = %v after %d pages, want an error at the bound of %d", err, n, maxListPages)
 		}
 	})
 }
@@ -101,12 +128,12 @@ func TestFindTaskErrors(t *testing.T) {
 	forbidden := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) {
 		reply(t, w, "oidc-identity/09-b-listtasks-a-context.response.json")
 	})
-	if _, err := forbidden.agentWith(t, quick).FindTask(t.Context(), replayContext, m1); !errors.Is(err, ErrForbidden) {
+	if _, _, err := forbidden.agentWith(t, quick).FindTask(t.Context(), replayContext, m1); !errors.Is(err, ErrForbidden) {
 		t.Errorf("err = %v, want ErrForbidden", err)
 	}
 	// Without a contextId ListTasks would list every task the caller owns, and a match would mean nothing.
 	for _, ids := range [][2]string{{"", m1}, {replayContext, ""}} {
-		if _, err := forbidden.agentWith(t, quick).FindTask(t.Context(), ids[0], ids[1]); err == nil {
+		if _, _, err := forbidden.agentWith(t, quick).FindTask(t.Context(), ids[0], ids[1]); err == nil {
 			t.Errorf("FindTask(%q, %q) = nil error, want one for a missing id", ids[0], ids[1])
 		}
 	}
@@ -122,11 +149,11 @@ func TestFindTaskHasADeadline(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}}
-		if _, err := memAgent(t, hang, func(c *Config) { c.UnaryTimeout = time.Second }).FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
+		if _, _, err := memAgent(t, hang, func(c *Config) { c.UnaryTimeout = time.Second }).FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("hung page: err = %v, want DeadlineExceeded", err)
 		}
 		stuck := New(func(ctx context.Context) (Conn, error) { <-ctx.Done(); return nil, ctx.Err() }, nil, Config{UnaryTimeout: time.Second})
-		if _, err := stuck.FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
+		if _, _, err := stuck.FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("stuck Source: err = %v, want DeadlineExceeded", err)
 		}
 	})
