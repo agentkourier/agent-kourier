@@ -112,3 +112,27 @@ func TestRecoveryListsSurviveReopen(t *testing.T) {
 		t.Fatalf("queued after reopen = %v, %v", got, err)
 	}
 }
+
+// Sessions with the same last activity come back in key order, whatever order they were
+// written in: the query ties on the primary key, so a listing is the same after every reopen.
+func TestListActiveSessionsTiesByKey(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	for _, thread := range []string{"b", "c", "a"} {
+		k := store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: thread}
+		if err := s.UpsertSession(ctx, store.Session{Key: k, TaskID: "t-" + thread, Binding: "ns/b", LastActivity: t0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListActiveSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var threads []string
+	for _, sess := range got {
+		threads = append(threads, sess.Key.ThreadTS)
+	}
+	if want := []string{"a", "b", "c"}; !slices.Equal(threads, want) {
+		t.Errorf("threads = %v; want %v", threads, want)
+	}
+}
