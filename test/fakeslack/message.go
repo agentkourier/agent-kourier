@@ -96,14 +96,6 @@ func cloneValue(v any) any {
 	return v
 }
 
-// WithBot sets the identity that bot-token posts carry: the bot's user ID, its
-// bot_id, and the app_id. The defaults are UFAKEBOT, BFAKEBOT and AFAKEAPP.
-func WithBot(user, botID, appID string) Option {
-	return func(s *Server) { s.bot = botIdentity{user: user, id: botID, app: appID} }
-}
-
-type botIdentity struct{ user, id, app string }
-
 // botMessage returns a new message from the bot, which carries the bot's user,
 // bot_id and app_id.
 func (s *Server) botMessage(text, threadTS string) *Message {

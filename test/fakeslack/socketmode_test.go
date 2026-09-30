@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,13 +35,20 @@ func newSocket(t *testing.T, opts ...fakeslack.Option) (*fakeslack.Server, *sock
 	leakCheck(t)
 	fake := fakeslack.New(opts...)
 	t.Cleanup(fake.Close)
-	api := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"), slack.OptionAppLevelToken(testAppToken))
+	return fake, runClient(t, fake.URL())
+}
+
+// runClient runs a slack-go Socket Mode client against the fake at baseURL until
+// the test ends.
+func runClient(t *testing.T, baseURL string) *socketmode.Client {
+	t.Helper()
+	api := slack.New(testToken, slack.OptionAPIURL(baseURL+"/"), slack.OptionAppLevelToken(testAppToken))
 	smc := socketmode.New(api)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = smc.RunContext(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
-	return fake, smc
+	return smc
 }
 
 // waitEvent returns the next client event of type typ, skipping the client's
@@ -96,6 +105,36 @@ func TestSocketModeSendsHello(t *testing.T) {
 	}
 }
 
+// TestNewHandlerServesSocketMode checks the documented way to run the fake
+// behind another listener: NewHandler mounted at /, reached directly.
+func TestNewHandlerServesSocketMode(t *testing.T) {
+	leakCheck(t)
+	h := fakeslack.NewHandler()
+	t.Cleanup(h.Close)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	smc := runClient(t, srv.URL)
+	waitEvent(t, smc, socketmode.EventTypeHello)
+	if n := h.Connections(); n != 1 {
+		t.Fatalf("Connections() = %d after hello; want 1", n)
+	}
+}
+
+func TestClosedServerRefusesSocketClients(t *testing.T) {
+	leakCheck(t)
+	h := fakeslack.NewHandler()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	h.Close()
+	_, resp, err := websocket.DefaultDialer.DialContext(t.Context(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/link", nil)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("dial after Close = %v, %v; want a 503 refusal", resp, err)
+	}
+}
+
 func TestClientDisconnectIsHandled(t *testing.T) {
 	leakCheck(t)
 	fake := fakeslack.New()
@@ -113,6 +152,23 @@ func TestCloseDropsConnections(t *testing.T) {
 	fake.Close()
 	if n := fake.Connections(); n != 0 {
 		t.Fatalf("Connections() = %d after Close; want 0", n)
+	}
+}
+
+func TestPingsCanBeTurnedOff(t *testing.T) {
+	leakCheck(t)
+	fake := fakeslack.New(fakeslack.WithPingInterval(0))
+	t.Cleanup(fake.Close)
+	ws := dial(t, fake)
+	errPing := errors.New("ping")
+	ws.SetPingHandler(func(string) error { return errPing })
+	_ = ws.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _, err := ws.ReadMessage() // hello
+	if err == nil {
+		_, _, err = ws.ReadMessage()
+	}
+	if errors.Is(err, errPing) || err == nil {
+		t.Fatalf("read after hello = %v; want a timeout, since pings are off", err)
 	}
 }
 

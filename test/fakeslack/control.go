@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// teamID is the workspace every event and interaction claims to come from.
-const teamID = "TFAKE"
-
 // UserMessage is a message a test posted as a user: where it was stored, and
 // the envelope_id of each event delivered for it. Pass Envelopes to WaitAck.
 type UserMessage struct {
@@ -107,8 +104,8 @@ func (s *Server) eventCallback(event map[string]any) (string, error) {
 	eventID, eventTime := fmt.Sprintf("Ev%08d", s.events), s.now().Unix()
 	s.mu.Unlock()
 	return s.SendEnvelope("events_api", map[string]any{
-		"type": "event_callback", "team_id": teamID, "api_app_id": s.bot.app,
+		"type": "event_callback", "team_id": s.team.id, "api_app_id": s.bot.app,
 		"event": event, "event_id": eventID, "event_time": eventTime,
-		"authorizations": []map[string]any{{"team_id": teamID, "user_id": s.bot.user, "is_bot": true}},
+		"authorizations": []map[string]any{{"team_id": s.team.id, "user_id": s.bot.user, "is_bot": true}},
 	})
 }

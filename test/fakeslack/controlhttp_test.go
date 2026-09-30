@@ -7,8 +7,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/socketmode"
 
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -186,6 +188,30 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 	var out map[string]string
 	if s := control(t, bare, "POST", "/_control/dm", map[string]string{"user": "U1", "text": "hi"}, &out); s != 409 || out["error"] == "" {
 		t.Fatalf("dm with no client = %d, %v; want 409", s, out)
+	}
+}
+
+func TestCloseEndsAckWaits(t *testing.T) {
+	fake, smc := connected(t)
+	id, err := fake.SendEnvelope("slash_commands", slashCommand)
+	if err != nil {
+		t.Fatalf("SendEnvelope: %v", err)
+	}
+	waitEvent(t, smc, socketmode.EventTypeSlashCommand) // delivered, and never acked
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, fake.URL()+"/_control/acks/"+id+"?timeout=30s", nil)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	time.Sleep(100 * time.Millisecond) // let the poll start waiting
+	start := time.Now()
+	fake.Close()
+	<-polled
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("Close took %v behind a 30s ack poll", d)
 	}
 }
 

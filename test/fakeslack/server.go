@@ -35,6 +35,7 @@
 //     needs; the message in it omitting metadata; state.values holding only the
 //     elements the test gave, where Slack sends every input, unset ones null;
 //     and a block sent without a block_id keeping "", where Slack makes one up.
+//   - auth.test: the fields returned, and its placeholder url and user name.
 //   - Bot identity: a bot post carrying user, bot_id and app_id together, with
 //     no subtype.
 //   - Content limits (validate.go): 50 blocks; 40000 characters of message
@@ -92,7 +93,8 @@ type Server struct {
 	now func() time.Time
 
 	pingEvery time.Duration
-	bot       botIdentity
+	bot       botIdentity // set by options, read-only after construction
+	team      teamIdentity
 	sock      sockets
 	control   http.Handler // the /_control/ routes
 
@@ -113,14 +115,37 @@ type Option func(*Server)
 // ordered.
 func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
 
+// WithBot sets the identity that bot-token posts carry: the bot's user ID, its
+// bot_id, and the app_id. The defaults are UFAKEBOT, BFAKEBOT and AFAKEAPP.
+// Courier learns its own user and bot IDs from auth.test; slack-go does not
+// decode app_id on messages. Set at construction, read-only after.
+func WithBot(user, botID, appID string) Option {
+	return func(s *Server) { s.bot = botIdentity{user: user, id: botID, app: appID} }
+}
+
+// WithTeam sets the workspace's team ID and name, which auth.test returns and
+// events and interactions carry. The defaults are TFAKE and fakeworkspace.
+// Set at construction, read-only after.
+func WithTeam(id, name string) Option {
+	return func(s *Server) { s.team = teamIdentity{id: id, name: name} }
+}
+
+type botIdentity struct{ user, id, app string }
+
+type teamIdentity struct{ id, name string }
+
 // NewHandler returns a Server for use as an http.Handler, with no listener of
-// its own.
+// its own. Mount it at / and reach it directly: the Socket Mode URL it hands
+// out is built from the request's Host, as ws:// (wss:// if the request came
+// over TLS), so a path prefix or a TLS-terminating proxy in front of it would
+// break Socket Mode.
 func NewHandler(opts ...Option) *Server {
 	s := &Server{
 		now:       time.Now,
 		pingEvery: defaultPingInterval,
 		bot:       botIdentity{user: "UFAKEBOT", id: "BFAKEBOT", app: "AFAKEAPP"},
-		sock:      sockets{pending: map[string]*envelope{}},
+		team:      teamIdentity{id: "TFAKE", name: "fakeworkspace"},
+		sock:      sockets{pending: map[string]*envelope{}, closing: make(chan struct{})},
 		channels:  map[string][]*Message{},
 		users:     map[string]User{},
 		members:   map[string][]string{},
@@ -196,6 +221,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	switch method {
 	case "apps.connections.open":
 		return s.connectionsOpen(r)
+	case "auth.test":
+		return s.authTest()
 	case "chat.postMessage":
 		return s.postMessage(r.Form)
 	case "chat.update":
@@ -217,6 +244,18 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	default:
 		return nil, "unknown_method"
 	}
+}
+
+// authTest implements auth.test
+// (https://docs.slack.dev/reference/methods/auth.test/), which tells courier
+// who it is: the bot's user and bot IDs and the team's.
+//
+// UNCONFIRMED(WP-04): the fields returned, and the placeholder url and user name.
+func (s *Server) authTest() (response, string) {
+	return response{
+		"url": "https://" + s.team.name + ".slack.com/", "team": s.team.name, "user": "fakebot",
+		"team_id": s.team.id, "user_id": s.bot.user, "bot_id": s.bot.id,
+	}, ""
 }
 
 // tokenPrefix returns the prefix of the token type a method accepts: an

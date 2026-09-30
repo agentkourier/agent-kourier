@@ -91,8 +91,9 @@ func (s *Server) Ack(envelopeID string) (payload json.RawMessage, acked bool) {
 	}
 }
 
-// WaitAck blocks until the client has acknowledged every envelope, or ctx ends.
-// It fails at once for an envelope ID the fake never issued.
+// WaitAck blocks until the client has acknowledged every envelope, or ctx ends,
+// or the Server is closed. It fails at once for an envelope ID the fake never
+// issued.
 func (s *Server) WaitAck(ctx context.Context, envelopeIDs ...string) error {
 	for _, id := range envelopeIDs {
 		env := s.envelope(id)
@@ -103,6 +104,8 @@ func (s *Server) WaitAck(ctx context.Context, envelopeIDs ...string) error {
 		case <-env.acked:
 		case <-ctx.Done():
 			return fmt.Errorf("fakeslack: waiting for ack of %s: %w", id, ctx.Err())
+		case <-s.sock.closing:
+			return fmt.Errorf("fakeslack: closed while waiting for ack of %s", id)
 		}
 	}
 	return nil
