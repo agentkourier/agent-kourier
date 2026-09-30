@@ -72,13 +72,14 @@ func NewStaticToken(r SecretReader, namespace string, ref v1alpha1.SecretKeyRef)
 	return &StaticToken{reader: r, namespace: namespace, ref: ref}
 }
 
-// String names the Secret, never the reader that holds its value, so that no fmt verb prints it.
-func (s *StaticToken) String() string {
+// String names the Secret, never the reader that holds its value, so that no fmt verb prints
+// it. It has a value receiver so that a copy is redacted too.
+func (s StaticToken) String() string {
 	return fmt.Sprintf("identity.StaticToken{%s/%s}", s.namespace, s.ref.Name)
 }
 
 // GoString is String, so %#v is safe.
-func (s *StaticToken) GoString() string { return s.String() }
+func (s StaticToken) GoString() string { return s.String() }
 
 // Token reads the Secret. Every call reads it again, so a rotated Secret is used at once.
 func (s *StaticToken) Token(ctx context.Context) (secret.Value, error) {

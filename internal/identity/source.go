@@ -37,31 +37,42 @@ type Source struct {
 	backend    *v1alpha1.AgentBackend
 	reader     SecretReader
 	token      TokenSource // nil when the Binding has no token
+	identity   string      // what an audit row names as the identity, never the token itself
 	audit      Auditor
 	onRejected func(string)
 }
 
 // New returns the Source for b, which reaches its agent on backend. Secrets are read
 // through r: the token from b's namespace, and each header's from backend's. aud records the
-// rejections and must not be nil. b and backend are read on every call, so they must not
-// change; pass the objects of a config snapshot.
-func New(b *v1alpha1.Binding, backend *v1alpha1.AgentBackend, r SecretReader, aud Auditor, opts Options) *Source {
+// rejections; New fails when it is nil, rather than at the first rejection. b and backend are
+// read on every call, so they must not change; pass the objects of a config snapshot.
+func New(b *v1alpha1.Binding, backend *v1alpha1.AgentBackend, r SecretReader, aud Auditor, opts Options) (*Source, error) {
+	if aud == nil {
+		return nil, errors.New("identity: New needs an Auditor")
+	}
 	s := &Source{
 		binding: b.Namespace + "/" + b.Name, spec: b, backend: backend, reader: r,
 		token: opts.Token, audit: aud, onRejected: opts.OnRejected,
 	}
-	if s.token == nil && b.Spec.Identity.TokenSecretRef != nil {
-		s.token = NewStaticToken(r, b.Namespace, *b.Spec.Identity.TokenSecretRef)
+	// The identity is the token's owner, which only the token knows. Name the Secret that
+	// holds it, or, when no token is sent, the userId that is.
+	s.identity = b.Spec.Identity.UserID
+	if ref := b.Spec.Identity.TokenSecretRef; ref != nil {
+		s.identity = "secret:" + b.Namespace + "/" + ref.Name
+		if s.token == nil {
+			s.token = NewStaticToken(r, b.Namespace, *ref)
+		}
 	}
-	return s
+	return s, nil
 }
 
 // String names the Binding and nothing else. A Source holds the Secret reader, and fmt would
 // otherwise print what the reader holds: %s and %q of a pointer show the fields it points to.
-func (s *Source) String() string { return "identity.Source{" + s.binding + "}" }
+// It has a value receiver so that a copy is redacted too.
+func (s Source) String() string { return "identity.Source{" + s.binding + "}" }
 
 // GoString is String, so %#v is safe.
-func (s *Source) GoString() string { return s.String() }
+func (s Source) GoString() string { return s.String() }
 
 // TokenRequired reports whether the Binding has a token, so that credentials without one
 // must fail rather than fall back to the userId.
@@ -123,10 +134,15 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 // does nothing. It never retries: the turn has failed, and the next one reads the Secret
 // again.
 //
+// This is the only audit write for a rejected call: the caller must not also audit it.
+// call names the operation and its message, context or task ID, as audit.Writer.AgentCall
+// needs. actor.Binding defaults to the Binding's namespace/name, and actor.Identity to
+// "secret:namespace/name" of the token Secret, or to the userId of a Binding without one.
+//
 // The returned error reports only this bookkeeping: the token that cannot be read now, and
 // an audit write that failed (spec 8.6 step 7: the record is of something already done, so
-// the caller logs the error and carries on). The re-read and the metric happen either way.
-// actor.Binding defaults to the Binding's namespace/name.
+// it never blocks the follow-up). The caller must log it: it is the only place an operator
+// sees that the token is now unreadable. The re-read and the metric happen either way.
 func (s *Source) Rejected(ctx context.Context, actor audit.Actor, call audit.Call) error {
 	if !errors.Is(call.Err, agent.ErrCredentialsRejected) {
 		return nil
@@ -136,6 +152,7 @@ func (s *Source) Rejected(ctx context.Context, actor audit.Actor, call audit.Cal
 		errs = append(errs, s.token.Refresh(ctx))
 	}
 	actor.Binding = cmp.Or(actor.Binding, s.binding)
+	actor.Identity = cmp.Or(actor.Identity, s.identity)
 	errs = append(errs, s.audit.AgentCall(ctx, actor, call))
 	if s.onRejected != nil {
 		s.onRejected(s.binding)
