@@ -157,8 +157,9 @@ step "test agents, front door, NetworkPolicy"
 "${K[@]}" apply -f "${FULL}/agent.yaml" -f "${FULL}/slow-agent.yaml" -f "${FULL}/frontdoor.yaml" -f "${FULL}/networkpolicy.yaml" >/dev/null
 # WP-01's policy had another name and apply does not prune; left in place it would still admit courier.
 "${K[@]}" -n kagent delete networkpolicy controller-admit-courier-only --ignore-not-found >/dev/null
-# Restart, as for mockllm, so a changed slowllm ConfigMap is picked up (a mounted script is read at start).
-"${K[@]}" -n kagent rollout restart deploy/slowllm >/dev/null
+# Restart, as for mockllm, so a changed slowllm ConfigMap or front-door alpha config is picked up
+# (a mounted file is read at start).
+"${K[@]}" -n kagent rollout restart deploy/slowllm deploy/kagent-frontdoor >/dev/null
 "${K[@]}" -n kagent rollout status deploy/slowllm deploy/kagent-frontdoor --timeout=180s
 "${K[@]}" -n kagent wait --for=condition=Ready agent/test-agent agent/slow-agent --timeout=300s
 

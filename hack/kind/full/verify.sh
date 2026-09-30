@@ -7,8 +7,13 @@
 #     and path-traversal probes through the door never reach a controller route;
 #  2. the front door refuses forged (well-formed), foreign-audience, and missing tokens, and so
 #     does the UI door;
-#  3. canary: the controller itself still accepts a forged token on /mcp (alpha5 does not verify);
-#  4. a courier-labelled pod in another namespace, an unlabelled pod, and pods in that namespace
+#  3. B's valid token cannot act as A through the door by adding X-Agent-Name plus X-User-Id or
+#     ?user_id=, in canonical and lower case (-31403 on send and GetTask), and X-Share-Token is not
+#     forwarded, while A's own send and GetTask still work (spec D32, R4; WP-01d);
+#  4. canary: the controller itself still accepts a forged token on /mcp, lets the same spoof
+#     through, and reads X-Share-Token (alpha5 does not verify); group 3 means something only
+#     because of this;
+#  5. a courier-labelled pod in another namespace, an unlabelled pod, and pods in that namespace
 #     carrying the labels the 8083 and 8080 policies trust, reach nothing.
 set -euo pipefail
 
@@ -27,11 +32,14 @@ UIDOOR=http://kagent-oauth2-proxy.kagent.svc.cluster.local:4180
 UI=http://kagent-ui.kagent.svc.cluster.local:8080
 CARD=/agents/kagent/test-agent/.well-known/agent-card.json
 HITL=https://kagent.dev/extensions/hitl/v1
-token() { # CLIENT SECRET: an ID token for the test identity from that Dex client
-  curl -sf -d grant_type=password -d "client_id=$1" -d "client_secret=$2" -d username=binding-test@example.test \
+token() { # CLIENT SECRET [USER]: an ID token for that Dex user (default: the Binding identity A) from that client
+  curl -sf -d grant_type=password -d "client_id=$1" -d "client_secret=$2" -d "username=${3:-$A_EMAIL}" \
     -d password=password -d 'scope=openid email' "$DEX/token" | sed -n 's/.*"id_token":"\([^"]*\)".*/\1/p'
 }
+A_EMAIL=binding-test@example.test
+B_EMAIL=identity-b@example.test # a second person: a different owner of kagent sessions
 binding_token() { token courier-binding fake-courier-binding-secret; }
+b_token() { token courier-binding fake-courier-binding-secret "$B_EMAIL"; }
 b64() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
 # forge TOKEN sets two forgeries of a real token: A keeps the real header and signature but
 # changes the payload's email; B is {"alg":"none"} with the real payload and no signature. It also
@@ -68,6 +76,36 @@ rpc() {
   curl -sN -m 120 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' ${5:+-H "$5"} "$FD/agents/kagent/$2" \
     -d '{"jsonrpc":"2.0","id":"1","method":"'"$3"'","params":{"message":{"messageId":"m-'"$(date +%s)$RANDOM"'","role":"ROLE_USER","parts":[{"text":"'"$4"'"}]}}}'
 }
+# a2a BASE TOKEN QUERY BODY [CURL ARG...]: one JSON-RPC POST to test-agent at BASE ($FD or $CTRL).
+# QUERY is "" or "?k=v"; the extra curl arguments carry the spoof headers.
+a2a() {
+  base=$1 bearer=$2 query=$3 body=$4
+  shift 4
+  curl -s -m 60 -H "Authorization: Bearer $bearer" -H 'Content-Type: application/json' "$@" "$base/agents/kagent/test-agent$query" -d "$body"
+}
+send_body() { # TEXT [CONTEXT_ID]: a SendMessage body with a unique messageId
+  printf '{"jsonrpc":"2.0","id":"1","method":"SendMessage","params":{"message":{"messageId":"m-%s%s",%s"role":"ROLE_USER","parts":[{"text":"%s"}]}}}' \
+    "$(date +%s)" "$RANDOM" "${2:+\"contextId\":\"$2\",}" "$1"
+}
+get_body() { printf '{"jsonrpc":"2.0","id":"1","method":"GetTask","params":{"id":"%s"}}' "$1"; } # TASK_ID
+task_id() { printf %s "$1" | sed -n 's/.*"task":{"id":"\([^"]*\)".*/\1/p'; }
+context_id() { printf %s "$1" | sed -n 's/.*"contextId":"\([^"]*\)".*/\1/p'; }
+# spoof BASE WANT LABEL QUERY [CURL ARG...]: B ($tokB) continues A's session ($cid) and reads A's
+# task ($tid) with the extra request data; both answers must contain WANT.
+spoof() {
+  sbase=$1 want=$2 label=$3 squery=$4
+  shift 4
+  [ "$sbase" = "$FD" ] && where=door || where=controller
+  assert "$where, $label: B continues A's session: $want" has "$(a2a "$sbase" "$tokB" "$squery" "$(send_body 'What is 2+2?' "$cid")" "$@")" "$want"
+  assert "$where, $label: B reads A's task: $want" has "$(a2a "$sbase" "$tokB" "$squery" "$(get_body "$tid")" "$@")" "$want"
+}
+# spoof_all BASE WANT: the four ways kagent lets a caller pick the acting user (WP-03), B as caller.
+spoof_all() {
+  spoof "$1" "$2" 'X-Agent-Name + X-User-Id' '' -H 'X-Agent-Name: test-agent' -H "X-User-Id: $A_EMAIL"
+  spoof "$1" "$2" 'x-agent-name + x-user-id (lower case)' '' -H 'x-agent-name: test-agent' -H "x-user-id: $A_EMAIL"
+  spoof "$1" "$2" 'X-Agent-Name + ?user_id' "?user_id=$A_EMAIL" -H 'X-Agent-Name: test-agent'
+  spoof "$1" "$2" 'x-agent-name + ?user_id (lower case)' "?user_id=$A_EMAIL" -H 'x-agent-name: test-agent'
+}
 # Only a timeout counts as refused: a policy drop must not be confused with another failure.
 refused() { rc=0; curl -s -m 8 -o /dev/null "$1" || rc=$?; [ "$rc" = 28 ]; }
 has() { printf %s "$1" | grep -q -- "$2"; } # TEXT PATTERN
@@ -89,7 +127,9 @@ ${K} get namespace courier >/dev/null 2>&1 || ${K} create namespace courier >/de
 echo "== courier pod: A2A through the front door, nothing else reachable"
 probe courier app.kubernetes.io/name=courier <<'EOF'
 tok=$(binding_token)
-assert "card served through the front door" has "$(curl -s -m 20 -H "Authorization: Bearer $tok" "$FD$CARD")" '"name":"test_agent"'
+card=$(curl -s -m 20 -H "Authorization: Bearer $tok" "$FD$CARD")
+assert "card served through the front door" has "$card" '"name":"test_agent"'
+assert "card advertises streaming (WP-27e refuses agents that do not)" has "$card" '"streaming":true'
 assert "SendMessage answered" has "$(rpc "$tok" test-agent SendMessage 'What is 2+2?')" 'The answer is 4.'
 ask='Which database should we use?'
 assert "A2A-Extensions reaches the controller: HITL payload present" has "$(rpc "$tok" test-agent SendMessage "$ask" "A2A-Extensions: $HITL")" '"type":"ask_user_request"'
@@ -140,6 +180,25 @@ assert "UI door refuses the Binding's token" eq "$(code "$tok" "$UIDOOR/api/agen
 assert "UI door passes a UI-audience token through the fence (200 is the controller's catch-all)" eq "$(code "$(token kagent-ui fake-oauth2-proxy-secret)" "$UIDOOR/api/agents")" 200
 EOF
 
+echo "== courier pod: X-Agent-Name, X-User-Id and X-Share-Token are stripped at the front door"
+probe courier app.kubernetes.io/name=courier <<'EOF'
+tokA=$(binding_token)
+tokB=$(b_token)
+r=$(a2a "$FD" "$tokA" '' "$(send_body 'What is 2+2?')")
+tid=$(task_id "$r")
+cid=$(context_id "$r")
+assert "A's own send answered" has "$r" 'The answer is 4.'
+assert "A's session has a task id" [ -n "$tid" ]
+assert "A's session has a context id" [ -n "$cid" ]
+assert "A continues its own session" has "$(a2a "$FD" "$tokA" '' "$(send_body 'What is 2+2?' "$cid")")" TASK_STATE_COMPLETED
+assert "A reads its own task" has "$(a2a "$FD" "$tokA" '' "$(get_body "$tid")")" TASK_STATE_COMPLETED
+# Control: without the spoof B is already refused, so the rows below differ from it only by the
+# headers. B has a valid token and its own sessions; only A's are out of reach.
+spoof "$FD" -31403 'no extra headers' ''
+spoof_all "$FD" -31403
+assert "X-Share-Token is not forwarded: a bogus one is ignored" eq "$(curl -s -o /dev/null -m 15 -w '%{http_code}' -H "Authorization: Bearer $tokA" -H 'X-Share-Token: bogus' "$FD$CARD")" 200
+EOF
+
 echo "== canary: the controller does not verify JWTs (kagent 1.0.0-alpha5)"
 # A pod labelled like the UI nginx is admitted to 8083 by design; this is what the front door is for.
 # /mcp is the controller's one route that answers with a body, so it shows a token being accepted.
@@ -153,6 +212,18 @@ else
   echo "FAIL: kagent now verifies JWTs on 8083; revisit D32/R4" >&2
   exit 1
 fi
+# The same spoof the front door refuses works here, so group 3's -31403 is the door's doing. A
+# session of A's is made directly; B, without headers, is refused (control), and with them acts as A.
+tokA=$(binding_token)
+tokB=$(b_token)
+r=$(a2a "$CTRL" "$tokA" '' "$(send_body 'What is 2+2?')")
+tid=$(task_id "$r")
+cid=$(context_id "$r")
+assert "controller: A's session has a task id" [ -n "$tid" ]
+assert "controller: A's session has a context id" [ -n "$cid" ]
+spoof "$CTRL" -31403 'no extra headers' ''
+spoof_all "$CTRL" TASK_STATE_COMPLETED
+assert "controller: a bogus X-Share-Token is read (403); the door drops it" eq "$(curl -s -o /dev/null -m 15 -w '%{http_code}' -H "Authorization: Bearer $tokA" -H 'X-Share-Token: bogus' "$CTRL$CARD")" 403
 EOF
 
 # fenced NAMESPACE LABELS DESCRIPTION: a pod that is not courier reaches none of the three.
