@@ -50,8 +50,7 @@ func Load(ctx context.Context, dir string) (*Set, error) {
 	}
 	l := &loader{set: &Set{}, seen: map[identity]string{}}
 	for _, e := range entries {
-		// Dot names include ConfigMap's ..data entries and editors' dangling lock symlinks.
-		if ext := filepath.Ext(e.Name()); strings.HasPrefix(e.Name(), ".") || (ext != ".yaml" && ext != ".yml") {
+		if !isConfigFile(e.Name()) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -63,6 +62,13 @@ func Load(ctx context.Context, dir string) (*Set, error) {
 		return nil, errors.Join(l.errs...)
 	}
 	return l.set, nil
+}
+
+// isConfigFile reports whether a directory entry is one Load reads. Dot names are not, which
+// leaves out ConfigMap's ..data entries and editors' dangling lock symlinks.
+func isConfigFile(name string) bool {
+	ext := filepath.Ext(name)
+	return !strings.HasPrefix(name, ".") && (ext == ".yaml" || ext == ".yml")
 }
 
 // identity is what makes an object unique: two documents may not share it.

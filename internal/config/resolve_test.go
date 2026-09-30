@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
@@ -66,14 +68,17 @@ func wantProblems(t *testing.T, set *Set, secrets SecretResolver, want ...string
 func TestResolveSpecExample(t *testing.T) {
 	set := specSet(t)
 	for i := range set.Bindings {
-		set.Bindings[i].Status.WebhookPath = "/hooks/stale" // status in a file is never input
+		set.Bindings[i].Status = v1alpha1.BindingStatus{ // status in a file is never input
+			WebhookPath: "/hooks/stale",
+			Conditions:  []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
+		}
 	}
 	snap, err := Resolve(context.Background(), set, specSecrets())
 	if err != nil {
 		t.Fatal(err)
 	}
 	const path = "/hooks/alertmanager/sre/sre-alerts"
-	if rb, ok := snap.Binding("sre", "chat-only"); !ok || rb.Binding.Status.WebhookPath != "" {
+	if rb, ok := snap.Binding("sre", "chat-only"); !ok || rb.Binding.Status.WebhookPath != "" || len(rb.Binding.Status.Conditions) != 0 {
 		t.Errorf("chat-only Binding = %+v, %v; want it resolved with no webhook path", rb, ok)
 	}
 	if _, ok := snap.BindingForWebhook("/hooks/stale"); ok {
@@ -89,7 +94,7 @@ func TestResolveSpecExample(t *testing.T) {
 	for name, lookup := range lookups {
 		rb, ok := lookup()
 		if !ok || rb.Binding.Name != "sre-alerts" || rb.Backend.Name != "kagent-pilot" || rb.Connection.Name != "slack-main" ||
-			rb.Binding.Status.WebhookPath != path {
+			rb.Binding.Status.WebhookPath != path || len(rb.Binding.Status.Conditions) != 0 {
 			t.Errorf("%s = %+v, %v; want the sre-alerts Binding with its backend and connection", name, rb, ok)
 		}
 	}

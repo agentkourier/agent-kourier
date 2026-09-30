@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -85,8 +86,11 @@ func (c *cancelingSecrets) Keys(ctx context.Context, _, _ string) ([]string, err
 func TestResolveStopsWhenCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	secrets := &cancelingSecrets{cancel: cancel}
-	_, err := Resolve(ctx, specSet(t), secrets)
-	if !errors.Is(err, context.Canceled) || len(flatten(err)) != 1 || secrets.reads != 1 {
-		t.Errorf("Resolve error = %v after %d reads; want one context.Canceled error after 1 read", err, secrets.reads)
+	set := specSet(t)
+	sreAlerts(set).Spec.Agent.BackendRef.Name = "nope" // a real problem must survive the cancellation
+	_, err := Resolve(ctx, set, secrets)
+	got := flatten(err)
+	if !errors.Is(err, context.Canceled) || len(got) != 2 || !strings.HasSuffix(got[1].Error(), "AgentBackend courier-system/nope not found") || secrets.reads != 1 {
+		t.Errorf("Resolve error = %v after %d reads; want context.Canceled once, then the reference problem, after 1 read", err, secrets.reads)
 	}
 }

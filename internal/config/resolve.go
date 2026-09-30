@@ -68,8 +68,9 @@ func (s *Snapshot) BindingForWebhook(path string) (ResolvedBinding, bool) {
 //
 // Resolve takes ownership of set: the caller must not use or change it afterwards. It resets
 // each Binding's status, which is never input, and sets Status.WebhookPath. On any problem it
-// returns every one, joined and grouped by object, and a nil Snapshot. If ctx ends first, it
-// returns only that error.
+// returns every one, joined and grouped by object, and a nil Snapshot. If ctx ends first, the
+// error also wraps ctx's, once, ahead of the reference problems found so far; Secret
+// problems are then incomplete.
 func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, error) {
 	r := &resolver{
 		secrets:  secrets,
@@ -89,18 +90,18 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 		r.connection(&set.ChatConnections[i])
 	}
 	r.checkSecrets(ctx, set)
+	// Group each object's problems, keeping the order they were found in.
+	slices.SortStableFunc(r.problems, func(a, b problem) int {
+		return cmp.Or(cmp.Compare(a.from.kind, b.from.kind), cmp.Compare(a.from.namespace, b.from.namespace), cmp.Compare(a.from.name, b.from.name))
+	})
+	var errs []error
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("resolve config: %w", err)
+		errs = append(errs, fmt.Errorf("resolve config: %w", err))
 	}
-	if len(r.problems) > 0 {
-		// Group each object's problems, keeping the order they were found in.
-		slices.SortStableFunc(r.problems, func(a, b problem) int {
-			return cmp.Or(cmp.Compare(a.from.kind, b.from.kind), cmp.Compare(a.from.namespace, b.from.namespace), cmp.Compare(a.from.name, b.from.name))
-		})
-		errs := make([]error, len(r.problems))
-		for i, p := range r.problems {
-			errs[i] = p.err
-		}
+	for _, p := range r.problems {
+		errs = append(errs, p.err)
+	}
+	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 	return r.snap, nil

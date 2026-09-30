@@ -63,7 +63,8 @@ func (r *resolver) checkKeyRef(ctx context.Context, from identity, path string, 
 }
 
 // checkSecret requires the Secret name, in the namespace of from, to have every one of keys.
-// Once ctx ends it does nothing, and Resolve reports the cancellation once.
+// Once ctx ends it does nothing and records nothing, so a cancelled read is not a problem
+// with the config; Resolve reports the cancellation once.
 func (r *resolver) checkSecret(ctx context.Context, from identity, path, name string, keys ...string) {
 	if ctx.Err() != nil {
 		return
@@ -71,6 +72,7 @@ func (r *resolver) checkSecret(ctx context.Context, from identity, path, name st
 	secret := identity{"Secret", from.namespace, name}
 	have, err := r.secrets.Keys(ctx, secret.namespace, name)
 	switch {
+	case ctx.Err() != nil: // cancelled during the read; err may be that, not a real problem
 	case errors.Is(err, ErrSecretNotFound):
 		r.fail(from, path, fmt.Errorf("%s not found", secret))
 	case err != nil:
