@@ -42,6 +42,9 @@ type Interaction struct {
 	Kind      Kind
 	TaskID    a2a.TaskID // the paused task, which the answer is addressed to
 	ContextID string
+	// Hint is the agent's own one-line description of the pause, when it sends one. It is
+	// untrusted text, like every question and tool argument.
+	Hint      string
 	RequestID string     // AskUser: the id the answer must echo (for kagent-v1 nested, the child tool's)
 	Questions []Question // AskUser
 	Tools     []Tool     // ToolApproval

@@ -57,10 +57,7 @@ func TestBuildResponseMatchesAcceptedRequests(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &Dialect{}
-			in, ok := d.ParseInteraction(fixtureTask(t, tc.pause))
-			if !ok {
-				t.Fatal("the recorded pause did not parse")
-			}
+			in := mustParse(t, fixtureTask(t, tc.pause))
 			got, err := d.BuildResponse(*in, tc.answer(in))
 			if err != nil {
 				t.Fatal(err)
@@ -91,9 +88,9 @@ func TestBuildResponseMatchesAcceptedRequests(t *testing.T) {
 
 func TestBuildResponseRefusesIncompleteAnswers(t *testing.T) {
 	d := &Dialect{}
-	two, _ := d.ParseInteraction(fixtureTask(t, "askuser/21-pause-good-two-answers.response.sse")) // multi-select, then free text
-	one, _ := d.ParseInteraction(fixtureTask(t, "askuser/02-ask.response.sse"))                    // single-select
-	tools, _ := d.ParseInteraction(pausedOn(map[string]any{"type": "tool_approval_request",
+	two := mustParse(t, fixtureTask(t, "askuser/21-pause-good-two-answers.response.sse")) // multi-select, then free text
+	one := mustParse(t, fixtureTask(t, "askuser/02-ask.response.sse"))                    // single-select
+	tools := mustParse(t, pausedOn(map[string]any{"type": "tool_approval_request",
 		"tools": []any{map[string]any{"id": "a", "name": "x"}, map[string]any{"id": "b", "name": "y"}}}))
 	ans := func(in *dialect.Interaction, a ...[]string) dialect.Answer {
 		return dialect.Answer{RequestID: in.RequestID, Answers: a}
@@ -147,7 +144,7 @@ func TestBuildResponseRefusesIncompleteAnswers(t *testing.T) {
 
 func TestBuildResponseToolApprovalsFollowTheRequestOrder(t *testing.T) {
 	d := &Dialect{}
-	in, _ := d.ParseInteraction(pausedOn(map[string]any{"type": "tool_approval_request",
+	in := mustParse(t, pausedOn(map[string]any{"type": "tool_approval_request",
 		"tools": []any{map[string]any{"id": "a"}, map[string]any{"id": "b"}}}))
 	msg, err := d.BuildResponse(*in, dialect.Answer{Decisions: []dialect.Decision{{ToolID: "b", Reason: "no"}, {ToolID: "a", Approved: true}}})
 	if err != nil {
@@ -167,7 +164,7 @@ func TestBuildResponseToolApprovalsFollowTheRequestOrder(t *testing.T) {
 // them, since no nested capture exists.
 func TestBuildResponseNestedIDs(t *testing.T) {
 	d := &Dialect{}
-	ask, _ := d.ParseInteraction(pausedOn(adkNestedAskUser()))
+	ask := mustParse(t, pausedOn(adkNestedAskUser()))
 	msg, err := d.BuildResponse(*ask, dialect.Answer{RequestID: ask.RequestID, Answers: [][]string{{"east"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +174,7 @@ func TestBuildResponseNestedIDs(t *testing.T) {
 		t.Errorf("ask-user payload = %v\nwant             %v", got, want)
 	}
 
-	approval, _ := d.ParseInteraction(pausedOn(adkNestedApproval()))
+	approval := mustParse(t, pausedOn(adkNestedApproval()))
 	msg, err = d.BuildResponse(*approval, dialect.Answer{Decisions: []dialect.Decision{{ToolID: "inner-1", Approved: true}}})
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +192,7 @@ func TestBuildResponseNestedIDs(t *testing.T) {
 // kagent, and an extra part is unmeasured on a message whose only accepted shape is one part.
 func TestAttributeLeavesAnswersWithoutAPrefix(t *testing.T) {
 	d := &Dialect{}
-	in, _ := d.ParseInteraction(fixtureTask(t, "askuser/02-ask.response.sse"))
+	in := mustParse(t, fixtureTask(t, "askuser/02-ask.response.sse"))
 	msg, err := d.BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"MySQL"}}})
 	if err != nil {
 		t.Fatal(err)

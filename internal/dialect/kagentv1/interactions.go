@@ -45,15 +45,32 @@ type wireNested struct {
 type hitlRequest struct {
 	Type      string         `json:"type"`
 	ID        string         `json:"id"`
+	Hint      string         `json:"hint"`
 	Questions []wireQuestion `json:"questions"`
 	Tools     []wireTool     `json:"tools"`
 	Nested    *wireNested    `json:"nested"`
 }
 
-// ParseInteraction returns the interaction a task paused on. It reports false unless the
-// task is input-required with a usable HITL request: an ask-user request needs an id and a
-// question, and a tool-approval request needs tools that each have an id. A pause without
-// the extension header has no payload and is not parsed (the header comes from Connect).
+// The most a pause may ask, so that a broken or hostile agent cannot make courier render
+// an unbounded prompt. Slack's own select menus stop at 100 options.
+const (
+	maxQuestions = 20
+	maxChoices   = 100
+)
+
+// unusable returns an error that wraps dialect.ErrUnusablePause and says why. The reason
+// is fixed text, never the agent's: it goes into a thread, and the agent is untrusted.
+func unusable(reason string) error {
+	return fmt.Errorf("%w: %s", dialect.ErrUnusablePause, reason)
+}
+
+// ParseInteraction returns the interaction a task paused on. A task that is not
+// input-required has none, and gives nil, nil. An input-required task whose HITL request
+// cannot be answered gives an error wrapping dialect.ErrUnusablePause, because kagent-v1
+// never falls back to free text: no payload (the request lacked the extension header,
+// which Connect sends), an unknown type, no id, no questions or tools, a tool without an
+// id, more than 20 questions or 100 choices, or a nested request that fails the checks
+// below.
 //
 // A nested request (a sub-agent's) is usable only when kagent's resume code can correlate
 // the answer (v1.0.0-alpha5 go/adk/pkg/a2a/hitl.go, source only, never captured). It
@@ -62,60 +79,90 @@ type hitlRequest struct {
 // (processNestedAskUser). A nested tool approval decides only the nested tools, with no
 // fallback to the top-level ones, and needs exactly one top-level tool
 // (processNestedApproval).
-func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, bool) {
+func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
+	if task.Status.State != a2a.TaskStateInputRequired {
+		return nil, nil // no structured pause is the documented "nothing to parse", not a failure
+	}
 	msg := task.Status.Message
-	if task.Status.State != a2a.TaskStateInputRequired || msg == nil || msg.Metadata[HITLExtension] == nil {
-		return nil, false
+	if msg == nil || msg.Metadata[HITLExtension] == nil {
+		return nil, unusable("no HITL payload, so the request lacked the extension header")
 	}
 	raw, err := json.Marshal(msg.Metadata[HITLExtension])
 	var req hitlRequest
 	if err != nil || json.Unmarshal(raw, &req) != nil {
-		return nil, false
+		return nil, unusable("malformed HITL payload")
 	}
-	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID}
+	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID, Hint: req.Hint}
 	if n := req.Nested; n != nil {
 		if n.TaskID == "" || n.SubagentName == "" {
-			return nil, false
+			return nil, unusable("nested request has no sub-agent name or task")
 		}
 		in.Nested = &dialect.Nested{Subagent: n.SubagentName, TaskID: n.TaskID, ContextID: n.ContextID}
 	}
 	switch req.Type {
 	case askUserRequest:
-		in.Kind, in.RequestID = dialect.AskUser, req.ID
-		if n := req.Nested; n != nil {
-			if len(n.Tools) != 1 || n.Tools[0].Name != "ask_user" || n.Tools[0].ID == "" || req.ID == "" {
-				return nil, false
-			}
-			in.RequestID = n.Tools[0].ID
-		}
-		for _, q := range req.Questions {
-			in.Questions = append(in.Questions, dialect.Question{Text: q.Question, Choices: append([]string(nil), q.Choices...), Multiple: q.Multiple})
-		}
-		if in.RequestID == "" || len(in.Questions) == 0 {
-			return nil, false
-		}
-		return in, true
+		err = parseAskUser(req, in)
 	case toolApprovalRequest:
-		in.Kind = dialect.ToolApproval
-		tools := req.Tools
-		if n := req.Nested; n != nil {
-			if len(req.Tools) != 1 || req.Tools[0].ID == "" {
-				return nil, false
-			}
-			tools = n.Tools
-		}
-		for _, w := range tools {
-			if w.ID == "" {
-				return nil, false
-			}
-			in.Tools = append(in.Tools, dialect.Tool{ID: w.ID, CallID: w.CallID, Name: w.Name, Args: w.Args})
-		}
-		if len(in.Tools) == 0 {
-			return nil, false
-		}
-		return in, true
+		err = parseToolApproval(req, in)
+	default:
+		err = unusable("unknown request type")
 	}
-	return nil, false
+	if err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
+// parseAskUser fills in from an ask-user request.
+func parseAskUser(req hitlRequest, in *dialect.Interaction) error {
+	if req.ID == "" {
+		return unusable("ask-user request has no id")
+	}
+	in.Kind, in.RequestID = dialect.AskUser, req.ID
+	if n := req.Nested; n != nil {
+		switch {
+		case len(n.Tools) != 1 || n.Tools[0].Name != "ask_user":
+			return unusable("nested ask-user needs exactly one ask_user tool")
+		case n.Tools[0].ID == "":
+			return unusable("nested ask-user tool has no id")
+		}
+		in.RequestID = n.Tools[0].ID
+	}
+	switch {
+	case len(req.Questions) == 0:
+		return unusable("ask-user request has no questions")
+	case len(req.Questions) > maxQuestions:
+		return unusable(fmt.Sprintf("ask-user request has more than %d questions", maxQuestions))
+	}
+	for _, q := range req.Questions {
+		if len(q.Choices) > maxChoices {
+			return unusable(fmt.Sprintf("a question has more than %d choices", maxChoices))
+		}
+		in.Questions = append(in.Questions, dialect.Question{Text: q.Question, Choices: q.Choices, Multiple: q.Multiple})
+	}
+	return nil
+}
+
+// parseToolApproval fills in from a tool-approval request.
+func parseToolApproval(req hitlRequest, in *dialect.Interaction) error {
+	in.Kind = dialect.ToolApproval
+	tools := req.Tools
+	if n := req.Nested; n != nil {
+		if len(req.Tools) != 1 || req.Tools[0].ID == "" {
+			return unusable("nested tool approval needs exactly one outer tool with an id")
+		}
+		tools = n.Tools
+	}
+	if len(tools) == 0 {
+		return unusable("tool approval has no tools")
+	}
+	for _, w := range tools {
+		if w.ID == "" {
+			return unusable("tool approval has a tool without an id")
+		}
+		in.Tools = append(in.Tools, dialect.Tool{ID: w.ID, CallID: w.CallID, Name: w.Name, Args: w.Args})
+	}
+	return nil
 }
 
 // The response payloads are plain maps, as kagent's AttachHitlExtension stores them in

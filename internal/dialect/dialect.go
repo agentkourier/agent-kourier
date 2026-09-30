@@ -5,6 +5,7 @@ package dialect
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -43,6 +44,11 @@ type User struct {
 	Email string // empty when unknown
 }
 
+// ErrUnusablePause is wrapped by the error ParseInteraction returns for a task that is
+// paused on input but cannot be answered. The error text names the reason and never
+// repeats text the agent supplied.
+var ErrUnusablePause = errors.New("unusable pause")
+
 // Dialect is one backend protocol variant (spec 6.2).
 type Dialect interface {
 	// Endpoint is the URL of the agent's A2A service, on the backend's verifying front door.
@@ -55,9 +61,11 @@ type Dialect interface {
 	// Connect returns an A2A client for the agent that sends the Binding's identity to the
 	// backend's front door and to nowhere else.
 	Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds Credentials) (*a2aclient.Client, error)
-	// ParseInteraction returns the interaction a paused task waits on. It reports false for
-	// a task that is not paused on one, and for a payload it cannot use.
-	ParseInteraction(task a2a.Task) (*Interaction, bool)
+	// ParseInteraction returns the interaction a paused task waits on. It returns nil, nil
+	// when the task has no structured pause (free text only, where the dialect allows it),
+	// and an error wrapping ErrUnusablePause, naming the reason, when the task is paused
+	// but cannot be answered: the caller reports that in the thread and cancels the task.
+	ParseInteraction(task a2a.Task) (*Interaction, error)
 	// BuildResponse returns the message that answers in. It validates the answer itself
 	// (backends accept incomplete ones, or wedge on them) and returns an error, having
 	// built nothing, unless every question is answered or every tool decided.
