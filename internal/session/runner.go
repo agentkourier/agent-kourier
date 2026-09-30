@@ -32,6 +32,7 @@ type convo struct {
 	answers    chan *a2a.Message // answers to the paused task, for the parked runner to send
 	ttl        time.Duration     // the Binding's threadTTL, for end
 	parked     a2a.TaskID        // the task the runner waits on, while it waits for input
+	driving    a2a.TaskID        // the task the runner streams or follows, between named and ended
 	released   bool              // the pause ended, and the runner has not yet moved on
 	resume     chan struct{}     // tells the parked runner that the pause ended
 }
@@ -91,21 +92,25 @@ var ErrNotParked = errors.New("session: no pause of that task to end")
 // paused, so callers call it only for a pause.
 func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) error {
 	m.mu.Lock()
-	c, running := m.convos[key], m.convos[key] != nil
 	if m.closed {
 		m.mu.Unlock()
 		return ErrNotParked // the runners are gone, or going
 	}
-	if running {
-		defer m.mu.Unlock()
-		if taskID == "" || c.parked != taskID || c.released {
+	if c := m.convos[key]; c != nil {
+		switch {
+		case taskID == "" || c.released || c.driving == taskID: // a duplicate, or the task streams
+			m.mu.Unlock()
 			return ErrNotParked
+		case c.parked == taskID:
+			c.released = true
+			c.resume <- struct{}{} // one release per park, and the channel holds one: never blocks
+			m.mu.Unlock()
+			return nil
 		}
-		c.released = true
-		c.resume <- struct{}{} // one release per park, and the channel holds one: never blocks
-		return nil
 	}
 	m.mu.Unlock()
+	// No runner, or one that does not drive this task (a turn held behind a task recorded before a
+	// restart): clear the record if it is still the task's, and wake the queue.
 	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
 	if err != nil {
 		return err
@@ -253,6 +258,13 @@ func (c *convo) settle() {
 	c.tries, c.since, c.patient, c.notified, c.busyNoted, c.cancelFrom = 0, time.Time{}, false, false, false, time.Time{}
 }
 
+// drives records the task the runner is streaming or following, for endPause and the controls.
+func (m *Manager) drives(c *convo, id a2a.TaskID) {
+	m.mu.Lock()
+	c.driving = id
+	m.mu.Unlock()
+}
+
 // unpark forgets a pause the runner turned out not to be parked on, and any signal for it.
 func (m *Manager) unpark(c *convo) {
 	m.mu.Lock()
@@ -331,6 +343,9 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 		if out != paused { // the pause event may have parked the runner before the stream failed
 			m.unpark(c)
 		}
+		if out != blocked { // a lost stream is still followed: the task stays the one driven
+			m.drives(c, "")
+		}
 	}()
 	sctx := context.WithoutCancel(m.ctx)
 	h := func(agent.Event) {}
@@ -349,6 +364,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			t.taskID = ev.TaskID
+			m.drives(c, ev.TaskID)
 			if !named { // the agent has named the task: record it before anyone renders it
 				named = true
 				c.settle()
@@ -372,7 +388,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 				// The pause is rendered inside this handler, and whoever renders it may end it at
 				// once: the runner must already be parked on this task.
 				m.mu.Lock()
-				c.parked, c.paused = final.ID, t
+				c.parked, c.paused, c.driving = final.ID, t, "" // a pause is not a stream
 				m.mu.Unlock()
 			}
 		}
@@ -413,6 +429,7 @@ func (m *Manager) answer(c *convo, msg *a2a.Message) (outcome, error) {
 	c.parked, c.released, c.paused = "", false, nil
 	m.mu.Unlock()
 	t.answer, t.nid, t.taskID, t.follow = true, msg.ID, msg.TaskID, false
+	m.drives(c, msg.TaskID)
 	if msg.ContextID == "" {
 		msg.ContextID = t.sess.ContextID
 	}
@@ -483,6 +500,7 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 			t.c.since = m.cfg.Now()
 		}
 		t.c.follow, t.taskID, t.follow = t, sl.TaskID, true
+		m.drives(t.c, sl.TaskID) // it is followed again: still the task driven
 		t.c.tries++
 		return blocked, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
 	}
@@ -512,6 +530,7 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 // is picked up again.
 func (m *Manager) resume(c *convo) (outcome, error) {
 	t := c.follow
+	m.drives(c, t.taskID)
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
 	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, a2a.ErrTaskNotFound):
@@ -569,23 +588,24 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	_, err := t.b.Agent.CancelTask(m.ctx, t.taskID)
 	t.op = audit.OpCancel
 	defer func() { t.op = "" }()
+	kind := classifyCancel(err)
 	switch {
-	case err == nil:
+	case kind == cancelDone:
 		m.audit(t, t.call(nil))
 		m.notice(t, NoticeWedged, "")
 		c.follow = nil
 		c.settle()
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, c.ttl)
-	case errors.Is(err, a2a.ErrTaskNotFound):
+	case kind == cancelGone:
 		m.audit(t, t.call(err))
 		return m.gone(t)
-	case errors.Is(err, a2a.ErrTaskNotCancelable): // it ended in the meantime: show how
+	case kind == cancelEnded: // it ended in the meantime: show how
 		m.audit(t, t.call(err))
 		c.cancelFrom = time.Time{}
 		return m.drive(t, func(h agent.Handler) error { return t.b.Agent.Follow(m.ctx, t.taskID, h) })
-	case errors.Is(err, agent.ErrCredentialsRejected):
+	case kind == cancelCredentials:
 		return m.lost(t, err) // the identity Source writes the row
-	case errors.Is(err, agent.ErrForbidden), m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
+	case kind == cancelForbidden, m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
 		m.audit(t, t.call(err))
 		c.follow = nil
 		return m.fail(t, "the wedged task could not be cancelled; stop it from the thread, or restart courier to reconcile it", err)
@@ -689,23 +709,32 @@ func (t *tstate) call(err error) audit.Call {
 // writes the audit row. Its own failure is logged: it is where an operator learns the token
 // cannot be read.
 func (m *Manager) rejected(t *tstate, err error) {
-	if t.b.Rejected == nil { // no identity Source to write the row: write it here, never drop it
-		m.audit(t, t.call(err))
+	m.reject(m.ctx, t.key, t.b, t.actor(), t.call(err))
+}
+
+// reject passes a refused credential to the identity Source, which writes the row, or, with no
+// Source, writes it here: never dropped. The Source's own failure is logged.
+func (m *Manager) reject(ctx context.Context, key Key, b Backend, actor audit.Actor, call audit.Call) {
+	if b.Rejected == nil {
+		m.auditCall(ctx, key, actor, call)
 		return
 	}
-	if rerr := t.b.Rejected(context.WithoutCancel(m.ctx), t.actor(), t.call(err)); rerr != nil {
-		m.cfg.Logger.Error("credential rejection bookkeeping", "key", t.key, "error", rerr)
+	if rerr := b.Rejected(context.WithoutCancel(ctx), actor, call); rerr != nil {
+		m.cfg.Logger.Error("credential rejection bookkeeping", "key", key, "error", rerr)
 	}
 }
 
 // audit records a call outcome the manager alone knows about. A failed write is logged, and
 // never blocks the turn (spec 8.6 step 7).
-func (m *Manager) audit(t *tstate, call audit.Call) {
+func (m *Manager) audit(t *tstate, call audit.Call) { m.auditCall(m.ctx, t.key, t.actor(), call) }
+
+// auditCall writes a call outcome. A failed write is logged, and never blocks anything (8.6 step 7).
+func (m *Manager) auditCall(ctx context.Context, key Key, actor audit.Actor, call audit.Call) {
 	if m.cfg.Audit == nil {
 		return
 	}
-	if aerr := m.cfg.Audit.AgentCall(context.WithoutCancel(m.ctx), t.actor(), call); aerr != nil {
-		m.cfg.Logger.Error("audit write failed", "key", t.key, "error", aerr)
+	if aerr := m.cfg.Audit.AgentCall(context.WithoutCancel(ctx), actor, call); aerr != nil {
+		m.cfg.Logger.Error("audit write failed", "key", key, "error", aerr)
 	}
 }
 

@@ -45,11 +45,11 @@ func TestStopCancelsARunningTaskAndTheQueueGoesOn(t *testing.T) {
 		}
 	}
 	<-mid
-	if did, err := f.m.Stop(t.Context(), key, "U9"); err != nil || !did {
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 		t.Fatalf("Stop = %v, %v; want it to stop the task", did, err)
 	}
-	<-sink.finals // turn 1, cancelled
-	<-sink.finals // turn 2
+	waitFinal(t, sink) // turn 1, cancelled
+	waitFinal(t, sink) // turn 2
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.audits) != 1 || f.audits[0].Op != audit.OpCancel || f.audits[0].TaskID != "t1" || f.actors[0].User != "U9" || f.actors[0].Binding != "ns/b1" {
@@ -71,9 +71,9 @@ func TestStopEndsAPause(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	<-sink.finals
+	waitFinal(t, sink)
 	f.nextSent()
-	if did, err := f.m.Stop(t.Context(), key, "U9"); err != nil || !did {
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
 		t.Fatalf("Stop = %v, %v; want it to stop the task", did, err)
 	}
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
@@ -94,13 +94,13 @@ func TestStopWithNoActiveTask(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	<-sink.finals
+	waitFinal(t, sink)
 	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
-	if did, err := f.m.Stop(t.Context(), key, "U9"); err != nil || did || len(f.cancelled()) != 0 {
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || did || len(f.cancelled()) != 0 {
 		t.Errorf("Stop = %v, %v, cancelled %v; want stopped=false and no cancel", did, err, f.cancelled())
 	}
 	other := Key{Connection: "slack", Channel: "C9", ThreadTS: "1.1"}
-	if did, err := f.m.Stop(t.Context(), other, "U9"); err != nil || did {
+	if did, err := f.m.Stop(t.Context(), other, "t1", "U9"); err != nil || did {
 		t.Errorf("Stop of a thread nobody owns = %v, %v; want stopped=false", did, err)
 	}
 }
@@ -117,7 +117,7 @@ func TestCancelWorksAfterARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
-	if err := f.m.Cancel(t.Context(), key, "interaction timed out"); err != nil {
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); err != nil {
 		t.Fatal(err)
 	}
 	if id, want := f.nextSent(), inbound("1").MessageID; id != want {
@@ -128,9 +128,9 @@ func TestCancelWorksAfterARestart(t *testing.T) {
 		t.Errorf("audits %+v by %+v; want the cancel of t1, by no person", f.audits, f.actors)
 	}
 	f.amu.Unlock()
-	<-sink.finals
+	waitFinal(t, sink)
 	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
-	if err := f.m.Cancel(t.Context(), key, "again"); !errors.Is(err, ErrNotPaused) {
+	if err := f.m.Cancel(t.Context(), key, "t1", "again"); !errors.Is(err, ErrNotPaused) {
 		t.Errorf("Cancel with no task = %v; want ErrNotPaused", err)
 	}
 }
@@ -149,7 +149,7 @@ func pausedFirst(t *testing.T, answer func(*a2a.Message, agent.Handler) error) (
 			t.Fatal(err)
 		}
 	}
-	<-sink.finals
+	waitFinal(t, sink)
 	f.nextSent()
 	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
 	return f, sink
@@ -178,7 +178,7 @@ func TestAnswerResumesAPausedTask(t *testing.T) {
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-2")); !errors.Is(err, ErrNotPaused) {
 		t.Errorf("a second answer = %v; want ErrNotPaused", err)
 	}
-	<-sink.finals // the answered task completes
+	waitFinal(t, sink) // the answered task completes
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Errorf("sent %s after the answer; want the held reply %s", id, want)
 	}
@@ -285,6 +285,125 @@ func TestAnswerThatCannotBeSentLeavesThePauseOpen(t *testing.T) {
 			defer f.amu.Unlock()
 			if errors.Is(cause, agent.ErrCredentialsRejected) != (len(f.rejected) >= 1) {
 				t.Errorf("Rejected calls = %+v for %v", f.rejected, cause)
+			}
+		})
+	}
+}
+
+// A control names the task it was rendered for. One that arrives late, for a task that has
+// ended, must leave the newer task alone: a stale timeout or an old button cancels nothing.
+func TestStaleControlsLeaveANewerTaskAlone(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n < 2 {
+			return turn(h, n, a2a.TaskStateInputRequired) // t1, then t2, each paused
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFinal(t, sink)
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+		t.Fatalf("Stop(t1) = %v, %v", did, err)
+	}
+	waitFinal(t, sink) // turn 2 pauses on t2
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); !errors.Is(err, ErrNotPaused) {
+		t.Errorf("late Cancel of t1 = %v; want ErrNotPaused", err)
+	}
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || did {
+		t.Errorf("late Stop of t1 = %v, %v; want stopped=false", did, err)
+	}
+	if got, recorded := f.cancelled(), f.taskID(); len(got) != 1 || got[0] != "t1" || recorded != "t2" {
+		t.Errorf("cancelled %v, recorded %q; want only t1 cancelled, and t2 still recorded", got, recorded)
+	}
+}
+
+// A runner that exists but is not driving the task (a turn held behind a task recorded before a
+// restart, here inside its lookup) does not end the task by itself. Stop cancels it, clears the
+// record if it is still the recorded one, and wakes the runner, so the held turn goes out.
+func TestStopOfATaskNoRunnerDrivesClearsItAndWakesTheQueue(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	f.seed("ns/b1", 0) // task t1 recorded, in context c1
+	inLookup, gate := make(chan struct{}), make(chan struct{})
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		inLookup <- struct{}{}
+		<-gate
+		return nil, nil, nil
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-inLookup // the runner exists, and drives nothing
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+		t.Fatalf("Stop = %v, %v; want it to stop the task", did, err)
+	}
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) { return nil, nil, nil }
+	close(gate)
+	if id, want := f.nextSent(), inbound("1").MessageID; id != want {
+		t.Errorf("sent %s; want the held turn %s", id, want)
+	}
+}
+
+// A cancel that fails is classified the way a wedged task's is: a task that ended meanwhile is
+// as good as cancelled; a task the agent no longer knows resets the session; a refused
+// credential goes to the identity Source; a refused identity is audited; a failure that may pass
+// is retried a few times. Every answer is audited once, and only the ones that end the task end
+// the pause.
+func TestFailedStopIsClassified(t *testing.T) {
+	ended := func(id a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
+	}
+	for _, tc := range []struct {
+		name     string
+		cause    error
+		wantStop bool // Stop reports the task stopped
+		wantErr  error
+		notice   NoticeKind // besides the stop's own
+		rows     int        // audit rows the manager writes
+		sources  int        // Rejected calls
+		attempts int
+	}{
+		{"it ended meanwhile", fmt.Errorf("cancel: %w", a2a.ErrTaskNotCancelable), true, nil, NoticeStopped, 1, 0, 1},
+		{"the agent no longer knows it", a2a.NewError(a2a.ErrTaskNotFound, "gone"), true, nil, NoticeSessionGone, 1, 0, 1},
+		{"credentials refused", fmt.Errorf("%w: rejected", agent.ErrCredentialsRejected), false, agent.ErrCredentialsRejected, "", 0, 1, 1},
+		{"identity refused", fmt.Errorf("send: %w", agent.ErrForbidden), false, agent.ErrForbidden, "", 1, 0, 1},
+		{"it may pass, and does not", errors.New("agent unreachable"), false, nil, "", 1, 0, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sink := pausedFirst(t, nil)
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			f.agent.mu.Lock()
+			f.agent.get = ended
+			f.agent.cancelErr = func(int) error { return tc.cause }
+			f.agent.mu.Unlock()
+			did, err := f.m.Stop(t.Context(), key, "t1", "U9")
+			if did != tc.wantStop || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) || (tc.wantErr == nil && tc.name != "it may pass, and does not" && err != nil) {
+				t.Errorf("Stop = %v, %v; want stopped=%v and %v", did, err, tc.wantStop, tc.wantErr)
+			}
+			if tc.name == "it may pass, and does not" && err == nil {
+				t.Error("Stop after a cancel that never works = nil; want an error")
+			}
+			if got := len(f.cancelled()); got != tc.attempts {
+				t.Errorf("%d cancel attempts; want %d", got, tc.attempts)
+			}
+			if tc.notice != "" && len(sink.noticesOf(tc.notice)) != 1 {
+				t.Errorf("%s notices = %+v; want one", tc.notice, sink.noticesOf(tc.notice))
+			}
+			f.amu.Lock()
+			rows, sources := len(f.audits), len(f.rejected)
+			f.amu.Unlock()
+			if rows != tc.rows || sources != tc.sources {
+				t.Errorf("%d audit rows, %d Rejected calls; want %d and %d", rows, sources, tc.rows, tc.sources)
+			}
+			if tc.wantStop { // the pause ended: the held reply goes out
+				if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+					t.Errorf("sent %s after the stop; want the held reply %s", id, want)
+				}
 			}
 		})
 	}

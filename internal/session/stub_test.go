@@ -227,11 +227,12 @@ func TestStubStopCancelsTheRunningTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	task1 := a2a.TaskID(e.taskID())
 	e.stub.Next(stubagent.Text("second"))
 	if _, err := e.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	if did, err := e.m.Stop(t.Context(), key, "U9"); err != nil || !did {
+	if did, err := e.m.Stop(t.Context(), key, task1, "U9"); err != nil || !did {
 		t.Fatalf("Stop = %v, %v; want it to stop the task", did, err)
 	}
 	if first := e.sink.finalTask(t, 1); first.Status.State != a2a.TaskStateCanceled {
