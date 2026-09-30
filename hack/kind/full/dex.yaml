@@ -1,6 +1,8 @@
 # Dex as the OIDC issuer for kagent's oauth2-proxy. Dex has no client_credentials grant, so
-# the test Binding identity is a static user that signs in with the password grant. All
-# secrets here are fake test values.
+# the test Binding identity is a static user that signs in with the password grant. Two more
+# static users serve the WP-03 identity spike: a second person, and a service-shaped identity
+# (Dex cannot mint a service token, so its email claim only names one). All secrets here are
+# fake test values.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -24,6 +26,14 @@ data:
       - email: binding-test@example.test
         username: binding-test
         userID: binding-test-0001
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # "password"
+      - email: identity-b@example.test
+        username: identity-b
+        userID: identity-b-0002
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # "password"
+      - email: svc-sre-alerts@example.test
+        username: svc-sre-alerts
+        userID: svc-sre-alerts-0003
         hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # "password"
     staticClients:
       - id: kagent-ui
