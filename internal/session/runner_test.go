@@ -1,9 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -139,11 +142,14 @@ func TestTurnAttribution(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
 	f.attr = (&kagentv1.Dialect{}).Attribute
-	f.m.cfg.Users = fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}}
+	var logs bytes.Buffer // written by the runner before it sends, read after the turn ended
+	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	f.m.cfg.Users = fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}, "U3": {Name: "Eve"}}
 	for i, tc := range []struct{ user, want string }{
 		{"U1", "[Slack: Ada (U1) <ada@example.com>]\nhello"},
-		{"U2", "[Slack: U2]\nhello"}, // the platform cannot resolve U2
-		{"", "hello"},                // an alert's prompt
+		{"U2", "[Slack: U2]\nhello"},       // the platform cannot resolve U2
+		{"U3", "[Slack: Eve (U3)]\nhello"}, // the platform's answer names no ID: the author's stays
+		{"", "hello"},                      // an alert's prompt
 	} {
 		in := inbound(fmt.Sprint(i))
 		in.UserID = tc.user
@@ -155,8 +161,11 @@ func TestTurnAttribution(t *testing.T) {
 		msg := f.agent.msgs[i]
 		f.agent.mu.Unlock()
 		if len(msg.Parts) != 1 || msg.Parts[0].Text() != tc.want {
-			t.Errorf("turn %d = %d parts, %q; want one part %q", i, len(msg.Parts), msg.Parts[0].Text(), tc.want)
+			t.Errorf("turn %d = %+v; want one part %q", i, msg.Parts, tc.want)
 		}
+	}
+	if got := logs.String(); !strings.Contains(got, "U2") || !strings.Contains(got, "no such user") {
+		t.Errorf("log = %q; want the failed resolution of U2 and its cause", got)
 	}
 }
 

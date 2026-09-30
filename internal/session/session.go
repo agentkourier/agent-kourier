@@ -43,7 +43,8 @@ type Backend struct {
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.
 	Agent AgentAPI
-	// Attribute records the acting user on a turn: the dialect's Attribute.
+	// Attribute records the acting user on a turn: the dialect's Attribute. Nil means a turn
+	// carries no attribution.
 	Attribute func(msg *a2a.Message, actor dialect.User)
 }
 

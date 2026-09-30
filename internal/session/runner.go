@@ -143,8 +143,12 @@ func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Mes
 	}
 	user := dialect.User{ID: r.UserID}
 	if m.cfg.Users != nil {
-		if u, err := m.cfg.Users.ResolveUser(m.ctx, r.UserID); err == nil {
+		switch u, err := m.cfg.Users.ResolveUser(m.ctx, r.UserID); {
+		case err != nil:
+			m.cfg.Logger.Warn("resolve user for attribution, using the ID alone", "user", r.UserID, "error", err)
+		default:
 			user = u
+			user.ID = r.UserID // the platform's answer never renames the author
 		}
 	}
 	b.Attribute(msg, user)

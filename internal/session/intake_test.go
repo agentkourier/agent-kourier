@@ -267,6 +267,7 @@ func TestSubmitRefusesWhatCannotBeServed(t *testing.T) {
 		want   error
 	}{
 		"no message id":      {func(in *Inbound) { in.MessageID = "" }, store.ErrInvalid},
+		"the system user":    {func(in *Inbound) { in.UserID = SystemUser }, store.ErrInvalid}, // only intake files a turn under it
 		"no text":            {func(in *Inbound) { in.Text = "" }, store.ErrInvalid},
 		"create, no Binding": {func(in *Inbound) { in.Binding = "" }, store.ErrInvalid},
 		"unknown Binding":    {func(in *Inbound) { in.Binding = "ns/gone" }, ErrUnknownBinding},
@@ -335,7 +336,8 @@ func TestSubmitWakesOutsideTheIntakeLock(t *testing.T) {
 			<-release
 		}
 	}
-	go func() { _, _ = f.submit(inbound("1")) }()
+	firstDone := make(chan struct{})
+	go func() { _, _ = f.submit(inbound("1")); close(firstDone) }()
 	<-blocked
 	done := make(chan error, 1)
 	go func() { _, err := f.submit(inbound("2")); done <- err }()
@@ -348,6 +350,7 @@ func TestSubmitWakesOutsideTheIntakeLock(t *testing.T) {
 		t.Error("a second Submit waited for the first one's wake")
 	}
 	close(release)
+	<-firstDone // the first Submit does not outlive the test
 }
 
 // Two Submits that both find no session must not both make one: the second would replace a

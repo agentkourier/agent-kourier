@@ -16,7 +16,10 @@ const SystemUser = "courier:system"
 // Disposition says what Submit did with a turn.
 type Disposition string
 
-// The dispositions of a Submit.
+// The dispositions of a Submit. Created and Accepted both mean the turn is queued. A
+// redelivery after a partial failure finds the session the first attempt made, and the
+// mention/message pair may split the same way, so a turn that created the session can be
+// reported as Accepted: never hang a one-time side effect on Created.
 const (
 	Created  Disposition = "created"   // a new session was made and the turn queued on it
 	Accepted Disposition = "accepted"  // the session is live and the turn queued on it
@@ -51,8 +54,8 @@ const readAll = 100 * 365 * 24 * time.Hour
 // event repeats what is left. It does not wait for the agent. An expired session is
 // returned as Expired and left as it was.
 func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
-	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.ThreadTS == "" || in.MessageID == "" || in.MessageTS == "" || in.Text == "" || (in.Create && in.Binding == "") {
-		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageTS and Text are required, and a Binding to create: %w", in.MessageID, store.ErrInvalid)
+	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.ThreadTS == "" || in.MessageID == "" || in.MessageTS == "" || in.Text == "" || in.UserID == SystemUser || (in.Create && in.Binding == "") {
+		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageTS and Text are required, and a Binding to create; UserID is never %q: %w", in.MessageID, SystemUser, store.ErrInvalid)
 	}
 	res, err := m.queue(ctx, in)
 	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
