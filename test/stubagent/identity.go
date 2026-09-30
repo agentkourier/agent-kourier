@@ -16,11 +16,6 @@ import (
 // and in insecure mode the user comes from X-User-Id, which the stub does not read.
 func WithRequiredAuth() Option { return func(s *Server) { s.requireAuth = true } }
 
-// bearer returns the bearer token of a request.
-func bearer(r *http.Request) (string, bool) {
-	return strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-}
-
 // identify returns the identity a request acts as, which decides whose sessions it may use, and
 // whether the request may proceed at all.
 //
@@ -28,13 +23,18 @@ func bearer(r *http.Request) (string, bool) {
 // bearer token, and does not verify the token: an unsigned one with the right claim is the
 // owner (WP-02, measured; identity/). UNCONFIRMED: a token without an email is owned by its
 // sub, apart from any email; that this is why kagent refused a sub-only token is inferred from
-// the refusal, not observed. A bearer token that is not a JWT, or has neither claim, is
-// refused with HTTP 401, and so is a request with no token under WithRequiredAuth; without it
-// that is the anonymous owner, "".
+// the refusal, not observed. Only an absent Authorization header is anonymous, the owner "",
+// and under WithRequiredAuth not even that. Any other header, even an empty one, must be one
+// line of a Bearer credential (the scheme is case-insensitive, RFC 7235) holding a JWT with an
+// email or a sub, or the request is refused with HTTP 401.
 func identify(r *http.Request, requireAuth bool) (owner string, ok bool) {
-	token, has := bearer(r)
-	if !has {
+	lines := r.Header.Values("Authorization")
+	if len(lines) == 0 {
 		return "", !requireAuth
+	}
+	scheme, token, found := strings.Cut(lines[0], " ")
+	if len(lines) != 1 || !found || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {

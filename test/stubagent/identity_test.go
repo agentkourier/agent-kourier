@@ -166,6 +166,45 @@ func TestUnreadableTokenIsUnauthorized(t *testing.T) {
 	}
 }
 
+// TestOnlyAnAbsentAuthorizationHeaderIsAnonymous: any Authorization header at all must be a
+// well-formed Bearer credential (the scheme is case-insensitive, RFC 7235) with a readable JWT
+// that has an email or a sub, or the request is refused with HTTP 401, WithRequiredAuth or not.
+// UNCONFIRMED: kagent's answer for these; only the missing token was seen (WP-02, curl).
+func TestOnlyAnAbsentAuthorizationHeaderIsAnonymous(t *testing.T) {
+	jwt := unsigned(t, obj{"email": "a@example.test"})
+	for _, tc := range []struct {
+		name  string
+		value []string // the Authorization header lines; none means absent
+		ok    bool
+	}{
+		{"absent", nil, true},
+		{"bearer", []string{"Bearer " + jwt}, true},
+		{"lowercase scheme", []string{"bearer " + jwt}, true},
+		{"uppercase scheme", []string{"BEARER " + jwt}, true},
+		{"empty value", []string{""}, false},
+		{"scheme alone", []string{"Bearer"}, false},
+		{"scheme and a space", []string{"Bearer "}, false},
+		{"another scheme", []string{"Basic YTpi"}, false},
+		{"another scheme with a JWT", []string{"Token " + jwt}, false},
+		{"the JWT alone", []string{jwt}, false},
+		{"two lines", []string{"Bearer " + jwt, "Bearer " + jwt}, false},
+	} {
+		s, agent, _ := newAgent(t)
+		agent.Next()
+		hdr := http.Header{"Authorization": tc.value}
+		if tc.value == nil {
+			hdr = http.Header{}
+		}
+
+		rpc, _ := do(t, http.MethodPost, s.AgentURL("kagent", "test"), obj{"jsonrpc": "2.0", "id": "1", "method": "GetTask"}, hdr)
+		card, _ := do(t, http.MethodGet, s.AgentURL("kagent", "test")+"/.well-known/agent-card.json", nil, hdr)
+
+		if ok := rpc != http.StatusUnauthorized && card == http.StatusOK; ok != tc.ok {
+			t.Errorf("%s: RPC HTTP %d, card HTTP %d; want the request accepted = %v", tc.name, rpc, card, tc.ok)
+		}
+	}
+}
+
 func TestRequiredAuthRefusesRequestsWithoutABearerToken(t *testing.T) {
 	s, agent, c := newAgent(t, stubagent.WithRequiredAuth())
 	agent.Next()

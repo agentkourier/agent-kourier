@@ -109,6 +109,20 @@ func (c *client) call(method string, params any) (int, obj) {
 	return st.status, evs[0]
 }
 
+// first sends a request and returns only the first envelope, then drops the connection. It is
+// for answers that must be a single error event: a regression that answers with a live stream
+// held open by the turn fails the test at once instead of hanging it.
+func (c *client) first(method string, params any) obj {
+	c.t.Helper()
+	st := c.open(method, params)
+	defer func() { _ = st.resp.Body.Close() }()
+	ev, ok := st.next()
+	if !ok {
+		c.t.Fatalf("%s answered with nothing", method)
+	}
+	return ev
+}
+
 // send is a SendStreamingMessage call that must answer with a stream.
 func (c *client) send(params obj) []obj {
 	c.t.Helper()

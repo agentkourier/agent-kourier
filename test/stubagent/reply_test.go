@@ -219,19 +219,43 @@ func TestReplyToTasksThatCannotTakeOne(t *testing.T) {
 	}
 }
 
-func TestReplayOfAnAnswerRunsNoSecondTurn(t *testing.T) {
-	_, agent, c := newAgent(t)
+// TestReplayOfAnAnswerIsRefused: answers carry a contextId, and WP-03 measured that a replay
+// carrying one is not deduplicated (oidc-replay, spec 8.2), so a replayed answer is refused,
+// not joined: -32004 while the task works, and the not-waiting -32004 once it has ended. A
+// blind resend of a tool approval must never run the tool twice.
+// UNCONFIRMED: "replay of an answer" is on the measurement backlog.
+func TestReplayOfAnAnswerIsRefused(t *testing.T) {
+	s, agent, c := newAgent(t)
 	calls := 0
-	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step { calls++; return []stubagent.Step{stubagent.Text("done")} }))
+	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step {
+		calls++
+		return []stubagent.Step{stubagent.Text("a"), stubagent.Hold("go"), stubagent.Text("b")}
+	}))
 	c = withHITL(c)
 	_, taskID, ctxID, request := paused(t, c)
 	answer := reply("m2", "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"}))
-	c.send(answer)
+	st := c.open("SendStreamingMessage", answer)
+	for range 4 { // WORKING, the echo, WORKING, the answer's function_response
+		if _, ok := st.next(); !ok {
+			t.Fatal("the answer's stream ended early")
+		}
+	}
+	_ = st.resp.Body.Close() // the turn runs on, held at the gate
 
-	replay := c.send(answer)
+	running := c.first("SendStreamingMessage", answer)
+	s.Release("go")
+	if err := s.WaitTurn(t.Context(), taskID); err != nil {
+		t.Fatalf("WaitTurn: %v", err)
+	}
+	ended := c.first("SendStreamingMessage", answer)
 
-	if got, want := shape(replay), "task:COMPLETED"; got != want || calls != 1 {
-		t.Errorf("replay of the answer: %s, script called %d times; want %s and once", got, calls, want)
+	for label, got := range map[string]obj{"while the task works": running, "after it ended": ended} {
+		if dig(got, "error", "code") != float64(-32004) {
+			t.Errorf("replay of the answer %s = %v, want -32004", label, got)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("the script ran %d times, want once", calls)
 	}
 }
 

@@ -262,9 +262,11 @@ func (a *Agent) check(id string, m obj, owner string) decision {
 	// WP-02 measured that (session, inflight). A replay that carries a contextId is a new
 	// message to kagent: busy while the task runs, a second run of the turn after it ended
 	// (measured by WP-03, oidc-replay; spec 8.2).
-	// UNCONFIRMED: a replay of a reply to a task, which carries a taskId, is deduplicated
-	// whatever else it carries; that is not measured.
-	if prior := a.messages[id]; prior != nil && (ctxID == "" || taskID != "") {
+	// A replay of an answer to a paused task carries a contextId too, so it is not deduplicated
+	// either: it goes through checkReply, which refuses it (busy while the task works, not
+	// waiting once it has ended), and a blind resend cannot run a tool twice.
+	// UNCONFIRMED: a replay of an answer is not measured; it is on the measurement backlog.
+	if prior := a.messages[id]; prior != nil && ctxID == "" {
 		if prior.sess.owner != owner {
 			return decision{err: deniedError()}
 		}

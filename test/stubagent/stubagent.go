@@ -19,11 +19,13 @@
 // result.task) and its ignoring of params.configuration, a contextId that names no session
 // opening one, the errors for cancelling or replying to a task that has ended (-32002 and
 // -32004), a reply to a task that is not waiting, several tools in one approval pause, a new
-// task in a session with a paused one, and the 401 of WithRequiredAuth. Identity adds more:
+// task in a session with a paused one, a replay of an answer (refused, not joined, because it
+// carries a contextId), and the 401 of WithRequiredAuth. Identity adds more:
 // only a send and GetTask were measured refused for another identity, so the refusal of a
 // HITL reply, a replay, SubscribeToTask and CancelTask is a guess; so are a sub-only token
 // owning its session by the sub, the owner check running before the busy and wedged checks,
-// the 401 for a bearer token with neither an email nor a sub, and an anonymous owner, which
+// the 401 for an Authorization header that is not a well-formed Bearer credential with an email
+// or a sub (only an absent header is anonymous), and an anonymous owner, which
 // matches no real kagent mode. The envelope errors (-32600, -32601, -32602, -32700) follow
 // a2a-go v2.6.0, not kagent, which vendors a2a-go v2.5.0.
 //
