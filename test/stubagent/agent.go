@@ -31,7 +31,8 @@ func (a *Agent) Next(steps ...Step) {
 }
 
 // Reply sets the script for messages that find no queued turn: f gets the message's text and
-// returns the steps of its turn. It suits an agent whose answer depends on the prompt.
+// returns the steps of its turn. It suits an agent whose answer depends on the prompt. f runs
+// under the server's lock and must not call the Server.
 func (a *Agent) Reply(f func(prompt string) []Step) {
 	a.s.mu.Lock()
 	defer a.s.mu.Unlock()
@@ -213,6 +214,7 @@ func (a *Agent) resume(id, taskID string, m obj, owner string) (*stream, *rpcErr
 }
 
 // busy reports whether a task of the session is working. kagent allows one at a time.
+// UNCONFIRMED: a task that is INPUT_REQUIRED does not make its session busy.
 func (a *Agent) busy(sess *session) bool {
 	for _, t := range a.tasks {
 		if t.sess == sess && t.state == working {

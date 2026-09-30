@@ -10,6 +10,7 @@ import (
 // WithRequiredAuth makes the stub answer HTTP 401 to a request with no bearer token, card
 // included, as kagent in OIDC mode does. The default accepts anonymous requests, which all
 // share one owner.
+// UNCONFIRMED: the card's 401 was seen with curl in WP-02, and there is no fixture.
 func WithRequiredAuth() Option { return func(s *Server) { s.requireAuth = true } }
 
 // bearer returns the bearer token of a request.

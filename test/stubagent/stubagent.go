@@ -5,9 +5,21 @@
 //
 // What it reproduces was measured against kagent by the WP-02 spike; the recorded exchanges
 // are in test/fixtures/kagent/. Tests do not replay them. Each test scripts the agent's next
-// turns instead, for example agent.Next(stubagent.Text("tick 1 ", "tick 2 ")).
+// turns instead, with Agent.Next or Agent.Reply and the steps Text, Tool, Hold, Ask and
+// RequestApproval, for example agent.Next(stubagent.Text("tick 1 ", "tick 2 ")). The tests of
+// this package compare what the stub sends with the fixtures, event by event.
+//
+// The functions that script a turn (Reply, and the then of Ask and RequestApproval) run under
+// the server's lock, so they must not call the Server.
 //
 // Behavior that no fixture shows is guessed, and its comment carries the tag UNCONFIRMED:.
+// Those items are the SendMessage result (a task under result.task), a contextId that names
+// no session opening one, the errors for cancelling or replying to a task that has ended
+// (-32002 and -32004), a reply to a task that is not waiting, several tools in one approval
+// pause, a new task in a session with a paused one, and the 401 of WithRequiredAuth.
+//
+// Command test/stubagent/cmd/stubagent serves the agents of SpikeAgents so that the WP-02
+// spike can run against the stub.
 package stubagent
 
 import (
