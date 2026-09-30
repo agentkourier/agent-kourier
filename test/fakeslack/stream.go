@@ -57,6 +57,7 @@ func (s *Server) startStream(form url.Values) (response, string) {
 	if code := s.addLocked(channel, m); code != "" {
 		return nil, code
 	}
+	s.queueOwnLocked(channel, nil, m)
 	return response{"channel": channel, "ts": m.TS}, ""
 }
 
@@ -111,6 +112,7 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 		if runes(m.Text)+runes(text) > maxMessageText {
 			return nil, "msg_too_long"
 		}
+		prev := m.clone()
 		m.Text += text
 		m.Chunks = append(m.Chunks, chunks...)
 		if !stop {
@@ -123,6 +125,7 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 		if meta != nil {
 			m.Metadata = meta
 		}
+		s.queueOwnLocked(channel, &prev, m)
 		echo := m.clone()
 		echo.Metadata = nil // as for chat.postMessage
 		return response{"channel": channel, "ts": ts, "message": echo}, ""

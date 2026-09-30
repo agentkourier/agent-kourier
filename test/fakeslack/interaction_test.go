@@ -143,7 +143,7 @@ func TestInteractiveBlockWithoutABlockIDCannotBePressed(t *testing.T) {
 // slack-go decodes a missing value field and a null one to the same zero value.
 func TestUnansweredInputsCarryTheirValueFieldOnTheWire(t *testing.T) {
 	leakCheck(t)
-	fake := fakeslack.New()
+	fake := fakeslack.New(fakeslack.WithoutOwnPostEvents()) // so the next envelope is the press
 	t.Cleanup(fake.Close)
 	ws := dial(t, fake)
 	if _, _, err := ws.ReadMessage(); err != nil { // hello

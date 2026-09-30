@@ -36,6 +36,7 @@ func (s *Server) postMessage(form url.Values) (response, string) {
 	if code := s.addLocked(channel, m); code != "" {
 		return nil, code
 	}
+	s.queueOwnLocked(channel, nil, m)
 	echo := m.clone()
 	echo.Metadata = nil
 	return response{"channel": channel, "ts": m.TS, "message": echo}, ""

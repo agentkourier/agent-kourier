@@ -30,6 +30,12 @@
 //     message getting no app_mention; the channel_type of a channel being
 //     "channel" unless SetChannelType says otherwise ("group" for private
 //     ones); and no message events for the bot's own posts, which Slack sends.
+//   - Events for the bot's own posts (ownevents.go), on by default: a message
+//     event with no subtype, and with bot_id and app_id, for each bot post;
+//     blocks being included and metadata not; a hidden message_changed event
+//     with its own ts for each chat.update; for streaming, a message event at
+//     startStream, none at appendStream and a message_changed at stopStream;
+//     and no message_changed for a thread parent that gains a reply.
 //   - Interactions (interaction.go): Submit answering an inline ask-user with a
 //     block_actions press that carries state.values, not a view_submission
 //     (the fake has no views); the payload's fields, which are the ones courier
@@ -104,11 +110,12 @@ type Server struct {
 	srv *httptest.Server // nil when used only as a handler
 	now func() time.Time
 
-	pingEvery time.Duration
-	bot       botIdentity // set by options, read-only after construction
-	team      teamIdentity
-	sock      sockets
-	control   http.Handler // the /_control/ routes
+	pingEvery   time.Duration
+	bot         botIdentity // set by options, read-only after construction
+	noOwnEvents bool        // set by WithoutOwnPostEvents, read-only after construction
+	team        teamIdentity
+	sock        sockets
+	control     http.Handler // the /_control/ routes
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
@@ -119,6 +126,7 @@ type Server struct {
 
 	channelTypes map[string]string      // set by SetChannelType, guarded by mu
 	ephemerals   map[string][]Ephemeral // per channel, in order, guarded by mu
+	ownPending   []ownEvent             // events for the bot's own posts, waiting for flushOwn; guarded by mu
 }
 
 // Option configures a Server.
@@ -217,6 +225,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, code := s.dispatch(r)
+	s.flushOwn()
 	if code != "" {
 		out = response{"ok": false, "error": code}
 	} else {

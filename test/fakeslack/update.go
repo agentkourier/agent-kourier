@@ -47,6 +47,7 @@ func (s *Server) updateMessage(form url.Values) (response, string) {
 		if m.Streaming {
 			return nil, "cant_update_message"
 		}
+		prev := m.clone()
 		if form.Get("text") != "" {
 			m.Text = form.Get("text")
 		}
@@ -57,6 +58,7 @@ func (s *Server) updateMessage(form url.Values) (response, string) {
 			m.Metadata = meta
 		}
 		m.Edited = &Edited{User: s.bot.user, TS: s.nextTSLocked()}
+		s.queueOwnLocked(channel, &prev, m)
 		echo := m.clone()
 		echo.Metadata = nil // as for chat.postMessage
 		return response{"channel": channel, "ts": ts, "text": m.Text, "message": echo}, ""

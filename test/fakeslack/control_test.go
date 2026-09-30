@@ -18,10 +18,12 @@ var slashCommand = map[string]string{"command": "/courier", "is_enterprise_insta
 
 const mentionText = "<@UFAKEBOT> investigate"
 
-// connected starts a fake with a Socket Mode client that has said hello.
+// connected starts a fake with a Socket Mode client that has said hello. It
+// turns off the events for the bot's own posts, so that tests of user actions
+// see only those events; the own-post tests use newSocket.
 func connected(t *testing.T) (*fakeslack.Server, *socketmode.Client) {
 	t.Helper()
-	fake, smc := newSocket(t)
+	fake, smc := newSocket(t, fakeslack.WithoutOwnPostEvents())
 	waitEvent(t, smc, socketmode.EventTypeHello)
 	return fake, smc
 }
