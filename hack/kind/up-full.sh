@@ -6,15 +6,13 @@
 # One full tier per Docker host: the cluster name is fixed, so parallel worktrees share it.
 set -eEuo pipefail
 
-# Pinned versions. Substrate must be the version kagent pins (its go.mod replace directive).
+# Pinned versions (the kind node image and the runtime image are in lib.sh). Substrate must be the version kagent pins (its go.mod replace directive).
 # Dex, the front door, and the probe image are pinned in full/dex.yaml, full/frontdoor.yaml, full/verify.sh.
-NODE_IMAGE=kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 SUBSTRATE_VERSION=0.3.0-alpha1
 KAGENT_VERSION=1.0.0-alpha5
 MOCKLLM_REF=v0.1.0 # tag name, for humans; the commit below is what is built
 MOCKLLM_COMMIT=35792a004f9387562a8760b2a513be8edeea6cf7
 GO_IMAGE=golang:1.25.14@sha256:699337d620559a59b4a2bb298ad59611e535d2ee755a34cf2d2a98f37578dc80
-RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 MOCKLLM_IMAGE=courier-e2e/mockllm:${MOCKLLM_REF}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

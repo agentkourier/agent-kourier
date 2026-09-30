@@ -26,8 +26,8 @@ tidy: ## Tidy go.mod and go.sum
 stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and with -no-auth (about 2 minutes)
 	hack/stub-oracle.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (stub)
-	@echo "not implemented yet (see WP-13)"
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink)
+	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the fast E2E tier (stub)
 	@echo "not implemented yet (see WP-14)"
@@ -38,5 +38,5 @@ e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockll
 e2e-full: ## Run the full E2E tier (stub)
 	@echo "not implemented yet (see WP-14)"
 
-e2e-down: ## Tear down E2E environments (full tier now; fast tier joins in WP-13)
+e2e-down: ## Tear down both E2E tiers (hack/kind/down.sh fast for the fast tier only)
 	hack/kind/down.sh

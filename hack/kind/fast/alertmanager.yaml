@@ -1,0 +1,47 @@
+# The fast tier's Alertmanager, run by prometheus-operator, and the route that sends every alert
+# to the sink receiver (spec 12.1): tests assert the sink still gets alerts while courier is
+# down (D22). A test posts alerts to alertmanager.monitoring.svc:9093/api/v2/alerts. Courier's
+# own route joins this one as another AlertmanagerConfig (WP-14, WP-47).
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  name: courier
+  namespace: monitoring
+spec:
+  replicas: 1
+  # Every AlertmanagerConfig in the cluster; no namespace matcher is added to their routes, so
+  # a test alert needs no namespace label.
+  alertmanagerConfigSelector: {}
+  alertmanagerConfigNamespaceSelector: {}
+  alertmanagerConfigMatcherStrategy: {type: None}
+---
+# v1alpha1 is the only version the pinned chart's CRD serves.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: sink
+  namespace: monitoring
+spec:
+  route:
+    receiver: sink
+    # Short timers keep a test fast; `continue` lets a later route (courier's) see the alert too.
+    continue: true
+    groupBy: [alertname]
+    groupWait: 1s
+    groupInterval: 5s
+    repeatInterval: 1h
+  receivers:
+    - name: sink
+      webhookConfigs:
+        - url: http://sink.e2e.svc.cluster.local:8080/alertmanager
+          sendResolved: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: alertmanager, alertmanager: courier}
+  ports: [{name: web, port: 9093, targetPort: web}]

@@ -1,9 +1,16 @@
 # shellcheck shell=bash
-# Shared by up-full.sh and down.sh (sourced, not executed).
+# Shared by up-full.sh, up-fast.sh and down.sh (sourced, not executed).
 
-# One full tier per Docker host: the cluster name is fixed, so two checkouts share it.
+# The kind node image and the base of the images the tiers build (mockllm; the fast tier's test
+# doubles, through a build argument). Used by the scripts that source this file.
+# shellcheck disable=SC2034
+NODE_IMAGE=kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
+RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
+# One full tier per Docker host: the cluster name is fixed, so two checkouts share it. The fast
+# tier is a separate cluster; use_tier fast points CLUSTER and OWNER_LABEL at it.
 CLUSTER=courier-full
-# Set on the kind node by full/kind-config.yaml; proves this tooling created the cluster.
+# Set on the kind node by full/kind-config.yaml (fast/kind-config.yaml for the fast tier);
+# proves this tooling created the cluster.
 OWNER_LABEL=courier.agent-courier.dev/owner=up-full
 # Set by up-full.sh after creation; records which checkout owns the cluster.
 CHECKOUT_KEY=courier.agent-courier.dev/checkout
@@ -13,7 +20,18 @@ die() {
   exit 1
 }
 
-# node_kubectl ARGS...: kubectl against the courier-full cluster using kind's own kubeconfig
+# use_tier full|fast: make the functions below act on that tier's cluster.
+use_tier() {
+  case "$1" in
+    full | fast)
+      CLUSTER=courier-$1
+      OWNER_LABEL=courier.agent-courier.dev/owner=up-$1
+      ;;
+    *) die "unknown tier '$1' (want full or fast)" ;;
+  esac
+}
+
+# node_kubectl ARGS...: kubectl against the CLUSTER cluster using kind's own kubeconfig
 # for it, never the host's current context.
 node_kubectl() {
   # kind's stderr is dropped: callers report failure themselves, and its message must not

@@ -1,0 +1,21 @@
+# kube-prometheus-stack as prometheus-operator only: the CRDs and the operator, nothing that
+# scrapes, stores or draws. Alertmanager comes from fast/alertmanager.yaml, not from the chart.
+crds: {enabled: true}
+alertmanager: {enabled: false}
+prometheus: {enabled: false}
+grafana: {enabled: false}
+kubeStateMetrics: {enabled: false}
+nodeExporter: {enabled: false}
+defaultRules: {create: false}
+kubeApiServer: {enabled: false}
+kubelet: {enabled: false}
+kubeControllerManager: {enabled: false}
+coreDns: {enabled: false}
+kubeDns: {enabled: false}
+kubeEtcd: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeProxy: {enabled: false}
+prometheusOperator:
+  admissionWebhooks: {enabled: false}
+  tls: {enabled: false}
+  serviceMonitor: {selfMonitor: false}

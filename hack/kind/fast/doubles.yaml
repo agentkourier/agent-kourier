@@ -1,0 +1,109 @@
+# The fast tier's test doubles, from the one image up-fast.sh builds and loads. Every Service is
+# ClusterIP and stays that way: the fake Slack's /_control/ has no authentication, so its port
+# is never published (no NodePort, Ingress, LoadBalancer or hostPort). verify.sh checks that.
+# Courier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
+# stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent> and sink.e2e.svc.cluster.local:8080.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fakeslack
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fakeslack}
+  template:
+    metadata:
+      labels: {app: fakeslack}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: fakeslack
+          image: courier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command: ["/fakeslack", "-addr", "0.0.0.0:8080"]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fakeslack
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: fakeslack}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# -require-auth: a request with no bearer token gets 401, as kagent in OIDC mode answers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stubagent
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: stubagent}
+  template:
+    metadata:
+      labels: {app: stubagent}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: stubagent
+          image: courier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command: ["/stubagent", "-addr", "0.0.0.0:8080", "-require-auth"]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stubagent
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: stubagent}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sink
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: sink}
+  template:
+    metadata:
+      labels: {app: sink}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: sink
+          image: courier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command: ["/sink", "-addr", "0.0.0.0:8080"]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sink
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: sink}
+  ports: [{port: 8080, targetPort: 8080}]
