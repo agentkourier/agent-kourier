@@ -29,6 +29,26 @@ type Tool struct {
 	Args   map[string]any
 }
 
+// ToolPartKind says whether an artifact part reports a tool call or its result.
+type ToolPartKind string
+
+// The kinds of tool part.
+const (
+	ToolCall   ToolPartKind = "call"
+	ToolResult ToolPartKind = "result"
+)
+
+// ToolPart is an artifact part that reports a tool call or a tool result, as a dialect
+// recognizes it. Both are untrusted, like every value the agent sends.
+type ToolPart struct {
+	Kind ToolPartKind
+	ID   string         // the call's id; a result repeats it
+	Name string         // the tool's name
+	Args map[string]any // ToolCall: the arguments
+	// Result is what a ToolResult returned.
+	Result any
+}
+
 // Nested says a sub-agent raised the interaction, and names the path to it.
 type Nested struct {
 	Subagent  string

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
 
 const ticks = "tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 tick 8 "
@@ -46,10 +48,13 @@ func fixtureEvents(t *testing.T, name string) []a2a.Event {
 	return evs
 }
 
-// run feeds events to a fresh assembler and returns what it emitted.
-func run(evs ...[]a2a.Event) (*assembler, []Event) {
+// run feeds events to a fresh assembler that knows kagent's tool parts.
+func run(evs ...[]a2a.Event) (*assembler, []Event) { return runWith(kagentv1.New(0).ToolPart, evs...) }
+
+// runWith feeds events to a fresh assembler and returns what it emitted.
+func runWith(classify ToolClassifier, evs ...[]a2a.Event) (*assembler, []Event) {
 	var got []Event
-	asm := newAssembler(func(e Event) { got = append(got, e) })
+	asm := newAssembler(func(e Event) { got = append(got, e) }, classify)
 	for _, batch := range evs {
 		for _, ev := range batch {
 			asm.apply(ev)
@@ -113,6 +118,7 @@ func TestAppendAndReplacePerArtifact(t *testing.T) {
 		{"no flag replaces", []a2a.Event{chunk("a", "one ", false), chunk("a", "new", false)}, []string{"one ", "new"}},
 		{"lastChunk carries the full text", []a2a.Event{chunk("a", "one ", false), chunk("a", "two", true), &a2a.TaskArtifactUpdateEvent{LastChunk: true, Artifact: &a2a.Artifact{ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart("one two")}}}}, []string{"one ", "one two"}},
 		{"artifacts are independent", []a2a.Event{chunk("a", "A", false), chunk("b", "B", false), chunk("a", "2", true)}, []string{"A", "B", "A2"}},
+		{"a live replace may shorten the text", []a2a.Event{chunk("a", "abc", false), chunk("a", "a", false)}, []string{"abc", "a"}},
 		{"an empty append changes nothing", []a2a.Event{chunk("a", "A", false), chunk("a", "", true)}, []string{"A"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -179,6 +185,53 @@ func TestSnapshotOfFinishedTaskDeliversItsText(t *testing.T) {
 	_, got := run(fixtureEvents(t, "session/02-replay-same-messageid.response.sse"))
 	if want := []string{"The answer is 4."}; !reflect.DeepEqual(texts(got), want) {
 		t.Errorf("texts = %q, want %q", texts(got), want)
+	}
+	if _, ok := got[len(got)-1].(FinalEvent); !ok {
+		t.Errorf("last event = %#v, want FinalEvent", got[len(got)-1])
+	}
+}
+
+func snapshot(text string) *a2a.Task {
+	return &a2a.Task{ID: "t", Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
+		Artifacts: []*a2a.Artifact{{ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart(text)}}}}
+}
+
+// kagent never shortens an artifact's text within a turn, so a snapshot that is a strict
+// prefix of what we hold is older than it (a GetTask that lags the stream) and is skipped.
+func TestSnapshotThatLagsDoesNotShortenTheText(t *testing.T) {
+	deltas := []a2a.Event{chunk("a", "a", false), chunk("a", "b", true)}
+	_, got := run(append(deltas, snapshot("a")))
+	if want := []string{"a", "ab"}; !reflect.DeepEqual(texts(got), want) {
+		t.Errorf("texts = %q, want %q: the snapshot \"a\" is older than \"ab\"", texts(got), want)
+	}
+	_, got = run(append(deltas, snapshot("x")))
+	if want := []string{"a", "ab", "x"}; !reflect.DeepEqual(texts(got), want) {
+		t.Errorf("texts = %q, want %q: a snapshot that is not a prefix replaces the text", texts(got), want)
+	}
+}
+
+func TestOnlyOneFinalEvent(t *testing.T) {
+	done := &a2a.Task{ID: "t", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}
+	_, got := run([]a2a.Event{done, done})
+	finals := 0
+	for _, e := range got {
+		if _, ok := e.(FinalEvent); ok {
+			finals++
+		}
+	}
+	if finals != 1 {
+		t.Errorf("%d FinalEvents, want 1", finals)
+	}
+}
+
+// Without a classifier a dialect has said nothing about data parts, so they stay opaque.
+func TestToolPartsAreOpaqueWithoutAClassifier(t *testing.T) {
+	_, got := runWith(nil, fixtureEvents(t, "approval/01-pause-approve.response.sse"))
+	for _, e := range got {
+		switch e.(type) {
+		case ToolCallEvent, ToolResultEvent:
+			t.Errorf("event %#v from an assembler with no classifier", e)
+		}
 	}
 	if _, ok := got[len(got)-1].(FinalEvent); !ok {
 		t.Errorf("last event = %#v, want FinalEvent", got[len(got)-1])

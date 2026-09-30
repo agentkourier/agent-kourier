@@ -52,6 +52,18 @@ func (fa *fakeAgent) auths() []string {
 	return out
 }
 
+// The Pool wires the dialect's ToolPart in, so an Agent from it cannot miss tool parts.
+func TestPoolAgentsRecognizeTheDialectsToolParts(t *testing.T) {
+	fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { sse(t, w, "approval/01-pause-approve.response.sse", -1) })
+	h, got := collector()
+	if err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Send(t.Context(), message("add"), h); err != nil {
+		t.Fatal(err)
+	}
+	if calls := slices.DeleteFunc(*got, func(e Event) bool { _, ok := e.(ToolCallEvent); return !ok }); len(calls) != 1 {
+		t.Errorf("%d tool call events, want 1", len(calls))
+	}
+}
+
 func TestPoolKeepsOneClientPerBindingAndAgent(t *testing.T) {
 	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
 	sre, dev := targetFor(fa, "team/sre", token("t")), targetFor(fa, "team/dev", token("t"))

@@ -5,16 +5,14 @@ import (
 	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
-// kagent marks each tool call and tool result artifact with a part-type in the metadata of
-// its data part (WP-02, measured). The convention belongs to the kagent-v1 dialect; a
-// generic a2a dialect would need its own.
-const (
-	partTypeKey          = "kagent.dev/a2a/part-type"
-	partFunctionCall     = "function_call"
-	partFunctionResponse = "function_response"
-)
+// ToolClassifier tells a tool call or tool result part from other content. It is the
+// dialect's ToolPart method: what marks a tool part is the backend's convention, not A2A's.
+// With no classifier, data parts are opaque and no tool event is delivered.
+type ToolClassifier func(part *a2a.Part) (dialect.ToolPart, bool)
 
 // assembler folds the events of one send, and of every reconnect within it, into Events.
 // A task snapshot (from GetTask, SubscribeToTask, or a replayed send) and a live chunk
@@ -22,6 +20,7 @@ const (
 // append: true adds to the artifact's text, and anything else replaces it (spec 8.3).
 type assembler struct {
 	emit      Handler
+	classify  ToolClassifier
 	text      map[a2a.ArtifactID]string
 	tools     map[string]bool // "artifact/part" of the tool parts already delivered
 	taskID    a2a.TaskID
@@ -30,11 +29,11 @@ type assembler struct {
 	final     *a2a.Task
 }
 
-func newAssembler(h Handler) *assembler {
+func newAssembler(h Handler, classify ToolClassifier) *assembler {
 	if h == nil {
 		h = func(Event) {}
 	}
-	return &assembler{emit: h, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
+	return &assembler{emit: h, classify: classify, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
 }
 
 // apply folds one event from the agent into the assembler and emits what changed.
@@ -43,10 +42,10 @@ func (a *assembler) apply(ev a2a.Event) {
 	case *a2a.Task:
 		a.track(e.ID, e.ContextID)
 		for _, art := range e.Artifacts {
-			a.artifact(art, false)
+			a.artifact(art, false, true)
 		}
 		a.setState(e.Status.State)
-		if settled(e.Status.State) {
+		if settled(e.Status.State) && a.final == nil {
 			a.final = e
 			a.emit(FinalEvent{Task: e})
 		}
@@ -55,7 +54,7 @@ func (a *assembler) apply(ev a2a.Event) {
 		a.setState(e.Status.State)
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
-		a.artifact(e.Artifact, e.Append)
+		a.artifact(e.Artifact, e.Append, false)
 	}
 }
 
@@ -82,20 +81,20 @@ func (a *assembler) setState(s a2a.TaskState) {
 }
 
 // artifact applies one artifact, or one chunk of it: its text parts per the append rule,
-// and its tool parts once each.
-func (a *assembler) artifact(art *a2a.Artifact, appendMode bool) {
+// and its tool parts once each. A task snapshot that is a strict prefix of the text held is
+// older than it (kagent never shortens an artifact's text within a turn), so it is skipped.
+func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	if art == nil {
 		return
 	}
 	var text strings.Builder
 	hasText := false
 	for i, p := range art.Parts {
-		switch c := p.Content.(type) {
-		case a2a.Text:
-			text.WriteString(string(c))
+		if tp, ok := a.toolPart(p); ok {
+			a.tool(art.ID, i, tp)
+		} else if t, isText := p.Content.(a2a.Text); isText {
+			text.WriteString(string(t))
 			hasText = true
-		case a2a.Data:
-			a.tool(art.ID, i, p, c)
 		}
 	}
 	if !hasText {
@@ -105,28 +104,30 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode bool) {
 	if appendMode {
 		t = old + t
 	}
-	if t != old {
+	stale := snapshot && strings.HasPrefix(old, t)
+	if t != old && !stale {
 		a.text[art.ID] = t
 		a.emit(TextEvent{ArtifactID: art.ID, Text: t})
 	}
 }
 
-func (a *assembler) tool(art a2a.ArtifactID, i int, p *a2a.Part, d a2a.Data) {
+func (a *assembler) toolPart(p *a2a.Part) (dialect.ToolPart, bool) {
+	if a.classify == nil {
+		return dialect.ToolPart{}, false
+	}
+	return a.classify(p)
+}
+
+// tool delivers a tool part once, however often a snapshot repeats it.
+func (a *assembler) tool(art a2a.ArtifactID, i int, tp dialect.ToolPart) {
 	key := string(art) + "/" + strconv.Itoa(i)
 	if a.tools[key] {
 		return
 	}
-	m, _ := d.Value.(map[string]any)
-	id, _ := m["id"].(string)
-	name, _ := m["name"].(string)
-	switch p.Metadata[partTypeKey] {
-	case partFunctionCall:
-		args, _ := m["args"].(map[string]any)
-		a.emit(ToolCallEvent{ArtifactID: art, CallID: id, Name: name, Args: args})
-	case partFunctionResponse:
-		a.emit(ToolResultEvent{ArtifactID: art, CallID: id, Name: name, Response: m["response"]})
-	default:
-		return
-	}
 	a.tools[key] = true
+	if tp.Kind == dialect.ToolCall {
+		a.emit(ToolCallEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Args: tp.Args})
+	} else {
+		a.emit(ToolResultEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Response: tp.Result})
+	}
 }

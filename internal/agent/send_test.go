@@ -140,7 +140,7 @@ func TestSendReturnsTheContextError(t *testing.T) {
 
 func TestSendFailsWhenThereIsNoConnection(t *testing.T) {
 	boom := errors.New("no token")
-	err := New(func(context.Context) (Conn, error) { return nil, boom }, Config{}).Send(t.Context(), message("hi"), nil)
+	err := New(func(context.Context) (Conn, error) { return nil, boom }, nil, Config{}).Send(t.Context(), message("hi"), nil)
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the source's error", err)
 	}
