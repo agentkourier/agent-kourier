@@ -33,6 +33,7 @@ type task struct {
 	state   string
 	history []obj
 	pause   *pause // what the task is waiting for, while it is INPUT_REQUIRED
+	ext     bool   // the request that started the turn now playing named the HITL extension
 	arts    []*artifact
 	log     []event            // every stream event so far, in order; followers read from an index
 	changed chan struct{}      // closed and replaced whenever log grows

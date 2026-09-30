@@ -22,6 +22,7 @@ type Agent struct {
 	reply    func(prompt string) []Step
 	sessions map[string]*session
 	tasks    map[string]*task
+	list     []*task          // the tasks in the order they began
 	messages map[string]*task // the task each accepted messageId started
 }
 
@@ -121,6 +122,8 @@ func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request, owner string) {
 		a.getTask(o, req.Params)
 	case "CancelTask":
 		a.cancelTask(o, req.Params)
+	case "ListTasks":
+		a.listTasks(o, req.Params)
 	case "SubscribeToTask":
 		o.stream = true
 		a.subscribeTask(r.Context(), o, req.Params)
@@ -141,7 +144,7 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 		o.fail(invalidParams("message is required"))
 		return
 	}
-	st, err := a.admit(p.Message, o.owner) //nolint:contextcheck // the turn outlives the request; the server's context bounds it
+	st, err := a.admit(p.Message, o.owner, o.ext) //nolint:contextcheck // the turn outlives the request; the server's context bounds it
 	if err != nil {
 		o.fail(err)
 		return
@@ -203,7 +206,7 @@ func validateMessage(m obj) *rpcError {
 // again after: the script may have run for a message that is then rejected (another send got
 // the session first, or the same messageId was accepted), or for an answer that lost the task
 // to another.
-func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
+func (a *Agent) admit(m obj, owner string, ext bool) (*stream, *rpcError) {
 	if err := validateMessage(m); err != nil {
 		return nil, err
 	}
@@ -224,7 +227,7 @@ func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 			return nil, &rpcError{codeUnscripted, "stubagent: no turn scripted for " + a.ns + "/" + a.name, "STUBAGENT_UNSCRIPTED"}
 		}
 		if reply == nil {
-			return a.start(id, m, d.sess, turn), nil
+			return a.start(id, m, d.sess, turn, ext), nil
 		}
 		s.unlocked(func() { steps = reply(promptText(m)) })
 	}
@@ -236,9 +239,9 @@ func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 		if first == nil || d.reply.p != first.p { // the task paused again, for something else
 			return nil, busyError("resource conflict")
 		}
-		return a.commit(id, m, d.reply, steps), nil
+		return a.commit(id, m, d.reply, steps, ext), nil
 	}
-	return a.start(id, m, d.sess, steps), nil
+	return a.start(id, m, d.sess, steps, ext), nil
 }
 
 // decision is what a message may do, as check decides it: it is answered at once (st, err), it
@@ -290,11 +293,12 @@ func (a *Agent) check(id string, m obj, owner string) decision {
 	return decision{sess: sess}
 }
 
-// start creates the task for a message and starts its turn. The caller holds s.mu.
-func (a *Agent) start(id string, m obj, sess *session, steps []Step) *stream {
+// start creates the task for a message and starts its turn. ext is whether the request named the
+// HITL extension. The caller holds s.mu.
+func (a *Agent) start(id string, m obj, sess *session, steps []Step, ext bool) *stream {
 	s := a.s
 	now := s.stamp()
-	t := &task{id: s.newID("task"), sess: sess, created: now, changed: make(chan struct{})}
+	t := &task{id: s.newID("task"), sess: sess, created: now, changed: make(chan struct{}), ext: ext}
 	in := maps.Clone(m)
 	in["contextId"] = sess.id
 	sub := obj{"id": t.id, "contextId": sess.id, "history": []obj{in}, "status": obj{"state": submitted}}
@@ -306,6 +310,7 @@ func (a *Agent) start(id string, m obj, sess *session, steps []Step) *stream {
 	t.setState(working, now)
 	t.push(t.statusEvent(), false)
 	a.tasks[t.id], a.messages[id] = t, t
+	a.list = append(a.list, t)
 	a.launch(t, steps)
 	return &stream{t: t}
 }
@@ -358,9 +363,11 @@ func (a *Agent) accept(t *task, id string, m obj, p *pause) {
 }
 
 // commit resumes a paused task with the steps its script returned for the answer, and returns
-// the stream of the events that follow. The caller holds s.mu.
-func (a *Agent) commit(id string, m obj, pd *pending, steps []Step) *stream {
+// the stream of the events that follow. ext is whether the answer's request named the HITL
+// extension. The caller holds s.mu.
+func (a *Agent) commit(id string, m obj, pd *pending, steps []Step, ext bool) *stream {
 	t := pd.t
+	t.ext = ext
 	a.accept(t, id, m, pd.p)
 	from := len(t.log)
 	t.push(t.workingEvent(nil), false)

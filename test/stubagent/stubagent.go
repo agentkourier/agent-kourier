@@ -26,7 +26,11 @@
 // owning its session by the sub, the owner check running before the busy and wedged checks,
 // the 401 for an Authorization header that is not a well-formed Bearer credential with an email
 // or a sub (only an absent header is anonymous), and an anonymous owner, which
-// matches no real kagent mode. The envelope errors (-32600, -32601, -32602, -32700) follow
+// matches no real kagent mode. ListTasks was measured (WP-03) for a list by contextId, with no
+// filter and refused, all within one page; what is guessed is paging past a page, the errors
+// for a bad pageSize or page token, the order by creation, an unknown contextId listing
+// nothing, the filters it ignores, and a pause listing as it was made, whatever the lister's
+// header (see listTasks). The envelope errors (-32600, -32601, -32602, -32700) follow
 // a2a-go v2.6.0, not kagent, which vendors a2a-go v2.5.0.
 //
 // Command test/stubagent/cmd/stubagent serves the agents of SpikeAgents so that the WP-02
