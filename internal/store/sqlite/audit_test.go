@@ -134,7 +134,7 @@ func TestAuditRedactsEveryFieldAgainstCanaries(t *testing.T) {
 	)
 	type canary struct{ name, in, secret string }
 	var cs []canary
-	for _, g := range []string{" ", "\t", "\n", "\v", "\u00a0", "\u2003", "\u3000", "\u0085", "\u2028", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", " \u200b\u00a0\t"} {
+	for _, g := range []string{" ", "\t", "\n", "\v", "\u00a0", "\u2003", "\u3000", "\u0085", "\u2028", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", " \u200b\u00a0\t", "\x00", "\x1b", "\u0080", "\u009f", ":", ": ", "%20"} {
 		cs = append(cs,
 			canary{fmt.Sprintf("Bearer %U", []rune(g)), "denied Bearer" + g + token + " by policy", token},
 			canary{fmt.Sprintf("bearer %U", []rune(g)), "bearer" + g + token, token},
@@ -144,6 +144,13 @@ func TestAuditRedactsEveryFieldAgainstCanaries(t *testing.T) {
 		canary{"glued bearer", "bearer" + token, token},
 		canary{"glued BEARER", "BEARER" + token, token},
 		canary{"format char in scheme", "Bea\u200brer " + token, token},
+		canary{"short glued bearer", "BearerTOKEN12", "TOKEN12"},
+		canary{"access_token", "cb?access_token=" + token + "&x=1", token},
+		canary{"refresh_token", "refresh_token=" + token, token},
+		canary{"id_token", "id_token: " + token, token},
+		canary{"client_secret", "client_secret=" + token, token},
+		canary{"oauth json", `{"token_type":"bearer","access_token":"` + token + `"}`, token},
+		canary{"oauth json client secret", `{"client_secret": "` + token + `"}`, token},
 		canary{"basic in lower case", "basic " + b64, b64},
 		canary{"basic without padding", "Basic " + b64[:len(b64)-2], b64[:len(b64)-2]},
 		canary{"jwt", "eyJhbGciOiJIUzI1NiJ9." + jwtSeg + ".c2lnbmF0dXJl", jwtSeg},

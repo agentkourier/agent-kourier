@@ -36,6 +36,20 @@ func TestRedactSecrets(t *testing.T) {
 		{"several", "xoxb-A and xapp-B", "[redacted] and [redacted]"},
 		{"clean", "approved by U123 for interaction i-42", "approved by U123 for interaction i-42"},
 		{"empty", "", ""},
+		{"bearer across control characters", "Bearer\x00FAKE Bearer\x1bFAKE Bearer\u009bFAKE Bearer\u007fFAKE", "[redacted] [redacted] [redacted] [redacted]"},
+		{"bearer with a colon", "Bearer: FAKE and bearer:FAKE and Bearer :\u200bFAKE", "[redacted] and [redacted] and [redacted]"},
+		{"bearer with a percent-encoded space", "Authorization=Bearer%20FAKE&x=1", "Authorization=[redacted]"},
+		{"basic with a colon, control character or %20", "Basic: " + b64 + " Basic\x00" + b64 + " Basic%20" + b64, "[redacted] [redacted] [redacted]"},
+		{"short glued bearer token", "BearerTOKEN12", "[redacted]"},
+		{"glued bearer with a format char in the token", "bearerTOK\u200bEN12345 tail", "[redacted] tail"},
+		{"access_token in a query", "GET /cb?access_token=FAKE123&state=ok", "GET /cb?access_token=[redacted]&state=ok"},
+		{"oauth keys", "refresh_token=R1 id_token=I1 client_secret=S1 ACCESS_TOKEN=A1", "refresh_token=[redacted] id_token=[redacted] client_secret=[redacted] ACCESS_TOKEN=[redacted]"},
+		{"oauth json", `{"token_type":"bearer","access_token":"FAKE","expires_in":3600}`, `{"token_type":"bearer","access_token":"[redacted]","expires_in":3600}`},
+		{"oauth json with spacing", `{"client_secret": "FAKE", "refresh_token" :"FAKE2"}`, `{"client_secret": "[redacted]", "refresh_token" :"[redacted]"}`},
+		{"oauth key with a format char", "access\u200b_token=FAKE", "access\u200b_token=[redacted]"},
+		{"oauth key without a value", "the access_token field, id_token", "the access_token field, id_token"},
+		// Identifiers that merely contain "bearer" keep their names.
+		{"bearer inside identifiers", "task=abc-bearer-xyz12345 payments/bearer-gateway bearer_gateway.svc bearer.example.com", "task=abc-bearer-xyz12345 payments/bearer-gateway bearer_gateway.svc bearer.example.com"},
 		// Prose stays readable: only the credential goes.
 		{"bearer alone", "the bearer", "the bearer"},
 		{"bearer plural and possessive", "bearers of the bearer's duty", "bearers of the bearer's duty"},
@@ -57,13 +71,13 @@ func TestRedactSecrets(t *testing.T) {
 }
 
 // TestRedactSecretsAnyGapRune sweeps every rune that unicode.IsSpace or the Cf
-// category reports and checks each one is a legal gap between a scheme and its
+// or Cc category reports and checks each one is a legal gap between a scheme and its
 // credential, so a new Unicode version cannot open a hole.
 func TestRedactSecretsAnyGapRune(t *testing.T) {
 	credentials := map[string]string{"Bearer": "FAKETOKEN", "Basic": "dXNlcjpwYXNzd29yZA=="}
 	n := 0
 	for r := rune(0); r <= unicode.MaxRune; r++ {
-		if !unicode.IsSpace(r) && !unicode.Is(unicode.Cf, r) {
+		if !unicode.IsSpace(r) && !unicode.Is(unicode.Cf, r) && !unicode.Is(unicode.Cc, r) {
 			continue
 		}
 		n++
