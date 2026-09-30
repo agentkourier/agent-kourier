@@ -444,3 +444,53 @@ func TestCloseWaitsForTheRunners(t *testing.T) {
 		t.Errorf("Close = %v, runner finished %v; want it to return only after the runner did", err, finished.Load())
 	}
 }
+
+// A session with a recorded task is not sent into: kagent runs one task at a time, and a turn
+// resent into the context would run twice. This is the state a restart finds (a task set, the
+// head undelivered) until reconciliation. It is an expected state, so it is not logged as an
+// error at every wake.
+func TestSessionWithAnActiveTaskIsNotSentInto(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	var logs bytes.Buffer // the runner writes it before its turn ends, and the test reads it after
+	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	f.seed("ns/b1", 0)                      // task t1 recorded
+	for _, ts := range []string{"1", "2"} { // two wakes
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case id := <-f.agent.sent:
+			t.Fatalf("%s was sent although task t1 is recorded", id)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if err := f.close(); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != inbound("1").MessageID || f.taskID() != "t1" {
+		t.Errorf("queue head %+v, %v; task %q; want the first turn still queued and t1 kept", next, err, f.taskID())
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("log = %q; a hold is expected, not an error", logs.String())
+	}
+}
+
+// If the agent ends a stream without naming a task, it may still have run the turn: it is
+// not sent again either.
+func TestTurnWithNoNamedTaskIsNotSentAgain(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	f.agent.script = func(context.Context, int, agent.Handler) error { return nil }
+	for range 2 { // the event, then its redelivery
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-f.agent.sent
+	select {
+	case id := <-f.agent.sent:
+		t.Fatalf("%s was sent again", id)
+	case <-time.After(150 * time.Millisecond):
+	}
+}

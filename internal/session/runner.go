@@ -92,7 +92,10 @@ func (m *Manager) run(key Key, c *convo) {
 	defer m.wg.Done()
 	for m.ctx.Err() == nil {
 		out, err := m.turn(key, c)
-		if err != nil && m.ctx.Err() == nil {
+		switch {
+		case errors.Is(err, errHeld):
+			m.cfg.Logger.Info("session turn held", "key", key, "reason", err)
+		case err != nil && m.ctx.Err() == nil:
 			m.cfg.Logger.Error("session turn failed", "key", key, "error", err)
 		}
 		switch {
@@ -180,16 +183,15 @@ func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handle
 	})
 	switch {
 	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
-		m.mu.Lock()
-		m.unrecorded[key] = r.ID
-		m.mu.Unlock()
+		m.hold(key, r.ID)
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
 	case !named && errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later
 		c.tries++
 		return blocked, fmt.Errorf("send turn %s: %w", r.ID, err)
 	case err != nil:
 		return ended, fmt.Errorf("send turn %s: %w", r.ID, err)
-	case !named:
+	case !named: // the stream ended clean but named no task: the agent may have run the turn
+		m.hold(key, r.ID)
 		return ended, fmt.Errorf("send turn %s: the agent named no task", r.ID)
 	case final == nil:
 		return ended, fmt.Errorf("send turn %s: the stream ended with no final task", r.ID)
@@ -223,6 +225,10 @@ func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Mes
 	return msg
 }
 
+// errHeld marks a turn that is not sent until reconciliation lifts the hold: an expected state,
+// so it is logged at Info.
+var errHeld = errors.New("session: turn held")
+
 // held refuses to send while a task of the session is recorded (kagent runs one at a time, and
 // a turn resent into its context would run twice), and a turn whose acceptance could not be
 // recorded. Reconciliation (FindTask first, spec 8.2) lifts both.
@@ -231,11 +237,18 @@ func (m *Manager) held(key Key, id string, sess store.Session) error {
 	defer m.mu.Unlock()
 	switch {
 	case sess.TaskID != "":
-		return fmt.Errorf("task %s of the session is still active: not sending %s", sess.TaskID, id)
+		return fmt.Errorf("task %s of the session is still active, not sending %s: %w", sess.TaskID, id, errHeld)
 	case m.unrecorded[key] == id:
-		return fmt.Errorf("the agent took turn %s but it was never recorded: not sending it again", id)
+		return fmt.Errorf("the agent took turn %s but it was never recorded, not sending it again: %w", id, errHeld)
 	}
 	return nil
+}
+
+// hold makes no wake send turn id again, until reconciliation lifts it.
+func (m *Manager) hold(key Key, id string) {
+	m.mu.Lock()
+	m.unrecorded[key] = id
+	m.mu.Unlock()
 }
 
 // recordAttempts bounds accept's retries, recordDelay spaces them.
