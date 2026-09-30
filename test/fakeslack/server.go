@@ -50,6 +50,13 @@
 //     block_id or action_id; the invalid_blocks code; rejecting the agent-UI
 //     blocks (alert, card, carousel) outside streaming; and the counting unit
 //     (this fake counts code points, Slack may count UTF-16 units).
+//   - Block rules (validate.go): a block_id appearing once in a message and an
+//     action_id once in a block; a section needing text or fields; a section
+//     accessory button held to the limits of an actions button; and button and
+//     header text each being at least 1 character.
+//   - chat.postEphemeral: invalid_arguments for a missing user; a thread_ts
+//     being taken as it is; the message_ts in the response; and ephemeral
+//     messages getting no event and being impossible to update.
 //   - chat.postMessage: invalid_metadata_format; replies must target a
 //     top-level message; the response message omits metadata; blocks=[] with
 //     text stores no blocks.
@@ -109,7 +116,8 @@ type Server struct {
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
 
-	channelTypes map[string]string // set by SetChannelType, guarded by mu
+	channelTypes map[string]string      // set by SetChannelType, guarded by mu
+	ephemerals   map[string][]Ephemeral // per channel, in order, guarded by mu
 }
 
 // Option configures a Server.
@@ -157,6 +165,7 @@ func NewHandler(opts ...Option) *Server {
 		members:   map[string][]string{},
 
 		channelTypes: map[string]string{},
+		ephemerals:   map[string][]Ephemeral{},
 	}
 	for _, o := range opts {
 		o(s)
@@ -231,6 +240,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.connectionsOpen(r)
 	case "auth.test":
 		return s.authTest()
+	case "chat.postEphemeral":
+		return s.postEphemeral(r.Form)
 	case "chat.postMessage":
 		return s.postMessage(r.Form)
 	case "chat.update":

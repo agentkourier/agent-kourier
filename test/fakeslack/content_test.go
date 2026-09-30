@@ -80,6 +80,8 @@ func TestContentLimitsMatchSlack(t *testing.T) {
 		"section field at limit":   {[]slack.MsgOption{field(chars(2000))}, ""},
 		"section field over limit": {[]slack.MsgOption{field(chars(2001))}, "invalid_blocks"},
 		"header at limit":          {[]slack.MsgOption{header(chars(150))}, ""},
+		"header one character":     {[]slack.MsgOption{header("h")}, ""},
+		"header empty":             {[]slack.MsgOption{header("")}, "invalid_blocks"},
 		"header over limit":        {[]slack.MsgOption{header(chars(151))}, "invalid_blocks"},
 		"text at limit":            {[]slack.MsgOption{text(chars(40000))}, ""},
 		"text over limit":          {[]slack.MsgOption{text(chars(40001))}, "msg_too_long"},

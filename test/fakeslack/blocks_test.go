@@ -56,33 +56,52 @@ func TestBlockRulesMatchSlack(t *testing.T) {
 		return out
 	}
 	md := slack.NewMarkdownBlock
+	// A button as a section's accessory takes the same rules as one in an actions block.
+	accessory := func(id, value, label string) []slack.MsgOption {
+		return blocks(slack.NewSectionBlock(mrkdwn("s"), nil, slack.NewAccessory(button(id, value, label))))
+	}
 
 	for name, tc := range map[string]struct {
 		opts []slack.MsgOption
 		want string
 	}{
-		"markdown at limit":       {blocks(md("", chars(12000))), ""},
-		"markdown over limit":     {blocks(md("", chars(12001))), "invalid_blocks"},
-		"markdown cumulative":     {blocks(md("", chars(6000)), md("", chars(6001))), "invalid_blocks"},
-		"section text empty":      {blocks(slack.NewSectionBlock(mrkdwn(""), nil, nil)), "invalid_blocks"},
-		"section field empty":     {blocks(slack.NewSectionBlock(nil, []*slack.TextBlockObject{mrkdwn("")}, nil)), "invalid_blocks"},
-		"10 section fields":       {blocks(slack.NewSectionBlock(nil, fields(10), nil)), ""},
-		"11 section fields":       {blocks(slack.NewSectionBlock(nil, fields(11), nil)), "invalid_blocks"},
-		"25 actions elements":     {blocks(slack.NewActionBlock("a", buttons(25)...)), ""},
-		"26 actions elements":     {blocks(slack.NewActionBlock("a", buttons(26)...)), "invalid_blocks"},
-		"button text at limit":    {blocks(slack.NewActionBlock("a", button("x", "v", chars(75)))), ""},
-		"button text over limit":  {blocks(slack.NewActionBlock("a", button("x", "v", chars(76)))), "invalid_blocks"},
-		"button value at limit":   {blocks(slack.NewActionBlock("a", button("x", chars(2000), "Go"))), ""},
-		"button value over limit": {blocks(slack.NewActionBlock("a", button("x", chars(2001), "Go"))), "invalid_blocks"},
-		"action_id at limit":      {blocks(slack.NewActionBlock("a", button(chars(255), "v", "Go"))), ""},
-		"action_id over limit":    {blocks(slack.NewActionBlock("a", button(chars(256), "v", "Go"))), "invalid_blocks"},
-		"block_id at limit":       {blocks(slack.NewActionBlock(chars(255), button("x", "v", "Go"))), ""},
-		"block_id over limit":     {blocks(slack.NewActionBlock(chars(256), button("x", "v", "Go"))), "invalid_blocks"},
-		"10 context elements":     {blocks(slack.NewContextBlock("", contexts(10)...)), ""},
-		"11 context elements":     {blocks(slack.NewContextBlock("", contexts(11)...)), "invalid_blocks"},
-		"alert block":             {blocks(slack.NewAlertBlock(mrkdwn("x"))), "invalid_blocks"},
-		"card block":              {blocks(slack.NewCardBlock()), "invalid_blocks"},
-		"carousel block":          {blocks(slack.NewCarouselBlock()), "invalid_blocks"},
+		"markdown at limit":                    {blocks(md("", chars(12000))), ""},
+		"markdown over limit":                  {blocks(md("", chars(12001))), "invalid_blocks"},
+		"markdown cumulative":                  {blocks(md("", chars(6000)), md("", chars(6001))), "invalid_blocks"},
+		"section text empty":                   {blocks(slack.NewSectionBlock(mrkdwn(""), nil, nil)), "invalid_blocks"},
+		"section field empty":                  {blocks(slack.NewSectionBlock(nil, []*slack.TextBlockObject{mrkdwn("")}, nil)), "invalid_blocks"},
+		"10 section fields":                    {blocks(slack.NewSectionBlock(nil, fields(10), nil)), ""},
+		"11 section fields":                    {blocks(slack.NewSectionBlock(nil, fields(11), nil)), "invalid_blocks"},
+		"25 actions elements":                  {blocks(slack.NewActionBlock("a", buttons(25)...)), ""},
+		"26 actions elements":                  {blocks(slack.NewActionBlock("a", buttons(26)...)), "invalid_blocks"},
+		"button text at limit":                 {blocks(slack.NewActionBlock("a", button("x", "v", chars(75)))), ""},
+		"button text over limit":               {blocks(slack.NewActionBlock("a", button("x", "v", chars(76)))), "invalid_blocks"},
+		"button value at limit":                {blocks(slack.NewActionBlock("a", button("x", chars(2000), "Go"))), ""},
+		"button value over limit":              {blocks(slack.NewActionBlock("a", button("x", chars(2001), "Go"))), "invalid_blocks"},
+		"action_id at limit":                   {blocks(slack.NewActionBlock("a", button(chars(255), "v", "Go"))), ""},
+		"action_id over limit":                 {blocks(slack.NewActionBlock("a", button(chars(256), "v", "Go"))), "invalid_blocks"},
+		"block_id at limit":                    {blocks(slack.NewActionBlock(chars(255), button("x", "v", "Go"))), ""},
+		"block_id over limit":                  {blocks(slack.NewActionBlock(chars(256), button("x", "v", "Go"))), "invalid_blocks"},
+		"10 context elements":                  {blocks(slack.NewContextBlock("", contexts(10)...)), ""},
+		"11 context elements":                  {blocks(slack.NewContextBlock("", contexts(11)...)), "invalid_blocks"},
+		"button text empty":                    {blocks(slack.NewActionBlock("a", button("x", "v", ""))), "invalid_blocks"},
+		"button text one character":            {blocks(slack.NewActionBlock("a", button("x", "v", "G"))), ""},
+		"accessory button at limits":           {accessory(chars(255), chars(2000), chars(75)), ""},
+		"accessory button text empty":          {accessory("x", "v", ""), "invalid_blocks"},
+		"accessory button text over limit":     {accessory("x", "v", chars(76)), "invalid_blocks"},
+		"accessory button value over limit":    {accessory("x", chars(2001), "Go"), "invalid_blocks"},
+		"accessory action_id over limit":       {accessory(chars(256), "v", "Go"), "invalid_blocks"},
+		"section with neither text nor fields": {blocks(slack.NewSectionBlock(nil, nil, nil)), "invalid_blocks"},
+		"section with only an accessory":       {blocks(slack.NewSectionBlock(nil, nil, slack.NewAccessory(button("x", "v", "Go")))), "invalid_blocks"},
+		"section with only fields":             {blocks(slack.NewSectionBlock(nil, fields(1), nil)), ""},
+		"duplicate block_id":                   {blocks(slack.NewActionBlock("same", button("x", "v", "Go")), slack.NewActionBlock("same", button("y", "v", "Go"))), "invalid_blocks"},
+		"distinct block_ids":                   {blocks(slack.NewActionBlock("one", button("x", "v", "Go")), slack.NewActionBlock("two", button("y", "v", "Go"))), ""},
+		"blocks without block_ids":             {blocks(slack.NewActionBlock("", button("x", "v", "Go")), slack.NewActionBlock("", button("y", "v", "Go"))), ""},
+		"duplicate action_id in a block":       {blocks(slack.NewActionBlock("a", button("same", "v", "Go"), button("same", "w", "Go"))), "invalid_blocks"},
+		"action_id reused across blocks":       {blocks(slack.NewActionBlock("a", button("same", "v", "Go")), slack.NewActionBlock("b", button("same", "v", "Go"))), ""},
+		"alert block":                          {blocks(slack.NewAlertBlock(mrkdwn("x"))), "invalid_blocks"},
+		"card block":                           {blocks(slack.NewCardBlock()), "invalid_blocks"},
+		"carousel block":                       {blocks(slack.NewCarouselBlock()), "invalid_blocks"},
 	} {
 		t.Run(name, func(t *testing.T) { expectContent(t, tc.opts, tc.want) })
 	}
@@ -100,6 +119,9 @@ func TestStreamContentLimits(t *testing.T) {
 		"50 blocks in a chunk":     {slack.MsgOptionChunks(slack.NewBlocksChunk(nDividers(50)...)), ""},
 		"51 blocks in a chunk":     {slack.MsgOptionChunks(slack.NewBlocksChunk(nDividers(51)...)), "invalid_blocks"},
 		"card in a chunk":          {slack.MsgOptionChunks(slack.NewBlocksChunk(slack.NewCardBlock())), ""},
+		"duplicate block_id in a chunk": {slack.MsgOptionChunks(slack.NewBlocksChunk(
+			slack.NewActionBlock("same", slack.NewButtonBlockElement("x", "v", plain("Go"))),
+			slack.NewActionBlock("same", slack.NewButtonBlockElement("y", "v", plain("Go"))))), "invalid_blocks"},
 		"empty section in a chunk": {slack.MsgOptionChunks(slack.NewBlocksChunk(slack.NewSectionBlock(mrkdwn(""), nil, nil))), "invalid_blocks"},
 	} {
 		t.Run(name, func(t *testing.T) {

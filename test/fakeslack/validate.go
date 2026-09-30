@@ -80,9 +80,9 @@ func checkBlocks(blocks string, streaming bool) (int, string) {
 	if len(raw) > maxBlocks {
 		return len(raw), "invalid_blocks"
 	}
-	markdown := 0
+	markdown, ids := 0, map[string]bool{}
 	for _, b := range raw {
-		if !blockOK(b, streaming, &markdown) {
+		if !blockOK(b, streaming, &markdown, ids) {
 			return len(raw), "invalid_blocks"
 		}
 	}
@@ -105,17 +105,41 @@ func textLen(raw json.RawMessage) (n int, ok bool) {
 
 // blockOK checks one block. The text of most blocks is an object, but the
 // markdown block's is a plain string, so it is decoded per type. markdown
-// accumulates the markdown text seen in the message so far.
-func blockOK(raw json.RawMessage, streaming bool, markdown *int) bool {
+// accumulates the markdown text seen in the message so far, and ids the
+// block_ids: one may appear only once in a message, and an action_id only once
+// in a block (https://docs.slack.dev/reference/block-kit/blocks/actions-block/).
+//
+// UNCONFIRMED(WP-04): those two uniqueness rules, and invalid_blocks as the
+// code for breaking them.
+func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]bool) bool {
 	var b struct {
-		Type     string            `json:"type"`
-		BlockID  string            `json:"block_id"`
-		Text     json.RawMessage   `json:"text"`
-		Fields   json.RawMessage   `json:"fields"`
-		Elements []json.RawMessage `json:"elements"`
+		Type      string            `json:"type"`
+		BlockID   string            `json:"block_id"`
+		Text      json.RawMessage   `json:"text"`
+		Fields    json.RawMessage   `json:"fields"`
+		Accessory json.RawMessage   `json:"accessory"`
+		Elements  []json.RawMessage `json:"elements"`
 	}
 	if json.Unmarshal(raw, &b) != nil || b.Type == "" || runes(b.BlockID) > maxID {
 		return false
+	}
+	if b.BlockID != "" {
+		if ids[b.BlockID] {
+			return false
+		}
+		ids[b.BlockID] = true
+	}
+	actionIDs := map[string]bool{}
+	for _, e := range b.Elements {
+		var id struct {
+			ActionID string `json:"action_id"`
+		}
+		if json.Unmarshal(e, &id) == nil && id.ActionID != "" {
+			if actionIDs[id.ActionID] {
+				return false
+			}
+			actionIDs[id.ActionID] = true
+		}
 	}
 	switch b.Type {
 	case "alert", "card", "carousel":
@@ -129,9 +153,9 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int) bool {
 		return *markdown <= maxMarkdownBlocks
 	case "header":
 		n, ok := textLen(b.Text)
-		return ok && n <= maxHeaderText
+		return ok && n >= 1 && n <= maxHeaderText
 	case "section":
-		return sectionOK(b.Text, b.Fields)
+		return sectionOK(b.Text, b.Fields, b.Accessory)
 	case "context":
 		return len(b.Elements) <= maxContextElements
 	case "actions":
@@ -147,8 +171,16 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int) bool {
 	return true
 }
 
-// sectionOK checks a section block's text and fields.
-func sectionOK(text, fields json.RawMessage) bool {
+// sectionOK checks a section block's text, fields and accessory. A section
+// needs text or fields, and an accessory button takes the rules of a button in
+// an actions block.
+//
+// UNCONFIRMED(WP-04): that a section must have text or fields, and that its
+// accessory is held to the button limits.
+func sectionOK(text, fields, accessory json.RawMessage) bool {
+	if accessory != nil && !actionElementOK(accessory) {
+		return false
+	}
 	if text != nil {
 		if n, ok := textLen(text); !ok || n < 1 || n > maxSectionText {
 			return false
@@ -158,7 +190,7 @@ func sectionOK(text, fields json.RawMessage) bool {
 	if fields != nil && json.Unmarshal(fields, &fs) != nil {
 		return false
 	}
-	if len(fs) > maxSectionFields {
+	if len(fs) > maxSectionFields || (text == nil && len(fs) == 0) {
 		return false
 	}
 	for _, f := range fs {
@@ -184,5 +216,5 @@ func actionElementOK(raw json.RawMessage) bool {
 		return true
 	}
 	n, ok := textLen(e.Text)
-	return ok && n <= maxButtonText && runes(e.Value) <= maxButtonValue
+	return ok && n >= 1 && n <= maxButtonText && runes(e.Value) <= maxButtonValue
 }
