@@ -258,6 +258,9 @@ type Dialect interface {       // a2a (generic), kagent-v1
     // backend's static headers; refuses reserved static headers and leaves req unchanged.
     Authenticate(req *http.Request, creds Credentials) error
     Attribute(msg *a2a.Message, actor User)            // who actually typed or clicked
+    // Fetches the card through the front door and returns a JSON-RPC client whose
+    // credentials are pinned to the front door host; follows no redirects, no proxies.
+    Connect(ctx context.Context, backend *AgentBackend, agent AgentRef, creds Credentials) (*a2aclient.Client, error)
     ParseInteraction(task a2a.Task) (*Interaction, bool)
     BuildResponse(in Interaction, answer Answer) (a2a.Message, error) // errors if incomplete
 }
