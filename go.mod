@@ -5,6 +5,7 @@ go 1.27.1
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 require (
+	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/slack-go/slack v0.29.0
 	go.uber.org/goleak v1.3.0
 	k8s.io/api v0.36.1
