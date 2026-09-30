@@ -185,6 +185,9 @@ type Manager struct {
 	attempted map[Key]attempt
 	// fresh holds the turns this process enqueued itself, and has not yet sent and recorded: they
 	// cannot have been sent before. Any other undelivered head may have been, by a process that died.
+	// A turn leaves it when the agent takes it and it is recorded (accept), when it fails for good
+	// (fail), and when it is dropped for a removed Binding. It stays while its row is queued in any
+	// other way, such as a held unrecorded turn, which is what lets it be looked up first.
 	fresh  map[string]struct{}
 	closed bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that

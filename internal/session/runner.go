@@ -228,6 +228,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		c.attach = nil
 		if c.follow == nil {
 			c.follow, c.ttl, c.since = a, a.b.ThreadTTL, m.cfg.Now()
+			c.driving = a.taskID // from now on the runner drives it: no second attachment in the gap before resume
 		}
 	}
 	m.mu.Unlock()
@@ -254,6 +255,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		m.notice(t, NoticeBindingGone, "")
 		// Delivered_at on this row means dropped, not sent: recovery and audit readers must not
 		// take it for a turn the agent received.
+		m.mu.Lock()
+		delete(m.fresh, r.ID)
+		m.mu.Unlock()
 		return ended, m.cfg.Store.MarkReplyDelivered(sctx, r.ID, m.cfg.Now())
 	} else if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)

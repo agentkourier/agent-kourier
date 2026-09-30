@@ -65,11 +65,11 @@ func (m *Manager) recoverKey(key Key) {
 	}
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)
 	if err != nil {
-		log.Warn("recover: skipping a session whose Binding is not configured", "binding", sess.Binding, "error", err)
+		log.Warn("recover: skipping a session whose Binding is not configured", "skip", "unknown_binding", "binding", sess.Binding, "error", err)
 		return
 	}
 	if _, err := m.cfg.Store.GetSession(m.ctx, key, backend.ThreadTTL, m.cfg.Now()); errors.Is(err, store.ErrExpired) {
-		log.Info("recover: skipping an expired session")
+		log.Info("recover: skipping an expired session", "skip", "expired")
 		return
 	} else if err != nil {
 		log.Error("recover: read session", "error", err)

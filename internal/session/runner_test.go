@@ -639,3 +639,45 @@ func (f *fixture) retired(t *testing.T) {
 	t.Helper()
 	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
 }
+
+// fresh is bounded by the turns still queued: every way a turn leaves the queue forgets it. A
+// turn the agent took, one failed for good, and one dropped for a removed Binding all do. (A held,
+// unrecorded turn keeps its entry while its row is queued, which is what lets it be looked up.)
+func TestFreshHoldsNoTurnThatLeftTheQueue(t *testing.T) {
+	fresh := func(f *fixture) int { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.fresh) }
+	t.Run("a turn the agent took", func(t *testing.T) {
+		f := newFixture(t)
+		sink := f.live()
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+		eventually(t, "the turn to be forgotten", func() bool { return fresh(f) == 0 })
+	})
+	t.Run("a turn failed for good", func(t *testing.T) {
+		f := newFixture(t)
+		sink := f.live()
+		f.agent.script = func(context.Context, int, agent.Handler) error { return fmt.Errorf("send: %w", agent.ErrForbidden) }
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		eventually(t, "the turn to be forgotten", func() bool { return fresh(f) == 0 })
+	})
+	t.Run("a turn dropped for a removed Binding", func(t *testing.T) {
+		f := newFixture(t)
+		sink := f.live()
+		f.m.wake = func(Key) {}
+		for _, ts := range []string{"1", "2", "3"} {
+			if _, err := f.submit(inbound(ts)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/gone", LastActivity: t0}); err != nil {
+			t.Fatal(err)
+		}
+		f.m.start(key)
+		eventually(t, "the turns to be dropped", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 3 })
+		eventually(t, "the turns to be forgotten", func() bool { return fresh(f) == 0 })
+	})
+}

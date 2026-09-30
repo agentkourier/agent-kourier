@@ -167,7 +167,7 @@ func TestRecoverSkipsExpiredSessionsAndUnknownBindings(t *testing.T) {
 			if sess != seeded || err != nil && !errors.Is(err, store.ErrExpired) {
 				t.Errorf("session = %+v, %v; want it untouched", sess, err)
 			}
-			wantLog := map[string]string{"expired": "skipping an expired session", "unknown Binding": "Binding is not configured"}[tc.name]
+			wantLog := map[string]string{"expired": "skip=expired", "unknown Binding": "skip=unknown_binding"}[tc.name]
 			if !strings.Contains(logs.String(), wantLog) {
 				t.Errorf("log = %q; want the skip to say %q", logs.String(), wantLog)
 			}
@@ -313,8 +313,10 @@ func TestHeadFromBeforeTheRestartIsLookedUpWhateverWakesFirst(t *testing.T) {
 			waitFinal(t, sink)
 			f.agent.mu.Lock()
 			defer f.agent.mu.Unlock()
-			if want := "[find send]"; fmt.Sprint(f.agent.seq) != want {
-				t.Errorf("calls = %v; want %s: the lookup before the first send", f.agent.seq, want)
+			// Recover may read the session once the turn has recorded its task, and look the head up
+			// again: the first two calls are what matters, the lookup before the one send.
+			if seq := f.agent.seq; len(seq) < 2 || seq[0] != "find" || seq[1] != "send" || len(f.agent.msgs) != 1 {
+				t.Errorf("calls = %v, %d sends; want a lookup, then the one send", seq, len(f.agent.msgs))
 			}
 		})
 	}
