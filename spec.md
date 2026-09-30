@@ -183,7 +183,7 @@ upstream webhook trigger stays compatible with courier.
 | D29 | Alert routing | Teams route alerts to their Binding through their own prometheus-operator `AlertmanagerConfig`. The webhook token is a Secret in the Binding's namespace. Cluster-level alerts go to a platform-team Binding through the central Alertmanager config. (v0.3) |
 | D30 | Config loading | Resources are Go types with kubebuilder markers from day one, loaded from YAML files in Phases 1 to 3. CRDs and the controller land in hardening. (v0.3) |
 | D31 | Spend cap | `maxRunsPerDay` per Binding, in addition to the rate limit. (v0.3) |
-| D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Courier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). A NetworkPolicy restricts the controller port to courier's front door and kagent's own components. (v0.3, corrected after WP-01) |
+| D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Courier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). NetworkPolicies restrict the controller port to that front door and kagent's own components, and fence every relay to the controller (the kagent UI) to the front door as well. (v0.3, corrected after WP-01 and its review) |
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 
 ## 6. Architecture
@@ -312,7 +312,7 @@ kind: AgentBackend
 metadata: { name: kagent-pilot, namespace: courier-system }
 spec:
   dialect: kagent-v1                 # a2a | kagent-v1
-  url: http://kagent-controller.kagent-pilot:8083
+  url: https://kagent-frontdoor.kagent-pilot     # verifying proxy, never :8083 (D32)
   headers: []                        # static headers, values may come from Secrets;
                                      # Authorization and X-User-Id are reserved (D14)
   allowedNamespaces: ["sre", "payments"]
@@ -574,10 +574,10 @@ this with an outbox:
 | Concern | Control |
 |---|---|
 | Webhook authenticity | Alertmanager does not sign payloads. Bearer token per Binding, stored in the Binding's namespace, constant-time compare. Optional mTLS at the ingress. |
-| Pilot environment | The kagent 1.0 alpha install holds production read credentials. It runs in OIDC mode with per-Binding service tokens, and a NetworkPolicy admits only courier (D32). The agent's credentials are read-only. |
+| Pilot environment | The kagent 1.0 alpha install holds production read credentials. Courier reaches it only through a verifying front door; NetworkPolicies restrict the controller port and every in-cluster relay to it, including the kagent UI, whose nginx forwards `/mcp` and `/api` with `Authorization` intact (D32). The agent's credentials are read-only. |
 | Paging path | Every route to courier uses `continue: true`; courier never replaces an existing receiver (D22). |
 | Slack authenticity | Signing secret verification with timestamp check for HTTP mode. Socket Mode uses the app token. |
-| Backend trust | kagent's controller port (8083) trusts identity without verifying it: in insecure mode via `X-User-Id`, and in OIDC mode by decoding the JWT without checking its signature (a forged `alg: none` token was accepted in WP-01). Courier must therefore call a verifying front door (oauth2-proxy or agentgateway) that validates the Binding's token, never 8083 directly. A NetworkPolicy limits 8083 to that front door and kagent's own components (UI, Substrate egress for TaskStore traffic). |
+| Backend trust | kagent's controller port (8083) trusts identity without verifying it: in insecure mode via `X-User-Id`, and in OIDC mode by decoding the JWT without checking its signature (a forged `alg: none` token was accepted in WP-01). Courier must therefore call a verifying front door (oauth2-proxy or agentgateway) that validates the Binding's token, never 8083 directly. A NetworkPolicy limits 8083 to that front door and kagent's own components (UI, Substrate egress for TaskStore traffic), and a second policy fences the UI to the front door, because its nginx relays `/mcp` and `/api` to 8083 with `Authorization` intact. |
 | Binding identity scope | Each Binding identity gets only the permissions every member of its channel is trusted with. Separate Bindings, not one shared identity, for channels with different trust levels. |
 | Secrets | Read from Kubernetes Secrets by reference. Never written to CRD status, logs, or the audit table. |
 | Tenancy | Namespaced Bindings with explicit `allowedNamespaces` on shared resources. |
@@ -674,7 +674,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). Phase 5 cannot exit without a recorded R1 decision. `interactions.approverGroups` is reserved in the schema so it can be added without a breaking change. |
 | R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, webhook auth, rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
-| R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode. | High | Courier talks only to a verifying front door (oauth2-proxy or agentgateway); NetworkPolicy restricts port 8083; `verify.sh` in the full tier proves a forged token is rejected at the front door. |
+| R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode. | High | Courier talks only to a verifying front door (oauth2-proxy or agentgateway); NetworkPolicies restrict port 8083 and fence the UI relay. Required proof (WP-01b): the full tier's `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) are rejected at the front door, and that A2A requests reach the agent through it. |
 | R5 | No stream replay in kagent. Text produced during a disconnect may be lost from the live view. | Medium | Reconcile from `GetTask` on reconnect and render the final task output. |
 | R6 | Slack rate limits on message edits under many concurrent streams. | Medium | Per-message throttle, global limiter, fall back to `final` output under pressure. |
 | R7 | SQLite limits the default install to one replica. | Low | Documented. Postgres path for HA. |
@@ -685,7 +685,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R12 | **Sparse or biased feedback.** Few votes, or votes only on bad answers, skew the go/no-go. | Medium | Minimum of 20 rated investigations. Weekly review. Engagement is measured alongside ratings. |
 | R13 | **kagent 1.0 GA slips or changes shape**, stranding courier on an alpha. | Medium | The pilot is explicitly disposable. Changes stay in the dialect. The go/no-go is about value, independent of GA timing. |
 | R14 | A team forgets `continue: true`, putting courier in its paging path. | Medium | Runbook check before enabling a route during the pilot. In hardening, the controller reads `AlertmanagerConfig` resources that target courier's webhook URL and sets a warning condition on the Binding when a route lacks `continue: true`. |
-| R15 | ~~kagent 1.0 needs Agent Substrate with gVisor, which may not run in kind on Docker Desktop for Mac.~~ **Resolved by WP-01:** the full tier runs on macOS (gVisor uses the systrap platform, no KVM), about 2.1 GiB idle, up in under three minutes. | Low | Pins matter (kagent 1.0.0-alpha5, Substrate 0.3.0-alpha1). |
+| R15 | ~~kagent 1.0 needs Agent Substrate with gVisor, which may not run in kind on Docker Desktop for Mac.~~ **Resolved by WP-01:** the full tier runs on macOS on Apple silicon (arm64; gVisor uses the systrap platform, no KVM), about 2.1 GiB idle, up in under three minutes. amd64 and Linux are expected from kagent's own CI but not measured. | Low | Pins matter (kagent 1.0.0-alpha5, Substrate 0.3.0-alpha1). |
 
 ## 15. Open questions
 
@@ -698,7 +698,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | Q6 | Is one Binding per channel too restrictive for teams wanting several agents in one channel? | Pilot review |
 | Q7 | Which team runs the pilot, and which alerts (by name and severity) are routed first? | Before Phase 2 |
 | Q8 | Where does the pilot kagent install run, and how does production Alertmanager reach courier over TLS? | Phase 0 |
-| Q9 | Which OIDC provider issues Binding service tokens? It must support the client-credentials grant (Dex does not); otherwise a static service user with the password grant, which is weaker. | Phase 0 (H-02) |
+| Q9 | Which OIDC provider issues Binding service tokens? It must support the client-credentials grant (Dex does not); otherwise a static service user with the password grant, which is weaker. Client-credentials tokens often lack an `email` claim: the front door must accept them (oauth2-proxy may need `oidc-email-claim`), and kagent falls back to `sub` for identity. | Phase 0 (H-02) |
 
 Q5 (queue rate-limited alerts) was resolved in v0.3 by D26: digest line, no queue.
 
@@ -771,6 +771,6 @@ Four rounds of adversarial questions against v0.2. Findings and resolutions:
 | Per-Binding webhook paths needed platform-owned Alertmanager changes, defeating self-service | Team `AlertmanagerConfig`, token in the Binding's namespace, `AlertSource` removed (D29) |
 | Four CRDs and a controller before the first Slack message | Same types, file loader until hardening (D30) |
 | Rate limit alone allowed about 720 runs a day per Binding | `maxRunsPerDay` (D31) |
-| Pilot install would hold production credentials with kagent's default no-auth mode | OIDC mode plus NetworkPolicy (D32) |
+| Pilot install would hold production credentials with kagent's default no-auth mode | OIDC mode plus NetworkPolicy (D32; corrected after WP-01 to require a verifying front door) |
 | At-least-once queue plus non-idempotent Slack posts could duplicate messages | Outbox with Slack message metadata reconciliation (8.6) |
 | Team `AlertmanagerConfig` routes only see their own namespace's alerts | Platform Binding with a central route for cluster-level alerts (7) |
