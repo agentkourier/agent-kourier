@@ -75,6 +75,8 @@ func TestAuthenticate(t *testing.T) {
 		{name: "static x-user-id, any case", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"x-user-id": {canary}}}, wantErr: true},
 		{name: "static Proxy-Authorization", creds: dialect.Credentials{Token: "t", Headers: http.Header{"Proxy-Authorization": {canary}}}, wantErr: true},
 		{name: "static cookie, any case", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"cOOkie": {canary}}}, wantErr: true},
+		{name: "static X-Agent-Name", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Agent-Name": {canary}}}, wantErr: true},
+		{name: "static x-agent-name, any case", creds: dialect.Credentials{Token: "t", Headers: http.Header{"x-agent-name": {canary}}}, wantErr: true},
 		{name: "token with a line break", creds: dialect.Credentials{Token: canary + "\r\nX-Evil: 1"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

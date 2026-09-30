@@ -17,10 +17,11 @@ import (
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
-// so an AgentBackend must not set it. Dialects refuse it too.
+// so an AgentBackend must not set it. Dialects refuse it too. X-Agent-Name is reserved
+// because kagent lets it select the acting user via X-User-Id or ?user_id= (D32).
 func IsReservedHeader(name string) bool {
 	switch http.CanonicalHeaderKey(name) {
-	case "Authorization", "Proxy-Authorization", "Cookie", "X-User-Id":
+	case "Authorization", "Proxy-Authorization", "Cookie", "X-User-Id", "X-Agent-Name":
 		return true
 	}
 	return false
