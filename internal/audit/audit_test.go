@@ -105,6 +105,8 @@ func TestAgentCall(t *testing.T) {
 		{"cancel busy", Call{Op: OpCancel, TaskID: "t1", Err: agent.ErrBusy}, "task=t1", "cancel: failed busy"},
 		{"other error", Call{Op: OpCancel, TaskID: "t1", Err: errors.New("boom")}, "task=t1", "cancel: failed error"},
 		{"find task absent", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1"}, "context=c1 message=m1", "find_task: absent"},
+		{"token unreadable (D34, the turn fails)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("%w: boom", errors.Join(agent.ErrNotSent, agent.ErrTokenUnreadable))}, "message=m1", "send: failed not_sent,token_unreadable"},
+		{"header unreadable", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", agent.ErrHeaderUnreadable)}, "message=m1", "send: failed header_unreadable"},
 		{"token required (D34, never downgrade)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("binding ns/b: %w", agent.ErrTokenRequired)}, "message=m1", "send: failed token_required"},
 		{"pool closed", Call{Op: OpSend, MessageID: "m1", Err: agent.ErrPoolClosed}, "message=m1", "send: failed pool_closed"},
 		{"streaming unsupported", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("agent ns/a: %w", agent.ErrStreamingUnsupported)}, "message=m1", "send: failed streaming_unsupported"},

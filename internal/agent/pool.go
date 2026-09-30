@@ -26,6 +26,13 @@ var (
 	ErrStreamingUnsupported = errors.New("agent: the agent card does not advertise streaming")
 	// ErrTokenRequired means a Target with TokenRequired got credentials without a token.
 	ErrTokenRequired = errors.New("agent: the Binding requires a bearer token and the credentials carry none")
+	// ErrTokenUnreadable means the Binding's token could not be read, or read as an empty or
+	// malformed value. The turn fails: a Binding with a token never falls back to its userId.
+	// The error wraps the cause.
+	ErrTokenUnreadable = errors.New("agent: the Binding's token cannot be read")
+	// ErrHeaderUnreadable means the Secret behind a static header could not be read. The turn
+	// fails: the backend's front door would refuse it, or worse, treat it as anonymous.
+	ErrHeaderUnreadable = errors.New("agent: a static header's secret cannot be read")
 	// ErrPoolClosed is returned by a call made after Pool.Close.
 	ErrPoolClosed = errors.New("agent: pool is closed")
 )

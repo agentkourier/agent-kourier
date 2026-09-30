@@ -11,6 +11,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -106,8 +107,8 @@ func TestStaticTokenErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, err := NewStaticToken(tc.r, "sre", v1alpha1.SecretKeyRef{Name: "creds"}).Token(t.Context())
-			if !errors.Is(err, ErrTokenUnreadable) || !errors.Is(err, tc.want) {
-				t.Fatalf("err = %v, want ErrTokenUnreadable wrapping %v", err, tc.want)
+			if !errors.Is(err, agent.ErrTokenUnreadable) || !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want agent.ErrTokenUnreadable wrapping %v", err, tc.want)
 			}
 			if v.Reveal() != "" {
 				t.Error("a failed read returned a value")
@@ -128,7 +129,7 @@ func TestStaticTokenRefreshReReads(t *testing.T) {
 		t.Errorf("Refresh = %v after %d reads, want nil after 1", err, r.count())
 	}
 	r.setErr(secret.ErrEmptyValue)
-	if err := src.Refresh(t.Context()); !errors.Is(err, ErrTokenUnreadable) {
-		t.Errorf("Refresh of an unreadable token = %v, want ErrTokenUnreadable", err)
+	if err := src.Refresh(t.Context()); !errors.Is(err, agent.ErrTokenUnreadable) {
+		t.Errorf("Refresh of an unreadable token = %v, want agent.ErrTokenUnreadable", err)
 	}
 }

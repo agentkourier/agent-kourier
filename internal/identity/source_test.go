@@ -181,8 +181,8 @@ func TestUnreadableSecretFailsTheTurn(t *testing.T) {
 		vals map[string]string
 		want error
 	}{
-		{"token secret missing", map[string]string{"platform/gw/token": "k"}, ErrTokenUnreadable},
-		{"header secret missing", map[string]string{"sre/creds/token": "t"}, ErrHeaderUnreadable},
+		{"token secret missing", map[string]string{"platform/gw/token": "k"}, agent.ErrTokenUnreadable},
+		{"header secret missing", map[string]string{"sre/creds/token": "t"}, agent.ErrHeaderUnreadable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(v1alpha1.Identity{UserID: "svc", TokenSecretRef: tokenRef()}, header)
@@ -320,8 +320,8 @@ func TestRejected(t *testing.T) {
 	t.Run("a token that is now unreadable is reported, and still audited and counted", func(t *testing.T) {
 		f := newFixture(v1alpha1.Identity{TokenSecretRef: tokenRef()})
 		err := f.source().Rejected(t.Context(), user, call)
-		if !errors.Is(err, ErrTokenUnreadable) {
-			t.Errorf("Rejected = %v, want ErrTokenUnreadable", err)
+		if !errors.Is(err, agent.ErrTokenUnreadable) {
+			t.Errorf("Rejected = %v, want agent.ErrTokenUnreadable", err)
 		}
 		if len(f.store.entries()) != 1 || len(f.metric) != 1 {
 			t.Errorf("%d audit rows and %d counts, want 1 each", len(f.store.entries()), len(f.metric))

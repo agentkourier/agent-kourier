@@ -81,7 +81,7 @@ func (s *Source) Target() agent.Target {
 // Credentials reads the Binding's current credentials. It is an agent.CredentialsFunc.
 //
 // If the token or a header's Secret cannot be read it returns empty credentials and an error
-// wrapping ErrTokenUnreadable or ErrHeaderUnreadable (and the cause), and the call must fail:
+// wrapping agent.ErrTokenUnreadable or agent.ErrHeaderUnreadable (and the cause), and the call must fail:
 // the userId is never sent in place of a token.
 func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 	c := dialect.Credentials{UserID: s.spec.Spec.Identity.UserID}
@@ -99,7 +99,7 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 			v, err := s.reader.Value(ctx, s.backend.Namespace, ref.Name, key)
 			if err != nil {
 				return dialect.Credentials{}, fmt.Errorf("%w: header %q from secret %s/%s key %q: %w",
-					ErrHeaderUnreadable, h.Name, s.backend.Namespace, ref.Name, key, err)
+					agent.ErrHeaderUnreadable, h.Name, s.backend.Namespace, ref.Name, key, err)
 			}
 			val = v.Reveal()
 		}

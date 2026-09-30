@@ -11,20 +11,11 @@ package identity
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/secret"
-)
-
-var (
-	// ErrTokenUnreadable means the Binding's token could not be read. The turn fails: a
-	// Binding with a token never falls back to its userId. The error wraps the cause.
-	ErrTokenUnreadable = errors.New("identity: the Binding's token cannot be read")
-	// ErrHeaderUnreadable means the Secret behind a static header could not be read. The
-	// turn fails: the backend's front door would refuse it, or worse, treat it as anonymous.
-	ErrHeaderUnreadable = errors.New("identity: a static header's secret cannot be read")
 )
 
 // SecretReader reads one value of a Secret. *k8ssecrets.Resolver implements it. An empty key
@@ -38,7 +29,7 @@ type SecretReader interface {
 type TokenSource interface {
 	// Token returns the current token. It is called for every operation, so an
 	// implementation that caches must expire what it caches. On failure the error wraps
-	// ErrTokenUnreadable.
+	// agent.ErrTokenUnreadable.
 	Token(ctx context.Context) (secret.Value, error)
 	// Refresh drops anything cached and reads the token again. It is called after the
 	// backend rejected the token, and returns the error a fresh Token would.
@@ -75,7 +66,7 @@ func (s *StaticToken) Token(ctx context.Context) (secret.Value, error) {
 		err = secret.ErrEmptyValue
 	}
 	if err != nil {
-		return secret.Value{}, fmt.Errorf("%w: secret %s/%s key %q: %w", ErrTokenUnreadable, s.namespace, s.ref.Name, key, err)
+		return secret.Value{}, fmt.Errorf("%w: secret %s/%s key %q: %w", agent.ErrTokenUnreadable, s.namespace, s.ref.Name, key, err)
 	}
 	return v, nil
 }
