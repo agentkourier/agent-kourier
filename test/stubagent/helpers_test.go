@@ -109,6 +109,39 @@ func (c *client) call(method string, params any) (int, obj) {
 	return st.status, evs[0]
 }
 
+// trySend is send for a goroutine other than the test's: it reports a failure as an error,
+// because only the test goroutine may call Fatalf.
+func (c *client) trySend(params obj) ([]obj, error) {
+	raw, err := json.Marshal(obj{"jsonrpc": "2.0", "id": "1", "method": "SendStreamingMessage", "params": params})
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodPost, c.url, bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	req.Header = c.hdr.Clone()
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(nil, 1<<20)
+	var evs []obj
+	for sc.Scan() {
+		if data, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+			var ev obj
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				return nil, fmt.Errorf("bad event %q: %w", data, err)
+			}
+			evs = append(evs, ev)
+		}
+	}
+	return evs, sc.Err()
+}
+
 // first sends a request and returns only the first envelope, then drops the connection. It is
 // for answers that must be a single error event: a regression that answers with a live stream
 // held open by the turn fails the test at once instead of hanging it.

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -46,13 +47,17 @@ func run(addr string, tick time.Duration, requireAuth bool) error {
 	stubagent.SpikeAgents(stub)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := &http.Server{Addr: addr, Handler: stub, ReadHeaderTimeout: 10 * time.Second}
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	srv := &http.Server{Handler: stub, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Shutdown(context.WithoutCancel(ctx)) // the shutdown must outlive the signal that starts it
 	}()
-	fmt.Println("stubagent: listening on", addr)
-	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+	fmt.Println("stubagent: listening on", addr) // after the bind, so a script can wait for this line
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil

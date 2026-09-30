@@ -169,8 +169,9 @@ func TestEmptyApprovalsAreAPlainReply(t *testing.T) {
 }
 
 // badApproval sends a reply with the decisions to a fresh pause for the tools, and returns its
-// stream, the task id and the approval ids the request issued.
-func badApproval(t *testing.T, tools []stubagent.ToolRequest, pick func(issued []string) []obj) (st *stream, taskID string, issued []string, called *bool) {
+// stream, the task id, the approval ids the request issued, whether the script ran, and the
+// client, for reading the task afterwards.
+func badApproval(t *testing.T, tools []stubagent.ToolRequest, pick func(issued []string) []obj) (st *stream, taskID string, issued []string, called *bool, cl *client) {
 	t.Helper()
 	_, agent, c := newAgent(t)
 	called = new(bool)
@@ -179,14 +180,22 @@ func badApproval(t *testing.T, tools []stubagent.ToolRequest, pick func(issued [
 	_, taskID, ctxID, request := paused(t, c)
 	issued = toolIDs(request)
 	st = c.open("SendStreamingMessage", reply("m2", "x", ctxID, taskID, decisions(pick(issued)...)))
-	return st, taskID, issued, called
+	return st, taskID, issued, called, c
+}
+
+// expectWedged checks that the task is stuck WORKING after a bad reply.
+func expectWedged(t *testing.T, c *client, taskID string) {
+	t.Helper()
+	if _, got := c.call("GetTask", obj{"id": taskID}); describe(got) != "task:WORKING" {
+		t.Errorf("GetTask after the bad reply = %s, want task:WORKING", describe(got))
+	}
 }
 
 // TestApprovalWithoutAnIssuedIDWedgesTheTask: approval/11 answers a reply that carries "nope" and
 // not the issued id with "tool approval response is missing id <the issued id>": kagent looks
 // for each issued id in the reply and names the one it does not find.
 func TestApprovalWithoutAnIssuedIDWedgesTheTask(t *testing.T) {
-	st, _, issued, called := badApproval(t, []stubagent.ToolRequest{addNumbers()},
+	st, taskID, issued, called, c := badApproval(t, []stubagent.ToolRequest{addNumbers()},
 		func([]string) []obj { return []obj{approval("nope", true, "")} })
 	evs := st.all()
 
@@ -198,6 +207,7 @@ func TestApprovalWithoutAnIssuedIDWedgesTheTask(t *testing.T) {
 	if got, want := dig(evs[1], "error", "message"), "tool approval response is missing id "+issued[0]; got != want || *called {
 		t.Errorf("error message = %v, script called %v; want %q", got, *called, want)
 	}
+	expectWedged(t, c, taskID)
 }
 
 // TestPartialApprovalNamesTheFirstIssuedIDMissing: with two tools, a reply that decides only
@@ -214,7 +224,7 @@ func TestPartialApprovalNamesTheFirstIssuedIDMissing(t *testing.T) {
 		{"the first", 0, 1},
 		{"the second", 1, 0},
 	} {
-		st, _, issued, called := badApproval(t, two, func(issued []string) []obj { return []obj{approval(issued[tc.decided], true, "")} })
+		st, taskID, issued, called, c := badApproval(t, two, func(issued []string) []obj { return []obj{approval(issued[tc.decided], true, "")} })
 		evs := st.all()
 
 		if got, want := shape(evs), "statusUpdate:WORKING, error:-32603"; got != want {
@@ -224,13 +234,14 @@ func TestPartialApprovalNamesTheFirstIssuedIDMissing(t *testing.T) {
 		if got, want := dig(evs[1], "error", "message"), "tool approval response is missing id "+issued[tc.missing]; got != want || *called {
 			t.Errorf("reply deciding %s tool: error %v, script called %v; want %q", tc.name, got, *called, want)
 		}
+		expectWedged(t, c, taskID)
 	}
 }
 
 // TestUnexpectedApprovalIDIsRejected: a reply that decides every issued tool and one more.
 // UNCONFIRMED: kagent's answer; the stub is stricter than the fixtures show and rejects it.
 func TestUnexpectedApprovalIDIsRejected(t *testing.T) {
-	st, _, _, called := badApproval(t, []stubagent.ToolRequest{addNumbers()},
+	st, _, _, called, _ := badApproval(t, []stubagent.ToolRequest{addNumbers()},
 		func(issued []string) []obj { return []obj{approval(issued[0], true, ""), approval("nope", true, "")} })
 
 	evs := st.all()

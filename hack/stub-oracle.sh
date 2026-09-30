@@ -22,15 +22,24 @@ trap cleanup EXIT
 go build -o "${work}/stubagent" ./test/stubagent/cmd/stubagent
 go build -o "${work}/spike" ./spike/a2a
 
+# Something already answering on the port is a leftover stub, or another server: the run would
+# test that, not the stub built above.
+if curl -s -o /dev/null "http://${addr}/"; then
+  echo "stub-oracle: ${addr} already answers; stop what is running there, or set STUB_ADDR" >&2
+  exit 1
+fi
+
 "${work}/stubagent" -addr "${addr}" >"${work}/stub.log" 2>&1 &
 stub_pid=$!
-for _ in $(seq 50); do
+# Ready is the stub's own "listening" line, printed once the port is bound, with the process
+# still alive: a stub that could not bind exits, and the port's owner is not taken for it.
+for _ in $(seq 100); do
   kill -0 "${stub_pid}" 2>/dev/null || { echo "stub-oracle: the stub exited:" >&2; cat "${work}/stub.log" >&2; exit 1; }
-  curl -s -o /dev/null "http://${addr}/agents/kagent/test-agent/.well-known/agent-card.json" && break
-  sleep 0.2
+  grep -q '^stubagent: listening on ' "${work}/stub.log" && break
+  sleep 0.1
 done
-curl -s -o /dev/null "http://${addr}/agents/kagent/test-agent/.well-known/agent-card.json" \
-  || { echo "stub-oracle: the stub did not answer on ${addr}" >&2; exit 1; }
+grep -q '^stubagent: listening on ' "${work}/stub.log" && kill -0 "${stub_pid}" 2>/dev/null \
+  || { echo "stub-oracle: the stub did not report that it is listening on ${addr}" >&2; exit 1; }
 
 b64url() { base64 | tr '+/' '-_' | tr -d '=\n'; }
 token="$(printf '{"alg":"none"}' | b64url).$(printf '{"email":"binding-test@example.test","sub":"stub-sub"}' | b64url)."

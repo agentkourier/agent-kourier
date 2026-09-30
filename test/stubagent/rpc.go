@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -165,13 +166,30 @@ func withoutHITL(e obj) obj {
 	return out
 }
 
-// withoutHITLParts returns a message without the extension URI and the HITL payload.
+// withoutHITLParts returns an agent's message without the HITL extension URI, leaving any
+// other extension in the list, and without the HITL payload. A user's message is the client's
+// own and stays as it was sent.
 func withoutHITLParts(m obj) obj {
-	if m["extensions"] == nil {
+	if m["role"] != "ROLE_AGENT" || m["extensions"] == nil {
 		return m
 	}
 	m = maps.Clone(m)
-	delete(m, "extensions")
+	var kept []string
+	switch list := m["extensions"].(type) {
+	case []string:
+		kept = slices.DeleteFunc(slices.Clone(list), func(e string) bool { return e == HITLExtension })
+	case []any:
+		for _, e := range list {
+			if e != HITLExtension {
+				kept = append(kept, fmt.Sprint(e))
+			}
+		}
+	}
+	if len(kept) > 0 {
+		m["extensions"] = kept
+	} else {
+		delete(m, "extensions")
+	}
 	if metadata, ok := m["metadata"].(obj); ok {
 		metadata = maps.Clone(metadata)
 		delete(metadata, HITLExtension)

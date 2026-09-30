@@ -268,7 +268,7 @@ func (a *Agent) check(id string, m obj, owner string) decision {
 	// message to kagent: busy while the task runs, a second run of the turn after it ended
 	// (measured by WP-03, oidc-replay; spec 8.2).
 	// A replay of an answer to a paused task carries a contextId too, so it is not deduplicated
-	// either: it goes through checkReply, which refuses it (busy while the task works, not
+	// either: it goes through takeReply, which refuses it (busy while the task works, not
 	// waiting once it has ended), and a blind resend cannot run a tool twice.
 	// UNCONFIRMED: a replay of an answer is not measured; it is on the measurement backlog.
 	if prior := a.messages[id]; prior != nil && ctxID == "" {
@@ -278,7 +278,7 @@ func (a *Agent) check(id string, m obj, owner string) decision {
 		return decision{st: prior.join()}
 	}
 	if taskID != "" {
-		return a.checkReply(id, taskID, m, owner)
+		return a.takeReply(id, taskID, m, owner)
 	}
 	sess, err := a.session(ctxID, owner)
 	if err != nil {
@@ -310,7 +310,10 @@ func (a *Agent) start(id string, m obj, sess *session, steps []Step) *stream {
 	return &stream{t: t}
 }
 
-// checkReply decides a reply to the task it names. The caller holds s.mu.
+// takeReply decides a reply to the task it names, and takes a bad one: unlike the rest of check
+// it changes state then, because the wedge happens the moment the reply is read (the task is
+// WORKING again, the reply is in its history and its messageId is recorded). A good reply is
+// only decoded here, and taken by commit once its script has run. The caller holds s.mu.
 //
 // Only a task that is waiting for input takes a reply. One that is working, including one
 // wedged by an earlier bad reply, is busy (WP-02, measured), and so is one whose session has
@@ -319,7 +322,7 @@ func (a *Agent) start(id string, m obj, sess *session, steps []Step) *stream {
 // contextId is never checked against the task's; that a reply is recorded, so that its
 // messageId is a replay, even when it is a bad one that wedges the task; and that a bad
 // reply to a unary SendMessage answers -32603 as a JSON body.
-func (a *Agent) checkReply(id, taskID string, m obj, owner string) decision {
+func (a *Agent) takeReply(id, taskID string, m obj, owner string) decision {
 	t := a.tasks[taskID]
 	switch {
 	case t == nil:

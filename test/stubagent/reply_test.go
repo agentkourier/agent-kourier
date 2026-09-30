@@ -291,6 +291,32 @@ func TestAnswerWaitsForABusySession(t *testing.T) {
 	}
 }
 
+// TestHeaderlessHistoryHidesOnlyTheAgentsRequest: read without the extension, a task's history
+// loses the HITL request the agent sent, and keeps the user's own messages as they were sent.
+// UNCONFIRMED, like the rest of the per-request header rule.
+func TestHeaderlessHistoryHidesOnlyTheAgentsRequest(t *testing.T) {
+	_, agent, c := newAgent(t)
+	agent.Next(dbAsk(nil))
+	c = withHITL(c)
+	_, taskID, ctxID, request := paused(t, c)
+	c.send(reply("m2", "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"})))
+	c.hdr.Del("A2A-Extensions")
+
+	_, got := c.call("GetTask", obj{"id": taskID})
+
+	hist, _ := dig(got, "result", "history").([]any)
+	if len(hist) != 3 {
+		t.Fatalf("history has %d messages, want 3", len(hist))
+	}
+	agentMsg, userReply := hist[1], hist[2]
+	if dig(agentMsg, "extensions") != nil || dig(agentMsg, "metadata", hitlURI) != nil || dig(agentMsg, "metadata", "kagent.dev/a2a/timeline-position") == nil {
+		t.Errorf("the agent's request in the history = %v, want no extension and no payload, other metadata kept", agentMsg)
+	}
+	if !reflect.DeepEqual(dig(userReply, "extensions"), []any{hitlURI}) || dig(userReply, "metadata", hitlURI) == nil {
+		t.Errorf("the user's reply in the history = %v, want it as sent, with its extension and payload", userReply)
+	}
+}
+
 // TestThenRunsOutsideTheLock: then may call the Server. Two answers can both be inside it; the
 // first to finish takes the task, and the other, finding it working, is refused.
 func TestThenRunsOutsideTheLock(t *testing.T) {
@@ -304,11 +330,15 @@ func TestThenRunsOutsideTheLock(t *testing.T) {
 	}))
 	c = withHITL(c)
 	_, taskID, ctxID, request := paused(t, c)
-	results := make(chan obj, 2)
+	type outcome struct {
+		evs []obj
+		err error
+	}
+	results := make(chan outcome, 2)
 	for _, id := range []string{"m2", "m3"} {
-		go func() {
-			evs := c.open("SendStreamingMessage", reply(id, "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"}))).all()
-			results <- last(evs)
+		go func() { // returns its error to the test goroutine, which alone may fail the test
+			evs, err := c.trySend(reply(id, "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"})))
+			results <- outcome{evs, err}
 		}()
 	}
 	for range 2 {
@@ -320,15 +350,17 @@ func TestThenRunsOutsideTheLock(t *testing.T) {
 	}
 	close(release)
 
-	a, b := <-results, <-results
-
 	refused := 0
-	for _, got := range []obj{a, b} {
-		if dig(got, "error", "code") == float64(-32004) {
+	for range 2 {
+		got := <-results
+		if got.err != nil || len(got.evs) == 0 {
+			t.Fatalf("an answer failed: %v, %d events", got.err, len(got.evs))
+		}
+		if dig(last(got.evs), "error", "code") == float64(-32004) {
 			refused++
 		}
 	}
 	if refused != 1 {
-		t.Errorf("of two simultaneous answers %d was refused, want exactly one: %v and %v", refused, a, b)
+		t.Errorf("of two simultaneous answers %d was refused, want exactly one", refused)
 	}
 }
