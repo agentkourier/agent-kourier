@@ -115,7 +115,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		}
 		return err
 	case asm.taskID == "": // nothing to reconnect to
-		return fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
+		return beforeAnyEvent(err)
 	}
 	switch err = a.reconnect(ctx, asm, err); {
 	case err == nil:

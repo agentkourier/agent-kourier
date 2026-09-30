@@ -6,6 +6,7 @@ package dialect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -48,6 +49,17 @@ type User struct {
 // paused on input but cannot be answered. The error text names the reason and never
 // repeats text the agent supplied.
 var ErrUnusablePause = errors.New("unusable pause")
+
+// HTTPStatusError is what a dialect's transport returns for a response that is not 2xx. It
+// lets a caller tell a request the backend refused (4xx) from a connection that dropped or
+// a backend that failed (5xx), which the SDK reports as an opaque string. It carries the
+// status only, never the response body, which may echo a credential. JSON-RPC errors are
+// HTTP 200 and never take this path.
+type HTTPStatusError struct{ Code int }
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("HTTP %d %s", e.Code, http.StatusText(e.Code))
+}
 
 // Dialect is one backend protocol variant (spec 6.2).
 type Dialect interface {

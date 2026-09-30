@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
 // The errors below are matched with errors.Is. Each also carries the agent's own error, so
@@ -15,11 +18,16 @@ import (
 // ErrNotSent (nothing left, retrying is safe), ErrOutcomeUnknown (the agent may have taken
 // the message), or ErrStreamLost (the agent named the task; see StreamLostError).
 var (
-	// ErrNotSent means the message never left: the Source could not give a connection, for
-	// example because a configured token could not be read. Retrying is safe.
+	// ErrNotSent means the message was not accepted: the Source could not give a connection
+	// (a configured token could not be read, say), or the backend answered the send with a
+	// 4xx status before any event. Retrying is safe, after fixing what the error names.
 	ErrNotSent = errors.New("agent: the message was not sent")
-	// ErrOutcomeUnknown means the stream was lost before the agent named a task, so the agent
-	// may or may not have accepted the message. Resending the same messageId WITHOUT a
+	// ErrCredentialsRejected is joined to an error whose HTTP status is 401 or 403: the front
+	// door refused the Binding's credentials, so the caller re-mints the token (WP-21e).
+	// Before any event it comes with ErrNotSent, and the send can be retried after re-minting.
+	ErrCredentialsRejected = errors.New("agent: the backend refused the credentials")
+	// ErrOutcomeUnknown means the stream was lost, or the backend failed with a 5xx status,
+	// before the agent named a task, so the agent may or may not have accepted the message. Resending the same messageId WITHOUT a
 	// contextId is deduplicated by kagent (WP-02, measured). One WITH a contextId is not
 	// (WP-03, measured): while the task runs it gets -32004, and after the task ends it starts
 	// a second full task. So the caller reconciles first, with FindTask on the contextId, and
@@ -74,8 +82,30 @@ func typed(err error, answer bool) error {
 		return fmt.Errorf("%w: %w", ErrForbidden, err)
 	case answer && errors.Is(err, a2a.ErrInternalError):
 		return fmt.Errorf("%w: %w", ErrAnswerRejected, err)
+	case httpStatus(err) == http.StatusUnauthorized || httpStatus(err) == http.StatusForbidden:
+		return fmt.Errorf("%w: %w", ErrCredentialsRejected, err)
 	}
 	return err
+}
+
+// httpStatus returns the HTTP status the backend answered with, or 0 if err carries none.
+func httpStatus(err error) int {
+	var hs *dialect.HTTPStatusError
+	if errors.As(err, &hs) {
+		return hs.Code
+	}
+	return 0
+}
+
+// beforeAnyEvent types an error that ended a send before the agent named a task: a 4xx
+// means the backend refused the request, so nothing was sent; anything else may have got
+// through.
+func beforeAnyEvent(err error) error {
+	err = typed(err, false)
+	if code := httpStatus(err); code >= 400 && code < 500 {
+		return fmt.Errorf("%w: %w", ErrNotSent, err)
+	}
+	return fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
 }
 
 // isProtocol reports whether err is one the agent itself returned, as opposed to a

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -164,6 +165,24 @@ func TestConnectIdentityOnTheWire(t *testing.T) {
 						t.Errorf("%s: Authorization=%q X-User-Id=%q, want %q and %q", method, h.Get("Authorization"), h.Get("X-User-Id"), tc.wantAuth, tc.wantUser)
 					}
 				}
+			}
+		})
+	}
+}
+
+// A response that is not 2xx comes back as a typed error, so a caller can tell a request the
+// front door refused from a connection that dropped. The body never reaches the error.
+func TestNon2xxResponseIsAnHTTPStatusError(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusNotFound, http.StatusBadGateway, http.StatusTemporaryRedirect} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			fd := newFrontDoor(t, true, nil, func(w http.ResponseWriter, _ *http.Request) { http.Error(w, canary, code) })
+			_, err := ask(t.Context(), fd, dialect.Credentials{Token: canary})
+			var hs *dialect.HTTPStatusError
+			if !errors.As(err, &hs) || hs.Code != code {
+				t.Fatalf("err = %v, want an *HTTPStatusError with code %d", err, code)
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Errorf("the response body leaked into the error: %v", err)
 			}
 		})
 	}

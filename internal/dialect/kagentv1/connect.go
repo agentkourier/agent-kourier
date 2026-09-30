@@ -105,7 +105,8 @@ func (d *Dialect) httpClient(creds dialect.Credentials, frontDoor *url.URL) *htt
 	}
 }
 
-// authTransport authenticates each request, on a copy, before sending it to the front door.
+// authTransport authenticates each request, on a copy, before sending it to the front door,
+// and turns a response that is not 2xx into a dialect.HTTPStatusError.
 type authTransport struct {
 	next      http.RoundTripper
 	dialect   *Dialect
@@ -127,5 +128,13 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := t.dialect.Authenticate(req, t.creds); err != nil {
 		return refuse(err)
 	}
-	return t.next.RoundTrip(req)
+	resp, err := t.next.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_ = resp.Body.Close()
+		return nil, &dialect.HTTPStatusError{Code: resp.StatusCode}
+	}
+	return resp, nil
 }
