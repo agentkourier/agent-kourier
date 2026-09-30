@@ -74,7 +74,7 @@ func TestReconnectAfterDropContinuesWithoutDuplicates(t *testing.T) {
 func TestWatchdogCancelsASilentHTTPStreamAndReconnects(t *testing.T) {
 	fa := newFakeAgent(t, resumeAfterFirstTick(t, true))
 	cfg := quick
-	cfg.InactivityTimeout = 300 * time.Millisecond // the stream never speaks again, so the window only sets the delay
+	cfg.InactivityTimeout = time.Second // the stream never speaks again, so the window only sets the delay
 	h, got := collector()
 	if err := fa.agentWith(t, cfg).Send(t.Context(), message("go slowly"), h); err != nil {
 		t.Fatal(err)
@@ -92,13 +92,13 @@ func TestWatchdogResetsOnEveryEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ch := make(chan item)
 		m := &memConn{sends: []chan item{ch}}
-		result, _ := sendAsync(t, memAgent(m, nil))
+		s := sendAsync(t, memAgent(t, m, nil))
 		for range 6 {
 			time.Sleep(6 * time.Second) // 36 s in all, far past the 10 s window
-			ch <- item{ev: delta("x")}
+			s.feed(ch, item{ev: delta("x")})
 		}
-		ch <- item{ev: task(a2a.TaskStateCompleted, "xxxxxx")}
-		if err := result(); err != nil {
+		s.feed(ch, item{ev: task(a2a.TaskStateCompleted, "xxxxxx")})
+		if err := s.result(); err != nil {
 			t.Fatal(err)
 		}
 		if got, want := m.calls(), []string{"send", "send ended"}; !slices.Equal(got, want) {
@@ -108,26 +108,32 @@ func TestWatchdogResetsOnEveryEvent(t *testing.T) {
 }
 
 // Silence past the window cancels the stream, and only then is the task reconciled: GetTask,
-// then SubscribeToTask (spec 8.3).
+// then SubscribeToTask (spec 8.3), ReconnectDelay after the cut.
 func TestWatchdogCancelsASilentStreamThenReconciles(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, sub := make(chan item), make(chan item)
 		m := &memConn{sends: []chan item{send}, subs: []chan item{sub}, gets: []getResult{{task: task(a2a.TaskStateWorking, "tick 1 ")}}}
-		result, events := sendAsync(t, memAgent(m, nil))
-		send <- item{ev: working()}
-		send <- item{ev: delta("tick 1 ")}
+		s := sendAsync(t, memAgent(t, m, nil))
+		s.feed(send, item{ev: working()})
+		s.feed(send, item{ev: delta("tick 1 ")})
 		time.Sleep(11 * time.Second) // silence past the window
-		sub <- item{ev: delta("tick 2")}
-		sub <- item{ev: task(a2a.TaskStateCompleted, "tick 1 tick 2")}
-		if err := result(); err != nil {
+		s.feed(sub, item{ev: delta("tick 2")})
+		s.feed(sub, item{ev: task(a2a.TaskStateCompleted, "tick 1 tick 2")})
+		if err := s.result(); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"send", "send ended", "get", "subscribe", "subscribe ended"}
+		want := []string{"send", "send ended", "get t1", "subscribe t1", "subscribe ended"}
 		if got := m.calls(); !slices.Equal(got, want) {
 			t.Errorf("calls = %q, want %q", got, want)
 		}
-		if got, want := texts(events()), []string{"tick 1 ", "tick 1 tick 2"}; !slices.Equal(got, want) {
+		if got, want := texts(s.events()), []string{"tick 1 ", "tick 1 tick 2"}; !slices.Equal(got, want) {
 			t.Errorf("texts = %q, want %q", got, want)
+		}
+		if d := m.at("send ended").Sub(m.at("send")); d != 10*time.Second { // the events came at once: the silence is the window
+			t.Errorf("the stream lived %v, want the 10 s window", d)
+		}
+		if d := m.at("get t1").Sub(m.at("send ended")); d != time.Second {
+			t.Errorf("GetTask came %v after the cut, want ReconnectDelay (1s)", d)
 		}
 	})
 }
@@ -137,17 +143,17 @@ func TestReconnectStopsAtAFinishedTask(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send := make(chan item)
 		m := &memConn{sends: []chan item{send}, gets: []getResult{{task: task(a2a.TaskStateCompleted, "ab")}}}
-		result, events := sendAsync(t, memAgent(m, nil))
-		send <- item{ev: delta("a")}
-		send <- item{err: io.ErrUnexpectedEOF}
-		if err := result(); err != nil {
+		s := sendAsync(t, memAgent(t, m, nil))
+		s.feed(send, item{ev: delta("a")})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		if err := s.result(); err != nil {
 			t.Fatal(err)
 		}
-		if got, want := m.calls(), []string{"send", "send ended", "get"}; !slices.Equal(got, want) {
+		if got, want := m.calls(), []string{"send", "send ended", "get t1"}; !slices.Equal(got, want) {
 			t.Errorf("calls = %q, want %q", got, want)
 		}
-		if _, ok := events()[len(events())-1].(FinalEvent); !ok || !slices.Equal(texts(events()), []string{"a", "ab"}) {
-			t.Errorf("events = %#v, want the text a then ab, and the final task", events())
+		if _, ok := s.events()[len(s.events())-1].(FinalEvent); !ok || !slices.Equal(texts(s.events()), []string{"a", "ab"}) {
+			t.Errorf("events = %#v, want the text a then ab, and the final task", s.events())
 		}
 	})
 }
@@ -157,16 +163,16 @@ func TestReconnectBudgetResetsWhenAStreamChangesSomething(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, sub1, sub2 := make(chan item), make(chan item), make(chan item)
 		m := &memConn{sends: []chan item{send}, subs: []chan item{sub1, sub2}, gets: []getResult{{task: task(a2a.TaskStateWorking, "a")}}}
-		result, events := sendAsync(t, memAgent(m, func(c *Config) { c.MaxReconnects = 1 }))
-		send <- item{ev: delta("a")}
-		send <- item{err: io.ErrUnexpectedEOF}
-		sub1 <- item{ev: delta("b")}
-		sub1 <- item{err: io.ErrUnexpectedEOF}
-		sub2 <- item{ev: task(a2a.TaskStateCompleted, "abc")}
-		if err := result(); err != nil {
+		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 1 }))
+		s.feed(send, item{ev: delta("a")})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		s.feed(sub1, item{ev: delta("b")})
+		s.feed(sub1, item{err: io.ErrUnexpectedEOF})
+		s.feed(sub2, item{ev: task(a2a.TaskStateCompleted, "abc")})
+		if err := s.result(); err != nil {
 			t.Fatalf("Send: %v (two drops with progress between them fit a budget of one)", err)
 		}
-		if got, want := texts(events()), []string{"a", "ab", "abc"}; !slices.Equal(got, want) {
+		if got, want := texts(s.events()), []string{"a", "ab", "abc"}; !slices.Equal(got, want) {
 			t.Errorf("texts = %q, want %q", got, want)
 		}
 	})
@@ -176,13 +182,13 @@ func TestReconnectGivesUp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send := make(chan item)
 		m := &memConn{sends: []chan item{send}, gets: []getResult{{err: errors.New("down")}}}
-		result, _ := sendAsync(t, memAgent(m, func(c *Config) { c.MaxReconnects = 2 }))
-		send <- item{ev: working()}
-		send <- item{err: io.ErrUnexpectedEOF}
-		if err := result(); !errors.Is(err, ErrStreamLost) {
+		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 }))
+		s.feed(send, item{ev: working()})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		if err := s.result(); !errors.Is(err, ErrStreamLost) {
 			t.Errorf("err = %v, want ErrStreamLost", err)
 		}
-		if n := len(m.calls()) - 2; n != 2 { // the send and its end
+		if n := countOf(m.calls(), "get t1"); n != 2 {
 			t.Errorf("%d GetTask calls, want 2, one per reconnect", n)
 		}
 	})

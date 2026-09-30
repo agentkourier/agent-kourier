@@ -129,11 +129,11 @@ func TestCancelOfWedgedTaskIgnoresTheCallersCancellation(t *testing.T) {
 		ctx, stop := context.WithCancel(t.Context())
 		send := make(chan item)
 		m := &memConn{sends: []chan item{send}, onCancel: stop}
-		agent := memAgent(m, nil)
+		agent := memAgent(t, m, nil)
 		done := make(chan error, 1)
 		go func() { done <- agent.Answer(ctx, message(""), nil) }()
-		send <- item{ev: working()}
-		send <- item{err: a2a.NewError(a2a.ErrInternalError, "wedged")}
+		feed(t, send, item{ev: working()}, done)
+		feed(t, send, item{err: a2a.NewError(a2a.ErrInternalError, "wedged")}, done)
 		err := <-done
 		if !errors.Is(err, ErrAnswerRejected) || errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want ErrAnswerRejected alone: the cancel ran on a context detached from the caller's", err)

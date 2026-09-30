@@ -18,18 +18,18 @@ func TestSilentWorkingTaskFailsAfterMaxReconnects(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, sub1, sub2, sub3 := make(chan item), make(chan item), make(chan item), make(chan item)
 		m := &memConn{sends: []chan item{send}, subs: []chan item{sub1, sub2, sub3}, gets: []getResult{{task: task(a2a.TaskStateWorking, "")}}}
-		result, _ := sendAsync(t, memAgent(m, func(c *Config) { c.MaxReconnects = 3 }))
-		send <- item{ev: working()}
-		send <- item{err: io.ErrUnexpectedEOF}
+		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 3 }))
+		s.feed(send, item{ev: working()})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
 		for _, sub := range []chan item{sub1, sub2, sub3} {
-			sub <- item{ev: task(a2a.TaskStateWorking, "")} // the opening snapshot, then silence
+			s.feed(sub, item{ev: task(a2a.TaskStateWorking, "")}) // the opening snapshot, then silence
 		}
-		err := result()
+		err := s.result()
 		var lost *StreamLostError
 		if !errors.Is(err, ErrStreamLost) || !errors.As(err, &lost) || lost.TaskID != "t1" || lost.ContextID != "c1" {
 			t.Fatalf("err = %v, want a StreamLostError for t1 in c1", err)
 		}
-		if n := countOf(m.calls(), "subscribe"); n != 3 {
+		if n := countOf(m.calls(), "subscribe t1"); n != 3 {
 			t.Errorf("%d subscribes, want 3, one per reconnect", n)
 		}
 	})
@@ -43,14 +43,14 @@ func TestOutcomeIsUnknownWhenTheStreamIsLostBeforeATaskIsNamed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send := make(chan item)
 		m := &memConn{sends: []chan item{send}}
-		result, _ := sendAsync(t, memAgent(m, nil))
-		send <- item{err: io.ErrUnexpectedEOF}
-		err := result()
+		s := sendAsync(t, memAgent(t, m, nil))
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		err := s.result()
 		if !errors.Is(err, ErrOutcomeUnknown) || errors.Is(err, ErrStreamLost) || errors.Is(err, ErrNotSent) {
 			t.Errorf("err = %v, want ErrOutcomeUnknown only", err)
 		}
-		if n := countOf(m.calls(), "get"); n != 0 {
-			t.Errorf("%d GetTask calls, want none: there is no task to ask about", n)
+		if got, want := m.calls(), []string{"send", "send ended"}; !slices.Equal(got, want) {
+			t.Errorf("calls = %q, want %q: there is no task to ask about", got, want)
 		}
 	})
 }
@@ -59,7 +59,7 @@ func TestOutcomeIsUnknownWhenTheStreamIsLostBeforeATaskIsNamed(t *testing.T) {
 func TestSourceFailureDuringReconnectKeepsTheTask(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, boom := make(chan item), errors.New("secret not found")
-		m := &memConn{sends: []chan item{send}}
+		m := &memConn{t: t, sends: []chan item{send}}
 		var calls int
 		source := func(context.Context) (Conn, error) {
 			if calls++; calls > 1 {
@@ -67,10 +67,10 @@ func TestSourceFailureDuringReconnectKeepsTheTask(t *testing.T) {
 			}
 			return m, nil
 		}
-		result, _ := sendAsync(t, New(source, nil, Config{ReconnectDelay: time.Second}))
-		send <- item{ev: working()}
-		send <- item{err: io.ErrUnexpectedEOF}
-		err := result()
+		s := sendAsync(t, New(source, nil, Config{ReconnectDelay: time.Second}))
+		s.feed(send, item{ev: working()})
+		s.feed(send, item{err: io.ErrUnexpectedEOF})
+		err := s.result()
 		var lost *StreamLostError
 		if !errors.Is(err, ErrStreamLost) || !errors.Is(err, boom) || !errors.As(err, &lost) || lost.TaskID != "t1" || lost.ContextID != "c1" || errors.Is(err, ErrNotSent) {
 			t.Errorf("err = %v, want a StreamLostError for t1 in c1 wrapping the Source's error", err)

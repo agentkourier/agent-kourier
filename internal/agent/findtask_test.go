@@ -76,7 +76,7 @@ func TestFindTaskFollowsPagesWithoutRelyingOnOrder(t *testing.T) {
 			tokens = append(tokens, req.PageToken)
 			return pages[req.PageToken], nil
 		}}
-		task, err := memAgent(m, nil).FindTask(t.Context(), "c1", "turn")
+		task, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
 		if err != nil || task == nil || task.ID != "t4" {
 			t.Errorf("task = %+v, %v; want t4: a running holder wins over a finished one on an earlier page", task, err)
 		}
@@ -91,7 +91,7 @@ func TestFindTaskGivesUpOnAListThatNeverEnds(t *testing.T) {
 		m := &memConn{list: func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 			return listOf("again", holding("t1", a2a.TaskStateCompleted, "x")), nil
 		}}
-		if task, err := memAgent(m, nil).FindTask(t.Context(), "c1", "turn"); err == nil {
+		if task, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil {
 			t.Errorf("task = %+v, want an error once the pages run past any sane bound", task)
 		}
 	})
@@ -122,7 +122,7 @@ func TestFindTaskHasADeadline(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}}
-		if _, err := memAgent(hang, func(c *Config) { c.UnaryTimeout = time.Second }).FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
+		if _, err := memAgent(t, hang, func(c *Config) { c.UnaryTimeout = time.Second }).FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("hung page: err = %v, want DeadlineExceeded", err)
 		}
 		stuck := New(func(ctx context.Context) (Conn, error) { <-ctx.Done(); return nil, ctx.Err() }, nil, Config{UnaryTimeout: time.Second})
