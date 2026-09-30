@@ -128,6 +128,7 @@ func TestCredentialsRejectedFailsTheTurn(t *testing.T) {
 func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
+	waits := f.countWaits()
 	f.agent.script = func(context.Context, int, agent.Handler) error {
 		return fmt.Errorf("send message: %w", agent.ErrForbidden)
 	}
@@ -135,15 +136,9 @@ func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-	select {
-	case <-f.agent.sent: // the one send
-	case <-time.After(time.Second):
-		t.Fatal("no send")
-	}
-	select {
-	case id := <-f.agent.sent:
-		t.Fatalf("%s was sent again", id)
-	case <-time.After(100 * time.Millisecond):
+	f.retired(t)
+	if sends, _, _ := f.agent.counts(); sends != 1 || waits.Load() != 0 {
+		t.Errorf("%d sends, %d retry waits; want one send and no retry", sends, waits.Load())
 	}
 	f.amu.Lock()
 	defer f.amu.Unlock()

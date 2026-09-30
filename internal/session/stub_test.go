@@ -182,7 +182,7 @@ func TestStubRefusedCredentialsFailTheTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the failure notice", func() bool { return len(e.sink.noticesOf(NoticeFailed)) == 1 })
-	time.Sleep(100 * time.Millisecond) // a retry would show by now
+	e.retired(t) // a retry would keep the runner alive
 	e.amu.Lock()
 	defer e.amu.Unlock()
 	if len(e.rejected) != 1 || !errors.Is(e.rejected[0].Err, agent.ErrCredentialsRejected) || len(e.audits) != 0 {

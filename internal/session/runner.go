@@ -85,7 +85,11 @@ var ErrNotParked = errors.New("session: no pause of that task to end")
 // paused, so callers call it only for a pause.
 func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) error {
 	m.mu.Lock()
-	c, running, closed := m.convos[key], m.convos[key] != nil, m.closed
+	c, running := m.convos[key], m.convos[key] != nil
+	if m.closed {
+		m.mu.Unlock()
+		return ErrNotParked // the runners are gone, or going
+	}
 	if running {
 		defer m.mu.Unlock()
 		if taskID == "" || c.parked != taskID || c.released {
@@ -96,9 +100,6 @@ func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) erro
 		return nil
 	}
 	m.mu.Unlock()
-	if closed {
-		return ErrNotParked
-	}
 	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
 	if err != nil {
 		return err
@@ -229,6 +230,17 @@ func (c *convo) settle() {
 	c.tries, c.since, c.patient, c.notified, c.cancelFrom = 0, time.Time{}, false, false, time.Time{}
 }
 
+// unpark forgets a pause the runner turned out not to be parked on, and any signal for it.
+func (m *Manager) unpark(c *convo) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c.parked, c.released = "", false
+	select {
+	case <-c.resume:
+	default:
+	}
+}
+
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
 	follow bool       // the attempt follows a task instead of sending
@@ -243,8 +255,13 @@ type tstate struct {
 
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
 // recording the task as soon as the agent names it.
-func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, error) {
+func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome, err error) {
 	key, c, r := t.key, t.c, t.r
+	defer func() {
+		if out != paused { // the pause event may have parked the runner before the stream failed
+			m.unpark(c)
+		}
+	}()
 	sctx := context.WithoutCancel(m.ctx)
 	h := func(agent.Event) {}
 	if m.cfg.Sink != nil {
@@ -255,7 +272,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 	var final *a2a.Task
 	var recordErr error
 	named := false
-	err := send(func(e agent.Event) {
+	err = send(func(e agent.Event) {
 		c.lastSeen = m.cfg.Now() // the task is alive: its age counts from here (R17)
 		switch ev := e.(type) {
 		case agent.StateEvent:

@@ -323,9 +323,10 @@ func TestRetryStateStartsOverAfterANamedTurn(t *testing.T) {
 func TestPreviouslySentTurnIsLookedUpBeforeAnyResend(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
+	waits := f.countWaits()
 	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 		if n == 1 {
-			return fmt.Errorf("%w: the stream ended", agent.ErrOutcomeUnknown)
+			return errors.New("the stream ended in a way nothing classifies") // the runner stops, leaving the turn queued
 		}
 		return turn(h, n, a2a.TaskStateCompleted)
 	}
@@ -333,17 +334,16 @@ func TestPreviouslySentTurnIsLookedUpBeforeAnyResend(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-sink.finals
-	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	f.retired(t)
 	in := inbound("2")
 	if _, err := f.submit(in); err != nil {
 		t.Fatal(err)
 	}
-	<-f.agent.sent
-	<-f.agent.sent
-	select { // the runner stops on an outcome it cannot classify; nothing resends it by itself
-	case id := <-f.agent.sent:
-		t.Fatalf("%s was sent again with nothing to wake the runner", id)
-	case <-time.After(100 * time.Millisecond):
+	f.nextSent()
+	f.nextSent()
+	f.retired(t) // nothing retries it by itself
+	if sends, _, _ := f.agent.counts(); sends != 2 || waits.Load() != 0 {
+		t.Fatalf("%d sends, %d retry waits; want turn 1 and turn 2 once, and no retry", sends, waits.Load())
 	}
 	if _, err := f.submit(in); err != nil { // the redelivered event
 		t.Fatal(err)
@@ -411,4 +411,48 @@ func TestAttemptedTurnIsForgottenWhenTheQueueEmpties(t *testing.T) {
 	}
 	f.m.start(key)
 	eventually(t, "the entry to go", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.attempted) == 0 })
+}
+
+// After Close, no pause can be ended: the runner is gone, and a call must not look as if it
+// released anything.
+func TestEndPauseAfterCloseIsDropped(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error { return turn(h, n, a2a.TaskStateInputRequired) }
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if err := f.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.endPause(t.Context(), key, "t1"); !errors.Is(err, ErrNotParked) {
+		t.Errorf("endPause after Close = %v; want ErrNotParked", err)
+	}
+}
+
+// A pause event is shown inside the stream, before the send has ended. If the stream then fails
+// (here, is lost), the conversation was never parked, and a call to end that pause must be
+// dropped: it must leave no stale state, and no buffered signal for a later pause to consume.
+func TestPauseEventFollowedByALostStreamLeavesNoStalePause(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	waits := f.countWaits()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		h(agent.FinalEvent{Task: &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}})
+		return &agent.StreamLostError{TaskID: "t1", ContextID: "c1", Err: errors.New("connection reset")}
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the runner to wait to follow the lost stream", func() bool { return waits.Load() == 1 })
+	if err := f.m.endPause(t.Context(), key, "t1"); !errors.Is(err, ErrNotParked) {
+		t.Errorf("endPause = %v; want ErrNotParked: the runner is not parked", err)
+	}
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	if c := f.m.convos[key]; len(c.resume) != 0 || c.parked != "" {
+		t.Errorf("parked %q, %d signals buffered; want none", c.parked, len(c.resume))
+	}
 }

@@ -69,7 +69,7 @@ func TestResetSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := s.GetSession(ctx, key, 1000*time.Hour, t0)
-		if want := (store.Session{Key: key, Binding: "ns/b", LastActivity: t0}); err != nil || got != want {
+		if want := (store.Session{Key: key, Binding: "ns/b", LastActivity: t0}); err != nil || !got.LastActivity.Equal(want.LastActivity) || got.ContextID != "" || got.TaskID != "" || got.Binding != want.Binding || got.Key != want.Key {
 			t.Fatalf("session = %+v, %v; want %+v", got, err, want)
 		}
 	}

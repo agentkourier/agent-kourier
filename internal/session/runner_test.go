@@ -605,3 +605,17 @@ func TestTransientBindingErrorLeavesTheTurnQueued(t *testing.T) {
 		t.Errorf("queue head %+v, %v; want the turn still queued and no notice", next, err)
 	}
 }
+
+// countWaits makes every wait for a retry endless, and counts them: a runner that has stopped
+// instead of retrying shows as zero waits once it has retired.
+func (f *fixture) countWaits() *atomic.Int32 {
+	var n atomic.Int32
+	f.m.cfg.After = func(time.Duration) <-chan time.Time { n.Add(1); return nil }
+	return &n
+}
+
+// retired waits for the runner of the conversation to stop.
+func (f *fixture) retired(t *testing.T) {
+	t.Helper()
+	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+}
