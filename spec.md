@@ -387,8 +387,8 @@ spec:
 Rules:
 
 - **Secret keys.** A single-value Secret reference (`alerts.tokenSecretRef`,
-  `identity.tokenSecretRef`, `auth.bearerTokenSecretRef`) takes an optional `key` that
-  defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
+  `identity.tokenSecretRef`, `auth.bearerTokenSecretRef`, and a header's
+  `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
   fixed keys: `botToken`, `appToken` (Socket Mode), and `signingSecret` (HTTP mode).
 - An empty namespace in a reference means the referring resource's namespace.
 - One channel maps to at most one Binding. A second Binding for the same channel is
