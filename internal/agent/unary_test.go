@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -43,25 +44,102 @@ func TestGetTaskAndCancelTaskResults(t *testing.T) {
 	}
 }
 
-// R17: a wrong answer wedges the task; the caller cancels it by the task the answer named.
-func TestWedgedTaskIsCancelledByItsAnswer(t *testing.T) {
-	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
+// The deadline starts before the connection is resolved: a Source that waits for the
+// network is bounded too.
+func TestUnaryDeadlineCoversTheSource(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stuck := func(ctx context.Context) (Conn, error) { <-ctx.Done(); return nil, ctx.Err() }
+		agent := New(stuck, nil, Config{UnaryTimeout: time.Second})
+		if _, err := agent.GetTask(t.Context(), "t1"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("GetTask err = %v, want DeadlineExceeded", err)
+		}
+		if _, err := agent.CancelTask(t.Context(), "t1"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("CancelTask err = %v, want DeadlineExceeded", err)
+		}
+	})
+}
+
+// wedgeThenCancel answers every send with kagent's wedge (-32603 after WORKING) and every
+// CancelTask with cancelReply.
+func wedgeThenCancel(t *testing.T, cancelReply func(http.ResponseWriter)) func(rpc, http.ResponseWriter) {
+	return func(call rpc, w http.ResponseWriter) {
 		if call.Method == "CancelTask" {
-			reply(t, w, "busy/04-cancel.response.json")
+			cancelReply(w)
 			return
 		}
 		sse(t, w, "askuser/10-bad-empty-answers.response.sse", -1)
+	}
+}
+
+// R17: an answer the agent rejects wedges the task, so Answer cancels it: the task the
+// stream named, else the one the answer was addressed to.
+func TestRejectedAnswerCancelsTheWedgedTask(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		serve  func(rpc, http.ResponseWriter)
+		wantID string
+	}{
+		{"the stream named the task", wedgeThenCancel(t, func(w http.ResponseWriter) { reply(t, w, "busy/04-cancel.response.json") }), "01a0f05a-a744-7b36-89fe-a087f77ac977"},
+		{"the stream named no task", func(call rpc, w http.ResponseWriter) {
+			if call.Method == "CancelTask" {
+				reply(t, w, "busy/04-cancel.response.json")
+				return
+			}
+			rpcError(-32603)(w)
+		}, "task-9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fa := newFakeAgent(t, tc.serve)
+			answer := message("")
+			answer.TaskID = "task-9"
+			if err := fa.agentWith(t, quick).Answer(t.Context(), answer, nil); !errors.Is(err, ErrAnswerRejected) {
+				t.Fatalf("Answer err = %v, want ErrAnswerRejected", err)
+			}
+			if fa.count("CancelTask") != 1 {
+				t.Fatalf("CancelTask called %d times, want once", fa.count("CancelTask"))
+			}
+			if got, want := string(fa.callAt(1).Params), `{"id":"`+tc.wantID+`"}`; got != want { // call 0 is the send
+				t.Errorf("CancelTask params = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestRejectedAnswerReportsAFailedCancel(t *testing.T) {
+	fa := newFakeAgent(t, wedgeThenCancel(t, func(w http.ResponseWriter) {
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","error":{"code":-32002,"message":"not cancelable"}}`))
+	}))
+	err := fa.agentWith(t, quick).Answer(t.Context(), message(""), nil)
+	if !errors.Is(err, ErrAnswerRejected) || !errors.Is(err, a2a.ErrTaskNotCancelable) {
+		t.Errorf("err = %v, want ErrAnswerRejected joined with the failed cancel", err)
+	}
+}
+
+// Only an answer wedges a task: a plain send that fails with -32603 cancels nothing.
+func TestRejectedSendDoesNotCancel(t *testing.T) {
+	fa := newFakeAgent(t, wedgeThenCancel(t, func(w http.ResponseWriter) { reply(t, w, "busy/04-cancel.response.json") }))
+	if err := fa.agentWith(t, quick).Send(t.Context(), message(""), nil); errors.Is(err, ErrAnswerRejected) || fa.count("CancelTask") != 0 {
+		t.Errorf("err = %v, CancelTask calls = %d; want a plain error and no cancel", err, fa.count("CancelTask"))
+	}
+}
+
+// The cancel must outlive the caller's context: it is the cleanup of the failed answer.
+func TestCancelOfWedgedTaskIgnoresTheCallersCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, stop := context.WithCancel(t.Context())
+		send := make(chan item)
+		m := &memConn{sends: []chan item{send}, onCancel: stop}
+		agent := memAgent(m, nil)
+		done := make(chan error, 1)
+		go func() { done <- agent.Answer(ctx, message(""), nil) }()
+		send <- item{ev: working()}
+		send <- item{err: a2a.NewError(a2a.ErrInternalError, "wedged")}
+		err := <-done
+		if !errors.Is(err, ErrAnswerRejected) || errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want ErrAnswerRejected alone: the cancel ran on a context detached from the caller's", err)
+		}
+		if got := m.calls(); got[len(got)-1] != "cancel t1" {
+			t.Errorf("calls = %q, want the cancel last", got)
+		}
 	})
-	agent, answer := fa.agentWith(t, quick), message("")
-	answer.TaskID = "task-9"
-	err := agent.Answer(t.Context(), answer, nil)
-	if !errors.Is(err, ErrAnswerRejected) {
-		t.Fatalf("Answer err = %v, want ErrAnswerRejected", err)
-	}
-	if _, err := agent.CancelTask(t.Context(), answer.TaskID); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(fa.callAt(1).Params); got != `{"id":"task-9"}` {
-		t.Errorf("CancelTask params = %s, want the answer's task", got)
-	}
 }

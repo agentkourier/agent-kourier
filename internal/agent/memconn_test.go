@@ -26,6 +26,7 @@ type memConn struct {
 	log         []string
 	sends, subs []chan item
 	gets        []getResult
+	onCancel    func() // runs at the start of CancelTask, for a test to cancel a context at that moment
 }
 
 type getResult struct {
@@ -95,7 +96,13 @@ func (m *memConn) GetTask(context.Context, *a2a.GetTaskRequest) (*a2a.Task, erro
 	return r.task, r.err
 }
 
-func (m *memConn) CancelTask(_ context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+func (m *memConn) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	if m.onCancel != nil {
+		m.onCancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.record("cancel " + string(req.ID))
 	return &a2a.Task{ID: req.ID, Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
 }

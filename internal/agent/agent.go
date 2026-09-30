@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -87,8 +88,9 @@ func (a *Agent) Send(ctx context.Context, msg *a2a.Message, h Handler) error {
 }
 
 // Answer is Send for a message that answers an interaction (an ask-user reply or a tool
-// approval). It differs only in typing a -32603 as ErrAnswerRejected, after which the
-// caller must CancelTask the task (R17).
+// approval). It differs in one way: a -32603 (ErrAnswerRejected) leaves the task wedged, so
+// Answer cancels it, the task the stream named or else msg.TaskID (R17). The caller tells
+// the thread. If the cancel fails too, the error carries both.
 func (a *Agent) Answer(ctx context.Context, msg *a2a.Message, h Handler) error {
 	return a.send(ctx, msg, h, true)
 }
@@ -106,7 +108,11 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	case err == nil:
 		return nil
 	case !dropped(ctx, err):
-		return sendError(ctx, err, answer)
+		err = sendError(ctx, err, answer)
+		if errors.Is(err, ErrAnswerRejected) {
+			err = a.cancelWedged(ctx, err, cmp.Or(asm.taskID, msg.TaskID))
+		}
+		return err
 	case asm.taskID == "": // nothing to reconnect to
 		return fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
 	}
@@ -117,6 +123,19 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("send message: %w", err)
 	}
 	return &StreamLostError{TaskID: asm.taskID, ContextID: asm.contextID, Err: typed(err, false)}
+}
+
+// cancelWedged cancels the task a rejected answer left in WORKING, which refuses every
+// message until then (R17). It runs detached from ctx, so the caller giving up does not
+// leave the task wedged; UnaryTimeout bounds it. A failed cancel is joined to rejected.
+func (a *Agent) cancelWedged(ctx context.Context, rejected error, id a2a.TaskID) error {
+	if id == "" {
+		return rejected
+	}
+	if _, err := a.CancelTask(context.WithoutCancel(ctx), id); err != nil {
+		return errors.Join(rejected, err)
+	}
+	return rejected
 }
 
 // reconnect resumes the task, after err ended its stream, until the task settles. It gives
@@ -189,8 +208,11 @@ func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Cont
 	return err
 }
 
-// GetTask returns the task's current state, within UnaryTimeout.
+// GetTask returns the task's current state. UnaryTimeout bounds it, resolving the
+// connection included.
 func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
+	defer cancel()
 	conn, err := a.source(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("connect to agent: %w", err)
@@ -198,15 +220,16 @@ func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
 	return a.getTask(ctx, conn, id)
 }
 
-// CancelTask cancels the task, within UnaryTimeout, and returns it as the agent left it. It
-// backs the thread's stop control and clears a wedged task after ErrAnswerRejected (R17).
+// CancelTask cancels the task and returns it as the agent left it. It backs the thread's
+// stop control, and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
+// resolving the connection included.
 func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
+	defer cancel()
 	conn, err := a.source(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("connect to agent: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
-	defer cancel()
 	task, err := conn.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id})
 	if err != nil {
 		return nil, fmt.Errorf("cancel task %s: %w", id, typed(err, false))

@@ -38,7 +38,8 @@ var (
 	ErrForbidden = errors.New("agent: caller is not the session's owner")
 	// ErrAnswerRejected means the agent failed an answer to an interaction with -32603, or
 	// with any code a2a-go does not know, which it reports as -32603. The task stays in
-	// WORKING and refuses every message, so it must be cancelled (R17).
+	// WORKING and refuses every message, so Answer cancels it (R17); a cancel that failed
+	// is joined to this error.
 	ErrAnswerRejected = errors.New("agent: the answer was rejected and the task is wedged")
 	// ErrStreamLost means the stream ended before the task reached an end state, and the
 	// reconnects did not get it there. The agent had named the task, so a StreamLostError
