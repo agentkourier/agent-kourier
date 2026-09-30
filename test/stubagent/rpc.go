@@ -18,6 +18,7 @@ const (
 	codeInternal      = -32603
 	codeTaskNotFound  = -32001
 	codeNotCancelable = -32002
+	codeBusy          = -32004 // A2A's unsupported operation, which kagent answers a busy session with
 )
 
 // rpcError is a JSON-RPC error. reason is the google.rpc.ErrorInfo reason kagent attaches.

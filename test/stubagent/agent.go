@@ -19,6 +19,7 @@ type Agent struct {
 	reply    func(prompt string) []Step
 	sessions map[string]*session
 	tasks    map[string]*task
+	messages map[string]*task // the task each accepted messageId started
 }
 
 // Next queues a turn for the next message the agent accepts. Turns run in the order queued.
@@ -122,6 +123,9 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 
 // admit turns a message into a running task: it finds or opens the session, creates the task
 // with the events kagent opens a stream with, and starts the turn.
+//
+// A message whose messageId was accepted before is a replay: it joins that task, and runs no
+// turn (WP-02, measured). A message that is rejected is not remembered, so it can be resent.
 func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	id, _ := m["messageId"].(string)
 	if id == "" {
@@ -130,12 +134,18 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	s := a.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if prior := a.messages[id]; prior != nil {
+		return prior.join(), nil
+	}
+	ctxID, _ := m["contextId"].(string)
+	sess := a.session(ctxID)
+	if a.busy(sess) {
+		return nil, &rpcError{codeBusy, "resource conflict", "UNSUPPORTED_OPERATION"}
+	}
 	steps, ok := a.nextTurn(promptText(m))
 	if !ok {
 		return nil, internalError("stubagent: no turn scripted for %s/%s", a.ns, a.name)
 	}
-	ctxID, _ := m["contextId"].(string)
-	sess := a.session(ctxID)
 	now := s.stamp()
 	t := &task{id: s.newID("task"), sess: sess, created: now, changed: make(chan struct{})}
 	in := maps.Clone(m)
@@ -148,9 +158,19 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	t.history = []obj{withTask(in, t.id)}
 	t.setState(working, now)
 	t.push(t.statusEvent(), false)
-	a.tasks[t.id] = t
+	a.tasks[t.id], a.messages[id] = t, t
 	a.launch(t, steps)
 	return &stream{t: t}, nil
+}
+
+// busy reports whether a task of the session is working. kagent allows one at a time.
+func (a *Agent) busy(sess *session) bool {
+	for _, t := range a.tasks {
+		if t.sess == sess && t.state == working {
+			return true
+		}
+	}
+	return false
 }
 
 // find returns the task that params name. The caller holds s.mu.

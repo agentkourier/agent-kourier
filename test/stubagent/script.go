@@ -28,6 +28,32 @@ func (ts textStep) play(r *run) bool {
 	return true
 }
 
+// Tool records a tool call and its result as kagent does: each is its own data-part artifact,
+// a single lastChunk event, apart from the text. It ends the open text artifact.
+func Tool(name string, args, result map[string]any) Step { return toolStep{name, args, result} }
+
+type toolStep struct {
+	name         string
+	args, result obj
+}
+
+func (ts toolStep) play(r *run) bool {
+	id := r.s.newID("call")
+	return r.endText() &&
+		r.data(obj{"id": id, "name": ts.name, "args": ts.args}, "function_call") &&
+		r.data(obj{"id": id, "name": ts.name, "response": ts.result}, "function_response")
+}
+
+// data emits a one-part data artifact, of kind function_call or function_response.
+func (r *run) data(data obj, kind string) bool {
+	return r.emit(func(t *task) (obj, bool) {
+		part := obj{"data": data, "metadata": obj{"kagent.dev/a2a/part-type": kind}}
+		a := &artifact{id: r.s.newID("artifact"), stamp: r.s.stamp(), parts: []obj{part}}
+		t.arts = append(t.arts, a)
+		return t.artifactEvent(a, a.parts, false, true), false
+	})
+}
+
 // Hold makes the turn wait at a gate until Server.Release opens it. It lets a test freeze a
 // task mid-turn, with the text so far, and inspect it.
 func Hold(gate string) Step { return holdStep(gate) }

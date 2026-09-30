@@ -35,7 +35,8 @@ type task struct {
 	stop    context.CancelFunc // ends the playing turn
 }
 
-// artifact is one artifactId. Its parts always hold what a snapshot shows: the text so far.
+// artifact is one artifactId. Its parts always hold what a snapshot shows: the text so far, or
+// the data part of a tool call or result.
 type artifact struct {
 	id    string
 	stamp string

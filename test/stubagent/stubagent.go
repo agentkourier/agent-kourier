@@ -123,7 +123,7 @@ func (s *Server) Agent(ns, name string) *Agent {
 	key := ns + "/" + name
 	if s.agents[key] == nil {
 		s.agents[key] = &Agent{s: s, ns: ns, name: name,
-			sessions: map[string]*session{}, tasks: map[string]*task{}}
+			sessions: map[string]*session{}, tasks: map[string]*task{}, messages: map[string]*task{}}
 	}
 	return s.agents[key]
 }

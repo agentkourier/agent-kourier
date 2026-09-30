@@ -279,7 +279,8 @@ func skeleton(v any) string {
 	}
 }
 
-// fixture reads the events of a recorded kagent SSE response.
+// fixture reads the envelopes of a recorded kagent response: the events of an .sse file, or
+// the one body of a .json file.
 func fixture(t *testing.T, name string) []obj {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "fixtures", "kagent", name))
@@ -287,6 +288,13 @@ func fixture(t *testing.T, name string) []obj {
 		t.Fatalf("fixture: %v", err)
 	}
 	var evs []obj
+	if strings.HasSuffix(name, ".json") {
+		var ev obj
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			t.Fatalf("fixture %s: %v", name, err)
+		}
+		return []obj{ev}
+	}
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if data, ok := strings.CutPrefix(line, "data: "); ok {
 			var ev obj
@@ -359,10 +367,10 @@ func assemble(evs []obj) string {
 	return sb.String()
 }
 
-// expectLike checks that an event has the same fields as the recorded one.
+// expectLike checks that an envelope has the same fields as the recorded one.
 func expectLike(t *testing.T, label string, got, recorded obj) {
 	t.Helper()
-	if g, w := skeleton(got["result"]), skeleton(recorded["result"]); g != w {
+	if g, w := skeleton(got), skeleton(recorded); g != w {
 		t.Errorf("%s has fields\n  %s\nthe fixture has\n  %s", label, g, w)
 	}
 }
