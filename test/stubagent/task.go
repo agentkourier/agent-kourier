@@ -26,9 +26,24 @@ type task struct {
 	updated string
 	state   string
 	history []obj
+	arts    []*artifact
 	log     []event       // every stream event so far, in order; followers read from an index
 	changed chan struct{} // closed and replaced whenever log grows
 }
+
+// artifact is one artifactId. Its parts always hold what a snapshot shows: the text so far.
+type artifact struct {
+	id    string
+	stamp string
+	parts []obj
+}
+
+// body is the artifact as the protocol shows it, holding parts.
+func (a *artifact) body(parts []obj) obj {
+	return obj{"artifactId": a.id, "parts": parts, "metadata": obj{"kagent.dev/a2a/timeline-position": a.stamp}}
+}
+
+func textParts(s string) []obj { return []obj{{"text": s}} }
 
 // event is one stream result. final marks the event that ends a stream: a task snapshot in a
 // state where the agent is no longer running.
@@ -51,13 +66,33 @@ func (t *task) setState(state, stamp string) {
 
 // snapshot is the task as GetTask returns it.
 func (t *task) snapshot() obj {
-	return obj{
+	snap := obj{
 		"id":        t.id,
 		"contextId": t.sess.id,
 		"status":    obj{"state": t.state, "timestamp": t.updated},
 		"history":   t.history,
 		"metadata":  obj{adkExtension: true, "kagent.dev/a2a/task-created-at": t.created},
 	}
+	if len(t.arts) > 0 {
+		arts := make([]obj, len(t.arts))
+		for i, a := range t.arts {
+			arts[i] = a.body(a.parts)
+		}
+		snap["artifacts"] = arts
+	}
+	return snap
+}
+
+// artifactEvent is an artifactUpdate result carrying parts of a.
+func (t *task) artifactEvent(a *artifact, parts []obj, appendTo, lastChunk bool) obj {
+	u := obj{"contextId": t.sess.id, "taskId": t.id, "artifact": a.body(parts)}
+	if appendTo {
+		u["append"] = true
+	}
+	if lastChunk {
+		u["lastChunk"] = true
+	}
+	return obj{"artifactUpdate": u}
 }
 
 // statusEvent is a statusUpdate result for the task's current state.

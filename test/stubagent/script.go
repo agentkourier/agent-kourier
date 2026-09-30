@@ -1,5 +1,10 @@
 package stubagent
 
+import (
+	"context"
+	"time"
+)
+
 // Step is one thing an agent does during a turn. A turn is a list of steps, played in order;
 // it ends with the task COMPLETED unless a step pauses it or the task is cancelled.
 type Step interface {
@@ -7,10 +12,29 @@ type Step interface {
 	play(r *run) bool
 }
 
+// Text streams text as kagent does: one artifact, its first chunk without append, the others
+// with append: true, then a lastChunk event holding the full text with no append. Consecutive
+// Text steps feed the same artifact. With WithTick the server pauses between chunks.
+func Text(chunks ...string) Step { return textStep(chunks) }
+
+type textStep []string
+
+func (ts textStep) play(r *run) bool {
+	for _, c := range ts {
+		if !r.chunk(c) {
+			return false
+		}
+	}
+	return true
+}
+
 // run is one playing turn of a task.
 type run struct {
-	s *Server
-	t *task
+	s    *Server
+	t    *task
+	ctx  context.Context
+	open *artifact // the text artifact being streamed, if any
+	text string    // what it holds so far
 }
 
 // emit changes the task and logs an event, under the lock. It returns false, doing nothing,
@@ -26,10 +50,53 @@ func (r *run) emit(fn func(t *task) (res obj, final bool)) bool {
 	return true
 }
 
+// chunk streams one text chunk, after the tick pause unless it is the first.
+func (r *run) chunk(text string) bool {
+	if r.open != nil && !r.sleep(r.s.tick) {
+		return false
+	}
+	return r.emit(func(t *task) (obj, bool) {
+		appendTo := r.open != nil
+		if !appendTo {
+			r.open, r.text = &artifact{id: r.s.newID("artifact"), stamp: r.s.stamp()}, ""
+			t.arts = append(t.arts, r.open)
+		}
+		r.text += text
+		r.open.parts = textParts(r.text)
+		return t.artifactEvent(r.open, textParts(text), appendTo, false), false
+	})
+}
+
+// endText closes the open text artifact with its lastChunk event.
+func (r *run) endText() bool {
+	if r.open == nil {
+		return true
+	}
+	a := r.open
+	r.open = nil
+	return r.emit(func(t *task) (obj, bool) { return t.artifactEvent(a, a.parts, false, true), false })
+}
+
 // finish ends the turn in a final state, with the task snapshot as the last event.
 func (r *run) finish(state string) {
+	if !r.endText() {
+		return
+	}
 	r.emit(func(t *task) (obj, bool) {
 		t.setState(state, r.s.stamp())
 		return obj{"task": t.snapshot()}, true
 	})
+}
+
+// sleep waits d, or until the turn is stopped. It reports whether the turn goes on.
+func (r *run) sleep(d time.Duration) bool {
+	if d <= 0 {
+		return r.ctx.Err() == nil
+	}
+	select {
+	case <-time.After(d):
+		return true
+	case <-r.ctx.Done():
+		return false
+	}
 }

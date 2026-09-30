@@ -161,7 +161,7 @@ func (a *Agent) launch(t *task, steps []Step) {
 	a.s.wg.Add(1)
 	go func() {
 		defer a.s.wg.Done()
-		r := &run{s: a.s, t: t}
+		r := &run{s: a.s, t: t, ctx: a.s.ctx}
 		for _, st := range steps {
 			if !st.play(r) {
 				return

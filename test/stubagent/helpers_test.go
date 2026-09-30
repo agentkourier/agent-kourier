@@ -299,6 +299,66 @@ func fixture(t *testing.T, name string) []obj {
 	return evs
 }
 
+// text joins the text parts of a parts list.
+func text(parts any) string {
+	var sb strings.Builder
+	ps, _ := parts.([]any)
+	for _, p := range ps {
+		if s, ok := dig(p, "text").(string); ok {
+			sb.WriteString(s)
+		}
+	}
+	return sb.String()
+}
+
+// taskText joins the text of every artifact of a task event (or a GetTask result).
+func taskText(ev obj) string {
+	_, e := body(ev)
+	var sb strings.Builder
+	arts, _ := e["artifacts"].([]any)
+	for _, a := range arts {
+		sb.WriteString(text(dig(a, "parts")))
+	}
+	return sb.String()
+}
+
+// assemble applies the client rule to a stream: an opening task snapshot seeds each artifact,
+// then a chunk with append: true is added to its artifact and any other chunk replaces it.
+// It skips lastChunk events, so a caller can compare the result with the lastChunk text.
+func assemble(evs []obj) string {
+	texts := map[string]string{}
+	var order []string
+	set := func(id, s string, add bool) {
+		if _, ok := texts[id]; !ok {
+			order = append(order, id)
+		}
+		if add {
+			texts[id] += s
+		} else {
+			texts[id] = s
+		}
+	}
+	for i, ev := range evs {
+		kind, e := body(ev)
+		switch {
+		case kind == "task" && i == 0:
+			arts, _ := e["artifacts"].([]any)
+			for _, a := range arts {
+				id, _ := dig(a, "artifactId").(string)
+				set(id, text(dig(a, "parts")), false)
+			}
+		case kind == "artifactUpdate" && e["lastChunk"] != true:
+			id, _ := dig(e, "artifact", "artifactId").(string)
+			set(id, text(dig(e, "artifact", "parts")), e["append"] == true)
+		}
+	}
+	var sb strings.Builder
+	for _, id := range order {
+		sb.WriteString(texts[id])
+	}
+	return sb.String()
+}
+
 // expectLike checks that an event has the same fields as the recorded one.
 func expectLike(t *testing.T, label string, got, recorded obj) {
 	t.Helper()

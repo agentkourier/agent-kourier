@@ -29,6 +29,7 @@ const HITLExtension = "https://kagent.dev/extensions/hitl/v1"
 type Server struct {
 	srv  *httptest.Server // nil when used only as a handler
 	now  func() time.Time
+	tick time.Duration
 	ctx  context.Context // ends the running turns
 	stop context.CancelFunc
 	wg   sync.WaitGroup // running turns
@@ -43,6 +44,10 @@ type Option func(*Server)
 
 // WithClock sets the clock that timestamps come from. The default is time.Now.
 func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
+
+// WithTick sets the pause between the text chunks of a turn. The default is none, so turns
+// run as fast as the client reads.
+func WithTick(d time.Duration) Option { return func(s *Server) { s.tick = d } }
 
 // NewHandler returns a Server for use as an http.Handler, with no listener of its own. Call
 // Close when done.
