@@ -8,6 +8,7 @@ linters:
   enable:
     - bodyclose     # unclosed HTTP response bodies (Slack, Alertmanager, A2A clients)
     - contextcheck  # context.Context must be propagated, not dropped
+    - depguard      # test fakes must not leak into production code
     - errcheck
     - errorlint     # enforce %w and errors.Is/As over ==/type assertions
     - gocritic
@@ -23,6 +24,13 @@ linters:
     - staticcheck
     - unused
   settings:
+    depguard:
+      rules:
+        fakeslack-is-test-only:
+          files: ["$all", "!$test", "!**/test/**"]
+          deny:
+            - pkg: github.com/agentkourier/agent-kourier/test/fakeslack
+              desc: the fake Slack is for tests; import it only from _test.go files and under test/
     nolintlint:
       require-explanation: true
       require-specific: true
