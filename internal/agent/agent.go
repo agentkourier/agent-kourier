@@ -37,6 +37,8 @@ type Config struct {
 	MaxReconnects int
 	// ReconnectDelay is the pause before each reconnect. Default 1s.
 	ReconnectDelay time.Duration
+	// ConnectTimeout bounds a Pool's connect, which fetches the agent card. Default 30s.
+	ConnectTimeout time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -51,6 +53,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.ReconnectDelay <= 0 {
 		c.ReconnectDelay = time.Second
+	}
+	if c.ConnectTimeout <= 0 {
+		c.ConnectTimeout = 30 * time.Second
 	}
 	return c
 }

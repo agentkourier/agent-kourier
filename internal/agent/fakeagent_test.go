@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -21,14 +22,17 @@ type rpc struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
 	Done   <-chan struct{} `json:"-"` // closed when the client hangs up
+	Header http.Header     `json:"-"`
 }
 
 // fakeAgent is an A2A server that answers each JSON-RPC call with whatever serve writes,
-// usually a fixture recorded in WP-02, and remembers the calls it got.
+// usually a WP-02 fixture, and records the calls. A GET is the card fetch, the call "card".
 type fakeAgent struct {
 	*httptest.Server
-	mu    sync.Mutex
-	calls []rpc
+	mu          sync.Mutex
+	calls       []rpc
+	noStreaming bool
+	cardDelay   time.Duration
 }
 
 func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fakeAgent {
@@ -36,16 +40,29 @@ func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fa
 	fa := &fakeAgent{}
 	fa.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var call rpc
-		if err := json.Unmarshal(body, &call); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		call := rpc{Method: "card"}
+		if r.Method == http.MethodPost {
+			if err := json.Unmarshal(body, &call); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
-		call.Done = r.Context().Done()
+		call.Done, call.Header = r.Context().Done(), r.Header
 		fa.mu.Lock()
 		fa.calls = append(fa.calls, call)
 		fa.mu.Unlock()
-		serve(call, w)
+		if call.Method != "card" {
+			serve(call, w)
+			return
+		}
+		select {
+		case <-time.After(fa.cardDelay):
+		case <-call.Done:
+			return
+		}
+		card := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)}}
+		card.Capabilities.Streaming = !fa.noStreaming
+		_ = json.NewEncoder(w).Encode(card)
 	}))
 	t.Cleanup(fa.Close)
 	return fa
