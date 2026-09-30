@@ -32,8 +32,8 @@ const MaxAuditOutcome = 200
 //
 // It holds identifiers and a short outcome only. Never put a payload, message
 // text, token, or any Secret content in it: the audit table is read by people
-// and exported (spec section 10). As a backstop, AppendAudit passes Subject and
-// Outcome through RedactSecrets.
+// and exported (spec section 10). As a backstop, AppendAudit passes every text
+// field except Email through RedactSecrets (see Redacted).
 type AuditEntry struct {
 	// Sequence is assigned by the store on append.
 	Sequence int64
@@ -51,6 +51,20 @@ type AuditEntry struct {
 	// Outcome is a short result such as "accepted" or "denied: not a member",
 	// at most MaxAuditOutcome bytes.
 	Outcome string
+}
+
+// Redacted returns e with RedactSecrets applied to every free-text field: User,
+// Identity, Binding, Subject and Outcome. Kind is a validated enum, and Email is
+// an identity field by design (spec 8.5), so both stay as they are. Every Audit
+// implementation must store the result of Redacted, never e itself: the store
+// is the last line of defence behind the audit writer.
+func (e AuditEntry) Redacted() AuditEntry {
+	e.User = RedactSecrets(e.User)
+	e.Identity = RedactSecrets(e.Identity)
+	e.Binding = RedactSecrets(e.Binding)
+	e.Subject = RedactSecrets(e.Subject)
+	e.Outcome = RedactSecrets(e.Outcome)
+	return e
 }
 
 // Audit is an append-only log. There is no update or delete.

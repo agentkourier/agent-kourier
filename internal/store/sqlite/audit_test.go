@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -119,5 +120,74 @@ func TestAuditRedactsSecretsBeforeStoring(t *testing.T) {
 	l, err := s.ListAudit(ctx, time.Time{}, 0, 10)
 	if err != nil || len(l) != 1 || l[0].Subject != "call with [redacted]" || l[0].Outcome != "denied [redacted]" {
 		t.Fatalf("stored = %+v, %v; want secrets redacted", l, err)
+	}
+}
+
+// TestAuditRedactsEveryFieldAgainstCanaries appends each canary in every free
+// text field and reads the rows back from SQLite: no secret may survive in any
+// column. Email is an identity field by design (spec 8.5) and must survive.
+func TestAuditRedactsEveryFieldAgainstCanaries(t *testing.T) {
+	const (
+		token  = "CANARYtok3n"
+		b64    = "Q0FOQVJZOnNlY3JldDEyMw=="
+		jwtSeg = "eyJzdWIiOiJDQU5BUlkifQ"
+	)
+	type canary struct{ name, in, secret string }
+	var cs []canary
+	for _, g := range []string{" ", "\t", "\n", "\v", "\u00a0", "\u2003", "\u3000", "\u0085", "\u2028", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", " \u200b\u00a0\t"} {
+		cs = append(cs,
+			canary{fmt.Sprintf("Bearer %U", []rune(g)), "denied Bearer" + g + token + " by policy", token},
+			canary{fmt.Sprintf("bearer %U", []rune(g)), "bearer" + g + token, token},
+			canary{fmt.Sprintf("Basic %U", []rune(g)), "Authorization: Basic" + g + b64, b64})
+	}
+	cs = append(cs,
+		canary{"glued bearer", "bearer" + token, token},
+		canary{"glued BEARER", "BEARER" + token, token},
+		canary{"format char in scheme", "Bea\u200brer " + token, token},
+		canary{"basic in lower case", "basic " + b64, b64},
+		canary{"basic without padding", "Basic " + b64[:len(b64)-2], b64[:len(b64)-2]},
+		canary{"jwt", "eyJhbGciOiJIUzI1NiJ9." + jwtSeg + ".c2lnbmF0dXJl", jwtSeg},
+		canary{"jwt after bearer", "Bearer eyJhbGciOiJIUzI1NiJ9." + jwtSeg + ".c2lnbmF0dXJl", jwtSeg})
+	for _, prefix := range []string{"xoxb", "xoxp", "xoxa", "xoxr", "xoxs", "xapp"} {
+		tok := prefix + "-1-" + token
+		cs = append(cs,
+			canary{"slack " + prefix, "slack " + tok, token},
+			canary{"slack " + prefix + " with format char in prefix", "slack " + prefix[:2] + "\u200b" + prefix[2:] + "\u2060-1-" + token, token})
+	}
+
+	ctx := context.Background()
+	s := openTemp(t)
+	var fields []string // free-text fields: everything but the validated Kind and the identity field Email
+	typ := reflect.TypeOf(store.AuditEntry{})
+	for i := 0; i < typ.NumField(); i++ {
+		if f := typ.Field(i); f.Type.Kind() == reflect.String && f.Name != "Kind" && f.Name != "Email" {
+			fields = append(fields, f.Name)
+		}
+	}
+	if len(fields) != 5 { // User, Identity, Binding, Subject, Outcome
+		t.Fatalf("free-text fields = %v; want User, Identity, Binding, Subject, Outcome", fields)
+	}
+	for _, c := range cs {
+		e := newAudit("s", t0)
+		for _, f := range fields {
+			reflect.ValueOf(&e).Elem().FieldByName(f).SetString(c.in)
+		}
+		if err := s.AppendAudit(ctx, e); err != nil {
+			t.Fatalf("%s: append: %v", c.name, err)
+		}
+	}
+	rows, err := s.ListAudit(ctx, time.Time{}, 0, 1000)
+	if err != nil || len(rows) != len(cs) {
+		t.Fatalf("ListAudit = %d rows, %v; want %d", len(rows), err, len(cs))
+	}
+	for i, row := range rows {
+		if row.Email != "u1@example.com" {
+			t.Errorf("%s: Email = %q; want it stored as given", cs[i].name, row.Email)
+		}
+		for _, f := range fields {
+			if got := reflect.ValueOf(row).FieldByName(f).String(); strings.Contains(got, cs[i].secret) {
+				t.Errorf("%s: %s = %q still holds the secret", cs[i].name, f, got)
+			}
+		}
 	}
 }

@@ -11,7 +11,7 @@ import (
 
 // AppendAudit implements store.Audit.
 func (s *Store) AppendAudit(ctx context.Context, e store.AuditEntry) error {
-	e.Subject, e.Outcome = store.RedactSecrets(e.Subject), store.RedactSecrets(e.Outcome)
+	e = e.Redacted()
 	if !e.Kind.Valid() || e.At.IsZero() || e.Subject == "" || e.Outcome == "" || len(e.Outcome) > store.MaxAuditOutcome {
 		return fmt.Errorf("append audit %q: valid Kind, At, Subject and an Outcome of 1 to %d bytes are required: %w",
 			e.Kind, store.MaxAuditOutcome, store.ErrInvalid)
