@@ -8,9 +8,10 @@ Raw JSON is in `test/fixtures/kagent/oidc-<case>/`; a call's `meta.json` records
 claims it used, never a token. Everything below is **measured** unless labelled *source* (read
 from the kagent or oauth2-proxy code at the pinned tag) or *inferred* (reasoned, not observed).
 
-**The run asserts every outcome in this document**: each case counts its checks and fails if any
-differs (HTTP status, JSON-RPC code, message, `ErrorInfo` reason, task states, task and context
-IDs, response bodies). Final run: 342 checks (identity 102, headerspoof 27, subswap 8, service
+**The run asserts the outcomes the spike drove** (not every statement here; the labels say
+which are observed, source or inferred): each case counts its checks and fails if any differs
+(HTTP status, JSON-RPC code, message, `ErrorInfo` reason, task states, task and context IDs,
+response bodies). Final run: 342 checks (identity 102, headerspoof 27, subswap 8, service
 148, expiry 14, replay 43), all passing, on a clean `make e2e-full-up`. `go run ./spike/a2a
 -suite oidc` needs `-controller`; use `run-oidc.sh`.
 
@@ -45,22 +46,33 @@ does not know.
 
 So a token that the front door accepts is enough to read, continue, or (by the same path)
 cancel any identity's sessions. Everything in section B holds only for callers that do not send
-these. Consequences: a leaked Binding token is a key to every Binding's sessions, not just its
-own (R4, D32), and D14's "session ownership isolates Bindings" is not a control. Not measured:
-`CancelTask` and `SubscribeToTask` with the spoof (they take the same authenticator path,
-*inferred*), and whether the controller's `X-Agent-Name` path skips other checks.
+these. Consequences (*inferred*: they depend on every Binding passing the same door): a leaked
+Binding token is a key to every Binding's sessions, not just its own (R4, D32), and the session
+ownership that spec 8.5 relies on does not isolate Bindings. Not measured: `CancelTask` and
+`SubscribeToTask` with the spoof (they take the same authenticator path, *inferred*), and whether
+the controller's `X-Agent-Name` path skips other checks.
 
-*Candidate fix, not applied here:* strip `X-Agent-Name` and `X-User-Id` at the door. Stripping
-`X-Agent-Name` alone should close both rows, since `user_id` is read only on the agent path
-(*source*). oauth2-proxy strips request headers named in `injectRequestHeaders` of its alpha
-config (*source*: `pkg/middleware/headers.go`, `preserveRequestValue` defaults to false).
-**Not tested:** I tried it once on the scratch cluster (a ConfigMap with the alpha config mounted
-into the door, `--alpha-config` added) and the new pod did not become ready within 120 s. I did
-not investigate why and abandoned the attempt as out of scope; the door was rebuilt from the repo
-afterwards. Whether an entry with no `values` is accepted, and whether an alpha
-`injectRequestHeaders` list replaces the flag-derived one (`--pass-authorization-header`), is
-unknown. Treat the fix as a proposal for WP-01c, to be proven with a `verify.sh` check that the
-four rows above end in `-31403`.
+The last two rows below were measured by the reviewer's curl run, not yet by the spike (the
+spike's `oidc-headerspoof` now asserts them, but has not been run on a tier since):
+
+| Extra request data | Result for B against A's session |
+|---|---|
+| `X-Agent-Name` and `X-User-Id` naming a third identity | `-31403` (the third identity does not own it) |
+| `X-Agent-Name` alone | `-31403` (the acting user falls back to the token's `sub`, another owner string) |
+
+*Candidate fix:* strip `X-Agent-Name` and `X-User-Id` at the door. Stripping `X-Agent-Name` alone
+should close both spoof rows, since `user_id` is read only on the agent path (*source*).
+WP-01d is the fix and owns proving it. What is established about the alpha-config route:
+
+- *Measured:* one attempt on the scratch cluster (a ConfigMap with an alpha config mounted into
+  the door, `--alpha-config` added) did not become ready within 120 s. oauth2-proxy v7.15.3 exits
+  with usage when `--alpha-config` is combined with `--http-address`, `--upstream` or
+  `--pass-authorization-header`, the likely reason the rollout failed (the reviewer's finding; I
+  did not read the pod's log).
+- *Source:* an alpha `injectRequestHeaders` list replaces the flag-derived one
+  (`pkg/apis/options/alpha_options.go:70-76`).
+- *Source:* an entry with no values only strips the named request header
+  (`pkg/validation/header.go:20-40`, `pkg/header/injector.go:27-38`, `pkg/middleware/headers.go`).
 
 ## B. Q3: session owner and a second real identity
 
@@ -101,7 +113,7 @@ signed tokens through the door (`oidc-service`):
 - **A service-shaped email** (`svc-sre-alerts@example.test`): an ordinary owner. It owns its
   session; A is refused on it and it is refused on A's, both ways, on every method.
 - **A token with no `email` claim**, made by asking Dex for scope `openid` only (the ID token
-  keeps `sub`, drops `email`; this is what a client-credentials token looks like):
+  keeps `sub`, drops `email`; that this resembles a client-credentials token is *inferred*):
   - the front door **accepts** it with no configuration change (`--email-domain=*`, default
     `oidc-email-claim`): a session is created and continued (`COMPLETED`);
   - kagent owns that session by `sub`. The same person's token *with* an `email` is refused on it
@@ -155,8 +167,8 @@ must match discovery). Of WP-01b's "issuer and expiry are inferred", expiry is n
 issuer stays inferred.
 
 **Dex restarts and the door.** Dex keeps keys in memory, so a restart rotates them. After the
-restarts I checked, the door answered 401 to a token signed by the new keys for about 30 s: its fetch of
-Dex's keys hit a 30 s `i/o timeout` (its log: `fetching keys oidc: get keys failed ... dial tcp
+restarts I checked (observed, not asserted), the door answered 401 to a token signed by the new
+keys for about 30 s: its fetch of Dex's keys hit a 30 s `i/o timeout` (its log: `fetching keys oidc: get keys failed ... dial tcp
 ... i/o timeout`), then recovered by itself. A first run without a wait failed for this reason;
 the spike now polls until a fresh token passes the door. This is a test artifact of restarting
 Dex, not a courier concern, but a pilot IdP that rotates its keys will produce the same short
@@ -178,15 +190,17 @@ one-second ticks) is used, as in WP-02.
 | `SubscribeToTask` on that task | `WORKING` snapshot, deltas, `lastChunk`, `COMPLETED` |
 | m2 replayed with C after it completed | **a new task** again; two `COMPLETED` tasks carry m2's `messageId` |
 
-So kagent deduplicates a `messageId` only when the send has no `contextId`, and only for a
-finished task. With a `contextId` it does not dedupe at all: the replay is busy while the task
-runs and a second run after. WP-02's "a rejected `messageId` is not remembered" (busy case) is
-the same behaviour seen from the other side.
+Without a `contextId` kagent deduplicates a replayed `messageId`, joining the task live while it
+runs and returning one snapshot after (WP-02). With a `contextId` it does not deduplicate:
+`-32004` while the task runs, a second full task after. WP-02's "a rejected `messageId` is not
+remembered" (busy case) is the same behaviour seen from the other side.
 
 For WP-28: a crash-recovery resend into an existing context must **not** be a blind replay.
 Courier should first call `ListTasks` with the `contextId` and look for a task whose history holds
 its `messageId`: found and running, `SubscribeToTask`; found and done, `GetTask` and render;
-absent, send. (`-32004` on the resend means the same lookup will find it.) Not measured:
+absent, send. On `-32004`, treat the context as busy (queue per D21) and repeat the lookup when
+the active task ends (*inferred* rule, matching spec 8.2; the lookup finding the task is not
+guaranteed, for example after a crash during an input-required pause). Not measured:
 whether the model server was called twice for the duplicate task (the second run's ticks show it
 executed), `ListTasks` paging past 50 tasks, and a replay with the `taskId` set.
 
@@ -194,7 +208,7 @@ executed), `ListTasks` paging past 50 tasks, and a replay with the `taskId` set.
 
 `CancelTask` and `SubscribeToTask` under the header spoof; a real client-credentials token
 (Dex cannot issue one); `email_verified: false` and audience variants (Dex cannot produce them);
-issuer mismatch; expiry on a streaming call already in flight (the door checks at connect);
+issuer mismatch; expiry on a streaming call already in flight (that the door checks only at connect is *inferred*);
 `userIdClaim` empty (`sub`, *source*) run for real; the effect of a Dex restart on sessions
 (they live in kagent's Postgres, keyed by the owner string, and survived here).
 
