@@ -7,6 +7,7 @@ package kagentv1
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -119,6 +120,7 @@ func withPrefix(parts a2a.ContentParts, prefix string) a2a.ContentParts {
 		if text, ok := p.Content.(a2a.Text); ok {
 			edited := *p
 			edited.Content = a2a.Text(prefix + "\n" + string(text))
+			edited.Metadata = maps.Clone(p.Metadata)
 			out := append(a2a.ContentParts(nil), parts...)
 			out[i] = &edited
 			return out
