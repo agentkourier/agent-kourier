@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// lineWriter sends each line written to it on a channel.
+// lineWriter sends each line written to it on a channel. The tests make it with a buffer of
+// one because run writes exactly one line (the listening line) and must not block on it.
 type lineWriter chan string
 
 func (l lineWriter) Write(p []byte) (int, error) {
