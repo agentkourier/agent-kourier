@@ -114,6 +114,8 @@ func TestAgentCall(t *testing.T) {
 		{"cancel task not found", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotFound}, "task=t1", "cancel: failed task_not_found"},
 		{"answer rejected and its cancel failed (R17)", Call{Op: OpAnswer, TaskID: "t1", Err: errors.Join(agent.ErrAnswerRejected, a2a.ErrTaskNotCancelable)}, "task=t1",
 			"answer: failed answer_rejected,task_not_cancelable"},
+		{"answer rejected and its auto-cancel failed (ErrCancelFailed)", Call{Op: OpAnswer, TaskID: "t1", Err: errors.Join(agent.ErrAnswerRejected, fmt.Errorf("%w: down", agent.ErrCancelFailed))}, "task=t1",
+			"answer: failed answer_rejected,cancel_failed"},
 		{"find task found", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"ta"}}, "task=ta context=c1 message=m1", "find_task: found"},
 		{"find task duplicate run", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"ta", "tb"}},
 			"task=ta context=c1 message=m1", "find_task: duplicate_run holders=2 ids=ta,tb"},
