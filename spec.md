@@ -248,10 +248,10 @@ type ChatPlatform interface {  // Slack
     ResolveUser(ctx context.Context, platformUserID string) (User, error)
 }
 
-// Interaction is a pause the agent needs a human to answer. Kinds: ToolApproval
-// (one or more tool calls with arguments), AskUser (questions, each with optional
-// choices and multi-select), and Nested (an interaction raised by a sub-agent,
-// carrying the path to it).
+// Interaction is a pause the agent needs a human to answer. Its kind is ToolApproval
+// (one or more tool calls with arguments) or AskUser (questions, each with optional
+// choices and multi-select). Either kind may be nested: raised by a sub-agent, in which
+// case it also carries the path to that sub-agent (name, task, and context).
 type Dialect interface {       // a2a (generic), kagent-v1
     Endpoint(backend *AgentBackend, agent AgentRef) (url string, err error)
     // Sets the Binding identity (bearer token, else X-User-Id, never both) and the
@@ -261,7 +261,9 @@ type Dialect interface {       // a2a (generic), kagent-v1
     // Fetches the card through the front door and returns a JSON-RPC client whose
     // credentials are pinned to the front door host; follows no redirects, no proxies.
     Connect(ctx context.Context, backend *AgentBackend, agent AgentRef, creds Credentials) (*a2aclient.Client, error)
-    ParseInteraction(task a2a.Task) (*Interaction, bool)
+    // nil, nil: no structured pause (free text only where the dialect allows it).
+    // ErrUnusablePause: paused but unanswerable, so report it and cancel the task.
+    ParseInteraction(task a2a.Task) (*Interaction, error)
     BuildResponse(in Interaction, answer Answer) (a2a.Message, error) // errors if incomplete
 }
 
@@ -536,7 +538,9 @@ then, a Binding has `toolApprovals: false`; if its agent pauses for a tool appro
 anyway, courier denies it, says so in the thread, and raises a metric, because the
 Binding was declared to point at a read-only agent.
 
-1. The task enters `input-required`. The dialect parses it into an `Interaction`.
+1. The task enters `input-required`. The dialect parses it into an `Interaction`. A pause
+   the dialect can't use (for `kagent-v1`: a missing or malformed payload) is reported in
+   the thread with its reason, audited, and the task is cancelled (6.3).
 2. Courier stores it as pending and renders it in the thread:
    - **Ask user:** each question with its choices as a select (multi-select where
      allowed), or a free-text input when there are no choices, and a Submit button.
@@ -544,6 +548,10 @@ Binding was declared to point at a read-only agent.
      buttons. Several tool calls in one pause get one control each, plus approve-all
      and deny-all.
    - **Nested:** rendered as its inner kind, labelled with the sub-agent that raised it.
+   - All agent-originated text is untrusted (R2): escaped (`&`, `<`, `>`), stripped of
+     control and format characters, rendered as `plain_text` where Slack allows, and
+     truncated to Slack's limits. Tool arguments go in an escaped code block. A choice
+     list over Slack's select limit falls back visibly; no choice is ever dropped.
 3. On submit, courier verifies the request came from Slack, confirms the user is a
    channel member and not a bot, and checks the answer is complete. An incomplete
    answer is rejected in Slack; nothing is sent to the backend.
