@@ -95,7 +95,9 @@ func TestRepliesAreHeldWhileAPauseLasts(t *testing.T) {
 		t.Fatalf("%s was sent during the pause", id)
 	case <-time.After(100 * time.Millisecond):
 	}
-	f.m.endPause(key)
+	if err := f.m.endPause(t.Context(), key, "t1"); err != nil {
+		t.Fatal(err)
+	}
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Errorf("sent %s after the pause; want %s", id, want)
 	}
@@ -190,5 +192,159 @@ func TestLookupFindsTheTurnOrFailsWithoutSending(t *testing.T) {
 	eventually(t, "the turn delivered and its task cleared", func() bool { return f.taskID() == "" })
 	if _, err := f.st.NextReply(t.Context(), key); err == nil {
 		t.Error("the followed turn is still queued")
+	}
+}
+
+// endPause names the task whose pause ended. A call that arrives while the runner is not
+// parked, that repeats a call already made, or that names another task is dropped: it must
+// never release the next pause, or replies would go out while a task waits for its answer.
+func TestEndPauseIgnoresStaleAndDuplicateCalls(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	mid, gate := make(chan struct{}), make(chan struct{})
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 0 {
+			accepted(h, n)
+			mid <- struct{}{}
+			<-gate
+			return turn(h, n, a2a.TaskStateInputRequired)
+		}
+		if n == 1 {
+			return turn(h, n, a2a.TaskStateInputRequired)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	end := func(id a2a.TaskID) {
+		t.Helper()
+		if err := f.m.endPause(t.Context(), key, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	silent := func(why string) {
+		t.Helper()
+		select {
+		case id := <-f.agent.sent:
+			t.Fatalf("%s was sent %s", id, why)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	for _, ts := range []string{"1", "2", "3"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-mid
+	end("t1") // stale: turn 1 has not paused yet
+	close(gate)
+	<-sink.finals
+	f.nextSent()
+	silent("after a call made before the pause")
+	end("t1")
+	end("t1") // the second is a duplicate
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Fatalf("sent %s after the pause; want %s", id, want)
+	}
+	<-sink.finals // turn 2 pauses on t2
+	end("t1")     // stale: t1's pause is over
+	silent("on a call for the earlier pause")
+	if got := f.taskID(); got != "t2" {
+		t.Errorf("task = %q; want t2 still recorded", got)
+	}
+	end("t2")
+	if id, want := f.nextSent(), inbound("3").MessageID; id != want {
+		t.Errorf("sent %s after the second pause; want %s", id, want)
+	}
+}
+
+// After a restart there is no runner. A call for the recorded task clears it and starts one;
+// a call for any other task does nothing.
+func TestEndPauseWithNoRunnerClearsTheRecordedTask(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	f.seed("ns/b1", 0) // task t1 in context c1
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	if err := f.m.endPause(t.Context(), key, "t9"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-f.agent.sent:
+		t.Fatalf("%s was sent on a call for another task", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := f.m.endPause(t.Context(), key, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if id, want := f.nextSent(), inbound("1").MessageID; id != want {
+		t.Errorf("sent %s; want the held turn %s", id, want)
+	}
+}
+
+// Two -32004 in a row on the first turn do not slow the next turn: a turn the agent takes
+// starts the backoff over, and a new head's first send is not a resend, so it has no lookup.
+func TestRetryStateStartsOverAfterANamedTurn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = 50*time.Millisecond, time.Second
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n < 2 || n == 3 { // turn 1 twice, turn 2 once
+			return fmt.Errorf("send message: %w", agent.ErrBusy)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		<-sink.finals
+	}
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	// Turn 1 had no context, so its resends have no lookup; turn 2 had one, before its resend.
+	if want := "[send send send send find send]"; fmt.Sprint(f.agent.seq) != want {
+		t.Errorf("calls = %v; want %s", f.agent.seq, want)
+	}
+	if gap := f.agent.times[4].Sub(f.agent.times[3]); gap < 50*time.Millisecond || gap >= 150*time.Millisecond {
+		t.Errorf("turn 2 waited %v after its first -32004; want the base 50ms, not the 200ms turn 1's count would give", gap)
+	}
+}
+
+// A turn sent once and not known to have been taken is looked up before any resend into its
+// context, whatever failed the first time, and however the resend is triggered (spec 8.2).
+func TestPreviouslySentTurnIsLookedUpBeforeAnyResend(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 1 {
+			return fmt.Errorf("%w: the stream ended", agent.ErrOutcomeUnknown)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-sink.finals
+	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	in := inbound("2")
+	if _, err := f.submit(in); err != nil {
+		t.Fatal(err)
+	}
+	<-f.agent.sent
+	<-f.agent.sent
+	select { // the runner stops on an outcome it cannot classify; nothing resends it by itself
+	case id := <-f.agent.sent:
+		t.Fatalf("%s was sent again with nothing to wake the runner", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := f.submit(in); err != nil { // the redelivered event
+		t.Fatal(err)
+	}
+	<-sink.finals
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if want := "[send send find send]"; fmt.Sprint(f.agent.seq) != want {
+		t.Errorf("calls = %v; want %s: the lookup comes before the resend", f.agent.seq, want)
 	}
 }

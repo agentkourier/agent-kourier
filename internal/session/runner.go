@@ -14,12 +14,14 @@ import (
 )
 
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
-// Only the runner reads and writes tries and ttl.
+// Only the runner reads and writes tries and ttl; the Manager's mutex guards the rest.
 type convo struct {
-	again  bool          // a wake arrived while the runner was busy
-	tries  int           // sends of the head turn that got -32004 or a failed lookup, in a row
-	ttl    time.Duration // the Binding's threadTTL, for end
-	resume chan struct{} // the pause ended (see endPause)
+	again    bool          // a wake arrived while the runner was busy
+	tries    int           // sends of the head turn that got -32004 or a failed lookup, in a row
+	ttl      time.Duration // the Binding's threadTTL, for end
+	parked   a2a.TaskID    // the task the runner waits on, while it waits for input
+	released bool          // the pause ended, and the runner has not yet moved on
+	resume   chan struct{} // tells the parked runner that the pause ended
 }
 
 // outcome is how one turn left the conversation: nothing queued, the task ended, or the task
@@ -62,18 +64,31 @@ func (m *Manager) retire(key Key) bool {
 	return true
 }
 
-// endPause tells the runner of key that the paused task has ended (answered and finished,
-// timed out, or cancelled): it clears the task and sends what was held.
-func (m *Manager) endPause(key Key) {
+// endPause tells the runner of key that the pause of taskID ended (answered and finished, timed
+// out, or cancelled): it clears the task and sends what was held. A call that arrives while
+// the runner is not parked on taskID, or repeats one already made, is dropped: it must never
+// release the next pause. With no runner (after a restart), a call for the task recorded in
+// the session clears it and starts one.
+func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) error {
 	m.mu.Lock()
-	c := m.convos[key]
-	m.mu.Unlock()
-	if c != nil {
-		select {
-		case c.resume <- struct{}{}:
-		default:
-		}
+	c, running, closed := m.convos[key], m.convos[key] != nil, m.closed
+	if running && taskID != "" && c.parked == taskID && !c.released {
+		c.released = true
+		c.resume <- struct{}{} // one release per park, and the channel holds one: never blocks
 	}
+	m.mu.Unlock()
+	if running || closed {
+		return nil
+	}
+	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
+	if err != nil || sess.TaskID != string(taskID) || taskID == "" {
+		return err // nothing recorded for that task
+	}
+	if err := m.cfg.Store.SetSessionTask(ctx, key, "", ""); err != nil {
+		return fmt.Errorf("end pause of task %s: %w", taskID, err)
+	}
+	m.start(key) //nolint:contextcheck // the runner belongs to the manager, and outlives the caller
+	return nil
 }
 
 // backoff is the pause before the next resend after tries in a row: RetryBase, doubling, up
@@ -102,6 +117,9 @@ func (m *Manager) run(key Key, c *convo) {
 		case out == paused:
 			select {
 			case <-c.resume:
+				m.mu.Lock()
+				c.parked, c.released = "", false
+				m.mu.Unlock()
 				if err := m.end(context.WithoutCancel(m.ctx), key, c.ttl); err != nil {
 					m.cfg.Logger.Error("end paused task", "key", key, "error", err)
 				}
@@ -141,9 +159,14 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	}
 	c.ttl = backend.ThreadTTL
 	send := func(h agent.Handler) error { return backend.Agent.Send(m.ctx, m.message(r, sess, backend), h) }
-	if c.tries > 0 && sess.ContextID != "" {
+	m.mu.Lock()
+	resend := m.attempted[key] == r.ID // sent before, and not known to have been taken
+	m.attempted[key] = r.ID
+	m.mu.Unlock()
+	if resend && sess.ContextID != "" {
 		// A resend into an existing context is not deduplicated by the agent, so look the turn up
-		// first: if the agent recorded it after all, follow that task instead (spec 8.2).
+		// first, whatever failed the first time: if the agent recorded it after all, follow that
+		// task instead (spec 8.2).
 		task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, r.ID)
 		if err != nil {
 			c.tries++
@@ -174,7 +197,11 @@ func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handle
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
 				named, c.tries = true, 0
-				recordErr = m.accept(sctx, r, ev)
+				if recordErr = m.accept(sctx, r, ev); recordErr == nil {
+					m.mu.Lock()
+					delete(m.attempted, key) // taken and recorded: never a resend
+					m.mu.Unlock()
+				}
 			}
 		case agent.FinalEvent:
 			final = ev.Task
@@ -196,6 +223,9 @@ func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handle
 	case final == nil:
 		return ended, fmt.Errorf("send turn %s: the stream ended with no final task", r.ID)
 	case !final.Status.State.Terminal():
+		m.mu.Lock()
+		c.parked = final.ID
+		m.mu.Unlock()
 		return paused, nil
 	}
 	return ended, m.end(sctx, key, c.ttl)

@@ -92,7 +92,8 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	if _, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageTS: in.MessageTS, Text: in.Text, EnqueuedAt: now}); err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}
-	// It waits if turns are ahead of it, or a task of the session is active or paused.
+	// It waits if turns are ahead of it, or a task of the session is active or paused. This is
+	// advisory: it races the runner, which may take the turn a moment later.
 	head, herr := m.cfg.Store.NextReply(ctx, in.Key)
 	sess, serr := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
 	res.Queued = (herr == nil && head.ID != in.MessageID) || (serr == nil && sess.TaskID != "")

@@ -117,7 +117,10 @@ type Manager struct {
 	// unrecorded holds, per conversation, the turn the agent took but that could not be
 	// recorded, so that no wake sends it again.
 	unrecorded map[Key]string
-	closed     bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
+	// attempted holds, per conversation, the head turn that was sent and not yet taken and
+	// recorded: a send of it again is a resend, and is looked up first.
+	attempted map[Key]string
+	closed    bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
@@ -143,7 +146,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.RetryMax <= 0 {
 		cfg.RetryMax = time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]string{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil

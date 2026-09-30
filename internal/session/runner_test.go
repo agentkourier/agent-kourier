@@ -34,11 +34,14 @@ type fakeAgent struct {
 	follow  func(id a2a.TaskID, h agent.Handler) error
 	finds   []string
 	follows []a2a.TaskID
+	seq     []string    // the calls in order: send, find, follow
+	times   []time.Time // when each send came
 }
 
 func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
 	a.mu.Lock()
 	a.finds = append(a.finds, contextID+" "+messageID)
+	a.seq = append(a.seq, "find")
 	find := a.find
 	a.mu.Unlock()
 	if find == nil {
@@ -50,6 +53,7 @@ func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a
 func (a *fakeAgent) Follow(_ context.Context, id a2a.TaskID, h agent.Handler) error {
 	a.mu.Lock()
 	a.follows = append(a.follows, id)
+	a.seq = append(a.seq, "follow")
 	a.mu.Unlock()
 	return a.follow(id, h)
 }
@@ -64,6 +68,8 @@ func (a *fakeAgent) Send(ctx context.Context, msg *a2a.Message, h agent.Handler)
 	a.mu.Lock()
 	n := len(a.msgs)
 	a.msgs = append(a.msgs, msg)
+	a.seq = append(a.seq, "send")
+	a.times = append(a.times, time.Now())
 	a.active++
 	a.maxActive = max(a.maxActive, a.active)
 	a.mu.Unlock()

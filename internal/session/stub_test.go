@@ -160,10 +160,13 @@ func TestStubBusySessionIsRetriedUntilItIsFree(t *testing.T) {
 	if _, err := e.submit(inbound("2")); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the turn to be rejected and resent", func() bool { return e.agent.sends.Load() >= sendsBefore+3 && e.agent.finds.Load() >= 2 })
+	eventually(t, "the turn to be rejected and resent", func() bool { return e.agent.sends.Load() >= sendsBefore+3 })
 	e.srv.Release("other")
 	task := e.sink.finalTask(t, 1)
 	pausedOn(t, task)
+	if sends, finds := e.agent.sends.Load()-sendsBefore, e.agent.finds.Load(); finds != sends-1 {
+		t.Errorf("%d sends of turn 2 and %d lookups; want a lookup before every resend, and none before the first send", sends, finds)
+	}
 	if _, holders, _ := e.agent.Agent.FindTask(t.Context(), sess.ContextID, inbound("2").MessageID); len(holders) != 1 {
 		t.Errorf("turn 2 ran %d times; want once", len(holders))
 	}
