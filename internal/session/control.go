@@ -142,9 +142,7 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 		if err := m.cfg.Store.ResetSession(ctx, key); err != nil {
 			return false, false, fmt.Errorf("reset session: %w", err)
 		}
-		if m.cfg.Sink != nil {
-			m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(NoticeSessionGone), Kind: NoticeSessionGone})
-		}
+		m.goneNotice(ctx, key, id, "")
 		_ = m.endPause(ctx, key, id) // a parked runner is released; the record is already cleared
 		return true, false, nil
 	case cancelDone:

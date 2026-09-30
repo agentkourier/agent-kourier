@@ -280,6 +280,13 @@ func TestWedgeWithAFailedAutoCancelIsCancelledAgain(t *testing.T) {
 	if got := sink.noticesOf(NoticeAnswerRejected); len(got) != 1 {
 		t.Errorf("answer-rejected notices = %+v; want one", got)
 	}
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	for i, a := range f.audits {
+		if a.Op == audit.OpCancel && (f.actors[i].User != "" || a.MessageID != "") { // courier's own cancels
+			t.Errorf("cancel row %+v by %+v; want no person and no turn: courier made the cancel", a, f.actors[i])
+		}
+	}
 }
 
 // An answer whose outcome is unknown may have been delivered, so the task is read before anything
@@ -512,6 +519,124 @@ func TestFailedStopIsClassified(t *testing.T) {
 				if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 					t.Errorf("sent %s after the stop; want the held reply %s", id, want)
 				}
+				if tc.notice == NoticeSessionGone { // the session was reset: a fresh context, and one notice for the task
+					f.agent.mu.Lock()
+					last := f.agent.msgs[len(f.agent.msgs)-1]
+					f.agent.mu.Unlock()
+					if got := sink.noticesOf(NoticeSessionGone); last.ContextID != "" || len(got) != 1 || got[0].ID != "task:t1/session_gone" {
+						t.Errorf("held reply in context %q, notices %+v; want no context and the notice task:t1/session_gone", last.ContextID, got)
+					}
+				}
+			}
+		})
+	}
+}
+
+// An exit that leaves a task recorded, while the runner stays alive behind it, must not leave the
+// runner looking as if it still drove the task: Stop then clears the record, and the held turn
+// goes out. The exits of a follow (a cancel that failed for good) and of a stream (a turn that
+// could not be recorded) each have their own way of leaving it.
+func TestStopAfterARunnerExitThatLeftTheTaskRecorded(t *testing.T) {
+	lookupsFailWhileRecorded := func(f *fixture) func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+			if f.taskID() != "" {
+				return nil, nil, errors.New("agent unreachable") // the held turn waits, and the runner lives
+			}
+			return nil, nil, nil
+		}
+	}
+	t.Run("a wedged task whose cancel was refused", func(t *testing.T) {
+		f, sink := wedgedFixture(t, func(f *fixture) {
+			f.agent.cancelErr = func(n int) error {
+				if n == 1 {
+					return fmt.Errorf("send: %w", agent.ErrForbidden)
+				}
+				return nil
+			}
+			f.agent.find = lookupsFailWhileRecorded(f)
+		}, "1", "2")
+		eventually(t, "the cancel to be refused for good", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		f.nextSent() // turn 1
+		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+			t.Fatalf("Stop = %v, %v", did, err)
+		}
+		if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+			t.Errorf("sent %s after the stop; want the held turn %s", id, want)
+		}
+	})
+	t.Run("a turn that could not be recorded", func(t *testing.T) {
+		f := newFixture(t)
+		f.live()
+		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+		f.st.stuck["mark"] = errors.New("disk full")
+		f.agent.find = lookupsFailWhileRecorded(f)
+		gate := make(chan struct{})
+		f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+			<-gate
+			return turn(h, n, a2a.TaskStateCompleted)
+		}
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		f.nextSent()
+		if _, err := f.submit(inbound("1")); err != nil { // a wake while the turn runs keeps the runner alive through its failure
+			t.Fatal(err)
+		}
+		close(gate)
+		eventually(t, "the runner to wait on the failing lookup", func() bool { _, finds, _ := f.agent.counts(); return finds > 0 })
+		f.st.mu.Lock()
+		delete(f.st.stuck, "mark") // the store recovers
+		f.st.mu.Unlock()
+		if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+			t.Fatalf("Stop = %v, %v", did, err)
+		}
+		if id, want := f.nextSent(), inbound("1").MessageID; id != want {
+			t.Errorf("sent %s after the stop; want the turn, looked up and found absent: %s", id, want)
+		}
+	})
+}
+
+// Cancel is for a pause. A task that streams is not one, and is left alone.
+func TestCancelRefusesAStreamingTask(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	mid, gate := make(chan struct{}), make(chan struct{})
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		mid <- struct{}{}
+		<-gate
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-mid
+	if err := f.m.Cancel(t.Context(), key, "t1", "interaction timed out"); !errors.Is(err, ErrNotPaused) || len(f.cancelled()) != 0 {
+		t.Errorf("Cancel of a streaming task = %v, cancelled %v; want ErrNotPaused and no cancel", err, f.cancelled())
+	}
+	close(gate)
+}
+
+// -32002 says the task could not be cancelled, which is fine if it ended meanwhile and not if it
+// is still active, or cannot be read: an error then, with the pause still held.
+func TestStopWhenTheTaskCannotBeCancelledAndIsNotOver(t *testing.T) {
+	for name, get := range map[string]func(a2a.TaskID) (*a2a.Task, error){
+		"still waiting for input": func(id a2a.TaskID) (*a2a.Task, error) {
+			return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, nil
+		},
+		"it cannot be read": func(a2a.TaskID) (*a2a.Task, error) { return nil, errors.New("agent unreachable") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := pausedFirst(t, func(_ *a2a.Message, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) })
+			f.agent.mu.Lock()
+			f.agent.get = get
+			f.agent.cancelErr = func(int) error { return fmt.Errorf("cancel: %w", a2a.ErrTaskNotCancelable) }
+			f.agent.mu.Unlock()
+			if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err == nil || did {
+				t.Errorf("Stop = %v, %v; want an error", did, err)
+			}
+			if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil { // the pause is still held
+				t.Errorf("Answer after the failed stop = %v; want the pause still open", err)
 			}
 		})
 	}

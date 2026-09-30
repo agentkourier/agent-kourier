@@ -329,6 +329,7 @@ type tstate struct {
 	nid    string     // what a notice of this attempt is named after, if not the turn
 	taskID a2a.TaskID // the task the agent named, or the one followed or answered
 	op     audit.Op   // the call audit rows name, when not a send
+	system bool       // courier made the call itself: no person, no turn
 	key    Key
 	c      *convo
 	r      store.Reply
@@ -543,19 +544,32 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 		t.c.tries++
 		return blocked, fmt.Errorf("reset session: %w", err)
 	}
-	m.notice(t, NoticeSessionGone, "") // its ID names the turn, so a repeat after a retry is harmless
+	m.goneNotice(m.ctx, t.key, t.taskID, t.r.MessageTS) // named after the task, so a repeat, or a control's, is one
 	t.c.follow = nil
 	t.c.settle()
 	return ended, nil
+}
+
+// goneNotice tells the thread the agent no longer has the task's session. Its ID is the task's, so
+// the runner and a control that both find it gone post one notice.
+func (m *Manager) goneNotice(ctx context.Context, key Key, id a2a.TaskID, ts string) {
+	if m.cfg.Sink != nil {
+		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(NoticeSessionGone), Kind: NoticeSessionGone, MessageTS: ts})
+	}
 }
 
 // resume follows the task of a turn whose stream was lost. A task WORKING for longer than
 // MaxWorkingAge (the agent's timestamp of the state, on courier's clock), or one whose state
 // cannot be read for that long, is presumed wedged and cancelled (R17); otherwise the stream
 // is picked up again.
-func (m *Manager) resume(c *convo) (outcome, error) {
+func (m *Manager) resume(c *convo) (out outcome, err error) {
 	t := c.follow
 	m.drives(c, t.taskID)
+	defer func() {
+		if out != blocked { // an exit that leaves the task recorded must not leave it looking driven
+			m.drives(c, "")
+		}
+	}()
 	if c.cancelNow { // the wedge is known, so there is nothing to read first
 		return m.wedged(t)
 	}
@@ -614,8 +628,8 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 		c.cancelFrom = m.cfg.Now()
 	}
 	_, err := t.b.Agent.CancelTask(m.ctx, t.taskID)
-	t.op = audit.OpCancel
-	defer func() { t.op = "" }()
+	t.op, t.system = audit.OpCancel, true // courier's own cancel: not the paused turn's user, not its message
+	defer func() { t.op, t.system = "", false }()
 	kind := classifyCancel(err)
 	switch {
 	case kind == cancelDone:
@@ -723,14 +737,18 @@ func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
 // actor is who an audit row of this turn names.
 func (t *tstate) actor() audit.Actor {
 	a := audit.Actor{Binding: t.sess.Binding, Identity: t.b.Identity}
-	if t.r.UserID != SystemUser {
+	if t.r.UserID != SystemUser && !t.system {
 		a.User = t.r.UserID
 	}
 	return a
 }
 
 func (t *tstate) call(err error) audit.Call {
-	return audit.Call{Op: cmp.Or(t.op, audit.OpSend), TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err}
+	c := audit.Call{Op: cmp.Or(t.op, audit.OpSend), TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err}
+	if t.system {
+		c.MessageID = ""
+	}
+	return c
 }
 
 // rejected passes a refused credential to the identity Source, which re-reads the token and
