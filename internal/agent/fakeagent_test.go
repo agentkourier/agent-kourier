@@ -41,13 +41,15 @@ func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fa
 	t.Helper()
 	fa := &fakeAgent{}
 	fa.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		call := rpc{Method: "card"}
-		if r.Method == http.MethodPost {
-			if err := json.Unmarshal(body, &call); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
+		if r.Method == http.MethodPost && err == nil {
+			err = json.Unmarshal(body, &call)
+		}
+		if err != nil {
+			t.Errorf("fake agent: bad request: %v", err) // not Fatal: this runs on the server's goroutine
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		call.Done, call.Header = r.Context().Done(), r.Header
 		fa.mu.Lock()
@@ -109,7 +111,8 @@ func sseEvents(t *testing.T, name string) [][]byte {
 	t.Helper()
 	body, err := os.ReadFile(fixturePath(name))
 	if err != nil {
-		t.Fatal(err)
+		t.Errorf("read fixture: %v", err) // not Fatal: this runs on the server's goroutine
+		return nil
 	}
 	var evs [][]byte
 	for _, ev := range bytes.SplitAfter(bytes.TrimSpace(body), []byte("\n\n")) {
@@ -141,7 +144,8 @@ func reply(t *testing.T, w http.ResponseWriter, name string) {
 	t.Helper()
 	body, err := os.ReadFile(fixturePath(name))
 	if err != nil {
-		t.Fatal(err)
+		t.Errorf("read fixture: %v", err) // not Fatal: this runs on the server's goroutine
+		return
 	}
 	_, _ = w.Write(body)
 }

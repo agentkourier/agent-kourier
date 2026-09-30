@@ -28,12 +28,17 @@ var (
 	// ErrBusy means the session already has an active task (JSON-RPC -32004). The message
 	// was not recorded. Do not retry at once: keep it queued, and resend it unchanged, with
 	// the same messageId, when the active task ends. -32004 also answers every send to a
-	// wedged task, so a task that stays busy past a maximum age needs CancelTask (R17).
+	// wedged task, so a task that stays busy past a maximum age needs CancelTask (R17). The
+	// error names no task. On Send, some task is active, possibly an input-required pause. On
+	// Answer it means busy, wedged, or ended (a2a-go answers -32004 to a message to a
+	// terminal task too), so GetTask the task: if it has ended, drop the answer and tell the
+	// thread; if it is WORKING, apply the age rule.
 	ErrBusy = errors.New("agent: the session has an active task")
 	// ErrForbidden means the agent refused the caller's identity for this session (-31403).
 	ErrForbidden = errors.New("agent: caller is not the session's owner")
-	// ErrAnswerRejected means the agent failed an answer to an interaction with -32603. The
-	// task stays in WORKING and refuses every message, so the caller must CancelTask it (R17).
+	// ErrAnswerRejected means the agent failed an answer to an interaction with -32603, or
+	// with any code a2a-go does not know, which it reports as -32603. The task stays in
+	// WORKING and refuses every message, so it must be cancelled (R17).
 	ErrAnswerRejected = errors.New("agent: the answer was rejected and the task is wedged")
 	// ErrStreamLost means the stream ended before the task reached an end state, and the
 	// reconnects did not get it there. The agent had named the task, so a StreamLostError

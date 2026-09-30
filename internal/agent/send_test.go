@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sync/atomic"
@@ -101,6 +102,63 @@ func TestForbiddenIsTyped(t *testing.T) {
 	err := fa.agent(t).Send(t.Context(), message("hi"), nil)
 	if !errors.Is(err, ErrForbidden) || errors.Is(err, ErrBusy) {
 		t.Errorf("err = %v, want ErrForbidden", err)
+	}
+}
+
+// rpcError is a JSON-RPC error event as kagent sends it: SSE over HTTP 200.
+func rpcError(code int) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		write(w, []byte(fmt.Sprintf("data: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"error\":{\"code\":%d,\"message\":\"x\"}}\n\n", code)))
+	}
+}
+
+// a2a-go turns every code it does not know into -32603, so an answer that fails with any
+// of them is typed as rejected, and the caller cancels the task (R17).
+func TestAnswerErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    int
+		want    error
+		notWant error
+	}{
+		{"busy, wedged or ended", -32004, ErrBusy, ErrAnswerRejected},
+		{"forbidden", -31403, ErrForbidden, ErrAnswerRejected},
+		{"internal error", -32603, ErrAnswerRejected, ErrBusy},
+		{"a code a2a-go does not know", -32050, ErrAnswerRejected, ErrBusy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { rpcError(tc.code)(w) })
+			err := fa.agent(t).Answer(t.Context(), message("yes"), nil)
+			if !errors.Is(err, tc.want) || errors.Is(err, tc.notWant) {
+				t.Errorf("err = %v, want %v and not %v", err, tc.want, tc.notWant)
+			}
+		})
+	}
+}
+
+// A send replayed after a crash, with the same messageId and no contextId, gets one of two
+// answers (WP-02): a live stream of the running task, or a snapshot of the finished one.
+func TestReplayedSendJoinsTheRunningTaskOrGetsItsSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, fixture string
+		wantTexts     []string
+	}{
+		{"running", "inflight/02-a-replay-while-running.response.sse", []string{"tick 1 ", "tick 1 tick 2 ", "tick 1 tick 2 tick 3 ", "tick 1 tick 2 tick 3 tick 4 ", "tick 1 tick 2 tick 3 tick 4 tick 5 ", "tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 ", "tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 ", ticks}},
+		{"finished", "session/02-replay-same-messageid.response.sse", []string{"The answer is 4."}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { sse(t, w, tc.fixture, -1) })
+			h, got := collector()
+			if err := fa.agent(t).Send(t.Context(), message("go slowly"), h); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(texts(*got), tc.wantTexts) {
+				t.Errorf("texts = %q, want %q", texts(*got), tc.wantTexts)
+			}
+			if final, ok := (*got)[len(*got)-1].(FinalEvent); !ok || final.Task.Status.State != a2a.TaskStateCompleted {
+				t.Errorf("last event = %#v, want the COMPLETED task", (*got)[len(*got)-1])
+			}
+		})
 	}
 }
 
