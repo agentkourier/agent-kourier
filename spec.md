@@ -216,7 +216,7 @@ upstream webhook trigger stays compatible with courier.
 
 | Component | Responsibility |
 |---|---|
-| Ingress adapters | Authenticate the inbound request, normalize it to an internal event, persist it, acknowledge fast. Slack requires a response within 3 seconds, so no agent call happens on the request path. |
+| Ingress adapters | Authenticate the inbound request, normalize it to an internal event, persist it, acknowledge fast. Slack requires a response within 3 seconds, so no agent call happens on the request path. For chat messages the persist step is the session manager's `Submit`: a local, idempotent (by messageId) write of the turn, after which the adapter acknowledges; a failed Submit is not acknowledged, so Slack redelivers (WP-29). |
 | Event queue | Durable table in the store. Gives at-least-once processing across restarts. |
 | Config loader | Validates references and builds the in-memory routing table. Phases 1 to 3: reads YAML files and reloads on change. Hardening: a controller watches CRDs and writes status conditions. Both produce the same Go types. |
 | Router | Finds the Binding for an event, then applies dedup, rate limits, and the daily cap. |
@@ -484,7 +484,8 @@ untrusted data. See risk R2.
 | Reply in a thread courier owns, with or without an @mention | Continues that session |
 | @mention inside a thread courier doesn't own, in a bound channel | New session anchored to that thread; courier owns it from then on |
 | Reply without an @mention in any other thread | Ignored |
-| Any message posted by courier itself (including `message_changed` from its own edits) | Ignored |
+| Any message posted by courier itself (including `message_changed` from its own edits), or by any other bot or app | Ignored: another bot's messages would let two bots reply to each other without end, and bot text is untrusted (R2) |
+| An edit or deletion of any message (`message_changed`, `message_deleted`), or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages |
 | DM | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. |
 
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
