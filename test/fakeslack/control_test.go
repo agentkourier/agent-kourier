@@ -105,10 +105,78 @@ func TestMentionDeliversAppMentionThenMessage(t *testing.T) {
 	waitAcked(t, fake, got.Envelopes...)
 }
 
-func TestMentionMustMentionTheBot(t *testing.T) {
+func TestUserActionsRefuseWhatSlackWouldNotSend(t *testing.T) {
 	fake, _ := connected(t)
-	if _, err := fake.Mention("C1", "U1", "hello there"); err == nil {
-		t.Fatal("Mention without the bot's mention succeeded")
+	root := post(t, slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/")), text("root"))
+	tests := []struct {
+		name string
+		do   func() (fakeslack.UserMessage, error)
+	}{
+		{"mention without the bot", func() (fakeslack.UserMessage, error) { return fake.Mention("C1", "U1", "hello there") }},
+		{"mention in a DM", func() (fakeslack.UserMessage, error) {
+			return fake.Mention(fakeslack.DMChannel("U1"), "U1", mentionText)
+		}},
+		{"mention with no channel", func() (fakeslack.UserMessage, error) { return fake.Mention("", "U1", mentionText) }},
+		{"mention with no user", func() (fakeslack.UserMessage, error) { return fake.Mention("C1", "", mentionText) }},
+		{"reply with no thread", func() (fakeslack.UserMessage, error) { return fake.Reply("C1", "", "U1", "x") }},
+		{"reply with no user", func() (fakeslack.UserMessage, error) { return fake.Reply("C1", root, "", "x") }},
+		{"DM from no user", func() (fakeslack.UserMessage, error) { return fake.DM("", "x") }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, err := tc.do(); err == nil {
+				t.Fatalf("succeeded with %+v; want an error", got)
+			}
+		})
+	}
+	if n := len(fake.Messages("C1")) + len(fake.Messages(fakeslack.DMChannel("U1"))); n != 1 { // only the root
+		t.Fatalf("refused actions stored messages: %d in all; want just the root", n)
+	}
+}
+
+func TestReplyMentioningTheBotDeliversAppMentionThenMessage(t *testing.T) {
+	fake, smc := connected(t)
+	root := post(t, slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/")), text("investigating"))
+	fake.SetChannelType("C1", "group") // a private channel
+
+	got, err := fake.Reply("C1", root, "U1", mentionText)
+	if err != nil || len(got.Envelopes) != 2 {
+		t.Fatalf("Reply = %+v, %v; want two envelopes", got, err)
+	}
+	_, _, first := nextInner(t, smc)
+	mention, ok := first.(*slackevents.AppMentionEvent)
+	if !ok || mention.ThreadTimeStamp != root || mention.TimeStamp != got.TS || mention.Channel != "C1" {
+		t.Fatalf("first event = %#v; want the app_mention in thread %s", first, root)
+	}
+	_, _, second := nextInner(t, smc)
+	if m, ok := second.(*slackevents.MessageEvent); !ok || m.ThreadTimeStamp != root || m.TimeStamp != got.TS || m.ChannelType != "group" {
+		t.Fatalf("second event = %#v; want the group message in thread %s", second, root)
+	}
+
+	// In a DM, Slack sends no app_mention.
+	dm, err := fake.DM("U1", "hi")
+	if err != nil {
+		t.Fatalf("DM: %v", err)
+	}
+	wantMessage(t, smc, dm, "", "im", "hi")
+	inDM, err := fake.Reply(dm.Channel, dm.TS, "U1", mentionText)
+	if err != nil || len(inDM.Envelopes) != 1 {
+		t.Fatalf("Reply mentioning the bot in a DM = %+v, %v; want one envelope", inDM, err)
+	}
+}
+
+func TestEnvelopesCanAcceptResponsePayloads(t *testing.T) {
+	fake, smc := connected(t)
+	for _, tc := range []struct {
+		opts []fakeslack.EnvelopeOption
+		want bool
+	}{{nil, false}, {[]fakeslack.EnvelopeOption{fakeslack.AcceptsResponsePayload()}, true}} {
+		if _, err := fake.SendEnvelope("slash_commands", slashCommand, tc.opts...); err != nil {
+			t.Fatalf("SendEnvelope: %v", err)
+		}
+		if got := waitEvent(t, smc, socketmode.EventTypeSlashCommand).Request.AcceptsResponsePayload; got != tc.want {
+			t.Fatalf("accepts_response_payload = %v; want %v", got, tc.want)
+		}
 	}
 }
 
@@ -160,5 +228,8 @@ func TestUserActionsNeedAClient(t *testing.T) {
 	t.Cleanup(fake.Close)
 	if _, err := fake.Mention("C1", "U1", mentionText); !errors.Is(err, fakeslack.ErrNoConnection) {
 		t.Fatalf("Mention with no client = %v; want ErrNoConnection", err)
+	}
+	if n := len(fake.Messages("C1")); n != 0 {
+		t.Fatalf("a Mention nobody could receive stored %d messages", n)
 	}
 }

@@ -17,14 +17,24 @@ type envelope struct {
 	payload json.RawMessage
 }
 
+// EnvelopeOption changes an envelope SendEnvelope sends.
+type EnvelopeOption func(envelope map[string]any)
+
+// AcceptsResponsePayload marks an envelope as one whose ack may carry a
+// response payload, as Slack does for view submissions and slash commands.
+func AcceptsResponsePayload() EnvelopeOption {
+	return func(e map[string]any) { e["accepts_response_payload"] = true }
+}
+
 // SendEnvelope sends a Socket Mode envelope of the given type ("events_api",
 // "interactive", "slash_commands", ...) carrying payload, and returns its
-// envelope_id. It fails with ErrNoConnection if no client is connected.
+// envelope_id. It fails with ErrNoConnection if no client is connected, or if
+// the write to the newest one fails.
 //
 // UNCONFIRMED(WP-04): that envelopes go to the newest connection only, where
 // Slack spreads them over up to 10; and that the fake never redelivers an
 // envelope that is not acked, where Slack retries with retry_attempt set.
-func (s *Server) SendEnvelope(typ string, payload any) (string, error) {
+func (s *Server) SendEnvelope(typ string, payload any, opts ...EnvelopeOption) (string, error) {
 	sk := &s.sock
 	sk.mu.Lock()
 	if len(sk.conns) == 0 {
@@ -37,9 +47,12 @@ func (s *Server) SendEnvelope(typ string, payload any) (string, error) {
 	sk.pending[id] = &envelope{acked: make(chan struct{})}
 	sk.mu.Unlock()
 
-	err := c.write(map[string]any{"envelope_id": id, "type": typ, "accepts_response_payload": false, "payload": payload})
-	if err != nil {
-		return "", fmt.Errorf("fakeslack: sending envelope %s: %w", id, err)
+	env := map[string]any{"envelope_id": id, "type": typ, "accepts_response_payload": false, "payload": payload}
+	for _, o := range opts {
+		o(env)
+	}
+	if err := c.write(env); err != nil {
+		return "", fmt.Errorf("fakeslack: sending envelope %s: %w: %w", id, ErrNoConnection, err)
 	}
 	return id, nil
 }

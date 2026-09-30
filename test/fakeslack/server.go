@@ -25,16 +25,20 @@
 //     only, where Slack spreads them over up to 10; and unacked envelopes
 //     never being redelivered, where Slack retries.
 //   - User actions (control.go): the order of the app_mention and message
-//     events for a mention, and both being sent; the fields of each event,
-//     which are the ones courier needs; a reply that mentions the bot getting
-//     no app_mention event; and no message events for the bot's own posts,
-//     which Slack sends.
+//     events for a mention, in a thread too, and both being sent; the fields
+//     of each event, which are the ones courier needs; a mention in a direct
+//     message getting no app_mention; the channel_type of a channel being
+//     "channel" unless SetChannelType says otherwise ("group" for private
+//     ones); and no message events for the bot's own posts, which Slack sends.
 //   - Interactions (interaction.go): Submit answering an inline ask-user with a
 //     block_actions press that carries state.values, not a view_submission
 //     (the fake has no views); the payload's fields, which are the ones courier
-//     needs; the message in it omitting metadata; state.values holding only the
-//     elements the test gave, where Slack sends every input, unset ones null;
-//     and a block sent without a block_id keeping "", where Slack makes one up.
+//     needs; the message in it omitting metadata; the envelope's
+//     accepts_response_payload being false; the name of each element type's
+//     value field in state.values, and unanswered inputs being sent as null;
+//     rejecting select options that the element does not offer; and Click and
+//     Submit refusing a message whose interactive block has no block_id, where
+//     Slack makes one up.
 //   - auth.test: the fields returned, and its placeholder url and user name.
 //   - Bot identity: a bot post carrying user, bot_id and app_id together, with
 //     no subtype.
@@ -104,6 +108,8 @@ type Server struct {
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
+
+	channelTypes map[string]string // set by SetChannelType, guarded by mu
 }
 
 // Option configures a Server.
@@ -149,6 +155,8 @@ func NewHandler(opts ...Option) *Server {
 		channels:  map[string][]*Message{},
 		users:     map[string]User{},
 		members:   map[string][]string{},
+
+		channelTypes: map[string]string{},
 	}
 	for _, o := range opts {
 		o(s)

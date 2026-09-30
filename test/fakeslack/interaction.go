@@ -2,13 +2,18 @@ package fakeslack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 )
 
-// StateValues is the state of a message's input elements, as a
-// block_actions payload reports it: block_id, then action_id, then the
-// element's state, such as {"type": "plain_text_input", "value": "yes"}.
-type StateValues map[string]map[string]any
+// StateValues is what a user entered in a message's input elements: block_id,
+// then action_id, then the element's fields other than its type, such as
+// {"value": "yes"} for a text input or {"selected_option": {"value": "a"}} for
+// a select. The type comes from the element in the message, so a "type" given
+// here must match it.
+type StateValues map[string]map[string]map[string]any
 
 // Click presses a button on a message the bot posted, as user, and delivers a
 // block_actions interactive envelope for it. value must be the button's own
@@ -25,13 +30,15 @@ func (s *Server) Click(user, messageTS, actionID, value string) (string, error) 
 	if v, _ := btn.element["value"].(string); v != value {
 		return "", fmt.Errorf("fakeslack: button %q has value %q, not %q", actionID, v, value)
 	}
-	return s.blockActions(user, channel, m, btn, nil)
+	return s.blockActions(user, channel, m, btn, blocks, nil)
 }
 
 // Submit answers an inline ask-user prompt: it presses the Submit button
 // submitActionID on a message the bot posted, as user, with values as the state
 // of the message's input elements, and delivers a block_actions envelope. Every
-// block_id and action_id in values must exist in the message. It returns the
+// block_id and action_id in values must be a stateful element of the message,
+// not a button, and a select's choices must be among its options. Inputs
+// missing from values are sent unanswered, as Slack sends them. It returns the
 // envelope_id.
 //
 // A message is not a modal, so Slack sends its inputs' state with the click on
@@ -47,30 +54,22 @@ func (s *Server) Submit(user, messageTS, submitActionID string, values StateValu
 	if err != nil {
 		return "", err
 	}
-	for blockID, actions := range values {
-		for actionID := range actions {
-			if !blocks.has(blockID, actionID) {
-				return "", fmt.Errorf("fakeslack: message %s has no element %q in block %q: %w", messageTS, actionID, blockID, ErrNotFound)
-			}
-		}
-	}
-	return s.blockActions(user, channel, m, btn, values)
+	return s.blockActions(user, channel, m, btn, blocks, values)
 }
 
 // blockActions delivers the block_actions payload for a press of btn.
 //
 // UNCONFIRMED(WP-04): the payload's fields, which are the ones courier needs
 // and slack-go parses (no response_url, trigger_id, token or team domain); the
-// message in it, which omits metadata; that state.values holds only the
-// elements the caller gave, where Slack sends every input in the message,
-// unset ones as null; a block_id of "" for a block sent without one, where
-// Slack generates one; and that Submit answers with block_actions and not
+// message in it, which omits metadata; the envelope's accepts_response_payload
+// being false; and that Submit answers with block_actions and not
 // view_submission.
-func (s *Server) blockActions(user, channel string, m Message, btn element, state StateValues) (string, error) {
-	m.Metadata = nil
-	if state == nil {
-		state = StateValues{}
+func (s *Server) blockActions(user, channel string, m Message, btn element, blocks elements, values StateValues) (string, error) {
+	state, err := blocks.state(values)
+	if err != nil {
+		return "", err
 	}
+	m.Metadata = nil
 	s.mu.Lock()
 	name, now := s.users[user].Name, s.now()
 	s.mu.Unlock()
@@ -95,15 +94,26 @@ func (s *Server) blockActions(user, channel string, m Message, btn element, stat
 }
 
 // findMessage returns the message with the given ts, whichever channel it is
-// in (ts values are unique across the fake), and its interactive elements.
+// in (ts values are unique across the fake), and its interactive elements. It
+// fails if any of them sits in a block with no block_id, which the user's
+// state could not be keyed by.
+//
+// UNCONFIRMED(WP-04): that refusal. Slack generates a block_id for such a
+// block; posting one still succeeds here.
 func (s *Server) findMessage(ts string) (channel string, m Message, blocks elements, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ch, msgs := range s.channels {
 		for _, x := range msgs {
-			if x.TS == ts {
-				return ch, x.clone(), findElements(x.Blocks), nil
+			if x.TS != ts {
+				continue
 			}
+			els := findElements(x.Blocks)
+			if slices.ContainsFunc(els, func(e element) bool { return e.blockID == "" }) {
+				return "", Message{}, nil, fmt.Errorf("fakeslack: message %s has an interactive block with no block_id; "+
+					"Slack would generate one, so set explicit block IDs", ts)
+			}
+			return ch, x.clone(), els, nil
 		}
 	}
 	return "", Message{}, nil, fmt.Errorf("fakeslack: no message with ts %q: %w", ts, ErrNotFound)
@@ -149,13 +159,100 @@ func findElements(blocks json.RawMessage) elements {
 	return out
 }
 
-func (es elements) has(blockID, actionID string) bool {
+// state builds the state.values of a block_actions payload: every stateful
+// element in the message (everything with an action_id but a button) unanswered,
+// as {"type": <the element's type>, <its value field>: null}, with values laid
+// over it.
+//
+// UNCONFIRMED(WP-04): the name of each element type's value field (unlisted
+// types use "value"), and that Slack sends unanswered inputs this way.
+func (es elements) state(values StateValues) (StateValues, error) {
+	out, defs := StateValues{}, map[[2]string]map[string]any{}
 	for _, e := range es {
-		if e.blockID == blockID && e.element["action_id"] == actionID {
-			return true
+		typ, _ := e.element["type"].(string)
+		if typ == "button" {
+			continue
+		}
+		if out[e.blockID] == nil {
+			out[e.blockID] = map[string]map[string]any{}
+		}
+		actionID := e.element["action_id"].(string)
+		out[e.blockID][actionID] = map[string]any{"type": typ, valueField(typ): nil}
+		defs[[2]string{e.blockID, actionID}] = e.element
+	}
+	for blockID, actions := range values {
+		for actionID, given := range actions {
+			cur, ok := out[blockID][actionID]
+			if !ok {
+				return nil, fmt.Errorf("fakeslack: message has no stateful element %q in block %q (buttons have none): %w", actionID, blockID, ErrNotFound)
+			}
+			if typ, has := given["type"]; has && typ != cur["type"] {
+				return nil, fmt.Errorf("fakeslack: element %q is a %v, not a %v", actionID, cur["type"], typ)
+			}
+			if err := optionsOK(defs[[2]string{blockID, actionID}], given); err != nil {
+				return nil, fmt.Errorf("fakeslack: element %q: %w", actionID, err)
+			}
+			maps.Copy(cur, given)
 		}
 	}
-	return false
+	return out, nil
+}
+
+// valueField returns the field that holds an element's answer in state.values.
+func valueField(typ string) string {
+	switch typ {
+	case "static_select", "external_select", "radio_buttons":
+		return "selected_option"
+	case "multi_static_select", "multi_external_select", "checkboxes":
+		return "selected_options"
+	case "datepicker":
+		return "selected_date"
+	case "timepicker":
+		return "selected_time"
+	}
+	return "value"
+}
+
+// optionsOK checks that what the user picked in a select, checkbox or radio
+// element is among the options the element offers. Elements that offer none in
+// the message, such as external selects, accept anything.
+func optionsOK(el, given map[string]any) error {
+	var offered struct {
+		Options []struct{ Value string } `json:"options"`
+		Groups  []struct {
+			Options []struct{ Value string } `json:"options"`
+		} `json:"option_groups"`
+	}
+	var picked struct {
+		One  *struct{ Value string }  `json:"selected_option"`
+		Many []struct{ Value string } `json:"selected_options"`
+	}
+	raw, _ := json.Marshal(el)
+	gotRaw, _ := json.Marshal(given)
+	if json.Unmarshal(raw, &offered) != nil || json.Unmarshal(gotRaw, &picked) != nil {
+		return errors.New("selected options are not objects with a value")
+	}
+	allowed := map[string]bool{}
+	for _, o := range offered.Options {
+		allowed[o.Value] = true
+	}
+	for _, g := range offered.Groups {
+		for _, o := range g.Options {
+			allowed[o.Value] = true
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	if picked.One != nil {
+		picked.Many = append(picked.Many, *picked.One)
+	}
+	for _, o := range picked.Many {
+		if !allowed[o.Value] {
+			return fmt.Errorf("option %q is not among the options offered", o.Value)
+		}
+	}
+	return nil
 }
 
 // button returns the button with the given action_id.

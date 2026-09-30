@@ -1,6 +1,7 @@
 package fakeslack_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -10,7 +11,7 @@ import (
 )
 
 // postAsk posts, as the bot, an ask-user prompt in a thread: a question input,
-// an Approve button and a Submit button. It returns the thread root and the
+// a select, an Approve button and a Submit button. It returns the thread root and the
 // prompt's ts.
 func postAsk(t *testing.T, fake *fakeslack.Server) (root, ask string) {
 	t.Helper()
@@ -18,6 +19,8 @@ func postAsk(t *testing.T, fake *fakeslack.Server) (root, ask string) {
 	root = post(t, bot, text("investigating"))
 	ask = post(t, bot, slack.MsgOptionTS(root), text("a question"), slack.MsgOptionBlocks(
 		slack.NewInputBlock("q1", plain("Which cluster?"), nil, slack.NewPlainTextInputBlockElement(nil, "answer_1")),
+		slack.NewInputBlock("q2", plain("Which env?"), nil, slack.NewOptionsSelectBlockElement(slack.OptTypeStatic, plain("Pick"), "pick",
+			slack.NewOptionBlockObject("a", plain("A"), nil), slack.NewOptionBlockObject("b", plain("B"), nil))),
 		slack.NewActionBlock("buttons",
 			slack.NewButtonBlockElement("approve", "yes", plain("Approve")),
 			slack.NewButtonBlockElement("submit", "go", plain("Submit")))))
@@ -50,35 +53,52 @@ func TestClickDeliversBlockActions(t *testing.T) {
 		len(act) != 1 || act[0].ActionID != "approve" || act[0].BlockID != "buttons" || act[0].Value != "yes" || act[0].Text.Text != "Approve" {
 		t.Fatalf("envelope %q, payload %+v; want a block_actions click on approve in %s", gotID, cb, ask)
 	}
-	if cb.Message.Timestamp != ask || cb.Message.BotID != "BFAKEBOT" || len(cb.Message.Blocks.BlockSet) != 2 {
+	if cb.Message.Timestamp != ask || cb.Message.BotID != "BFAKEBOT" || len(cb.Message.Blocks.BlockSet) != 3 {
 		t.Fatalf("payload message = %+v; want the stored bot message with its blocks", cb.Message)
 	}
 	waitAcked(t, fake, id)
 }
 
-func TestSubmitDeliversInputStateWithTheButton(t *testing.T) {
+func TestSubmitSendsEveryInputWithTheAnswersOverlaid(t *testing.T) {
 	fake, smc := connected(t)
 	_, ask := postAsk(t, fake)
-	answer := map[string]any{"type": "plain_text_input", "value": "prod-east"}
 
-	id, err := fake.Submit("U1", ask, "submit", fakeslack.StateValues{"q1": {"answer_1": answer}})
+	// A partial answer: the select goes out unanswered, with its type from the message.
+	id, err := fake.Submit("U1", ask, "submit", fakeslack.StateValues{"q1": {"answer_1": {"value": "prod-east"}}})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	gotID, cb := nextInteraction(t, smc)
 	act := cb.ActionCallback.BlockActions
-	got := cb.BlockActionState.Values["q1"]["answer_1"]
-	if gotID != id || cb.Type != slack.InteractionTypeBlockActions || len(act) != 1 || act[0].ActionID != "submit" || act[0].Value != "go" ||
-		got.Type != "plain_text_input" || got.Value != "prod-east" {
-		t.Fatalf("envelope %q, payload %+v, state %+v; want the submit press carrying the answer", gotID, cb, cb.BlockActionState)
+	text, pick := cb.BlockActionState.Values["q1"]["answer_1"], cb.BlockActionState.Values["q2"]["pick"]
+	if gotID != id || len(act) != 1 || act[0].ActionID != "submit" || act[0].Value != "go" ||
+		text.Type != "plain_text_input" || text.Value != "prod-east" ||
+		pick.Type != "static_select" || pick.SelectedOption.Value != "" || len(cb.BlockActionState.Values) != 2 {
+		t.Fatalf("envelope %q, payload %+v, state %+v; want the answered input and the unanswered select", gotID, cb, cb.BlockActionState)
 	}
 	waitAcked(t, fake, id)
+
+	// A select answer, and a click, which also carries the full state.
+	if _, err := fake.Submit("U1", ask, "submit", fakeslack.StateValues{"q2": {"pick": {"selected_option": map[string]any{"value": "b"}}}}); err != nil {
+		t.Fatalf("Submit select: %v", err)
+	}
+	if _, cb := nextInteraction(t, smc); cb.BlockActionState.Values["q2"]["pick"].SelectedOption.Value != "b" {
+		t.Fatalf("state = %+v; want the select answered b", cb.BlockActionState)
+	}
+	if _, err := fake.Click("U1", ask, "approve", "yes"); err != nil {
+		t.Fatalf("Click: %v", err)
+	}
+	if _, cb := nextInteraction(t, smc); cb.BlockActionState.Values["q1"]["answer_1"].Type != "plain_text_input" {
+		t.Fatalf("click state = %+v; want every input, unanswered", cb.BlockActionState)
+	}
 }
 
 func TestInteractionsRejectImpossibleUserActions(t *testing.T) {
 	fake, _ := connected(t)
 	_, ask := postAsk(t, fake)
-	ok := fakeslack.StateValues{"q1": {"answer_1": map[string]any{"type": "plain_text_input", "value": "x"}}}
+	submit := func(values fakeslack.StateValues) func() (string, error) {
+		return func() (string, error) { return fake.Submit("U1", ask, "submit", values) }
+	}
 	tests := []struct {
 		name string
 		do   func() (string, error)
@@ -87,13 +107,14 @@ func TestInteractionsRejectImpossibleUserActions(t *testing.T) {
 		{"click on an action that is not there", func() (string, error) { return fake.Click("U1", ask, "nope", "yes") }},
 		{"click on an input", func() (string, error) { return fake.Click("U1", ask, "answer_1", "") }},
 		{"click with the wrong value", func() (string, error) { return fake.Click("U1", ask, "approve", "no") }},
-		{"submit with a button that is not there", func() (string, error) { return fake.Submit("U1", ask, "nope", ok) }},
-		{"submit an input that is not there", func() (string, error) {
-			return fake.Submit("U1", ask, "submit", fakeslack.StateValues{"q1": {"nope": map[string]any{}}})
+		{"submit with a button that is not there", func() (string, error) {
+			return fake.Submit("U1", ask, "nope", fakeslack.StateValues{"q1": {"answer_1": {"value": "x"}}})
 		}},
-		{"submit an input in the wrong block", func() (string, error) {
-			return fake.Submit("U1", ask, "submit", fakeslack.StateValues{"buttons": {"answer_1": map[string]any{}}})
-		}},
+		{"submit an input that is not there", submit(fakeslack.StateValues{"q1": {"nope": {}}})},
+		{"submit an input in the wrong block", submit(fakeslack.StateValues{"buttons": {"answer_1": {}}})},
+		{"submit state for a button", submit(fakeslack.StateValues{"buttons": {"approve": {"value": "x"}}})},
+		{"submit with a type the element does not have", submit(fakeslack.StateValues{"q1": {"answer_1": {"type": "static_select"}}})},
+		{"submit an option the select does not offer", submit(fakeslack.StateValues{"q2": {"pick": {"selected_option": map[string]any{"value": "zzz"}}}})},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,5 +122,14 @@ func TestInteractionsRejectImpossibleUserActions(t *testing.T) {
 				t.Fatalf("succeeded with envelope %q; want an error", id)
 			}
 		})
+	}
+}
+
+func TestInteractiveBlockWithoutABlockIDCannotBePressed(t *testing.T) {
+	fake, _ := connected(t)
+	bot := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))
+	ts := post(t, bot, text("no ids"), slack.MsgOptionBlocks(slack.NewActionBlock("", slack.NewButtonBlockElement("go", "v", plain("Go")))))
+	if _, err := fake.Click("U1", ts, "go", "v"); err == nil || !strings.Contains(err.Error(), "block_id") {
+		t.Fatalf("Click on a block without a block_id = %v; want an error that asks for explicit block IDs", err)
 	}
 }
