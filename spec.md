@@ -264,6 +264,8 @@ type Dialect interface {       // a2a (generic), kagent-v1
     // nil, nil: no structured pause (free text only where the dialect allows it).
     // ErrUnusablePause: paused but unanswerable, so report it and cancel the task.
     ParseInteraction(task a2a.Task) (*Interaction, error)
+    // Classifies an artifact part as a tool call or tool result; ok false means plain content.
+    ToolPart(part *a2a.Part) (tool ToolPart, ok bool)
     BuildResponse(in Interaction, answer Answer) (a2a.Message, error) // errors if incomplete
 }
 
