@@ -188,6 +188,36 @@ func TestNon2xxResponseIsAnHTTPStatusError(t *testing.T) {
 	}
 }
 
+// A 429 or 503 may say when to come back, in a header. The error carries that and nothing
+// from the body.
+func TestHTTPStatusErrorCarriesRetryAfter(t *testing.T) {
+	for _, tc := range []struct {
+		name, header string
+		min, max     time.Duration
+	}{
+		{"seconds", "7", 7 * time.Second, 7 * time.Second},
+		{"a date", time.Now().Add(90 * time.Second).UTC().Format(http.TimeFormat), 60 * time.Second, 90 * time.Second},
+		{"a date in the past", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0, 0},
+		{"garbage", "soon", 0, 0},
+		{"negative", "-5", 0, 0},
+		{"absent", "", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := newFrontDoor(t, true, nil, func(w http.ResponseWriter, _ *http.Request) {
+				if tc.header != "" {
+					w.Header().Set("Retry-After", tc.header)
+				}
+				http.Error(w, canary, http.StatusTooManyRequests)
+			})
+			_, err := ask(t.Context(), fd, dialect.Credentials{Token: canary})
+			var hs *dialect.HTTPStatusError
+			if !errors.As(err, &hs) || hs.RetryAfter < tc.min || hs.RetryAfter > tc.max || strings.Contains(err.Error(), canary) {
+				t.Errorf("err = %v (%+v), want RetryAfter of %v to %v and no body", err, hs, tc.min, tc.max)
+			}
+		})
+	}
+}
+
 func TestConnectFailuresLeakNothing(t *testing.T) {
 	other, stolen := otherHost(t) // the redirect target, which must never be called
 	for _, tc := range []struct {

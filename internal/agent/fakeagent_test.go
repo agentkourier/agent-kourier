@@ -34,6 +34,7 @@ type fakeAgent struct {
 	calls       []rpc
 	noStreaming bool
 	cardGate    chan struct{}
+	cardStatus  int // when set, the card fetch fails with this HTTP status
 }
 
 func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fakeAgent {
@@ -64,6 +65,10 @@ func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fa
 			case <-call.Done:
 				return
 			}
+		}
+		if fa.cardStatus != 0 { // the front door refuses the card fetch
+			http.Error(w, "refused", fa.cardStatus)
+			return
 		}
 		card := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)}}
 		card.Capabilities.Streaming = !fa.noStreaming

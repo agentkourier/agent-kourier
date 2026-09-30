@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -53,9 +54,15 @@ var ErrUnusablePause = errors.New("unusable pause")
 // HTTPStatusError is what a dialect's transport returns for a response that is not 2xx. It
 // lets a caller tell a request the backend refused (4xx) from a connection that dropped or
 // a backend that failed (5xx), which the SDK reports as an opaque string. It carries the
-// status only, never the response body, which may echo a credential. JSON-RPC errors are
-// HTTP 200 and never take this path.
-type HTTPStatusError struct{ Code int }
+// status and the Retry-After header, never the response body, which may echo a credential.
+// JSON-RPC errors are HTTP 200 and never take this path.
+type HTTPStatusError struct {
+	Code int
+	// RetryAfter is the delay the backend's Retry-After header asked for, or 0 if it sent
+	// none, or one that is not seconds or a date, or one already past. A 429 or 503 is
+	// retried after it, with backoff.
+	RetryAfter time.Duration
+}
 
 func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("HTTP %d %s", e.Code, http.StatusText(e.Code))

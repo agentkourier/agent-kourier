@@ -20,7 +20,10 @@ import (
 var (
 	// ErrNotSent means the message was not accepted: the Source could not give a connection
 	// (a configured token could not be read, say), or the backend answered the send with a
-	// 4xx status before any event. Retrying is safe, after fixing what the error names.
+	// 4xx status before any event. Retrying is safe, after fixing what the error names: that
+	// is inferred (a front door that refuses a request does not pass it on), not measured.
+	// A 429 or 503 must be retried with backoff, no sooner than the RetryAfter of the
+	// dialect.HTTPStatusError in the chain.
 	ErrNotSent = errors.New("agent: the message was not sent")
 	// ErrCredentialsRejected is joined to an error whose HTTP status is 401 or 403: the front
 	// door refused the Binding's credentials, so the caller re-mints the token (WP-21e).
@@ -97,12 +100,20 @@ func httpStatus(err error) int {
 	return 0
 }
 
+// refused reports whether the backend answered with a 4xx status: it refused the request,
+// and will refuse it again.
+func refused(err error) bool {
+	code := httpStatus(err)
+	return code >= 400 && code < 500
+}
+
 // beforeAnyEvent types an error that ended a send before the agent named a task: a 4xx
 // means the backend refused the request, so nothing was sent; anything else may have got
-// through.
+// through. That includes a 3xx: kagent never redirects and the client follows no redirect,
+// so one is a misconfiguration, and the safe reading of it is "unknown".
 func beforeAnyEvent(err error) error {
 	err = typed(err, false)
-	if code := httpStatus(err); code >= 400 && code < 500 {
+	if refused(err) {
 		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
 	return fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)

@@ -36,7 +36,7 @@ func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a
 	conn, err := a.source(sctx)
 	cancel()
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to agent: %w", err)
+		return nil, nil, fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
 	var holders []*a2a.Task
 	seen := map[string]bool{}

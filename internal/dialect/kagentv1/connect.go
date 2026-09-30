@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,7 +135,22 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		_ = resp.Body.Close()
-		return nil, &dialect.HTTPStatusError{Code: resp.StatusCode}
+		return nil, &dialect.HTTPStatusError{Code: resp.StatusCode, RetryAfter: retryAfter(resp.Header)}
 	}
 	return resp, nil
+}
+
+// retryAfter reads a Retry-After header, which is a number of seconds or an HTTP date. It
+// returns 0 for anything else, and for a delay that is not in the future, and caps it at a
+// day so a hostile header cannot overflow or park a caller.
+func retryAfter(h http.Header) time.Duration {
+	const day = 24 * time.Hour
+	v := h.Get("Retry-After")
+	if secs, err := strconv.Atoi(v); err == nil {
+		return min(max(time.Duration(min(secs, 86400))*time.Second, 0), day)
+	}
+	if at, err := http.ParseTime(v); err == nil {
+		return min(max(time.Until(at), 0), day)
+	}
+	return 0
 }

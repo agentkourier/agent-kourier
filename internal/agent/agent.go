@@ -100,7 +100,7 @@ func (a *Agent) Answer(ctx context.Context, msg *a2a.Message, h Handler) error {
 func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bool) error {
 	conn, err := a.source(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, err)
+		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
 	asm := newAssembler(h, a.tool)
 	err = a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
@@ -145,7 +145,7 @@ func (a *Agent) cancelWedged(ctx context.Context, rejected error, id a2a.TaskID)
 // not count), and on an error that is not a lost connection.
 func (a *Agent) reconnect(ctx context.Context, asm *assembler, err error) error {
 	for failures := 0; err != nil; {
-		if failures++; !dropped(ctx, err) || failures > a.cfg.MaxReconnects {
+		if failures++; !dropped(ctx, err) || refused(err) || failures > a.cfg.MaxReconnects {
 			return err
 		}
 		select {
@@ -217,7 +217,7 @@ func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
 	defer cancel()
 	conn, err := a.source(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("connect to agent: %w", err)
+		return nil, fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
 	return a.getTask(ctx, conn, id)
 }
@@ -230,7 +230,7 @@ func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error
 	defer cancel()
 	conn, err := a.source(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("connect to agent: %w", err)
+		return nil, fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
 	task, err := conn.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id})
 	if err != nil {
