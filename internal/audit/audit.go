@@ -3,9 +3,10 @@
 // The router, the session manager and the interaction flow call it, so no caller builds a
 // store.AuditEntry by hand. It takes identifiers and typed outcomes, never payloads. Every
 // string that reaches a row (identifiers, and an unusable pause's reason, which is fixed
-// dialect text, spec 8.4 step 1) is cleaned, run through store.RedactSecrets and capped,
-// because the store redacts only Subject and Outcome. Returned errors and the failure log
-// are cleaned the same way.
+// dialect text, spec 8.4 step 1) is cleaned, run through store.RedactSecrets and capped.
+// This repeats the store's own redaction (every field but Email, after WP-23c) on purpose:
+// only this package also deletes invisible characters and unifies spaces first. Returned
+// errors and the failure log are cleaned the same way.
 //
 // Failure policy (spec 8.6 step 7). No write is dropped silently: each failure is logged
 // (without the entry), counted through Options.OnFailure, and returned. The caller then
@@ -298,8 +299,13 @@ type cleanError struct {
 func (e *cleanError) Error() string { return e.msg }
 func (e *cleanError) Unwrap() error { return e.cause }
 
-// fail returns "<format>: <cause>" as a cleanError.
+// fail returns "<format>: <cause>" as a cleanError. It cleans each argument before
+// formatting: %q would turn an invisible rune into an ASCII escape that clean, run on the
+// finished message, could no longer see, and so no longer delete or match.
 func fail(cause error, format string, args ...any) error {
+	for i, a := range args {
+		args[i] = clean(fmt.Sprint(a), maxField)
+	}
 	return &cleanError{msg: clean(fmt.Sprintf(format, args...)+": "+cause.Error(), maxError), cause: cause}
 }
 
@@ -350,10 +356,11 @@ func orElse[T ~string](have, fallback T) T {
 	return fallback
 }
 
-// gluedBearer catches a bearer credential whose separator was a format character (a
-// zero-width space, say) and so vanished; store.RedactSecrets needs whitespace between the
-// scheme and the token. It over-redacts words that merely start with "bearer".
-var gluedBearer = regexp.MustCompile(`(?i)bearer\S+`)
+// gluedBearer catches what store.RedactSecrets, which needs whitespace after "bearer", misses:
+// a colon separator ("Bearer: X"), and a token glued to the scheme after a format character
+// (a zero-width space, say) vanished. The glued form needs a run of 8 or more characters
+// starting with a letter or digit, so an identifier such as "ns/bearer-gateway" survives.
+var gluedBearer = regexp.MustCompile(`(?i)bearer(?::\s*\S+|[A-Za-z0-9]\S{7,})`)
 
 // clean makes s safe for a row: it deletes format characters, turns control characters and
 // every Unicode space into an ASCII space, redacts secrets, and caps s at limit bytes,

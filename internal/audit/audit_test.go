@@ -226,7 +226,7 @@ func TestUnusablePause(t *testing.T) {
 // that Go's ASCII-only \s would not match.
 var bearerVariants = []string{
 	"Bearer\tSECRETA1", "Authorization: Bearer\nSECRETA2", "Bearer\u200bSECRETA3", "Bearer\u00a0SECRETA4", "Bearer\u2003SECRETA5",
-	"Bearer\u00a0 SECRETA6", "Bearer\u200b SECRETA7", // each needs its own layer: the space map, the format-character delete
+	"Bearer: SECRETA8", "Bearer:SECRETA9", "Bearer\u200b:\u00a0SECRETA0", "Bearer\u00a0 SECRETA6", "Bearer\u200b SECRETA7", // each needs its own layer: the space map, the format-character delete
 }
 
 func TestNoSecretsInStoredRows(t *testing.T) {
@@ -300,19 +300,37 @@ func TestWriteFailureIsReturnedLoggedAndMetered(t *testing.T) {
 func TestReturnedErrorsAreCleanAndStillUnwrap(t *testing.T) {
 	w, _ := newWriter(t)
 	ctx := context.Background()
-	leaky := "Bearer SECRETA1"
-	for name, err := range map[string]error{
-		"event outcome":   w.Event(ctx, who, SourceAlert, leaky, "bogus"),
-		"event binding":   w.Event(ctx, Actor{}, SourceAlert, leaky, EventAccepted),
-		"pause subject":   w.UnusablePause(ctx, who, "", "", errors.New(leaky)),
-		"pause cause nil": w.UnusablePause(ctx, who, "t1", "", nil),
-		"call op":         w.AgentCall(ctx, who, Call{Op: Op(leaky), TaskID: "t1"}),
-		"call subject":    w.AgentCall(ctx, who, Call{Op: OpSend, Err: errors.New(leaky)}),
-		"decision result": w.Decision(ctx, who, Decision{InteractionID: leaky, Result: DecisionResult(leaky)}),
-	} {
-		if !errors.Is(err, store.ErrInvalid) || strings.Contains(err.Error(), "SECRETA") {
-			t.Errorf("%s: err = %v, want ErrInvalid with no secret in its text", name, err)
+	// %q would turn an invisible rune into an ASCII escape before clean could delete it.
+	for _, leaky := range append([]string{"Bearer SECRETA1", "xo\u200bxb-1234-SECRETA2", "eyJhbGci\u200bOiJub25lIn0.eyJjYW5hcnkiOjF9.SECRETA3", "Bearer\u00a0 SECRETA4"}, bearerVariants...) {
+		for name, err := range map[string]error{
+			"event outcome":   w.Event(ctx, who, SourceAlert, leaky, "bogus"),
+			"event binding":   w.Event(ctx, Actor{}, SourceAlert, leaky, EventAccepted),
+			"pause subject":   w.UnusablePause(ctx, who, "", "", errors.New(leaky)),
+			"pause cause nil": w.UnusablePause(ctx, who, "t1", "", nil),
+			"call op":         w.AgentCall(ctx, who, Call{Op: Op(leaky), TaskID: "t1"}),
+			"call subject":    w.AgentCall(ctx, who, Call{Op: OpSend, Err: errors.New(leaky)}),
+			"decision result": w.Decision(ctx, who, Decision{InteractionID: leaky, Result: DecisionResult(leaky)}),
+		} {
+			if !errors.Is(err, store.ErrInvalid) {
+				t.Errorf("%q, %s: err = %v, want ErrInvalid", leaky, name, err)
+			}
+			for _, secret := range []string{"SECRETA", "xoxb-", "eyJ"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("%q, %s: err = %q holds %q", leaky, name, err, secret)
+				}
+			}
 		}
+	}
+}
+
+func TestIdentifiersNamingBearerAreKept(t *testing.T) {
+	w, s := newWriter(t)
+	a := Actor{User: "U1", Identity: "sa/bearerauth", Binding: "ns/bearer-gateway"}
+	if err := w.Event(context.Background(), a, SourceAlert, "bearer-alert", EventAccepted); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	if got := only(t, s); got.Identity != a.Identity || got.Binding != a.Binding || got.Subject != "bearer-alert" {
+		t.Errorf("row = %+v, want identifiers that merely start with bearer left alone", got)
 	}
 }
 
