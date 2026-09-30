@@ -76,6 +76,25 @@ func do(t *testing.T, method, url string, body any, hdr http.Header) (int, []byt
 	return resp.StatusCode, raw
 }
 
+// msg builds message params; ctxID may be empty.
+func msg(id, text, ctxID string) obj {
+	m := obj{"messageId": id, "role": "ROLE_USER", "parts": []obj{{"text": text}}}
+	if ctxID != "" {
+		m["contextId"] = ctxID
+	}
+	return obj{"message": m}
+}
+
+// task returns the task under result.task of a SendMessage answer.
+func task(t *testing.T, body obj) obj {
+	t.Helper()
+	tk, _ := dig(body, "result", "task").(obj)
+	if tk == nil {
+		t.Fatalf("no task in %v", body)
+	}
+	return tk
+}
+
 // dig walks nested maps by key; it returns nil when a key is missing.
 func dig(v any, keys ...string) any {
 	for _, k := range keys {

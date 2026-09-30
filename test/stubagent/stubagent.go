@@ -11,10 +11,13 @@
 package stubagent
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,8 +27,12 @@ const HITLExtension = "https://kagent.dev/extensions/hitl/v1"
 // Server serves any number of stub agents. It is an http.Handler and is safe for concurrent
 // use.
 type Server struct {
-	srv *httptest.Server // nil when used only as a handler
-	now func() time.Time
+	srv  *httptest.Server // nil when used only as a handler
+	now  func() time.Time
+	ctx  context.Context // ends the running turns
+	stop context.CancelFunc
+	wg   sync.WaitGroup // running turns
+	seq  atomic.Int64
 
 	mu     sync.Mutex
 	agents map[string]*Agent // by "ns/name", guarded by mu
@@ -41,6 +48,7 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 // Close when done.
 func NewHandler(opts ...Option) *Server {
 	s := &Server{now: time.Now, agents: map[string]*Agent{}}
+	s.ctx, s.stop = context.WithCancel(context.Background())
 	for _, o := range opts {
 		o(s)
 	}
@@ -68,12 +76,18 @@ func (s *Server) AgentURL(ns, name string) string { return s.URL() + agentPath(n
 
 func agentPath(ns, name string) string { return "/agents/" + ns + "/" + name }
 
-// Close shuts down a Server started with New. It does nothing otherwise.
+// Close stops the running turns and shuts down a Server started with New.
 func (s *Server) Close() {
+	s.stop()
 	if s.srv != nil {
 		s.srv.Close()
 	}
+	s.wg.Wait()
 }
+
+func (s *Server) newID(kind string) string { return fmt.Sprintf("%s-%d", kind, s.seq.Add(1)) }
+
+func (s *Server) stamp() string { return s.now().UTC().Format(time.RFC3339Nano) }
 
 // Agent returns the agent ns/name, registering it on first use. An unregistered agent's
 // endpoint and card answer 404.
@@ -82,7 +96,7 @@ func (s *Server) Agent(ns, name string) *Agent {
 	defer s.mu.Unlock()
 	key := ns + "/" + name
 	if s.agents[key] == nil {
-		s.agents[key] = &Agent{s: s, ns: ns, name: name}
+		s.agents[key] = &Agent{s: s, ns: ns, name: name, sessions: map[string]*session{}}
 	}
 	return s.agents[key]
 }
