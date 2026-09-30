@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
@@ -60,7 +61,8 @@ func newStubEnv(t *testing.T, opts ...stubagent.Option) *stubEnv {
 	return &stubEnv{fixture: f, sink: f.live(), srv: srv, stub: srv.Agent("kagent", "test"), agent: ag}
 }
 
-// finalTask waits for the sink's n-th FinalEvent and returns its task.
+// finalTask waits for the next n FinalEvents of the sink and returns the last of them: the
+// task a turn ended, or paused, in.
 func (s *fakeSink) finalTask(t *testing.T, n int) *a2a.Task {
 	t.Helper()
 	for range n {
@@ -72,13 +74,26 @@ func (s *fakeSink) finalTask(t *testing.T, n int) *a2a.Task {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var last *a2a.Task
+	s.taken += n
+	var tasks []*a2a.Task
 	for _, e := range s.events {
 		if fe, ok := e.(agent.FinalEvent); ok {
-			last = fe.Task
+			tasks = append(tasks, fe.Task)
 		}
 	}
-	return last
+	return tasks[s.taken-1]
+}
+
+// says reports whether the task's output has an artifact whose text is text.
+func says(task *a2a.Task, text string) bool {
+	for _, a := range task.Artifacts {
+		for _, p := range a.Parts {
+			if p.Text() == text {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // S4: a reply sent while a task runs is queued, and delivered as the next turn of the same
@@ -98,7 +113,7 @@ func TestStubQueuedReplyIsDeliveredAfterTheTaskEnds(t *testing.T) {
 	e.srv.Release("first")
 	e.sink.finalTask(t, 1)
 	second := e.sink.finalTask(t, 1)
-	if second.Status.State != a2a.TaskStateCompleted || second.Artifacts[0].Parts[0].Text() != "second answer" {
+	if second.Status.State != a2a.TaskStateCompleted || !says(second, "second answer") {
 		t.Errorf("second turn = %+v; want it completed with its own answer", second)
 	}
 	sess, _ := e.session()
@@ -190,5 +205,97 @@ func TestStubRefusedCredentialsFailTheTurn(t *testing.T) {
 	}
 	if sends := e.agent.sends.Load(); sends != 1 {
 		t.Errorf("%d sends; want one: a refused credential is not retried", sends)
+	}
+}
+
+// twoTurns queues turn 1 and, behind it, turn 2 (which the stub answers "second").
+func (e *stubEnv) twoTurns(t *testing.T) {
+	t.Helper()
+	e.stub.Next(stubagent.Text("second"))
+	for _, ts := range []string{"1", "2"} {
+		if _, err := e.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The stop control cancels a task that runs, at the stub, and the queue goes on with the reply.
+func TestStubStopCancelsTheRunningTask(t *testing.T) {
+	e := newStubEnv(t)
+	e.stub.Next(stubagent.Hold("never"), stubagent.Text("never said"))
+	if _, err := e.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	e.stub.Next(stubagent.Text("second"))
+	if _, err := e.submit(inbound("2")); err != nil {
+		t.Fatal(err)
+	}
+	if did, err := e.m.Stop(t.Context(), key, "U9"); err != nil || !did {
+		t.Fatalf("Stop = %v, %v; want it to stop the task", did, err)
+	}
+	if first := e.sink.finalTask(t, 1); first.Status.State != a2a.TaskStateCanceled {
+		t.Errorf("first turn ended %s; want cancelled", first.Status.State)
+	}
+	if second := e.sink.finalTask(t, 1); second.Status.State != a2a.TaskStateCompleted || !says(second, "second") {
+		t.Errorf("second turn = %+v; want it completed", second)
+	}
+	e.amu.Lock()
+	defer e.amu.Unlock()
+	if len(e.audits) != 1 || e.audits[0].Op != audit.OpCancel || e.actors[0].User != "U9" {
+		t.Errorf("audits %+v by %+v; want the cancel, by U9", e.audits, e.actors)
+	}
+}
+
+// S3, from the session's side: the agent asks a question, the dialect builds the answer from a
+// choice, and Answer sends it; the task then completes, and the reply held behind the pause goes.
+func TestStubAskThenAnswer(t *testing.T) {
+	e := newStubEnv(t)
+	e.stub.Next(stubagent.Ask([]stubagent.Question{{Question: "Which database?", Choices: []string{"PostgreSQL", "MySQL"}}},
+		func(r stubagent.Response) []stubagent.Step {
+			return []stubagent.Step{stubagent.Text("chose " + r.Answers[0][0])}
+		}))
+	e.twoTurns(t)
+	in := pausedOn(t, e.sink.finalTask(t, 1))
+	msg, err := (&kagentv1.Dialect{}).BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"PostgreSQL"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the runner to park", func() bool { return e.m.Answer(t.Context(), key, &msg) == nil })
+	if answered := e.sink.finalTask(t, 1); answered.Status.State != a2a.TaskStateCompleted || !says(answered, "chose PostgreSQL") {
+		t.Errorf("answered turn = %+v; want it completed with the chosen database", answered)
+	}
+	if second := e.sink.finalTask(t, 1); !says(second, "second") {
+		t.Errorf("second turn = %+v; want the held reply, sent after the answer", second)
+	}
+}
+
+// R17, end to end: an answer kagent cannot correlate wedges the task in WORKING. Agent.Answer
+// cancels it, the thread is told, the call is audited, and the held reply goes out.
+func TestStubBadAnswerWedgesAndIsCancelled(t *testing.T) {
+	e := newStubEnv(t)
+	e.stub.Next(askDatabase)
+	e.twoTurns(t)
+	task := e.sink.finalTask(t, 1)
+	in := pausedOn(t, task)
+	msg, err := (&kagentv1.Dialect{}).BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"MySQL"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Metadata[kagentv1.HITLExtension].(map[string]any)["id"] = "not-the-request" // the wedge of WP-02
+	eventually(t, "the runner to park", func() bool { return e.m.Answer(t.Context(), key, &msg) == nil })
+	if second := e.sink.finalTask(t, 1); !says(second, "second") {
+		t.Fatalf("second turn = %+v; want the held reply, sent after the wedge was cancelled", second)
+	}
+	if got := e.sink.noticesOf(NoticeAnswerRejected); len(got) != 1 {
+		t.Errorf("answer-rejected notices = %+v; want one", got)
+	}
+	if wedged, err := e.agent.GetTask(t.Context(), task.ID); err != nil || wedged.Status.State != a2a.TaskStateCanceled {
+		t.Errorf("the wedged task = %+v, %v; want it cancelled at the stub", wedged, err)
+	}
+	e.amu.Lock()
+	defer e.amu.Unlock()
+	if len(e.audits) != 1 || e.audits[0].Op != audit.OpAnswer {
+		t.Errorf("audits = %+v; want the rejected answer", e.audits)
 	}
 }

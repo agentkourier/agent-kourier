@@ -385,6 +385,8 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
+	case err != nil && t.answer && errors.Is(err, agent.ErrAnswerRejected): // it says so after the task is named again
+		return m.unanswered(t, err)
 	case err != nil && (named || t.follow):
 		return m.lost(t, err)
 	case err != nil && t.answer:

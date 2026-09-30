@@ -133,6 +133,7 @@ type fakeSink struct {
 	events  []agent.Event
 	notices []Notice
 	refs    []TurnRef
+	taken   int // FinalEvents finalTask has returned
 	finals  chan struct{}
 	onFinal func(*a2a.Task) // runs inside the handler, before finals is signalled
 }
