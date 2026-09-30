@@ -16,21 +16,25 @@ var (
 	ErrNotFound = errors.New("store: not found")
 	// ErrInvalid is returned when an argument is not a legal value.
 	ErrInvalid = errors.New("store: invalid argument")
+	// ErrConflict is returned when a row exists but is not in a state that
+	// allows the requested change.
+	ErrConflict = errors.New("store: conflict")
 )
 
 // Store is the full persistence surface, composed of one interface per concern.
 type Store interface {
 	Events
+	Queue
 	io.Closer
 }
 
 // EventStatus is the processing state of an inbound event.
 type EventStatus string
 
-// Event processing states. The queue owns retry policy. The atomic claim will
-// be a store method added by the event queue work, using UPDATE ... RETURNING
-// on SQLite's write pool and FOR UPDATE SKIP LOCKED in Postgres, so callers
-// must not build claims from GetEvent plus SetEventStatus.
+// Event processing states. The queue worker owns retry policy. Claims go
+// through Queue.ClaimEvent, which is atomic (UPDATE ... RETURNING on SQLite's
+// write pool, FOR UPDATE SKIP LOCKED in Postgres), so callers must not build
+// claims from GetEvent plus SetEventStatus.
 const (
 	EventPending    EventStatus = "pending"
 	EventProcessing EventStatus = "processing"
