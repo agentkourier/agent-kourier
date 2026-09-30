@@ -161,7 +161,7 @@ func NewHandler(opts ...Option) *Server {
 	for _, o := range opts {
 		o(s)
 	}
-	s.control = s.newControlMux()
+	s.control = s.newControlRoutes()
 	return s
 }
 

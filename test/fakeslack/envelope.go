@@ -111,7 +111,7 @@ func (s *Server) WaitAck(ctx context.Context, envelopeIDs ...string) error {
 	for _, id := range envelopeIDs {
 		env := s.envelope(id)
 		if env == nil {
-			return fmt.Errorf("fakeslack: no envelope %q was sent", id)
+			return fmt.Errorf("fakeslack: no envelope %q was sent: %w", id, ErrNotFound)
 		}
 		select {
 		case <-env.acked:

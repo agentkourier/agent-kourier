@@ -165,6 +165,11 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 	}{
 		{"malformed JSON", "/_control/mention", "{", 400},
 		{"misspelled field", "/_control/mention", `{"chanel": "C1"}`, 400},
+		{"a field of another endpoint", "/_control/reply", `{"channel": "C1", "message_ts": "1.2", "user": "U1"}`, 400},
+		{"trailing garbage", "/_control/dm", `{"user": "U1", "text": "hi"} {"user": "U2"}`, 400},
+		{"mention without a channel", "/_control/mention", map[string]string{"user": "U1", "text": mentionText}, 400},
+		{"submit an option the select does not offer", "/_control/submit", map[string]any{"user": "U1", "message_ts": ask, "action_id": "submit",
+			"values": map[string]any{"q2": map[string]any{"pick": map[string]any{"selected_option": map[string]string{"value": "zzz"}}}}}, 400},
 		{"mention without the bot", "/_control/mention", map[string]string{"channel": "C1", "user": "U1", "text": "hi"}, 400},
 		{"reply to a missing thread", "/_control/reply", map[string]string{"channel": "C1", "thread_ts": "1.000001", "user": "U1", "text": "x"}, 404},
 		{"click on a missing message", "/_control/click", map[string]string{"message_ts": "1.000001", "action_id": "approve"}, 404},
@@ -188,6 +193,60 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 	var out map[string]string
 	if s := control(t, bare, "POST", "/_control/dm", map[string]string{"user": "U1", "text": "hi"}, &out); s != 409 || out["error"] == "" {
 		t.Fatalf("dm with no client = %d, %v; want 409", s, out)
+	}
+}
+
+func TestControlRoutingIsStrict(t *testing.T) {
+	fake, _ := newFake(t)
+	tests := []struct {
+		method, path string
+		want         int
+	}{
+		{"GET", "/_control/mention", 405},
+		{"POST", "/_control/connections", 405},
+		{"GET", "/_control/nope", 404},
+		{"POST", "/_control//mention", 404},
+		{"POST", "/_control/mention/", 404},
+		{"GET", "/_control", 404},
+	}
+	for _, tc := range tests {
+		var out map[string]string
+		if s := control(t, fake, tc.method, tc.path, nil, &out); s != tc.want || out["error"] == "" {
+			t.Fatalf("%s %s = %d, %v; want %d with a JSON error", tc.method, tc.path, s, out, tc.want)
+		}
+	}
+}
+
+func TestControlShowsStreamingState(t *testing.T) {
+	fake, _ := newFake(t)
+	bot := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))
+	_, root, err := bot.PostMessage("D1", text("root"))
+	if err != nil {
+		t.Fatalf("post root: %v", err)
+	}
+	_, ts, err := bot.StartStream("D1", slack.MsgOptionTS(root), slack.MsgOptionChunks(slack.NewMarkdownTextChunk("part")))
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	stream := func() (streaming bool, chunks int) {
+		var thread []struct {
+			TS        string
+			Streaming bool
+			Chunks    []any
+		}
+		if s := control(t, fake, "GET", "/_control/thread?channel=D1&ts="+root, nil, &thread); s != 200 || len(thread) != 2 || thread[1].TS != ts {
+			t.Fatalf("thread = %d, %+v; want the root and the stream", s, thread)
+		}
+		return thread[1].Streaming, len(thread[1].Chunks)
+	}
+	if streaming, chunks := stream(); !streaming || chunks != 1 {
+		t.Fatalf("running stream = streaming %v, %d chunks; want true, 1", streaming, chunks)
+	}
+	if _, _, err := bot.StopStream("D1", ts); err != nil {
+		t.Fatalf("StopStream: %v", err)
+	}
+	if streaming, _ := stream(); streaming {
+		t.Fatal("finished stream still shows as streaming")
 	}
 }
 

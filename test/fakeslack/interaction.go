@@ -2,7 +2,6 @@ package fakeslack
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -28,7 +27,7 @@ func (s *Server) Click(user, messageTS, actionID, value string) (string, error) 
 		return "", err
 	}
 	if v, _ := btn.element["value"].(string); v != value {
-		return "", fmt.Errorf("fakeslack: button %q has value %q, not %q", actionID, v, value)
+		return "", invalid("fakeslack: button %q has value %q, not %q", actionID, v, value)
 	}
 	return s.blockActions(user, channel, m, btn, blocks, nil)
 }
@@ -110,7 +109,7 @@ func (s *Server) findMessage(ts string) (channel string, m Message, blocks eleme
 			}
 			els := findElements(x.Blocks)
 			if slices.ContainsFunc(els, func(e element) bool { return e.blockID == "" }) {
-				return "", Message{}, nil, fmt.Errorf("fakeslack: message %s has an interactive block with no block_id; "+
+				return "", Message{}, nil, invalid("fakeslack: message %s has an interactive block with no block_id; "+
 					"Slack would generate one, so set explicit block IDs", ts)
 			}
 			return ch, x.clone(), els, nil
@@ -187,7 +186,7 @@ func (es elements) state(values StateValues) (StateValues, error) {
 				return nil, fmt.Errorf("fakeslack: message has no stateful element %q in block %q (buttons have none): %w", actionID, blockID, ErrNotFound)
 			}
 			if typ, has := given["type"]; has && typ != cur["type"] {
-				return nil, fmt.Errorf("fakeslack: element %q is a %v, not a %v", actionID, cur["type"], typ)
+				return nil, invalid("fakeslack: element %q is a %v, not a %v", actionID, cur["type"], typ)
 			}
 			if err := optionsOK(defs[[2]string{blockID, actionID}], given); err != nil {
 				return nil, fmt.Errorf("fakeslack: element %q: %w", actionID, err)
@@ -230,7 +229,7 @@ func optionsOK(el, given map[string]any) error {
 	raw, _ := json.Marshal(el)
 	gotRaw, _ := json.Marshal(given)
 	if json.Unmarshal(raw, &offered) != nil || json.Unmarshal(gotRaw, &picked) != nil {
-		return errors.New("selected options are not objects with a value")
+		return invalid("selected options are not objects with a value")
 	}
 	allowed := map[string]bool{}
 	for _, o := range offered.Options {
@@ -249,7 +248,7 @@ func optionsOK(el, given map[string]any) error {
 	}
 	for _, o := range picked.Many {
 		if !allowed[o.Value] {
-			return fmt.Errorf("option %q is not among the options offered", o.Value)
+			return invalid("option %q is not among the options offered", o.Value)
 		}
 	}
 	return nil
@@ -260,7 +259,7 @@ func (es elements) button(actionID string) (element, error) {
 	for _, e := range es {
 		if e.element["action_id"] == actionID {
 			if e.element["type"] != "button" {
-				return element{}, fmt.Errorf("fakeslack: element %q is a %v, not a button", actionID, e.element["type"])
+				return element{}, invalid("fakeslack: element %q is a %v, not a button", actionID, e.element["type"])
 			}
 			return e, nil
 		}

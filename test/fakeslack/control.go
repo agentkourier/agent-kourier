@@ -18,6 +18,18 @@ type UserMessage struct {
 // does not exist.
 var ErrNotFound = errors.New("fakeslack: not found")
 
+// ErrInvalid is matched by errors.Is for a request the fake refuses because no
+// user or Slack app could have made it: missing fields, a mention that does not
+// mention the bot, an answer the message's elements cannot take.
+var ErrInvalid = errors.New("fakeslack: invalid request")
+
+type invalidError string
+
+func (e invalidError) Error() string      { return string(e) }
+func (invalidError) Is(target error) bool { return target == ErrInvalid }
+
+func invalid(format string, args ...any) error { return invalidError(fmt.Sprintf(format, args...)) }
+
 // Mention posts text in a channel as user and delivers an app_mention event and
 // a message event for it. The text must mention the bot, as <@UFAKEBOT> by
 // default, since courier reads the mention out of the text. Slack sends no
@@ -30,10 +42,10 @@ var ErrNotFound = errors.New("fakeslack: not found")
 // event_context or token).
 func (s *Server) Mention(channel, user, text string) (UserMessage, error) {
 	if !s.mentionsBot(text) {
-		return UserMessage{}, fmt.Errorf("fakeslack: text %q does not mention the bot <@%s>", text, s.bot.user)
+		return UserMessage{}, invalid("fakeslack: text %q does not mention the bot <@%s>", text, s.bot.user)
 	}
 	if s.channelType(channel) == "im" {
-		return UserMessage{}, fmt.Errorf("fakeslack: %s is a direct message, where Slack sends no app_mention; use DM", channel)
+		return UserMessage{}, invalid("fakeslack: %s is a direct message, where Slack sends no app_mention; use DM", channel)
 	}
 	return s.userMessage(channel, "", user, text)
 }
@@ -44,7 +56,7 @@ func (s *Server) Mention(channel, user, text string) (UserMessage, error) {
 // event comes first, with the thread_ts, as for a Mention.
 func (s *Server) Reply(channel, threadTS, user, text string) (UserMessage, error) {
 	if threadTS == "" {
-		return UserMessage{}, errors.New("fakeslack: a reply needs a thread_ts")
+		return UserMessage{}, invalid("fakeslack: a reply needs a thread_ts")
 	}
 	return s.userMessage(channel, threadTS, user, text)
 }
@@ -92,7 +104,7 @@ func (s *Server) channelType(channel string) string {
 // ErrNoConnection: the event is lost, as it would be in Slack.
 func (s *Server) userMessage(channel, threadTS, user, text string) (UserMessage, error) {
 	if channel == "" || user == "" {
-		return UserMessage{}, errors.New("fakeslack: a user message needs a channel and a user")
+		return UserMessage{}, invalid("fakeslack: a user message needs a channel and a user")
 	}
 	if s.Connections() == 0 {
 		return UserMessage{}, ErrNoConnection
@@ -106,7 +118,7 @@ func (s *Server) userMessage(channel, threadTS, user, text string) (UserMessage,
 	case "thread_not_found":
 		return UserMessage{}, fmt.Errorf("fakeslack: posting as %s in %s: %w", user, channel, ErrNotFound)
 	default:
-		return UserMessage{}, fmt.Errorf("fakeslack: posting as %s in %s: %s", user, channel, code)
+		return UserMessage{}, invalid("fakeslack: posting as %s in %s: %s", user, channel, code)
 	}
 
 	out := UserMessage{Channel: channel, TS: m.TS}
