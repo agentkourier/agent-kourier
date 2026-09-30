@@ -3,8 +3,8 @@ kind: Binding
 metadata: { name: chat-only, namespace: sre }
 spec:
   agent:
-    backendRef: { name: kagent-pilot }
+    backendRef: { namespace: courier-system, name: kagent-pilot }
     name: k8s-agent
     namespace: kagent
   identity: { userId: courier-chat-only }
-  chat: { connectionRef: { name: slack-main }, channel: G0123456789 }
+  chat: { connectionRef: { namespace: courier-system, name: slack-main }, channel: G0123456789 }
