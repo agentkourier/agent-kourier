@@ -27,13 +27,19 @@ type assembler struct {
 	contextID string
 	state     a2a.TaskState
 	final     *a2a.Task
+	changes   int // events emitted so far: text, tool, state, and final
 }
 
 func newAssembler(h Handler, classify ToolClassifier) *assembler {
 	if h == nil {
 		h = func(Event) {}
 	}
-	return &assembler{emit: h, classify: classify, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
+	a := &assembler{classify: classify, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
+	a.emit = func(e Event) {
+		a.changes++
+		h(e)
+	}
+	return a
 }
 
 // apply folds one event from the agent into the assembler and emits what changed.

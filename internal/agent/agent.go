@@ -75,7 +75,8 @@ func New(source Source, tool ToolClassifier, cfg Config) *Agent {
 
 // Send sends msg and delivers the reply to h as it streams, returning when the task ends
 // or pauses for input (h has then got a FinalEvent) or when the send fails. Set msg.ID
-// once and keep it: a resend after ErrBusy or a crash must carry the same messageId.
+// once and keep it: a message resent after ErrBusy must carry the same messageId. After
+// ErrOutcomeUnknown, do not resend until FindTask has looked the turn up (see the error).
 //
 // A stream that drops, or stays silent for InactivityTimeout, is cancelled and reconciled:
 // GetTask, then SubscribeToTask (spec 8.3), and no text is delivered twice. An error event
@@ -95,44 +96,65 @@ func (a *Agent) Answer(ctx context.Context, msg *a2a.Message, h Handler) error {
 func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bool) error {
 	conn, err := a.source(ctx)
 	if err != nil {
-		return fmt.Errorf("connect to agent: %w", err)
+		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, err)
 	}
 	asm := newAssembler(h, a.tool)
-	progressed, err := a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	err = a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 	})
+	switch {
+	case err == nil:
+		return nil
+	case !dropped(ctx, err):
+		return sendError(ctx, err, answer)
+	case asm.taskID == "": // nothing to reconnect to
+		return fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
+	}
+	switch err = a.reconnect(ctx, asm, err); {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil:
+		return fmt.Errorf("send message: %w", err)
+	}
+	return &StreamLostError{TaskID: asm.taskID, ContextID: asm.contextID, Err: typed(err, false)}
+}
+
+// reconnect resumes the task, after err ended its stream, until the task settles. It gives
+// up when MaxReconnects in a row change nothing (the opening snapshot of a resubscribe does
+// not count), and on an error that is not a lost connection.
+func (a *Agent) reconnect(ctx context.Context, asm *assembler, err error) error {
 	for failures := 0; err != nil; {
-		if progressed {
-			failures = 0
-		}
-		failures++
-		// Reconnect only after a dropped connection, and only once the agent has named the task.
-		if failures > a.cfg.MaxReconnects || asm.taskID == "" || ctx.Err() != nil || isProtocol(err) {
-			return sendError(ctx, err, asm.taskID, answer)
+		if failures++; !dropped(ctx, err) || failures > a.cfg.MaxReconnects {
+			return err
 		}
 		select {
 		case <-time.After(a.cfg.ReconnectDelay):
 		case <-ctx.Done():
-			return sendError(ctx, ctx.Err(), asm.taskID, answer)
+			return ctx.Err()
 		}
-		if conn, err = a.source(ctx); err != nil {
-			return fmt.Errorf("reconnect to agent: %w", err)
+		conn, cerr := a.source(ctx) // resolves credentials again: the token may have rotated
+		if cerr != nil {
+			return fmt.Errorf("reconnect to agent: %w", cerr)
 		}
-		progressed, err = a.resume(ctx, conn, asm)
+		before := asm.changes
+		err = a.resume(ctx, conn, asm)
+		if asm.changes > before {
+			failures = 0
+		}
 	}
 	return nil
 }
 
 // resume reconciles a lost stream: GetTask, then, if the task still runs, SubscribeToTask.
 // A snapshot replaces the text, so only what is new reaches the caller.
-func (a *Agent) resume(ctx context.Context, conn Conn, asm *assembler) (bool, error) {
+func (a *Agent) resume(ctx context.Context, conn Conn, asm *assembler) error {
 	task, err := a.getTask(ctx, conn, asm.taskID)
 	if err != nil {
-		return false, err
+		return err
 	}
 	asm.apply(task)
 	if asm.final != nil {
-		return true, nil
+		return nil
 	}
 	return a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: asm.taskID})
@@ -143,30 +165,28 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 
 // read feeds a stream to asm until the task settles, cutting the stream after
 // InactivityTimeout without an event. It returns the stream's error, errInactive when the
-// watchdog cut it, or io.ErrUnexpectedEOF when it ended cleanly first. progressed says
-// whether any event arrived.
-func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) (progressed bool, err error) {
+// watchdog cut it, or io.ErrUnexpectedEOF when it ended cleanly first.
+func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchdog := time.AfterFunc(a.cfg.InactivityTimeout, cancel)
 	defer watchdog.Stop()
-	err = io.ErrUnexpectedEOF
+	err := error(io.ErrUnexpectedEOF)
 	for ev, streamErr := range open(sctx) {
 		if streamErr != nil {
 			err = streamErr
 			break
 		}
-		progressed = true
 		watchdog.Reset(a.cfg.InactivityTimeout)
 		asm.apply(ev)
 		if asm.final != nil {
-			return true, nil
+			return nil
 		}
 	}
 	if ctx.Err() == nil && sctx.Err() != nil {
 		err = errInactive
 	}
-	return progressed, err
+	return err
 }
 
 // GetTask returns the task's current state, within UnaryTimeout.

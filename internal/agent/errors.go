@@ -9,10 +9,22 @@ import (
 )
 
 // The errors below are matched with errors.Is. Each also carries the agent's own error, so
-// errors.Is(err, a2a.ErrUnsupportedOperation) and the like still work. An error that is
-// none of these means the send's outcome is unknown; resending the same messageId is safe
-// (spec 8.2).
+// errors.Is(err, a2a.ErrUnsupportedOperation) and the like still work.
+//
+// A send that fails on the connection, not on the agent's answer, says how far it got:
+// ErrNotSent (nothing left, retrying is safe), ErrOutcomeUnknown (the agent may have taken
+// the message), or ErrStreamLost (the agent named the task; see StreamLostError).
 var (
+	// ErrNotSent means the message never left: the Source could not give a connection, for
+	// example because a configured token could not be read. Retrying is safe.
+	ErrNotSent = errors.New("agent: the message was not sent")
+	// ErrOutcomeUnknown means the stream was lost before the agent named a task, so the agent
+	// may or may not have accepted the message. Resending the same messageId WITHOUT a
+	// contextId is deduplicated by kagent (WP-02, measured). One WITH a contextId is not
+	// (WP-03, measured): while the task runs it gets -32004, and after the task ends it starts
+	// a second full task. So the caller reconciles first, with FindTask on the contextId, and
+	// resends only when the turn is absent (spec 8.2).
+	ErrOutcomeUnknown = errors.New("agent: the outcome of the send is unknown")
 	// ErrBusy means the session already has an active task (JSON-RPC -32004). The message
 	// was not recorded. Do not retry at once: keep it queued, and resend it unchanged, with
 	// the same messageId, when the active task ends. -32004 also answers every send to a
@@ -24,9 +36,27 @@ var (
 	// task stays in WORKING and refuses every message, so the caller must CancelTask it (R17).
 	ErrAnswerRejected = errors.New("agent: the answer was rejected and the task is wedged")
 	// ErrStreamLost means the stream ended before the task reached an end state, and the
-	// agent had named the task, so its state can still be read with GetTask.
+	// reconnects did not get it there. The agent had named the task, so a StreamLostError
+	// carries its ID and its state can still be read with GetTask.
 	ErrStreamLost = errors.New("agent: stream ended before the task did")
 )
+
+// StreamLostError is the error a send returns when it lost its stream after the agent named
+// the task, and could not resume it: the reconnects ran out, or a reconnect failed for
+// another reason (the Source could not give a connection, or the agent refused). It
+// satisfies errors.Is(err, ErrStreamLost) and also wraps that cause.
+type StreamLostError struct {
+	TaskID    a2a.TaskID
+	ContextID string
+	Err       error // why the last reconnect failed
+}
+
+func (e *StreamLostError) Error() string {
+	return fmt.Sprintf("%v (task %s): %v", ErrStreamLost, e.TaskID, e.Err)
+}
+
+// Unwrap lets errors.Is find ErrStreamLost and the cause.
+func (e *StreamLostError) Unwrap() []error { return []error{ErrStreamLost, e.Err} }
 
 // typed maps the agent's JSON-RPC errors to this package's; other errors pass through.
 // answer is true when the call was an answer to an interaction.
@@ -43,19 +73,20 @@ func typed(err error, answer bool) error {
 }
 
 // isProtocol reports whether err is one the agent itself returned, as opposed to a
-// dropped connection: the task is not "lost", the agent said no.
+// dropped connection: the agent said no, the connection did not fail.
 func isProtocol(err error) bool {
 	var rpcErr *a2a.Error
 	return errors.As(err, &rpcErr)
 }
 
-// sendError types the error that ended a send. taskID is the task the agent named, if any.
-func sendError(ctx context.Context, err error, taskID a2a.TaskID, answer bool) error {
-	switch {
-	case ctx.Err() == nil && isProtocol(err):
+// dropped reports whether err is a lost connection, which is worth a reconnect, and not the
+// agent's answer or the caller's own cancellation.
+func dropped(ctx context.Context, err error) bool { return ctx.Err() == nil && !isProtocol(err) }
+
+// sendError types the agent's error, or the caller's cancellation, that ended a send.
+func sendError(ctx context.Context, err error, answer bool) error {
+	if ctx.Err() == nil {
 		err = typed(err, answer)
-	case ctx.Err() == nil && taskID != "":
-		err = fmt.Errorf("%w: %w", ErrStreamLost, err)
 	}
 	return fmt.Errorf("send message: %w", err)
 }
