@@ -114,6 +114,7 @@ type fixture struct {
 	onWake func()
 	now    atomic.Int64 // the clock, in Unix nanoseconds
 	agent  *fakeAgent
+	real   AgentAPI // when set, the agent the Binding uses instead of the fake
 	attr   func(*a2a.Message, dialect.User)
 }
 
@@ -123,7 +124,11 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if !ok {
 		return Backend{}, ErrUnknownBinding
 	}
-	return Backend{ThreadTTL: ttl, Agent: f.agent, Attribute: f.attr}, nil
+	var ag AgentAPI = f.agent
+	if f.real != nil {
+		ag = f.real
+	}
+	return Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr}, nil
 }
 
 func newFixture(t *testing.T) *fixture {
