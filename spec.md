@@ -573,7 +573,12 @@ Binding's single service identity (`spec.identity`).
 - **Attribution:** the Slack user who typed or clicked is resolved (`users.info`,
   cached) and attached by the dialect as message metadata and a prefix the agent can
   see. The prefix is informational; agents must not treat it as authorization, which is
-  always the Binding identity. Courier's audit log records the Slack user, email, and Binding identity together.
+  always the Binding identity. Courier's audit log records the Slack user, email, and Binding identity together. For a chat
+  turn the prefix goes at the start of the first text part, never as a part of its own.
+  For HITL answers, attribution is metadata only: kagent rebuilds an answer into tool
+  confirmation parts and drops the message text and metadata (alpha5 source,
+  `go/adk/pkg/a2a/hitl.go` `BuildResumeHITLMessage`; not measured), so the agent never
+  sees who answered. The audit log and the updated Slack message (8.4 step 5) record it.
 - **Consequence:** kagent's logs and any tools the agent calls see the Binding identity,
   not the person. This is consistent with channel-scoped authorization (D12): the
   channel is the access boundary, and the Binding identity should hold only the
@@ -751,6 +756,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R13 | **kagent 1.0 GA slips or changes shape**, stranding courier on an alpha. | Medium | The pilot is explicitly disposable. Changes stay in the dialect. The go/no-go is about value, independent of GA timing. |
 | R14 | A team forgets `continue: true`, putting courier in its paging path. | Medium | Runbook check before enabling a route during the pilot. In hardening, the controller reads `AlertmanagerConfig` resources that target courier's webhook URL and sets a warning condition on the Binding when a route lacks `continue: true`. |
 | R17 | **A malformed HITL reply wedges the kagent task** in `WORKING` (WP-02: an empty answer list or a wrong request id; still `WORKING` after 20 s, and every send to the session, including a new turn, gets `-32004`). `CancelTask` recovers it; other recovery is untested. After a courier crash, a wedged task is indistinguishable from a long-running one. | Medium | The dialect validates answers before sending (6.3); on `-32603` from an answer, courier cancels the task and tells the thread; restart reconciliation (WP-28) applies a maximum WORKING age. Consider an upstream issue. |
+| R18 | **kagent has two agent runtimes that validate differently.** WP-02 measured the Go ADK runtime only. From alpha5 source (not measured), the harness runtime (`go/harness/runtime/a2a/executor.go`, `validateRequest`) refuses a plain user message unless it has exactly one text part. | Medium | Attribution goes into the first text part (8.5, WP-25c). The dialect's wire-shape tests pin the single-text-part shape. Measure against the harness runtime before any pilot agent uses it. |
 | R16 | A crash between `chat.startStream` returning and courier recording the stream's ts leaves a duplicate message and an orphaned stream (8.6 step 6). | Low | ts recorded immediately; window is one local write. WP-04 checks whether startStream accepts metadata, which would close it. |
 | R15 | ~~kagent 1.0 needs Agent Substrate with gVisor, which may not run in kind on Docker Desktop for Mac.~~ **Resolved by WP-01:** the full tier runs on macOS on Apple silicon (arm64; gVisor uses the systrap platform, no KVM), about 1.9 to 2.1 GiB idle, up in about three minutes (148 to 180 s measured). amd64 and Linux are expected from kagent's own CI but not measured. | Low | Pins matter (kagent 1.0.0-alpha5, Substrate 0.3.0-alpha1). |
 
