@@ -110,4 +110,6 @@ else
   echo "skipping: no Docker image ${COURIER_IMAGE}. Courier is not a broker until WP-35, which adds its Dockerfile; build the image and re-run to load it."
 fi
 
+step "verify"
+"${FAST}/verify.sh"
 echo "fast tier up in ${SECONDS}s (context ${CTX})"
