@@ -1,0 +1,43 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - bodyclose     # unclosed HTTP response bodies (Slack, Alertmanager, A2A clients)
+    - contextcheck  # context.Context must be propagated, not dropped
+    - errcheck
+    - errorlint     # enforce %w and errors.Is/As over ==/type assertions
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - noctx          # HTTP requests must carry a context
+    - nolintlint    # a bare //nolint cannot silently bypass this config
+    - revive        # default rule set (exported comments, receiver-naming, ...)
+    - rowserrcheck  # sql.Rows.Err must be checked (SQLite store)
+    - sqlclosecheck # sql.Rows and Stmt must be closed (SQLite store)
+    - staticcheck
+    - unused
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # memory layout micro-optimisation; hurts struct readability
+        - shadow          # noisy on the idiomatic `if err := ...` pattern
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec  # test fixtures use fake credentials and loose file modes
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

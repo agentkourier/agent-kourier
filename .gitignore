@@ -6,3 +6,11 @@
 .env
 .env.*
 /.kube/
+.idea/
+.vscode/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+/.claude/worktrees/
+/.claude/settings.local.json
