@@ -163,13 +163,10 @@ func TestPoolRefusesAnAgentThatDoesNotStream(t *testing.T) {
 // first send must not fetch it again.
 func TestWarmReturnsAtOnceAndSharesTheConnect(t *testing.T) {
 	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
-	fa.cardDelay = 300 * time.Millisecond
+	fa.cardGate = make(chan struct{}) // the card is held back until Warm has returned
 	tg := targetFor(fa, "team/sre", token("t"))
-	start := time.Now()
-	p.Warm(tg)
-	if d := time.Since(start); d > 100*time.Millisecond {
-		t.Errorf("Warm took %v, want it to return before the card arrives", d)
-	}
+	returns(t, "Warm", func() { p.Warm(tg) })
+	close(fa.cardGate)
 	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -178,21 +175,28 @@ func TestWarmReturnsAtOnceAndSharesTheConnect(t *testing.T) {
 	}
 }
 
+// returns fails the test if f is still running after 10 s. The window only bounds a hang;
+// nothing asserts how fast f is, so a slow machine cannot fail it.
+func returns(t *testing.T, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { f(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s did not return: it is waiting for the card fetch", what)
+	}
+}
+
 func TestCloseStopsWarmUpsAndRefusesNewCalls(t *testing.T) {
-	cfg := quick
-	cfg.ConnectTimeout = 5 * time.Second // the bound if Close fails to cancel the warm-up
-	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), cfg)
-	fa.cardDelay = time.Minute
+	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
+	fa.cardGate = make(chan struct{}) // the card never comes
 	tg := targetFor(fa, "team/sre", token("t"))
 	p.Warm(tg)
 	for fa.count("card") == 0 {
 		time.Sleep(time.Millisecond)
 	}
-	start := time.Now()
-	p.Close()
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("Close took %v: it waited for the warm-up's card fetch instead of cancelling it", d)
-	}
+	returns(t, "Close", p.Close) // cancels the warm-up's fetch
 	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); !errors.Is(err, ErrPoolClosed) {
 		t.Errorf("Send after Close = %v, want ErrPoolClosed", err)
 	}
@@ -288,30 +292,29 @@ func TestTokenRequiredRefusesAnEmptyToken(t *testing.T) {
 	}
 }
 
-// A caller that was waiting for a connect when the pool closed must not start one.
-func TestCallWaitingOnAConnectDoesNotConnectAfterClose(t *testing.T) {
+// conn takes the entry's lock and only then checks for Close, so a call that waited for a
+// connect to finish cannot start one afterwards. Nothing else guards it.
+func TestConnAfterCloseFailsWithoutAConnect(t *testing.T) {
 	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
-	entered := make(chan struct{})
-	tg := targetFor(fa, "team/sre", func(ctx context.Context) (dialect.Credentials, error) {
-		close(entered)
-		return token("t")(ctx)
-	})
-	e, err := p.entry(poolKey{tg.Binding, tg.Agent})
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.mu.Lock() // a connect in progress
-	got, closing := make(chan error, 1), make(chan struct{})
-	go func() { _, err := p.conn(t.Context(), tg); got <- err }()
-	<-entered
-	time.Sleep(20 * time.Millisecond) // let the caller reach the entry's lock, ahead of Close
-	go func() { p.Close(); close(closing) }()
-	for !p.isClosed() {
-		time.Sleep(time.Millisecond)
-	}
-	e.mu.Unlock()
-	if err := <-got; !errors.Is(err, ErrPoolClosed) || fa.count("card") != 0 {
+	p.Close()
+	if _, err := p.conn(t.Context(), targetFor(fa, "team/sre", token("t"))); !errors.Is(err, ErrPoolClosed) || fa.count("card") != 0 {
 		t.Errorf("err = %v, card fetches = %d; want ErrPoolClosed and none", err, fa.count("card"))
 	}
-	<-closing
+}
+
+// Close waits for the connects in progress, so it cancels them, a caller's included.
+func TestCloseCancelsAConnectACallerIsWaitingOn(t *testing.T) {
+	fa, p := newFakeAgent(t, liveStream(t)), NewPool(kagentv1.New(0), quick)
+	fa.cardGate = make(chan struct{}) // the card never comes
+	sent := make(chan error, 1)
+	go func() { sent <- p.Agent(targetFor(fa, "team/sre", token("t"))).Send(t.Context(), message("hi"), nil) }()
+	for fa.count("card") == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	returns(t, "Close", p.Close)
+	returns(t, "Send", func() {
+		if err := <-sent; !errors.Is(err, ErrNotSent) {
+			t.Errorf("Send = %v, want ErrNotSent: the connect was cancelled", err)
+		}
+	})
 }

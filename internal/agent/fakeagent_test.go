@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -34,7 +33,7 @@ type fakeAgent struct {
 	mu          sync.Mutex
 	calls       []rpc
 	noStreaming bool
-	cardDelay   time.Duration
+	cardGate    chan struct{}
 }
 
 func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fakeAgent {
@@ -59,10 +58,12 @@ func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fa
 			serve(call, w)
 			return
 		}
-		select {
-		case <-time.After(fa.cardDelay):
-		case <-call.Done:
-			return
+		if fa.cardGate != nil { // a test that sets a gate closes it to release the card
+			select {
+			case <-fa.cardGate:
+			case <-call.Done:
+				return
+			}
 		}
 		card := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)}}
 		card.Capabilities.Streaming = !fa.noStreaming

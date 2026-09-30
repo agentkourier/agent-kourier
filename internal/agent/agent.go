@@ -90,8 +90,9 @@ func (a *Agent) Send(ctx context.Context, msg *a2a.Message, h Handler) error {
 
 // Answer is Send for a message that answers an interaction (an ask-user reply or a tool
 // approval). It differs in one way: a -32603 (ErrAnswerRejected) leaves the task wedged, so
-// Answer cancels it, the task the stream named or else msg.TaskID (R17). The caller tells
-// the thread. If the cancel fails too, the error carries both.
+// Answer cancels it, the task the stream named or else msg.TaskID (R17). If neither names a
+// task, nothing is cancelled. The caller tells the thread. If the cancel fails too, the
+// error carries both.
 func (a *Agent) Answer(ctx context.Context, msg *a2a.Message, h Handler) error {
 	return a.send(ctx, msg, h, true)
 }

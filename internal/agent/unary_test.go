@@ -115,6 +115,15 @@ func TestRejectedAnswerReportsAFailedCancel(t *testing.T) {
 	}
 }
 
+// With no task named by the stream or by the answer, there is nothing to cancel.
+func TestRejectedAnswerWithNoTaskCancelsNothing(t *testing.T) {
+	fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { rpcError(-32603)(w) })
+	err := fa.agentWith(t, quick).Answer(t.Context(), message(""), nil) // message() sets no TaskID
+	if !errors.Is(err, ErrAnswerRejected) || fa.count("CancelTask") != 0 {
+		t.Errorf("err = %v, CancelTask calls = %d; want ErrAnswerRejected and no cancel", err, fa.count("CancelTask"))
+	}
+}
+
 // Only an answer wedges a task: a plain send that fails with -32603 cancels nothing.
 func TestRejectedSendDoesNotCancel(t *testing.T) {
 	fa := newFakeAgent(t, wedgeThenCancel(t, func(w http.ResponseWriter) { reply(t, w, "busy/04-cancel.response.json") }))

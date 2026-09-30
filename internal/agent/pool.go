@@ -133,10 +133,7 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if t.TokenRequired && creds.Token == "" {
 		return nil, fmt.Errorf("binding %s: %w", t.Binding, ErrTokenRequired)
 	}
-	e, err := p.entry(poolKey{t.Binding, t.Agent})
-	if err != nil {
-		return nil, err
-	}
+	e := p.entry(poolKey{t.Binding, t.Agent})
 	seal := p.seal(t.Backend.Spec.URL, creds)
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -146,14 +143,16 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	if e.client != nil && e.seal == seal {
 		return e.client, nil
 	}
+	// Close waits for the entry's lock, so it must be able to cut short a connect a caller
+	// started: the connect ends when the caller's context, the timeout, or the pool ends.
 	ctx, cancel := context.WithTimeout(ctx, p.cfg.ConnectTimeout)
 	defer cancel()
+	defer context.AfterFunc(p.bg, cancel)() //nolint:contextcheck // p.bg is the pool's own lifetime, joined to the caller's on purpose
 	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
 	if err != nil {
 		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
 	}
-	// UNCONFIRMED: no fixture holds kagent 1.0.0-alpha5's card, so whether it sets
-	// capabilities.streaming is not known. If it does not, this refuses every kagent agent.
+	// WP-01d measured kagent 1.0.0-alpha5's card: it sets capabilities.streaming to true.
 	if !client.Card().Capabilities.Streaming {
 		return nil, fmt.Errorf("agent %s/%s: %w", t.Agent.Namespace, t.Agent.Name, ErrStreamingUnsupported)
 	}
@@ -161,18 +160,17 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	return client, nil
 }
 
-func (p *Pool) entry(k poolKey) (*entry, error) {
+// entry returns the entry for k, made on first use. It does not look at closed: conn does,
+// under the entry's lock, which is the one check that cannot be raced.
+func (p *Pool) entry(k poolKey) *entry {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed {
-		return nil, ErrPoolClosed
-	}
 	e, ok := p.entries[k]
 	if !ok {
 		e = &entry{}
 		p.entries[k] = e
 	}
-	return e, nil
+	return e
 }
 
 func (p *Pool) isClosed() bool {
