@@ -3,8 +3,8 @@ package session
 import (
 	"context"
 	"errors"
-	"io"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,15 +17,40 @@ var (
 	key = Key{Connection: "slack", Channel: "C1", ThreadTS: "1700.01"}
 )
 
-// spyStore counts touches, over a real SQLite store.
+// spyStore counts touches and fails a named call once ("touch", "upsert" or "enqueue"),
+// over a real SQLite store.
 type spyStore struct {
 	Store
 	touches int
+	fail    map[string]error
+}
+
+func (s *spyStore) failOnce(call string) error {
+	err := s.fail[call]
+	delete(s.fail, call)
+	return err
 }
 
 func (s *spyStore) TouchSession(ctx context.Context, k Key, at time.Time) error {
 	s.touches++
+	if err := s.failOnce("touch"); err != nil {
+		return err
+	}
 	return s.Store.TouchSession(ctx, k, at)
+}
+
+func (s *spyStore) UpsertSession(ctx context.Context, sess store.Session) error {
+	if err := s.failOnce("upsert"); err != nil {
+		return err
+	}
+	return s.Store.UpsertSession(ctx, sess)
+}
+
+func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error) {
+	if err := s.failOnce("enqueue"); err != nil {
+		return false, err
+	}
+	return s.Store.EnqueueReply(ctx, r)
 }
 
 // fakeBindings maps Binding names to their threadTTL.
@@ -44,6 +69,7 @@ type fixture struct {
 	m      *Manager
 	woke   int
 	onWake func()
+	now    atomic.Int64 // the clock, in Unix nanoseconds
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -53,8 +79,9 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	f := &fixture{t: t, st: &spyStore{Store: s}}
-	f.m, err = New(Config{Store: f.st, Bindings: fakeBindings{"ns/b1": time.Hour, "ns/b2": 1000 * time.Hour}, Now: func() time.Time { return t0 }})
+	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}}}
+	f.now.Store(t0.UnixNano())
+	f.m, err = New(Config{Store: f.st, Bindings: fakeBindings{"ns/b1": time.Hour, "ns/b2": 1000 * time.Hour}, Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -186,6 +213,7 @@ func TestSubmitRefusesWhatCannotBeServed(t *testing.T) {
 		want   error
 	}{
 		"no message id":      {func(in *Inbound) { in.MessageID = "" }, store.ErrInvalid},
+		"no text":            {func(in *Inbound) { in.Text = "" }, store.ErrInvalid},
 		"create, no Binding": {func(in *Inbound) { in.Binding = "" }, store.ErrInvalid},
 		"unknown Binding":    {func(in *Inbound) { in.Binding = "ns/gone" }, ErrUnknownBinding},
 	} {
@@ -204,9 +232,66 @@ func TestSubmitRefusesWhatCannotBeServed(t *testing.T) {
 	if got, _ := f.session(); !errors.Is(err, ErrUnknownBinding) || f.woke != 0 || got != seeded || len(f.drain()) != 0 {
 		t.Errorf("Submit = %v, session %+v, woke %d; want ErrUnknownBinding and no change", err, got, f.woke)
 	}
-	f = newFixture(t)
-	_ = f.st.Store.(io.Closer).Close()
-	if _, err := f.submit(inbound("1700.01")); err == nil || f.woke != 0 {
-		t.Errorf("Submit on a closed store = %v, woke %d; want an error and no wake", err, f.woke)
+}
+
+// A failed write returns an error and wakes nothing, and the queue handler's retry finishes
+// the job (spec 8.6: at-least-once). The touch comes first, so a session that was live when
+// the turn was accepted is live for the retry: a retry past the old threadTTL must not turn
+// the accepted turn into an expired one that stays queued for ever.
+func TestSubmitWriteFailures(t *testing.T) {
+	boom := errors.New("disk full")
+	for _, tc := range []struct {
+		name string
+		fail string
+		seed bool          // a live session one second from its threadTTL
+		wait time.Duration // before the retry
+	}{
+		{"enqueue after the session was created", "enqueue", false, 2 * time.Second},
+		{"enqueue after the session was touched", "enqueue", true, 2 * time.Second},
+		{"touch", "touch", true, 0}, // nothing was accepted, so a retry past the boundary is rightly expired
+		{"upsert", "upsert", false, 2 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			if tc.seed {
+				f.seed("ns/b1", time.Hour-time.Second)
+			}
+			f.st.fail[tc.fail] = boom
+			if _, err := f.submit(inbound("1")); !errors.Is(err, boom) || f.woke != 0 {
+				t.Fatalf("Submit = %v, woke %d; want the store's error and no wake", err, f.woke)
+			}
+			f.now.Store(t0.Add(tc.wait).UnixNano())
+			res, err := f.submit(inbound("1"))
+			if got := len(f.drain()); err != nil || res.Disposition == Expired || got != 1 || f.woke != 1 {
+				t.Errorf("retry = %+v, %v; %d turns queued, woke %d; want it accepted once", res, err, got, f.woke)
+			}
+		})
 	}
+}
+
+// A runner that is slow to wake must not hold up the intake of other turns.
+func TestSubmitWakesOutsideTheIntakeLock(t *testing.T) {
+	f := newFixture(t)
+	f.seed("ns/b1", 0)
+	blocked, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	f.m.wake = func(Key) {
+		if !first.Swap(true) { // only the first wake blocks
+			close(blocked)
+			<-release
+		}
+	}
+	go func() { _, _ = f.submit(inbound("1")) }()
+	<-blocked
+	done := make(chan error, 1)
+	go func() { _, err := f.submit(inbound("2")); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("a second Submit waited for the first one's wake")
+	}
+	close(release)
 }

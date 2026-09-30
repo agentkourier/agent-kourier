@@ -54,6 +54,19 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.ThreadTS == "" || in.MessageID == "" || in.MessageTS == "" || in.Text == "" || (in.Create && in.Binding == "") {
 		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageTS and Text are required, and a Binding to create: %w", in.MessageID, store.ErrInvalid)
 	}
+	res, err := m.queue(ctx, in)
+	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
+		return res, err
+	}
+	m.wake(in.Key) // outside the intake lock: a slow wake must not hold up other turns
+	return res, nil
+}
+
+// queue is Submit's durable half, under the intake lock. A live session is touched before the
+// turn is queued, so the decision that it is live sticks: if the enqueue then fails, or the
+// process dies between the two writes, the retry may come after threadTTL and must still
+// find the session live (a touch nobody used is harmless).
+func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	m.intake.Lock()
 	defer m.intake.Unlock()
 	now := m.cfg.Now()
@@ -69,16 +82,11 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	if _, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageTS: in.MessageTS, Text: in.Text, EnqueuedAt: now}); err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}
-	if res.Disposition == Accepted {
-		if err := m.cfg.Store.TouchSession(ctx, in.Key, now); err != nil {
-			return Result{}, fmt.Errorf("touch session %+v: %w", in.Key, err)
-		}
-	}
-	m.wake(in.Key)
 	return res, nil
 }
 
-// admit reads the session and, for a new thread that may be created, writes its row.
+// admit reads the session and, for a new thread that may be created, writes its row, or, for
+// a live one, touches it.
 func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result, error) {
 	sess, err := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
 	switch {
@@ -107,6 +115,9 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 		return Result{Disposition: Expired}, nil
 	case err != nil:
 		return Result{}, fmt.Errorf("read session %+v: %w", in.Key, err)
+	}
+	if err := m.cfg.Store.TouchSession(ctx, in.Key, now); err != nil {
+		return Result{}, fmt.Errorf("touch session %+v: %w", in.Key, err)
 	}
 	return Result{Disposition: Accepted}, nil
 }
