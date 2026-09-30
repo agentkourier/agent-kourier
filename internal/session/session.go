@@ -35,6 +35,8 @@ type Store interface {
 // AgentAPI is the part of *agent.Agent the manager uses.
 type AgentAPI interface {
 	Send(ctx context.Context, msg *a2a.Message, h agent.Handler) error
+	Follow(ctx context.Context, id a2a.TaskID, h agent.Handler) error
+	FindTask(ctx context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
 }
 
 // Backend is what the manager needs to know about one Binding.
@@ -65,12 +67,27 @@ type TurnRef struct {
 	MessageID string
 }
 
+// NoticeKind is what a Notice tells the thread.
+type NoticeKind string
+
+// NoticeQueued asks for the reaction that marks a reply waiting for the active task (spec 8.2).
+const NoticeQueued NoticeKind = "queued"
+
+// Notice is something for the thread that no turn's output says. ID is stable, so a renderer
+// that posts through the outbox posts it once.
+type Notice struct {
+	ID        string
+	Kind      NoticeKind
+	MessageTS string // the Slack message the notice is about
+}
+
 // Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
 // handler for one turn's events, FinalEvent included, or nil. The handler runs on the goroutine
 // that reads the agent's stream, so it must not block: a slow renderer stalls the read, and
-// can trip the inactivity watchdog into a needless reconnect.
+// can trip the inactivity watchdog into a needless reconnect. Notice must not block for long.
 type Sink interface {
 	Turn(ctx context.Context, t TurnRef) agent.Handler
+	Notice(ctx context.Context, key Key, n Notice)
 }
 
 // Config configures a Manager. Store and Bindings are required. A nil Users attributes a turn
@@ -82,6 +99,9 @@ type Config struct {
 	Sink     Sink
 	Now      func() time.Time
 	Logger   *slog.Logger
+	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
+	// They default to 1 s and 60 s (spec 8.2).
+	RetryBase, RetryMax time.Duration
 }
 
 // Manager owns the sessions of every conversation. It is safe for concurrent use.
@@ -116,6 +136,12 @@ func New(cfg Config) (*Manager, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.RetryBase <= 0 {
+		cfg.RetryBase = time.Second
+	}
+	if cfg.RetryMax <= 0 {
+		cfg.RetryMax = time.Minute
 	}
 	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())

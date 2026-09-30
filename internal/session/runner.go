@@ -14,16 +14,23 @@ import (
 )
 
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
-type convo struct{ again bool } // again: a wake arrived while the runner was busy
+// Only the runner reads and writes tries and ttl.
+type convo struct {
+	again  bool          // a wake arrived while the runner was busy
+	tries  int           // sends of the head turn that got -32004 or a failed lookup, in a row
+	ttl    time.Duration // the Binding's threadTTL, for end
+	resume chan struct{} // the pause ended (see endPause)
+}
 
 // outcome is how one turn left the conversation: nothing queued, the task ended, or the task
-// waits for input (spec 8.4).
+// waits for input (spec 8.4), or cannot be sent yet.
 type outcome int
 
 const (
 	idle outcome = iota
 	ended
 	paused
+	blocked // the agent is busy with a task courier did not record, or the lookup failed
 )
 
 // start is the wake hook: it makes sure a runner is draining key's queue.
@@ -37,9 +44,10 @@ func (m *Manager) start(key Key) {
 		c.again = true
 		return
 	}
-	m.convos[key] = &convo{}
+	c := &convo{resume: make(chan struct{}, 1)}
+	m.convos[key] = c
 	m.wg.Add(1)
-	go m.run(key)
+	go m.run(key, c)
 }
 
 // retire ends key's runner unless a wake arrived since it last looked at the queue.
@@ -54,17 +62,53 @@ func (m *Manager) retire(key Key) bool {
 	return true
 }
 
-// run drains key's queue. A turn that fails stays queued, for the next wake to retry.
-func (m *Manager) run(key Key) {
+// endPause tells the runner of key that the paused task has ended (answered and finished,
+// timed out, or cancelled): it clears the task and sends what was held.
+func (m *Manager) endPause(key Key) {
+	m.mu.Lock()
+	c := m.convos[key]
+	m.mu.Unlock()
+	if c != nil {
+		select {
+		case c.resume <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// backoff is the pause before the next resend after tries in a row: RetryBase, doubling, up
+// to RetryMax.
+func (m *Manager) backoff(tries int) time.Duration {
+	d := m.cfg.RetryBase
+	for i := 1; i < tries && d < m.cfg.RetryMax; i++ {
+		d *= 2
+	}
+	return min(d, m.cfg.RetryMax)
+}
+
+// run drains key's queue. A turn that fails stays queued, for the next wake to retry; one that
+// is blocked is retried after a backoff, and never dropped.
+func (m *Manager) run(key Key, c *convo) {
 	defer m.wg.Done()
 	for m.ctx.Err() == nil {
-		out, err := m.turn(key)
+		out, err := m.turn(key, c)
 		if err != nil && m.ctx.Err() == nil {
 			m.cfg.Logger.Error("session turn failed", "key", key, "error", err)
 		}
 		switch {
 		case out == paused:
-			<-m.ctx.Done() // held until Close; Answer and Cancel add the ways out
+			select {
+			case <-c.resume:
+				if err := m.end(context.WithoutCancel(m.ctx), key, c.ttl); err != nil {
+					m.cfg.Logger.Error("end paused task", "key", key, "error", err)
+				}
+			case <-m.ctx.Done():
+			}
+		case out == blocked:
+			select {
+			case <-time.After(m.backoff(c.tries)):
+			case <-m.ctx.Done():
+			}
 		case (out == idle || err != nil) && m.retire(key):
 			return
 		}
@@ -73,7 +117,7 @@ func (m *Manager) run(key Key) {
 
 // turn sends the oldest queued turn of key and follows it until its task ends or pauses.
 // Store writes ignore a shutdown, so an accepted turn is never left unrecorded.
-func (m *Manager) turn(key Key) (outcome, error) {
+func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	sctx := context.WithoutCancel(m.ctx)
 	r, err := m.cfg.Store.NextReply(sctx, key)
 	if errors.Is(err, store.ErrNotFound) {
@@ -92,6 +136,27 @@ func (m *Manager) turn(key Key) (outcome, error) {
 	if err := m.held(key, r.ID, sess); err != nil {
 		return idle, err
 	}
+	c.ttl = backend.ThreadTTL
+	send := func(h agent.Handler) error { return backend.Agent.Send(m.ctx, m.message(r, sess, backend), h) }
+	if c.tries > 0 && sess.ContextID != "" {
+		// A resend into an existing context is not deduplicated by the agent, so look the turn up
+		// first: if the agent recorded it after all, follow that task instead (spec 8.2).
+		task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, r.ID)
+		if err != nil {
+			c.tries++
+			return blocked, fmt.Errorf("look up turn %s: %w", r.ID, err)
+		}
+		if task != nil {
+			send = func(h agent.Handler) error { return backend.Agent.Follow(m.ctx, task.ID, h) }
+		}
+	}
+	return m.drive(key, c, r, send)
+}
+
+// drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
+// recording the task as soon as the agent names it.
+func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handler) error) (outcome, error) {
+	sctx := context.WithoutCancel(m.ctx)
 	h := func(agent.Event) {}
 	if m.cfg.Sink != nil {
 		if sh := m.cfg.Sink.Turn(m.ctx, TurnRef{key, r.ID}); sh != nil {
@@ -101,11 +166,11 @@ func (m *Manager) turn(key Key) (outcome, error) {
 	var final *a2a.Task
 	var recordErr error
 	named := false
-	err = backend.Agent.Send(m.ctx, m.message(r, sess, backend), func(e agent.Event) {
+	err := send(func(e agent.Event) {
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
-				named = true
+				named, c.tries = true, 0
 				recordErr = m.accept(sctx, r, ev)
 			}
 		case agent.FinalEvent:
@@ -119,6 +184,9 @@ func (m *Manager) turn(key Key) (outcome, error) {
 		m.unrecorded[key] = r.ID
 		m.mu.Unlock()
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
+	case !named && errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later
+		c.tries++
+		return blocked, fmt.Errorf("send turn %s: %w", r.ID, err)
 	case err != nil:
 		return ended, fmt.Errorf("send turn %s: %w", r.ID, err)
 	case !named:
@@ -128,7 +196,7 @@ func (m *Manager) turn(key Key) (outcome, error) {
 	case !final.Status.State.Terminal():
 		return paused, nil
 	}
-	return ended, m.end(sctx, key, backend.ThreadTTL)
+	return ended, m.end(sctx, key, c.ttl)
 }
 
 // message builds the A2A message of a turn: exactly one text part (R18), the queue's messageId

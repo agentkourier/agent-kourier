@@ -42,8 +42,12 @@ type Inbound struct {
 	Create bool
 }
 
-// Result is the outcome of a Submit.
-type Result struct{ Disposition Disposition }
+// Result is the outcome of a Submit. Queued means the turn has to wait for a task that is
+// active, or for turns ahead of it: the caller marks it with a reaction (the sink is told too).
+type Result struct {
+	Disposition Disposition
+	Queued      bool
+}
 
 // readAll is a threadTTL no session outlives: the real one is the session's Binding's.
 const readAll = 100 * 365 * 24 * time.Hour
@@ -62,6 +66,9 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 		return res, err
 	}
 	m.wake(in.Key) // outside the intake lock: a slow wake must not hold up other turns
+	if res.Queued && m.cfg.Sink != nil {
+		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: in.MessageID + "/queued", Kind: NoticeQueued, MessageTS: in.MessageTS})
+	}
 	return res, nil
 }
 
@@ -85,6 +92,10 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	if _, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageTS: in.MessageTS, Text: in.Text, EnqueuedAt: now}); err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}
+	// It waits if turns are ahead of it, or a task of the session is active or paused.
+	head, herr := m.cfg.Store.NextReply(ctx, in.Key)
+	sess, serr := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
+	res.Queued = (herr == nil && head.ID != in.MessageID) || (serr == nil && sess.TaskID != "")
 	return res, nil
 }
 

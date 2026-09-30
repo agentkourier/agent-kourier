@@ -29,6 +29,29 @@ type fakeAgent struct {
 	active, maxActive int // Sends running now, and at most
 	sent              chan string
 	script            func(ctx context.Context, n int, h agent.Handler) error
+	// find and follow answer FindTask and Follow; finds and follows record their calls.
+	find    func(contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
+	follow  func(id a2a.TaskID, h agent.Handler) error
+	finds   []string
+	follows []a2a.TaskID
+}
+
+func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
+	a.mu.Lock()
+	a.finds = append(a.finds, contextID+" "+messageID)
+	find := a.find
+	a.mu.Unlock()
+	if find == nil {
+		return nil, nil, nil
+	}
+	return find(contextID, messageID)
+}
+
+func (a *fakeAgent) Follow(_ context.Context, id a2a.TaskID, h agent.Handler) error {
+	a.mu.Lock()
+	a.follows = append(a.follows, id)
+	a.mu.Unlock()
+	return a.follow(id, h)
 }
 
 func newFakeAgent() *fakeAgent {
@@ -63,11 +86,18 @@ func turn(h agent.Handler, n int, state a2a.TaskState) error {
 	return nil
 }
 
-// fakeSink records every event, and announces each FinalEvent on finals.
+// fakeSink records every event and notice, and announces each FinalEvent on finals.
 type fakeSink struct {
-	mu     sync.Mutex
-	events []agent.Event
-	finals chan struct{}
+	mu      sync.Mutex
+	events  []agent.Event
+	notices []Notice
+	finals  chan struct{}
+}
+
+func (s *fakeSink) Notice(_ context.Context, _ Key, n Notice) {
+	s.mu.Lock()
+	s.notices = append(s.notices, n)
+	s.mu.Unlock()
 }
 
 func (s *fakeSink) Turn(context.Context, TurnRef) agent.Handler {
