@@ -154,7 +154,8 @@ func (f *fixture) live() *fakeSink {
 
 // close closes the manager, failing the test if it does not return in 5 s.
 func (f *fixture) close() error {
-	ctx, cancel := context.WithTimeout(f.t.Context(), 5*time.Second)
+	// Not t.Context(): that is already cancelled when a Cleanup runs, and Close would not wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return f.m.Close(ctx)
 }

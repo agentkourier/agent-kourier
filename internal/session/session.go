@@ -131,7 +131,7 @@ type Config struct {
 	Sink     Sink
 	Now      func() time.Time
 	Logger   *slog.Logger
-	Audit    Auditor // nil audits nothing
+	Audit    Auditor // required: a failure the manager must record is never dropped (spec 8.6 step 7)
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
@@ -174,6 +174,8 @@ func New(cfg Config) (*Manager, error) {
 		return nil, errors.New("session: Store is required")
 	case cfg.Bindings == nil:
 		return nil, errors.New("session: Bindings is required")
+	case cfg.Audit == nil:
+		return nil, errors.New("session: Audit is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

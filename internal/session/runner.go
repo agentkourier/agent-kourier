@@ -20,6 +20,7 @@ type convo struct {
 	again    bool          // a wake arrived while the runner was busy
 	tries    int           // sends of the head turn that failed in a way to retry, in a row
 	since    time.Time     // when the first of them failed, for SendGiveUp
+	notified bool          // the thread was told courier is retrying, for this run of trouble
 	patient  bool          // the turn is never given up on: the agent has it, or its session is busy
 	follow   *tstate       // the turn whose task is followed again, after its stream was lost
 	ttl      time.Duration // the Binding's threadTTL, for end
@@ -217,6 +218,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	return m.drive(t, send)
 }
 
+// settle forgets the retry state of the head turn: it was taken, failed for good, or ended.
+func (c *convo) settle() {
+	c.tries, c.since, c.patient, c.notified = 0, time.Time{}, false, false
+}
+
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
 	follow bool       // the attempt follows a task instead of sending
@@ -246,7 +252,8 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
-				named, c.tries, c.since, c.patient = true, 0, time.Time{}, false
+				named = true
+				c.settle()
 				if t.sess.ContextID != "" && ev.ContextID != "" && ev.ContextID != t.sess.ContextID {
 					// The agent answered in another context: it opened a new session for the old id.
 					// UNCONFIRMED against kagent. The new context is recorded below.
@@ -321,7 +328,8 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 // owned. UNCONFIRMED: what kagent answers for a task or session it dropped (spec 8.2).
 func (m *Manager) gone(t *tstate) (outcome, error) {
 	m.notice(t, NoticeSessionGone, "")
-	t.c.follow, t.c.tries, t.c.since = nil, 0, time.Time{}
+	t.c.follow = nil
+	t.c.settle()
 	return ended, m.cfg.Store.ResetSession(context.WithoutCancel(m.ctx), t.key)
 }
 
@@ -362,7 +370,8 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 		return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
 	}
 	m.notice(t, NoticeWedged, "")
-	t.c.follow, t.c.tries, t.c.since = nil, 0, time.Time{}
+	t.c.follow = nil
+	t.c.settle()
 	return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 }
 
@@ -379,6 +388,7 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 	case errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later, never give up
 		t.c.tries++
 		t.c.patient = true
+		t.c.since = time.Time{} // and the agent answered: its unreachable time starts over
 		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 	case errors.Is(err, agent.ErrOutcomeUnknown): // the agent may have taken it: looked up before any resend
 		return m.retry(t, err)
@@ -401,7 +411,9 @@ func (m *Manager) retry(t *tstate, err error) (outcome, error) {
 	if !c.patient && m.cfg.Now().Sub(c.since) >= m.cfg.SendGiveUp {
 		return m.fail(t, "the agent could not be reached", err)
 	}
-	if c.tries++; c.tries == 1 {
+	c.tries++
+	if !c.notified {
+		c.notified = true
 		m.notice(t, NoticeRetrying, "")
 	}
 	return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
@@ -415,9 +427,10 @@ func (m *Manager) duplicates(t *tstate, holders []a2a.TaskID) {
 }
 
 // fail ends the turn without a task: it is not sent again, the thread is told why, and the
-// queue goes on.
+// queue goes on. If marking the turn delivered fails, the turn stays queued and the next attempt
+// is a real second call, with its own audit row: bounded, and never silent.
 func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
-	t.c.tries, t.c.since, t.c.patient = 0, time.Time{}, false
+	t.c.settle()
 	m.mu.Lock()
 	delete(m.attempted, t.key) // it will not be sent again
 	m.mu.Unlock()
@@ -449,7 +462,8 @@ func (t *tstate) call(err error) audit.Call {
 // writes the audit row. Its own failure is logged: it is where an operator learns the token
 // cannot be read.
 func (m *Manager) rejected(t *tstate, err error) {
-	if t.b.Rejected == nil {
+	if t.b.Rejected == nil { // no identity Source to write the row: write it here, never drop it
+		m.audit(t, t.call(err))
 		return
 	}
 	if rerr := t.b.Rejected(context.WithoutCancel(m.ctx), t.actor(), t.call(err)); rerr != nil {

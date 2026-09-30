@@ -454,3 +454,97 @@ func TestReplacedContextIsAdoptedAndReported(t *testing.T) {
 		t.Errorf("context = %q; want the new one, c2", sess.ContextID)
 	}
 }
+
+// Any answer from the agent, -32004 included, means it is reachable: the give-up clock starts
+// over. A not-sent, a busy session 10 minutes later, and a not-sent 16 minutes after the first
+// are not 15 minutes of an unreachable agent.
+func TestBusyResetsTheGiveUpClock(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		switch n {
+		case 0:
+			return fmt.Errorf("%w: down", agent.ErrNotSent)
+		case 1:
+			f.now.Store(t0.Add(10 * time.Minute).UnixNano())
+			return fmt.Errorf("send message: %w", agent.ErrBusy)
+		case 2:
+			f.now.Store(t0.Add(16 * time.Minute).UnixNano())
+			return fmt.Errorf("%w: down", agent.ErrNotSent)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if got := sink.noticesOf(NoticeFailed); len(got) != 0 {
+		t.Errorf("failed notices = %+v; want none: the agent answered at +10 minutes", got)
+	}
+}
+
+// The thread is told once that courier is retrying, whatever failed first: a busy session, then
+// two not-sent, is one run of trouble with one notice; a later turn's trouble gets its own.
+func TestRetryingNoticeIsSentOncePerTurn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		switch n {
+		case 0:
+			return fmt.Errorf("send message: %w", agent.ErrBusy)
+		case 1, 2, 4: // turn 1 twice, then turn 2 once
+			return fmt.Errorf("%w: down", agent.ErrNotSent)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		waitFinal(t, sink)
+	}
+	got := sink.noticesOf(NoticeRetrying)
+	if len(got) != 2 || got[0].MessageTS != "1" || got[1].MessageTS != "2" {
+		t.Errorf("retrying notices = %+v; want one for turn 1 and one for turn 2", got)
+	}
+}
+
+// With no identity Source to call, a refused credential is still audited: no failure is
+// dropped without a row (spec 8.6 step 7).
+func TestRefusedCredentialWithoutASourceIsAudited(t *testing.T) {
+	f := newFixture(t)
+	f.noRejected = true
+	sink := f.live()
+	f.agent.script = func(context.Context, int, agent.Handler) error {
+		return fmt.Errorf("%w: %w", agent.ErrNotSent, agent.ErrCredentialsRejected)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	if len(f.audits) != 1 || !errors.Is(f.audits[0].Err, agent.ErrCredentialsRejected) {
+		t.Errorf("audits = %+v; want the refused send", f.audits)
+	}
+}
+
+// An Auditor is required: a manager that audits nothing would drop the failures it must record.
+func TestNewRequiresAnAuditor(t *testing.T) {
+	f := newFixture(t)
+	if _, err := New(Config{Store: f.st, Bindings: f}); err == nil {
+		t.Error("New without an Auditor = nil; want an error")
+	}
+}
+
+// waitFinal waits for the sink's next FinalEvent, or fails the test after 10 s.
+func waitFinal(t *testing.T, s *fakeSink) {
+	t.Helper()
+	select {
+	case <-s.finals:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no final event")
+	}
+}

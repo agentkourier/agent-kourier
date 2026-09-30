@@ -119,6 +119,7 @@ type fixture struct {
 	amu              sync.Mutex
 	rejected, audits []audit.Call // what Rejected and the Auditor were given
 	attr             func(*a2a.Message, dialect.User)
+	noRejected       bool // the Backend has no identity Source to call Rejected on
 }
 
 func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
@@ -146,7 +147,11 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	return Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token"}, nil
+	b := Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token"}
+	if f.noRejected {
+		b.Rejected = nil
+	}
+	return b, nil
 }
 
 func newFixture(t *testing.T) *fixture {
