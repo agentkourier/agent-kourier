@@ -389,6 +389,9 @@ Rules:
   `identity.tokenSecretRef`, and a header's `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
   fixed keys: `botToken`, `appToken` (Socket Mode), and `signingSecret` (HTTP mode).
 - An empty namespace in a reference means the referring resource's namespace.
+- `ChatConnection.spec.directMessages.defaultBindingRef` may name a Binding in any
+  namespace, because the platform team owns connections and DM access is gated on
+  membership in that Binding's channel (8.2). The Binding must use the same connection.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
   backend, such as agentgateway, validates the Binding's OIDC token. Static headers may
