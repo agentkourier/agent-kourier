@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by up-full.sh, up-fast.sh and down.sh (sourced, not executed).
+# Shared by up-full.sh, up-fast.sh, fast/verify.sh and down.sh (sourced, not executed).
 
 # The kind node image and the base of the images the tiers build (mockllm; the fast tier's test
 # doubles, through a build argument). Used by the scripts that source this file.
@@ -41,6 +41,21 @@ node_kubectl() {
 
 cluster_exists() {
   kind get clusters | grep -qx "${CLUSTER}"
+}
+
+# assert_context: die unless the kubeconfig context in CTX, which the fast tier's scripts pass to
+# every kubectl and helm call, is the local courier-fast kind cluster. The name is checked
+# literally and the API server must be on loopback, which no remote cluster is.
+assert_context() {
+  local name server
+  name=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.contexts[0].name}' 2>/dev/null) || name=
+  server=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || server=
+  [ "${CTX}" = kind-courier-fast ] && [ "${name}" = kind-courier-fast ] ||
+    die "context '${name:-?}' is not kind-courier-fast; refusing to run kubectl or helm"
+  case "${server}" in
+    https://127.0.0.1:* | https://localhost:*) ;;
+    *) die "context ${CTX} points at a non-local API server; refusing to run kubectl or helm" ;;
+  esac
 }
 
 # assert_owned: die unless the existing courier-full cluster was created by this tooling.

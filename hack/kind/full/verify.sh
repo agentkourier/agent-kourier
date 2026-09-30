@@ -115,10 +115,18 @@ assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; e
 EOF
 )
 
+# --rm removes a probe when kubectl attaches and finishes; this trap removes the one a kubectl that
+# failed before that, or an interrupt, leaves behind.
+PROBE_NS=''
+PROBE_POD=''
+trap '[ -z "${PROBE_POD}" ] || ${K} -n "${PROBE_NS}" delete pod "${PROBE_POD}" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+trap 'exit 130' INT TERM
+
 # probe NAMESPACE LABELS: run the script on stdin in a throwaway curl pod with those labels.
 probe() {
+  PROBE_NS=$1 PROBE_POD=probe-${RANDOM}
   { printf '%s\n' "${PRELUDE}"; cat; } |
-    ${K} -n "$1" run "probe-${RANDOM}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" \
+    ${K} -n "$1" run "${PROBE_POD}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" \
       --labels="$2" --command -- sh -s
 }
 

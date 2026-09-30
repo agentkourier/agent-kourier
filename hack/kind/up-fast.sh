@@ -50,21 +50,6 @@ for tool in docker kind kubectl helm go; do
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
 
-# assert_context: die unless the kubeconfig context this script is about to use is the local
-# courier-fast kind cluster. The name is checked literally and the API server must be on
-# loopback, which no remote cluster is.
-assert_context() {
-  local name server
-  name=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.contexts[0].name}' 2>/dev/null) || name=
-  server=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || server=
-  [ "${CTX}" = kind-courier-fast ] && [ "${name}" = kind-courier-fast ] ||
-    die "context '${name:-?}' is not kind-courier-fast; refusing to run kubectl or helm"
-  case "${server}" in
-    https://127.0.0.1:* | https://localhost:*) ;;
-    *) die "context ${CTX} points at a non-local API server; refusing to run kubectl or helm" ;;
-  esac
-}
-
 step "kind cluster ${CLUSTER}"
 if cluster_exists; then
   assert_owned

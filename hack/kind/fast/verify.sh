@@ -10,15 +10,21 @@
 #     sink taking a POST and reading it back; and an alert posted to Alertmanager reaching the sink.
 set -euo pipefail
 
-CTX=kind-courier-fast
-NODE=courier-fast-control-plane
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR source=../lib.sh
+. "${HERE}/../lib.sh"
+use_tier fast
+CTX=kind-${CLUSTER}
+NODE=${CLUSTER}-control-plane
 K=(kubectl --context "${CTX}")
 # The same curl image as full/verify.sh.
 CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
 
 for tool in kubectl docker jq; do
-  command -v "${tool}" >/dev/null || { echo "error: ${tool} is required" >&2; exit 1; }
+  command -v "${tool}" >/dev/null || die "${tool} is required"
 done
+# Safe to run on its own: nothing below runs against any other context.
+assert_context
 assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; exit 1; fi; } # DESCRIPTION COMMAND...
 is_empty() { [ -z "$1" ]; }
 not_empty() { [ -n "$1" ]; }
@@ -26,7 +32,8 @@ not_empty() { [ -n "$1" ]; }
 echo "== never published: the fake Slack's /_control/ has no authentication"
 pods=$("${K[@]}" -n e2e get pods -l app=fakeslack -o json)
 assert "a fake Slack pod exists (the checks below are not vacuous)" not_empty "$(jq -r '.items[].metadata.name' <<<"${pods}")"
-# A Service selects the fake Slack's pods when every selector pair is one of a pod's labels.
+# A Service selects the fake Slack's pods when every selector pair is one of a pod's labels. A
+# Service with no selector and hand-written EndpointSlices is out of scope: nothing here makes one.
 published=$("${K[@]}" -n e2e get services -o json | jq -r --argjson pods "$(jq '[.items[].metadata.labels]' <<<"${pods}")" '
   .items[]
   | (.spec.selector // {}) as $sel
@@ -36,14 +43,23 @@ published=$("${K[@]}" -n e2e get services -o json | jq -r --argjson pods "$(jq '
   | .metadata.name')
 assert "no Service for the fake Slack is NodePort, LoadBalancer or has external IPs: [${published}]" is_empty "${published}"
 assert "the fake Slack has a ClusterIP Service" not_empty "$("${K[@]}" -n e2e get service fakeslack -o jsonpath='{.spec.clusterIP}')"
-assert "no Ingress in the cluster" is_empty "$("${K[@]}" get ingress -A -o name)"
+ingresses=$("${K[@]}" get ingress -A -o name)
+assert "no Ingress in the cluster: [${ingresses}]" is_empty "${ingresses}"
 exposed=$(jq -r '.items[] | select(.spec.hostNetwork == true or any(.spec.containers[].ports[]?; .hostPort != null)) | .metadata.name' <<<"${pods}")
 assert "no fake Slack pod uses hostPort or hostNetwork: [${exposed}]" is_empty "${exposed}"
-hostports=$(docker port "${NODE}" | grep -v -E '^6443/tcp -> 127\.0\.0\.1:[0-9]+$' || true)
-assert "the kind node publishes only the API server, on loopback: [${hostports}]" is_empty "${hostports}"
+apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
+ports=$(docker port "${NODE}" 2>/dev/null) || ports=
+assert "the kind node publishes the API server, 6443/tcp on 127.0.0.1: [${ports}]" grep -q -E "${apiserver}" <<<"${ports}"
+hostports=$(grep -v -E "${apiserver}" <<<"${ports}" || true) # grep exits 1 when nothing else is published
+assert "the kind node publishes nothing but the API server: [${hostports}]" is_empty "${hostports}"
 
 echo "== in the cluster: each component answers"
-"${K[@]}" -n e2e run "probe-${RANDOM}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -s <<'EOF'
+# --rm removes the probe when kubectl attaches and finishes; the trap covers a kubectl that fails
+# before that, or an interrupt.
+probe=probe-${RANDOM}
+trap '"${K[@]}" -n e2e delete pod "${probe}" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+trap 'exit 130' INT TERM
+"${K[@]}" -n e2e run "${probe}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -s <<'EOF'
 FS=http://fakeslack.e2e.svc.cluster.local:8080
 AGENT=http://stubagent.e2e.svc.cluster.local:8080/agents/kagent/test-agent
 AM=http://alertmanager.monitoring.svc.cluster.local:9093
