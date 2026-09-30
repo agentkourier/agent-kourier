@@ -154,3 +154,20 @@ func (m *Manager) end(ctx context.Context, key Key, ttl time.Duration) error {
 	}
 	return m.cfg.Store.TouchSession(ctx, key, m.cfg.Now())
 }
+
+// Close stops the runners and waits for them, until ctx ends. It does not cancel any task at
+// the agent: a turn the agent accepted stays recorded, for restart reconciliation.
+func (m *Manager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
+	m.stop()
+	done := make(chan struct{})
+	go func() { m.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("close session manager: %w", ctx.Err())
+	}
+}

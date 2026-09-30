@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -26,7 +27,27 @@ type spyStore struct {
 	Store
 	mu      sync.Mutex
 	touches int
+	upserts int
 	fail    map[string]error
+	gate    chan struct{} // when set, the first GetSession waits for a second, or 200 ms
+	reads   int
+}
+
+func (s *spyStore) GetSession(ctx context.Context, k Key, ttl time.Duration, now time.Time) (store.Session, error) {
+	s.mu.Lock()
+	s.reads++
+	n := s.reads
+	s.mu.Unlock()
+	switch {
+	case s.gate != nil && n == 1:
+		select {
+		case <-s.gate:
+		case <-time.After(200 * time.Millisecond):
+		}
+	case s.gate != nil && n == 2:
+		close(s.gate)
+	}
+	return s.Store.GetSession(ctx, k, ttl, now)
 }
 
 func (s *spyStore) failOnce(call string) error {
@@ -48,6 +69,9 @@ func (s *spyStore) TouchSession(ctx context.Context, k Key, at time.Time) error 
 }
 
 func (s *spyStore) UpsertSession(ctx context.Context, sess store.Session) error {
+	s.mu.Lock()
+	s.upserts++
+	s.mu.Unlock()
 	if err := s.failOnce("upsert"); err != nil {
 		return err
 	}
@@ -302,4 +326,33 @@ func TestSubmitWakesOutsideTheIntakeLock(t *testing.T) {
 		t.Error("a second Submit waited for the first one's wake")
 	}
 	close(release)
+}
+
+// Two Submits that both find no session must not both make one: the second would replace a
+// row the first's turn may already have filled in. The gate holds the first read open long
+// enough for an unserialized second one to find no session too.
+func TestSubmitConcurrentCreate(t *testing.T) {
+	f := newFixture(t)
+	f.st.gate = make(chan struct{})
+	f.m.wake = func(Key) {} // the fixture's counts are not safe for two goroutines
+	res := make([]Result, 2)
+	var wg sync.WaitGroup
+	for i := range res {
+		wg.Go(func() {
+			var err error
+			if res[i], err = f.submit(inbound(fmt.Sprint(i))); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	created := 0
+	for _, r := range res {
+		if r.Disposition == Created {
+			created++
+		}
+	}
+	if created != 1 || f.st.upserts != 1 || len(f.drain()) != 2 {
+		t.Errorf("%d Created, %d session writes; want one of each, and both turns queued", created, f.st.upserts)
+	}
 }

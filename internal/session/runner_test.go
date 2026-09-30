@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -17,10 +18,11 @@ import (
 // fakeAgent is an AgentAPI whose turns a test scripts: each Send announces its messageId on
 // sent, then runs script with its 0-based call number.
 type fakeAgent struct {
-	mu     sync.Mutex
-	msgs   []*a2a.Message
-	sent   chan string
-	script func(ctx context.Context, n int, h agent.Handler) error
+	mu                sync.Mutex
+	msgs              []*a2a.Message
+	active, maxActive int // Sends running now, and at most
+	sent              chan string
+	script            func(ctx context.Context, n int, h agent.Handler) error
 }
 
 func newFakeAgent() *fakeAgent {
@@ -33,7 +35,10 @@ func (a *fakeAgent) Send(ctx context.Context, msg *a2a.Message, h agent.Handler)
 	a.mu.Lock()
 	n := len(a.msgs)
 	a.msgs = append(a.msgs, msg)
+	a.active++
+	a.maxActive = max(a.maxActive, a.active)
 	a.mu.Unlock()
+	defer func() { a.mu.Lock(); a.active--; a.mu.Unlock() }()
 	a.sent <- msg.ID
 	return a.script(ctx, n, h)
 }
@@ -74,7 +79,7 @@ func (s *fakeSink) Turn(context.Context, TurnRef) agent.Handler {
 func (f *fixture) live() *fakeSink {
 	sink := &fakeSink{finals: make(chan struct{}, 16)}
 	f.m.cfg.Sink, f.m.wake = sink, f.m.start
-	f.t.Cleanup(func() { f.m.stop(); f.m.wg.Wait() }) // Close arrives with the next layer
+	f.t.Cleanup(func() { _ = f.m.Close(context.Background()) })
 	return sink
 }
 
@@ -143,6 +148,7 @@ func TestAcceptedTurnIsRecordedMidStream(t *testing.T) {
 // task stays recorded, for recovery (spec 8.4).
 func TestInputRequiredParksTheConversation(t *testing.T) {
 	f := newFixture(t)
+	ignore := goleak.IgnoreCurrent()
 	sink := f.live()
 	f.agent.script = func(_ context.Context, n int, h agent.Handler) error { return turn(h, n, a2a.TaskStateInputRequired) }
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -159,7 +165,130 @@ func TestInputRequiredParksTheConversation(t *testing.T) {
 		t.Errorf("%s was sent although the task waits for input", id)
 	case <-time.After(100 * time.Millisecond):
 	}
+	if err := f.m.Close(t.Context()); err != nil { // Close leaves the state as it is, for recovery
+		t.Fatal(err)
+	}
 	if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != second.MessageID || f.taskID() != "t1" {
 		t.Errorf("queue head %+v, %v; task %q; want the second turn still queued and t1 recorded", next, err, f.taskID())
+	}
+	goleak.VerifyNone(t, ignore)
+}
+
+// Turns of one conversation never overlap, and run in the order they were queued (D21).
+func TestTurnsRunOneAtATimeInOrder(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	release := make(chan struct{})
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		<-release
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	var want []string
+	for _, ts := range []string{"1", "2", "3"} {
+		in := inbound(ts)
+		want = append(want, in.MessageID)
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-f.agent.sent
+	select { // the second turn waits for the first
+	case id := <-f.agent.sent:
+		t.Errorf("%s was sent while the first turn ran", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	for range want {
+		release <- struct{}{} // each Send takes one
+	}
+	eventually(t, "three turns", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.msgs) == 3 })
+	for i, m := range f.agent.msgs {
+		if m.ID != want[i] {
+			t.Errorf("turn %d = %s; want %s", i, m.ID, want[i])
+		}
+	}
+	if f.agent.maxActive != 1 {
+		t.Errorf("%d turns ran at once", f.agent.maxActive)
+	}
+}
+
+// A shutdown mid-stream cancels the stream, not the task: the agent's task stays recorded.
+func TestCloseLeavesAnAcceptedTurnRecorded(t *testing.T) {
+	f := newFixture(t)
+	ignore := goleak.IgnoreCurrent()
+	f.live()
+	f.agent.script = func(ctx context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-f.agent.sent
+	eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
+	if err := f.m.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.NextReply(t.Context(), key); !errors.Is(err, store.ErrNotFound) || f.taskID() != "t1" {
+		t.Errorf("queue %v, task %q; want the turn delivered and t1 recorded", err, f.taskID())
+	}
+	goleak.VerifyNone(t, ignore)
+}
+
+// A send that fails before the task is named leaves the turn queued, and does not spin: the
+// redelivered event, waking the runner again, sends the same messageId once more.
+func TestFailedSendStaysQueued(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 0 {
+			return errors.New("connection refused")
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	in := inbound("1")
+	if _, err := f.submit(in); err != nil {
+		t.Fatal(err)
+	}
+	<-f.agent.sent
+	select {
+	case id := <-f.agent.sent:
+		t.Fatalf("%s was sent again with nothing to wake the runner", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != in.MessageID {
+		t.Fatalf("queue head %+v, %v; want the failed turn", next, err)
+	}
+	if _, err := f.submit(in); err != nil {
+		t.Fatal(err)
+	}
+	if id := <-f.agent.sent; id != in.MessageID {
+		t.Errorf("resent %s; want the same messageId %s", id, in.MessageID)
+	}
+	<-sink.finals
+}
+
+// A task that ends after its session expired clears the task but does not touch the session
+// back to life (D28): the runner reads before it touches.
+func TestEndedTurnDoesNotReviveAnExpiredSession(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	mid, gate := make(chan struct{}), make(chan struct{})
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		mid <- struct{}{}
+		<-gate
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-mid
+	f.now.Store(t0.Add(2 * time.Hour).UnixNano()) // ns/b1's threadTTL is an hour
+	close(gate)
+	<-sink.finals
+	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	if sess, _ := f.session(); sess.TaskID != "" || !sess.LastActivity.Equal(t0) {
+		t.Errorf("session = %+v; want the task cleared and the activity still %v", sess, t0)
 	}
 }
