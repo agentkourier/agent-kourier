@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"unicode"
 )
@@ -48,6 +50,38 @@ func TestRedactSecrets(t *testing.T) {
 		{"oauth json with spacing", `{"client_secret": "FAKE", "refresh_token" :"FAKE2"}`, `{"client_secret": "[redacted]", "refresh_token" :"[redacted]"}`},
 		{"oauth key with a format char", "access\u200b_token=FAKE", "access\u200b_token=[redacted]"},
 		{"oauth key without a value", "the access_token field, id_token", "the access_token field, id_token"},
+		// Escaped-quote JSON is what %q prints for a token-endpoint body.
+		{"escaped-quote json", `{\"access_token\":\"FAKE\",\"expires_in\":3600}`, `{\"access_token\":\"[redacted]\",\"expires_in\":3600}`},
+		{"escaped-quote json, every key", `{\"refresh_token\":\"R1\",\"id_token\": \"I1\",\"client_secret\" : \"S1\"}`, `{\"refresh_token\":\"[redacted]\",\"id_token\": \"[redacted]\",\"client_secret\" : \"[redacted]\"}`},
+		{"double-escaped json", `{\\\"access_token\\\":\\\"FAKE\\\"}`, `{\\\"access_token\\\":\\\"[redacted]\\\"}`},
+		{"single-quoted key and value", `{'access_token': 'FAKE', 'scope': 'x'}`, `{'access_token': '[redacted]', 'scope': 'x'}`},
+		// camelCase and hyphen spellings, in any case.
+		{"camelCase keys", "accessToken=A1 refreshToken=R1 idToken=I1 clientSecret=S1", "accessToken=[redacted] refreshToken=[redacted] idToken=[redacted] clientSecret=[redacted]"},
+		{"hyphen keys", "access-token=A1 refresh-token: R1 id-token=I1 client-secret=S1", "access-token=[redacted] refresh-token: [redacted] id-token=[redacted] client-secret=[redacted]"},
+		{"key case", "ACCESSTOKEN=A1 Client_Secret=S1 Access-Token=A2", "ACCESSTOKEN=[redacted] Client_Secret=[redacted] Access-Token=[redacted]"},
+		{"camelCase json", `{"accessToken":"FAKE","expiresIn":3600,"clientSecret":"S1"}`, `{"accessToken":"[redacted]","expiresIn":3600,"clientSecret":"[redacted]"}`},
+		{"camelCase in escaped-quote json", `{\"idToken\":\"FAKE\",\"refresh-token\":\"R1\"}`, `{\"idToken\":\"[redacted]\",\"refresh-token\":\"[redacted]\"}`},
+		{"key words split by a format char", "access\u200b-\u200btoken=FAKE", "access\u200b-\u200btoken=[redacted]"},
+		// A Bearer or Slack credential ends at a quote, comma, semicolon, brace
+		// or backslash, so compact JSON keeps what follows.
+		{"compact json keeps the next field", `{"auth":"Bearer FAKE","user":"U1"}`, `{"auth":"[redacted]","user":"U1"}`},
+		{"bearer ends at a delimiter", `Bearer A1,x Bearer A2;x {Bearer A3}x 'Bearer A4'x "Bearer A5"x`, `[redacted],x [redacted];x {[redacted]}x '[redacted]'x "[redacted]"x`},
+		{"bearer in escaped-quote json", `{\"auth\":\"Bearer FAKE\",\"user\":\"U1\"}`, `{\"auth\":\"[redacted]\",\"user\":\"U1\"}`},
+		{"bearer with a colon in compact json", `{"auth":"Bearer: FAKE","user":"U1"}`, `{"auth":"[redacted]","user":"U1"}`},
+		{"quoted bearer credential", `Authorization: Bearer "FAKE" ok`, `Authorization: [redacted]" ok`},
+		{"bearer with nothing but a quote after it", `{"auth":"Bearer ","user":"U1"}`, `{"auth":"Bearer ","user":"U1"}`},
+		{"slack token ends at a quote", `{"t":"xoxb-FAKE-1","user":"U1"}`, `{"t":"[redacted]","user":"U1"}`},
+		{"slack token ends at a delimiter", `xoxp-A1,x xapp-1-A2;x {xoxb-A3}x`, `[redacted],x [redacted];x {[redacted]}x`},
+		{"slack token in escaped-quote json", `{\"t\":\"xapp-1-FAKE\",\"user\":\"U1\"}`, `{\"t\":\"[redacted]\",\"user\":\"U1\"}`},
+		// An empty value does not take the next word.
+		{"empty value before a word", "client_secret= next and access_token= more", "client_secret= next and access_token= more"},
+		{"empty value before an ampersand", "client_secret=&grant_type=x", "client_secret=&grant_type=x"},
+		{"empty json values", `{"access_token":"","user":"U1"} {\"id_token\":\"\",\"user\":\"U1\"}`, `{"access_token":"","user":"U1"} {\"id_token\":\"\",\"user\":\"U1\"}`},
+		{"spaced assignment", "client_secret = FAKE and refresh_token =FAKE2", "client_secret = [redacted] and refresh_token =[redacted]"},
+		{"space after a colon", "id_token: FAKE", "id_token: [redacted]"},
+		// Prose and identifiers that merely mention the keys survive.
+		{"keys in prose", "the access token is valid; rotate clientSecret, then accessToken. See getAccessToken() and idTokenHint", "the access token is valid; rotate clientSecret, then accessToken. See getAccessToken() and idTokenHint"},
+		{"identifiers that extend a key", "accessTokenTTL=30 access_tokens=3 client-secret-ref: name refresh-tokens=2 tokenSecretRef: s", "accessTokenTTL=30 access_tokens=3 client-secret-ref: name refresh-tokens=2 tokenSecretRef: s"},
 		// Identifiers that merely contain "bearer" keep their names.
 		{"bearer inside identifiers", "task=abc-bearer-xyz12345 payments/bearer-gateway bearer_gateway.svc bearer.example.com", "task=abc-bearer-xyz12345 payments/bearer-gateway bearer_gateway.svc bearer.example.com"},
 		// Prose stays readable: only the credential goes.
@@ -87,8 +121,51 @@ func TestRedactSecretsAnyGapRune(t *testing.T) {
 				t.Errorf("RedactSecrets(%q) = %q; want the credential redacted (U+%04X)", in, got, r)
 			}
 		}
+		// The same runes may pad an OAuth key from its colon and its value.
+		g := string(r)
+		in := "x access_token" + g + ":" + g + "FAKETOKEN y"
+		if got, want := RedactSecrets(in), "x access_token"+g+":"+g+"[redacted] y"; got != want {
+			t.Errorf("RedactSecrets(%q) = %q; want %q (U+%04X)", in, got, want, r)
+		}
 	}
 	if n < 100 {
 		t.Fatalf("swept only %d gap runes; the sweep is broken", n)
+	}
+}
+
+// TestRedactSecretsQuotedBody feeds RedactSecrets what %q prints for a
+// token-endpoint body, which is the form an audit field gets when a caller
+// logs one: no token survives and the neighbouring fields do.
+func TestRedactSecretsQuotedBody(t *testing.T) {
+	for _, c := range []struct{ name, body, keep string }{
+		{"snake_case", `{"access_token":"FAKEa1","refresh_token":"FAKEr1","id_token":"FAKEi1","client_secret":"FAKEc1","expires_in":3600}`, `\"expires_in\":3600`},
+		{"camelCase", `{"accessToken":"FAKEa1","refreshToken":"FAKEr1","idToken":"FAKEi1","clientSecret":"FAKEc1","expiresIn":3600}`, `\"expiresIn\":3600`},
+		{"bearer", `{"auth":"Bearer FAKEa1","user":"U1"}`, `\"user\":\"U1\"`},
+		{"slack", `{"auth":"xoxb-FAKE-a1","user":"U1"}`, `\"user\":\"U1\"`},
+	} {
+		got := RedactSecrets(fmt.Sprintf("denied %q", c.body))
+		if strings.Contains(got, "FAKE") || !strings.Contains(got, c.keep) {
+			t.Errorf("%s: RedactSecrets(%%q of body) = %s; want every FAKE token gone and %s kept", c.name, got, c.keep)
+		}
+	}
+}
+
+// TestRedactSecretsKnownLimits pins what RedactSecrets documents it does not
+// catch. Each leak is deliberate: when one gets fixed, flip its case to a
+// redaction test and update the doc on RedactSecrets.
+func TestRedactSecretsKnownLimits(t *testing.T) {
+	for _, c := range []struct{ name, in, leak string }{
+		{"object value", `{"access_token":{"value":"FAKE"}}`, "FAKE"},
+		{"array value", `{"access_token":["FAKE"]}`, "FAKE"},
+		{"escaped quote inside a value", `{"access_token":"FA\"KE"}`, `KE`},
+		{"url-encoded json", `%7B%22access_token%22%3A%22FAKE%22%7D`, "FAKE"},
+		{"html-encoded json", `{&quot;access_token&quot;:&quot;FAKE&quot;}`, "FAKE"},
+		{"password", `password=FAKE {"password":"FAKE"}`, "FAKE"},
+		{"fullwidth scheme", "\uff22earer FAKE", "FAKE"},
+		{"spaced equals with a non-empty value after it", "client_secret= \"FAKE\"", "FAKE"},
+	} {
+		if got := RedactSecrets(c.in); !strings.Contains(got, c.leak) {
+			t.Errorf("%s: RedactSecrets(%q) = %q; the documented limit no longer leaks %q", c.name, c.in, got, c.leak)
+		}
 	}
 }

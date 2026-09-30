@@ -161,6 +161,28 @@ func TestAuditRedactsEveryFieldAgainstCanaries(t *testing.T) {
 			canary{"slack " + prefix, "slack " + tok, token},
 			canary{"slack " + prefix + " with format char in prefix", "slack " + prefix[:2] + "\u200b" + prefix[2:] + "\u2060-1-" + token, token})
 	}
+	// OAuth body forms (WP-23d). survivor is text that must outlive the
+	// redaction: the neighbouring field, or the word after an empty value.
+	survivors := map[string]string{}
+	add := func(name, in, secret, survivor string) {
+		cs = append(cs, canary{name, in, secret})
+		survivors[name] = survivor
+	}
+	for _, key := range []string{"access_token", "refresh_token", "id_token", "client_secret", "accessToken", "refreshToken", "idToken", "clientSecret", "access-token", "refresh-token", "id-token", "client-secret", "ACCESSTOKEN"} {
+		add("json "+key, `{"`+key+`":"`+token+`","user":"U1"}`, token, `"user":"U1"`)
+		add("escaped-quote json "+key, `{\"`+key+`\":\"`+token+`\",\"user\":\"U1\"}`, token, `\"user\":\"U1\"`)
+		add("double-escaped json "+key, `{\\\"`+key+`\\\":\\\"`+token+`\\\",\\\"user\\\":\\\"U1\\\"}`, token, `\\\"user\\\":\\\"U1\\\"`)
+		add("%q of json "+key, fmt.Sprintf("%q", `{"`+key+`":"`+token+`","user":"U1"}`), token, `\"user\":\"U1\"`)
+		add("form "+key, key+"="+token+"&user=U1", token, "&user=U1")
+	}
+	add("compact json bearer", `{"auth":"Bearer `+token+`","user":"U1"}`, token, `"user":"U1"`)
+	add("escaped-quote json bearer", `{\"auth\":\"Bearer `+token+`\",\"user\":\"U1\"}`, token, `\"user\":\"U1\"`)
+	add("compact json bearer with a colon", `{"auth":"Bearer: `+token+`","user":"U1"}`, token, `"user":"U1"`)
+	add("bearer before a semicolon", "Bearer "+token+";user=U1", token, ";user=U1")
+	add("compact json xoxb", `{"auth":"xoxb-1-`+token+`","user":"U1"}`, token, `"user":"U1"`)
+	add("escaped-quote json xapp", `{\"auth\":\"xapp-1-`+token+`\",\"user\":\"U1\"}`, token, `\"user\":\"U1\"`)
+	add("empty value keeps the next word", "client_secret= nextword", "", "nextword")
+	add("empty json value keeps the next field", `{"access_token":"","user":"U1"}`, "", `"user":"U1"`)
 
 	ctx := context.Background()
 	s := openTemp(t)
@@ -192,8 +214,12 @@ func TestAuditRedactsEveryFieldAgainstCanaries(t *testing.T) {
 			t.Errorf("%s: Email = %q; want it stored as given", cs[i].name, row.Email)
 		}
 		for _, f := range fields {
-			if got := reflect.ValueOf(row).FieldByName(f).String(); strings.Contains(got, cs[i].secret) {
+			got := reflect.ValueOf(row).FieldByName(f).String()
+			if cs[i].secret != "" && strings.Contains(got, cs[i].secret) {
 				t.Errorf("%s: %s = %q still holds the secret", cs[i].name, f, got)
+			}
+			if s := survivors[cs[i].name]; !strings.Contains(got, s) {
+				t.Errorf("%s: %s = %q lost %q to over-redaction", cs[i].name, f, got, s)
 			}
 		}
 	}
