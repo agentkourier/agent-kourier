@@ -54,7 +54,8 @@
 //     action_id once in a block; a section needing text or fields; a section
 //     accessory button held to the limits of an actions button; and button and
 //     header text each being at least 1 character.
-//   - chat.postEphemeral: invalid_arguments for a missing user; a thread_ts
+//   - chat.postEphemeral: user_not_in_channel for a recipient outside a channel
+//     with registered members; invalid_arguments for a missing user; a thread_ts
 //     being taken as it is; the message_ts in the response; and ephemeral
 //     messages getting no event and being impossible to update.
 //   - chat.postMessage: invalid_metadata_format; replies must target a

@@ -30,8 +30,16 @@ func TestPostEphemeralIsVisibleOnlyToTheFakesInspection(t *testing.T) {
 	if n := len(fake.Messages("C1")); n != 1 {
 		t.Fatalf("Messages has %d messages; want just the root", n)
 	}
-	if h, err := api.GetConversationHistory(&slack.GetConversationHistoryParameters{ChannelID: "C1"}); err != nil || len(h.Messages) != 1 {
-		t.Fatalf("history = %+v, %v; want just the root", h, err)
+	h, err := api.GetConversationHistory(&slack.GetConversationHistoryParameters{ChannelID: "C1"})
+	if err != nil || len(h.Messages) != 1 || h.Messages[0].ReplyCount != 0 {
+		t.Fatalf("history = %+v, %v; want just the root, with no replies counted", h, err)
+	}
+	replies, _, _, err := api.GetConversationReplies(&slack.GetConversationRepliesParameters{ChannelID: "C1", Timestamp: root})
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("replies = %+v, %v; want just the root", replies, err)
+	}
+	if thread := fake.Thread("C1", root); len(thread) != 1 {
+		t.Fatalf("Thread = %+v; want just the root", thread)
 	}
 	if n := len(fake.Ephemerals("C2")); n != 0 {
 		t.Fatalf("Ephemerals(C2) = %d; want none", n)
@@ -58,6 +66,24 @@ func TestPostEphemeralRefusesWhatSlackWould(t *testing.T) {
 				t.Fatalf("PostEphemeral = %v; want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestPostEphemeralRefusesANonMember(t *testing.T) {
+	fake, api := newFake(t)
+	fake.SetMembers("C1", "U1", "U2")
+	for user, want := range map[string]string{"U1": "", "U2": "", "U3": "user_not_in_channel", "UFAKEBOT": "user_not_in_channel"} {
+		_, err := api.PostEphemeral("C1", user, text("x"))
+		if (err == nil) != (want == "") || (err != nil && err.Error() != want) {
+			t.Errorf("PostEphemeral to %s = %v; want %q", user, err, want)
+		}
+	}
+	// A channel with no registered membership accepts anyone.
+	if _, err := api.PostEphemeral("C9", "U3", text("x")); err != nil {
+		t.Errorf("PostEphemeral in an unregistered channel = %v; want success", err)
+	}
+	if n := len(fake.Ephemerals("C1")); n != 2 {
+		t.Errorf("Ephemerals(C1) = %d; want the two to members", n)
 	}
 }
 

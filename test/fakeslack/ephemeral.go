@@ -1,6 +1,9 @@
 package fakeslack
 
-import "net/url"
+import (
+	"net/url"
+	"slices"
+)
 
 // Ephemeral is a message the bot sent with chat.postEphemeral: visible to one
 // user only, and in no history. Message.User is the bot, as for any bot post.
@@ -27,9 +30,12 @@ func (s *Server) Ephemerals(channel string) []Ephemeral {
 // kept apart from the channel's messages, since nobody else could read it.
 //
 // Error codes from the docs: channel_not_found, no_text, invalid_blocks,
-// msg_too_long.
+// msg_too_long, user_not_in_channel.
 //
-// UNCONFIRMED(WP-04): invalid_arguments for a missing user; that a thread_ts
+// UNCONFIRMED(WP-04): user_not_in_channel for a recipient outside a channel
+// whose members SetMembers registered (any user is accepted in other channels),
+// which is what a notice sent to a wrong ID, such as the bot's own, would get;
+// invalid_arguments for a missing user; that a thread_ts
 // is taken as it is, without checking the thread exists or marking its parent;
 // the message_ts in the response; and that ephemeral messages get no event,
 // and cannot be updated.
@@ -38,7 +44,8 @@ func (s *Server) postEphemeral(form url.Values) (response, string) {
 	if channel == "" {
 		return nil, "channel_not_found"
 	}
-	if form.Get("user") == "" {
+	user := form.Get("user")
+	if user == "" {
 		return nil, "invalid_arguments"
 	}
 	if code := validateContent(form.Get("text"), form.Get("blocks"), true); code != "" {
@@ -49,7 +56,10 @@ func (s *Server) postEphemeral(form url.Values) (response, string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if members, registered := s.members[channel]; registered && !slices.Contains(members, user) {
+		return nil, "user_not_in_channel"
+	}
 	m.TS = s.nextTSLocked()
-	s.ephemerals[channel] = append(s.ephemerals[channel], Ephemeral{*m, form.Get("user")})
+	s.ephemerals[channel] = append(s.ephemerals[channel], Ephemeral{*m, user})
 	return response{"message_ts": m.TS}, ""
 }
