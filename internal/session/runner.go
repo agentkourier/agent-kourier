@@ -21,6 +21,7 @@ type convo struct {
 	tries    int           // sends of the head turn that failed in a way to retry, in a row
 	since    time.Time     // when the first of them failed, for SendGiveUp
 	patient  bool          // the turn is never given up on: the agent has it, or its session is busy
+	follow   *tstate       // the turn whose task is followed again, after its stream was lost
 	ttl      time.Duration // the Binding's threadTTL, for end
 	parked   a2a.TaskID    // the task the runner waits on, while it waits for input
 	released bool          // the pause ended, and the runner has not yet moved on
@@ -142,6 +143,9 @@ func (m *Manager) run(key Key, c *convo) {
 // turn sends the oldest queued turn of key and follows it until its task ends or pauses.
 // Store writes ignore a shutdown, so an accepted turn is never left unrecorded.
 func (m *Manager) turn(key Key, c *convo) (outcome, error) {
+	if c.follow != nil { // a stream was lost: the task is followed before anything else is sent
+		return m.resume(c)
+	}
 	sctx := context.WithoutCancel(m.ctx)
 	r, err := m.cfg.Store.NextReply(sctx, key)
 	if errors.Is(err, store.ErrNotFound) {
@@ -195,11 +199,13 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
-	key  Key
-	c    *convo
-	r    store.Reply
-	sess store.Session
-	b    Backend
+	follow bool       // the attempt follows a task instead of sending
+	taskID a2a.TaskID // the task followed, when follow
+	key    Key
+	c      *convo
+	r      store.Reply
+	sess   store.Session
+	b      Backend
 }
 
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
@@ -232,14 +238,17 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 		}
 		h(e)
 	})
+	if err == nil {
+		c.follow = nil
+	}
 	switch {
 	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
-	case err != nil && !named:
-		return m.unsent(t, err)
+	case err != nil && (named || t.follow):
+		return m.lost(t, err)
 	case err != nil:
-		return ended, fmt.Errorf("send turn %s: %w", r.ID, err)
+		return m.unsent(t, err)
 	case !named: // the stream ended clean but named no task: the agent may have run the turn
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("send turn %s: the agent named no task", r.ID)
@@ -252,6 +261,69 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 		return paused, nil
 	}
 	return ended, m.end(sctx, key, c.ttl)
+}
+
+// lost handles a failure after the agent named the task, or of a follow. A refused credential
+// is checked before a lost stream, because a reconnect the front door refused is both: it is
+// not followed in a loop. A lost stream is followed again after a backoff.
+func (m *Manager) lost(t *tstate, err error) (outcome, error) {
+	var sl *agent.StreamLostError
+	switch {
+	case errors.Is(err, agent.ErrCredentialsRejected):
+		m.rejected(t, err)
+		t.c.follow = nil // the task stays recorded, for reconciliation
+		m.notice(t, NoticeFailed, "the agent's front door refused the Binding's credentials")
+		return ended, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
+	case errors.As(err, &sl):
+		if t.c.since.IsZero() {
+			t.c.since = m.cfg.Now()
+		}
+		t.c.follow, t.taskID, t.follow = t, sl.TaskID, true
+		t.c.tries++
+		return blocked, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
+	}
+	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+}
+
+// resume follows the task of a turn whose stream was lost. A task WORKING for longer than
+// MaxWorkingAge (the agent's timestamp of the state, on courier's clock), or one whose state
+// cannot be read for that long, is presumed wedged and cancelled (R17); otherwise the stream
+// is picked up again.
+func (m *Manager) resume(c *convo) (outcome, error) {
+	t := c.follow
+	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
+	now := m.cfg.Now()
+	switch {
+	case errors.Is(err, agent.ErrCredentialsRejected):
+		return m.lost(t, err)
+	case err == nil && running(task) && task.Status.Timestamp != nil && now.Sub(*task.Status.Timestamp) > m.cfg.MaxWorkingAge,
+		err != nil && now.Sub(c.since) > m.cfg.MaxWorkingAge:
+		return m.wedged(t)
+	case err != nil:
+		c.tries++
+		return blocked, fmt.Errorf("get task %s: %w", t.taskID, err)
+	}
+	return m.drive(t, func(h agent.Handler) error { return t.b.Agent.Follow(m.ctx, t.taskID, h) })
+}
+
+// running reports whether a task is being worked on: not ended, and not waiting for input.
+func running(t *a2a.Task) bool {
+	s := t.Status.State
+	return !s.Terminal() && s != a2a.TaskStateInputRequired && s != a2a.TaskStateAuthRequired
+}
+
+// wedged cancels a task presumed wedged (R17), tells the thread, records the call, and lets
+// the queue go on. A cancel that fails is retried after a backoff.
+func (m *Manager) wedged(t *tstate) (outcome, error) {
+	_, err := t.b.Agent.CancelTask(m.ctx, t.taskID)
+	m.audit(t, audit.Call{Op: audit.OpCancel, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err})
+	if err != nil {
+		t.c.tries++
+		return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
+	}
+	m.notice(t, NoticeWedged, "")
+	t.c.follow, t.c.tries, t.c.since = nil, 0, time.Time{}
+	return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 }
 
 // unsent handles a send that failed before the agent named a task, by what the error says

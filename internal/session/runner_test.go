@@ -34,6 +34,8 @@ type fakeAgent struct {
 	follow  func(id a2a.TaskID, h agent.Handler) error
 	finds   []string
 	follows []a2a.TaskID
+	get     func(id a2a.TaskID) (*a2a.Task, error)
+	cancels []a2a.TaskID
 	seq     []string    // the calls in order: send, find, follow
 	times   []time.Time // when each send came
 }
@@ -50,6 +52,20 @@ func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a
 	return find(contextID, messageID)
 }
 
+func (a *fakeAgent) GetTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	a.mu.Lock()
+	get := a.get
+	a.mu.Unlock()
+	return get(id)
+}
+
+func (a *fakeAgent) CancelTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	a.mu.Lock()
+	a.cancels = append(a.cancels, id)
+	a.mu.Unlock()
+	return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
+}
+
 func (a *fakeAgent) Follow(_ context.Context, id a2a.TaskID, h agent.Handler) error {
 	a.mu.Lock()
 	a.follows = append(a.follows, id)
@@ -59,7 +75,7 @@ func (a *fakeAgent) Follow(_ context.Context, id a2a.TaskID, h agent.Handler) er
 }
 
 func newFakeAgent() *fakeAgent {
-	return &fakeAgent{sent: make(chan string, 16), script: func(_ context.Context, n int, h agent.Handler) error {
+	return &fakeAgent{sent: make(chan string, 16), get: func(a2a.TaskID) (*a2a.Task, error) { return nil, errors.New("GetTask is not scripted") }, script: func(_ context.Context, n int, h agent.Handler) error {
 		return turn(h, n, a2a.TaskStateCompleted)
 	}}
 }

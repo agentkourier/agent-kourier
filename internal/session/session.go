@@ -37,6 +37,8 @@ type Store interface {
 type AgentAPI interface {
 	Send(ctx context.Context, msg *a2a.Message, h agent.Handler) error
 	Follow(ctx context.Context, id a2a.TaskID, h agent.Handler) error
+	GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error)
+	CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error)
 	FindTask(ctx context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
 }
 
@@ -90,6 +92,8 @@ const (
 	NoticeRetrying NoticeKind = "retrying"
 	// NoticeFailed says the turn failed and will not be sent; Detail says why.
 	NoticeFailed NoticeKind = "failed"
+	// NoticeWedged says a task ran past maxWorkingAge and was cancelled (R17).
+	NoticeWedged NoticeKind = "wedged"
 	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).
 	NoticeDuplicateRun NoticeKind = "duplicate_run"
 )
@@ -125,6 +129,9 @@ type Config struct {
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
 	// They default to 1 s and 60 s (spec 8.2).
 	RetryBase, RetryMax time.Duration
+	// MaxWorkingAge is how long a task may stay WORKING after a stream was lost before it is
+	// presumed wedged and cancelled (R17). It defaults to an hour. It never limits a live stream.
+	MaxWorkingAge time.Duration
 	// SendGiveUp is how long an unreachable agent is retried before the turn fails (spec 11).
 	// It defaults to 15 minutes.
 	SendGiveUp time.Duration
@@ -171,6 +178,9 @@ func New(cfg Config) (*Manager, error) {
 	}
 	if cfg.RetryMax <= 0 {
 		cfg.RetryMax = time.Minute
+	}
+	if cfg.MaxWorkingAge <= 0 {
+		cfg.MaxWorkingAge = time.Hour
 	}
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute

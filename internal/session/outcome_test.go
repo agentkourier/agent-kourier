@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -262,5 +263,122 @@ func TestUnknownOutcomeGivesUpWhenTheLookupNeverAnswers(t *testing.T) {
 	eventually(t, "the turn to fail", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	if sends, _, _ := f.agent.counts(); sends != 2 {
 		t.Errorf("%d sends; want turn 1 and turn 2 once: a failed lookup never lets a resend through", sends)
+	}
+}
+
+// lost makes turn 0 lose its stream after the agent named task t1: Send returns the
+// StreamLostError that says so.
+func lost(cause error) func(context.Context, int, agent.Handler) error {
+	return func(_ context.Context, n int, h agent.Handler) error {
+		if n > 0 {
+			return turn(h, n, a2a.TaskStateCompleted)
+		}
+		accepted(h, n)
+		return &agent.StreamLostError{TaskID: "t1", ContextID: "c1", Err: cause}
+	}
+}
+
+// working is the task t1 as GetTask shows it, in WORKING since at.
+func working(at time.Time) func(a2a.TaskID) (*a2a.Task, error) {
+	return func(id a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking, Timestamp: &at}}, nil
+	}
+}
+
+// A stream lost after the task was named is followed again, after a backoff, until the task
+// settles (spec 8.3): the turn is not resent, and the queue waits for the task.
+func TestLostStreamIsFollowedUntilTheTaskEnds(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+	f.agent.script = lost(errors.New("connection reset"))
+	f.agent.get = working(t0)
+	follows := 0
+	f.agent.follow = func(id a2a.TaskID, h agent.Handler) error {
+		if follows++; follows == 1 {
+			return &agent.StreamLostError{TaskID: id, ContextID: "c1", Err: errors.New("still down")}
+		}
+		return turn(h, 0, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-sink.finals // turn 1 ends after two follows
+	<-sink.finals // then turn 2
+	if sends, _, fo := f.agent.counts(); sends != 2 || fo != 2 {
+		t.Errorf("%d sends, %d follows; want turn 1 once and turn 2 once, and turn 1's task followed twice", sends, fo)
+	}
+}
+
+// A task WORKING for longer than maxWorkingAge is presumed wedged (R17): it is cancelled, the
+// thread is told, the call is audited, and the queue goes on. The age is the agent's own
+// timestamp of the state, on courier's clock.
+func TestWedgedTaskIsCancelledAfterMaxWorkingAge(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		now  time.Duration // how far past t0 courier's clock starts
+		get  func(f *fixture) func(a2a.TaskID) (*a2a.Task, error)
+	}{
+		{"by the task's timestamp", time.Hour, func(*fixture) func(a2a.TaskID) (*a2a.Task, error) { return working(t0.Add(-2 * time.Hour)) }},
+		{"when GetTask never answers, by the time since the loss", 0, func(f *fixture) func(a2a.TaskID) (*a2a.Task, error) {
+			return func(a2a.TaskID) (*a2a.Task, error) {
+				f.now.Store(t0.Add(2 * time.Hour).UnixNano())
+				return nil, errors.New("agent unreachable")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+			f.agent.script = lost(errors.New("connection reset"))
+			f.agent.get = tc.get(f)
+			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
+			f.now.Store(t0.Add(tc.now).UnixNano())
+			for _, ts := range []string{"1", "2"} {
+				if _, err := f.submit(inbound(ts)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			<-sink.finals // turn 2, after turn 1's task was cancelled
+			f.agent.mu.Lock()
+			cancels := slices.Clone(f.agent.cancels)
+			f.agent.mu.Unlock()
+			if !slices.Equal(cancels, []a2a.TaskID{"t1"}) {
+				t.Errorf("cancelled %v; want t1 once", cancels)
+			}
+			if got := sink.noticesOf(NoticeWedged); len(got) != 1 || got[0].MessageTS != "1" {
+				t.Errorf("wedged notices = %+v; want one for turn 1", got)
+			}
+			f.amu.Lock()
+			defer f.amu.Unlock()
+			if len(f.audits) != 1 || f.audits[0].Op != audit.OpCancel || f.audits[0].TaskID != "t1" {
+				t.Errorf("audits = %+v; want the cancel of t1", f.audits)
+			}
+		})
+	}
+}
+
+// A reconnect the front door refused comes back as a StreamLostError that also matches
+// ErrCredentialsRejected. The credential check comes first: the stream is not followed in a
+// loop, the identity Source is told, and the thread hears the turn failed. The task stays
+// recorded, for reconciliation.
+func TestLostStreamWithRefusedCredentialsIsNotFollowed(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = lost(fmt.Errorf("reconnect: %w", agent.ErrCredentialsRejected))
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	if len(f.rejected) != 1 || !errors.Is(f.rejected[0].Err, agent.ErrCredentialsRejected) || len(f.audits) != 0 {
+		t.Errorf("Rejected calls %+v, audits %+v; want one Rejected call and no other audit", f.rejected, f.audits)
+	}
+	if _, _, fo := f.agent.counts(); fo != 0 || f.taskID() != "t1" {
+		t.Errorf("%d follows, task %q; want no follow and t1 still recorded", fo, f.taskID())
 	}
 }
