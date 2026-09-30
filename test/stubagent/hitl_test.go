@@ -94,7 +94,8 @@ func TestAskWithoutTheExtensionHasOnlyTheQuestionText(t *testing.T) {
 	if request != nil || text(dig(last(evs), "result", "task", "status", "message", "parts")) != dbQuestion {
 		t.Errorf("paused task = %v, want the question as text and no HITL payload", dig(last(evs), "result", "task", "status", "message"))
 	}
-	// The payload is chosen per request: the same task read with the extension has it.
+	// UNCONFIRMED: kagent's answer for a task that paused for one client and is read by another.
+	// The stub decides by the header of each request, so the same task read with it has the payload.
 	_, got := withHITL(c).call("GetTask", obj{"id": taskID})
 	if dig(got, "result", "status", "message", "metadata", hitlURI) == nil {
 		t.Errorf("GetTask with the extension = %v, want the HITL payload", got)
@@ -106,20 +107,82 @@ func TestAskWithoutTheExtensionHasOnlyTheQuestionText(t *testing.T) {
 	}
 }
 
-func TestAskWithSeveralQuestionsAndFreeText(t *testing.T) {
+// TestSeveralQuestionsLikeKagent reproduces askuser/21: the status text joins the questions
+// with "; ", the request carries choices for every question ([] for free text) and multiple,
+// and the ask_user call's args carry choices only when there are some and multiple only when it
+// is true.
+func TestSeveralQuestionsLikeKagent(t *testing.T) {
 	_, agent, c := newAgent(t)
 	agent.Next(stubagent.Ask([]stubagent.Question{
-		{Question: "Which?", Choices: []string{"a", "b"}, Multiple: true},
-		{Question: "Any colour?"},
+		{Question: "Which databases?", Choices: []string{"PostgreSQL", "MySQL"}, Multiple: true},
+		{Question: "Favorite color?"},
 	}, nil))
 
 	evs, _, _, request := paused(t, withHITL(c))
 
-	qs, _ := request["questions"].([]any)
-	if len(qs) != 2 || dig(qs[0], "multiple") != true || dig(qs[1], "choices") != nil || dig(qs[1], "question") != "Any colour?" {
-		t.Errorf("questions = %v, want a multi-select and a free-text question with no choices", qs)
+	rec := fixture(t, "askuser/21-pause-good-two-answers.response.sse")
+	if got, want := shape(evs), shape(rec); got != want {
+		t.Fatalf("shape = %s, want %s", got, want)
 	}
-	if got := text(dig(last(evs), "result", "task", "status", "message", "parts")); got != "Which?\nAny colour?" {
-		t.Errorf("status text = %q, want the questions joined by newlines", got)
+	for i := range evs {
+		expectLike(t, describe(evs[i]), evs[i], rec[i])
+	}
+	recRequest := dig(last(rec), "result", "task", "status", "message", "metadata", hitlURI).(obj)
+	if !reflect.DeepEqual(request["questions"], recRequest["questions"]) {
+		t.Errorf("request questions = %v, want %v", request["questions"], recRequest["questions"])
+	}
+	if got, want := dig(firstPart(evs[3]), "data", "args"), dig(firstPart(rec[3]), "data", "args"); !reflect.DeepEqual(got, want) {
+		t.Errorf("ask_user args = %v, want %v", got, want)
+	}
+	if got := text(dig(last(evs), "result", "task", "status", "message", "parts")); got != "Which databases?; Favorite color?" {
+		t.Errorf("status text = %q, want the questions joined by %q", got, "; ")
+	}
+}
+
+// TestCancelledPausedTaskShowsNoRequest: a task that leaves INPUT_REQUIRED has no request, so
+// a cancelled one has a state and no status message (askuser/30, 38, busy/04).
+func TestCancelledPausedTaskShowsNoRequest(t *testing.T) {
+	_, agent, c := newAgent(t)
+	agent.Next(dbAsk(nil))
+	c = withHITL(c)
+	_, taskID, _, _ := paused(t, c)
+
+	_, cancelled := c.call("CancelTask", obj{"id": taskID})
+	_, got := c.call("GetTask", obj{"id": taskID})
+
+	for label, ev := range map[string]obj{"CancelTask": cancelled, "GetTask": got} {
+		if describe(ev) != "task:CANCELED" || dig(ev, "result", "status", "message") != nil {
+			t.Errorf("%s on a paused task = %v, want the CANCELED task with no status message", label, ev)
+		}
+	}
+}
+
+// TestExtensionHeaderIsAListOfURIs: A2A-Extensions is a comma-separated list, and may be sent
+// as several header lines. The extension is named only if one entry is its URI exactly.
+func TestExtensionHeaderIsAListOfURIs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []string
+		named  bool
+	}{
+		{"alone", []string{hitlURI}, true},
+		{"in a list", []string{"https://example.test/other, " + hitlURI}, true},
+		{"on its own line", []string{"https://example.test/other", hitlURI}, true},
+		{"with spaces around it", []string{" " + hitlURI + " "}, true},
+		{"as the prefix of another URI", []string{hitlURI + "/v2"}, false},
+		{"inside another URI", []string{"https://example.test/?x=" + hitlURI}, false},
+		{"absent", nil, false},
+	} {
+		_, agent, c := newAgent(t)
+		agent.Next(dbAsk(nil))
+		for _, v := range tc.values {
+			c.hdr.Add("A2A-Extensions", v)
+		}
+
+		_, _, _, request := paused(t, c)
+
+		if (request != nil) != tc.named {
+			t.Errorf("%s: payload present = %v, want %v", tc.name, request != nil, tc.named)
+		}
 	}
 }

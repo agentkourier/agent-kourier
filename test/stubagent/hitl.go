@@ -2,7 +2,6 @@ package stubagent
 
 import (
 	"encoding/json"
-	"maps"
 	"strings"
 )
 
@@ -66,12 +65,21 @@ func (a askStep) play(r *run) bool {
 	var asked, requested []obj
 	var texts []string
 	for _, q := range a.questions {
+		// askuser/21: the call's args carry choices only when there are some, and multiple only
+		// when true; the request always carries both.
 		one := obj{"question": q.Question}
 		if len(q.Choices) > 0 {
 			one["choices"] = q.Choices
 		}
+		if q.Multiple {
+			one["multiple"] = true
+		}
 		asked = append(asked, one)
-		requested = append(requested, withMultiple(one, q.Multiple))
+		choices := q.Choices
+		if choices == nil {
+			choices = []string{}
+		}
+		requested = append(requested, obj{"question": q.Question, "choices": choices, "multiple": q.Multiple})
 		texts = append(texts, q.Question)
 	}
 	call, id := r.s.newID("call"), r.s.newID("adk")
@@ -79,7 +87,7 @@ func (a askStep) play(r *run) bool {
 		r.data(obj{"id": call, "name": "ask_user", "args": obj{"questions": asked}}, "function_call") &&
 		r.data(obj{"id": call, "name": "ask_user", "response": obj{"questions": asked, "status": "pending"}}, "function_response") {
 		r.pause(&pause{
-			id: id, msgID: r.s.newID("message"), text: strings.Join(texts, "\n"),
+			id: id, msgID: r.s.newID("message"), text: strings.Join(texts, "; "), // askuser/18, 21
 			request: obj{"type": "ask_user_request", "id": id, "questions": requested},
 			decode:  decodeAnswers(id),
 			then: func(resp Response) []Step {
@@ -97,18 +105,15 @@ func (a askStep) play(r *run) bool {
 	return false // the turn continues, if the user answers, with the steps then returns
 }
 
-func withMultiple(question obj, multiple bool) obj {
-	q := maps.Clone(question)
-	q["multiple"] = multiple
-	return q
-}
-
 // missingAnswers is kagent's error for an ask-user reply it cannot correlate, or that has no answers.
 const missingAnswers = "ask_user decision is missing approval correlation or answers"
 
 // decodeAnswers reads the reply to the ask-user request id. kagent checks only that the reply
 // repeats the request id and has at least one answer; it accepts too few answers, and answers
 // that are not choices (WP-02, measured), and so does the stub.
+// UNCONFIRMED: a reply whose payload has no type, or another type, is taken as plain text, and
+// so is a payload sent without the extension header. The fixtures reply only with the header
+// and with the right type.
 func decodeAnswers(id string) func(obj) (Response, *rpcError) {
 	return func(payload obj) (Response, *rpcError) {
 		if payload["type"] != "ask_user_response" {

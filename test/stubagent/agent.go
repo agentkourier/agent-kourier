@@ -87,7 +87,7 @@ func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request) {
 		Method  string          `json:"method"`
 		Params  json.RawMessage `json:"params"`
 	}
-	o := &rw{s: a.s, w: w, owner: ownerOf(r), ext: strings.Contains(r.Header.Get("A2A-Extensions"), HITLExtension)}
+	o := &rw{s: a.s, w: w, owner: ownerOf(r), ext: namesHITL(r.Header)}
 	// The envelope checks and their messages follow a2a-go v2.6.0 a2asrv/jsonrpc.go ServeHTTP
 	// and handleUnmarshalError.
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

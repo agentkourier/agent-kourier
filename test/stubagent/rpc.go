@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -107,8 +108,26 @@ type rw struct {
 	failed bool   // an error has been written
 }
 
+// namesHITL reports whether a request asks for the HITL extension: the A2A-Extensions header,
+// on any of its lines, lists its URI as an entry of a comma-separated list.
+func namesHITL(h http.Header) bool {
+	for _, line := range h.Values("A2A-Extensions") {
+		for entry := range strings.SplitSeq(line, ",") {
+			if strings.TrimSpace(entry) == HITLExtension {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // view is a result as this client sees it. The HITL request in a paused task's status message,
 // and the extension URI listing it, are there only for a client that named the extension.
+// Measured (WP-02): without the header the pause is INPUT_REQUIRED with the text and no payload,
+// and with it the payload is there.
+// UNCONFIRMED: what kagent shows a client that asks differently from the one the task paused
+// for. The stub goes by the header of each request, and strips the agent's request from the
+// history as well as from the status.
 func (o *rw) view(res obj) obj {
 	if o.ext {
 		return res
@@ -125,25 +144,40 @@ func (o *rw) view(res obj) obj {
 	return out
 }
 
-// withoutHITL returns a task or status update without the HITL parts of its status message.
+// withoutHITL returns a task or status update without the HITL parts of the messages in its
+// status and its history.
 func withoutHITL(e obj) obj {
-	status, _ := e["status"].(obj)
-	message, _ := status["message"].(obj)
-	if message["extensions"] == nil {
-		return e
+	out := maps.Clone(e)
+	if status, ok := e["status"].(obj); ok {
+		if message, ok := status["message"].(obj); ok {
+			status = maps.Clone(status)
+			status["message"] = withoutHITLParts(message)
+			out["status"] = status
+		}
 	}
-	message = maps.Clone(message)
-	delete(message, "extensions")
-	if metadata, ok := message["metadata"].(obj); ok {
+	if history, ok := e["history"].([]obj); ok {
+		stripped := make([]obj, len(history))
+		for i, m := range history {
+			stripped[i] = withoutHITLParts(m)
+		}
+		out["history"] = stripped
+	}
+	return out
+}
+
+// withoutHITLParts returns a message without the extension URI and the HITL payload.
+func withoutHITLParts(m obj) obj {
+	if m["extensions"] == nil {
+		return m
+	}
+	m = maps.Clone(m)
+	delete(m, "extensions")
+	if metadata, ok := m["metadata"].(obj); ok {
 		metadata = maps.Clone(metadata)
 		delete(metadata, HITLExtension)
-		message["metadata"] = metadata
+		m["metadata"] = metadata
 	}
-	status = maps.Clone(status)
-	status["message"] = message
-	out := maps.Clone(e)
-	out["status"] = status
-	return out
+	return m
 }
 
 // event delivers a result: at once when streaming, else it replaces the pending answer.

@@ -69,9 +69,14 @@ func (t *task) push(res obj, final bool) {
 	t.changed = make(chan struct{})
 }
 
-// setState records a state change at time stamp. The caller holds Server.mu.
+// setState records a state change at time stamp. A task that leaves INPUT_REQUIRED no longer
+// waits for anything, so it has no request and shows no status message (askuser/30, 38,
+// busy/04). The caller holds Server.mu.
 func (t *task) setState(state, stamp string) {
 	t.state, t.updated = state, stamp
+	if state != inputRequired {
+		t.pause = nil
+	}
 }
 
 // snapshot is the task as GetTask returns it.
