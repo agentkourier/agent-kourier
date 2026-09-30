@@ -57,7 +57,7 @@ func TestStreamingErrorIsOneSSEEvent(t *testing.T) {
 	st := c.open("SendStreamingMessage", msg("m1", "hi", ""))
 	evs := st.all()
 
-	if !st.sse || st.status != http.StatusOK || len(evs) != 1 || dig(evs[0], "error", "code") != float64(-32603) {
+	if !st.sse || st.status != http.StatusOK || len(evs) != 1 || dig(evs[0], "error", "code") != float64(-32099) {
 		t.Errorf("unscripted streaming send = HTTP %d, sse %v, %v; want one error event", st.status, st.sse, evs)
 	}
 }

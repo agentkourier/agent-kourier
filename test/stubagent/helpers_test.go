@@ -52,7 +52,9 @@ func (c *client) open(method string, params any) *stream {
 		c.t.Fatalf("%s: %v", method, err)
 	}
 	c.t.Cleanup(func() { _ = resp.Body.Close() })
-	return &stream{t: c.t, resp: resp, sc: bufio.NewScanner(resp.Body), status: resp.StatusCode,
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(nil, 1<<20) // a task snapshot can outgrow the default 64 KiB line
+	return &stream{t: c.t, resp: resp, sc: sc, status: resp.StatusCode,
 		sse: strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")}
 }
 
@@ -67,9 +69,15 @@ func (s *stream) next() (obj, bool) {
 				break
 			}
 		}
+		if err := s.sc.Err(); err != nil {
+			s.t.Fatalf("read the stream: %v", err)
+		}
 	} else if !s.read {
 		s.read = true
-		raw, _ = io.ReadAll(s.resp.Body)
+		var err error
+		if raw, err = io.ReadAll(s.resp.Body); err != nil {
+			s.t.Fatalf("read the body: %v", err)
+		}
 	}
 	if raw == nil {
 		return nil, false

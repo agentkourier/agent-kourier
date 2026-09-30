@@ -14,6 +14,7 @@ type obj = map[string]any
 // JSON-RPC error codes the stub answers with.
 const (
 	codeParse         = -32700
+	codeInvalidReq    = -32600
 	codeMethod        = -32601
 	codeParams        = -32602
 	codeInternal      = -32603
@@ -21,6 +22,7 @@ const (
 	codeNotCancelable = -32002
 	codeBusy          = -32004 // A2A's unsupported operation, which kagent answers a busy session with
 	codeDenied        = -31403 // another identity's session or task
+	codeUnscripted    = -32099 // a code kagent never sends: the stub has no turn for the message
 )
 
 // rpcError is a JSON-RPC error. reason is the google.rpc.ErrorInfo reason kagent attaches.
@@ -57,8 +59,32 @@ func busyError(msg string) *rpcError { return &rpcError{codeBusy, msg, "UNSUPPOR
 
 func taskNotFound() *rpcError { return &rpcError{codeTaskNotFound, "task not found", "TASK_NOT_FOUND"} }
 
+// invalidParams is -32602. Its message ends ": invalid params", as a2a-go's does: a2a-go v2.6.0
+// internal/jsonrpc ToJSONRPCError sends err.Error() of an error that wraps ErrInvalidParams.
 func invalidParams(format string, args ...any) *rpcError {
-	return &rpcError{codeParams, fmt.Sprintf(format, args...), "INVALID_PARAMS"}
+	return &rpcError{codeParams, fmt.Sprintf(format, args...) + ": invalid params", "INVALID_PARAMS"}
+}
+
+// invalidRequest is -32600, for an envelope that is not a JSON-RPC 2.0 request.
+func invalidRequest() *rpcError {
+	return &rpcError{codeInvalidReq, "invalid request", "INVALID_REQUEST"}
+}
+
+// validID reports whether a JSON-RPC id is a string, a number or null, or absent (a2a-go v2.6.0
+// internal/jsonrpc IsValidID).
+func validID(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var id any
+	if json.Unmarshal(raw, &id) != nil {
+		return false
+	}
+	switch id.(type) {
+	case nil, string, float64:
+		return true
+	}
+	return false
 }
 
 func internalError(format string, args ...any) *rpcError {
@@ -132,6 +158,14 @@ func (o *rw) event(res obj) {
 func (o *rw) fail(e *rpcError) {
 	o.failed = true
 	o.write(obj{"jsonrpc": "2.0", "id": o.id, "error": e.body(o.s.now())})
+}
+
+// abort ends a non-streaming call that has no outcome to report, because the server closed
+// while the turn ran, with a 503. A stream just stops.
+func (o *rw) abort() {
+	if !o.stream {
+		http.Error(o.w, "stubagent: closed", http.StatusServiceUnavailable)
+	}
 }
 
 // done writes the pending answer of a non-streaming call.

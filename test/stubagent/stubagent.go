@@ -9,14 +9,19 @@
 // RequestApproval, for example agent.Next(stubagent.Text("tick 1 ", "tick 2 ")). The tests of
 // this package compare what the stub sends with the fixtures, event by event.
 //
-// The functions that script a turn (Reply, and the then of Ask and RequestApproval) run under
-// the server's lock, so they must not call the Server.
+// The then of Ask and RequestApproval runs under the server's lock, so it must not call the
+// Server. Reply runs outside it and may, but it may then run for a message that is rejected
+// after it returns, because another send got in first.
 //
 // Behavior that no fixture shows is guessed, and its comment carries the tag UNCONFIRMED:.
-// Those items are the SendMessage result (a task under result.task), a contextId that names
-// no session opening one, the errors for cancelling or replying to a task that has ended
-// (-32002 and -32004), a reply to a task that is not waiting, several tools in one approval
-// pause, a new task in a session with a paused one, and the 401 of WithRequiredAuth.
+// Those items are the agent card's fields other than the in-cluster URL and the extension, the
+// 404 for an unknown route, a card that needs no token, the SendMessage result (a task under
+// result.task) and its ignoring of params.configuration, a contextId that names no session
+// opening one, the errors for cancelling or replying to a task that has ended (-32002 and
+// -32004), a reply to a task that is not waiting, several tools in one approval pause, a new
+// task in a session with a paused one, and the 401 of WithRequiredAuth. The envelope errors
+// (-32600, -32601, -32602, -32700) follow a2a-go v2.6.0, not kagent, which vendors a2a-go
+// v2.5.0.
 //
 // Command test/stubagent/cmd/stubagent serves the agents of SpikeAgents so that the WP-02
 // spike can run against the stub.
@@ -144,6 +149,8 @@ func (s *Server) Agent(ns, name string) *Agent {
 const cardFile = ".well-known/agent-card.json"
 
 // ServeHTTP routes a request to an agent's card or JSON-RPC endpoint.
+// UNCONFIRMED: an unknown agent or route answers 404, and a card needs no token unless
+// WithRequiredAuth is set.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(strings.Trim(r.URL.Path, "/"), "/", 4)
 	if len(parts) < 3 || parts[0] != "agents" {
@@ -159,7 +166,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case a == nil:
 		http.NotFound(w, r)
 	case len(parts) == 4 && parts[3] == cardFile && r.Method == http.MethodGet:
-		a.serveCard(w, r)
+		a.serveCard(w)
 	case len(parts) == 3 && r.Method == http.MethodPost:
 		a.serveRPC(w, r)
 	default:
