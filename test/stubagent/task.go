@@ -118,6 +118,16 @@ func (t *task) artifactEvent(a *artifact, parts []obj, appendTo, lastChunk bool)
 	return obj{"artifactUpdate": u}
 }
 
+// workingEvent is the bare WORKING statusUpdate that answers a reply to a paused task, with
+// message as its status message when there is one. Unlike statusEvent it has no metadata.
+func (t *task) workingEvent(message obj) obj {
+	status := obj{"state": t.state, "timestamp": t.updated}
+	if message != nil {
+		status["message"] = message
+	}
+	return obj{"statusUpdate": obj{"contextId": t.sess.id, "taskId": t.id, "status": status}}
+}
+
 // statusEvent is a statusUpdate result for the task's current state.
 func (t *task) statusEvent() obj {
 	return obj{"statusUpdate": obj{

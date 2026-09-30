@@ -137,10 +137,13 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	if prior := a.messages[id]; prior != nil {
 		return prior.join(), nil
 	}
+	if taskID, _ := m["taskId"].(string); taskID != "" {
+		return a.resume(id, taskID, m)
+	}
 	ctxID, _ := m["contextId"].(string)
 	sess := a.session(ctxID)
 	if a.busy(sess) {
-		return nil, &rpcError{codeBusy, "resource conflict", "UNSUPPORTED_OPERATION"}
+		return nil, busyError("resource conflict")
 	}
 	steps, ok := a.nextTurn(promptText(m))
 	if !ok {
@@ -163,6 +166,44 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	return &stream{t: t}, nil
 }
 
+// resume delivers a reply to the task it names. The caller holds s.mu.
+//
+// Only a task that is waiting for input takes a reply. One that is working, including one
+// wedged by an earlier bad reply, is busy (WP-02, measured).
+// UNCONFIRMED: a reply to a task that has ended is answered with -32004 too.
+func (a *Agent) resume(id, taskID string, m obj) (*stream, *rpcError) {
+	t := a.tasks[taskID]
+	switch {
+	case t == nil:
+		return nil, taskNotFound()
+	case t.state == working:
+		return nil, busyError("resource conflict")
+	case t.pause == nil:
+		return nil, busyError("task is not waiting for input")
+	}
+	p := t.pause
+	payload, _ := dig(m, "metadata", HITLExtension).(obj)
+	resp, bad := p.decode(payload)
+	resp.Text = promptText(m)
+	t.history = append(t.history, m)
+	t.pause = nil
+	t.setState(working, a.s.stamp())
+	a.messages[id] = t
+	if bad != nil {
+		// kagent fails once the task is back in WORKING, and nothing runs to move it on. The
+		// error goes to this reply's stream, after the WORKING update; only CancelTask ends it.
+		return &stream{t: t, first: t.workingEvent(nil), end: true, fail: bad}, nil
+	}
+	from := len(t.log)
+	t.push(t.workingEvent(nil), false)
+	if !resp.Plain() {
+		t.push(t.workingEvent(m), false) // kagent echoes a reply it took as an answer, not plain text
+	}
+	t.push(t.statusEvent(), false)
+	a.launch(t, p.then(resp))
+	return &stream{t: t, from: from}, nil
+}
+
 // busy reports whether a task of the session is working. kagent allows one at a time.
 func (a *Agent) busy(sess *session) bool {
 	for _, t := range a.tasks {
@@ -182,7 +223,7 @@ func (a *Agent) find(params json.RawMessage) (*task, *rpcError) {
 		return nil, invalidParams("params.id is required")
 	}
 	if a.tasks[p.ID] == nil {
-		return nil, &rpcError{codeTaskNotFound, "task not found", "TASK_NOT_FOUND"}
+		return nil, taskNotFound()
 	}
 	return a.tasks[p.ID], nil
 }
@@ -279,9 +320,10 @@ func (a *Agent) subscribeTask(ctx context.Context, o *rw, params json.RawMessage
 // the log from the index it had when the snapshot was taken, so nothing is missed or repeated.
 type stream struct {
 	t     *task
-	first obj  // the snapshot event that opens a join, or nil
-	from  int  // the first log index to send after it
-	end   bool // the snapshot is the whole answer
+	first obj       // the event that opens a join, or nil
+	from  int       // the first log index to send after it
+	end   bool      // first is the whole answer
+	fail  *rpcError // ends the stream, after first, with this error
 }
 
 // follow writes the stream until a final event, the client going away, or the server closing.
@@ -289,6 +331,9 @@ type stream struct {
 func (s *Server) follow(ctx context.Context, o *rw, st *stream) {
 	if st.first != nil {
 		o.event(st.first)
+		if st.fail != nil {
+			o.fail(st.fail)
+		}
 		if st.end {
 			return
 		}

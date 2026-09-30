@@ -1,6 +1,7 @@
 package stubagent
 
 import (
+	"encoding/json"
 	"maps"
 	"strings"
 )
@@ -14,8 +15,13 @@ type Question struct {
 
 // Response is the user's reply to a pause, as the script that paused sees it.
 type Response struct {
-	Text string // the text of the user's message
+	Text    string     // the text of the user's message
+	Answers [][]string // ask-user answers, one list per question, exactly as sent
 }
+
+// Plain reports whether the reply carries no answer, only text. kagent takes such a reply as a
+// new user turn and drops the question that was pending (WP-02, measured).
+func (r Response) Plain() bool { return r.Answers == nil }
 
 // pause is what a paused task waits for.
 type pause struct {
@@ -23,6 +29,7 @@ type pause struct {
 	msgID   string // the id of the status message
 	text    string // the status message text: all a client without the extension sees
 	request obj    // the HITL request, sent only to a client that asked for the extension
+	decode  func(payload obj) (Response, *rpcError)
 	then    func(Response) []Step
 	stamp   string
 }
@@ -71,8 +78,19 @@ func (a askStep) play(r *run) bool {
 		r.data(obj{"id": call, "name": "ask_user", "args": obj{"questions": asked}}, "function_call") &&
 		r.data(obj{"id": call, "name": "ask_user", "response": obj{"questions": asked, "status": "pending"}}, "function_response") {
 		r.pause(&pause{
-			id: id, msgID: r.s.newID("message"), text: strings.Join(texts, "\n"), then: a.then,
+			id: id, msgID: r.s.newID("message"), text: strings.Join(texts, "\n"),
 			request: obj{"type": "ask_user_request", "id": id, "questions": requested},
+			decode:  decodeAnswers(id),
+			then: func(resp Response) []Step {
+				var steps []Step
+				if !resp.Plain() {
+					steps = append(steps, answeredStep{call, a.questions, resp.Answers})
+				}
+				if a.then != nil {
+					steps = append(steps, a.then(resp)...)
+				}
+				return steps
+			},
 		})
 	}
 	return false // the turn continues, if the user answers, with the steps then returns
@@ -82,4 +100,55 @@ func withMultiple(question obj, multiple bool) obj {
 	q := maps.Clone(question)
 	q["multiple"] = multiple
 	return q
+}
+
+// missingAnswers is kagent's error for an ask-user reply it cannot correlate, or that has no answers.
+const missingAnswers = "ask_user decision is missing approval correlation or answers"
+
+// decodeAnswers reads the reply to the ask-user request id. kagent checks only that the reply
+// repeats the request id and has at least one answer; it accepts too few answers, and answers
+// that are not choices (WP-02, measured), and so does the stub.
+func decodeAnswers(id string) func(obj) (Response, *rpcError) {
+	return func(payload obj) (Response, *rpcError) {
+		if payload["type"] != "ask_user_response" {
+			return Response{}, nil
+		}
+		given, _ := payload["answers"].([]any)
+		if payload["id"] != id || len(given) == 0 {
+			return Response{}, internalError(missingAnswers)
+		}
+		answers := make([][]string, len(given))
+		for i, g := range given {
+			list, _ := dig(g, "answer").([]any)
+			for _, v := range list {
+				s, _ := v.(string)
+				answers[i] = append(answers[i], s)
+			}
+		}
+		return Response{Answers: answers}, nil
+	}
+}
+
+// answeredStep is the function_response artifact kagent emits when an ask_user call is
+// answered: every question with its answers, none if it got none, as a JSON string.
+type answeredStep struct {
+	call      string
+	questions []Question
+	answers   [][]string
+}
+
+func (a answeredStep) play(r *run) bool {
+	pairs := []obj{}
+	for i, q := range a.questions {
+		answer := []string{}
+		if i < len(a.answers) {
+			answer = append(answer, a.answers[i]...)
+		}
+		pairs = append(pairs, obj{"question": q.Question, "answer": answer})
+	}
+	result, err := json.Marshal(pairs)
+	if err != nil {
+		return false
+	}
+	return r.data(obj{"id": a.call, "name": "ask_user", "response": obj{"result": string(result)}}, "function_response")
 }

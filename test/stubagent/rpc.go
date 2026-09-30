@@ -39,6 +39,23 @@ func (e *rpcError) body(now time.Time) obj {
 	}}}
 }
 
+// dig walks nested maps by key; it returns nil when a key is missing.
+func dig(v any, keys ...string) any {
+	for _, k := range keys {
+		m, ok := v.(obj)
+		if !ok {
+			return nil
+		}
+		v = m[k]
+	}
+	return v
+}
+
+// busyError is kagent's answer to a message its session cannot take.
+func busyError(msg string) *rpcError { return &rpcError{codeBusy, msg, "UNSUPPORTED_OPERATION"} }
+
+func taskNotFound() *rpcError { return &rpcError{codeTaskNotFound, "task not found", "TASK_NOT_FOUND"} }
+
 func invalidParams(format string, args ...any) *rpcError {
 	return &rpcError{codeParams, fmt.Sprintf(format, args...), "INVALID_PARAMS"}
 }

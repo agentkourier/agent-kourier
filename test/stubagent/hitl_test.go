@@ -24,6 +24,27 @@ func dbAsk(then func(stubagent.Response) []stubagent.Step) stubagent.Step {
 	return stubagent.Ask([]stubagent.Question{{Question: dbQuestion, Choices: []string{"PostgreSQL", "MySQL"}}}, then)
 }
 
+// answers is the HITL payload of an ask-user reply: one answer list per question.
+func answers(requestID string, lists ...[]string) obj {
+	as := []obj{}
+	for _, l := range lists {
+		as = append(as, obj{"answer": l})
+	}
+	return obj{"type": "ask_user_response", "id": requestID, "answers": as}
+}
+
+// reply builds a message to a paused task, with the HITL payload if there is one.
+func reply(id, text, ctxID, taskID string, payload obj) obj {
+	params := msg(id, text, ctxID)
+	m := params["message"].(obj)
+	m["taskId"] = taskID
+	if payload != nil {
+		m["extensions"] = []string{hitlURI}
+		m["metadata"] = obj{hitlURI: payload}
+	}
+	return params
+}
+
 // paused sends a prompt and returns the stream of the pause, with the task and context ids and
 // the request the agent sent, if it sent one.
 func paused(t *testing.T, c *client) (evs []obj, taskID, ctxID string, request obj) {
