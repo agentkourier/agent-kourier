@@ -1,0 +1,68 @@
+# Dex as the OIDC issuer for kagent's oauth2-proxy. Dex has no client_credentials grant, so
+# the test Binding identity is a static user that signs in with the password grant. All
+# secrets here are fake test values.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dex
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex
+  namespace: dex
+data:
+  config.yaml: |
+    issuer: http://dex.dex.svc.cluster.local:5556/dex
+    storage: {type: memory}
+    web: {http: 0.0.0.0:5556}
+    oauth2:
+      skipApprovalScreen: true
+      passwordConnector: local
+    enablePasswordDB: true
+    staticPasswords:
+      - email: binding-test@example.test
+        username: binding-test
+        userID: binding-test-0001
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"  # "password"
+    staticClients:
+      - id: kagent-ui
+        name: kagent oauth2-proxy
+        secret: fake-oauth2-proxy-secret
+        redirectURIs: [http://localhost:4180/oauth2/callback]
+      - id: courier-binding
+        name: courier test Binding
+        secret: fake-courier-binding-secret
+        redirectURIs: [http://localhost/unused]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: dex}
+  template:
+    metadata:
+      labels: {app: dex}
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462
+          args: ["dex", "serve", "/etc/dex/config.yaml"]
+          ports: [{containerPort: 5556}]
+          volumeMounts: [{name: config, mountPath: /etc/dex}]
+      volumes:
+        - name: config
+          configMap: {name: dex}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  selector: {app: dex}
+  ports: [{port: 5556, targetPort: 5556}]

@@ -1,0 +1,29 @@
+# Fence the kagent controller. Port 8083 serves the public A2A gateway and, on the same
+# listener, the actors' private TaskStore gRPC (it arrives via Substrate's egress gateway),
+# so those callers must stay admitted or no task ever completes. In trusted-proxy mode the
+# controller does not verify JWTs, so this policy is the only thing between another pod and
+# any identity (spec section 10, "Backend trust").
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: controller-admit-courier-only
+  namespace: kagent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: controller}
+  policyTypes: [Ingress]
+  ingress:
+    - from: # courier, in its own namespace ("courier" is kind-only; the spec examples use courier-system)
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: courier}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: courier}
+      ports: [{port: 8083, protocol: TCP}]
+    - from: # kagent's UI nginx (behind oauth2-proxy) and Substrate's egress gateway
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: ui}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ate-system}
+          podSelector:
+            matchLabels: {app: atenet-egress}
+      ports: [{port: 8083, protocol: TCP}]

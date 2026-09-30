@@ -1,0 +1,26 @@
+# One test agent on the mock model. Harness image is the digest-pinned Go ADK runtime that
+# ships with kagent 1.0.0-alpha5 (digest of the multi-arch index).
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: test-agent
+  namespace: kagent
+spec:
+  template:
+    modelConfig:
+      name: default-model-config
+    description: Answers one canned prompt from the mock model
+    systemPrompt: Reply briefly.
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef:
+        name: kagent-default
+      snapshotPolicy:
+        # Required by the CRD (non-empty, no whitespace). Not a real GCS path here: the
+        # bundled Substrate stores snapshots in RustFS (S3, bucket ate-snapshots), and atelet
+        # logs show objects landing under the key prefix kagent/. The gs:// form is what
+        # kagent's own CI uses with the same Substrate defaults; other values are untested.
+        location: gs://ate-snapshots/kagent/

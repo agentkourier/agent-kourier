@@ -1,0 +1,16 @@
+# How Substrate's API server authenticates actors: with the cluster's own service-account
+# issuer. Same content as kagent's CI. Applied by up-full.sh.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-api-authentication
+  namespace: ate-system
+data:
+  authentication.yaml: |
+    actorIdentityJWTProvider: kubernetes
+    jwtProviders:
+      - name: kubernetes
+        issuer: https://kubernetes.default.svc
+        audiences: [api.ate-system.svc]
+        certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token

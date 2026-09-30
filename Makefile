@@ -29,11 +29,11 @@ e2e-fast-up: ## Bring up the fast E2E tier (stub)
 e2e-fast: ## Run the fast E2E tier (stub)
 	@echo "not implemented yet (see WP-14)"
 
-e2e-full-up: ## Bring up the full E2E tier (stub)
-	@echo "not implemented yet (see WP-01)"
+e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm)
+	hack/kind/up-full.sh
 
 e2e-full: ## Run the full E2E tier (stub)
 	@echo "not implemented yet (see WP-14)"
 
-e2e-down: ## Tear down E2E environments (stub)
-	@echo "not implemented yet (see WP-13 / WP-01)"
+e2e-down: ## Tear down E2E environments (full tier now; fast tier joins in WP-13)
+	hack/kind/down.sh
