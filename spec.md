@@ -253,8 +253,10 @@ type ChatPlatform interface {  // Slack
 // choices and multi-select), and Nested (an interaction raised by a sub-agent,
 // carrying the path to it).
 type Dialect interface {       // a2a (generic), kagent-v1
-    Endpoint(backend AgentBackend, agent AgentRef) (url string, err error)
-    Authenticate(req *http.Request, creds Credentials) // bearer token or insecure-mode header
+    Endpoint(backend *AgentBackend, agent AgentRef) (url string, err error)
+    // Sets the Binding identity (bearer token, else X-User-Id, never both) and the
+    // backend's static headers; refuses reserved static headers and leaves req unchanged.
+    Authenticate(req *http.Request, creds Credentials) error
     Attribute(msg *a2a.Message, actor User)            // who actually typed or clicked
     ParseInteraction(task a2a.Task) (*Interaction, bool)
     BuildResponse(in Interaction, answer Answer) (a2a.Message, error) // errors if incomplete
@@ -262,6 +264,10 @@ type Dialect interface {       // a2a (generic), kagent-v1
 
 type Store interface { /* sessions, queue, dedup, interactions, audit */ }
 ```
+
+`Credentials` holds the Binding identity (token or user ID) and the AgentBackend's static
+headers with Secret values resolved. It never formats or marshals its values. The caller
+applies `Authenticate` last, on a clone of each outgoing request.
 
 ### 6.3 Backends
 
@@ -409,7 +415,9 @@ Rules:
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
   backend, such as agentgateway, validates the Binding's OIDC token. Static headers may
-  not set `Authorization` or `X-User-Id`.
+  not set `Authorization`, `Proxy-Authorization`, `Cookie`, or `X-User-Id`. If a Binding
+  sets `identity.tokenSecretRef` and the token cannot be read, the turn fails; it never
+  falls back to `userId` alone.
 - One channel maps to at most one Binding. A second Binding for the same channel is
   rejected with a status condition.
 - Each Binding with `alerts` gets its own webhook path. Alertmanager routing decides
@@ -553,7 +561,8 @@ Binding's single service identity (`spec.identity`).
   `X-User-Id` in insecure mode.
 - **Attribution:** the Slack user who typed or clicked is resolved (`users.info`,
   cached) and attached by the dialect as message metadata and a prefix the agent can
-  see. Courier's audit log records the Slack user, email, and Binding identity together.
+  see. The prefix is informational; agents must not treat it as authorization, which is
+  always the Binding identity. Courier's audit log records the Slack user, email, and Binding identity together.
 - **Consequence:** kagent's logs and any tools the agent calls see the Binding identity,
   not the person. This is consistent with channel-scoped authorization (D12): the
   channel is the access boundary, and the Binding identity should hold only the
