@@ -24,15 +24,16 @@ var (
 	key = Key{Connection: "slack", Channel: "C1", ThreadTS: "1700.01"}
 )
 
-// spyStore counts touches and fails a named call once ("touch", "upsert" or "enqueue"),
-// over a real SQLite store.
+// spyStore counts touches and fails a named call ("touch", "upsert", "enqueue", "set" for
+// SetSessionTask or "mark" for MarkReplyDelivered), once or every time, over a real SQLite store.
 type spyStore struct {
 	Store
 	mu      sync.Mutex
 	touches int
 	upserts int
-	fail    map[string]error
-	gate    chan struct{} // when set, the first GetSession waits for a second, or 200 ms
+	fail    map[string]error // fails a call once
+	stuck   map[string]error // fails a call every time
+	gate    chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
 	reads   int
 }
 
@@ -56,9 +57,26 @@ func (s *spyStore) GetSession(ctx context.Context, k Key, ttl time.Duration, now
 func (s *spyStore) failOnce(call string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.stuck[call]; err != nil {
+		return err
+	}
 	err := s.fail[call]
 	delete(s.fail, call)
 	return err
+}
+
+func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID string) error {
+	if err := s.failOnce("set"); err != nil {
+		return err
+	}
+	return s.Store.SetSessionTask(ctx, k, contextID, taskID)
+}
+
+func (s *spyStore) MarkReplyDelivered(ctx context.Context, id string, at time.Time) error {
+	if err := s.failOnce("mark"); err != nil {
+		return err
+	}
+	return s.Store.MarkReplyDelivered(ctx, id, at)
 }
 
 func (s *spyStore) TouchSession(ctx context.Context, k Key, at time.Time) error {
@@ -115,7 +133,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}}, agent: newFakeAgent()}
+	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
 	f.m, err = New(Config{Store: f.st, Bindings: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {

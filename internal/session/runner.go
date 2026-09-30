@@ -89,6 +89,9 @@ func (m *Manager) turn(key Key) (outcome, error) {
 	if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
 	}
+	if err := m.held(key, r.ID, sess); err != nil {
+		return idle, err
+	}
 	h := func(agent.Event) {}
 	if m.cfg.Sink != nil {
 		if sh := m.cfg.Sink.Turn(m.ctx, TurnRef{key, r.ID}); sh != nil {
@@ -96,15 +99,14 @@ func (m *Manager) turn(key Key) (outcome, error) {
 		}
 	}
 	var final *a2a.Task
+	var recordErr error
 	named := false
 	err = backend.Agent.Send(m.ctx, m.message(r, sess, backend), func(e agent.Event) {
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
 				named = true
-				if err := m.accept(sctx, r, ev); err != nil {
-					m.cfg.Logger.Error("record accepted turn", "message", r.ID, "error", err)
-				}
+				recordErr = m.accept(sctx, r, ev)
 			}
 		case agent.FinalEvent:
 			final = ev.Task
@@ -112,8 +114,15 @@ func (m *Manager) turn(key Key) (outcome, error) {
 		h(e)
 	})
 	switch {
+	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
+		m.mu.Lock()
+		m.unrecorded[key] = r.ID
+		m.mu.Unlock()
+		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
 	case err != nil:
 		return ended, fmt.Errorf("send turn %s: %w", r.ID, err)
+	case !named:
+		return ended, fmt.Errorf("send turn %s: the agent named no task", r.ID)
 	case final == nil:
 		return ended, fmt.Errorf("send turn %s: the stream ended with no final task", r.ID)
 	case !final.Status.State.Terminal():
@@ -142,15 +151,44 @@ func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Mes
 	return msg
 }
 
+// held refuses to send while a task of the session is recorded (kagent runs one at a time, and
+// a turn resent into its context would run twice), and a turn whose acceptance could not be
+// recorded. Reconciliation (FindTask first, spec 8.2) lifts both.
+func (m *Manager) held(key Key, id string, sess store.Session) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case sess.TaskID != "":
+		return fmt.Errorf("task %s of the session is still active: not sending %s", sess.TaskID, id)
+	case m.unrecorded[key] == id:
+		return fmt.Errorf("the agent took turn %s but it was never recorded: not sending it again", id)
+	}
+	return nil
+}
+
+// recordAttempts bounds accept's retries, recordDelay spaces them.
+const (
+	recordAttempts = 3
+	recordDelay    = 10 * time.Millisecond
+)
+
 // accept records that the agent took the turn (spec 8.2): the session gets its contextId and
 // task, then the turn leaves the queue. In that order, so a crash in between leaves a task
-// recovery can find, never one nobody knows about. It does not rewrite the session row, so it
-// cannot undo a Submit's touch.
-func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent) error {
-	if err := m.cfg.Store.SetSessionTask(ctx, r.Key, ev.ContextID, string(ev.TaskID)); err != nil {
-		return err
+// recovery can find, never one nobody knows about. Both writes are idempotent, so the pair is
+// retried, a bounded number of times. It does not rewrite the session row, so it cannot undo
+// a Submit's touch.
+func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent) (err error) {
+	for i := range recordAttempts {
+		if i > 0 {
+			time.Sleep(recordDelay)
+		}
+		if err = m.cfg.Store.SetSessionTask(ctx, r.Key, ev.ContextID, string(ev.TaskID)); err == nil {
+			if err = m.cfg.Store.MarkReplyDelivered(ctx, r.ID, m.cfg.Now()); err == nil {
+				return nil
+			}
+		}
 	}
-	return m.cfg.Store.MarkReplyDelivered(ctx, r.ID, m.cfg.Now())
+	return err
 }
 
 // end clears the task of a conversation whose task ended, and touches the session, but only

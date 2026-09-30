@@ -330,3 +330,48 @@ func TestEndedTurnDoesNotReviveAnExpiredSession(t *testing.T) {
 		t.Errorf("session = %+v; want the task cleared and the activity still %v", sess, t0)
 	}
 }
+
+// If the turn cannot be recorded, it must not be sent again: the agent has taken it, and a
+// resend into its context runs it a second time (spec 8.2). The turn fails after a bounded
+// retry, the runner stops, and no later wake sends it either: the head stays queued (and the
+// task, if it was recorded, stays set) for reconciliation.
+func TestUnrecordedTurnIsNeverResent(t *testing.T) {
+	for call, wantTask := range map[string]string{"set": "", "mark": "t1"} {
+		t.Run(call, func(t *testing.T) {
+			f := newFixture(t)
+			f.live()
+			f.st.stuck[call] = errors.New("disk full")
+			in := inbound("1")
+			for i := range 2 { // the event, then its redelivery
+				if _, err := f.submit(in); err != nil {
+					t.Fatal(err)
+				}
+				if i == 0 {
+					<-f.agent.sent
+				}
+				select {
+				case id := <-f.agent.sent:
+					t.Fatalf("%s was sent a second time", id)
+				case <-time.After(150 * time.Millisecond):
+				}
+			}
+			if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != in.MessageID || f.taskID() != wantTask {
+				t.Errorf("queue head %+v, %v; task %q; want the turn still queued and task %q", next, err, f.taskID(), wantTask)
+			}
+		})
+	}
+}
+
+// A write that fails once is retried, and the turn goes on as if nothing happened.
+func TestRecordingRetriesATransientFailure(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	f.st.fail["mark"] = errors.New("busy")
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the turn to be delivered and its task cleared", func() bool {
+		_, err := f.st.NextReply(t.Context(), key)
+		return errors.Is(err, store.ErrNotFound) && f.taskID() == ""
+	})
+}

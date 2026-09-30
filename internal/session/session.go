@@ -91,7 +91,10 @@ type Manager struct {
 
 	mu     sync.Mutex
 	convos map[Key]*convo // conversations with a runner
-	closed bool
+	// unrecorded holds, per conversation, the turn the agent took but that could not be
+	// recorded, so that no wake sends it again.
+	unrecorded map[Key]string
+	closed     bool
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
@@ -111,7 +114,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil
