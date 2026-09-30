@@ -446,6 +446,12 @@ untrusted data. See risk R2.
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
 is derived from the Slack event ID for idempotency.
 
+The session row is written before the first A2A call, holding the key and the Binding;
+`contextId` is filled in from the backend's first response. If courier crashes in
+between, the retried send reuses the same `messageId`, so the backend returns the same
+conversation. An expired session is kept, not deleted, so courier can tell a reply in an
+expired thread (notice) from a reply in a thread it never owned (ignored).
+
 **Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
 activity, and a reply at any point in that window resumes the same `contextId`. kagent
 suspends and resumes idle sessions on its own. If the backend reports that the session
