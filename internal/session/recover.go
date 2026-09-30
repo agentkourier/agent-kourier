@@ -13,8 +13,9 @@ import (
 // Recover reconciles the conversations a restart found in the store (spec 8.2, 8.3): every
 // session with an active task, and every one with a queued reply. It returns at once, after two
 // lists; each conversation is taken up by its own goroutine, which a backend that is down does
-// not stop (it is asked again, with a backoff). Call it before anything else wakes the manager, at
-// startup. A second call starts nothing for a conversation that already has its runner.
+// not stop (it is asked again, with a backoff). Call it at startup, before anything wakes the manager;
+// a wake that gets to a conversation first has the recovered task attached to its runner, which
+// follows it before it sends anything. A second call, once the task is taken up, starts nothing new.
 //
 // A conversation with a recorded task is followed from where the task stands: the agent says
 // whether it ended (its output is rendered, marked recovered), waits for input (the pause is shown
@@ -74,35 +75,33 @@ func (m *Manager) recoverKey(key Key) {
 		log.Error("recover: read session", "error", err)
 		return
 	}
-	// The in-memory record of what was sent is gone, so a head of a conversation with a context may
-	// have been sent before the crash: it is looked up before it is sent. A first turn has no
-	// context to look in, and its resend is deduplicated by the agent.
 	head, herr := m.cfg.Store.NextReply(m.ctx, key)
-	if herr == nil && sess.ContextID != "" {
-		m.mu.Lock()
-		m.attempted[key] = attempt{id: head.ID, unknown: true}
-		m.mu.Unlock()
-	}
 	if sess.TaskID == "" {
 		m.start(key)
 		return
 	}
-	// A task is recorded. The runner follows it first, before anything queued is sent. If the head
+	// A task is recorded. The runner follows it first, before anything queued is sent (adopt). If the head
 	// is that task's own turn (a crash between recording the task and marking the turn delivered),
 	// the task's history says so: the turn is then the task's, marked delivered by following it, and
 	// never sent again.
-	turnRow := store.Reply{ID: "task:" + sess.TaskID, Key: key}
+	turnRow := store.Reply{ID: recoveredPrefix + sess.TaskID, Key: key}
 	if herr == nil && sess.ContextID != "" {
-		if task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID); err == nil && task != nil && string(task.ID) == sess.TaskID {
-			turnRow = head
+		for attempt := 1; ; attempt++ { // asked again until it answers: a fallback would render t's output twice
+			task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID)
+			if err == nil {
+				if task != nil && string(task.ID) == sess.TaskID {
+					turnRow = head
+				}
+				break
+			}
+			select {
+			case <-m.cfg.After(m.backoff(attempt)):
+			case <-m.ctx.Done():
+				return
+			}
 		}
 	}
 	t := &tstate{key: key, r: turnRow, sess: sess, b: backend,
 		follow: true, taskID: a2a.TaskID(sess.TaskID), recovered: true}
-	started := m.startWith(key, func(c *convo) {
-		t.c, c.follow, c.ttl, c.since = c, t, backend.ThreadTTL, m.cfg.Now()
-	})
-	if !started {
-		log.Info("recover: the conversation already has a runner")
-	}
+	m.adopt(key, t)
 }

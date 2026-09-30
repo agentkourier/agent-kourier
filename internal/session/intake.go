@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
+
+// recoveredPrefix starts the message ID recovery gives a task whose turn it cannot name: no turn
+// of a person or an alert may begin with it.
+const recoveredPrefix = "task:"
 
 // SystemUser is the user a turn is filed under when nobody wrote it (an alert's first
 // prompt): the store requires one.
@@ -59,8 +64,8 @@ const readAll = 100 * 365 * 24 * time.Hour
 // event repeats what is left. It does not wait for the agent. An expired session is
 // returned as Expired and left as it was.
 func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
-	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.ThreadTS == "" || in.MessageID == "" || in.MessageTS == "" || in.Text == "" || in.UserID == SystemUser || (in.Create && in.Binding == "") {
-		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageTS and Text are required, and a Binding to create; UserID is never %q: %w", in.MessageID, SystemUser, store.ErrInvalid)
+	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.ThreadTS == "" || in.MessageID == "" || in.MessageTS == "" || in.Text == "" || in.UserID == SystemUser || strings.HasPrefix(in.MessageID, recoveredPrefix) || (in.Create && in.Binding == "") {
+		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageTS and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
 	}
 	res, err := m.queue(ctx, in)
 	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
@@ -90,8 +95,14 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		user = SystemUser
 	}
 	// A duplicate, or a turn already delivered, is not queued again, and still wakes the runner.
-	if _, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageTS: in.MessageTS, Text: in.Text, EnqueuedAt: now}); err != nil {
+	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageTS: in.MessageTS, Text: in.Text, EnqueuedAt: now})
+	if err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
+	}
+	if enqueued { // this process made the row, so nothing has sent the turn yet
+		m.mu.Lock()
+		m.fresh[in.MessageID] = struct{}{}
+		m.mu.Unlock()
 	}
 	// It waits if turns are ahead of it, or a task of the session is active or paused. This is
 	// advisory: it races the runner, which may take the turn a moment later.

@@ -1,8 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,12 +158,18 @@ func TestRecoverSkipsExpiredSessionsAndUnknownBindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := restarted(t)
+			var logs bytes.Buffer // written by the recovery goroutine, read after it is done
+			f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 			seeded := f.seed(tc.binding, tc.age)
 			f.recover(t)
 			f.m.wg.Wait() // the recovery goroutines, and any runner they wrongly started, are done
 			sess, err := f.st.GetSession(t.Context(), key, 1000*time.Hour, t0)
 			if sess != seeded || err != nil && !errors.Is(err, store.ErrExpired) {
 				t.Errorf("session = %+v, %v; want it untouched", sess, err)
+			}
+			wantLog := map[string]string{"expired": "skipping an expired session", "unknown Binding": "Binding is not configured"}[tc.name]
+			if !strings.Contains(logs.String(), wantLog) {
+				t.Errorf("log = %q; want the skip to say %q", logs.String(), wantLog)
 			}
 			if sends, finds, follows := f.agent.counts(); sends+finds+follows != 0 || len(f.cancelled()) != 0 {
 				t.Errorf("%d sends, %d lookups, %d follows, cancelled %v; want no call", sends, finds, follows, f.cancelled())
@@ -168,15 +178,19 @@ func TestRecoverSkipsExpiredSessionsAndUnknownBindings(t *testing.T) {
 	}
 }
 
-// queuedBeforeTheRestart queues turn 1 on the conversation, with no runner to take it.
+// queuedBeforeTheRestart leaves turn 1 in the queue as a previous process did: enqueued, with no
+// runner, and unknown to this process. The session is made if there is none.
 func queuedBeforeTheRestart(t *testing.T, f *fixture) {
 	t.Helper()
-	wake := f.m.wake
-	f.m.wake = func(Key) {}
-	if _, err := f.submit(inbound("1")); err != nil {
+	if _, err := f.session(); errors.Is(err, store.ErrNotFound) {
+		if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b1", LastActivity: t0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := inbound("1")
+	if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: in.MessageID, Key: key, UserID: "U1", MessageTS: "1", Text: "hello", EnqueuedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
-	f.m.wake = wake
 }
 
 func (f *fixture) queueEmpty() bool {
@@ -269,4 +283,132 @@ func TestRecoverLooksUpAQueuedHeadBeforeSendingIt(t *testing.T) {
 			t.Errorf("%d sends, %d lookups; want one send and no lookup", sends, finds)
 		}
 	})
+}
+
+// A head that some other process enqueued may have been sent before it died, whichever wake gets
+// to it first: Recover, or the queue handler's redelivery of the same event. So it is looked up
+// before it goes into its context, in either order, and never sent blind.
+func TestHeadFromBeforeTheRestartIsLookedUpWhateverWakesFirst(t *testing.T) {
+	for name, order := range map[string]func(*testing.T, *fixture){
+		"Recover, then the redelivered event at once": func(t *testing.T, f *fixture) {
+			f.recover(t)
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"the redelivered event, then Recover": func(t *testing.T, f *fixture) {
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			f.recover(t)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, sink := restarted(t)
+			if err := f.st.SetSessionTask(t.Context(), key, "", ""); err != nil { // context c1 stays
+				t.Fatal(err)
+			}
+			queuedBeforeTheRestart(t, f)
+			order(t, f)
+			waitFinal(t, sink)
+			f.agent.mu.Lock()
+			defer f.agent.mu.Unlock()
+			if want := "[find send]"; fmt.Sprint(f.agent.seq) != want {
+				t.Errorf("calls = %v; want %s: the lookup before the first send", f.agent.seq, want)
+			}
+		})
+	}
+}
+
+// A turn this process enqueued itself cannot have been sent before: it goes out with no lookup.
+func TestHeadThisProcessEnqueuedIsSentWithoutALookup(t *testing.T) {
+	f, sink := restarted(t)
+	if err := f.st.SetSessionTask(t.Context(), key, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	if sends, finds, _ := f.agent.counts(); sends != 1 || finds != 0 {
+		t.Errorf("%d sends, %d lookups; want one send and no lookup", sends, finds)
+	}
+}
+
+// The head counts as the running turn only if the task that holds it is the recorded one. One
+// that another task holds is a turn behind t1, which is followed under its own turn.
+func TestRecoverDoesNotTakeAHeadAnotherTaskHolds(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return &a2a.Task{ID: "t7", ContextID: "c1"}, []a2a.TaskID{"t7"}, nil
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) == 0 || sink.refs[0].MessageID != "task:t1" || !sink.refs[0].Recovered {
+		t.Errorf("turn refs = %+v; want t1 followed under its own turn, task:t1", sink.refs)
+	}
+}
+
+// If the lookup that matches the head to the running turn fails, recovery asks again with a
+// backoff, and starts nothing meanwhile: a fallback would render the task's output under the wrong
+// turn, and again under the right one.
+func TestRecoverRetriesTheHeadMatch(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	lookups := 0
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		if lookups++; lookups <= 2 {
+			return nil, nil, errors.New("agent unreachable")
+		}
+		return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	eventually(t, "the head to be delivered", f.queueEmpty)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || sink.refs[0].MessageID != inbound("1").MessageID {
+		t.Errorf("turn refs = %+v; want one, under the head's turn", sink.refs)
+	}
+}
+
+// Recover may come after a wake: a Slack reply can reach the key first, and its runner hold the
+// head behind the recorded task, busy in a lookup. The recovery is attached to that runner, which
+// then follows the task (rendered once, recovered), and only after it is the held reply sent.
+func TestRecoverAttachesToARunnerThatWokeFirst(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	inLookup, gate := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		if !first.Swap(true) {
+			inLookup <- struct{}{}
+			<-gate
+		}
+		return nil, nil, nil
+	}
+	if _, err := f.submit(inbound("1")); err != nil { // the redelivered event wakes a runner
+		t.Fatal(err)
+	}
+	<-inLookup // the runner is busy holding the head behind t1
+	f.recover(t)
+	eventually(t, "the recovery to be attached to the busy runner", func() bool {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		return f.m.convos[key].attach != nil // the runner is held in its lookup, so it has not taken it
+	})
+	close(gate)
+	waitFinal(t, sink) // t1, followed
+	waitFinal(t, sink) // then the held reply
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 2 || sink.refs[0].MessageID != "task:t1" || !sink.refs[0].Recovered || sink.refs[1].Recovered {
+		t.Errorf("turn refs = %+v; want t1 recovered once, then the reply", sink.refs)
+	}
+	if sends, _, follows := f.agent.counts(); sends != 1 || follows != 1 {
+		t.Errorf("%d sends, %d follows; want the reply sent once after t1 was followed", sends, follows)
+	}
 }

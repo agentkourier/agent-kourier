@@ -34,6 +34,7 @@ type spyStore struct {
 	upserts int
 	fail    map[string]error // fails a call once
 	stuck   map[string]error // fails a call every time
+	onSet   func()           // runs when a task is cleared
 	gate    chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
 	reads   int
 }
@@ -67,6 +68,12 @@ func (s *spyStore) failOnce(call string) error {
 }
 
 func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID string) error {
+	s.mu.Lock()
+	hook := s.onSet
+	s.mu.Unlock()
+	if hook != nil && taskID == "" { // a task being cleared
+		hook()
+	}
 	if err := s.failOnce("set"); err != nil {
 		return err
 	}
@@ -309,11 +316,12 @@ func TestSubmitRefusesWhatCannotBeServed(t *testing.T) {
 		mutate func(*Inbound)
 		want   error
 	}{
-		"no message id":      {func(in *Inbound) { in.MessageID = "" }, store.ErrInvalid},
-		"the system user":    {func(in *Inbound) { in.UserID = SystemUser }, store.ErrInvalid}, // only intake files a turn under it
-		"no text":            {func(in *Inbound) { in.Text = "" }, store.ErrInvalid},
-		"create, no Binding": {func(in *Inbound) { in.Binding = "" }, store.ErrInvalid},
-		"unknown Binding":    {func(in *Inbound) { in.Binding = "ns/gone" }, ErrUnknownBinding},
+		"no message id":             {func(in *Inbound) { in.MessageID = "" }, store.ErrInvalid},
+		"a recovered turn's prefix": {func(in *Inbound) { in.MessageID = "task:t1" }, store.ErrInvalid}, // reserved for recovery
+		"the system user":           {func(in *Inbound) { in.UserID = SystemUser }, store.ErrInvalid},   // only intake files a turn under it
+		"no text":                   {func(in *Inbound) { in.Text = "" }, store.ErrInvalid},
+		"create, no Binding":        {func(in *Inbound) { in.Binding = "" }, store.ErrInvalid},
+		"unknown Binding":           {func(in *Inbound) { in.Binding = "ns/gone" }, ErrUnknownBinding},
 	} {
 		f, in := newFixture(t), inbound("1700.01")
 		tc.mutate(&in)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -480,4 +481,35 @@ func TestReleaseOfAPauseInAFailedStreamIsDrained(t *testing.T) {
 	if c := f.m.convos[key]; callErr != nil || len(c.resume) != 0 || c.parked != "" {
 		t.Errorf("call = %v, %d signals buffered, parked %q; want it accepted, then nothing left over", callErr, len(c.resume), c.parked)
 	}
+}
+
+// Ending a pause takes the runner a moment (it clears the recorded task), and in that moment a
+// duplicate call must still be refused: one that found the runner neither parked nor driving, and
+// the record still naming the task, would clear it itself and answer nil, which a caller reads as
+// "I ended the pause".
+func TestDuplicateEndPauseWhileThePauseIsBeingEnded(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	f.st.onSet = func() { // the first clearing of the task, by the runner
+		if !first.Swap(true) {
+			close(entered)
+			<-release
+		}
+	}
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error { return turn(h, n, a2a.TaskStateInputRequired) }
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	eventually(t, "the runner to park", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	if err := f.m.endPause(t.Context(), key, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	<-entered // the runner is ending the pause
+	if err := f.m.endPause(t.Context(), key, "t1"); !errors.Is(err, ErrNotParked) {
+		t.Errorf("duplicate endPause = %v; want ErrNotParked", err)
+	}
+	close(release)
 }

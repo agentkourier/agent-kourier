@@ -352,3 +352,55 @@ func TestStubRestartMidTask(t *testing.T) {
 		t.Errorf("turn refs = %+v; want the recovered output once, then the reply", sink.refs)
 	}
 }
+
+// S2 with a reply queued behind the running task: courier restarts, recovers the task, and then the
+// reply, which a process that died may or may not have sent, is looked up once against the stub's
+// ListTasks, found absent, and sent once, in the same context: exactly one task holds it.
+func TestStubRestartWithAReplyQueuedBehindTheTask(t *testing.T) {
+	e := newStubEnv(t)
+	e.stub.Next(stubagent.Hold("crash"), stubagent.Text("first, after the restart"))
+	e.stub.Next(stubagent.Text("the queued reply, answered"))
+	if _, err := e.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
+	if res, err := e.submit(inbound("2")); err != nil || !res.Queued {
+		t.Fatalf("reply = %+v, %v; want it queued behind the task", res, err)
+	}
+	before, _ := e.session()
+	if err := e.close(); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeSink{finals: make(chan struct{}, 16)}
+	cfg := e.m.cfg
+	cfg.Sink = sink
+	m2, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = m2.Close(ctx)
+	})
+	findsBefore, sendsBefore := e.agent.finds.Load(), e.agent.sends.Load()
+	if err := m2.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.Release("crash")
+	if first := sink.finalTask(t, 1); !says(first, "first, after the restart") {
+		t.Fatalf("recovered output = %+v", first)
+	}
+	if reply := sink.finalTask(t, 1); !says(reply, "the queued reply, answered") {
+		t.Fatalf("reply = %+v; want it answered after the recovered task", reply)
+	}
+	// One lookup matched the head to the running turn (it is not: t1 does not hold it), and one
+	// preceded the send: the head of a process that died is always looked up.
+	if finds, sends := e.agent.finds.Load()-findsBefore, e.agent.sends.Load()-sendsBefore; finds != 2 || sends != 1 {
+		t.Errorf("%d lookups, %d sends since the restart; want two lookups and one send", finds, sends)
+	}
+	_, holders, err := e.agent.Agent.FindTask(t.Context(), before.ContextID, inbound("2").MessageID)
+	if err != nil || len(holders) != 1 {
+		t.Errorf("holders of the reply = %v, %v; want exactly one", holders, err)
+	}
+}

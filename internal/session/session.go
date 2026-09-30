@@ -183,7 +183,10 @@ type Manager struct {
 	// attempted holds, per conversation, the head turn that was sent and not yet taken and
 	// recorded: a send of it again is a resend, and is looked up first.
 	attempted map[Key]attempt
-	closed    bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
+	// fresh holds the turns this process enqueued itself, and has not yet sent and recorded: they
+	// cannot have been sent before. Any other undelivered head may have been, by a process that died.
+	fresh  map[string]struct{}
+	closed bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex
@@ -220,7 +223,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, fresh: map[string]struct{}{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil
