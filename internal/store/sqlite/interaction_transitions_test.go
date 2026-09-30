@@ -170,6 +170,9 @@ func TestSetInteractionMessageRef(t *testing.T) {
 	if err := set("nope", "1"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing = %v; want ErrNotFound", err)
 	}
+	if err := set("", "1"); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("empty id = %v; want ErrInvalid", err)
+	}
 	if err := set("i1", ""); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("empty ref = %v; want ErrInvalid", err)
 	}

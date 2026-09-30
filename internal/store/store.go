@@ -30,6 +30,8 @@ type Store interface {
 	Outbox
 	Sessions
 	Interactions
+	ReplyQueue
+	Audit
 	io.Closer
 }
 

@@ -73,7 +73,7 @@ func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) er
 	if id == "" || ref == "" {
 		return fmt.Errorf("set message ref for interaction %q: ID and ref are required: %w", id, store.ErrInvalid)
 	}
-	if err := s.setMessageRef(ctx, "interactions", id, ref); err != nil {
+	if err := s.setMessageRef(ctx, interactionRefs, id, ref); err != nil {
 		return fmt.Errorf("set message ref for interaction %q: %w", id, err)
 	}
 	return nil

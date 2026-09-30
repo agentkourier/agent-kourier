@@ -161,18 +161,27 @@ func (s *Store) SetEventStatus(ctx context.Context, id string, status store.Even
 	return errIfUnchanged(n, err, fmt.Sprintf("set event %q status", id))
 }
 
-// setMessageRef is a compare-and-set of message_ref on table, which must be a
-// constant name, never caller input. The UPDATE and the read that tells a
-// missing row from a conflict share one transaction, so the answer reflects
-// the state the UPDATE saw.
-func (s *Store) setMessageRef(ctx context.Context, table, id, ref string) error {
+// refTable names a table with a message_ref column. It is spliced into SQL,
+// so only the constants below may be used; caller input needs an explicit
+// conversion to reach it.
+type refTable string
+
+const (
+	outboxRefs      refTable = "outbox"
+	interactionRefs refTable = "interactions"
+)
+
+// setMessageRef is a compare-and-set of message_ref on table. The UPDATE and
+// the read that tells a missing row from a conflict share one transaction, so
+// the answer reflects the state the UPDATE saw.
+func (s *Store) setMessageRef(ctx context.Context, table refTable, id, ref string) error {
 	return s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `UPDATE `+table+` SET message_ref = ? WHERE id = ? AND message_ref IN ('', ?)`, ref, id, ref)
+		n, err := execRows(ctx, tx, `UPDATE `+string(table)+` SET message_ref = ? WHERE id = ? AND message_ref IN ('', ?)`, ref, id, ref)
 		if err != nil || n > 0 {
 			return err
 		}
 		var existing string
-		err = tx.QueryRowContext(ctx, `SELECT message_ref FROM `+table+` WHERE id = ?`, id).Scan(&existing)
+		err = tx.QueryRowContext(ctx, `SELECT message_ref FROM `+string(table)+` WHERE id = ?`, id).Scan(&existing)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return store.ErrNotFound

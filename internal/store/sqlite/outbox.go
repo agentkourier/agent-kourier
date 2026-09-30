@@ -26,7 +26,7 @@ func (s *Store) RecordMessageRef(ctx context.Context, id, ref string) error {
 	if id == "" || ref == "" {
 		return fmt.Errorf("record message ref for outbox %q: ID and ref are required: %w", id, store.ErrInvalid)
 	}
-	if err := s.setMessageRef(ctx, "outbox", id, ref); err != nil {
+	if err := s.setMessageRef(ctx, outboxRefs, id, ref); err != nil {
 		return fmt.Errorf("record message ref for outbox %q: %w", id, err)
 	}
 	return nil
