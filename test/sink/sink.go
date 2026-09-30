@@ -7,7 +7,8 @@
 //	GET /requests:    the recorded requests as a JSON list, oldest first
 //	DELETE /requests: clears the log, 204
 //
-// It has no authentication and keeps no headers. It is for tests inside a cluster.
+// It has no authentication and keeps every header it is sent, so send it nothing secret. It is
+// for tests inside a cluster.
 package sink
 
 import (
@@ -24,12 +25,14 @@ const MaxBody = 1 << 20
 // logPath is where tests read and clear the log.
 const logPath = "/requests"
 
-// Request is one recorded request.
+// Request is one recorded request. Body is a JSON string, so a body that is not UTF-8 comes
+// back with its invalid bytes replaced; the webhooks tests send are JSON.
 type Request struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Query  string `json:"query,omitempty"`
-	Body   string `json:"body"`
+	Method string      `json:"method"`
+	Path   string      `json:"path"`
+	Query  string      `json:"query,omitempty"`
+	Header http.Header `json:"headers"`
+	Body   string      `json:"body"`
 }
 
 // Server is the sink. It is an http.Handler and is safe for concurrent use.
@@ -77,7 +80,7 @@ func (s *Server) record(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	s.reqs = append(s.reqs, Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(body)})
+	s.reqs = append(s.reqs, Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Header: r.Header.Clone(), Body: string(body)})
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
