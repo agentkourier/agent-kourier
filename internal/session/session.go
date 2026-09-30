@@ -132,6 +132,8 @@ type Config struct {
 	Now      func() time.Time
 	Logger   *slog.Logger
 	Audit    Auditor // nil audits nothing
+	// After waits for a duration, and defaults to time.After. A test injects a clock.
+	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
 	// They default to 1 s and 60 s (spec 8.2).
 	RetryBase, RetryMax time.Duration
@@ -178,6 +180,9 @@ func New(cfg Config) (*Manager, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.After == nil {
+		cfg.After = time.After
 	}
 	if cfg.RetryBase <= 0 {
 		cfg.RetryBase = time.Second

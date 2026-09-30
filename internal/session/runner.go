@@ -68,25 +68,38 @@ func (m *Manager) retire(key Key) bool {
 	return true
 }
 
+// ErrNotParked is what endPause returns for a call it dropped: the conversation is not paused on
+// that task, or the pause was already ended.
+var ErrNotParked = errors.New("session: no pause of that task to end")
+
 // endPause tells the runner of key that the pause of taskID ended (answered and finished, timed
 // out, or cancelled): it clears the task and sends what was held. A call that arrives while
-// the runner is not parked on taskID, or repeats one already made, is dropped: it must never
-// release the next pause. With no runner (after a restart), a call for the task recorded in
-// the session clears it and starts one.
+// the runner is not parked on taskID, or repeats one already made, is dropped with ErrNotParked:
+// it must never release the next pause. With no runner (after a restart), a call for the task
+// recorded in the session clears it and starts one, without checking that the task was
+// paused, so callers call it only for a pause.
 func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) error {
 	m.mu.Lock()
 	c, running, closed := m.convos[key], m.convos[key] != nil, m.closed
-	if running && taskID != "" && c.parked == taskID && !c.released {
+	if running {
+		defer m.mu.Unlock()
+		if taskID == "" || c.parked != taskID || c.released {
+			return ErrNotParked
+		}
 		c.released = true
 		c.resume <- struct{}{} // one release per park, and the channel holds one: never blocks
-	}
-	m.mu.Unlock()
-	if running || closed {
 		return nil
 	}
+	m.mu.Unlock()
+	if closed {
+		return ErrNotParked
+	}
 	sess, err := m.cfg.Store.GetSession(ctx, key, readAll, m.cfg.Now())
-	if err != nil || sess.TaskID != string(taskID) || taskID == "" {
-		return err // nothing recorded for that task
+	if err != nil {
+		return err
+	}
+	if sess.TaskID != string(taskID) || taskID == "" {
+		return ErrNotParked // nothing recorded for that task
 	}
 	if err := m.cfg.Store.SetSessionTask(ctx, key, "", ""); err != nil {
 		return fmt.Errorf("end pause of task %s: %w", taskID, err)
@@ -131,7 +144,7 @@ func (m *Manager) run(key Key, c *convo) {
 			}
 		case out == blocked:
 			select {
-			case <-time.After(m.backoff(c.tries)):
+			case <-m.cfg.After(m.backoff(c.tries)):
 			case <-m.ctx.Done():
 			}
 		case (out == idle || err != nil) && m.retire(key):
@@ -148,7 +161,10 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	}
 	sctx := context.WithoutCancel(m.ctx)
 	r, err := m.cfg.Store.NextReply(sctx, key)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) { // empty: nothing sent is waiting for a resend
+		m.mu.Lock()
+		delete(m.attempted, key)
+		m.mu.Unlock()
 		return idle, nil
 	} else if err != nil {
 		return idle, fmt.Errorf("read queue: %w", err)
@@ -244,6 +260,13 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 			}
 		case agent.FinalEvent:
 			final = ev.Task
+			if !final.Status.State.Terminal() {
+				// The pause is rendered inside this handler, and whoever renders it may end it at
+				// once: the runner must already be parked on this task.
+				m.mu.Lock()
+				c.parked, c.released = final.ID, false
+				m.mu.Unlock()
+			}
 		}
 		h(e)
 	})
@@ -264,9 +287,6 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 	case final == nil:
 		return ended, fmt.Errorf("send turn %s: the stream ended with no final task", r.ID)
 	case !final.Status.State.Terminal():
-		m.mu.Lock()
-		c.parked = final.ID
-		m.mu.Unlock()
 		return paused, nil
 	}
 	return ended, m.end(sctx, key, c.ttl)

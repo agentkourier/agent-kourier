@@ -36,8 +36,7 @@ type fakeAgent struct {
 	follows []a2a.TaskID
 	get     func(id a2a.TaskID) (*a2a.Task, error)
 	cancels []a2a.TaskID
-	seq     []string    // the calls in order: send, find, follow
-	times   []time.Time // when each send came
+	seq     []string // the calls in order: send, find, follow
 }
 
 func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
@@ -85,7 +84,6 @@ func (a *fakeAgent) Send(ctx context.Context, msg *a2a.Message, h agent.Handler)
 	n := len(a.msgs)
 	a.msgs = append(a.msgs, msg)
 	a.seq = append(a.seq, "send")
-	a.times = append(a.times, time.Now())
 	a.active++
 	a.maxActive = max(a.maxActive, a.active)
 	a.mu.Unlock()
@@ -114,6 +112,7 @@ type fakeSink struct {
 	events  []agent.Event
 	notices []Notice
 	finals  chan struct{}
+	onFinal func(*a2a.Task) // runs inside the handler, before finals is signalled
 }
 
 func (s *fakeSink) Notice(_ context.Context, _ Key, n Notice) {
@@ -127,7 +126,10 @@ func (s *fakeSink) Turn(context.Context, TurnRef) agent.Handler {
 		s.mu.Lock()
 		s.events = append(s.events, e)
 		s.mu.Unlock()
-		if _, ok := e.(agent.FinalEvent); ok {
+		if fe, ok := e.(agent.FinalEvent); ok {
+			if s.onFinal != nil {
+				s.onFinal(fe.Task)
+			}
 			s.finals <- struct{}{}
 		}
 	}

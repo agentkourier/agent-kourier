@@ -214,10 +214,10 @@ func TestEndPauseIgnoresStaleAndDuplicateCalls(t *testing.T) {
 		}
 		return turn(h, n, a2a.TaskStateCompleted)
 	}
-	end := func(id a2a.TaskID) {
+	end := func(id a2a.TaskID, wantErr error) {
 		t.Helper()
-		if err := f.m.endPause(t.Context(), key, id); err != nil {
-			t.Fatal(err)
+		if err := f.m.endPause(t.Context(), key, id); !errors.Is(err, wantErr) {
+			t.Fatalf("endPause(%s) = %v; want %v", id, err, wantErr)
 		}
 	}
 	silent := func(why string) {
@@ -234,23 +234,23 @@ func TestEndPauseIgnoresStaleAndDuplicateCalls(t *testing.T) {
 		}
 	}
 	<-mid
-	end("t1") // stale: turn 1 has not paused yet
+	end("t1", ErrNotParked) // stale: turn 1 has not paused yet
 	close(gate)
 	<-sink.finals
 	f.nextSent()
 	silent("after a call made before the pause")
-	end("t1")
-	end("t1") // the second is a duplicate
+	end("t1", nil)
+	end("t1", ErrNotParked) // a duplicate
 	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
 		t.Fatalf("sent %s after the pause; want %s", id, want)
 	}
-	<-sink.finals // turn 2 pauses on t2
-	end("t1")     // stale: t1's pause is over
+	<-sink.finals           // turn 2 pauses on t2
+	end("t1", ErrNotParked) // stale: t1's pause is over
 	silent("on a call for the earlier pause")
 	if got := f.taskID(); got != "t2" {
 		t.Errorf("task = %q; want t2 still recorded", got)
 	}
-	end("t2")
+	end("t2", nil)
 	if id, want := f.nextSent(), inbound("3").MessageID; id != want {
 		t.Errorf("sent %s after the second pause; want %s", id, want)
 	}
@@ -266,8 +266,8 @@ func TestEndPauseWithNoRunnerClearsTheRecordedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the held runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
-	if err := f.m.endPause(t.Context(), key, "t9"); err != nil {
-		t.Fatal(err)
+	if err := f.m.endPause(t.Context(), key, "t9"); !errors.Is(err, ErrNotParked) {
+		t.Fatalf("endPause of another task = %v; want ErrNotParked", err)
 	}
 	select {
 	case id := <-f.agent.sent:
@@ -287,7 +287,14 @@ func TestEndPauseWithNoRunnerClearsTheRecordedTask(t *testing.T) {
 func TestRetryStateStartsOverAfterANamedTurn(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
-	f.m.cfg.RetryBase, f.m.cfg.RetryMax = 50*time.Millisecond, time.Second
+	var waits []time.Duration
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Second, time.Minute
+	f.m.cfg.After = func(d time.Duration) <-chan time.Time { // no real wait; the delay asked for is recorded
+		waits = append(waits, d) // the runner is the only caller, and the test reads it after the turns end
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}
 	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 		if n < 2 || n == 3 { // turn 1 twice, turn 2 once
 			return fmt.Errorf("send message: %w", agent.ErrBusy)
@@ -306,8 +313,8 @@ func TestRetryStateStartsOverAfterANamedTurn(t *testing.T) {
 	if want := "[send send send send find send]"; fmt.Sprint(f.agent.seq) != want {
 		t.Errorf("calls = %v; want %s", f.agent.seq, want)
 	}
-	if gap := f.agent.times[4].Sub(f.agent.times[3]); gap < 50*time.Millisecond || gap >= 150*time.Millisecond {
-		t.Errorf("turn 2 waited %v after its first -32004; want the base 50ms, not the 200ms turn 1's count would give", gap)
+	if want := []time.Duration{time.Second, 2 * time.Second, time.Second}; !slices.Equal(waits, want) {
+		t.Errorf("waits = %v; want %v: turn 2's first wait is the base, not the third step turn 1's count would give", waits, want)
 	}
 }
 
@@ -347,4 +354,61 @@ func TestPreviouslySentTurnIsLookedUpBeforeAnyResend(t *testing.T) {
 	if want := "[send send find send]"; fmt.Sprint(f.agent.seq) != want {
 		t.Errorf("calls = %v; want %s: the lookup comes before the resend", f.agent.seq, want)
 	}
+}
+
+// The pause is rendered inside Send's handler, so a call to end it can come from the renderer
+// before Send returns. It must be seen as a call for the pause the runner is about to park on:
+// the conversation is not left parked for good.
+func TestEndPauseFromInsideTheSinkReleasesThePause(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	var callErr error
+	sink.onFinal = func(task *a2a.Task) {
+		if task.Status.State == a2a.TaskStateInputRequired {
+			callErr = f.m.endPause(context.Background(), key, task.ID)
+		}
+	}
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 0 {
+			return turn(h, n, a2a.TaskStateInputRequired)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.nextSent()
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Errorf("sent %s after the pause; want %s", id, want)
+	}
+	<-sink.finals
+	<-sink.finals
+	if callErr != nil {
+		t.Errorf("endPause from the handler = %v; want it accepted", callErr)
+	}
+}
+
+// A conversation whose queue is empty keeps no resend record.
+func TestAttemptedTurnIsForgottenWhenTheQueueEmpties(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	f.agent.script = func(context.Context, int, agent.Handler) error { return errors.New("boom") } // stays queued
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	f.nextSent()
+	eventually(t, "the runner to retire", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.convos) == 0 })
+	f.m.mu.Lock()
+	recorded := len(f.m.attempted)
+	f.m.mu.Unlock()
+	if recorded != 1 {
+		t.Fatalf("%d attempted entries; want the queued turn's", recorded)
+	}
+	if err := f.st.MarkReplyDelivered(t.Context(), inbound("1").MessageID, t0); err != nil { // the queue empties
+		t.Fatal(err)
+	}
+	f.m.start(key)
+	eventually(t, "the entry to go", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return len(f.m.attempted) == 0 })
 }
