@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,14 +29,18 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("%s %s: status %d: %s", e.Method, e.URL, e.Status, strings.TrimSpace(e.Body))
 }
 
+// errTooLarge is wrapped by the error for a 2xx answer longer than the client's limit.
+var errTooLarge = errors.New("response too large")
+
 // client is the JSON-over-HTTP caller that the helpers for one double share.
 type client struct {
-	base string
-	hc   *http.Client
+	base  string
+	hc    *http.Client
+	limit int64 // the most of an answer do reads; maxBody unless a helper needs more
 }
 
 func newClient(base string) *client {
-	return &client{strings.TrimRight(base, "/"), &http.Client{Timeout: httpTimeout}}
+	return &client{strings.TrimRight(base, "/"), &http.Client{Timeout: httpTimeout}, maxBody}
 }
 
 // do sends in (nil for no body) as JSON and decodes a 2xx answer into out (nil to ignore it). Any
@@ -68,7 +73,14 @@ func (c *client) do(ctx context.Context, method, path string, in, out any) error
 	if out == nil {
 		return nil
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(out); err != nil {
+	b, err := io.ReadAll(io.LimitReader(resp.Body, c.limit+1))
+	switch {
+	case err != nil:
+		return fmt.Errorf("e2e: read %s %s: %w", method, path, err)
+	case int64(len(b)) > c.limit:
+		return fmt.Errorf("e2e: %s %s: %w: over %d bytes", method, path, errTooLarge, c.limit)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
 		return fmt.Errorf("e2e: decode %s %s: %w", method, path, err)
 	}
 	return nil

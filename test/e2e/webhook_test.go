@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/test/sink"
@@ -12,10 +13,10 @@ import (
 
 func TestPostWebhook(t *testing.T) {
 	const token = "fake-webhook-token"
-	var auth []string
+	var auth, ctype []string
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth, body = r.Header.Values("Authorization"), nil
+		auth, ctype = r.Header.Values("Authorization"), r.Header.Values("Content-Type")
 		body, _ = io.ReadAll(r.Body)
 		http.Error(w, "nope", http.StatusUnauthorized)
 	}))
@@ -24,15 +25,15 @@ func TestPostWebhook(t *testing.T) {
 	if err != nil || resp.Status != http.StatusUnauthorized || string(resp.Body) != "nope\n" {
 		t.Fatalf("PostWebhook = %+v, %v; a 401 is an answer, not an error", resp, err)
 	}
-	if len(auth) != 1 || auth[0] != "Bearer "+token || string(body) != `{"a":1}` {
-		t.Errorf("server saw %q and %q", auth, body)
+	if len(auth) != 1 || auth[0] != "Bearer "+token || string(body) != `{"a":1}` || len(ctype) != 1 || ctype[0] != "application/json" {
+		t.Errorf("server saw %q, %q and %q", auth, ctype, body)
 	}
 	if _, err := PostWebhook(context.Background(), srv.URL, "", nil); err != nil || len(auth) != 0 {
 		t.Errorf("without a token: %v, Authorization %q, want none", err, auth)
 	}
 	srv.Close()
-	if _, err := PostWebhook(context.Background(), srv.URL, token, nil); err == nil {
-		t.Error("PostWebhook to a closed server succeeded")
+	if _, err := PostWebhook(context.Background(), srv.URL, token, nil); err == nil || strings.Contains(err.Error(), token) {
+		t.Errorf("PostWebhook to a closed server = %v, want an error without the token", err)
 	}
 }
 

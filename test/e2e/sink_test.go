@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,13 +42,22 @@ func TestSinkReadsAndClearsTheLog(t *testing.T) {
 }
 
 func TestSinkWaitFor(t *testing.T) {
-	srv := httptest.NewServer(sink.NewHandler())
+	// The late request is sent only after the sink has answered the first poll, so the wait is
+	// guaranteed to miss once and then hit, with no sleep to tune.
+	var once sync.Once
+	firstPoll, handler := make(chan struct{}), sink.NewHandler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+		if r.Method == http.MethodGet && r.URL.Path == "/requests" {
+			once.Do(func() { close(firstPoll) })
+		}
+	}))
 	defer srv.Close()
 	s := NewSink(srv.URL)
 	sent := make(chan struct{})
 	go func() {
 		defer close(sent)
-		time.Sleep(2 * pollInterval) // the late sender; the wait under test does not sleep
+		<-firstPoll
 		post(t, srv.URL+"/late", "fire")
 	}()
 	defer func() { <-sent }()
@@ -57,6 +67,28 @@ func TestSinkWaitFor(t *testing.T) {
 	}
 	if _, err := s.WaitFor(context.Background(), 40*time.Millisecond, is("/never")); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("WaitFor for a request that never comes = %v, want ErrTimeout", err)
+	}
+}
+
+func TestSinkReadsALogOverOneMiB(t *testing.T) {
+	srv := httptest.NewServer(sink.NewHandler())
+	defer srv.Close()
+	for range 12 { // each is well under the sink's per-request cap; together they are 1.2 MB
+		post(t, srv.URL+"/alertmanager", strings.Repeat("a", 100_000))
+	}
+	if reqs, err := NewSink(srv.URL).Requests(t.Context()); err != nil || len(reqs) != 12 {
+		t.Fatalf("Requests = %d requests, %v; want all 12", len(reqs), err)
+	}
+}
+
+func TestSinkLogOverItsCapSaysToClearIt(t *testing.T) {
+	srv := httptest.NewServer(sink.NewHandler())
+	defer srv.Close()
+	post(t, srv.URL+"/a", strings.Repeat("a", 2000))
+	s := NewSink(srv.URL)
+	s.c.limit = 1000
+	if _, err := s.Requests(t.Context()); err == nil || !strings.Contains(err.Error(), "Clear it") {
+		t.Fatalf("Requests = %v, want an error telling the caller to Clear the log", err)
 	}
 }
 
