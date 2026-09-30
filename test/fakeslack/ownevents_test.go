@@ -2,6 +2,8 @@ package fakeslack_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +113,7 @@ func TestChatUpdateDeliversMessageChanged(t *testing.T) {
 	m, ok := inner.(*slackevents.MessageEvent)
 	if !ok || m.SubType != "message_changed" || m.Channel != "C1" || m.Message == nil || m.PreviousMessage == nil ||
 		m.Message.Text != "after" || m.PreviousMessage.Text != "before" || m.Message.Timestamp != ts || m.PreviousMessage.Timestamp != ts ||
-		m.Message.User != "UFAKEBOT" || m.TimeStamp == ts || m.TimeStamp == "" || m.Message.Metadata.EventType != "" {
+		m.Message.User != "UFAKEBOT" || m.Message.BotID != "BFAKEBOT" || m.TimeStamp == ts || m.TimeStamp == "" || m.Message.Metadata.EventType != "" {
 		t.Fatalf("event = %#v; want message_changed from before to after on %s", inner, ts)
 	}
 	waitAcked(t, fake, env)
@@ -181,5 +183,93 @@ func TestBotPostsWithNoClientAreUnaffected(t *testing.T) {
 	post(t, botClient(fake), text("nobody is listening"))
 	if n := len(fake.Messages("C1")); n != 1 {
 		t.Fatalf("Messages = %d; want the post stored", n)
+	}
+}
+
+func TestOwnEventEnvelopesAreRecordedForAcks(t *testing.T) {
+	fake, smc := newSocket(t)
+	waitEvent(t, smc, socketmode.EventTypeHello)
+	api := botClient(fake)
+	ts := post(t, api, text("before"))
+	if _, _, _, err := api.UpdateMessage("C1", ts, text("after")); err != nil {
+		t.Fatalf("UpdateMessage: %v", err)
+	}
+
+	ids := fake.OwnEventEnvelopes("C1", ts)
+	if len(ids) != 2 {
+		t.Fatalf("OwnEventEnvelopes = %v; want the post's and the update's", ids)
+	}
+	for i, want := range ids { // in delivery order, and the ones the client saw
+		if env, _, _ := nextInner(t, smc); env != want {
+			t.Fatalf("event %d has envelope %q; want %q", i, env, want)
+		}
+	}
+	waitAcked(t, fake, ids...) // what a no-loop test waits on
+	if n := len(fake.OwnEventEnvelopes("C1", "1.000001")) + len(fake.OwnEventEnvelopes("C2", ts)); n != 0 {
+		t.Fatalf("envelopes recorded for a message that was not posted: %d", n)
+	}
+}
+
+func TestOwnEventEnvelopesAreNotRecordedWithoutEvents(t *testing.T) {
+	leakCheck(t)
+	fake := fakeslack.New()
+	t.Cleanup(fake.Close)
+	ts := post(t, botClient(fake), text("nobody is listening"))
+	if ids := fake.OwnEventEnvelopes("C1", ts); len(ids) != 0 {
+		t.Fatalf("OwnEventEnvelopes with no client = %v; want none", ids)
+	}
+}
+
+// TestOwnEventsBelongToTheirRequest posts and updates from many goroutines at
+// once. Each call must have sent exactly its own event by the time it returns,
+// and a post's event must come before its update's. A queue shared between
+// requests lets one request send another's event after that request has
+// answered, so this fails on it (see the mutation in the WP-11f fix report).
+func TestOwnEventsBelongToTheirRequest(t *testing.T) {
+	leakCheck(t)
+	fake := fakeslack.New()
+	t.Cleanup(fake.Close)
+	ws := dial(t, fake)
+	if _, _, err := ws.ReadMessage(); err != nil { // hello
+		t.Fatalf("read hello: %v", err)
+	}
+	go func() { // drain, so that writes never block
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	const posters, rounds = 16, 12
+	errs := make(chan string, posters*rounds*2)
+	var wg sync.WaitGroup
+	for range posters {
+		wg.Go(func() {
+			api := botClient(fake)
+			for range rounds {
+				_, ts, err := api.PostMessage("C1", text("p"))
+				if err != nil {
+					errs <- "post: " + err.Error()
+					return
+				}
+				if n := len(fake.OwnEventEnvelopes("C1", ts)); n != 1 {
+					errs <- fmt.Sprintf("%d events recorded when the post returned; want 1", n)
+				}
+				if _, _, _, err := api.UpdateMessage("C1", ts, text("u")); err != nil {
+					errs <- "update: " + err.Error()
+					return
+				}
+				ids := fake.OwnEventEnvelopes("C1", ts)
+				if len(ids) != 2 || ids[0] >= ids[1] { // envelope IDs are zero-padded counters
+					errs <- fmt.Sprintf("events %v when the update returned; want the post's, then the update's", ids)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
 	}
 }

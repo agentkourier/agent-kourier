@@ -35,7 +35,8 @@
 //     blocks being included and metadata not; a hidden message_changed event
 //     with its own ts for each chat.update; for streaming, a message event at
 //     startStream, none at appendStream and a message_changed at stopStream;
-//     and no message_changed for a thread parent that gains a reply.
+//     and no message_changed for a thread parent that gains a reply, where
+//     Slack sends one.
 //   - Interactions (interaction.go): Submit answering an inline ask-user with a
 //     block_actions press that carries state.values, not a view_submission
 //     (the fake has no views); the payload's fields, which are the ones courier
@@ -126,7 +127,12 @@ type Server struct {
 
 	channelTypes map[string]string      // set by SetChannelType, guarded by mu
 	ephemerals   map[string][]Ephemeral // per channel, in order, guarded by mu
-	ownPending   []ownEvent             // events for the bot's own posts, waiting for flushOwn; guarded by mu
+	ownPending   []ownEvent             // events queued by the request holding ownMu, for flushOwn; guarded by mu
+	ownSent      map[ownKey][]string    // envelope IDs of events sent for each bot message, guarded by mu
+
+	ownMu sync.Mutex // held from dispatch to flushOwn by the methods that queue events, so one request's queue is its own
+
+	afterDispatch func() // a test hook, called between queueing a request's own events and sending them
 }
 
 // Option configures a Server.
@@ -175,6 +181,7 @@ func NewHandler(opts ...Option) *Server {
 
 		channelTypes: map[string]string{},
 		ephemerals:   map[string][]Ephemeral{},
+		ownSent:      map[ownKey][]string{},
 	}
 	for _, o := range opts {
 		o(s)
@@ -224,8 +231,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.control.ServeHTTP(w, r)
 		return
 	}
+	// Requests that queue events for the bot's own posts take turns, from
+	// queueing to sending, so that each sends exactly its own events before it
+	// answers, and a post's event goes out before its update's.
+	own := ownEventMethods[strings.TrimPrefix(r.URL.Path, "/")]
+	if own {
+		s.ownMu.Lock()
+		defer s.ownMu.Unlock()
+	}
 	out, code := s.dispatch(r)
-	s.flushOwn()
+	if own {
+		if s.afterDispatch != nil {
+			s.afterDispatch()
+		}
+		s.flushOwn()
+	}
 	if code != "" {
 		out = response{"ok": false, "error": code}
 	} else {
