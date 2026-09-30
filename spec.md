@@ -631,6 +631,13 @@ this with an outbox:
    and is accepted as an at-least-once duplicate, with the orphaned stream left to
    Slack's stream timeout. If WP-04 finds `startStream` accepts metadata, the window
    closes and this exception is removed.
+7. **Audit writes are never dropped silently.** A record that authorizes an action is
+   written first and fails the action if the write fails: an inbound event before it is
+   queued (the webhook answers 5xx, so Alertmanager retries) and an interaction decision
+   before the answer is sent (an unaudited approval never takes effect). A record of
+   something already done (an agent call, an unusable pause and its cancel) is logged,
+   metered and returned, but never blocks the follow-up, above all the cancel. A decision
+   records who, when and the answer's shape (counts), never its choices or free text.
 
 ### 8.7 Feedback
 
