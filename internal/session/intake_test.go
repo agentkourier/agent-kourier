@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
@@ -93,6 +96,7 @@ type fixture struct {
 	onWake func()
 	now    atomic.Int64 // the clock, in Unix nanoseconds
 	agent  *fakeAgent
+	attr   func(*a2a.Message, dialect.User)
 }
 
 // Backend makes the fixture the Bindings: ns/b1 has a threadTTL of 1 h, ns/b2 of 1000 h.
@@ -101,7 +105,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if !ok {
 		return Backend{}, ErrUnknownBinding
 	}
-	return Backend{ThreadTTL: ttl, Agent: f.agent}, nil
+	return Backend{ThreadTTL: ttl, Agent: f.agent, Attribute: f.attr}, nil
 }
 
 func newFixture(t *testing.T) *fixture {

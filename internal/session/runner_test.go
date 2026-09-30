@@ -12,6 +12,8 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -75,6 +77,15 @@ func (s *fakeSink) Turn(context.Context, TurnRef) agent.Handler {
 	}
 }
 
+type fakeUsers map[string]dialect.User
+
+func (u fakeUsers) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+	if user, ok := u[id]; ok {
+		return user, nil
+	}
+	return dialect.User{}, errors.New("no such user")
+}
+
 // live starts real runners on Submit, with a sink, and returns the sink.
 func (f *fixture) live() *fakeSink {
 	sink := &fakeSink{finals: make(chan struct{}, 16)}
@@ -110,6 +121,33 @@ func TestTurnMessage(t *testing.T) {
 		f.agent.mu.Unlock()
 		if len(msg.Parts) != 1 || msg.Parts[0].Text() != "hello" || msg.ID != in.MessageID || msg.ContextID != wantContext {
 			t.Errorf("turn %d = %d parts, id %q, context %q; want one part, id %q, context %q", i, len(msg.Parts), msg.ID, msg.ContextID, in.MessageID, wantContext)
+		}
+	}
+}
+
+// A turn carries who wrote it (D14), inside its one text part (R18): the user the platform
+// resolves, else the ID alone, and nothing for a turn nobody wrote.
+func TestTurnAttribution(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.attr = (&kagentv1.Dialect{}).Attribute
+	f.m.cfg.Users = fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}}
+	for i, tc := range []struct{ user, want string }{
+		{"U1", "[Slack: Ada (U1) <ada@example.com>]\nhello"},
+		{"U2", "[Slack: U2]\nhello"}, // the platform cannot resolve U2
+		{"", "hello"},                // an alert's prompt
+	} {
+		in := inbound(fmt.Sprint(i))
+		in.UserID = tc.user
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		<-sink.finals
+		f.agent.mu.Lock()
+		msg := f.agent.msgs[i]
+		f.agent.mu.Unlock()
+		if len(msg.Parts) != 1 || msg.Parts[0].Text() != tc.want {
+			t.Errorf("turn %d = %d parts, %q; want one part %q", i, len(msg.Parts), msg.Parts[0].Text(), tc.want)
 		}
 	}
 }

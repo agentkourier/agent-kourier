@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -42,12 +43,19 @@ type Backend struct {
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.
 	Agent AgentAPI
+	// Attribute records the acting user on a turn: the dialect's Attribute.
+	Attribute func(msg *a2a.Message, actor dialect.User)
 }
 
 // Bindings resolves a Binding by its namespace/name.
 type Bindings interface {
 	// Backend returns the Binding's backend, or an error wrapping ErrUnknownBinding.
 	Backend(name string) (Backend, error)
+}
+
+// Users resolves a chat user for attribution (the chat platform's ResolveUser).
+type Users interface {
+	ResolveUser(ctx context.Context, id string) (dialect.User, error)
 }
 
 // TurnRef names the turn a Sink is asked to render.
@@ -62,10 +70,12 @@ type Sink interface {
 	Turn(ctx context.Context, t TurnRef) agent.Handler
 }
 
-// Config configures a Manager. Store and Bindings are required; a nil Sink drops the output.
+// Config configures a Manager. Store and Bindings are required. A nil Users attributes a turn
+// by the user's ID alone, and a nil Sink drops the output.
 type Config struct {
 	Store    Store
 	Bindings Bindings
+	Users    Users
 	Sink     Sink
 	Now      func() time.Time
 	Logger   *slog.Logger

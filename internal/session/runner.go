@@ -9,6 +9,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -96,7 +97,7 @@ func (m *Manager) turn(key Key) (outcome, error) {
 	}
 	var final *a2a.Task
 	named := false
-	err = backend.Agent.Send(m.ctx, message(r, sess), func(e agent.Event) {
+	err = backend.Agent.Send(m.ctx, m.message(r, sess, backend), func(e agent.Event) {
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
@@ -122,10 +123,22 @@ func (m *Manager) turn(key Key) (outcome, error) {
 }
 
 // message builds the A2A message of a turn: exactly one text part (R18), the queue's messageId
-// and the session's contextId, which is empty on a first turn.
-func message(r store.Reply, sess store.Session) *a2a.Message {
+// and the session's contextId, which is empty on a first turn. A turn a person wrote carries
+// who (D14): the user the platform resolves, else the ID alone. The dialect puts it into that
+// one part. A turn nobody wrote (an alert's prompt) carries none.
+func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Message {
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
 	msg.ID, msg.ContextID = r.ID, sess.ContextID
+	if r.UserID == SystemUser || b.Attribute == nil {
+		return msg
+	}
+	user := dialect.User{ID: r.UserID}
+	if m.cfg.Users != nil {
+		if u, err := m.cfg.Users.ResolveUser(m.ctx, r.UserID); err == nil {
+			user = u
+		}
+	}
+	b.Attribute(msg, user)
 	return msg
 }
 
