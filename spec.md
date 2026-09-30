@@ -273,20 +273,23 @@ Courier speaks A2A 1.0 over JSON-RPC: `SendStreamingMessage`, `GetTask`,
 | `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text, and the next thread reply is sent as a plain message. | Any A2A 1.0 agent that does not advertise a structured HITL extension |
 | `kagent-v1` | Yes | Yes: tool approvals, ask-user questions, and nested sub-agent interactions, through extension `https://kagent.dev/extensions/hitl/v1` | `POST /agents/{ns}/{name}`, card at `.well-known/agent-card.json`. Auth by bearer token in OIDC mode, or `X-User-Id` in insecure mode. |
 
-kagent 1.0.0-alpha5 validates HITL responses far less than assumed (WP-02). Measured:
-too few answers, or an answer outside the offered choices, is accepted; an empty answer
-list returns JSON-RPC `-32603` (as an SSE event after a WORKING update, over HTTP 200)
-and leaves the task in `WORKING` for at least 20 s, after which a valid answer gets
-`-32004` and `CancelTask` clears it; a wrong request id also returns `-32603` and the task
-was still `WORKING` 3 s later; a tool-approval reply with no decisions is treated as plain
-user text. Not yet measured: whether anything other than `CancelTask` recovers a wedged
-task. The `kagent-v1` dialect therefore validates every answer itself before sending
-(completeness, choice membership, known request id), never uses the free-text fallback,
-and uses `CancelTask` to recover a wedged task. For ask-user, the structured payload
-appears only when the request carries `A2A-Extensions:
-https://kagent.dev/extensions/hitl/v1` (measured); the same for tool approval is not yet
-measured. Through a2a-go v2.6.0 with its extension activator the payload arrives (Q1);
-that the activator is what sets the header is inferred, pending a control run.
+kagent 1.0.0-alpha5 validates HITL responses far less than assumed (WP-02, measured). Too
+few answers, or an answer outside the offered choices, is accepted. An empty answer list
+or a wrong request id returns JSON-RPC `-32603`, as an SSE event after a `WORKING` update
+over HTTP 200, and leaves the task in `WORKING`: still so after 20 s, when a valid answer,
+a plain-text message to the task, and a new turn in the context each get `-32004`;
+`CancelTask` clears it. An unknown tool-approval id also returns `-32603`, and the task was
+still `WORKING` 3 s later. A tool-approval reply with no decisions is treated as plain user
+text, and the tool does not run. Not measured: waits beyond 20 s, recovery across a
+restart, or any recovery other than `CancelTask`. The `kagent-v1` dialect therefore
+validates every answer itself before sending (completeness, choice membership, known
+request id), never uses the free-text fallback, and uses `CancelTask` to recover a wedged
+task. For both ask-user and tool approval, the structured payload appears only when the
+request carries `A2A-Extensions: https://kagent.dev/extensions/hitl/v1`; without it the
+pause is still `input-required`, with the question (or ADK's approval hint) as text.
+a2a-go v2.6.0's `a2aext.NewActivator` puts that header on the wire only when the agent card
+lists the URI under `capabilities.extensions` (Q1, measured with controls). Whether a reply
+must also carry the header is not measured.
 
 **google/ax.** ax has no message model, so courier does not call it. Two supported
 patterns, both of which look like a plain A2A backend to courier:
@@ -466,10 +469,14 @@ event IDs, and both must map to one turn.
 
 The session row is written before the first A2A call, holding the key and the Binding;
 `contextId` is filled in from the backend's first response. If courier crashes in
-between, the retried send reuses the same `messageId`. After the task completed, kagent
-returned the same context and task for a replayed `messageId` (WP-02, measured); a
-replay while the task is still running is not yet measured, and the replay returns a
-task snapshot rather than a live stream, so courier follows it with `SubscribeToTask`. An expired session is kept, not deleted, so courier can tell a reply in an
+between, the retried send reuses the same `messageId`, with no `contextId`, as on the first
+send. kagent deduplicates on it (WP-02, measured). While the task still runs, the replay
+is itself a live stream of the same task and context: a `WORKING` snapshot with the text
+so far, then the remaining deltas, the `lastChunk` chunk and the final task. After the
+task has ended, the replay returns one snapshot of that task. Either way the task shows a
+single run (one history message, one artifact); whether the model was called a second
+time is not measured. A replay carrying a `contextId` while the task runs (a crash during
+a thread reply) is not yet measured (WP-03). An expired session is kept, not deleted, so courier can tell a reply in an
 expired thread (notice) from a reply in a thread it never owned (ignored).
 
 **Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
@@ -480,7 +487,10 @@ session. After `threadTTL`, a reply gets the same notice.
 
 **Reply while a task is running.** kagent allows one active task per session and
 rejects a new message while one runs, with JSON-RPC `-32004` "resource conflict" (inside
-the SSE stream for streaming sends; WP-02). Courier queues the reply per session, marks it
+the SSE stream for streaming sends; WP-02). A rejected message is not recorded: resending
+it unchanged, with the same `messageId`, after the active task ends (cancelled or
+completed) starts a new task in the same context (WP-02, measured). A queued reply
+therefore keeps its `messageId`, and a resend that still gets `-32004` stays queued. Courier queues the reply per session, marks it
 with a reaction, and sends queued replies in order, one per turn, when the active task
 reaches a terminal or `input-required` state. A reply sent while an interaction is
 pending is queued the same way; it is not treated as the interaction's answer.
@@ -489,11 +499,16 @@ A user can stop the active task from the thread; the stop control calls `CancelT
 ### 8.3 Streaming and long-running tasks
 
 - Courier calls `SendStreamingMessage` and edits one Slack message as text arrives.
-  On `SubscribeToTask`, kagent sends a task snapshot, then `append: true` deltas, then
-  one `lastChunk: true` artifact with the full text and no append flag; the client
-  replaces, never appends, on that chunk (WP-02, measured). The shape of a live
-  multi-chunk `SendStreamingMessage` is not yet captured; the client treats a chunk
-  without `append: true` as a replacement in both paths.
+  kagent streams each artifact as chunks keyed by `artifactId` (WP-02, measured). A live
+  `SendStreamingMessage` opens with two `SUBMITTED` task events and a `WORKING` update;
+  the first text chunk has no `append` flag, later deltas carry `append: true`, and one
+  final `lastChunk: true` chunk carries the artifact's full text with no `append` flag.
+  `SubscribeToTask`, and a replayed in-flight send, open instead with a task snapshot
+  holding the text so far, followed by `append: true` deltas, the `lastChunk` chunk and
+  the final task. `GetTask` during a run returns `WORKING` with the text so far. Tool
+  calls and results arrive as separate data-part artifacts, each a single
+  `lastChunk: true` chunk. The client appends on `append: true` and otherwise replaces,
+  per artifact.
 - Edits are throttled per message (default one edit per 2 seconds, configurable) and
   coalesced. Tool calls appear as short status lines.
 - Slack's `chat.startStream` requires a recipient user in channels. Chat threads use
@@ -715,7 +730,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R12 | **Sparse or biased feedback.** Few votes, or votes only on bad answers, skew the go/no-go. | Medium | Minimum of 20 rated investigations. Weekly review. Engagement is measured alongside ratings. |
 | R13 | **kagent 1.0 GA slips or changes shape**, stranding courier on an alpha. | Medium | The pilot is explicitly disposable. Changes stay in the dialect. The go/no-go is about value, independent of GA timing. |
 | R14 | A team forgets `continue: true`, putting courier in its paging path. | Medium | Runbook check before enabling a route during the pilot. In hardening, the controller reads `AlertmanagerConfig` resources that target courier's webhook URL and sets a warning condition on the Binding when a route lacks `continue: true`. |
-| R17 | **A malformed HITL reply wedges the kagent task** in `WORKING` (WP-02, measured for at least 20 s); `CancelTask` recovers it, and other recovery is untested. After a courier crash, a wedged task is indistinguishable from a long-running one. | Medium | The dialect validates answers before sending (6.3); on `-32603` from an answer, courier cancels the task and tells the thread; restart reconciliation (WP-28) applies a maximum WORKING age. Consider an upstream issue. |
+| R17 | **A malformed HITL reply wedges the kagent task** in `WORKING` (WP-02: an empty answer list or a wrong request id; still `WORKING` after 20 s, and every send to the session, including a new turn, gets `-32004`). `CancelTask` recovers it; other recovery is untested. After a courier crash, a wedged task is indistinguishable from a long-running one. | Medium | The dialect validates answers before sending (6.3); on `-32603` from an answer, courier cancels the task and tells the thread; restart reconciliation (WP-28) applies a maximum WORKING age. Consider an upstream issue. |
 | R16 | A crash between `chat.startStream` returning and courier recording the stream's ts leaves a duplicate message and an orphaned stream (8.6 step 6). | Low | ts recorded immediately; window is one local write. WP-04 checks whether startStream accepts metadata, which would close it. |
 | R15 | ~~kagent 1.0 needs Agent Substrate with gVisor, which may not run in kind on Docker Desktop for Mac.~~ **Resolved by WP-01:** the full tier runs on macOS on Apple silicon (arm64; gVisor uses the systrap platform, no KVM), about 1.9 to 2.1 GiB idle, up in about three minutes (148 to 180 s measured). amd64 and Linux are expected from kagent's own CI but not measured. | Low | Pins matter (kagent 1.0.0-alpha5, Substrate 0.3.0-alpha1). |
 
@@ -723,9 +738,9 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 
 | # | Question | Resolve in |
 |---|---|---|
-| Q1 | ~~Does the A2A Go SDK support negotiating the kagent HITL extension?~~ **Resolved (WP-02):** through a2a-go v2.6.0 with `a2aext.NewActivator`, the structured payload arrives (measured; that the activator sets the header is inferred pending a control run). Payloads are untyped, so courier defines its own structs. Pass the full `.well-known/agent-card.json` URL to `agentcard.Resolve`, and override the card's in-cluster URL with the front door. | Phase 0 |
+| Q1 | ~~Does the A2A Go SDK support negotiating the kagent HITL extension?~~ **Resolved (WP-02):** through a2a-go v2.6.0 with `a2aext.NewActivator`, the structured payload arrives; a2a-go v2.6.0's `a2aext.NewActivator` sends `A2A-Extensions` when, and only when, the agent card lists the URI; without the activator, or with a card listing no extension, no header is sent and no payload arrives (measured with controls; matches `a2aext/activator.go`). Payloads are untyped, so courier defines its own structs. Pass the full `.well-known/agent-card.json` URL to `agentcard.Resolve`, and override the card's in-cluster URL with the front door. | Phase 0 |
 | Q2 | What are the rate limits of `chat.startStream` and `chat.update` under many concurrent threads? (Method choice resolved in 8.3.) | Phase 0 |
-| Q3 | How does kagent 1.0 OIDC mode authenticate a non-human service identity, and what claim becomes the session owner? **Partly answered (WP-02):** with `userIdClaim: email` the owner is the `email` claim, and a different email gets `-31403`; the default is `sub` (from source). WP-03 confirms with a second real identity behind the front door. | Phase 0 |
+| Q3 | How does kagent 1.0 OIDC mode authenticate a non-human service identity, and what claim becomes the session owner? **Partly answered (WP-02):** with `userIdClaim: email` the owner is the `email` claim, and a different email gets `-31403` (for both send and `GetTask`; a token with no `email` is also refused); the default is `sub` (from source). WP-03 confirms with a second real identity behind the front door. | Phase 0 |
 | Q4 | Final API group name and project license for the OSS release. | Phase 6 |
 | Q6 | Is one Binding per channel too restrictive for teams wanting several agents in one channel? | Pilot review |
 | Q7 | Which team runs the pilot, and which alerts (by name and severity) are routed first? | Before Phase 2 |
