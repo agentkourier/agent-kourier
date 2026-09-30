@@ -541,6 +541,13 @@ this with an outbox:
 5. Interaction prompts (8.4) are posts too, so they go through the outbox with role
    `reply` and the interaction ID as the source ID. Outbox IDs derive from source and
    role, so they cannot collide with agent replies.
+6. Streamed messages (8.3) are the exception to step 3. `chat.startStream` creates the
+   message, but metadata can be attached only when the stream stops (to be confirmed
+   in WP-04). Courier records the stream's ts in the outbox immediately after
+   `startStream` returns. A crash inside that window cannot be reconciled from history
+   and is accepted as an at-least-once duplicate, with the orphaned stream left to
+   Slack's stream timeout. If WP-04 finds `startStream` accepts metadata, the window
+   closes and this exception is removed.
 
 ### 8.7 Feedback
 
@@ -685,6 +692,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | R12 | **Sparse or biased feedback.** Few votes, or votes only on bad answers, skew the go/no-go. | Medium | Minimum of 20 rated investigations. Weekly review. Engagement is measured alongside ratings. |
 | R13 | **kagent 1.0 GA slips or changes shape**, stranding courier on an alpha. | Medium | The pilot is explicitly disposable. Changes stay in the dialect. The go/no-go is about value, independent of GA timing. |
 | R14 | A team forgets `continue: true`, putting courier in its paging path. | Medium | Runbook check before enabling a route during the pilot. In hardening, the controller reads `AlertmanagerConfig` resources that target courier's webhook URL and sets a warning condition on the Binding when a route lacks `continue: true`. |
+| R16 | A crash between `chat.startStream` returning and courier recording the stream's ts leaves a duplicate message and an orphaned stream (8.6 step 6). | Low | ts recorded immediately; window is one local write. WP-04 checks whether startStream accepts metadata, which would close it. |
 | R15 | ~~kagent 1.0 needs Agent Substrate with gVisor, which may not run in kind on Docker Desktop for Mac.~~ **Resolved by WP-01:** the full tier runs on macOS on Apple silicon (arm64; gVisor uses the systrap platform, no KVM), about 1.9 to 2.1 GiB idle, up in about three minutes (148 to 180 s measured). amd64 and Linux are expected from kagent's own CI but not measured. | Low | Pins matter (kagent 1.0.0-alpha5, Substrate 0.3.0-alpha1). |
 
 ## 15. Open questions
