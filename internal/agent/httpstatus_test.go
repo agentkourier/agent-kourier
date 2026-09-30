@@ -22,7 +22,7 @@ func TestReconnectStopsOnARefusedRequest(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				send := make(chan item)
 				refused := fmt.Errorf("get task: %w", &dialect.HTTPStatusError{Code: tc.code})
-				m := &memConn{sends: []chan item{send}, gets: []getResult{{task: nil, err: refused}}}
+				m := newMemConn(t, []chan item{send}, nil, getResult{err: refused})
 				s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 3 }))
 				s.feed(send, item{ev: working()})
 				s.feed(send, item{err: io.ErrUnexpectedEOF})

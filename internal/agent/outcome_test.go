@@ -17,7 +17,7 @@ import (
 func TestSilentWorkingTaskFailsAfterMaxReconnects(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, sub1, sub2, sub3 := make(chan item), make(chan item), make(chan item), make(chan item)
-		m := &memConn{sends: []chan item{send}, subs: []chan item{sub1, sub2, sub3}, gets: []getResult{{task: task(a2a.TaskStateWorking, "")}}}
+		m := newMemConn(t, []chan item{send}, []chan item{sub1, sub2, sub3}, getResult{task: task(a2a.TaskStateWorking, "")})
 		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 3 }))
 		s.feed(send, item{ev: working()})
 		s.feed(send, item{err: io.ErrUnexpectedEOF})
@@ -42,7 +42,7 @@ func countOf(calls []string, name string) int {
 func TestOutcomeIsUnknownWhenTheStreamIsLostBeforeATaskIsNamed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send := make(chan item)
-		m := &memConn{sends: []chan item{send}}
+		m := newMemConn(t, []chan item{send}, nil)
 		s := sendAsync(t, memAgent(t, m, nil))
 		s.feed(send, item{err: io.ErrUnexpectedEOF})
 		err := s.result()
@@ -59,7 +59,7 @@ func TestOutcomeIsUnknownWhenTheStreamIsLostBeforeATaskIsNamed(t *testing.T) {
 func TestSourceFailureDuringReconnectKeepsTheTask(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, boom := make(chan item), errors.New("secret not found")
-		m := &memConn{t: t, sends: []chan item{send}}
+		m := newMemConn(t, []chan item{send}, nil)
 		var calls int
 		source := func(context.Context) (Conn, error) {
 			if calls++; calls > 1 {

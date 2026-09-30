@@ -137,7 +137,8 @@ func TestCancelOfWedgedTaskIgnoresTheCallersCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, stop := context.WithCancel(t.Context())
 		send := make(chan item)
-		m := &memConn{sends: []chan item{send}, onCancel: stop}
+		m := newMemConn(t, []chan item{send}, nil)
+		m.onCancel = stop
 		agent := memAgent(t, m, nil)
 		done := make(chan error, 1)
 		go func() { done <- agent.Answer(ctx, message(""), nil) }()

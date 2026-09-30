@@ -28,10 +28,17 @@ type memConn struct {
 	mu          sync.Mutex
 	log         []string
 	times       []time.Time
+	reported    bool // an unscripted call has been reported
 	sends, subs []chan item
 	gets        []getResult
 	onCancel    func() // runs at the start of CancelTask, for a test to cancel a context at that moment
 	list        func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error)
+}
+
+// newMemConn returns a memConn that fails t on an unscripted call. A test that needs list or
+// onCancel sets them on the result.
+func newMemConn(t *testing.T, sends, subs []chan item, gets ...getResult) *memConn {
+	return &memConn{t: t, sends: sends, subs: subs, gets: gets}
 }
 
 type getResult struct {
@@ -53,21 +60,27 @@ func (m *memConn) calls() []string {
 }
 
 // at returns when the first call or stream end named entry was recorded.
-func (m *memConn) at(entry string) time.Time {
+// It reports false if there is no such entry, which a test that already failed can hit.
+func (m *memConn) at(entry string) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, e := range m.log {
 		if e == entry {
-			return m.times[i]
+			return m.times[i], true
 		}
 	}
-	m.t.Errorf("memConn: %q was never recorded", entry)
-	return time.Time{}
+	return time.Time{}, false
 }
 
-// unscripted fails the test for a call it did not expect, and returns the error to hand back.
+// unscripted fails the test for a call it did not expect, and returns the error to hand
+// back. Only the first is reported: a runaway loop would print thousands.
 func (m *memConn) unscripted(call string) error {
-	m.t.Errorf("memConn: unscripted call %s", call)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.reported {
+		m.reported = true
+		m.t.Errorf("memConn: unscripted call %s", call)
+	}
 	return errors.New("memConn: unscripted call " + call)
 }
 
@@ -118,11 +131,11 @@ func (m *memConn) stream(ctx context.Context, name, entry string, queue *[]chan 
 func (m *memConn) GetTask(_ context.Context, req *a2a.GetTaskRequest) (*a2a.Task, error) {
 	m.record("get " + string(req.ID))
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if len(m.gets) == 0 {
-		m.t.Errorf("memConn: unscripted call get %s", req.ID)
-		return nil, errors.New("memConn: unscripted call get")
+		m.mu.Unlock()
+		return nil, m.unscripted("get " + string(req.ID))
 	}
+	defer m.mu.Unlock()
 	r := m.gets[0]
 	if len(m.gets) > 1 {
 		m.gets = m.gets[1:]
@@ -141,11 +154,9 @@ func (m *memConn) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*
 	return &a2a.Task{ID: req.ID, Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
 }
 
-// memAgent returns an Agent over m with a 10 s watchdog and a 1 s reconnect pause. It also
-// gives m the test to fail on an unscripted call.
+// memAgent returns an Agent over m with a 10 s watchdog and a 1 s reconnect pause.
 func memAgent(t *testing.T, m *memConn, tune func(*Config)) *Agent {
 	t.Helper()
-	m.t = t
 	cfg := Config{InactivityTimeout: 10 * time.Second, ReconnectDelay: time.Second}
 	if tune != nil {
 		tune(&cfg)
@@ -172,17 +183,31 @@ func sendAsync(t *testing.T, a *Agent) *sending {
 // returned, so a regression that ends the send early is an assertion and not a deadlock.
 func (s *sending) feed(ch chan<- item, it item) { feed(s.t, ch, it, s.done) }
 
-func (s *sending) result() error { return <-s.done }
+// result waits for Send to return. A minute on the fake clock is far longer than any test
+// needs, so a Send that never returns fails the test fast, on a runaway loop or a hang.
+func (s *sending) result() error {
+	s.t.Helper()
+	select {
+	case err := <-s.done:
+		return err
+	case <-time.After(time.Minute):
+		s.t.Fatalf("Send never returned")
+		return nil
+	}
+}
 
 func (s *sending) events() []Event { return *s.got }
 
-// feed sends it on ch, or fails the test if the send under test finished first.
+// feed sends it on ch, or fails the test if the send under test finished first, or never
+// read the stream: a minute on the fake clock is far longer than any test needs.
 func feed(t *testing.T, ch chan<- item, it item, done <-chan error) {
 	t.Helper()
 	select {
 	case ch <- it:
 	case err := <-done:
 		t.Fatalf("the send returned (%v) while the test was still feeding its stream", err)
+	case <-time.After(time.Minute):
+		t.Fatalf("the stream was never read")
 	}
 }
 

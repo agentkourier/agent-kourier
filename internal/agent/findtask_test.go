@@ -78,10 +78,11 @@ func TestFindTaskFollowsPagesWithoutRelyingOnOrder(t *testing.T) {
 			"p3": listOf("", holding("t4", a2a.TaskStateWorking, "turn")), // a second holder, still running
 		}
 		var tokens []string
-		m := &memConn{list: func(_ context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+		m := newMemConn(t, nil, nil)
+		m.list = func(_ context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 			tokens = append(tokens, req.PageToken)
 			return pages[req.PageToken], nil
-		}}
+		}
 		task, holders, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
 		if err != nil || task == nil || task.ID != "t4" {
 			t.Errorf("task = %+v, %v; want t4: a running holder wins over a finished one on an earlier page", task, err)
@@ -98,9 +99,10 @@ func TestFindTaskFollowsPagesWithoutRelyingOnOrder(t *testing.T) {
 // A page token seen before is a loop: fail at once, not after the page bound.
 func TestFindTaskFailsAtOnceOnARepeatedPageToken(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m := &memConn{list: func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+		m := newMemConn(t, nil, nil)
+		m.list = func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 			return listOf("again", holding("t1", a2a.TaskStateCompleted, "x")), nil
-		}}
+		}
 		if _, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil {
 			t.Error("want an error for a token that repeats")
 		}
@@ -114,10 +116,11 @@ func TestFindTaskFailsAtOnceOnARepeatedPageToken(t *testing.T) {
 func TestFindTaskGivesUpOnAListThatNeverEnds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var n int
-		m := &memConn{list: func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+		m := newMemConn(t, nil, nil)
+		m.list = func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 			n++
 			return listOf(fmt.Sprint("page", n), holding("t1", a2a.TaskStateCompleted, "x")), nil
-		}}
+		}
 		if _, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn"); err == nil || n != maxListPages {
 			t.Errorf("err = %v after %d pages, want an error at the bound of %d", err, n, maxListPages)
 		}
@@ -145,10 +148,11 @@ func TestFindTaskErrors(t *testing.T) {
 // Each page is a unary call under UnaryTimeout, and so is resolving the connection.
 func TestFindTaskHasADeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		hang := &memConn{list: func(ctx context.Context, _ *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+		hang := newMemConn(t, nil, nil)
+		hang.list = func(ctx context.Context, _ *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
-		}}
+		}
 		if _, _, err := memAgent(t, hang, func(c *Config) { c.UnaryTimeout = time.Second }).FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("hung page: err = %v, want DeadlineExceeded", err)
 		}

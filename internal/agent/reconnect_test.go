@@ -91,7 +91,7 @@ func TestWatchdogCancelsASilentHTTPStreamAndReconnects(t *testing.T) {
 func TestWatchdogResetsOnEveryEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ch := make(chan item)
-		m := &memConn{sends: []chan item{ch}}
+		m := newMemConn(t, []chan item{ch}, nil)
 		s := sendAsync(t, memAgent(t, m, nil))
 		for range 6 {
 			time.Sleep(6 * time.Second) // 36 s in all, far past the 10 s window
@@ -112,7 +112,7 @@ func TestWatchdogResetsOnEveryEvent(t *testing.T) {
 func TestWatchdogCancelsASilentStreamThenReconciles(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, sub := make(chan item), make(chan item)
-		m := &memConn{sends: []chan item{send}, subs: []chan item{sub}, gets: []getResult{{task: task(a2a.TaskStateWorking, "tick 1 ")}}}
+		m := newMemConn(t, []chan item{send}, []chan item{sub}, getResult{task: task(a2a.TaskStateWorking, "tick 1 ")})
 		s := sendAsync(t, memAgent(t, m, nil))
 		s.feed(send, item{ev: working()})
 		s.feed(send, item{ev: delta("tick 1 ")})
@@ -129,10 +129,16 @@ func TestWatchdogCancelsASilentStreamThenReconciles(t *testing.T) {
 		if got, want := texts(s.events()), []string{"tick 1 ", "tick 1 tick 2"}; !slices.Equal(got, want) {
 			t.Errorf("texts = %q, want %q", got, want)
 		}
-		if d := m.at("send ended").Sub(m.at("send")); d != 10*time.Second { // the events came at once: the silence is the window
+		sent, ok1 := m.at("send")
+		cut, ok2 := m.at("send ended")
+		got, ok3 := m.at("get t1")
+		if !ok1 || !ok2 || !ok3 { // the calls check above has already failed
+			return
+		}
+		if d := cut.Sub(sent); d != 10*time.Second { // the events came at once: the silence is the window
 			t.Errorf("the stream lived %v, want the 10 s window", d)
 		}
-		if d := m.at("get t1").Sub(m.at("send ended")); d != time.Second {
+		if d := got.Sub(cut); d != time.Second {
 			t.Errorf("GetTask came %v after the cut, want ReconnectDelay (1s)", d)
 		}
 	})
@@ -142,7 +148,7 @@ func TestWatchdogCancelsASilentStreamThenReconciles(t *testing.T) {
 func TestReconnectStopsAtAFinishedTask(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send := make(chan item)
-		m := &memConn{sends: []chan item{send}, gets: []getResult{{task: task(a2a.TaskStateCompleted, "ab")}}}
+		m := newMemConn(t, []chan item{send}, nil, getResult{task: task(a2a.TaskStateCompleted, "ab")})
 		s := sendAsync(t, memAgent(t, m, nil))
 		s.feed(send, item{ev: delta("a")})
 		s.feed(send, item{err: io.ErrUnexpectedEOF})
@@ -162,7 +168,7 @@ func TestReconnectStopsAtAFinishedTask(t *testing.T) {
 func TestReconnectBudgetResetsWhenAStreamChangesSomething(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send, sub1, sub2 := make(chan item), make(chan item), make(chan item)
-		m := &memConn{sends: []chan item{send}, subs: []chan item{sub1, sub2}, gets: []getResult{{task: task(a2a.TaskStateWorking, "a")}}}
+		m := newMemConn(t, []chan item{send}, []chan item{sub1, sub2}, getResult{task: task(a2a.TaskStateWorking, "a")})
 		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 1 }))
 		s.feed(send, item{ev: delta("a")})
 		s.feed(send, item{err: io.ErrUnexpectedEOF})
@@ -181,7 +187,7 @@ func TestReconnectBudgetResetsWhenAStreamChangesSomething(t *testing.T) {
 func TestReconnectGivesUp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		send := make(chan item)
-		m := &memConn{sends: []chan item{send}, gets: []getResult{{err: errors.New("down")}}}
+		m := newMemConn(t, []chan item{send}, nil, getResult{err: errors.New("down")})
 		s := sendAsync(t, memAgent(t, m, func(c *Config) { c.MaxReconnects = 2 }))
 		s.feed(send, item{ev: working()})
 		s.feed(send, item{err: io.ErrUnexpectedEOF})
