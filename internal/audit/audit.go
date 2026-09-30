@@ -36,10 +36,9 @@ import (
 )
 
 const (
-	maxField   = 256 // longest identifier kept, in bytes
-	maxReason  = 120 // longest agent-derived reason kept, in bytes
-	maxError   = 300 // longest returned error text, in bytes
-	maxHolders = 5   // most duplicate-run task IDs listed
+	maxField  = 256 // longest identifier kept, in bytes
+	maxReason = 120 // longest agent-derived reason kept, in bytes
+	maxError  = 300 // longest returned error text, in bytes
 )
 
 // Actor is who an entry is attributed to, where known (spec 8.5): the Slack user, their
@@ -180,9 +179,14 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 	if len(c.Holders) > 0 {
 		c.TaskID = orElse(c.TaskID, c.Holders[0])
 	}
+	switch c.Op {
+	case OpSend, OpAnswer, OpCancel, OpFindTask:
+	default:
+		return fail(store.ErrInvalid, "audit agent call: unknown op %q", c.Op)
+	}
 	subj := subject(c.TaskID, c.ContextID, c.MessageID)
 	if subj == "" {
-		return fmt.Errorf("audit %s: a task, context or message ID is required: %w", c.Op, store.ErrInvalid)
+		return fail(store.ErrInvalid, "audit %s: a task, context or message ID is required", c.Op)
 	}
 	outcome := "ok"
 	switch {
@@ -193,11 +197,18 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 	case c.Op == OpFindTask && len(c.Holders) == 1:
 		outcome = "found"
 	case c.Op == OpFindTask:
-		ids := make([]string, 0, maxHolders)
-		for _, h := range c.Holders[:min(len(c.Holders), maxHolders)] {
-			ids = append(ids, clean(string(h), maxField))
+		outcome = "duplicate_run holders=" + strconv.Itoa(len(c.Holders)) + " ids="
+		room := store.MaxAuditOutcome - len(c.Op) - len(": ") - len(outcome)
+		for i, h := range c.Holders {
+			id := clean(string(h), maxField)
+			if i > 0 {
+				id = "," + id
+			}
+			if len(id) > room {
+				break // a whole id or none: a cut id would name no task
+			}
+			outcome, room = outcome+id, room-len(id)
 		}
-		outcome = "duplicate_run holders=" + strconv.Itoa(len(c.Holders)) + " ids=" + strings.Join(ids, ",")
 	}
 	return w.append(ctx, store.AuditAgentCall, a, w.opts.Now(), subj, string(c.Op)+": "+outcome)
 }
@@ -207,7 +218,7 @@ func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 	switch d.Result {
 	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied:
 	default:
-		return fmt.Errorf("audit decision %q: unknown result %q: %w", d.InteractionID, d.Result, store.ErrInvalid)
+		return fail(store.ErrInvalid, "audit decision %q: unknown result %q", d.InteractionID, d.Result)
 	}
 	outcome := string(d.Result)
 	if d.Answer != nil {
@@ -243,12 +254,12 @@ func (w *Writer) UnusablePause(ctx context.Context, a Actor, taskID a2a.TaskID, 
 }
 
 // UnusablePauseCancel records the cancel of an unusable pause: ok when cancelErr is nil,
-// failed otherwise. Its text is never stored. A failed write here must not stop the cancel
+// failed with its typed tags otherwise. Its text is never stored. A failed write here must not stop the cancel
 // (spec 8.6 step 7), so call it after the cancel, whatever the write returns.
 func (w *Writer) UnusablePauseCancel(ctx context.Context, a Actor, taskID a2a.TaskID, contextID string, cancelErr error) error {
 	outcome := "unusable_pause_cancel: ok"
 	if cancelErr != nil {
-		outcome = "unusable_pause_cancel: failed"
+		outcome = "unusable_pause_cancel: failed " + strings.Join(errorTags(cancelErr), ",")
 	}
 	return w.pause(ctx, a, taskID, contextID, outcome)
 }
@@ -301,8 +312,11 @@ func errorTags(err error) []string {
 	}{
 		{agent.ErrCredentialsRejected, "credentials_rejected"}, {agent.ErrNotSent, "not_sent"},
 		{agent.ErrOutcomeUnknown, "outcome_unknown"}, {agent.ErrStreamLost, "stream_lost"}, {agent.ErrBusy, "busy"},
-		{agent.ErrForbidden, "forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {context.Canceled, "canceled"},
-		{context.DeadlineExceeded, "deadline_exceeded"},
+		{agent.ErrForbidden, "forbidden"}, {agent.ErrAnswerRejected, "answer_rejected"}, {agent.ErrTokenRequired, "token_required"},
+		{agent.ErrPoolClosed, "pool_closed"}, {agent.ErrStreamingUnsupported, "streaming_unsupported"},
+		// Answer's automatic cancel (R17) can fail and is joined to ErrAnswerRejected: a wedged task must not read as cleared.
+		{a2a.ErrTaskNotCancelable, "task_not_cancelable"}, {a2a.ErrTaskNotFound, "task_not_found"},
+		{context.Canceled, "canceled"}, {context.DeadlineExceeded, "deadline_exceeded"},
 	} {
 		if errors.Is(err, t.err) {
 			tags = append(tags, t.tag)

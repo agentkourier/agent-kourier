@@ -105,11 +105,18 @@ func TestAgentCall(t *testing.T) {
 		{"cancel busy", Call{Op: OpCancel, TaskID: "t1", Err: agent.ErrBusy}, "task=t1", "cancel: failed busy"},
 		{"other error", Call{Op: OpCancel, TaskID: "t1", Err: errors.New("boom")}, "task=t1", "cancel: failed error"},
 		{"find task absent", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1"}, "context=c1 message=m1", "find_task: absent"},
+		{"token required (D34, never downgrade)", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("binding ns/b: %w", agent.ErrTokenRequired)}, "message=m1", "send: failed token_required"},
+		{"pool closed", Call{Op: OpSend, MessageID: "m1", Err: agent.ErrPoolClosed}, "message=m1", "send: failed pool_closed"},
+		{"streaming unsupported", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("agent ns/a: %w", agent.ErrStreamingUnsupported)}, "message=m1", "send: failed streaming_unsupported"},
+		{"cancel not cancelable", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotCancelable}, "task=t1", "cancel: failed task_not_cancelable"},
+		{"cancel task not found", Call{Op: OpCancel, TaskID: "t1", Err: a2a.ErrTaskNotFound}, "task=t1", "cancel: failed task_not_found"},
+		{"answer rejected and its cancel failed (R17)", Call{Op: OpAnswer, TaskID: "t1", Err: errors.Join(agent.ErrAnswerRejected, a2a.ErrTaskNotCancelable)}, "task=t1",
+			"answer: failed answer_rejected,task_not_cancelable"},
 		{"find task found", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"ta"}}, "task=ta context=c1 message=m1", "find_task: found"},
 		{"find task duplicate run", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"ta", "tb"}},
 			"task=ta context=c1 message=m1", "find_task: duplicate_run holders=2 ids=ta,tb"},
-		{"find task many holders", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"t1", "t2", "t3", "t4", "t5", "t6", "t7"}},
-			"task=t1 context=c1 message=m1", "find_task: duplicate_run holders=7 ids=t1,t2,t3,t4,t5"},
+		{"find task many short holders", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: []a2a.TaskID{"t1", "t2", "t3", "t4", "t5", "t6", "t7"}},
+			"task=t1 context=c1 message=m1", "find_task: duplicate_run holders=7 ids=t1,t2,t3,t4,t5,t6,t7"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, s := newWriter(t)
@@ -126,6 +133,26 @@ func TestAgentCall(t *testing.T) {
 	w, _ := newWriter(t)
 	if err := w.AgentCall(context.Background(), who, Call{Op: OpSend}); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("a call naming no task, context or message = %v, want ErrInvalid", err)
+	}
+	if err := w.AgentCall(context.Background(), who, Call{Op: "send: ok Bearer SECRETA1", TaskID: "t1"}); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("a call with a free-text Op = %v, want ErrInvalid", err)
+	}
+}
+
+func TestDuplicateRunListsOnlyWholeIDsThatFit(t *testing.T) {
+	w, s := newWriter(t)
+	var holders []a2a.TaskID
+	for i := range 5 {
+		holders = append(holders, a2a.TaskID(fmt.Sprintf("%08d-aaaa-bbbb-cccc-dddddddddddd", i)))
+	}
+	if err := w.AgentCall(context.Background(), who, Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1", Holders: holders}); err != nil {
+		t.Fatalf("AgentCall: %v", err)
+	}
+	got := only(t, s).Outcome
+	const prefix = "find_task: duplicate_run holders=5 ids="
+	ids := strings.Split(strings.TrimPrefix(got, prefix), ",")
+	if !strings.HasPrefix(got, prefix) || len(got) > store.MaxAuditOutcome || len(ids) != 4 || len(ids[3]) != 36 {
+		t.Errorf("outcome (%d bytes) = %q, want holders=5 with the 4 whole UUIDs that fit and none cut", len(got), got)
 	}
 }
 
@@ -180,7 +207,8 @@ func TestUnusablePause(t *testing.T) {
 	for _, c := range []struct {
 		err  error
 		want string
-	}{{nil, "unusable_pause_cancel: ok"}, {errors.New("boom"), "unusable_pause_cancel: failed"}} {
+	}{{nil, "unusable_pause_cancel: ok"}, {errors.New("boom"), "unusable_pause_cancel: failed error"},
+		{fmt.Errorf("x: %w", errors.Join(agent.ErrNotSent, agent.ErrCredentialsRejected)), "unusable_pause_cancel: failed credentials_rejected,not_sent"}} {
 		if err := w.UnusablePauseCancel(ctx, who, "t1", "c1", c.err); err != nil {
 			t.Fatalf("UnusablePauseCancel: %v", err)
 		}
@@ -278,6 +306,9 @@ func TestReturnedErrorsAreCleanAndStillUnwrap(t *testing.T) {
 		"event binding":   w.Event(ctx, Actor{}, SourceAlert, leaky, EventAccepted),
 		"pause subject":   w.UnusablePause(ctx, who, "", "", errors.New(leaky)),
 		"pause cause nil": w.UnusablePause(ctx, who, "t1", "", nil),
+		"call op":         w.AgentCall(ctx, who, Call{Op: Op(leaky), TaskID: "t1"}),
+		"call subject":    w.AgentCall(ctx, who, Call{Op: OpSend, Err: errors.New(leaky)}),
+		"decision result": w.Decision(ctx, who, Decision{InteractionID: leaky, Result: DecisionResult(leaky)}),
 	} {
 		if !errors.Is(err, store.ErrInvalid) || strings.Contains(err.Error(), "SECRETA") {
 			t.Errorf("%s: err = %v, want ErrInvalid with no secret in its text", name, err)
