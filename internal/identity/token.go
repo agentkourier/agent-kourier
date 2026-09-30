@@ -11,12 +11,34 @@ package identity
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
+
+// ErrControlCharacter is what a Secret value with a control character wraps, most often the
+// trailing newline that kubectl create secret --from-file keeps. The value is never trimmed:
+// a token that differs from what the operator stored is not the operator's to guess at.
+// Neither the Authorization header nor any other can carry it.
+var ErrControlCharacter = errors.New("identity: the value contains a control character")
+
+// checkValue returns an error, naming the Secret and key and never the value, when v cannot
+// be sent: it is empty, or holds a control character. The reader's own errors name them, so
+// this is the only place that has to.
+func checkValue(v secret.Value, namespace, name, key string) error {
+	switch s := v.Reveal(); {
+	case s == "":
+		return fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secret.ErrEmptyValue)
+	case strings.ContainsFunc(s, unicode.IsControl):
+		return fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, ErrControlCharacter)
+	}
+	return nil
+}
 
 // SecretReader reads one value of a Secret. *k8ssecrets.Resolver implements it. An empty key
 // means v1alpha1.DefaultSecretKey.
@@ -62,11 +84,11 @@ func (s *StaticToken) GoString() string { return s.String() }
 func (s *StaticToken) Token(ctx context.Context) (secret.Value, error) {
 	key := cmp.Or(s.ref.Key, v1alpha1.DefaultSecretKey)
 	v, err := s.reader.Value(ctx, s.namespace, s.ref.Name, key)
-	if err == nil && v.Reveal() == "" {
-		err = secret.ErrEmptyValue
+	if err == nil {
+		err = checkValue(v, s.namespace, s.ref.Name, key)
 	}
 	if err != nil {
-		return secret.Value{}, fmt.Errorf("%w: secret %s/%s key %q: %w", agent.ErrTokenUnreadable, s.namespace, s.ref.Name, key, err)
+		return secret.Value{}, fmt.Errorf("%w: %w", agent.ErrTokenUnreadable, err)
 	}
 	return v, nil
 }

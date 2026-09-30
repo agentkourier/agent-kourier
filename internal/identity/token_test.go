@@ -100,10 +100,13 @@ func TestStaticTokenErrors(t *testing.T) {
 		r    *fakeReader
 		want error
 	}{
-		{"secret missing", &fakeReader{err: fmt.Errorf("secret sre/creds: %w", config.ErrSecretNotFound)}, config.ErrSecretNotFound},
+		{"secret missing", &fakeReader{err: fmt.Errorf("secret sre/creds key \"token\": %w", config.ErrSecretNotFound)}, config.ErrSecretNotFound},
 		{"key missing", newReader(nil), secret.ErrKeyNotFound},
-		{"empty value", &fakeReader{err: fmt.Errorf("key: %w", secret.ErrEmptyValue)}, secret.ErrEmptyValue},
+		{"empty value", &fakeReader{err: fmt.Errorf("secret sre/creds key \"token\": %w", secret.ErrEmptyValue)}, secret.ErrEmptyValue},
 		{"reader returns an empty value without an error", newReader(map[string]string{"sre/creds/token": ""}), secret.ErrEmptyValue},
+		// kubectl create secret --from-file keeps the file's trailing newline.
+		{"trailing newline", newReader(map[string]string{"sre/creds/token": "tok\n"}), ErrControlCharacter},
+		{"NUL inside", newReader(map[string]string{"sre/creds/token": "to\x00k"}), ErrControlCharacter},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, err := NewStaticToken(tc.r, "sre", v1alpha1.SecretKeyRef{Name: "creds"}).Token(t.Context())
@@ -113,9 +116,9 @@ func TestStaticTokenErrors(t *testing.T) {
 			if v.Reveal() != "" {
 				t.Error("a failed read returned a value")
 			}
-			for _, name := range []string{"sre", "creds", "token"} {
-				if !strings.Contains(err.Error(), name) {
-					t.Errorf("error %q does not name %q", err, name)
+			for _, name := range []string{"sre/creds", `"token"`} {
+				if got := strings.Count(err.Error(), name); got != 1 {
+					t.Errorf("error %q names %s %d times, want once", err, name, got)
 				}
 			}
 		})

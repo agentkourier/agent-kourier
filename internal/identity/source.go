@@ -11,6 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // Auditor records an agent call. *audit.Writer implements it.
@@ -90,6 +91,9 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 		if err != nil {
 			return dialect.Credentials{}, err
 		}
+		if tok.Reveal() == "" { // whatever the source, an empty token must not leave the userId
+			return dialect.Credentials{}, fmt.Errorf("%w: %w", agent.ErrTokenUnreadable, secret.ErrEmptyValue)
+		}
 		c.Token = tok.Reveal()
 	}
 	for _, h := range s.backend.Spec.Headers {
@@ -97,9 +101,11 @@ func (s *Source) Credentials(ctx context.Context) (dialect.Credentials, error) {
 		if ref := h.ValueSecretRef; ref != nil {
 			key := cmp.Or(ref.Key, v1alpha1.DefaultSecretKey)
 			v, err := s.reader.Value(ctx, s.backend.Namespace, ref.Name, key)
+			if err == nil {
+				err = checkValue(v, s.backend.Namespace, ref.Name, key)
+			}
 			if err != nil {
-				return dialect.Credentials{}, fmt.Errorf("%w: header %q from secret %s/%s key %q: %w",
-					agent.ErrHeaderUnreadable, h.Name, s.backend.Namespace, ref.Name, key, err)
+				return dialect.Credentials{}, fmt.Errorf("%w: header %q: %w", agent.ErrHeaderUnreadable, h.Name, err)
 			}
 			val = v.Reveal()
 		}

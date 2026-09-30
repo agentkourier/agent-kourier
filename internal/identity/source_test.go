@@ -177,20 +177,26 @@ func (d *spyDialect) Connect(context.Context, *v1alpha1.AgentBackend, v1alpha1.A
 func TestUnreadableSecretFailsTheTurn(t *testing.T) {
 	header := v1alpha1.Header{Name: "X-Api-Key", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "gw"}}
 	for _, tc := range []struct {
-		name string
-		vals map[string]string
-		want error
+		name        string
+		vals        map[string]string
+		want, cause error
+		names       string // the Secret the error must name
 	}{
-		{"token secret missing", map[string]string{"platform/gw/token": "k"}, agent.ErrTokenUnreadable},
-		{"header secret missing", map[string]string{"sre/creds/token": "t"}, agent.ErrHeaderUnreadable},
+		{"token secret missing", map[string]string{"platform/gw/token": "k"}, agent.ErrTokenUnreadable, secret.ErrKeyNotFound, "sre/creds"},
+		{"header secret missing", map[string]string{"sre/creds/token": "t"}, agent.ErrHeaderUnreadable, secret.ErrKeyNotFound, "platform/gw"},
+		{"token with a trailing newline", map[string]string{"sre/creds/token": "t\n", "platform/gw/token": "k"}, agent.ErrTokenUnreadable, ErrControlCharacter, "sre/creds"},
+		{"header with a trailing newline", map[string]string{"sre/creds/token": "t", "platform/gw/token": "k\n"}, agent.ErrHeaderUnreadable, ErrControlCharacter, "platform/gw"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(v1alpha1.Identity{UserID: "svc", TokenSecretRef: tokenRef()}, header)
 			f.reader.vals = tc.vals
 			s := f.source()
 			got, err := s.Credentials(t.Context())
-			if !errors.Is(err, tc.want) || !errors.Is(err, secret.ErrKeyNotFound) {
-				t.Fatalf("Credentials err = %v, want %v wrapping ErrKeyNotFound", err, tc.want)
+			if !errors.Is(err, tc.want) || !errors.Is(err, tc.cause) {
+				t.Fatalf("Credentials err = %v, want %v wrapping %v", err, tc.want, tc.cause)
+			}
+			if !strings.Contains(err.Error(), tc.names) || !strings.Contains(err.Error(), `"token"`) {
+				t.Errorf("error %q does not name the Secret %s and its key", err, tc.names)
 			}
 			if got.UserID != "" || got.Token != "" || got.Headers != nil {
 				t.Error("a failed Credentials returned something usable; it must fall back to nothing")
@@ -207,6 +213,20 @@ func TestUnreadableSecretFailsTheTurn(t *testing.T) {
 				t.Errorf("%d connects after an unreadable secret, want 0", n)
 			}
 		})
+	}
+}
+
+// TestEmptyTokenFromAnySourceFailsTheTurn: a TokenSource that returns "" without an error must
+// not leave the userId as the identity.
+func TestEmptyTokenFromAnySourceFailsTheTurn(t *testing.T) {
+	f := newFixture(v1alpha1.Identity{UserID: "svc"})
+	s := New(f.binding, f.backend, f.reader, audit.New(f.store, audit.Options{}), Options{Token: &fakeToken{}})
+	got, err := s.Credentials(t.Context())
+	if !errors.Is(err, agent.ErrTokenUnreadable) || !errors.Is(err, secret.ErrEmptyValue) {
+		t.Fatalf("Credentials err = %v, want ErrTokenUnreadable wrapping ErrEmptyValue", err)
+	}
+	if got.UserID != "" || got.Token != "" {
+		t.Errorf("Credentials = %q, %q, want nothing usable", got.UserID, got.Token)
 	}
 }
 
@@ -425,6 +445,10 @@ func TestSecretValuesNeverPrinted(t *testing.T) {
 	delete(f.reader.vals, "platform/gw/token")
 	_, err = s.Credentials(ctx)
 	note("unreadable header", err)
+	f.reader.set("sre/creds/token", canary+"\n")
+	_, err = s.Credentials(ctx)
+	note("token with a newline", err)
+	f.reader.set("sre/creds/token", canary)
 	err = s.Rejected(ctx, audit.Actor{User: "U1"}, audit.Call{Op: audit.OpSend, MessageID: "m", Err: errRejection})
 	note("rejected", err)
 	f.store.err = errors.New("disk full")
