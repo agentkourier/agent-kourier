@@ -424,10 +424,14 @@ Measured here: the pinned image with `--alpha-config` plus `--http-address` prin
 and exits, which matches that symptom. That it was WP-03's actual cause is *inferred*; I did not
 see its pod.
 
-**`X-Kagent-Insecure-Runtime-Identity`** is read only by kagent's TaskStore authenticator, for the
-gRPC runtime methods (`taskstore/authority.go`, *source*), which the door cannot reach (`/agents/`
-only). It is stripped as defence in depth. There is no observable through the door, so that entry
-rests on the config and the source, not on a check.
+**Two strips are defence in depth, resting on config and source, not on a check.**
+- `X-Kagent-Insecure-Runtime-Identity` is read only by kagent's TaskStore authenticator, for the
+  gRPC runtime methods (`taskstore/authority.go`, *source*), which the door cannot reach
+  (`/agents/` only). There is no observable through the door.
+- `X-User-Id` has no observable either, while `X-Agent-Name` is stripped: without it kagent never
+  reads `X-User-Id` (`proxy_authn.go`, *source*). The reviewer removed only the `X-User-Id` entry
+  and `verify.sh` still passed (83 ok, 0 FAIL, measured). The entry matters only if the
+  `X-Agent-Name` strip is ever lost, and the header rows would still pass in that case.
 
 **What `verify.sh` gained** (Dex user B, `identity-b@example.test`, from WP-03):
 - the card advertises `"streaming":true` (WP-27e needs it);
@@ -501,7 +505,21 @@ and `slow-agent`:
 `streaming` is **true** (measured; *source*: `gateway.go` sets `Streaming: true` for every agent).
 The card's two `supportedInterfaces` URLs name `kagent-controller.kagent.svc:8083`, not the door.
 
-**Not covered.** `CancelTask`, `SubscribeToTask` and `SendStreamingMessage` under the spoof (same
-authenticator path, *inferred*); a strip of `X-Agent-Name` alone was not mutation-tested (WP-03's
-*source* reading says it closes both query and header rows); the runtime-identity entry (above).
-WP-03's own `oidc-headerspoof` case was not re-run here; `verify.sh` is the proof.
+**Stream, `SubscribeToTask` and `CancelTask` under the spoof** (measured by the reviewer, not by
+`verify.sh`). Through the door, with `X-Agent-Name` plus `X-User-Id: <A>`, all five probes (send,
+stream, `GetTask`, `SubscribeToTask`, `CancelTask`) got `-31403`, and A's running task stayed
+`WORKING`. Straight to 8083 the same spoof gets `SubscribeToTask` a `WORKING` snapshot, and
+`CancelTask` **cancelled A's running task**. This is the *source* too: kagent authenticates once
+per HTTP request, in `AuthnMiddleware` (`go/core/pkg/auth/auth.go:133`), so every A2A method on
+`/agents/` takes the same path.
+
+**Strip entries and what removes them** (mutations; the first is the reviewer's, the second is my
+run, the table's third row, which also dropped `X-Share-Token`):
+- Only the `X-User-Id` entry removed: 83 ok, 0 FAIL (above).
+- Only the `X-Agent-Name` entry removed (`X-User-Id` still stripped): the two header rows pass,
+  because `X-User-Id` is gone and B falls back to its own `sub`, and the `?user_id=` row FAILs.
+  So `X-Agent-Name` is the entry that matters, and the `?user_id=` rows are what catch its loss.
+
+**Not covered.** The runtime-identity entry and the `X-User-Id` entry (above). WP-03's own
+`oidc-headerspoof` case was not re-run here; `verify.sh` is the proof. Its two rows that expected
+`COMPLETED` through the door now expect `-31403` (WP-01d).

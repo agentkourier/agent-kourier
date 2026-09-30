@@ -180,7 +180,7 @@ assert "UI door refuses the Binding's token" eq "$(code "$tok" "$UIDOOR/api/agen
 assert "UI door passes a UI-audience token through the fence (200 is the controller's catch-all)" eq "$(code "$(token kagent-ui fake-oauth2-proxy-secret)" "$UIDOOR/api/agents")" 200
 EOF
 
-echo "== courier pod: X-Agent-Name, X-User-Id and X-Share-Token are stripped at the front door"
+echo "== courier pod: the spoof is refused at the door; X-Share-Token is dropped"
 probe courier app.kubernetes.io/name=courier <<'EOF'
 tokA=$(binding_token)
 tokB=$(b_token)

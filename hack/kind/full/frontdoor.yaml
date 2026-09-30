@@ -8,7 +8,8 @@
 # Chosen over agentgateway because the image and the token logic are already in this cluster.
 # Identity-selecting headers: kagent takes the acting user from X-User-Id or ?user_id= whenever
 # X-Agent-Name is present, even with a valid token, and honours X-Share-Token on /agents/ (spec
-# D32, R4; WP-03). The door strips those headers (alpha config below); verify.sh proves it.
+# D32, R4; WP-03). The door strips those headers (alpha config below); verify.sh shows the spoof
+# refused and X-Share-Token dropped. It cannot observe every entry (see the doc's WP-01d section).
 # TEST ONLY: fake client secret; a pilot install issues its own and terminates TLS in front.
 apiVersion: v1
 kind: ConfigMap
@@ -32,7 +33,7 @@ data:
         # Strip-only entries (no values): oauth2-proxy deletes any inbound header whose name matches,
         # case-insensitively and with _ read as - (pkg/middleware/headers.go).
         - name: X-Agent-Name # selects kagent's agent-call path, where the acting user is caller-supplied
-        - name: X-User-Id # the acting user on that path (?user_id= is read only there too)
+        - name: X-User-Id # the acting user on that path; defence in depth while X-Agent-Name is stripped
         - name: X-Share-Token # grants access to another owner's session; courier never uses one
         # Read only by the controller's runtime (TaskStore) RPCs, which /agents/ cannot reach;
         # stripped anyway because it is an unsigned identity claim.
@@ -65,7 +66,7 @@ data:
                 prefix: 'Bearer '
     metricsServer: {}
     providers:
-        - clientID: courier-binding
+        - clientID: courier-binding # the only accepted audience: no --oidc-extra-audience
           clientSecretFile: /etc/oauth2-proxy-secret/client-secret
           azureConfig:
             tenant: common
@@ -101,6 +102,7 @@ data:
     upstreamConfig:
         proxyRawPath: false
         upstreams:
+            # /agents/ is the whole A2A surface (send, stream, card); /api, /mcp and the rest are 404 here.
             - id: /agents/
               path: /agents/
               uri: http://kagent-controller.kagent.svc.cluster.local:8083/agents/
