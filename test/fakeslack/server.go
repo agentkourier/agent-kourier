@@ -12,7 +12,12 @@
 // PostMessageParameters. The tagged items are:
 //
 //   - Auth: accepting the token from the header or the token form field, any
-//     xoxb- token being valid, and the not_authed and invalid_auth codes.
+//     token with the right prefix being valid (xoxb- for the Web API, xapp-
+//     for apps.connections.open), the not_authed and invalid_auth codes, and
+//     invalid_auth for the wrong token type, where Slack may say
+//     not_allowed_token_type.
+//   - Bot identity: a bot post carrying user, bot_id and app_id together, with
+//     no subtype.
 //   - Content limits (validate.go): 50 blocks; 40000 characters of message
 //     text (msg_too_long versus truncation); 3000 of section text and 2000 per
 //     section field, each at least 1, and 10 fields; 150 of header text; 12000
@@ -67,6 +72,8 @@ type Server struct {
 	srv *httptest.Server // nil when used only as a handler
 	now func() time.Time
 
+	bot botIdentity
+
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
@@ -88,6 +95,7 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 func NewHandler(opts ...Option) *Server {
 	s := &Server{
 		now:      time.Now,
+		bot:      botIdentity{user: "UFAKEBOT", id: "BFAKEBOT", app: "AFAKEAPP"},
 		channels: map[string][]*Message{},
 		users:    map[string]User{},
 		members:  map[string][]string{},
@@ -143,10 +151,11 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	if err := r.ParseForm(); err != nil {
 		return nil, "invalid_arguments"
 	}
-	if code := authenticate(r); code != "" {
+	method := strings.TrimPrefix(r.URL.Path, "/")
+	if code := authenticate(r, tokenPrefix(method)); code != "" {
 		return nil, code
 	}
-	switch strings.TrimPrefix(r.URL.Path, "/") {
+	switch method {
 	case "chat.postMessage":
 		return s.postMessage(r.Form)
 	case "chat.update":
@@ -170,13 +179,25 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 	}
 }
 
-// authenticate checks for a bot token. Slack accepts it in the Authorization
-// header or in a token parameter, and slack-go uses the latter for the
-// methods faked here (https://docs.slack.dev/authentication/tokens/).
+// tokenPrefix returns the prefix of the token type a method accepts: an
+// app-level token for opening a Socket Mode connection, a bot token for the
+// rest.
+func tokenPrefix(method string) string {
+	if method == "apps.connections.open" {
+		return "xapp-"
+	}
+	return "xoxb-"
+}
+
+// authenticate checks for a token with the given prefix. Slack accepts it in
+// the Authorization header or in a token parameter, and slack-go uses the
+// latter for the Web API methods faked here and the former for
+// apps.connections.open (https://docs.slack.dev/authentication/tokens/).
 //
 // UNCONFIRMED(WP-04): the not_authed and invalid_auth codes, that either
-// location works for every faked method, and that any xoxb- token is valid.
-func authenticate(r *http.Request) string {
+// location works for every faked method, and that any token with the right
+// prefix is valid.
+func authenticate(r *http.Request, prefix string) string {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok {
 		token = r.Form.Get("token")
@@ -184,7 +205,7 @@ func authenticate(r *http.Request) string {
 	switch {
 	case token == "":
 		return "not_authed"
-	case !strings.HasPrefix(token, "xoxb-"):
+	case !strings.HasPrefix(token, prefix):
 		return "invalid_auth"
 	}
 	return ""

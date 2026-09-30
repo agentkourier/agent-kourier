@@ -31,6 +31,8 @@ type Edited struct {
 type Message struct {
 	Type     string          `json:"type"`
 	User     string          `json:"user"`
+	BotID    string          `json:"bot_id,omitempty"`
+	AppID    string          `json:"app_id,omitempty"`
 	Text     string          `json:"text"`
 	TS       string          `json:"ts"`
 	ThreadTS string          `json:"thread_ts,omitempty"`
@@ -94,7 +96,22 @@ func cloneValue(v any) any {
 	return v
 }
 
-const botUser = "UFAKEBOT"
+// WithBot sets the identity that bot-token posts carry: the bot's user ID, its
+// bot_id, and the app_id. The defaults are UFAKEBOT, BFAKEBOT and AFAKEAPP.
+func WithBot(user, botID, appID string) Option {
+	return func(s *Server) { s.bot = botIdentity{user: user, id: botID, app: appID} }
+}
+
+type botIdentity struct{ user, id, app string }
+
+// botMessage returns a new message from the bot, which carries the bot's user,
+// bot_id and app_id.
+func (s *Server) botMessage(text, threadTS string) *Message {
+	return &Message{
+		Type: "message", User: s.bot.user, BotID: s.bot.id, AppID: s.bot.app,
+		Text: text, ThreadTS: threadTS,
+	}
+}
 
 // nextTSLocked issues the next message ts: the clock's time in microseconds,
 // or one microsecond past the last ts if the clock has not moved on. Callers

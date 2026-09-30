@@ -22,10 +22,8 @@ func (s *Server) postMessage(form url.Values) (response, string) {
 	if code := validateContent(form.Get("text"), form.Get("blocks"), true); code != "" {
 		return nil, code
 	}
-	m := &Message{
-		Type: "message", User: botUser, Text: form.Get("text"),
-		ThreadTS: form.Get("thread_ts"), Blocks: blocksOrNil(form.Get("blocks")),
-	}
+	m := s.botMessage(form.Get("text"), form.Get("thread_ts"))
+	m.Blocks = blocksOrNil(form.Get("blocks"))
 	if raw := form.Get("metadata"); raw != "" {
 		var ok bool
 		if m.Metadata, ok = parseMetadata(raw); !ok {

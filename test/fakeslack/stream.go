@@ -49,10 +49,8 @@ func (s *Server) startStream(form url.Values) (response, string) {
 	if runes(text) > maxMessageText {
 		return nil, "msg_too_long"
 	}
-	m := &Message{
-		Type: "message", User: botUser, Text: text, ThreadTS: form.Get("thread_ts"),
-		Chunks: chunks, Streaming: true,
-	}
+	m := s.botMessage(text, form.Get("thread_ts"))
+	m.Chunks, m.Streaming = chunks, true
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

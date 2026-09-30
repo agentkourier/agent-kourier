@@ -56,7 +56,7 @@ func (s *Server) updateMessage(form url.Values) (response, string) {
 		if meta != nil {
 			m.Metadata = meta
 		}
-		m.Edited = &Edited{User: botUser, TS: s.nextTSLocked()}
+		m.Edited = &Edited{User: s.bot.user, TS: s.nextTSLocked()}
 		echo := m.clone()
 		echo.Metadata = nil // as for chat.postMessage
 		return response{"channel": channel, "ts": ts, "text": m.Text, "message": echo}, ""
