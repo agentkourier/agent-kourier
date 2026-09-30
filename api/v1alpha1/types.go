@@ -100,6 +100,7 @@ type AgentBackendSpec struct {
 
 // Header is a static HTTP header. Set exactly one of Value and ValueSecretRef; a
 // ValueSecretRef follows the same key convention as the other single-value refs.
+// Authorization and X-User-Id are reserved for the Binding identity; Validate rejects them.
 type Header struct {
 	// +kubebuilder:validation:MinLength=1
 	Name           string        `json:"name"`
