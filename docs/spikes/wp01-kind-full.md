@@ -390,3 +390,118 @@ ok: no route to http://kagent-ui.kagent.svc.cluster.local:8080/mcp
 
 `up-full.sh` also restarts `deploy/slowllm` after applying it, as it does for mockllm, so an
 edited ConfigMap script is picked up.
+
+## WP-01d: the front door strips identity-selecting headers
+
+Run 2026-09-30, same host: `make e2e-down`, then a clean `make e2e-full-up` (258 s) with 83 `ok:`
+lines and no `FAIL`. Everything is **measured** unless marked *source* or *inferred*.
+
+**The hole (R4, D32).** *Source* (kagent v1.0.0-alpha5, `proxy_authn.go`): with `X-Agent-Name` set,
+the acting user is `?user_id=`, else `X-User-Id`, else the token's `sub`, even for a valid token.
+WP-03 measured B's token acting as A that way through the old door. The old door forwarded both.
+
+**The fix.** The door now runs oauth2-proxy in alpha config (`full/frontdoor.yaml`).
+`--convert-config-to-alpha` from the pinned image, given the door's old flags, produced the
+config; it sits in the ConfigMap `kagent-frontdoor-config`, mounted at `/etc/oauth2-proxy`, and
+`up-full.sh` restarts the door so an edit is picked up. Three things differ from the converter's
+output:
+- **Strip-only `injectRequestHeaders` entries** (name, no values): `X-Agent-Name`, `X-User-Id`,
+  `X-Share-Token` (kagent reads it on `/agents/`, `http.go`, and it grants another owner's session)
+  and `X-Kagent-Insecure-Runtime-Identity`. *Source* (`pkg/middleware/headers.go`): matching is
+  case-insensitive and reads `_` as `-`. The alpha list replaces the flag-derived one, so the
+  converter's `Authorization` injection (`id_token`, prefix `Bearer `) and `X-Forwarded-*` entries stay.
+- **`clientSecretFile`** (`/etc/oauth2-proxy-secret/client-secret`, from the existing Secret)
+  replaces the client secret the converter inlines; no secret is in the ConfigMap (checked with
+  `kubectl get configmap -o yaml | grep`).
+- **Args:** every converted flag is gone (`--http-address`, `--provider`, `--oidc-issuer-url`,
+  `--client-id`, `--upstream`, `--pass-authorization-header`, `--flush-interval`,
+  `--upstream-timeout`). `--email-domain`, `--skip-jwt-bearer-tokens`, `--force-json-errors`,
+  `--cookie-secure` and `--silence-ping-logging` are core options the converter does not move, and stay.
+
+The door became ready at once; the log shows the same `mapping path "/agents/"` and JWT-skip lines
+as before, so the nginx fallback was not needed. WP-03's patched rollout never became ready.
+Measured here: the pinned image with `--alpha-config` plus `--http-address` prints its usage text
+and exits, which matches that symptom. That it was WP-03's actual cause is *inferred*; I did not
+see its pod.
+
+**`X-Kagent-Insecure-Runtime-Identity`** is read only by kagent's TaskStore authenticator, for the
+gRPC runtime methods (`taskstore/authority.go`, *source*), which the door cannot reach (`/agents/`
+only). It is stripped as defence in depth. There is no observable through the door, so that entry
+rests on the config and the source, not on a check.
+
+**What `verify.sh` gained** (Dex user B, `identity-b@example.test`, from WP-03):
+- the card advertises `"streaming":true` (WP-27e needs it);
+- a group where B's valid token, through the door, carries `X-Agent-Name` plus `X-User-Id: <A>` and
+  `X-Agent-Name` plus `?user_id=<A>`, each in canonical and lower case, and gets `-31403` on a send to
+  A's context and on `GetTask` of A's task; a no-extra-headers control gets `-31403` too; A's own
+  send, continue and `GetTask` still complete; a bogus `X-Share-Token` through the door is ignored (200 on the card);
+- in the canary, from a pod the 8083 policy admits (the way the existing canary reaches 8083,
+  not a port-forward): the same four spoofs and the same control, against the controller. The
+  spoofs get `TASK_STATE_COMPLETED` (they work), the control gets `-31403`, and a bogus
+  `X-Share-Token` gets 403. That is what makes the door group mean something.
+
+New lines from the clean run (the rest are WP-01c's, unchanged):
+
+```
+ok: card advertises streaming (WP-27e refuses agents that do not)
+== courier pod: X-Agent-Name, X-User-Id and X-Share-Token are stripped at the front door
+ok: A's own send answered
+ok: A's session has a task id
+ok: A's session has a context id
+ok: A continues its own session
+ok: A reads its own task
+ok: door, no extra headers: B continues A's session: -31403
+ok: door, no extra headers: B reads A's task: -31403
+ok: door, X-Agent-Name + X-User-Id: B continues A's session: -31403
+ok: door, X-Agent-Name + X-User-Id: B reads A's task: -31403
+ok: door, x-agent-name + x-user-id (lower case): B continues A's session: -31403
+ok: door, x-agent-name + x-user-id (lower case): B reads A's task: -31403
+ok: door, X-Agent-Name + ?user_id: B continues A's session: -31403
+ok: door, X-Agent-Name + ?user_id: B reads A's task: -31403
+ok: door, x-agent-name + ?user_id (lower case): B continues A's session: -31403
+ok: door, x-agent-name + ?user_id (lower case): B reads A's task: -31403
+ok: X-Share-Token is not forwarded: a bogus one is ignored
+== canary: the controller does not verify JWTs (kagent 1.0.0-alpha5)
+ok: controller /mcp initialize: forged token accepted
+ok: controller /mcp initialize: no token refused
+ok: controller accepted both forgeries (expected at alpha5)
+ok: controller: A's session has a task id
+ok: controller: A's session has a context id
+ok: controller, no extra headers: B continues A's session: -31403
+ok: controller, no extra headers: B reads A's task: -31403
+ok: controller, X-Agent-Name + X-User-Id: B continues A's session: TASK_STATE_COMPLETED
+ok: controller, X-Agent-Name + X-User-Id: B reads A's task: TASK_STATE_COMPLETED
+ok: controller, x-agent-name + x-user-id (lower case): B continues A's session: TASK_STATE_COMPLETED
+ok: controller, x-agent-name + x-user-id (lower case): B reads A's task: TASK_STATE_COMPLETED
+ok: controller, X-Agent-Name + ?user_id: B continues A's session: TASK_STATE_COMPLETED
+ok: controller, X-Agent-Name + ?user_id: B reads A's task: TASK_STATE_COMPLETED
+ok: controller, x-agent-name + ?user_id (lower case): B continues A's session: TASK_STATE_COMPLETED
+ok: controller, x-agent-name + ?user_id (lower case): B reads A's task: TASK_STATE_COMPLETED
+ok: controller: a bogus X-Share-Token is read (403); the door drops it
+```
+
+**Each check can fail** (measured; the door was changed on the running cluster, verify re-run):
+
+| Door | Result |
+|---|---|
+| The old door (flags only, no strip) | `FAIL: X-Agent-Name + X-User-Id: B continues A's session: -31403` (this run predates the "door," label prefix): B acted as A |
+| Strip entries without `X-Share-Token` | all eight spoof checks pass; `FAIL: X-Share-Token is not forwarded: a bogus one is ignored` |
+| Strip entries without `X-Agent-Name` and `X-Share-Token` | the two header rows pass (`X-User-Id` alone is stripped, so B falls back to its own `sub`); `FAIL: door, X-Agent-Name + ?user_id: B continues A's session: -31403`. The query rows are their own checks |
+
+The cluster was then restored from the repo and the clean run above followed.
+
+**The agent card** (`test/fixtures/kagent/card/`, fetched through the door with a real token; it
+carries no token, so nothing was redacted). `capabilities`, verbatim, identical for `test-agent`
+and `slow-agent`:
+
+```json
+{"extensions":[{"description":"Human approval and user input","uri":"https://kagent.dev/extensions/hitl/v1"}],"streaming":true,"extendedAgentCard":true}
+```
+
+`streaming` is **true** (measured; *source*: `gateway.go` sets `Streaming: true` for every agent).
+The card's two `supportedInterfaces` URLs name `kagent-controller.kagent.svc:8083`, not the door.
+
+**Not covered.** `CancelTask`, `SubscribeToTask` and `SendStreamingMessage` under the spoof (same
+authenticator path, *inferred*); a strip of `X-Agent-Name` alone was not mutation-tested (WP-03's
+*source* reading says it closes both query and header rows); the runtime-identity entry (above).
+WP-03's own `oidc-headerspoof` case was not re-run here; `verify.sh` is the proof.
