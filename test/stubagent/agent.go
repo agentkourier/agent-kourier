@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -151,31 +153,38 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 	o.done()
 }
 
-// validateMessage rejects what a2a-go v2.6.0 rejects with -32602: a2asrv/handler.go
-// handleSendMessage, for a message with no ID, no parts or no role, and a2a/core.go
-// Part.UnmarshalJSON, for a part that does not have exactly one of text, raw, data and url.
+// validateMessage rejects what a2a-go v2.6.0 rejects. A part that does not have exactly one of
+// text, raw, data and url fails first, while the request is decoded (a2a/core.go
+// Part.UnmarshalJSON): its error is not a json.UnmarshalTypeError, so it is -32700 "parse
+// error: ...", with the same texts. The stub sorts the field names it lists, which a2a-go leaves
+// in map order. Then a2asrv/handler.go handleSendMessage answers -32602 for a message with no
+// ID, no parts or no role. An empty url does not count as content.
 func validateMessage(m obj) *rpcError {
+	parts, _ := m["parts"].([]any)
+	for _, p := range parts {
+		part, _ := p.(obj)
+		n := 0
+		for _, kind := range []string{"text", "raw", "data", "url"} {
+			if v, ok := part[kind]; ok && (kind != "url" || v != "") {
+				n++
+			}
+		}
+		switch {
+		case n == 0:
+			keys := slices.Sorted(maps.Keys(part))
+			return &rpcError{codeParse, fmt.Sprintf("parse error: unknown part content type: %v", keys), "PARSE_ERROR"}
+		case n > 1:
+			return &rpcError{codeParse, fmt.Sprintf("parse error: expected exactly one of text, raw, data, or url, got %d", n), "PARSE_ERROR"}
+		}
+	}
 	if id, _ := m["messageId"].(string); id == "" {
 		return invalidParams("message ID is required")
 	}
-	parts, _ := m["parts"].([]any)
 	if len(parts) == 0 {
 		return invalidParams("message parts is required")
 	}
 	if role, _ := m["role"].(string); role == "" {
 		return invalidParams("message role is required")
-	}
-	for _, p := range parts {
-		part, _ := p.(obj)
-		n := 0
-		for _, kind := range []string{"text", "raw", "data", "url"} {
-			if _, ok := part[kind]; ok {
-				n++
-			}
-		}
-		if n != 1 {
-			return invalidParams("expected exactly one of text, raw, data, or url, got %d", n)
-		}
 	}
 	return nil
 }
@@ -208,9 +217,7 @@ func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 	}
 	var steps []Step
 	if d.reply != nil {
-		s.mu.Unlock()
-		steps = d.reply.p.then(d.reply.resp)
-		s.mu.Lock()
+		s.unlocked(func() { steps = d.reply.p.then(d.reply.resp) })
 	} else {
 		turn, reply, ok := a.pick()
 		if !ok {
@@ -219,9 +226,7 @@ func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 		if reply == nil {
 			return a.start(id, m, d.sess, turn), nil
 		}
-		s.mu.Unlock()
-		steps = reply(promptText(m))
-		s.mu.Lock()
+		s.unlocked(func() { steps = reply(promptText(m)) })
 	}
 	first := d.reply
 	if d = a.check(id, m, owner); d.st != nil || d.err != nil {

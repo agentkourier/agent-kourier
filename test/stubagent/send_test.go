@@ -51,34 +51,40 @@ func oneMessage(id string, parts ...obj) obj {
 	return obj{"message": obj{"messageId": id, "role": "ROLE_USER", "parts": parts}}
 }
 
-// TestSendRejectsWhatIsNotAMessage follows a2a-go v2.6.0: a2asrv/handler.go handleSendMessage
-// answers -32602 for a message with no ID, no parts or no role, and a2a/core.go
-// (Part.UnmarshalJSON) for a part that does not have exactly one of text, raw, data and url.
+// TestSendRejectsWhatIsNotAMessage follows a2a-go v2.6.0. a2asrv/handler.go handleSendMessage
+// answers -32602 for a message with no ID, no parts or no role. A part that does not have
+// exactly one of text, raw, data and url fails earlier, while the request is decoded
+// (a2a/core.go Part.UnmarshalJSON), and its error is not a type error, so it is -32700 "parse
+// error: ..." even when the message has other faults.
 func TestSendRejectsWhatIsNotAMessage(t *testing.T) {
 	_, agent, c := newAgent(t)
 	noRole := oneMessage("m1", obj{"text": "hi"})
 	delete(noRole["message"].(obj), "role")
 	noParts := oneMessage("m1")
 	delete(noParts["message"].(obj), "parts")
-	const onePart = "expected exactly one of text, raw, data, or url"
+	const parse, params = float64(-32700), float64(-32602)
 	for _, tc := range []struct {
 		name    string
 		params  obj
-		message string // a prefix of the error message
+		code    float64
+		message string // the error message, or its prefix
 	}{
-		{"no message", obj{}, "message is required"},
-		{"no messageId", msg("", "hi", ""), "message ID is required"},
-		{"no parts", noParts, "message parts is required"},
-		{"empty parts", oneMessage("m1"), "message parts is required"},
-		{"no role", noRole, "message role is required"},
-		{"a part with nothing in it", oneMessage("m1", obj{}), onePart},
-		{"a part with two contents", oneMessage("m1", obj{"text": "hi", "data": obj{}}), onePart},
+		{"no message", obj{}, params, "message is required"},
+		{"no messageId", msg("", "hi", ""), params, "message ID is required"},
+		{"no parts", noParts, params, "message parts is required"},
+		{"empty parts", oneMessage("m1"), params, "message parts is required"},
+		{"no role", noRole, params, "message role is required"},
+		{"a part with nothing in it", oneMessage("m1", obj{}), parse, "parse error: unknown part content type: []"},
+		{"a part with an unknown field", oneMessage("m1", obj{"foo": 1}), parse, "parse error: unknown part content type: [foo]"},
+		{"a part with an empty url", oneMessage("m1", obj{"url": ""}), parse, "parse error: unknown part content type: [url]"},
+		{"a part with two contents", oneMessage("m1", obj{"text": "hi", "data": obj{}}), parse, "parse error: expected exactly one of text, raw, data, or url, got 2"},
+		{"a bad part in a message with no ID", oneMessage("", obj{}), parse, "parse error: unknown part content type: []"},
 	} {
 		agent.Next()
 		status, body := c.call("SendMessage", tc.params)
 		text, _ := dig(body, "error", "message").(string)
-		if status != http.StatusOK || dig(body, "error", "code") != float64(-32602) || !strings.HasPrefix(text, tc.message) {
-			t.Errorf("%s = HTTP %d %v, want error -32602 %q", tc.name, status, body, tc.message)
+		if status != http.StatusOK || dig(body, "error", "code") != tc.code || !strings.HasPrefix(text, tc.message) {
+			t.Errorf("%s = HTTP %d %v, want error %v %q", tc.name, status, body, tc.code, tc.message)
 		}
 	}
 	// Each rejection left its queued turn alone, so seven are waiting: a part of any one kind
@@ -136,6 +142,39 @@ func TestReplyRunningTwiceForOneMessageStartsOneTask(t *testing.T) {
 
 	if a["id"] != b["id"] {
 		t.Errorf("one messageId started two tasks, %v and %v", a["id"], b["id"])
+	}
+}
+
+// TestPanickingScriptFailsOnlyItsRequest: a script runs while the lock is open, and a panic in
+// it must not leave the lock wrong for the deferred unlock: the request fails, the server
+// serves on, and a paused task still waits. (With a hand-written unlock and lock around the
+// script, the panic unwinds into an unlock of an unlocked mutex, which kills the test binary.)
+func TestPanickingScriptFailsOnlyItsRequest(t *testing.T) {
+	_, agent, c := newAgent(t)
+	fails := func(params obj) bool {
+		body := obj{"jsonrpc": "2.0", "id": "1", "method": "SendStreamingMessage", "params": params}
+		resp, err := http.DefaultClient.Do(request(t, http.MethodPost, c.url, body, c.hdr))
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		return err != nil
+	}
+	agent.Reply(func(string) []stubagent.Step { panic("a bug in a test's Reply") })
+	replyFailed := fails(msg("m1", "hi", ""))
+	agent.Reply(func(string) []stubagent.Step { return nil })
+	_, afterReply := c.call("SendMessage", msg("m2", "hi", ""))
+
+	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step { panic("a bug in a test's then") }))
+	c = withHITL(c)
+	_, taskID, ctxID, pauseReq := paused(t, c)
+	thenFailed := fails(reply("m4", "x", ctxID, taskID, answers(pauseReq["id"].(string), []string{"MySQL"})))
+	_, afterThen := c.call("GetTask", obj{"id": taskID})
+
+	if !replyFailed || dig(afterReply, "error") != nil {
+		t.Errorf("panicking Reply: request failed = %v, the next send = %v; want a failure, then a working server", replyFailed, afterReply)
+	}
+	if !thenFailed || describe(afterThen) != "task:INPUT_REQUIRED" {
+		t.Errorf("panicking then: request failed = %v, task after = %s; want a failure and the task still INPUT_REQUIRED", thenFailed, describe(afterThen))
 	}
 }
 

@@ -129,7 +129,7 @@ func TestReplayCarryingAContextIDIsNotDeduplicated(t *testing.T) {
 	st, taskID, ctxID := startSlow(c)
 	_ = st.resp.Body.Close()
 
-	_, running := c.call("SendStreamingMessage", msg("m1", "go slowly", ctxID))
+	running := c.first("SendStreamingMessage", msg("m1", "go slowly", ctxID)) // a regression would stream, held open
 	s.Release("go")
 	if err := s.WaitTurn(t.Context(), taskID); err != nil {
 		t.Fatalf("WaitTurn: %v", err)

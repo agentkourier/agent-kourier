@@ -115,6 +115,15 @@ func (s *Server) Close() {
 	s.wg.Wait()
 }
 
+// unlocked runs f with s.mu released, and takes it again even if f panics, so that the caller's
+// deferred Unlock stays balanced and the panic only fails the request it happens in. The caller
+// holds s.mu.
+func (s *Server) unlocked(f func()) {
+	s.mu.Unlock()
+	defer s.mu.Lock()
+	f()
+}
+
 // WaitTurn waits for the turn last played for the task to end: it completed, paused for input,
 // or was cancelled. A test uses it to know that a turn has said all it will, whatever a
 // client has read. It returns at once if the turn is over, and an error if the task is unknown
