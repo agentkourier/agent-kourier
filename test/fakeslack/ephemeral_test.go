@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
 )
 
 func TestPostEphemeralIsVisibleOnlyToTheFakesInspection(t *testing.T) {
@@ -92,5 +94,21 @@ func TestPostEphemeralNeedsABotToken(t *testing.T) {
 	form := url.Values{"token": {testAppToken}, "channel": {"C1"}, "user": {"U1"}, "text": {"x"}}
 	if body := rawBody(t, fake, "chat.postEphemeral", form); !strings.Contains(body, `"error":"invalid_auth"`) {
 		t.Fatalf("chat.postEphemeral with an app token = %s; want invalid_auth", body)
+	}
+}
+
+// Slack sends no event for an ephemeral message, so courier's notice to a user
+// must not come back to it as a message event.
+func TestPostEphemeralDeliversNoEvent(t *testing.T) {
+	fake, smc := newSocket(t)
+	waitEvent(t, smc, socketmode.EventTypeHello)
+	if _, err := botClient(fake).PostEphemeral("C1", "U1", text("please answer")); err != nil {
+		t.Fatalf("PostEphemeral: %v", err)
+	}
+	if _, err := fake.DM("U1", "hi"); err != nil {
+		t.Fatalf("DM: %v", err)
+	}
+	if _, _, first := nextInner(t, smc); first.(*slackevents.MessageEvent).User != "U1" {
+		t.Fatalf("first event = %#v; want the user's DM, with no event for the ephemeral", first)
 	}
 }
