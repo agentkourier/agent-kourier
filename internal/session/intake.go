@@ -21,10 +21,11 @@ type Disposition string
 // mention/message pair may split the same way, so a turn that created the session can be
 // reported as Accepted: never hang a one-time side effect on Created.
 const (
-	Created  Disposition = "created"   // a new session was made and the turn queued on it
-	Accepted Disposition = "accepted"  // the session is live and the turn queued on it
-	NotOwned Disposition = "not_owned" // courier owns no such thread: ignore the turn (spec 8.2)
-	Expired  Disposition = "expired"   // owned but past threadTTL: nothing written; the caller posts the notice
+	Created     Disposition = "created"      // a new session was made and the turn queued on it
+	Accepted    Disposition = "accepted"     // the session is live and the turn queued on it
+	NotOwned    Disposition = "not_owned"    // courier owns no such thread: ignore the turn (spec 8.2)
+	BindingGone Disposition = "binding_gone" // owned, but its Binding left the config: nothing written; the caller posts the notice
+	Expired     Disposition = "expired"      // owned but past threadTTL: nothing written; the caller posts the notice
 )
 
 // Inbound is one turn from a person or an alert.
@@ -121,7 +122,9 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 		return Result{}, fmt.Errorf("read session %+v: %w", in.Key, err)
 	}
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)
-	if err != nil {
+	if errors.Is(err, ErrUnknownBinding) { // expiry cannot be judged without it, so old or not
+		return Result{Disposition: BindingGone}, nil
+	} else if err != nil {
 		return Result{}, fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
 	}
 	// The store owns the expiry rule: ask it again, with the session's own threadTTL.

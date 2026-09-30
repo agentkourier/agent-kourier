@@ -92,6 +92,12 @@ const (
 	NoticeRetrying NoticeKind = "retrying"
 	// NoticeFailed says the turn failed and will not be sent; Detail says why.
 	NoticeFailed NoticeKind = "failed"
+	// NoticeSessionGone says the agent no longer has the thread's session: the next turn starts a
+	// fresh one, and the agent's memory of the conversation is lost (spec 8.2).
+	NoticeSessionGone NoticeKind = "session_gone"
+	// NoticeBindingGone says the thread's Binding is no longer configured, so its turns cannot be
+	// sent.
+	NoticeBindingGone NoticeKind = "binding_gone"
 	// NoticeWedged says a task ran past maxWorkingAge and was cancelled (R17).
 	NoticeWedged NoticeKind = "wedged"
 	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).

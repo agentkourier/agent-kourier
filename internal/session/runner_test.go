@@ -549,3 +549,23 @@ func TestTurnWithNoNamedTaskIsLookedUpNotResent(t *testing.T) {
 		t.Errorf("%d sends; want turn 1, and turn 2 once", sends)
 	}
 }
+
+// A turn queued for a session whose Binding then left the config is not retried: the thread is
+// told, and the turn leaves the queue.
+func TestQueuedTurnOfARemovedBindingIsDropped(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.wake = func(Key) {} // queue the turn first, run it after the Binding is gone
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/gone", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	f.m.start(key)
+	eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeBindingGone)) == 1 })
+	eventually(t, "the turn to leave the queue", func() bool { _, err := f.st.NextReply(t.Context(), key); return errors.Is(err, store.ErrNotFound) })
+	if sends, _, _ := f.agent.counts(); sends != 0 {
+		t.Errorf("%d sends; want none", sends)
+	}
+}

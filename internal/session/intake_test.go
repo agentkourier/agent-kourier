@@ -302,14 +302,6 @@ func TestSubmitRefusesWhatCannotBeServed(t *testing.T) {
 			t.Errorf("%s: Submit = %v, session %v, woke %d; want %v and nothing written", name, err, serr, f.woke, tc.want)
 		}
 	}
-	// A session whose Binding left the config cannot be judged for expiry: an error, for the
-	// queue handler to retry, and no change.
-	f := newFixture(t)
-	seeded := f.seed("ns/gone", 0)
-	_, err := f.submit(inbound("1700.01"))
-	if got, _ := f.session(); !errors.Is(err, ErrUnknownBinding) || f.woke != 0 || got != seeded || len(f.drain()) != 0 {
-		t.Errorf("Submit = %v, session %+v, woke %d; want ErrUnknownBinding and no change", err, got, f.woke)
-	}
 }
 
 // A failed write returns an error and wakes nothing, and the queue handler's retry finishes
@@ -403,5 +395,17 @@ func TestSubmitConcurrentCreate(t *testing.T) {
 	}
 	if created != 1 || f.st.upserts != 1 || len(f.drain()) != 2 {
 		t.Errorf("%d Created, %d session writes; want one of each, and both turns queued", created, f.st.upserts)
+	}
+}
+
+// A session whose Binding left the config cannot be judged for expiry, so, old or not, it is
+// answered with its own disposition, for the caller to tell the thread, and nothing is
+// written, queued or woken: there is no retry loop to wait in.
+func TestSubmitBindingGone(t *testing.T) {
+	f := newFixture(t)
+	seeded := f.seed("ns/gone", 100*time.Hour)
+	res, err := f.submit(inbound("1700.01"))
+	if got, _ := f.session(); err != nil || res.Disposition != BindingGone || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
+		t.Errorf("Submit = %+v, %v; session %+v, %d touches, woke %d; want BindingGone and no change", res, err, got, f.st.touches, f.woke)
 	}
 }

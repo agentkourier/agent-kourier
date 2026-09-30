@@ -158,7 +158,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		return idle, fmt.Errorf("read session: %w", err)
 	}
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)
-	if err != nil {
+	if errors.Is(err, ErrUnknownBinding) { // it left the config since the turn was queued: no retry loop
+		t := &tstate{key: key, c: c, r: r, sess: sess}
+		m.notice(t, NoticeBindingGone, "")
+		return ended, m.cfg.Store.MarkReplyDelivered(sctx, r.ID, m.cfg.Now())
+	} else if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
 	}
 	c.ttl = backend.ThreadTTL
@@ -227,6 +231,11 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
 				named, c.tries, c.since, c.patient = true, 0, time.Time{}, false
+				if t.sess.ContextID != "" && ev.ContextID != "" && ev.ContextID != t.sess.ContextID {
+					// The agent answered in another context: it opened a new session for the old id.
+					// UNCONFIRMED against kagent. The new context is recorded below.
+					m.notice(t, NoticeSessionGone, "")
+				}
 				if recordErr = m.accept(sctx, r, ev); recordErr == nil {
 					m.mu.Lock()
 					delete(m.attempted, key) // taken and recorded: never a resend
@@ -269,6 +278,8 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	var sl *agent.StreamLostError
 	switch {
+	case errors.Is(err, a2a.ErrTaskNotFound):
+		return m.gone(t)
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		m.rejected(t, err)
 		t.c.follow = nil // the task stays recorded, for reconciliation
@@ -285,6 +296,15 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
 
+// gone handles a session the agent no longer has: the thread is told, and the record of it is
+// reset, context and task together, so the next turn starts a fresh session. The thread stays
+// owned. UNCONFIRMED: what kagent answers for a task or session it dropped (spec 8.2).
+func (m *Manager) gone(t *tstate) (outcome, error) {
+	m.notice(t, NoticeSessionGone, "")
+	t.c.follow, t.c.tries, t.c.since = nil, 0, time.Time{}
+	return ended, m.cfg.Store.ResetSession(context.WithoutCancel(m.ctx), t.key)
+}
+
 // resume follows the task of a turn whose stream was lost. A task WORKING for longer than
 // MaxWorkingAge (the agent's timestamp of the state, on courier's clock), or one whose state
 // cannot be read for that long, is presumed wedged and cancelled (R17); otherwise the stream
@@ -294,7 +314,7 @@ func (m *Manager) resume(c *convo) (outcome, error) {
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	now := m.cfg.Now()
 	switch {
-	case errors.Is(err, agent.ErrCredentialsRejected):
+	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, a2a.ErrTaskNotFound):
 		return m.lost(t, err)
 	case err == nil && running(task) && task.Status.Timestamp != nil && now.Sub(*task.Status.Timestamp) > m.cfg.MaxWorkingAge,
 		err != nil && now.Sub(c.since) > m.cfg.MaxWorkingAge:

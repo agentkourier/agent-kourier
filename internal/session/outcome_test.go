@@ -382,3 +382,75 @@ func TestLostStreamWithRefusedCredentialsIsNotFollowed(t *testing.T) {
 		t.Errorf("%d follows, task %q; want no follow and t1 still recorded", fo, f.taskID())
 	}
 }
+
+// The agent no longer knows the task, or the session: the thread is told, the courier's record
+// of the agent's session is reset (and only that, so the thread stays owned), and the next turn
+// starts without a contextId, a fresh session (spec 8.2). UNCONFIRMED against kagent: what it
+// answers for a session it dropped.
+func TestSessionGoneStartsAFreshContext(t *testing.T) {
+	notFound := a2a.NewError(a2a.ErrTaskNotFound, "task not found")
+	for _, tc := range []struct {
+		name          string
+		get, followTo error
+	}{
+		{"GetTask does not know the task", notFound, nil},
+		{"Follow does not know the task", nil, notFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
+			f.agent.script = lost(errors.New("connection reset"))
+			f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) { return working(t0)(id) }
+			if tc.get != nil {
+				f.agent.get = func(a2a.TaskID) (*a2a.Task, error) { return nil, tc.get }
+			}
+			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return tc.followTo }
+			for _, ts := range []string{"1", "2"} {
+				if _, err := f.submit(inbound(ts)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			<-sink.finals // turn 2
+			if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "1" {
+				t.Errorf("session-gone notices = %+v; want one, for turn 1", got)
+			}
+			f.agent.mu.Lock()
+			defer f.agent.mu.Unlock()
+			if second := f.agent.msgs[1]; second.ContextID != "" {
+				t.Errorf("turn 2 was sent in context %q; want none: a fresh session", second.ContextID)
+			}
+			if sess, _ := f.session(); sess.Binding != "ns/b1" || !sess.LastActivity.Equal(t0) {
+				t.Errorf("session = %+v; want the Binding and activity kept", sess)
+			}
+		})
+	}
+}
+
+// If the agent answers a turn in a different context than the session's, it opened a new
+// session for the old one's id (UNCONFIRMED: what kagent does with an unknown contextId): the
+// thread is told, and the new context is recorded.
+func TestReplacedContextIsAdoptedAndReported(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 1 {
+			h(agent.StateEvent{TaskID: "t2", ContextID: "c2", State: a2a.TaskStateWorking})
+			h(agent.FinalEvent{Task: &a2a.Task{ID: "t2", ContextID: "c2", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
+			return nil
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		<-sink.finals
+	}
+	if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "2" {
+		t.Errorf("session-gone notices = %+v; want one, for turn 2", got)
+	}
+	if sess, _ := f.session(); sess.ContextID != "c2" {
+		t.Errorf("context = %q; want the new one, c2", sess.ContextID)
+	}
+}
