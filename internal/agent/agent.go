@@ -18,6 +18,7 @@ type Conn interface {
 	SubscribeToTask(ctx context.Context, req *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, req *a2a.GetTaskRequest) (*a2a.Task, error)
 	CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error)
+	ListTasks(ctx context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error)
 }
 
 // Source returns the connection for one call, resolving credentials each time, so a rotated
