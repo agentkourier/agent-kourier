@@ -22,8 +22,8 @@ func TestInteractionsCreateAndGet(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
 	i := newInteraction("i1", time.Hour)
-	i.MessageRef = "1700.01"
-	i.State, i.Decider = store.InteractionAnswered, "U1" // ignored on create
+	i.MessageRef = "ignored"
+	i.State, i.Decider = store.InteractionAnswered, "U1" // ignored on create, like MessageRef
 	if c, err := s.CreateInteraction(ctx, i); err != nil || !c {
 		t.Fatalf("create = %v, %v; want true, nil", c, err)
 	}
@@ -32,7 +32,7 @@ func TestInteractionsCreateAndGet(t *testing.T) {
 		t.Fatalf("duplicate create = %v, %v; want false, nil", c, err)
 	}
 	want := i
-	want.State, want.Decider = store.InteractionPending, ""
+	want.State, want.Decider, want.MessageRef = store.InteractionPending, "", ""
 	if got, err := s.GetInteraction(ctx, "i1"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("get = %+v, %v; want %+v", got, err, want)
 	}

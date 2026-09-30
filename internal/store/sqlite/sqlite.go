@@ -160,3 +160,27 @@ func (s *Store) SetEventStatus(ctx context.Context, id string, status store.Even
 	n, err := s.exec(ctx, `UPDATE events SET status = ?, last_error = ? WHERE id = ?`, string(status), lastError, id)
 	return errIfUnchanged(n, err, fmt.Sprintf("set event %q status", id))
 }
+
+// setMessageRef is a compare-and-set of message_ref on table, which must be a
+// constant name, never caller input. The UPDATE and the read that tells a
+// missing row from a conflict share one transaction, so the answer reflects
+// the state the UPDATE saw.
+func (s *Store) setMessageRef(ctx context.Context, table, id, ref string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		n, err := execRows(ctx, tx, `UPDATE `+table+` SET message_ref = ? WHERE id = ? AND message_ref IN ('', ?)`, ref, id, ref)
+		if err != nil || n > 0 {
+			return err
+		}
+		var existing string
+		err = tx.QueryRowContext(ctx, `SELECT message_ref FROM `+table+` WHERE id = ?`, id).Scan(&existing)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return store.ErrNotFound
+		case err != nil:
+			return err
+		case existing == ref:
+			return nil
+		}
+		return fmt.Errorf("already recorded as a different message: %w", store.ErrConflict)
+	})
+}

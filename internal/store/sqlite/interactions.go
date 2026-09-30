@@ -39,9 +39,9 @@ func (s *Store) CreateInteraction(ctx context.Context, i store.Interaction) (boo
 		i.Request = []byte{} // a nil slice would bind as NULL
 	}
 	n, err := s.exec(ctx, `INSERT INTO interactions (id, connection, channel, thread_ts, task_id, kind, request,
-		message_ref, created_at, deadline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		created_at, deadline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		i.ID, i.Key.Connection, i.Key.Channel, i.Key.ThreadTS, i.TaskID, string(i.Kind), i.Request,
-		i.MessageRef, ts(i.CreatedAt), ts(i.Deadline))
+		ts(i.CreatedAt), ts(i.Deadline))
 	if err != nil {
 		return false, fmt.Errorf("create interaction %q: %w", i.ID, err)
 	}
