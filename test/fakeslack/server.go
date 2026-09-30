@@ -27,6 +27,12 @@
 //     which are the ones courier needs; a reply that mentions the bot getting
 //     no app_mention event; and no message events for the bot's own posts,
 //     which Slack sends.
+//   - Interactions (interaction.go): Submit answering an inline ask-user with a
+//     block_actions press that carries state.values, not a view_submission
+//     (the fake has no views); the payload's fields, which are the ones courier
+//     needs; the message in it omitting metadata; state.values holding only the
+//     elements the test gave, where Slack sends every input, unset ones null;
+//     and a block sent without a block_id keeping "", where Slack makes one up.
 //   - Bot identity: a bot post carrying user, bot_id and app_id together, with
 //     no subtype.
 //   - Content limits (validate.go): 50 blocks; 40000 characters of message
