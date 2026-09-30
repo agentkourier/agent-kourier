@@ -14,8 +14,11 @@ cmd/courier/            entrypoint (--version, later the broker)
 api/v1alpha1/           resource types (Binding, etc.)
 internal/config         file loader for resources
 internal/router         Binding resolution, dedup, rate limit, daily cap
-internal/session        session manager and A2A client
+internal/session        session manager (turns, reply queue, controls, recovery)
+internal/agent          A2A client: streaming, reconnect, typed outcomes, client pool
 internal/dialect        agent-dialect adapters (kagent, generic a2a)
+internal/identity       Binding token source and credentials for the agent pool
+internal/secret         redacting Secret value type
 internal/chat/slack     Slack adapter
 internal/alert/alertmanager   Alertmanager receiver
 internal/store          SQLite (later Postgres) persistence
