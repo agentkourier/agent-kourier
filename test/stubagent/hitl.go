@@ -15,13 +15,14 @@ type Question struct {
 
 // Response is the user's reply to a pause, as the script that paused sees it.
 type Response struct {
-	Text    string     // the text of the user's message
-	Answers [][]string // ask-user answers, one list per question, exactly as sent
+	Text      string     // the text of the user's message
+	Answers   [][]string // ask-user answers, one list per question, exactly as sent
+	Approvals []Approval // tool-approval decisions, in the order sent
 }
 
-// Plain reports whether the reply carries no answer, only text. kagent takes such a reply as a
-// new user turn and drops the question that was pending (WP-02, measured).
-func (r Response) Plain() bool { return r.Answers == nil }
+// Plain reports whether the reply carries no answer or decision, only text. kagent takes such
+// a reply as a new user turn and drops the request that was pending (WP-02, measured).
+func (r Response) Plain() bool { return r.Answers == nil && r.Approvals == nil }
 
 // pause is what a paused task waits for.
 type pause struct {
@@ -84,7 +85,7 @@ func (a askStep) play(r *run) bool {
 			then: func(resp Response) []Step {
 				var steps []Step
 				if !resp.Plain() {
-					steps = append(steps, answeredStep{call, a.questions, resp.Answers})
+					steps = append(steps, responseStep{call, "ask_user", answeredResult(a.questions, resp.Answers)})
 				}
 				if a.then != nil {
 					steps = append(steps, a.then(resp)...)
@@ -129,26 +130,28 @@ func decodeAnswers(id string) func(obj) (Response, *rpcError) {
 	}
 }
 
-// answeredStep is the function_response artifact kagent emits when an ask_user call is
-// answered: every question with its answers, none if it got none, as a JSON string.
-type answeredStep struct {
-	call      string
-	questions []Question
-	answers   [][]string
-}
-
-func (a answeredStep) play(r *run) bool {
+// answeredResult is what kagent's ask_user call returns once answered: every question with its
+// answers, none if it got none, as a JSON string.
+func answeredResult(questions []Question, answers [][]string) obj {
 	pairs := []obj{}
-	for i, q := range a.questions {
+	for i, q := range questions {
 		answer := []string{}
-		if i < len(a.answers) {
-			answer = append(answer, a.answers[i]...)
+		if i < len(answers) {
+			answer = append(answer, answers[i]...)
 		}
 		pairs = append(pairs, obj{"question": q.Question, "answer": answer})
 	}
-	result, err := json.Marshal(pairs)
-	if err != nil {
-		return false
-	}
-	return r.data(obj{"id": a.call, "name": "ask_user", "response": obj{"result": string(result)}}, "function_response")
+	result, _ := json.Marshal(pairs) // strings and lists of strings always marshal
+	return obj{"result": string(result)}
+}
+
+// responseStep is the function_response artifact of a tool call whose result arrives after a
+// pause.
+type responseStep struct {
+	call, name string
+	response   obj
+}
+
+func (s responseStep) play(r *run) bool {
+	return r.data(obj{"id": s.call, "name": s.name, "response": s.response}, "function_response")
 }
