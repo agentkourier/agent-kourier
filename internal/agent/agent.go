@@ -16,6 +16,7 @@ type Conn interface {
 	SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error]
 	SubscribeToTask(ctx context.Context, req *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, req *a2a.GetTaskRequest) (*a2a.Task, error)
+	CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error)
 }
 
 // Source returns the connection for one call, resolving credentials each time, so a rotated
@@ -29,7 +30,7 @@ type Config struct {
 	// and reconnects. Every event resets it. Set it longer than the agent's longest silent
 	// tool call, since kagent sends nothing while a tool runs. Default 5 minutes.
 	InactivityTimeout time.Duration
-	// UnaryTimeout bounds each GetTask of a reconnect. Default 30s.
+	// UnaryTimeout bounds GetTask and CancelTask, and each GetTask of a reconnect. Default 30s.
 	UnaryTimeout time.Duration
 	// MaxReconnects is how many reconnects in a row may fail, without a stream delivering an
 	// event in between, before the send fails with ErrStreamLost. Default 5.
@@ -159,7 +160,31 @@ func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Cont
 	return progressed, err
 }
 
-// getTask reads the task's state, within UnaryTimeout.
+// GetTask returns the task's current state, within UnaryTimeout.
+func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	conn, err := a.source(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("connect to agent: %w", err)
+	}
+	return a.getTask(ctx, conn, id)
+}
+
+// CancelTask cancels the task, within UnaryTimeout, and returns it as the agent left it. It
+// backs the thread's stop control and clears a wedged task after ErrAnswerRejected (R17).
+func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	conn, err := a.source(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("connect to agent: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
+	defer cancel()
+	task, err := conn.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id})
+	if err != nil {
+		return nil, fmt.Errorf("cancel task %s: %w", id, typed(err, false))
+	}
+	return task, nil
+}
+
 func (a *Agent) getTask(ctx context.Context, conn Conn, id a2a.TaskID) (*a2a.Task, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()
