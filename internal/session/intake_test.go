@@ -14,6 +14,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -107,15 +108,32 @@ func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error
 }
 
 type fixture struct {
-	t      *testing.T
-	st     *spyStore
-	m      *Manager
-	woke   int
-	onWake func()
-	now    atomic.Int64 // the clock, in Unix nanoseconds
-	agent  *fakeAgent
-	real   AgentAPI // when set, the agent the Binding uses instead of the fake
-	attr   func(*a2a.Message, dialect.User)
+	t                *testing.T
+	st               *spyStore
+	m                *Manager
+	woke             int
+	onWake           func()
+	now              atomic.Int64 // the clock, in Unix nanoseconds
+	agent            *fakeAgent
+	real             AgentAPI // when set, the agent the Binding uses instead of the fake
+	amu              sync.Mutex
+	rejected, audits []audit.Call // what Rejected and the Auditor were given
+	attr             func(*a2a.Message, dialect.User)
+}
+
+func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	f.rejected = append(f.rejected, c)
+	return nil
+}
+
+// AgentCall makes the fixture the Auditor.
+func (f *fixture) AgentCall(_ context.Context, _ audit.Actor, c audit.Call) error {
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	f.audits = append(f.audits, c)
+	return nil
 }
 
 // Backend makes the fixture the Bindings: ns/b1 has a threadTTL of 1 h, ns/b2 of 1000 h.
@@ -128,7 +146,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	return Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr}, nil
+	return Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token"}, nil
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -140,7 +158,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { _ = s.Close() })
 	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Bindings: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	f.m, err = New(Config{Store: f.st, Bindings: f, Audit: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

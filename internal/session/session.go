@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -48,6 +49,17 @@ type Backend struct {
 	// Attribute records the acting user on a turn: the dialect's Attribute. Nil means a turn
 	// carries no attribution.
 	Attribute func(msg *a2a.Message, actor dialect.User)
+	// Rejected is identity.Source.Rejected. The manager calls it for every call the front door
+	// refused the credentials of (ErrCredentialsRejected); it re-reads the token, and writes the
+	// only audit row for the call, so the manager does not audit it again. Nil does nothing.
+	Rejected func(ctx context.Context, actor audit.Actor, call audit.Call) error
+	// Identity names the Binding's service identity for the audit rows the manager writes.
+	Identity string
+}
+
+// Auditor records agent calls: *audit.Writer. A failed write is logged, never fatal (spec 8.6).
+type Auditor interface {
+	AgentCall(ctx context.Context, a audit.Actor, c audit.Call) error
 }
 
 // Bindings resolves a Binding by its namespace/name.
@@ -70,8 +82,15 @@ type TurnRef struct {
 // NoticeKind is what a Notice tells the thread.
 type NoticeKind string
 
-// NoticeQueued asks for the reaction that marks a reply waiting for the active task (spec 8.2).
-const NoticeQueued NoticeKind = "queued"
+// The kinds of notice.
+const (
+	// NoticeQueued asks for the reaction that marks a reply waiting for the active task (spec 8.2).
+	NoticeQueued NoticeKind = "queued"
+	// NoticeRetrying says the agent cannot be reached and courier is trying again (spec 11).
+	NoticeRetrying NoticeKind = "retrying"
+	// NoticeFailed says the turn failed and will not be sent; Detail says why.
+	NoticeFailed NoticeKind = "failed"
+)
 
 // Notice is something for the thread that no turn's output says. ID is stable, so a renderer
 // that posts through the outbox posts it once.
@@ -79,6 +98,7 @@ type Notice struct {
 	ID        string
 	Kind      NoticeKind
 	MessageTS string // the Slack message the notice is about
+	Detail    string // a short reason, fixed text: never agent output, never a secret
 }
 
 // Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
@@ -99,9 +119,13 @@ type Config struct {
 	Sink     Sink
 	Now      func() time.Time
 	Logger   *slog.Logger
+	Audit    Auditor // nil audits nothing
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
 	// They default to 1 s and 60 s (spec 8.2).
 	RetryBase, RetryMax time.Duration
+	// SendGiveUp is how long an unreachable agent is retried before the turn fails (spec 11).
+	// It defaults to 15 minutes.
+	SendGiveUp time.Duration
 }
 
 // Manager owns the sessions of every conversation. It is safe for concurrent use.
@@ -145,6 +169,9 @@ func New(cfg Config) (*Manager, error) {
 	}
 	if cfg.RetryMax <= 0 {
 		cfg.RetryMax = time.Minute
+	}
+	if cfg.SendGiveUp <= 0 {
+		cfg.SendGiveUp = 15 * time.Minute
 	}
 	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]string{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())

@@ -9,6 +9,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -17,7 +18,8 @@ import (
 // Only the runner reads and writes tries and ttl; the Manager's mutex guards the rest.
 type convo struct {
 	again    bool          // a wake arrived while the runner was busy
-	tries    int           // sends of the head turn that got -32004 or a failed lookup, in a row
+	tries    int           // sends of the head turn that failed in a way to retry, in a row
+	since    time.Time     // when the first of them failed, for SendGiveUp
 	ttl      time.Duration // the Binding's threadTTL, for end
 	parked   a2a.TaskID    // the task the runner waits on, while it waits for input
 	released bool          // the pause ended, and the runner has not yet moved on
@@ -158,6 +160,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		return idle, err
 	}
 	c.ttl = backend.ThreadTTL
+	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
 	send := func(h agent.Handler) error { return backend.Agent.Send(m.ctx, m.message(r, sess, backend), h) }
 	m.mu.Lock()
 	resend := m.attempted[key] == r.ID // sent before, and not known to have been taken
@@ -176,12 +179,22 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 			send = func(h agent.Handler) error { return backend.Agent.Follow(m.ctx, task.ID, h) }
 		}
 	}
-	return m.drive(key, c, r, send)
+	return m.drive(t, send)
+}
+
+// tstate is the turn being run: its queue row, the session it runs in, and its Binding.
+type tstate struct {
+	key  Key
+	c    *convo
+	r    store.Reply
+	sess store.Session
+	b    Backend
 }
 
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
 // recording the task as soon as the agent names it.
-func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handler) error) (outcome, error) {
+func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, error) {
+	key, c, r := t.key, t.c, t.r
 	sctx := context.WithoutCancel(m.ctx)
 	h := func(agent.Event) {}
 	if m.cfg.Sink != nil {
@@ -196,7 +209,7 @@ func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handle
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
-				named, c.tries = true, 0
+				named, c.tries, c.since = true, 0, time.Time{}
 				if recordErr = m.accept(sctx, r, ev); recordErr == nil {
 					m.mu.Lock()
 					delete(m.attempted, key) // taken and recorded: never a resend
@@ -212,9 +225,8 @@ func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handle
 	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
-	case !named && errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later
-		c.tries++
-		return blocked, fmt.Errorf("send turn %s: %w", r.ID, err)
+	case err != nil && !named:
+		return m.unsent(t, err)
 	case err != nil:
 		return ended, fmt.Errorf("send turn %s: %w", r.ID, err)
 	case !named: // the stream ended clean but named no task: the agent may have run the turn
@@ -229,6 +241,89 @@ func (m *Manager) drive(key Key, c *convo, r store.Reply, send func(agent.Handle
 		return paused, nil
 	}
 	return ended, m.end(sctx, key, c.ttl)
+}
+
+// unsent handles a send that failed before the agent named a task, by what the error says
+// about how far the message got (see the agent package's errors).
+func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
+	switch {
+	case errors.Is(err, agent.ErrCredentialsRejected): // before ErrNotSent, which it comes with
+		m.rejected(t, err)
+		return m.fail(t, "the agent's front door refused the Binding's credentials", err)
+	case errors.Is(err, agent.ErrForbidden):
+		m.audit(t, err)
+		return m.fail(t, "the agent refused the Binding's identity for this session", err)
+	case errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later, never give up
+		t.c.tries++
+		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+	case errors.Is(err, agent.ErrNotSent): // nothing left: safe to retry, for a while
+		now := m.cfg.Now()
+		if t.c.since.IsZero() {
+			t.c.since = now
+		}
+		if now.Sub(t.c.since) >= m.cfg.SendGiveUp {
+			return m.fail(t, "the agent could not be reached", err)
+		}
+		if t.c.tries++; t.c.tries == 1 {
+			m.notice(t, NoticeRetrying, "")
+		}
+		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+	}
+	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+}
+
+// fail ends the turn without a task: it is not sent again, the thread is told why, and the
+// queue goes on.
+func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
+	t.c.tries, t.c.since = 0, time.Time{}
+	m.mu.Lock()
+	delete(m.attempted, t.key) // it will not be sent again
+	m.mu.Unlock()
+	m.notice(t, NoticeFailed, why)
+	m.cfg.Logger.Warn("session turn failed", "key", t.key, "message", t.r.ID, "reason", why, "error", cause)
+	return ended, m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now())
+}
+
+func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
+	if m.cfg.Sink != nil {
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: t.r.ID + "/" + string(kind), Kind: kind, MessageTS: t.r.MessageTS, Detail: detail})
+	}
+}
+
+// actor is who an audit row of this turn names.
+func (t *tstate) actor() audit.Actor {
+	a := audit.Actor{Binding: t.sess.Binding, Identity: t.b.Identity}
+	if t.r.UserID != SystemUser {
+		a.User = t.r.UserID
+	}
+	return a
+}
+
+func (t *tstate) call(err error) audit.Call {
+	return audit.Call{Op: audit.OpSend, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err}
+}
+
+// rejected passes a refused credential to the identity Source, which re-reads the token and
+// writes the audit row. Its own failure is logged: it is where an operator learns the token
+// cannot be read.
+func (m *Manager) rejected(t *tstate, err error) {
+	if t.b.Rejected == nil {
+		return
+	}
+	if rerr := t.b.Rejected(context.WithoutCancel(m.ctx), t.actor(), t.call(err)); rerr != nil {
+		m.cfg.Logger.Error("credential rejection bookkeeping", "key", t.key, "error", rerr)
+	}
+}
+
+// audit records a call outcome the manager alone knows about. A failed write is logged, and
+// never blocks the turn (spec 8.6 step 7).
+func (m *Manager) audit(t *tstate, err error) {
+	if m.cfg.Audit == nil {
+		return
+	}
+	if aerr := m.cfg.Audit.AgentCall(context.WithoutCancel(m.ctx), t.actor(), t.call(err)); aerr != nil {
+		m.cfg.Logger.Error("audit write failed", "key", t.key, "error", aerr)
+	}
 }
 
 // message builds the A2A message of a turn: exactly one text part (R18), the queue's messageId
