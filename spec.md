@@ -303,7 +303,12 @@ request carries `A2A-Extensions: https://kagent.dev/extensions/hitl/v1`; without
 pause is still `input-required`, with the question (or ADK's approval hint) as text.
 a2a-go v2.6.0's `a2aext.NewActivator` puts that header on the wire only when the agent card
 lists the URI under `capabilities.extensions` (Q1, measured with controls). Whether a reply
-must also carry the header is not measured.
+must also carry the header is not measured. The payload's presence is fixed when the pause
+is created, not when it is read: a later `ListTasks` without the header still shows each
+pause as its creating request left it (WP-03 fixture oidc-identity/16, measured), and
+a2a-go returns stored tasks unfiltered on `GetTask` too (source). So the `kagent-v1`
+dialect sends the header on every send, resend and answer, and a pause re-read after a
+restart (WP-33) has its payload only if the turn that made it carried the header.
 
 **google/ax.** ax has no message model, so courier does not call it. Two supported
 patterns, both of which look like a plain A2A backend to courier:
