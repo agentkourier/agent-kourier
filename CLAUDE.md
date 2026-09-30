@@ -36,7 +36,8 @@ Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive)
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
 - `make fmt lint test build tidy`: `test` runs `go test -race ./...`; `build` writes `bin/courier`.
-- `make e2e-fast-up e2e-fast e2e-full-up e2e-full e2e-down`: stubs until WP-13 / WP-01 / WP-14.
+- `make e2e-fast-up` / `e2e-full-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
+  `e2e-full-down` and `e2e-down` (both) tear them down. `e2e-fast` / `e2e-full` are stubs until WP-14.
 - Add tools with `go get -tool <module>/cmd/<tool>@<version>`.
 
 ## Work-package workflow
