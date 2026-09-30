@@ -65,7 +65,9 @@ type TurnRef struct {
 }
 
 // Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
-// handler for one turn's events, FinalEvent included, or nil.
+// handler for one turn's events, FinalEvent included, or nil. The handler runs on the goroutine
+// that reads the agent's stream, so it must not block: a slow renderer stalls the read, and
+// can trip the inactivity watchdog into a needless reconnect.
 type Sink interface {
 	Turn(ctx context.Context, t TurnRef) agent.Handler
 }
@@ -94,7 +96,7 @@ type Manager struct {
 	// unrecorded holds, per conversation, the turn the agent took but that could not be
 	// recorded, so that no wake sends it again.
 	unrecorded map[Key]string
-	closed     bool
+	closed     bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
 	intake sync.Mutex

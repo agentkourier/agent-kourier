@@ -352,7 +352,8 @@ func TestSubmitWakesOutsideTheIntakeLock(t *testing.T) {
 
 // Two Submits that both find no session must not both make one: the second would replace a
 // row the first's turn may already have filled in. The gate holds the first read open long
-// enough for an unserialized second one to find no session too.
+// enough for an unserialized second one to find no session too. The correct path always waits
+// the full 200 ms: the second Submit cannot get in while the first holds the lock.
 func TestSubmitConcurrentCreate(t *testing.T) {
 	f := newFixture(t)
 	f.st.gate = make(chan struct{})

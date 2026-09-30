@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,8 +91,15 @@ func (u fakeUsers) ResolveUser(_ context.Context, id string) (dialect.User, erro
 func (f *fixture) live() *fakeSink {
 	sink := &fakeSink{finals: make(chan struct{}, 16)}
 	f.m.cfg.Sink, f.m.wake = sink, f.m.start
-	f.t.Cleanup(func() { _ = f.m.Close(context.Background()) })
+	f.t.Cleanup(func() { _ = f.close() })
 	return sink
+}
+
+// close closes the manager, failing the test if it does not return in 5 s.
+func (f *fixture) close() error {
+	ctx, cancel := context.WithTimeout(f.t.Context(), 5*time.Second)
+	defer cancel()
+	return f.m.Close(ctx)
 }
 
 func eventually(t *testing.T, what string, cond func() bool) {
@@ -203,7 +211,7 @@ func TestInputRequiredParksTheConversation(t *testing.T) {
 		t.Errorf("%s was sent although the task waits for input", id)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if err := f.m.Close(t.Context()); err != nil { // Close leaves the state as it is, for recovery
+	if err := f.close(); err != nil { // Close leaves the state as it is, for recovery
 		t.Fatal(err)
 	}
 	if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != second.MessageID || f.taskID() != "t1" {
@@ -264,7 +272,7 @@ func TestCloseLeavesAnAcceptedTurnRecorded(t *testing.T) {
 	}
 	<-f.agent.sent
 	eventually(t, "the task to be recorded", func() bool { return f.taskID() == "t1" })
-	if err := f.m.Close(t.Context()); err != nil {
+	if err := f.close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.st.NextReply(t.Context(), key); !errors.Is(err, store.ErrNotFound) || f.taskID() != "t1" {
@@ -374,4 +382,26 @@ func TestRecordingRetriesATransientFailure(t *testing.T) {
 		_, err := f.st.NextReply(t.Context(), key)
 		return errors.Is(err, store.ErrNotFound) && f.taskID() == ""
 	})
+}
+
+// Close returns only after the runners have: a turn that is still writing when Close returns
+// would race whatever the caller does next, such as closing the store.
+func TestCloseWaitsForTheRunners(t *testing.T) {
+	f := newFixture(t)
+	f.live()
+	var finished atomic.Bool
+	f.agent.script = func(ctx context.Context, n int, h agent.Handler) error {
+		accepted(h, n)
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond) // a runner that is slow to wind down
+		finished.Store(true)
+		return ctx.Err()
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-f.agent.sent
+	if err := f.close(); err != nil || !finished.Load() {
+		t.Errorf("Close = %v, runner finished %v; want it to return only after the runner did", err, finished.Load())
+	}
 }
