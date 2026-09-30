@@ -90,6 +90,8 @@ const (
 	NoticeRetrying NoticeKind = "retrying"
 	// NoticeFailed says the turn failed and will not be sent; Detail says why.
 	NoticeFailed NoticeKind = "failed"
+	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).
+	NoticeDuplicateRun NoticeKind = "duplicate_run"
 )
 
 // Notice is something for the thread that no turn's output says. ID is stable, so a renderer

@@ -20,6 +20,7 @@ type convo struct {
 	again    bool          // a wake arrived while the runner was busy
 	tries    int           // sends of the head turn that failed in a way to retry, in a row
 	since    time.Time     // when the first of them failed, for SendGiveUp
+	patient  bool          // the turn is never given up on: the agent has it, or its session is busy
 	ttl      time.Duration // the Binding's threadTTL, for end
 	parked   a2a.TaskID    // the task the runner waits on, while it waits for input
 	released bool          // the pause ended, and the runner has not yet moved on
@@ -156,28 +157,38 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
 	}
-	if err := m.held(key, r.ID, sess); err != nil {
-		return idle, err
-	}
 	c.ttl = backend.ThreadTTL
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
 	send := func(h agent.Handler) error { return backend.Agent.Send(m.ctx, m.message(r, sess, backend), h) }
+	hold := m.held(key, r.ID, sess)
 	m.mu.Lock()
 	resend := m.attempted[key] == r.ID // sent before, and not known to have been taken
 	m.attempted[key] = r.ID
 	m.mu.Unlock()
-	if resend && sess.ContextID != "" {
-		// A resend into an existing context is not deduplicated by the agent, so look the turn up
-		// first, whatever failed the first time: if the agent recorded it after all, follow that
-		// task instead (spec 8.2).
-		task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, r.ID)
-		if err != nil {
-			c.tries++
-			return blocked, fmt.Errorf("look up turn %s: %w", r.ID, err)
+	if hold != nil || resend {
+		// The agent may already have this turn, and a resend into an existing context is not
+		// deduplicated, so look it up first, whatever failed the first time: found, it is followed
+		// (a duplicate run is reported); absent, it is sent. A lookup that fails means nothing is
+		// known, so nothing is sent (spec 8.2). A first turn has no context to look in, and its
+		// resend is deduplicated.
+		if sess.ContextID != "" {
+			task, holders, err := backend.Agent.FindTask(m.ctx, sess.ContextID, r.ID)
+			switch {
+			case err != nil:
+				c.patient = c.patient || hold != nil // a turn the agent took is never failed
+				return m.retry(t, fmt.Errorf("look up turn %s: %w", r.ID, err))
+			case task != nil:
+				if len(holders) > 1 {
+					m.duplicates(t, holders)
+				}
+				send = func(h agent.Handler) error { return backend.Agent.Follow(m.ctx, task.ID, h) }
+			case sess.TaskID != "": // absent, and a task of the session runs: this turn is behind it
+				return idle, hold
+			}
+		} else if sess.TaskID != "" {
+			return idle, hold
 		}
-		if task != nil {
-			send = func(h agent.Handler) error { return backend.Agent.Follow(m.ctx, task.ID, h) }
-		}
+		m.release(key, r.ID) // reconciled: followed, or the agent never had it
 	}
 	return m.drive(t, send)
 }
@@ -209,7 +220,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 		switch ev := e.(type) {
 		case agent.StateEvent:
 			if !named { // the agent has named the task: record it before anyone renders it
-				named, c.tries, c.since = true, 0, time.Time{}
+				named, c.tries, c.since, c.patient = true, 0, time.Time{}, false
 				if recordErr = m.accept(sctx, r, ev); recordErr == nil {
 					m.mu.Lock()
 					delete(m.attempted, key) // taken and recorded: never a resend
@@ -251,31 +262,50 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 		m.rejected(t, err)
 		return m.fail(t, "the agent's front door refused the Binding's credentials", err)
 	case errors.Is(err, agent.ErrForbidden):
-		m.audit(t, err)
+		m.audit(t, t.call(err))
 		return m.fail(t, "the agent refused the Binding's identity for this session", err)
 	case errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later, never give up
 		t.c.tries++
+		t.c.patient = true
 		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
-	case errors.Is(err, agent.ErrNotSent): // nothing left: safe to retry, for a while
-		now := m.cfg.Now()
-		if t.c.since.IsZero() {
-			t.c.since = now
-		}
-		if now.Sub(t.c.since) >= m.cfg.SendGiveUp {
-			return m.fail(t, "the agent could not be reached", err)
-		}
-		if t.c.tries++; t.c.tries == 1 {
-			m.notice(t, NoticeRetrying, "")
-		}
-		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+	case errors.Is(err, agent.ErrOutcomeUnknown): // the agent may have taken it: looked up before any resend
+		return m.retry(t, err)
+	case errors.Is(err, agent.ErrNotSent): // nothing left, so nothing to look up: safe to retry
+		m.mu.Lock()
+		delete(m.attempted, t.key)
+		m.mu.Unlock()
+		return m.retry(t, err)
 	}
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+}
+
+// retry waits and tries the head turn again. It gives up, failing the turn, after SendGiveUp of
+// failures, unless the turn is one never to give up on. The first time, it tells the thread.
+func (m *Manager) retry(t *tstate, err error) (outcome, error) {
+	c := t.c
+	if c.since.IsZero() {
+		c.since = m.cfg.Now()
+	}
+	if !c.patient && m.cfg.Now().Sub(c.since) >= m.cfg.SendGiveUp {
+		return m.fail(t, "the agent could not be reached", err)
+	}
+	if c.tries++; c.tries == 1 {
+		m.notice(t, NoticeRetrying, "")
+	}
+	return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+}
+
+// duplicates reports a turn the agent ran more than once: the thread is told, and the audit
+// log records every holder.
+func (m *Manager) duplicates(t *tstate, holders []a2a.TaskID) {
+	m.notice(t, NoticeDuplicateRun, "")
+	m.audit(t, audit.Call{Op: audit.OpFindTask, ContextID: t.sess.ContextID, MessageID: t.r.ID, Holders: holders})
 }
 
 // fail ends the turn without a task: it is not sent again, the thread is told why, and the
 // queue goes on.
 func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
-	t.c.tries, t.c.since = 0, time.Time{}
+	t.c.tries, t.c.since, t.c.patient = 0, time.Time{}, false
 	m.mu.Lock()
 	delete(m.attempted, t.key) // it will not be sent again
 	m.mu.Unlock()
@@ -317,11 +347,11 @@ func (m *Manager) rejected(t *tstate, err error) {
 
 // audit records a call outcome the manager alone knows about. A failed write is logged, and
 // never blocks the turn (spec 8.6 step 7).
-func (m *Manager) audit(t *tstate, err error) {
+func (m *Manager) audit(t *tstate, call audit.Call) {
 	if m.cfg.Audit == nil {
 		return
 	}
-	if aerr := m.cfg.Audit.AgentCall(context.WithoutCancel(m.ctx), t.actor(), t.call(err)); aerr != nil {
+	if aerr := m.cfg.Audit.AgentCall(context.WithoutCancel(m.ctx), t.actor(), call); aerr != nil {
 		m.cfg.Logger.Error("audit write failed", "key", t.key, "error", aerr)
 	}
 }
@@ -367,6 +397,15 @@ func (m *Manager) held(key Key, id string, sess store.Session) error {
 		return fmt.Errorf("the agent took turn %s but it was never recorded, not sending it again: %w", id, errHeld)
 	}
 	return nil
+}
+
+// release lifts the hold on turn id: it was reconciled.
+func (m *Manager) release(key Key, id string) {
+	m.mu.Lock()
+	if m.unrecorded[key] == id {
+		delete(m.unrecorded, key)
+	}
+	m.mu.Unlock()
 }
 
 // hold makes no wake send turn id again, until reconciliation lifts it.

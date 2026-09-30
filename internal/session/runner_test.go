@@ -384,32 +384,52 @@ func TestEndedTurnDoesNotReviveAnExpiredSession(t *testing.T) {
 	}
 }
 
-// If the turn cannot be recorded, it must not be sent again: the agent has taken it, and a
-// resend into its context runs it a second time (spec 8.2). The turn fails after a bounded
-// retry, the runner stops, and no later wake sends it either: the head stays queued (and the
-// task, if it was recorded, stays set) for reconciliation.
-func TestUnrecordedTurnIsNeverResent(t *testing.T) {
-	for call, wantTask := range map[string]string{"set": "", "mark": "t1"} {
+// counts returns how many sends, lookups and follows the agent has had.
+func (a *fakeAgent) counts() (sends, finds, follows int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.msgs), len(a.finds), len(a.follows)
+}
+
+// If the turn cannot be recorded, the runner stops instead of resending it in a loop, and
+// what a later wake does is reconciliation (spec 8.2). With a context, the lookup finds the
+// turn the agent took, which is followed, never sent again. A first turn has no context to
+// look in, and its resend, with the same messageId and none, is deduplicated by the agent.
+func TestUnrecordedTurnIsReconciledNotResent(t *testing.T) {
+	for _, call := range []string{"mark", "set"} { // "mark" leaves the context recorded, "set" does not
 		t.Run(call, func(t *testing.T) {
 			f := newFixture(t)
 			f.live()
 			f.st.stuck[call] = errors.New("disk full")
-			in := inbound("1")
-			for i := range 2 { // the event, then its redelivery
-				if _, err := f.submit(in); err != nil {
-					t.Fatal(err)
-				}
-				if i == 0 {
-					<-f.agent.sent
-				}
-				select {
-				case id := <-f.agent.sent:
-					t.Fatalf("%s was sent a second time", id)
-				case <-time.After(150 * time.Millisecond):
-				}
+			f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+				return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
 			}
-			if next, err := f.st.NextReply(t.Context(), key); err != nil || next.ID != in.MessageID || f.taskID() != wantTask {
-				t.Errorf("queue head %+v, %v; task %q; want the turn still queued and task %q", next, err, f.taskID(), wantTask)
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+			in := inbound("1")
+			if _, err := f.submit(in); err != nil {
+				t.Fatal(err)
+			}
+			<-f.agent.sent
+			select { // with nothing to wake it, the runner does not send again
+			case id := <-f.agent.sent:
+				t.Fatalf("%s was sent a second time", id)
+			case <-time.After(150 * time.Millisecond):
+			}
+			if _, err := f.submit(in); err != nil { // the redelivery
+				t.Fatal(err)
+			}
+			if call == "mark" {
+				eventually(t, "the turn to be followed", func() bool { _, _, fo := f.agent.counts(); return fo == 1 })
+				if sends, _, _ := f.agent.counts(); sends != 1 {
+					t.Errorf("%d sends; want the turn followed through the lookup, not sent again", sends)
+				}
+				return
+			}
+			eventually(t, "the turn to be sent again", func() bool { s, _, _ := f.agent.counts(); return s == 2 })
+			f.agent.mu.Lock()
+			defer f.agent.mu.Unlock()
+			if m := f.agent.msgs[1]; m.ID != in.MessageID || m.ContextID != "" || len(f.agent.finds) != 0 {
+				t.Errorf("resent %s in context %q after %d lookups; want the same messageId, no context, no lookup", m.ID, m.ContextID, len(f.agent.finds))
 			}
 		})
 	}
@@ -482,21 +502,34 @@ func TestSessionWithAnActiveTaskIsNotSentInto(t *testing.T) {
 	}
 }
 
-// If the agent ends a stream without naming a task, it may still have run the turn: it is
-// not sent again either.
-func TestTurnWithNoNamedTaskIsNotSentAgain(t *testing.T) {
+// If the agent ends a stream without naming a task, it may still have run the turn: the
+// next wake looks it up, and follows what it finds, instead of sending it into the context.
+func TestTurnWithNoNamedTaskIsLookedUpNotResent(t *testing.T) {
 	f := newFixture(t)
-	f.live()
-	f.agent.script = func(context.Context, int, agent.Handler) error { return nil }
+	sink := f.live()
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 1 {
+			return nil // turn 2: the stream ends clean, naming nothing
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return &a2a.Task{ID: "t9", ContextID: "c1"}, []a2a.TaskID{"t9"}, nil
+	}
+	f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 8, a2a.TaskStateCompleted) }
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-sink.finals
+	eventually(t, "turn 1 to end", func() bool { return f.taskID() == "" })
 	for range 2 { // the event, then its redelivery
-		if _, err := f.submit(inbound("1")); err != nil {
+		if _, err := f.submit(inbound("2")); err != nil {
 			t.Fatal(err)
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	<-f.agent.sent
-	select {
-	case id := <-f.agent.sent:
-		t.Fatalf("%s was sent again", id)
-	case <-time.After(150 * time.Millisecond):
+	eventually(t, "the turn to be followed", func() bool { _, _, fo := f.agent.counts(); return fo >= 1 })
+	if sends, _, _ := f.agent.counts(); sends != 2 {
+		t.Errorf("%d sends; want turn 1, and turn 2 once", sends)
 	}
 }
