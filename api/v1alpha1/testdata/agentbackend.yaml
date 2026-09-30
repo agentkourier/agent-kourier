@@ -1,0 +1,8 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: kagent-pilot, namespace: courier-system }
+spec:
+  dialect: kagent-v1                 # a2a | kagent-v1
+  url: http://kagent-controller.kagent-pilot:8083
+  headers: []                        # static headers, values may come from Secrets
+  allowedNamespaces: ["sre", "payments"]

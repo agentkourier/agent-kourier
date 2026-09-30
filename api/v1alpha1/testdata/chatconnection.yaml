@@ -1,0 +1,10 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: slack-main, namespace: courier-system }
+spec:
+  platform: slack
+  mode: socket                       # socket | http
+  credentialsSecretRef: { name: slack-main }   # bot token, app token or signing secret
+  directMessages:
+    defaultBindingRef: { namespace: sre, name: sre-alerts }
+  allowedNamespaces: ["sre", "payments"]

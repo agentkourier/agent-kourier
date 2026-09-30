@@ -1,0 +1,34 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: { name: sre-alerts, namespace: sre }
+spec:
+  agent:
+    backendRef: { namespace: courier-system, name: kagent-pilot }
+    name: k8s-agent
+    namespace: kagent
+  identity:                          # every turn in this binding runs as this identity
+    userId: courier-sre-alerts       # insecure mode: sent as X-User-Id
+    tokenSecretRef: { name: courier-sre-alerts-oidc }  # OIDC mode (pilot default, D32)
+  chat:
+    connectionRef: { namespace: courier-system, name: slack-main }
+    channel: C0123456789             # investigation channel ID, not name
+    output: live                     # live | final
+  alerts:
+    type: alertmanager
+    tokenSecretRef: { name: courier-webhook-token }  # same namespace as the Binding
+    promptTemplate: |                # Go template over the normalized AlertEvent
+      Investigate this alert and report likely cause and next steps.
+    rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }
+    maxRunsPerDay: 40
+  interactions:
+    askUser: true
+    toolApprovals: false             # Phase 5
+    timeout: 30m
+    approverGroups: []               # reserved, see R1; empty = any channel member
+  feedback:
+    enabled: true
+  session:
+    threadTTL: 2160h                 # 90 days
+status:
+  conditions: []                     # Ready, BackendReachable, ChannelJoined
+  webhookPath: /hooks/alertmanager/sre/sre-alerts

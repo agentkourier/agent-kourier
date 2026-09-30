@@ -1,0 +1,10 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: { name: chat-only, namespace: sre }
+spec:
+  agent:
+    backendRef: { name: kagent-pilot }
+    name: k8s-agent
+    namespace: kagent
+  identity: { userId: courier-chat-only }
+  chat: { connectionRef: { name: slack-main }, channel: G0123456789 }
