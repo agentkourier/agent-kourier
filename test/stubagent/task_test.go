@@ -1,6 +1,8 @@
 package stubagent_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -58,20 +60,31 @@ func TestDroppedStreamDoesNotStopTheTurn(t *testing.T) {
 	_ = st.resp.Body.Close()
 
 	s.Release("go")
+	if err := s.WaitTurn(t.Context(), taskID); err != nil {
+		t.Fatalf("WaitTurn: %v", err)
+	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		_, got := c.call("GetTask", obj{"id": taskID})
-		if _, _, state := ids(got); state == completed {
-			if text := taskText(got); text != "tick 1 tick 2 " {
-				t.Errorf("final text = %q, want both ticks", text)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the task did not complete after the stream was dropped: %v", got)
-		}
-		time.Sleep(5 * time.Millisecond)
+	_, got := c.call("GetTask", obj{"id": taskID})
+	if _, _, state := ids(got); state != completed || taskText(got) != "tick 1 tick 2 " {
+		t.Errorf("after the stream was dropped: state %s, text %q, want %s and both ticks", state, taskText(got), completed)
+	}
+}
+
+func TestWaitTurn(t *testing.T) {
+	s, agent, c := newAgent(t)
+	slowTurn(agent)
+	st, taskID, _ := startSlow(c)
+	_ = st.resp.Body.Close()
+
+	held, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	waiting := s.WaitTurn(held, taskID) // the turn is at the gate
+	s.Release("go")
+	released := s.WaitTurn(t.Context(), taskID)
+	unknown := s.WaitTurn(t.Context(), "nope")
+
+	if !errors.Is(waiting, context.DeadlineExceeded) || released != nil || unknown == nil {
+		t.Errorf("WaitTurn while held = %v, after release = %v, unknown task = %v; want a deadline, nil and an error", waiting, released, unknown)
 	}
 }
 
@@ -149,7 +162,9 @@ func TestCancelTaskStopsTheTurn(t *testing.T) {
 		t.Errorf("open stream ended with %s, want task:CANCELED", describe(last(rest)))
 	}
 	s.Release("go")
-	time.Sleep(20 * time.Millisecond) // long enough for a turn that wrongly went on to have said so
+	if err := s.WaitTurn(t.Context(), taskID); err != nil { // the turn has ended, so it has said all it will
+		t.Fatalf("WaitTurn: %v", err)
+	}
 	_, again := c.call("GetTask", obj{"id": taskID})
 	if _, _, state := ids(again); state != canceled || taskText(again) != "tick 1 " {
 		t.Errorf("after the gate opened: state %s, text %q, want %s and %q", state, taskText(again), canceled, "tick 1 ")

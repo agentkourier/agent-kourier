@@ -57,6 +57,8 @@ func dig(v any, keys ...string) any {
 // busyError is kagent's answer to a message its session cannot take.
 func busyError(msg string) *rpcError { return &rpcError{codeBusy, msg, "UNSUPPORTED_OPERATION"} }
 
+// taskNotFound is -32001 for a task id the agent does not know.
+// UNCONFIRMED: no fixture shows kagent's answer; this is A2A's TaskNotFound.
 func taskNotFound() *rpcError { return &rpcError{codeTaskNotFound, "task not found", "TASK_NOT_FOUND"} }
 
 // invalidParams is -32602. Its message ends ": invalid params", as a2a-go's does: a2a-go v2.6.0

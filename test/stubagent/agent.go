@@ -182,8 +182,11 @@ func validateMessage(m obj) *rpcError {
 // admit turns a message into a running task: it finds or opens the session, creates the task
 // with the events kagent opens a stream with, and starts the turn.
 //
-// A message whose messageId was accepted before is a replay: it joins that task, and runs no
-// turn (WP-02, measured). A message that is rejected is not remembered, so it can be resent.
+// A message whose messageId was accepted before is a replay: if it names no contextId it joins
+// that task and runs no turn (WP-02, measured; see gate for one that does). A message that is
+// rejected is not remembered, so it can be resent. UNCONFIRMED: that a unary SendMessage
+// replay blocks until the task's final snapshot, as a stream would, and that replaying the
+// messageId of a cancelled task answers its CANCELED snapshot.
 //
 // A Reply function runs outside the lock, so it may call the Server. The lock is open while it
 // runs, so the checks are made again after it: it may have run for a message that is then
@@ -219,17 +222,24 @@ func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 // messageId, resume a task it replies to, or be rejected (denied, busy). Otherwise it returns
 // the session the message starts a task in. The caller holds s.mu.
 func (a *Agent) gate(id string, m obj, owner string) (*stream, *session, *rpcError) {
-	if prior := a.messages[id]; prior != nil {
+	taskID, _ := m["taskId"].(string)
+	ctxID, _ := m["contextId"].(string)
+	// A replay joins the task it started, but only one that names no contextId is deduplicated:
+	// WP-02 measured that (session, inflight). A replay that carries a contextId is a new
+	// message to kagent: busy while the task runs, a second run of the turn after it ended
+	// (measured by WP-03, oidc-replay; spec 8.2).
+	// UNCONFIRMED: a replay of a reply to a task, which carries a taskId, is deduplicated
+	// whatever else it carries; that is not measured.
+	if prior := a.messages[id]; prior != nil && (ctxID == "" || taskID != "") {
 		if prior.sess.owner != owner {
 			return nil, nil, deniedError()
 		}
 		return prior.join(), nil, nil
 	}
-	if taskID, _ := m["taskId"].(string); taskID != "" {
+	if taskID != "" {
 		st, err := a.resume(id, taskID, m, owner)
 		return st, nil, err
 	}
-	ctxID, _ := m["contextId"].(string)
 	sess, err := a.session(ctxID, owner)
 	if err != nil {
 		return nil, nil, err
@@ -346,8 +356,10 @@ func (a *Agent) getTask(o *rw, params json.RawMessage) {
 	o.done()
 }
 
-// cancelTask stops the task's turn and ends its streams with the CANCELED task.
-// UNCONFIRMED: cancelling a task that is already completed or cancelled answers -32002.
+// cancelTask stops the task's turn and ends its streams with the CANCELED task. The result is
+// the CANCELED task with the text so far (busy/04, measured).
+// UNCONFIRMED: an already open stream ending with the CANCELED task snapshot, and cancelling a
+// task that is already completed or cancelled answering -32002.
 func (a *Agent) cancelTask(o *rw, params json.RawMessage) {
 	a.s.mu.Lock()
 	t, err := a.find(params, o.owner)
@@ -389,10 +401,12 @@ func (a *Agent) session(ctxID, owner string) (*session, *rpcError) {
 // launch plays steps for the task in the background. The caller holds s.mu.
 func (a *Agent) launch(t *task, steps []Step) {
 	ctx, stop := context.WithCancel(a.s.ctx)
-	t.stop = stop
+	t.stop, t.done = stop, make(chan struct{})
+	done := t.done
 	a.s.wg.Add(1)
 	go func() {
 		defer a.s.wg.Done()
+		defer close(done)
 		defer stop()
 		r := &run{s: a.s, t: t, ctx: ctx}
 		for _, st := range steps {
@@ -405,7 +419,9 @@ func (a *Agent) launch(t *task, steps []Step) {
 }
 
 // subscribeTask streams a task that is already running: a snapshot with the text so far, then
-// what happens next. For a task that is not running, the snapshot is the whole answer.
+// what happens next. For a task that is not running, the snapshot is the whole answer: measured
+// for a completed task (inflight/03).
+// UNCONFIRMED: the same for a task that was cancelled or is paused.
 func (a *Agent) subscribeTask(ctx context.Context, o *rw, params json.RawMessage) {
 	a.s.mu.Lock()
 	t, err := a.find(params, o.owner)

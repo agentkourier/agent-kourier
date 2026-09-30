@@ -1,6 +1,7 @@
 package stubagent_test
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,5 +81,39 @@ func TestTickPausesBetweenChunks(t *testing.T) {
 
 	if took := time.Since(start); took < 2*tick {
 		t.Errorf("three chunks took %v, want at least two ticks (%v)", took, 2*tick)
+	}
+}
+
+func TestEmptyChunksAreSkipped(t *testing.T) {
+	_, agent, c := newAgent(t)
+	agent.Next(stubagent.Text("", "a", ""), stubagent.Text(""))
+
+	evs := c.send(msg("m1", "hi", ""))
+
+	if got, want := shape(evs[3:]), "artifact, artifact+last, task:COMPLETED"; got != want || taskText(last(evs)) != "a" {
+		t.Errorf("shape = %s, text %q; want %s and %q", got, taskText(last(evs)), want, "a")
+	}
+}
+
+// TestEveryEventHasItsOwnTimelinePosition: kagent stamps each artifact event (livestream
+// fixture), and the artifact in a task snapshot carries the position of its latest event.
+func TestEveryEventHasItsOwnTimelinePosition(t *testing.T) {
+	var nanos atomic.Int64
+	clock := func() time.Time { return time.Unix(0, nanos.Add(int64(time.Millisecond))).UTC() }
+	_, agent, c := newAgent(t, stubagent.WithClock(clock))
+	agent.Next(stubagent.Text("a", "b"), stubagent.Tool("t", nil, nil))
+
+	evs := c.send(msg("m1", "hi", ""))
+
+	pos := func(ev obj) any {
+		return dig(ev, "result", "artifactUpdate", "artifact", "metadata", "kagent.dev/a2a/timeline-position")
+	}
+	// events 3, 4 and 5 are the two chunks and the lastChunk of one artifact
+	if pos(evs[3]) == pos(evs[4]) || pos(evs[4]) == pos(evs[5]) || pos(evs[3]) == pos(evs[5]) {
+		t.Errorf("chunk positions %v, %v and lastChunk %v, want three different ones", pos(evs[3]), pos(evs[4]), pos(evs[5]))
+	}
+	arts, _ := dig(last(evs), "result", "task", "artifacts").([]any)
+	if len(arts) == 0 || dig(arts[0], "metadata", "kagent.dev/a2a/timeline-position") != pos(evs[5]) {
+		t.Errorf("the snapshot's artifact position is not its lastChunk's %v: %v", pos(evs[5]), arts)
 	}
 }

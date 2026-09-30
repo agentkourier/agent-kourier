@@ -118,6 +118,34 @@ func TestReplayWhileRunningJoinsTheLiveTurn(t *testing.T) {
 	}
 }
 
+// TestReplayCarryingAContextIDIsNotDeduplicated: WP-03 measured (oidc-replay, spec 8.2) that a
+// replay with a contextId is not the WP-02 replay without one: while the task runs it is
+// refused as busy, and after the task ended it starts a second task in the context, a
+// duplicate run of the turn.
+func TestReplayCarryingAContextIDIsNotDeduplicated(t *testing.T) {
+	s, agent, c := newAgent(t)
+	slowTurn(agent)
+	agent.Next(stubagent.Text("again"))
+	st, taskID, ctxID := startSlow(c)
+	_ = st.resp.Body.Close()
+
+	_, running := c.call("SendStreamingMessage", msg("m1", "go slowly", ctxID))
+	s.Release("go")
+	if err := s.WaitTurn(t.Context(), taskID); err != nil {
+		t.Fatalf("WaitTurn: %v", err)
+	}
+	evs := c.send(msg("m1", "go slowly", ctxID))
+
+	info, _ := dig(running, "error", "data").([]any)
+	if dig(running, "error", "code") != float64(-32004) || dig(running, "error", "message") != "resource conflict" || len(info) != 1 || dig(info[0], "reason") != "UNSUPPORTED_OPERATION" {
+		t.Errorf("replay with a contextId while running = %v, want -32004 resource conflict, UNSUPPORTED_OPERATION", running)
+	}
+	id, ctx, state := ids(last(evs))
+	if id == taskID || ctx != ctxID || state != completed || taskText(last(evs)) != "again" {
+		t.Errorf("replay with a contextId after the task ended: task %s in %s, %s, text %q; want a new task in %s running the turn again", id, ctx, state, taskText(last(evs)), ctxID)
+	}
+}
+
 func TestToolCallAndResultAreDataArtifacts(t *testing.T) {
 	_, agent, c := newAgent(t)
 	agent.Next(stubagent.Text("a "), stubagent.Tool("add_numbers", obj{"a": 3, "b": 5}, obj{"output": "8"}), stubagent.Text("b "))

@@ -109,6 +109,30 @@ func (s *Server) Close() {
 	s.wg.Wait()
 }
 
+// WaitTurn waits for the turn last played for the task to end: it completed, paused for input,
+// or was cancelled. A test uses it to know that a turn has said all it will, whatever a
+// client has read. It returns at once if the turn is over, and an error if the task is unknown
+// or ctx ends first.
+func (s *Server) WaitTurn(ctx context.Context, taskID string) error {
+	var done chan struct{}
+	s.mu.Lock()
+	for _, a := range s.agents {
+		if t := a.tasks[taskID]; t != nil {
+			done = t.done
+		}
+	}
+	s.mu.Unlock()
+	if done == nil {
+		return fmt.Errorf("stubagent: no task %q", taskID)
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for the turn of task %s: %w", taskID, ctx.Err())
+	}
+}
+
 // Release opens the gate that Hold steps wait at. A gate stays open, so releasing it before a
 // turn gets there lets that turn straight through.
 func (s *Server) Release(gate string) {

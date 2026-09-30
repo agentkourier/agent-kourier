@@ -14,14 +14,15 @@ type Step interface {
 
 // Text streams text as kagent does: one artifact, its first chunk without append, the others
 // with append: true, then a lastChunk event holding the full text with no append. Consecutive
-// Text steps feed the same artifact. With WithTick the server pauses between chunks.
+// Text steps feed the same artifact, and an empty chunk is skipped. With WithTick the server
+// pauses between chunks.
 func Text(chunks ...string) Step { return textStep(chunks) }
 
 type textStep []string
 
 func (ts textStep) play(r *run) bool {
 	for _, c := range ts {
-		if !r.chunk(c) {
+		if c != "" && !r.chunk(c) {
 			return false
 		}
 	}
@@ -30,6 +31,8 @@ func (ts textStep) play(r *run) bool {
 
 // Tool records a tool call and its result as kagent does: each is its own data-part artifact,
 // a single lastChunk event, apart from the text. It ends the open text artifact.
+// UNCONFIRMED: that text followed by a tool call is closed with its lastChunk event before the
+// call; the fixtures have no text ahead of a tool call.
 func Tool(name string, args, result map[string]any) Step { return toolStep{name, args, result} }
 
 type toolStep struct {
@@ -102,11 +105,11 @@ func (r *run) chunk(text string) bool {
 	return r.emit(func(t *task) (obj, bool) {
 		appendTo := r.open != nil
 		if !appendTo {
-			r.open, r.text = &artifact{id: r.s.newID("artifact"), stamp: r.s.stamp()}, ""
+			r.open, r.text = &artifact{id: r.s.newID("artifact")}, ""
 			t.arts = append(t.arts, r.open)
 		}
 		r.text += text
-		r.open.parts = textParts(r.text)
+		r.open.parts, r.open.stamp = textParts(r.text), r.s.stamp() // each event has its own position
 		return t.artifactEvent(r.open, textParts(text), appendTo, false), false
 	})
 }
@@ -118,7 +121,10 @@ func (r *run) endText() bool {
 	}
 	a := r.open
 	r.open = nil
-	return r.emit(func(t *task) (obj, bool) { return t.artifactEvent(a, a.parts, false, true), false })
+	return r.emit(func(t *task) (obj, bool) {
+		a.stamp = r.s.stamp()
+		return t.artifactEvent(a, a.parts, false, true), false
+	})
 }
 
 // pause ends the turn with the task INPUT_REQUIRED, the snapshot as the last event.

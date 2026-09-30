@@ -37,6 +37,7 @@ type task struct {
 	log     []event            // every stream event so far, in order; followers read from an index
 	changed chan struct{}      // closed and replaced whenever log grows
 	stop    context.CancelFunc // ends the playing turn
+	done    chan struct{}      // closed when the turn last launched has ended
 }
 
 // artifact is one artifactId. Its parts always hold what a snapshot shows: the text so far, or
