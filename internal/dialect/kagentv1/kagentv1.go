@@ -86,9 +86,10 @@ func (*Dialect) Authenticate(req *http.Request, creds dialect.Credentials) error
 	return nil
 }
 
-// Attribute records the acting user as message metadata (ActorMetadataKey) and as a leading
-// text part the agent can read, such as "[Slack: Jane Doe (U123) <jane@example.com>]". It
-// changes msg in place, so call it once per message. Names come from users, so the prefix
+// Attribute records the acting user as message metadata (ActorMetadataKey) and as a prefix
+// the agent can read, such as "[Slack: Jane Doe (U123) <jane@example.com>]", at the start of
+// the first text part (its own part only when the message has no text). It changes msg in
+// place, so call it once per message. Names come from users, so the prefix
 // drops control and format characters (bidi overrides, zero-width) and brackets, and is
 // cut short. An actor with no ID is ignored.
 func (*Dialect) Attribute(msg *a2a.Message, actor dialect.User) {
@@ -106,7 +107,24 @@ func (*Dialect) Attribute(msg *a2a.Message, actor dialect.User) {
 		msg.Metadata = map[string]any{}
 	}
 	msg.Metadata[ActorMetadataKey] = meta
-	msg.Parts = append(a2a.ContentParts{a2a.NewTextPart("[Slack: " + who + "]")}, msg.Parts...)
+	msg.Parts = withPrefix(msg.Parts, "[Slack: "+who+"]")
+}
+
+// withPrefix returns parts with prefix at the start of the first text part, then a newline.
+// Without a text part it adds one holding only the prefix. kagent's harness runtime refuses a
+// user message unless it has exactly one text part (spec R18). It returns a new slice and
+// replaces the edited part, because the caller may share both.
+func withPrefix(parts a2a.ContentParts, prefix string) a2a.ContentParts {
+	for i, p := range parts {
+		if text, ok := p.Content.(a2a.Text); ok {
+			edited := *p
+			edited.Content = a2a.Text(prefix + "\n" + string(text))
+			out := append(a2a.ContentParts(nil), parts...)
+			out[i] = &edited
+			return out
+		}
+	}
+	return append(a2a.ContentParts{a2a.NewTextPart(prefix)}, parts...)
 }
 
 // clean makes s safe to show in the attribution prefix.

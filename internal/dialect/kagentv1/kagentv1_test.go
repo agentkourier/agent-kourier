@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -155,11 +156,11 @@ func TestAttribute(t *testing.T) {
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("restart it"))
 	msg.Metadata = map[string]any{"keep": true}
 	(&Dialect{}).Attribute(msg, dialect.User{ID: "U123", Name: "Jane [admin]\nDoe", Email: "jane@example.com"})
-	if len(msg.Parts) != 2 || msg.Parts[1].Text() != "restart it" {
-		t.Fatalf("parts = %+v, want the prefix then the original text", msg.Parts)
+	if len(msg.Parts) != 1 {
+		t.Fatalf("parts = %+v, want one text part (R18)", msg.Parts)
 	}
-	if got, want := msg.Parts[0].Text(), "[Slack: Jane admin Doe (U123) <jane@example.com>]"; got != want {
-		t.Errorf("prefix = %q, want %q", got, want)
+	if got, want := msg.Parts[0].Text(), "[Slack: Jane admin Doe (U123) <jane@example.com>]\nrestart it"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
 	}
 	actor, _ := msg.Metadata[ActorMetadataKey].(map[string]any)
 	if actor["id"] != "U123" || actor["email"] != "jane@example.com" || msg.Metadata["keep"] != true {
@@ -176,7 +177,7 @@ func TestAttribute(t *testing.T) {
 	// Bidi overrides, zero-width characters, and fullwidth brackets go too; long names are cut.
 	odd := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
 	(&Dialect{}).Attribute(odd, dialect.User{ID: "U1", Name: "Ji\u202eane\u200b ［x］＜y＞"})
-	if got, want := odd.Parts[0].Text(), "[Slack: Jiane xy (U1)]"; got != want {
+	if got, want := odd.Parts[0].Text(), "[Slack: Jiane xy (U1)]\nhi"; got != want {
 		t.Errorf("prefix = %q, want %q", got, want)
 	}
 	long := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
@@ -192,7 +193,50 @@ func TestAttribute(t *testing.T) {
 	}
 	none := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
 	(&Dialect{}).Attribute(none, dialect.User{})
-	if len(none.Parts) != 1 || none.Metadata != nil {
+	if len(none.Parts) != 1 || none.Parts[0].Text() != "hi" || none.Metadata != nil {
 		t.Errorf("an unknown actor changed the message: %+v", none)
+	}
+}
+
+func TestAttributePlacesPrefixInFirstTextPart(t *testing.T) {
+	data := a2a.NewDataPart(map[string]any{"k": "v"})
+	raw := a2a.NewRawPart([]byte("png"))
+	first, second := a2a.NewTextPart("one"), a2a.NewTextPart("two")
+	first.MediaType, first.Metadata = "text/plain", map[string]any{"m": 1}
+	prefixed := &a2a.Part{Content: a2a.Text("[Slack: U1]\none"), MediaType: "text/plain", Metadata: first.Metadata}
+	prefixOnly := a2a.NewTextPart("[Slack: U1]")
+	for _, tc := range []struct {
+		name        string
+		parts, want []*a2a.Part
+	}{
+		{"text only stays one part", []*a2a.Part{first}, []*a2a.Part{prefixed}},
+		{"only the first text part changes", []*a2a.Part{data, first, raw, second}, []*a2a.Part{data, prefixed, raw, second}},
+		{"no text gets one prefix part first", []*a2a.Part{data, raw}, []*a2a.Part{prefixOnly, data, raw}},
+		{"no parts gets one prefix part", nil, []*a2a.Part{prefixOnly}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &a2a.Message{Role: a2a.MessageRoleUser, Parts: append(a2a.ContentParts(nil), tc.parts...)}
+			(&Dialect{}).Attribute(msg, dialect.User{ID: "U1"})
+			if !reflect.DeepEqual([]*a2a.Part(msg.Parts), tc.want) {
+				got, _ := json.Marshal(msg.Parts)
+				want, _ := json.Marshal(tc.want)
+				t.Errorf("parts = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+// TestAttributeLeavesTheCallersPartsAlone pins that the caller's part and slice are replaced
+// rather than edited: the same Part may sit in another message.
+func TestAttributeLeavesTheCallersPartsAlone(t *testing.T) {
+	part := a2a.NewTextPart("restart it")
+	parts := a2a.ContentParts{part}
+	msg := &a2a.Message{Parts: parts}
+	(&Dialect{}).Attribute(msg, dialect.User{ID: "U1"})
+	if part.Text() != "restart it" || parts[0] != part {
+		t.Errorf("the caller's part or slice changed: %q", part.Text())
+	}
+	if msg.Parts[0] == part {
+		t.Error("the part was edited in place, not replaced")
 	}
 }
