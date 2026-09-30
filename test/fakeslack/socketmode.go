@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -28,6 +29,7 @@ type sockets struct {
 	conns    []*sockConn          // oldest first; guarded by mu
 	shutdown bool                 // set by Close, guarded by mu
 	closing  chan struct{}        // closed by Close, so that waits for acks end
+	waiters  atomic.Int32         // WaitAck calls about to block or blocked, for tests
 	issued   int                  // envelopes issued, guarded by mu
 	pending  map[string]*envelope // every envelope sent, by envelope_id; guarded by mu
 	wg       sync.WaitGroup       // the handler and ping goroutines

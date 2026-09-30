@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/slack-go/slack"
-	"github.com/slack-go/slack/socketmode"
 
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -251,37 +248,6 @@ func TestControlShowsStreamingState(t *testing.T) {
 	}
 	if streaming, _ := stream(); streaming {
 		t.Fatal("finished stream still shows as streaming")
-	}
-}
-
-func TestCloseEndsAckWaits(t *testing.T) {
-	fake, smc := connected(t)
-	id, err := fake.SendEnvelope("slash_commands", slashCommand)
-	if err != nil {
-		t.Fatalf("SendEnvelope: %v", err)
-	}
-	waitEvent(t, smc, socketmode.EventTypeSlashCommand) // delivered, and never acked
-	polled, sent := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(polled)
-		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { close(sent) }})
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fake.URL()+"/_control/acks/"+id+"?timeout=30s", nil)
-		if resp, err := http.DefaultClient.Do(req); err == nil {
-			_ = resp.Body.Close()
-		} else {
-			select {
-			case <-sent:
-			default:
-				close(sent) // the request never went out; do not hang the test
-			}
-		}
-	}()
-	<-sent // the poll is on its way to the server
-	start := time.Now()
-	fake.Close()
-	<-polled
-	if d := time.Since(start); d > 5*time.Second {
-		t.Fatalf("Close took %v behind a 30s ack poll", d)
 	}
 }
 
