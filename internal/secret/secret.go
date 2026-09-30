@@ -17,6 +17,9 @@ var (
 	// ErrEmptyValue is what a reader wraps when the key exists but holds no bytes. An empty
 	// token is never usable, and would otherwise be sent as an empty credential.
 	ErrEmptyValue = errors.New("empty value")
+	// ErrUnsupportedType is what a reader wraps when the Secret is of a type it never reads
+	// values from, such as a Helm release or a TLS key pair. Only Opaque Secrets are read.
+	ErrUnsupportedType = errors.New("unsupported secret type")
 )
 
 // redacted is what every formatting path prints in place of the value.
@@ -29,6 +32,10 @@ const redacted = "[redacted]"
 // struct field, so it prints the field's representation instead, and a string held inline
 // would be printed in full; a pointer prints as an address. Because of that, == compares
 // identity, not content: compare the results of Reveal.
+//
+// Reflection-based dumpers print the value however it is held: go-spew, apimachinery's
+// dump.Pretty, and go-cmp with AllowUnexported or an Exporter. Never pass them a struct that
+// holds a Value.
 //
 // The zero Value holds the empty string.
 type Value struct {

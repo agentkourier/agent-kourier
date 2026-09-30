@@ -19,15 +19,25 @@
 //
 // # Values
 //
-// The cache holds each Secret's name and data, values included, so that Value costs no API
-// call, and nothing else: the informer's transform drops annotations such as
-// last-applied-configuration, which can hold a second copy of the values. Keys returns names
-// only. Value returns a secret.Value, which no formatting path can print, built from a copy
-// of the bytes, so a Secret's rotation never changes a Value already read.
+// The cache holds each Secret's name, type and data, and nothing else: the informer's
+// transform drops annotations such as last-applied-configuration, which can hold a second
+// copy of the values. Only Opaque Secrets (or an empty type) keep their values, so that
+// Value costs no API call; every other type (a Helm release, a service account token, TLS
+// keys, a docker config) keeps key names only, and Value refuses it. Keys returns names only.
+// Value returns a secret.Value, which no formatting path can print, built from a copy of the
+// bytes, so a Secret's rotation never changes a Value already read.
 //
-// The transform runs after client-go has decoded the response, and client-go logs response
-// bodies, Secret lists included, through klog at verbosity 8 and above. klog verbosity must
-// stay below 8 wherever this package runs.
+// Every Opaque value in each watched namespace stays resident for the life of the process,
+// whether or not any config refers to it. That has these consequences for the deployment:
+//
+//   - klog verbosity is 0 and must stay so. Nothing calls klog.InitFlags, and nothing may
+//     expose -v. The transform runs after client-go has decoded the response, and client-go
+//     logs response bodies, Secret lists included, through klog at verbosity 8 and above.
+//   - GOTRACEBACK=crash must never be set (a core dump holds the heap), and no heap-dump
+//     endpoint may be added. pprof heap profiles hold allocation sites only, not contents.
+//
+// After the pilot, narrow the exposure to the Secrets that config refers to: one informer per
+// referenced Secret, with a metadata.name field selector, and RBAC resourceNames.
 package k8ssecrets
 
 import (
@@ -163,8 +173,9 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 
 // Value returns the value of key in the Secret from the cache; an empty key means
 // v1alpha1.DefaultSecretKey. It fails as get does, and wraps secret.ErrKeyNotFound when the
-// Secret has no such key and secret.ErrEmptyValue when the key holds no bytes. Error
-// messages name the namespace, Secret and key, never the value.
+// Secret has no such key, secret.ErrEmptyValue when the key holds no bytes, and
+// secret.ErrUnsupportedType when the Secret is not Opaque. Error messages name the namespace,
+// Secret and key (and the type), never the value.
 func (r *Resolver) Value(_ context.Context, namespace, name, key string) (secretval.Value, error) {
 	if key == "" {
 		key = v1alpha1.DefaultSecretKey
@@ -175,6 +186,8 @@ func (r *Resolver) Value(_ context.Context, namespace, name, key string) (secret
 	}
 	v, ok := s.Data[key]
 	switch {
+	case !opaque(s.Type):
+		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q of type %q: %w", namespace, name, key, s.Type, secretval.ErrUnsupportedType)
 	case !ok:
 		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrKeyNotFound)
 	case len(v) == 0:
@@ -183,9 +196,13 @@ func (r *Resolver) Value(_ context.Context, namespace, name, key string) (secret
 	return secretval.New(string(v)), nil
 }
 
-// trim is the informer transform. It reduces a Secret to its identity and its data, with
-// StringData folded in as the API server does on write (it wins over Data for a key in both).
-// It returns anything that is not a Secret unchanged.
+// opaque reports whether a Secret of type t may have its values read.
+func opaque(t corev1.SecretType) bool { return t == "" || t == corev1.SecretTypeOpaque }
+
+// trim is the informer transform. It reduces a Secret to its identity, its type and its data,
+// with StringData folded in as the API server does on write (it wins over Data for a key in
+// both). Only an Opaque Secret keeps its values; any other type keeps key names, with nil
+// values. It returns anything that is not a Secret unchanged.
 //
 // It must never return an error: when the store rejects an object, client-go's reflector
 // logs the untransformed object.
@@ -196,11 +213,17 @@ func trim(obj any) (any, error) {
 	}
 	out := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: s.Name, ResourceVersion: s.ResourceVersion},
+		Type:       s.Type,
 		Data:       make(map[string][]byte, len(s.Data)+len(s.StringData)),
 	}
 	maps.Copy(out.Data, s.Data)
 	for k, v := range s.StringData {
 		out.Data[k] = []byte(v)
+	}
+	if !opaque(s.Type) {
+		for k := range out.Data {
+			out.Data[k] = nil
+		}
 	}
 	return out, nil
 }

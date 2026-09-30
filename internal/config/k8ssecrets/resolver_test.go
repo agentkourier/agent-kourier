@@ -193,6 +193,43 @@ func TestValue(t *testing.T) {
 	}
 }
 
+// TestValueOnlyForOpaque: Courier's own tokens live in Opaque Secrets. Any other type (a Helm
+// release, a service account token, TLS keys) keeps its key names for Keys, but its values
+// never enter the cache and Value refuses it.
+func TestValueOnlyForOpaque(t *testing.T) {
+	typed := func(name string, typ corev1.SecretType) *corev1.Secret {
+		s := secret("sre", name)
+		s.Type = typ
+		return s
+	}
+	r := start(t, fake.NewClientset(
+		typed("opaque", corev1.SecretTypeOpaque),
+		typed("tls", corev1.SecretTypeTLS),
+		typed("release", "helm.sh/release.v1"),
+	))
+	if v, err := r.Value(context.Background(), "sre", "opaque", ""); err != nil || v.Reveal() != canary {
+		t.Errorf("Opaque Value = %v, %v; want the value", v, err)
+	}
+	for name, typ := range map[string]string{"tls": "kubernetes.io/tls", "release": "helm.sh/release.v1"} {
+		if keys, err := r.Keys(context.Background(), "sre", name); err != nil || !slices.Equal(keys, []string{"alpha", "middle", "token"}) {
+			t.Errorf("%s Keys = %v, %v; want the key names", name, keys, err)
+		}
+		v, err := r.Value(context.Background(), "sre", name, "")
+		if !errors.Is(err, secretval.ErrUnsupportedType) || !strings.Contains(err.Error(), typ) || v.Reveal() != "" {
+			t.Errorf("%s Value = %v, %v; want ErrUnsupportedType naming %q", name, v, err, typ)
+		}
+		cached, err := r.namespaces["sre"].lister.Secrets("sre").Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, val := range cached.Data {
+			if val != nil {
+				t.Errorf("%s: cached Data[%q] holds a value", name, k)
+			}
+		}
+	}
+}
+
 func TestValueErrors(t *testing.T) {
 	s := secret("sre", "creds")
 	s.Data["empty"] = []byte{}
