@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"strings"
 )
 
-// Agent is one scripted agent. Script it with Next; register it with Server.Agent.
+// Agent is one scripted agent. Script it with Next and Reply; register it with Server.Agent.
 type Agent struct {
 	s    *Server
 	ns   string
@@ -15,6 +16,7 @@ type Agent struct {
 
 	// Guarded by s.mu.
 	turns    [][]Step
+	reply    func(prompt string) []Step
 	sessions map[string]*session
 }
 
@@ -26,14 +28,25 @@ func (a *Agent) Next(steps ...Step) {
 	a.turns = append(a.turns, steps)
 }
 
+// Reply sets the script for messages that find no queued turn: f gets the message's text and
+// returns the steps of its turn. It suits an agent whose answer depends on the prompt.
+func (a *Agent) Reply(f func(prompt string) []Step) {
+	a.s.mu.Lock()
+	defer a.s.mu.Unlock()
+	a.reply = f
+}
+
 // nextTurn picks the steps for a new turn. The caller holds s.mu.
-func (a *Agent) nextTurn() ([]Step, bool) {
-	if len(a.turns) == 0 {
-		return nil, false
+func (a *Agent) nextTurn(prompt string) ([]Step, bool) {
+	if len(a.turns) > 0 {
+		steps := a.turns[0]
+		a.turns = a.turns[1:]
+		return steps, true
 	}
-	steps := a.turns[0]
-	a.turns = a.turns[1:]
-	return steps, true
+	if a.reply != nil {
+		return a.reply(prompt), true
+	}
+	return nil, false
 }
 
 // serveCard answers with the agent card, which lists the HITL extension as kagent's does.
@@ -72,13 +85,16 @@ func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "SendMessage":
 		a.send(r.Context(), o, req.Params)
+	case "SendStreamingMessage":
+		o.stream = true
+		a.send(r.Context(), o, req.Params)
 	default:
 		o.fail(&rpcError{codeMethod, "method not found: " + req.Method, "METHOD_NOT_FOUND"})
 	}
 }
 
-// send handles SendMessage: it admits the message, then follows the task to the end of the
-// turn and answers with its final snapshot.
+// send handles SendMessage and SendStreamingMessage: it admits the message, then follows the
+// task to the end of the turn, streaming its events or answering with its final snapshot.
 func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 	var p struct {
 		Message obj `json:"message"`
@@ -106,7 +122,7 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	s := a.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	steps, ok := a.nextTurn()
+	steps, ok := a.nextTurn(promptText(m))
 	if !ok {
 		return nil, internalError("stubagent: no turn scripted for %s/%s", a.ns, a.name)
 	}
@@ -190,4 +206,17 @@ func withTask(m obj, taskID string) obj {
 	m = maps.Clone(m)
 	m["taskId"] = taskID
 	return m
+}
+
+// promptText joins the text parts of a message.
+func promptText(m obj) string {
+	var sb strings.Builder
+	parts, _ := m["parts"].([]any)
+	for _, p := range parts {
+		if part, ok := p.(obj); ok {
+			s, _ := part["text"].(string)
+			sb.WriteString(s)
+		}
+	}
+	return sb.String()
 }

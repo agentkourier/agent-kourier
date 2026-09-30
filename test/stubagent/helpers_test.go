@@ -1,10 +1,15 @@
 package stubagent_test
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -28,21 +33,87 @@ type client struct {
 	hdr http.Header
 }
 
-// call sends one request and returns the HTTP status and the JSON body.
-func (c *client) call(method string, params any) (int, obj) {
-	c.t.Helper()
-	req := obj{"jsonrpc": "2.0", "id": "1", "method": method, "params": params}
-	status, raw := do(c.t, http.MethodPost, c.url, req, c.hdr)
-	var out obj
-	if err := json.Unmarshal(raw, &out); err != nil {
-		c.t.Fatalf("%s: bad JSON %q: %v", method, raw, err)
-	}
-	return status, out
+// stream reads the envelopes of one response as they arrive: one per SSE event, or the one
+// JSON body.
+type stream struct {
+	t      *testing.T
+	resp   *http.Response
+	sc     *bufio.Scanner
+	status int
+	sse    bool
+	read   bool
 }
 
-// do sends a request and returns the status and body. A nil body sends none, a string is sent
-// as it is, and anything else as JSON.
-func do(t *testing.T, method, url string, body any, hdr http.Header) (int, []byte) {
+func (c *client) open(method string, params any) *stream {
+	c.t.Helper()
+	body := obj{"jsonrpc": "2.0", "id": "1", "method": method, "params": params}
+	resp, err := http.DefaultClient.Do(request(c.t, http.MethodPost, c.url, body, c.hdr))
+	if err != nil {
+		c.t.Fatalf("%s: %v", method, err)
+	}
+	c.t.Cleanup(func() { _ = resp.Body.Close() })
+	return &stream{t: c.t, resp: resp, sc: bufio.NewScanner(resp.Body), status: resp.StatusCode,
+		sse: strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")}
+}
+
+// next returns the next envelope, or false at the end of the response.
+func (s *stream) next() (obj, bool) {
+	s.t.Helper()
+	var raw []byte
+	if s.sse {
+		for s.sc.Scan() {
+			if data, ok := strings.CutPrefix(s.sc.Text(), "data: "); ok {
+				raw = []byte(data)
+				break
+			}
+		}
+	} else if !s.read {
+		s.read = true
+		raw, _ = io.ReadAll(s.resp.Body)
+	}
+	if raw == nil {
+		return nil, false
+	}
+	var ev obj
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		s.t.Fatalf("bad JSON %q: %v", raw, err)
+	}
+	return ev, true
+}
+
+// all reads the response to its end.
+func (s *stream) all() []obj {
+	var evs []obj
+	for ev, ok := s.next(); ok; ev, ok = s.next() {
+		evs = append(evs, ev)
+	}
+	return evs
+}
+
+// call sends a request that answers with one envelope, as JSON or as a single SSE event.
+func (c *client) call(method string, params any) (int, obj) {
+	c.t.Helper()
+	st := c.open(method, params)
+	evs := st.all()
+	if len(evs) != 1 {
+		c.t.Fatalf("%s answered with %d envelopes, want 1", method, len(evs))
+	}
+	return st.status, evs[0]
+}
+
+// send is a SendStreamingMessage call that must answer with a stream.
+func (c *client) send(params obj) []obj {
+	c.t.Helper()
+	st := c.open("SendStreamingMessage", params)
+	if !st.sse {
+		c.t.Fatalf("SendStreamingMessage did not answer with SSE")
+	}
+	return st.all()
+}
+
+// request builds a request. A nil body sends none, a string is sent as it is, and anything
+// else as JSON.
+func request(t *testing.T, method, url string, body any, hdr http.Header) *http.Request {
 	t.Helper()
 	var r io.Reader = http.NoBody
 	switch b := body.(type) {
@@ -64,7 +135,13 @@ func do(t *testing.T, method, url string, body any, hdr http.Header) (int, []byt
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	return req
+}
+
+// do sends a request and returns the status and body.
+func do(t *testing.T, method, url string, body any, hdr http.Header) (int, []byte) {
+	t.Helper()
+	resp, err := http.DefaultClient.Do(request(t, method, url, body, hdr))
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
@@ -105,4 +182,127 @@ func dig(v any, keys ...string) any {
 		v = m[k]
 	}
 	return v
+}
+
+// body returns an event's kind ("task", "statusUpdate", "artifactUpdate", "error") and
+// payload; GetTask and CancelTask results are the task itself.
+func body(ev obj) (string, obj) {
+	if _, ok := ev["error"]; ok {
+		return "error", nil
+	}
+	res, _ := ev["result"].(obj)
+	if _, ok := res["status"]; ok {
+		return "task", res
+	}
+	for _, k := range []string{"task", "statusUpdate", "artifactUpdate"} {
+		if e, ok := res[k].(obj); ok {
+			return k, e
+		}
+	}
+	return "", nil
+}
+
+// ids returns the task ID, context ID and state carried by an event.
+func ids(ev obj) (task, ctxID, state string) {
+	_, e := body(ev)
+	task, _ = e["id"].(string)
+	if task == "" {
+		task, _ = e["taskId"].(string)
+	}
+	ctxID, _ = e["contextId"].(string)
+	state, _ = dig(e, "status", "state").(string)
+	return task, ctxID, state
+}
+
+func last(evs []obj) obj { return evs[len(evs)-1] }
+
+// describe names one event as the WP-02 spike does: kind and state, or artifact flags.
+func describe(ev obj) string {
+	kind, e := body(ev)
+	switch kind {
+	case "error":
+		return fmt.Sprintf("error:%v", dig(ev, "error", "code"))
+	case "artifactUpdate":
+		d := "artifact"
+		if e["append"] == true {
+			d += "+append"
+		}
+		if e["lastChunk"] == true {
+			d += "+last"
+		}
+		return d
+	}
+	_, _, state := ids(ev)
+	return kind + ":" + strings.TrimPrefix(state, "TASK_STATE_")
+}
+
+// shape run-length encodes a stream, for example "task:SUBMITTED x2, artifact+append x7".
+func shape(evs []obj) string {
+	var parts []string
+	for i := 0; i < len(evs); {
+		j := i
+		for j < len(evs) && describe(evs[j]) == describe(evs[i]) {
+			j++
+		}
+		p := describe(evs[i])
+		if j-i > 1 {
+			p += fmt.Sprintf(" x%d", j-i)
+		}
+		parts = append(parts, p)
+		i = j
+	}
+	return strings.Join(parts, ", ")
+}
+
+// skeleton is a value's structure with the values erased: keys, and a type per leaf. Two
+// events with the same skeleton have the same fields.
+func skeleton(v any) string {
+	switch v := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var sb strings.Builder
+		for _, k := range keys {
+			fmt.Fprintf(&sb, "%s:%s,", k, skeleton(v[k]))
+		}
+		return "{" + sb.String() + "}"
+	case []any:
+		if len(v) == 0 {
+			return "[]"
+		}
+		return "[" + skeleton(v[0]) + "]"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+// fixture reads the events of a recorded kagent SSE response.
+func fixture(t *testing.T, name string) []obj {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "fixtures", "kagent", name))
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	var evs []obj
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			var ev obj
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				t.Fatalf("fixture %s: %v", name, err)
+			}
+			evs = append(evs, ev)
+		}
+	}
+	return evs
+}
+
+// expectLike checks that an event has the same fields as the recorded one.
+func expectLike(t *testing.T, label string, got, recorded obj) {
+	t.Helper()
+	if g, w := skeleton(got["result"]), skeleton(recorded["result"]); g != w {
+		t.Errorf("%s has fields\n  %s\nthe fixture has\n  %s", label, g, w)
+	}
 }

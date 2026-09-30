@@ -43,28 +43,36 @@ func internalError(format string, args ...any) *rpcError {
 	return &rpcError{codeInternal, fmt.Sprintf(format, args...), "INTERNAL_ERROR"}
 }
 
-// rw writes one call's response. Every answer is HTTP 200, errors included, as kagent's is
-// (WP-02, measured).
+// rw writes one call's response. A streaming call answers as SSE, one JSON-RPC envelope per
+// event; any other call answers with one JSON body. Every answer is HTTP 200, errors included,
+// as kagent's is (WP-02, measured).
 type rw struct {
 	s      *Server
 	w      http.ResponseWriter
 	id     json.RawMessage
-	held   obj  // the last result the call was given; done answers with it
+	stream bool
+	held   obj  // a non-streaming call answers with the last result it was given
 	failed bool // an error has been written
 }
 
-// event delivers a result. A call answers with one JSON body, so this keeps the latest.
-func (o *rw) event(res obj) { o.held = res }
+// event delivers a result: at once when streaming, else it replaces the pending answer.
+func (o *rw) event(res obj) {
+	if o.stream {
+		o.write(obj{"jsonrpc": "2.0", "id": o.id, "result": res})
+		return
+	}
+	o.held = res
+}
 
-// fail answers with a JSON-RPC error.
+// fail answers with a JSON-RPC error: a single SSE event when streaming, else a JSON body.
 func (o *rw) fail(e *rpcError) {
 	o.failed = true
 	o.write(obj{"jsonrpc": "2.0", "id": o.id, "error": e.body(o.s.now())})
 }
 
-// done writes the pending answer, if the call did not fail.
+// done writes the pending answer of a non-streaming call.
 func (o *rw) done() {
-	if !o.failed && o.held != nil {
+	if !o.stream && !o.failed && o.held != nil {
 		o.write(obj{"jsonrpc": "2.0", "id": o.id, "result": o.held})
 	}
 }
@@ -75,6 +83,13 @@ func (o *rw) write(env obj) {
 		http.Error(o.w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	o.w.Header().Set("Content-Type", "application/json")
-	_, _ = o.w.Write(b)
+	if !o.stream {
+		o.w.Header().Set("Content-Type", "application/json")
+		_, _ = o.w.Write(b)
+		return
+	}
+	o.w.Header().Set("Content-Type", "text/event-stream")
+	o.w.Header().Set("Cache-Control", "no-cache")
+	_, _ = fmt.Fprintf(o.w, "id: %s\ndata: %s\n\n", o.s.newID("event"), b)
+	_ = http.NewResponseController(o.w).Flush()
 }
