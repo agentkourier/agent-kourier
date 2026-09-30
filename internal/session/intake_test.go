@@ -124,7 +124,8 @@ type fixture struct {
 	agent            *fakeAgent
 	real             AgentAPI // when set, the agent the Binding uses instead of the fake
 	amu              sync.Mutex
-	rejected, audits []audit.Call // what Rejected and the Auditor were given
+	rejected, audits []audit.Call  // what Rejected and the Auditor were given
+	actors           []audit.Actor // who the Auditor's calls named
 	attr             func(*a2a.Message, dialect.User)
 	bindingErr       error // when set, every Binding lookup fails with it (guarded by amu)
 	noRejected       bool  // the Backend has no identity Source to call Rejected on
@@ -138,10 +139,10 @@ func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
 }
 
 // AgentCall makes the fixture the Auditor.
-func (f *fixture) AgentCall(_ context.Context, _ audit.Actor, c audit.Call) error {
+func (f *fixture) AgentCall(_ context.Context, a audit.Actor, c audit.Call) error {
 	f.amu.Lock()
 	defer f.amu.Unlock()
-	f.audits = append(f.audits, c)
+	f.audits, f.actors = append(f.audits, c), append(f.actors, a)
 	return nil
 }
 

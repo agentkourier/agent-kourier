@@ -98,6 +98,9 @@ const (
 	// NoticeBindingGone says the thread's Binding is no longer configured, so its turns cannot be
 	// sent.
 	NoticeBindingGone NoticeKind = "binding_gone"
+	// NoticeStopped says a person stopped a task that was not streaming, so there is nothing else
+	// to show it (spec 8.2).
+	NoticeStopped NoticeKind = "stopped"
 	// NoticeWedged says a task ran past maxWorkingAge and was cancelled (R17).
 	NoticeWedged NoticeKind = "wedged"
 	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).

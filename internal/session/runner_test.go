@@ -37,6 +37,7 @@ type fakeAgent struct {
 	get       func(id a2a.TaskID) (*a2a.Task, error)
 	cancels   []a2a.TaskID
 	cancelErr func(attempt int) error // the error of the n-th CancelTask (1-based), if any
+	onCancel  func(id a2a.TaskID)     // runs inside CancelTask, before it returns
 	seq       []string                // the calls in order: send, find, follow
 }
 
@@ -62,8 +63,11 @@ func (a *fakeAgent) GetTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error)
 func (a *fakeAgent) CancelTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error) {
 	a.mu.Lock()
 	a.cancels = append(a.cancels, id)
-	cerr, attempt := a.cancelErr, len(a.cancels)
+	hook, cerr, attempt := a.onCancel, a.cancelErr, len(a.cancels)
 	a.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
 	if cerr != nil {
 		if err := cerr(attempt); err != nil {
 			return nil, err
