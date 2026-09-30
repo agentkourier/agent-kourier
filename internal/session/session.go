@@ -137,8 +137,10 @@ type Config struct {
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.
 	// They default to 1 s and 60 s (spec 8.2).
 	RetryBase, RetryMax time.Duration
-	// MaxWorkingAge is how long a task may stay WORKING after a stream was lost before it is
-	// presumed wedged and cancelled (R17). It defaults to an hour. It never limits a live stream.
+	// MaxWorkingAge is how long a WORKING task may go without life, after a stream was lost,
+	// before it is presumed wedged and cancelled (R17). Its age counts from the later of the
+	// task's status timestamp and the last event courier saw of it, so a task that streamed for
+	// hours and then dropped is followed. It defaults to an hour, and never limits a live stream.
 	MaxWorkingAge time.Duration
 	// SendGiveUp is how long an unreachable agent is retried before the turn fails (spec 11).
 	// It defaults to 15 minutes.

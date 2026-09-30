@@ -30,13 +30,14 @@ type fakeAgent struct {
 	sent              chan string
 	script            func(ctx context.Context, n int, h agent.Handler) error
 	// find and follow answer FindTask and Follow; finds and follows record their calls.
-	find    func(contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
-	follow  func(id a2a.TaskID, h agent.Handler) error
-	finds   []string
-	follows []a2a.TaskID
-	get     func(id a2a.TaskID) (*a2a.Task, error)
-	cancels []a2a.TaskID
-	seq     []string // the calls in order: send, find, follow
+	find      func(contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
+	follow    func(id a2a.TaskID, h agent.Handler) error
+	finds     []string
+	follows   []a2a.TaskID
+	get       func(id a2a.TaskID) (*a2a.Task, error)
+	cancels   []a2a.TaskID
+	cancelErr func(attempt int) error // the error of the n-th CancelTask (1-based), if any
+	seq       []string                // the calls in order: send, find, follow
 }
 
 func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
@@ -61,7 +62,13 @@ func (a *fakeAgent) GetTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error)
 func (a *fakeAgent) CancelTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error) {
 	a.mu.Lock()
 	a.cancels = append(a.cancels, id)
+	cerr, attempt := a.cancelErr, len(a.cancels)
 	a.mu.Unlock()
+	if cerr != nil {
+		if err := cerr(attempt); err != nil {
+			return nil, err
+		}
+	}
 	return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
 }
 
@@ -571,4 +578,11 @@ func TestQueuedTurnOfARemovedBindingIsDropped(t *testing.T) {
 	if sends, _, _ := f.agent.counts(); sends != 0 {
 		t.Errorf("%d sends; want none", sends)
 	}
+}
+
+// cancelled returns the tasks the agent was asked to cancel.
+func (f *fixture) cancelled() []a2a.TaskID {
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	return append([]a2a.TaskID(nil), f.agent.cancels...)
 }

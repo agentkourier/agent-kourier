@@ -42,7 +42,7 @@ func TestNotSentIsRetriedWithOneNotice(t *testing.T) {
 	if _, err := f.submit(in); err != nil {
 		t.Fatal(err)
 	}
-	<-sink.finals
+	waitFinal(t, sink)
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()
 	if len(f.agent.msgs) != 4 || len(f.agent.finds) != 0 {
@@ -77,7 +77,7 @@ func TestNotSentGivesUp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	<-sink.finals // the second turn, which the first one's failure did not stop
+	waitFinal(t, sink) // the second turn, which the first one's failure did not stop
 	failed := sink.noticesOf(NoticeFailed)
 	if len(failed) != 1 || failed[0].ID != inbound("1").MessageID+"/failed" || failed[0].Detail == "" {
 		t.Errorf("failed notices = %+v; want one for turn 1, with a reason", failed)
@@ -106,7 +106,7 @@ func TestCredentialsRejectedFailsTheTurn(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	<-sink.finals
+	waitFinal(t, sink)
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	if len(f.rejected) != 1 || f.rejected[0].Op != audit.OpSend || f.rejected[0].MessageID != inbound("1").MessageID || !errors.Is(f.rejected[0].Err, agent.ErrCredentialsRejected) {
@@ -183,7 +183,7 @@ func TestUnknownOutcomeIsLookedUpBeforeAnyResend(t *testing.T) {
 		if _, err := f.submit(inbound(ts)); err != nil {
 			t.Fatal(err)
 		}
-		<-sink.finals
+		waitFinal(t, sink)
 	}
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()
@@ -206,7 +206,7 @@ func TestUnknownOutcomeOfAFirstTurnIsResentWithoutALookup(t *testing.T) {
 	if _, err := f.submit(inbound("1")); err != nil {
 		t.Fatal(err)
 	}
-	<-sink.finals
+	waitFinal(t, sink)
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()
 	if len(f.agent.msgs) != 2 || len(f.agent.finds) != 0 || f.agent.msgs[0].ID != f.agent.msgs[1].ID || f.agent.msgs[1].ContextID != "" {
@@ -229,7 +229,7 @@ func TestUnknownOutcomeFoundIsFollowedAndDuplicatesAreReported(t *testing.T) {
 		if _, err := f.submit(inbound(ts)); err != nil {
 			t.Fatal(err)
 		}
-		<-sink.finals
+		waitFinal(t, sink)
 	}
 	if sends, _, follows := f.agent.counts(); sends != 2 || follows != 1 {
 		t.Errorf("%d sends, %d follows; want turn 1 and turn 2 once, and the found task followed", sends, follows)
@@ -305,8 +305,8 @@ func TestLostStreamIsFollowedUntilTheTaskEnds(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	<-sink.finals // turn 1 ends after two follows
-	<-sink.finals // then turn 2
+	waitFinal(t, sink) // turn 1 ends after two follows
+	waitFinal(t, sink) // then turn 2
 	if sends, _, fo := f.agent.counts(); sends != 2 || fo != 2 {
 		t.Errorf("%d sends, %d follows; want turn 1 once and turn 2 once, and turn 1's task followed twice", sends, fo)
 	}
@@ -318,10 +318,10 @@ func TestLostStreamIsFollowedUntilTheTaskEnds(t *testing.T) {
 func TestWedgedTaskIsCancelledAfterMaxWorkingAge(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		now  time.Duration // how far past t0 courier's clock starts
+		now  time.Duration // how far past t0 courier's clock is when the stream drops
 		get  func(f *fixture) func(a2a.TaskID) (*a2a.Task, error)
 	}{
-		{"by the task's timestamp", time.Hour, func(*fixture) func(a2a.TaskID) (*a2a.Task, error) { return working(t0.Add(-2 * time.Hour)) }},
+		{"by the task's timestamp and its last event", 2 * time.Hour, func(*fixture) func(a2a.TaskID) (*a2a.Task, error) { return working(t0.Add(-2 * time.Hour)) }},
 		{"when GetTask never answers, by the time since the loss", 0, func(f *fixture) func(a2a.TaskID) (*a2a.Task, error) {
 			return func(a2a.TaskID) (*a2a.Task, error) {
 				f.now.Store(t0.Add(2 * time.Hour).UnixNano())
@@ -333,16 +333,22 @@ func TestWedgedTaskIsCancelledAfterMaxWorkingAge(t *testing.T) {
 			f := newFixture(t)
 			sink := f.live()
 			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 2*time.Millisecond
-			f.agent.script = lost(errors.New("connection reset"))
+			inner := lost(errors.New("connection reset"))
+			f.agent.script = func(ctx context.Context, n int, h agent.Handler) error {
+				err := inner(ctx, n, h) // the task is named at t0, and its stream drops
+				if n == 0 {
+					f.now.Store(t0.Add(tc.now).UnixNano())
+				}
+				return err
+			}
 			f.agent.get = tc.get(f)
 			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
-			f.now.Store(t0.Add(tc.now).UnixNano())
 			for _, ts := range []string{"1", "2"} {
 				if _, err := f.submit(inbound(ts)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			<-sink.finals // turn 2, after turn 1's task was cancelled
+			waitFinal(t, sink) // turn 2, after turn 1's task was cancelled
 			f.agent.mu.Lock()
 			cancels := slices.Clone(f.agent.cancels)
 			f.agent.mu.Unlock()
@@ -411,7 +417,7 @@ func TestSessionGoneStartsAFreshContext(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			<-sink.finals // turn 2
+			waitFinal(t, sink) // turn 2
 			if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "1" {
 				t.Errorf("session-gone notices = %+v; want one, for turn 1", got)
 			}
@@ -445,7 +451,7 @@ func TestReplacedContextIsAdoptedAndReported(t *testing.T) {
 		if _, err := f.submit(inbound(ts)); err != nil {
 			t.Fatal(err)
 		}
-		<-sink.finals
+		waitFinal(t, sink)
 	}
 	if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "2" {
 		t.Errorf("session-gone notices = %+v; want one, for turn 2", got)
@@ -546,5 +552,140 @@ func waitFinal(t *testing.T, s *fakeSink) {
 	case <-s.finals:
 	case <-time.After(10 * time.Second):
 		t.Fatal("no final event")
+	}
+}
+
+// wedgedFixture is a conversation whose turn 1 lost its stream and whose task t1 has run for
+// two hours since it was named, so that the next look at it cancels it (R17).
+func wedgedFixture(t *testing.T, setup func(*fixture), turns ...string) (*fixture, *fakeSink) {
+	t.Helper()
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+	inner := lost(errors.New("connection reset"))
+	f.agent.script = func(ctx context.Context, n int, h agent.Handler) error {
+		err := inner(ctx, n, h) // the task is named at t0 ...
+		if n == 0 {
+			f.now.Store(t0.Add(2 * time.Hour).UnixNano()) // ... and two hours pass before anyone looks
+		}
+		return err
+	}
+	f.agent.get = working(t0.Add(-2 * time.Hour))
+	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
+	setup(f) // before any turn: the runner reads what it sets
+	for _, ts := range turns {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f, sink
+}
+
+// A cancel that fails is classified, not retried for ever: the audit log gets one row for the
+// decision, and the thread hears what happened.
+func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
+	t.Run("the task is gone: the session is reset", func(t *testing.T) {
+		f, sink := wedgedFixture(t, func(f *fixture) {
+			f.agent.cancelErr = func(int) error { return a2a.NewError(a2a.ErrTaskNotFound, "task not found") }
+		}, "1", "2")
+		waitFinal(t, sink) // turn 2, sent in a fresh context
+		if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 {
+			t.Errorf("session-gone notices = %+v; want one", got)
+		}
+		f.agent.mu.Lock()
+		defer f.agent.mu.Unlock()
+		if len(f.agent.cancels) != 1 || f.agent.msgs[1].ContextID != "" {
+			t.Errorf("%d cancels, turn 2 in context %q; want one cancel and a fresh context", len(f.agent.cancels), f.agent.msgs[1].ContextID)
+		}
+	})
+	t.Run("not cancelable: the task ended meanwhile, and its end is rendered", func(t *testing.T) {
+		f, sink := wedgedFixture(t, func(f *fixture) {
+			f.agent.cancelErr = func(int) error { return fmt.Errorf("cancel: %w", a2a.ErrTaskNotCancelable) }
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+		}, "1", "2")
+		waitFinal(t, sink)
+		if got := sink.noticesOf(NoticeWedged); len(got) != 0 {
+			t.Errorf("wedged notices = %+v; want none: the task had ended", got)
+		}
+		if _, _, fo := f.agent.counts(); fo != 1 {
+			t.Errorf("%d follows; want the task read once more, to render its end", fo)
+		}
+	})
+	for _, tc := range []struct {
+		name   string
+		cause  error
+		source bool // the identity Source is told, and writes the audit row
+	}{
+		{"the credentials are refused", fmt.Errorf("%w: rejected", agent.ErrCredentialsRejected), true},
+		{"the identity is refused", fmt.Errorf("send message: %w", agent.ErrForbidden), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sink := wedgedFixture(t, func(f *fixture) { f.agent.cancelErr = func(int) error { return tc.cause } }, "1")
+			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			time.Sleep(50 * time.Millisecond) // a retry loop would show by now
+			f.amu.Lock()
+			defer f.amu.Unlock()
+			rows := len(f.audits)
+			if tc.source {
+				rows = len(f.rejected)
+			}
+			if cancels := f.agent.cancels; len(cancels) != 1 || rows != 1 {
+				t.Errorf("%d cancels, %d audit rows; want one of each", len(cancels), rows)
+			}
+		})
+	}
+	t.Run("a transient failure is retried for a bounded time, then reported", func(t *testing.T) {
+		f, sink := wedgedFixture(t, func(f *fixture) {
+			f.agent.cancelErr = func(n int) error {
+				if n == 3 {
+					f.now.Store(t0.Add(2*time.Hour + 16*time.Minute).UnixNano())
+				}
+				return errors.New("agent unreachable")
+			}
+		}, "1")
+		eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+		f.amu.Lock()
+		defer f.amu.Unlock()
+		if len(f.audits) != 1 || f.audits[0].Op != audit.OpCancel {
+			t.Errorf("audits = %+v; want one row, for the decision, not one per attempt", f.audits)
+		}
+	})
+}
+
+// The age of a WORKING task counts from the later of its status timestamp and the last event
+// courier saw for it (R17): a healthy task that streamed for an hour and then dropped is
+// followed, not cancelled. A state with no timestamp, or one in the future, says nothing about
+// age, and is not cancelled either.
+func TestTaskWithRecentLifeIsNotPresumedWedged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		get  func(a2a.TaskID) (*a2a.Task, error)
+	}{
+		{"its status is old but an event is recent", working(t0.Add(-2 * time.Hour))},
+		{"no timestamp", func(id a2a.TaskID) (*a2a.Task, error) {
+			return &a2a.Task{ID: id, ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil
+		}},
+		{"a timestamp in the future", working(t0.Add(24 * time.Hour))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+				accepted(h, n)
+				f.now.Store(t0.Add(90 * time.Minute).UnixNano())
+				h(agent.TextEvent{ArtifactID: "a", Text: "progress"}) // the task is alive, an hour and a half in
+				return &agent.StreamLostError{TaskID: "t1", ContextID: "c1", Err: errors.New("connection reset")}
+			}
+			f.agent.get = tc.get
+			f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			if got := f.cancelled(); len(got) != 0 {
+				t.Errorf("cancelled %v; want the task followed to its end", got)
+			}
+		})
 	}
 }

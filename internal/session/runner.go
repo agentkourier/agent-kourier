@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,16 +18,19 @@ import (
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
 // Only the runner reads and writes tries and ttl; the Manager's mutex guards the rest.
 type convo struct {
-	again    bool          // a wake arrived while the runner was busy
-	tries    int           // sends of the head turn that failed in a way to retry, in a row
-	since    time.Time     // when the first of them failed, for SendGiveUp
-	notified bool          // the thread was told courier is retrying, for this run of trouble
-	patient  bool          // the turn is never given up on: the agent has it, or its session is busy
-	follow   *tstate       // the turn whose task is followed again, after its stream was lost
-	ttl      time.Duration // the Binding's threadTTL, for end
-	parked   a2a.TaskID    // the task the runner waits on, while it waits for input
-	released bool          // the pause ended, and the runner has not yet moved on
-	resume   chan struct{} // tells the parked runner that the pause ended
+	again      bool          // a wake arrived while the runner was busy
+	tries      int           // sends of the head turn that failed in a way to retry, in a row
+	since      time.Time     // when the first of them failed, for SendGiveUp
+	notified   bool          // the thread was told courier is retrying, for this run of trouble
+	lastTask   a2a.TaskID    // the task courier last saw an event of ...
+	lastSeen   time.Time     // ... and when: the later of this and the status timestamp is its age (R17)
+	cancelFrom time.Time     // when the first attempt to cancel a wedged task was made, for SendGiveUp
+	patient    bool          // the turn is never given up on: the agent has it, or its session is busy
+	follow     *tstate       // the turn whose task is followed again, after its stream was lost
+	ttl        time.Duration // the Binding's threadTTL, for end
+	parked     a2a.TaskID    // the task the runner waits on, while it waits for input
+	released   bool          // the pause ended, and the runner has not yet moved on
+	resume     chan struct{} // tells the parked runner that the pause ended
 }
 
 // outcome is how one turn left the conversation: nothing queued, the task ended, or the task
@@ -220,13 +224,14 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 
 // settle forgets the retry state of the head turn: it was taken, failed for good, or ended.
 func (c *convo) settle() {
-	c.tries, c.since, c.patient, c.notified = 0, time.Time{}, false, false
+	c.tries, c.since, c.patient, c.notified, c.cancelFrom = 0, time.Time{}, false, false, time.Time{}
 }
 
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
 	follow bool       // the attempt follows a task instead of sending
-	taskID a2a.TaskID // the task followed, when follow
+	taskID a2a.TaskID // the task the agent named, or the one followed
+	op     audit.Op   // the call audit rows name, when not a send
 	key    Key
 	c      *convo
 	r      store.Reply
@@ -249,8 +254,10 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (outcome, err
 	var recordErr error
 	named := false
 	err := send(func(e agent.Event) {
+		c.lastSeen = m.cfg.Now() // the task is alive: its age counts from here (R17)
 		switch ev := e.(type) {
 		case agent.StateEvent:
+			c.lastTask, t.taskID = ev.TaskID, ev.TaskID
 			if !named { // the agent has named the task: record it before anyone renders it
 				named = true
 				c.settle()
@@ -340,18 +347,33 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 func (m *Manager) resume(c *convo) (outcome, error) {
 	t := c.follow
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
-	now := m.cfg.Now()
 	switch {
 	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, a2a.ErrTaskNotFound):
 		return m.lost(t, err)
-	case err == nil && running(task) && task.Status.Timestamp != nil && now.Sub(*task.Status.Timestamp) > m.cfg.MaxWorkingAge,
-		err != nil && now.Sub(c.since) > m.cfg.MaxWorkingAge:
+	case err == nil && m.wedgedByAge(c, task), err != nil && m.cfg.Now().Sub(c.since) > m.cfg.MaxWorkingAge:
 		return m.wedged(t)
 	case err != nil:
 		c.tries++
 		return blocked, fmt.Errorf("get task %s: %w", t.taskID, err)
 	}
+	// Follow reads the task again (a second unary call, cheap) and then subscribes to it.
 	return m.drive(t, func(h agent.Handler) error { return t.b.Agent.Follow(m.ctx, t.taskID, h) })
+}
+
+// wedgedByAge reports whether a WORKING task has gone too long without life (R17): it counts
+// from the later of the task's status timestamp and the last event courier saw of it, so a
+// healthy task that streamed for hours and then dropped is followed. A state with no timestamp,
+// or one in the future, says nothing about age.
+func (m *Manager) wedgedByAge(c *convo, task *a2a.Task) bool {
+	ts := task.Status.Timestamp
+	if !running(task) || ts == nil {
+		return false
+	}
+	alive := *ts
+	if c.lastTask == task.ID && c.lastSeen.After(alive) {
+		alive = c.lastSeen
+	}
+	return m.cfg.Now().Sub(alive) > m.cfg.MaxWorkingAge
 }
 
 // running reports whether a task is being worked on: not ended, and not waiting for input.
@@ -360,19 +382,43 @@ func running(t *a2a.Task) bool {
 	return !s.Terminal() && s != a2a.TaskStateInputRequired && s != a2a.TaskStateAuthRequired
 }
 
-// wedged cancels a task presumed wedged (R17), tells the thread, records the call, and lets
-// the queue go on. A cancel that fails is retried after a backoff.
+// wedged cancels a task presumed wedged (R17). The decision is audited once, by how it ends, not
+// once per attempt. The cancel's error says what to do: a task the agent no longer knows resets
+// the session; one that cannot be cancelled has ended, so it is read once more and its end
+// rendered; a refused credential or identity fails; anything else is retried until SendGiveUp,
+// then reported. Every way out lets the queue go on, except where the task stays recorded and
+// the turns behind it stay held for reconciliation.
 func (m *Manager) wedged(t *tstate) (outcome, error) {
-	_, err := t.b.Agent.CancelTask(m.ctx, t.taskID)
-	m.audit(t, audit.Call{Op: audit.OpCancel, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err})
-	if err != nil {
-		t.c.tries++
-		return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
+	c := t.c
+	if c.cancelFrom.IsZero() {
+		c.cancelFrom = m.cfg.Now()
 	}
-	m.notice(t, NoticeWedged, "")
-	t.c.follow = nil
-	t.c.settle()
-	return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
+	_, err := t.b.Agent.CancelTask(m.ctx, t.taskID)
+	t.op = audit.OpCancel
+	defer func() { t.op = "" }()
+	switch {
+	case err == nil:
+		m.audit(t, t.call(nil))
+		m.notice(t, NoticeWedged, "")
+		c.follow = nil
+		c.settle()
+		return ended, m.end(context.WithoutCancel(m.ctx), t.key, c.ttl)
+	case errors.Is(err, a2a.ErrTaskNotFound):
+		m.audit(t, t.call(err))
+		return m.gone(t)
+	case errors.Is(err, a2a.ErrTaskNotCancelable): // it ended in the meantime: show how
+		m.audit(t, t.call(err))
+		c.cancelFrom = time.Time{}
+		return m.drive(t, func(h agent.Handler) error { return t.b.Agent.Follow(m.ctx, t.taskID, h) })
+	case errors.Is(err, agent.ErrCredentialsRejected):
+		return m.lost(t, err) // the identity Source writes the row
+	case errors.Is(err, agent.ErrForbidden), m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
+		m.audit(t, t.call(err))
+		c.follow = nil
+		return m.fail(t, "the wedged task could not be cancelled", err)
+	}
+	c.tries++
+	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
 }
 
 // unsent handles a send that failed before the agent named a task, by what the error says
@@ -455,7 +501,7 @@ func (t *tstate) actor() audit.Actor {
 }
 
 func (t *tstate) call(err error) audit.Call {
-	return audit.Call{Op: audit.OpSend, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err}
+	return audit.Call{Op: cmp.Or(t.op, audit.OpSend), TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.r.ID, Err: err}
 }
 
 // rejected passes a refused credential to the identity Source, which re-reads the token and
