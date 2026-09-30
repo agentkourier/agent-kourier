@@ -43,8 +43,7 @@ type User struct {
 	Email string // empty when unknown
 }
 
-// Dialect is one backend protocol variant (spec 6.2). The interaction methods
-// (ParseInteraction, BuildResponse) join it with the interaction types in WP-26.
+// Dialect is one backend protocol variant (spec 6.2).
 type Dialect interface {
 	// Endpoint is the URL of the agent's A2A service, on the backend's verifying front door.
 	Endpoint(backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef) (string, error)
@@ -56,4 +55,7 @@ type Dialect interface {
 	// Connect returns an A2A client for the agent that sends the Binding's identity to the
 	// backend's front door and to nowhere else.
 	Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds Credentials) (*a2aclient.Client, error)
+	// ParseInteraction returns the interaction a paused task waits on. It reports false for
+	// a task that is not paused on one, and for a payload it cannot use.
+	ParseInteraction(task a2a.Task) (*Interaction, bool)
 }
