@@ -3,11 +3,27 @@ package stubagent_test
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
 const missingAnswers = "ask_user decision is missing approval correlation or answers"
+
+// expectRoles checks the roles of a task's history, in order.
+func expectRoles(t *testing.T, ev obj, want ...string) {
+	t.Helper()
+	_, e := body(ev)
+	hist, _ := e["history"].([]any)
+	var got []string
+	for _, m := range hist {
+		role, _ := dig(m, "role").(string)
+		got = append(got, role)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("history roles = %v, want %v (the prompt, the agent's request, the reply)", got, want)
+	}
+}
 
 func TestAnswerResumesTheTaskLikeKagent(t *testing.T) {
 	_, agent, c := newAgent(t)
@@ -32,11 +48,11 @@ func TestAnswerResumesTheTaskLikeKagent(t *testing.T) {
 		t.Errorf("the script saw %+v, want the answer PostgreSQL and the message text", seen)
 	}
 	id, ctx, state := ids(last(evs))
-	hist, _ := dig(last(evs), "result", "task", "history").([]any)
-	if id != taskID || ctx != ctxID || state != completed || taskText(last(evs)) != "Using PostgreSQL for storage." || len(hist) != 2 {
-		t.Errorf("final task = %s in %s, %s, text %q, %d history messages; want the same task, COMPLETED, the text, 2 messages",
-			id, ctx, state, taskText(last(evs)), len(hist))
+	if id != taskID || ctx != ctxID || state != completed || taskText(last(evs)) != "Using PostgreSQL for storage." {
+		t.Errorf("final task = %s in %s, %s, text %q; want the same task, COMPLETED and the text", id, ctx, state, taskText(last(evs)))
 	}
+	// askuser/05: the request the agent sent is in the history between the prompt and the reply.
+	expectRoles(t, last(evs), "ROLE_USER", "ROLE_AGENT", "ROLE_USER")
 	if result := dig(firstPart(evs[3]), "data", "response", "result"); result != `[{"answer":["PostgreSQL"],"question":"`+dbQuestion+`"}]` {
 		t.Errorf("the answer's function_response = %v, want the answered questions", result)
 	}
@@ -65,6 +81,7 @@ func TestPlainReplyIsANewUserTurn(t *testing.T) {
 	if !seen.Plain() || seen.Text != "PostgreSQL" {
 		t.Errorf("the script saw %+v, want a plain response with the message text", seen)
 	}
+	expectRoles(t, last(evs), "ROLE_USER", "ROLE_AGENT", "ROLE_USER") // askuser/08
 }
 
 func TestAnswersAreNotValidatedAgainstTheQuestions(t *testing.T) {
@@ -101,9 +118,16 @@ func TestBadAnswerWedgesTheTaskUntilCancelled(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		payload func(requestID string) obj
+		stream  string    // the recorded bad answer
+		get     string    // the recorded GetTask after it
+		busy    [3]string // the recorded good answer, plain text and new turn that follow
 	}{
-		{"empty answer list", func(id string) obj { return answers(id) }},
-		{"unknown request id", func(string) obj { return answers("nope", []string{"PostgreSQL"}) }},
+		{"empty answer list", func(id string) obj { return answers(id) },
+			"askuser/10-bad-empty-answers.response.sse", "askuser/11-gettask-after-bad-empty-answers.response.json",
+			[3]string{"askuser/27-wedge-empty-then-good-answer.response.sse", "askuser/28-wedge-empty-then-plain-text.response.sse", "askuser/29-wedge-empty-then-new-turn.response.sse"}},
+		{"unknown request id", func(string) obj { return answers("nope", []string{"PostgreSQL"}) },
+			"askuser/13-bad-wrong-id.response.sse", "askuser/14-gettask-after-bad-wrong-id.response.json",
+			[3]string{"askuser/35-wedge-wrong-id-then-good-answer.response.sse", "askuser/36-wedge-wrong-id-then-plain-text.response.sse", "askuser/37-wedge-wrong-id-then-new-turn.response.sse"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, agent, c := newAgent(t)
@@ -117,7 +141,7 @@ func TestBadAnswerWedgesTheTaskUntilCancelled(t *testing.T) {
 			evs := st.all()
 
 			// The error arrives as an SSE event after a WORKING update, over HTTP 200.
-			rec := fixture(t, "askuser/10-bad-empty-answers.response.sse")
+			rec := fixture(t, tc.stream)
 			if got, want := shape(evs), "statusUpdate:WORKING, error:-32603"; got != want || st.status != 200 || !st.sse {
 				t.Fatalf("bad answer = HTTP %d, sse %v, %s; want 200, true, %s", st.status, st.sse, got, want)
 			}
@@ -127,19 +151,29 @@ func TestBadAnswerWedgesTheTaskUntilCancelled(t *testing.T) {
 				t.Errorf("error = %v, want %q with reason INTERNAL_ERROR", evs[1]["error"], missingAnswers)
 			}
 
-			// The task is stuck WORKING: nothing gets in, and only CancelTask gets out.
+			// The task is stuck WORKING, with the whole conversation in its history.
 			_, got := c.call("GetTask", obj{"id": taskID})
-			if _, _, state := ids(got); state != working {
-				t.Errorf("GetTask after the bad answer: %s, want %s", state, working)
+			expectLike(t, "GetTask after the bad answer", got, fixture(t, tc.get)[0])
+			if _, _, state := ids(got); state != working || dig(got, "result", "status", "message") != nil {
+				t.Errorf("GetTask after the bad answer: %s with message %v, want %s and none", state, dig(got, "result", "status", "message"), working)
 			}
-			for label, params := range map[string]obj{
-				"a good answer":        reply("m3", "x", ctxID, taskID, answers(request["id"].(string), []string{"PostgreSQL"})),
-				"plain text":           reply("m4", "x", ctxID, taskID, nil),
-				"a new turn (no task)": msg("m5", "x", ctxID),
+			expectRoles(t, got, "ROLE_USER", "ROLE_AGENT", "ROLE_USER")
+
+			// Nothing gets in, and only CancelTask gets out.
+			for i, params := range []obj{
+				reply("m3", "x", ctxID, taskID, answers(request["id"].(string), []string{"PostgreSQL"})), // a good answer
+				reply("m4", "x", ctxID, taskID, nil),                                                     // plain text
+				msg("m5", "x", ctxID),                                                                    // a new turn, no task
 			} {
-				if _, got := c.call("SendStreamingMessage", params); dig(got, "error", "code") != float64(-32004) {
-					t.Errorf("%s to the wedged task = %v, want -32004", label, got)
+				st := c.open("SendStreamingMessage", params)
+				evs := st.all()
+				info, _ := dig(evs[0], "error", "data").([]any)
+				if !st.sse || len(evs) != 1 || dig(evs[0], "error", "code") != float64(-32004) || dig(evs[0], "error", "message") != "resource conflict" ||
+					len(info) != 1 || dig(info[0], "reason") != "UNSUPPORTED_OPERATION" {
+					t.Errorf("send %d to the wedged task = sse %v, %v; want one -32004 resource conflict event", i, st.sse, evs)
+					continue
 				}
+				expectLike(t, "busy answer", evs[0], fixture(t, tc.busy[i])[0])
 			}
 			if _, got := c.call("CancelTask", obj{"id": taskID}); describe(got) != "task:CANCELED" {
 				t.Errorf("CancelTask = %v, want the CANCELED task", got)
@@ -151,15 +185,23 @@ func TestBadAnswerWedgesTheTaskUntilCancelled(t *testing.T) {
 	}
 }
 
-func TestPausedTaskCanBeCancelled(t *testing.T) {
+func TestCancelledPausedTaskTakesNoAnswer(t *testing.T) {
 	_, agent, c := newAgent(t)
-	agent.Next(dbAsk(nil))
-	_, taskID, _, _ := paused(t, c)
+	called := false
+	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step { called = true; return nil }))
+	c = withHITL(c)
+	_, taskID, ctxID, request := paused(t, c)
 
-	_, got := c.call("CancelTask", obj{"id": taskID})
+	c.call("CancelTask", obj{"id": taskID})
+	_, late := c.call("SendStreamingMessage", reply("m2", "x", ctxID, taskID, answers(request["id"].(string), []string{"PostgreSQL"})))
+	_, got := c.call("GetTask", obj{"id": taskID})
 
+	// UNCONFIRMED: the code kagent answers a reply to a cancelled task with; the stub says -32004.
+	if dig(late, "error", "code") != float64(-32004) || called {
+		t.Errorf("answer to a cancelled task = %v, script called %v; want an error and the script not called", late, called)
+	}
 	if describe(got) != "task:CANCELED" {
-		t.Errorf("CancelTask on a paused task = %v, want the CANCELED task", got)
+		t.Errorf("GetTask after the refused answer = %s, want task:CANCELED", describe(got))
 	}
 }
 
@@ -190,5 +232,79 @@ func TestReplayOfAnAnswerRunsNoSecondTurn(t *testing.T) {
 
 	if got, want := shape(replay), "task:COMPLETED"; got != want || calls != 1 {
 		t.Errorf("replay of the answer: %s, script called %d times; want %s and once", got, calls, want)
+	}
+}
+
+// TestAnswerWaitsForABusySession: another task of the session is working, so its one-task
+// limit refuses the answer, as it would a new message; the same answer is taken once the other
+// task has ended. A paused task does not itself make the session busy.
+func TestAnswerWaitsForABusySession(t *testing.T) {
+	s, agent, c := newAgent(t)
+	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step { return []stubagent.Step{stubagent.Text("answered")} }))
+	agent.Next(stubagent.Hold("sibling"))
+	c = withHITL(c)
+	_, taskID, ctxID, request := paused(t, c)
+	sibling := c.open("SendStreamingMessage", msg("m2", "another turn", ctxID)) // a new task in the session, held
+	var siblingID string
+	for range 3 { // SUBMITTED twice, WORKING
+		ev, _ := sibling.next()
+		siblingID, _, _ = ids(ev)
+	}
+	answer := reply("m3", "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"}))
+
+	_, refused := c.call("SendStreamingMessage", answer)
+	s.Release("sibling")
+	if err := s.WaitTurn(t.Context(), siblingID); err != nil {
+		t.Fatalf("WaitTurn: %v", err)
+	}
+	evs := c.send(answer)
+
+	if dig(refused, "error", "code") != float64(-32004) || dig(refused, "error", "message") != "resource conflict" {
+		t.Errorf("answer while another task works = %v, want -32004 resource conflict", refused)
+	}
+	if describe(last(evs)) != "task:COMPLETED" || taskText(last(evs)) != "answered" {
+		t.Errorf("the same answer after the other task ended = %s, want COMPLETED", describe(last(evs)))
+	}
+}
+
+// TestThenRunsOutsideTheLock: then may call the Server. Two answers can both be inside it; the
+// first to finish takes the task, and the other, finding it working, is refused.
+func TestThenRunsOutsideTheLock(t *testing.T) {
+	s, agent, c := newAgent(t)
+	entered, release := make(chan struct{}, 2), make(chan struct{})
+	agent.Next(dbAsk(func(stubagent.Response) []stubagent.Step {
+		s.Release("from-then") // takes the server's lock
+		entered <- struct{}{}
+		<-release
+		return nil
+	}))
+	c = withHITL(c)
+	_, taskID, ctxID, request := paused(t, c)
+	results := make(chan obj, 2)
+	for _, id := range []string{"m2", "m3"} {
+		go func() {
+			evs := c.open("SendStreamingMessage", reply(id, "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"}))).all()
+			results <- last(evs)
+		}()
+	}
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the second answer never reached then: then ran under the server's lock")
+		}
+	}
+	close(release)
+
+	a, b := <-results, <-results
+
+	refused := 0
+	for _, got := range []obj{a, b} {
+		if dig(got, "error", "code") == float64(-32004) {
+			refused++
+		}
+	}
+	if refused != 1 {
+		t.Errorf("of two simultaneous answers %d was refused, want exactly one: %v and %v", refused, a, b)
 	}
 }

@@ -9,9 +9,9 @@
 // RequestApproval, for example agent.Next(stubagent.Text("tick 1 ", "tick 2 ")). The tests of
 // this package compare what the stub sends with the fixtures, event by event.
 //
-// The then of Ask and RequestApproval runs under the server's lock, so it must not call the
-// Server. Reply runs outside it and may, but it may then run for a message that is rejected
-// after it returns, because another send got in first.
+// Reply, and the then of Ask and RequestApproval, run outside the server's lock and may call
+// the Server. They may then run for a message that is rejected after they return, because
+// another send got in first.
 //
 // Behavior that no fixture shows is guessed, and its comment carries the tag UNCONFIRMED:.
 // Those items are the agent card's fields other than the in-cluster URL and the extension, the

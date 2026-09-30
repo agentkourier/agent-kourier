@@ -33,7 +33,8 @@ func (a *Agent) Next(steps ...Step) {
 
 // Reply sets the script for messages that find no queued turn: f gets the message's text and
 // returns the steps of its turn. It suits an agent whose answer depends on the prompt. f runs
-// under the server's lock and must not call the Server.
+// outside the server's lock and may call the Server, and may run for a message that is then
+// rejected because another send got in first.
 func (a *Agent) Reply(f func(prompt string) []Step) {
 	a.s.mu.Lock()
 	defer a.s.mu.Unlock()
@@ -188,9 +189,11 @@ func validateMessage(m obj) *rpcError {
 // replay blocks until the task's final snapshot, as a stream would, and that replaying the
 // messageId of a cancelled task answers its CANCELED snapshot.
 //
-// A Reply function runs outside the lock, so it may call the Server. The lock is open while it
-// runs, so the checks are made again after it: it may have run for a message that is then
-// rejected, or that turns out to be a replay.
+// The functions that script a turn, Reply and the then of Ask and RequestApproval, run outside
+// the lock, so they may call the Server. The lock is open while they run, so the checks are made
+// again after: the script may have run for a message that is then rejected (another send got
+// the session first, or the same messageId was accepted), or for an answer that lost the task
+// to another.
 func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 	if err := validateMessage(m); err != nil {
 		return nil, err
@@ -199,29 +202,60 @@ func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 	s := a.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, sess, err := a.gate(id, m, owner)
-	if st != nil || err != nil {
-		return st, err
+	d := a.check(id, m, owner)
+	if d.st != nil || d.err != nil {
+		return d.st, d.err
 	}
-	steps, reply, ok := a.pick()
-	if !ok {
-		return nil, &rpcError{codeUnscripted, "stubagent: no turn scripted for " + a.ns + "/" + a.name, "STUBAGENT_UNSCRIPTED"}
-	}
-	if reply != nil {
+	var steps []Step
+	if d.reply != nil {
+		s.mu.Unlock()
+		steps = d.reply.p.then(d.reply.resp)
+		s.mu.Lock()
+	} else {
+		turn, reply, ok := a.pick()
+		if !ok {
+			return nil, &rpcError{codeUnscripted, "stubagent: no turn scripted for " + a.ns + "/" + a.name, "STUBAGENT_UNSCRIPTED"}
+		}
+		if reply == nil {
+			return a.start(id, m, d.sess, turn), nil
+		}
 		s.mu.Unlock()
 		steps = reply(promptText(m))
 		s.mu.Lock()
-		if st, sess, err = a.gate(id, m, owner); st != nil || err != nil {
-			return st, err
-		}
 	}
-	return a.start(id, m, sess, steps), nil
+	first := d.reply
+	if d = a.check(id, m, owner); d.st != nil || d.err != nil {
+		return d.st, d.err
+	}
+	if d.reply != nil {
+		if first == nil || d.reply.p != first.p { // the task paused again, for something else
+			return nil, busyError("resource conflict")
+		}
+		return a.commit(id, m, d.reply, steps), nil
+	}
+	return a.start(id, m, d.sess, steps), nil
 }
 
-// gate decides what a message that is not yet a task may do: join the task of a replayed
-// messageId, resume a task it replies to, or be rejected (denied, busy). Otherwise it returns
-// the session the message starts a task in. The caller holds s.mu.
-func (a *Agent) gate(id string, m obj, owner string) (*stream, *session, *rpcError) {
+// decision is what a message may do, as check decides it: it is answered at once (st, err), it
+// starts a task in a session, or it answers a paused task.
+type decision struct {
+	st    *stream
+	err   *rpcError
+	sess  *session
+	reply *pending
+}
+
+// pending is a good answer to a paused task, decoded and waiting for its steps.
+type pending struct {
+	t    *task
+	p    *pause
+	resp Response
+}
+
+// check decides what a message that is not yet a task may do: join the task of a replayed
+// messageId, answer a paused task, or be rejected (denied, busy). Otherwise it names the
+// session the message starts a task in. The caller holds s.mu.
+func (a *Agent) check(id string, m obj, owner string) decision {
 	taskID, _ := m["taskId"].(string)
 	ctxID, _ := m["contextId"].(string)
 	// A replay joins the task it started, but only one that names no contextId is deduplicated:
@@ -232,22 +266,21 @@ func (a *Agent) gate(id string, m obj, owner string) (*stream, *session, *rpcErr
 	// whatever else it carries; that is not measured.
 	if prior := a.messages[id]; prior != nil && (ctxID == "" || taskID != "") {
 		if prior.sess.owner != owner {
-			return nil, nil, deniedError()
+			return decision{err: deniedError()}
 		}
-		return prior.join(), nil, nil
+		return decision{st: prior.join()}
 	}
 	if taskID != "" {
-		st, err := a.resume(id, taskID, m, owner)
-		return st, nil, err
+		return a.checkReply(id, taskID, m, owner)
 	}
 	sess, err := a.session(ctxID, owner)
 	if err != nil {
-		return nil, nil, err
+		return decision{err: err}
 	}
 	if a.busy(sess) {
-		return nil, nil, busyError("resource conflict")
+		return decision{err: busyError("resource conflict")}
 	}
-	return nil, sess, nil
+	return decision{sess: sess}
 }
 
 // start creates the task for a message and starts its turn. The caller holds s.mu.
@@ -270,44 +303,63 @@ func (a *Agent) start(id string, m obj, sess *session, steps []Step) *stream {
 	return &stream{t: t}
 }
 
-// resume delivers a reply to the task it names. The caller holds s.mu.
+// checkReply decides a reply to the task it names. The caller holds s.mu.
 //
 // Only a task that is waiting for input takes a reply. One that is working, including one
-// wedged by an earlier bad reply, is busy (WP-02, measured).
-// UNCONFIRMED: a reply to a task that has ended is answered with -32004 too.
-func (a *Agent) resume(id, taskID string, m obj, owner string) (*stream, *rpcError) {
+// wedged by an earlier bad reply, is busy (WP-02, measured), and so is one whose session has
+// another working task, as it is for any message.
+// UNCONFIRMED: -32004 for a reply to a task that has ended or was cancelled; that a reply's
+// contextId is never checked against the task's; that a reply is recorded, so that its
+// messageId is a replay, even when it is a bad one that wedges the task; and that a bad
+// reply to a unary SendMessage answers -32603 as a JSON body.
+func (a *Agent) checkReply(id, taskID string, m obj, owner string) decision {
 	t := a.tasks[taskID]
 	switch {
 	case t == nil:
-		return nil, taskNotFound()
+		return decision{err: taskNotFound()}
 	case t.sess.owner != owner:
-		return nil, deniedError()
-	case t.state == working:
-		return nil, busyError("resource conflict")
-	case t.pause == nil:
-		return nil, busyError("task is not waiting for input")
+		return decision{err: deniedError()}
+	case t.state == working, a.busy(t.sess):
+		return decision{err: busyError("resource conflict")}
+	case t.state != inputRequired:
+		return decision{err: busyError("task is not waiting for input")}
 	}
 	p := t.pause
 	payload, _ := dig(m, "metadata", HITLExtension).(obj)
 	resp, bad := p.decode(payload)
 	resp.Text = promptText(m)
-	t.history = append(t.history, m)
-	t.pause = nil
-	t.setState(working, a.s.stamp())
-	a.messages[id] = t
 	if bad != nil {
 		// kagent fails once the task is back in WORKING, and nothing runs to move it on. The
 		// error goes to this reply's stream, after the WORKING update; only CancelTask ends it.
-		return &stream{t: t, first: t.workingEvent(nil), end: true, fail: bad}, nil
+		a.accept(t, id, m, p)
+		return decision{st: &stream{t: t, first: t.workingEvent(nil), end: true, fail: bad}}
 	}
+	return decision{reply: &pending{t, p, resp}}
+}
+
+// accept takes a reply into the task: the request the agent sent and the reply join the
+// history (askuser/05, 11), and the task is WORKING again. The caller holds s.mu.
+func (a *Agent) accept(t *task, id string, m obj, p *pause) {
+	in := withTask(m, t.id)
+	in["contextId"] = t.sess.id
+	t.history = append(t.history, p.message(t), in)
+	t.setState(working, a.s.stamp())
+	a.messages[id] = t
+}
+
+// commit resumes a paused task with the steps its script returned for the answer, and returns
+// the stream of the events that follow. The caller holds s.mu.
+func (a *Agent) commit(id string, m obj, pd *pending, steps []Step) *stream {
+	t := pd.t
+	a.accept(t, id, m, pd.p)
 	from := len(t.log)
 	t.push(t.workingEvent(nil), false)
-	if !resp.Plain() {
+	if !pd.resp.Plain() {
 		t.push(t.workingEvent(m), false) // kagent echoes a reply it took as an answer, not plain text
 	}
 	t.push(t.statusEvent(), false)
-	a.launch(t, p.then(resp))
-	return &stream{t: t, from: from}, nil
+	a.launch(t, steps)
+	return &stream{t: t, from: from}
 }
 
 // busy reports whether a task of the session is working. kagent allows one at a time.

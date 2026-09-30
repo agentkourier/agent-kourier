@@ -278,10 +278,11 @@ func skeleton(v any) string {
 		}
 		return "{" + sb.String() + "}"
 	case []any:
-		if len(v) == 0 {
-			return "[]"
+		items := make([]string, len(v)) // every element counts, so a list of the wrong length differs
+		for i, item := range v {
+			items[i] = skeleton(item)
 		}
-		return "[" + skeleton(v[0]) + "]"
+		return "[" + strings.Join(items, ";") + "]"
 	default:
 		return fmt.Sprintf("%T", v)
 	}
