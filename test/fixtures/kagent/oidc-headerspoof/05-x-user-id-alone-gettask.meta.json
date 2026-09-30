@@ -1,0 +1,1 @@
+{"contentType":"application/json","extensionsHeader":false,"extraHeaders":{"X-User-Id":["binding-test@example.test"]},"identity":{"claims":{"email":"identity-b@example.test","sub":"Cg9pZGVudGl0eS1iLTAwMDISBWxvY2Fs"},"tokenKind":"signed"},"status":200}

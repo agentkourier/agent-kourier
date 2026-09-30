@@ -1,0 +1,3 @@
+id: 439e454a-9ae0-452d-8625-3324b6d6235d
+data: {"jsonrpc":"2.0","id":"1","error":{"code":-31403,"message":"permission denied","data":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","domain":"a2a-protocol.org","metadata":{"timestamp":"2026-09-30T10:21:50Z"},"reason":"UNAUTHORIZED"}]}}
+

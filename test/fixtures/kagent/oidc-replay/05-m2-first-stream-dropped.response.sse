@@ -1,0 +1,12 @@
+id: b02a46a0-8a7c-47b3-8bc6-bde3b0fee236
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f1d7-36bf-771b-acc3-ded7148eac42","contextId":"01a0f1d6-f62d-7112-881b-f8f2e19632cd","history":[{"messageId":"spike-1790763808395539000","contextId":"01a0f1d6-f62d-7112-881b-f8f2e19632cd","parts":[{"text":"go slowly again"}],"role":"ROLE_USER"}],"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: 96d6f865-c9dd-4e18-97ed-152d41f16a10
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f1d7-36bf-771b-acc3-ded7148eac42","contextId":"01a0f1d6-f62d-7112-881b-f8f2e19632cd","history":[{"messageId":"spike-1790763808395539000","contextId":"01a0f1d6-f62d-7112-881b-f8f2e19632cd","parts":[{"text":"go slowly again"}],"role":"ROLE_USER"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true},"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: db928c1f-2ca4-4891-b719-e82f798f334a
+data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":{"contextId":"01a0f1d6-f62d-7112-881b-f8f2e19632cd","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T10:23:28.45901081Z"},"taskId":"01a0f1d7-36bf-771b-acc3-ded7148eac42","metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true}}}}
+
+id: 1ca612b3-4270-4930-8fce-8a753cd66fc6
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"artifact":{"artifactId":"01a0f1d7-3730-7d4f-9f84-1ceabf5f69d3","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T10:23:28.560382389Z"},"parts":[{"text":"tick 1 "}]},"contextId":"01a0f1d6-f62d-7112-881b-f8f2e19632cd","taskId":"01a0f1d7-36bf-771b-acc3-ded7148eac42"}}}
+

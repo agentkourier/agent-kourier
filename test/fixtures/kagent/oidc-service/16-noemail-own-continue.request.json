@@ -1,0 +1,17 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SendStreamingMessage",
+ "params": {
+  "message": {
+   "contextId": "01a0f1d5-b673-7916-915d-8c9ebb4de80f",
+   "messageId": "spike-1790763710431125000",
+   "parts": [
+    {
+     "text": "What is 2+2?"
+    }
+   ],
+   "role": "ROLE_USER"
+  }
+ }
+}

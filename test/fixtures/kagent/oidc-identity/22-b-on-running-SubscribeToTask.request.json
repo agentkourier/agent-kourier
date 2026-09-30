@@ -1,0 +1,8 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "SubscribeToTask",
+ "params": {
+  "id": "01a0f1d5-0304-7d3f-9ce5-bc059c06d42c"
+ }
+}

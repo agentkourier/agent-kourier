@@ -1,0 +1,1 @@
+{"contentType":"text/event-stream","extensionsHeader":false,"extraHeaders":{"X-Agent-Name":["spoof"]},"identity":{"claims":{"email":"identity-b@example.test","sub":"Cg9pZGVudGl0eS1iLTAwMDISBWxvY2Fs"},"tokenKind":"signed"},"query":"?user_id=binding-test@example.test","status":200}

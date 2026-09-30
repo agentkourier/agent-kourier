@@ -1,0 +1,8 @@
+{
+ "id": "1",
+ "jsonrpc": "2.0",
+ "method": "ListTasks",
+ "params": {
+  "contextId": "01a0f1d4-fe32-7c2a-8681-2bca795e1183"
+ }
+}

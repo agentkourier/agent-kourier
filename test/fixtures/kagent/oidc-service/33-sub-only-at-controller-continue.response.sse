@@ -1,0 +1,18 @@
+id: faba0718-c7a7-417b-bb04-2ccb179f4bc0
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f1d5-b881-7a64-b55c-4481cf7f944f","contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","history":[{"messageId":"spike-1790763710569046000","contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","parts":[{"text":"What is 2+2?"}],"role":"ROLE_USER"}],"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: d883d496-a5ff-4425-a3d7-62de76ccae9e
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f1d5-b881-7a64-b55c-4481cf7f944f","contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","history":[{"messageId":"spike-1790763710569046000","contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","parts":[{"text":"What is 2+2?"}],"role":"ROLE_USER"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true},"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: 9d2a26f4-b73b-4088-a7d7-f0b2364e0963
+data: {"jsonrpc":"2.0","id":"1","result":{"statusUpdate":{"contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T10:21:50.602230504Z"},"taskId":"01a0f1d5-b881-7a64-b55c-4481cf7f944f","metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true}}}}
+
+id: 341a9eb3-0598-49c0-a8f3-7f4661895e42
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"artifact":{"artifactId":"01a0f1d5-b893-7bc1-bbf2-7a8c77e362fd","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T10:21:50.611357629Z"},"parts":[{"text":"The answer is 4."}]},"contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","taskId":"01a0f1d5-b881-7a64-b55c-4481cf7f944f"}}}
+
+id: ff6a59a3-d752-45df-80e9-318ff8eed82e
+data: {"jsonrpc":"2.0","id":"1","result":{"artifactUpdate":{"artifact":{"artifactId":"01a0f1d5-b893-7bc1-bbf2-7a8c77e362fd","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T10:21:50.611735Z"},"parts":[{"text":"The answer is 4."}]},"contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","lastChunk":true,"taskId":"01a0f1d5-b881-7a64-b55c-4481cf7f944f"}}}
+
+id: 43dc2d91-8a78-47c4-9455-f44dab592e87
+data: {"jsonrpc":"2.0","id":"1","result":{"task":{"id":"01a0f1d5-b881-7a64-b55c-4481cf7f944f","artifacts":[{"artifactId":"01a0f1d5-b893-7bc1-bbf2-7a8c77e362fd","metadata":{"kagent.dev/a2a/timeline-position":"2026-09-30T10:21:50.611735Z"},"parts":[{"text":"The answer is 4."}]}],"contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","history":[{"messageId":"spike-1790763710569046000","contextId":"01a0f1d5-b673-7916-915d-8c9ebb4de80f","parts":[{"text":"What is 2+2?"}],"role":"ROLE_USER","taskId":"01a0f1d5-b881-7a64-b55c-4481cf7f944f"}],"metadata":{"https://google.github.io/adk-docs/a2a/a2a-extension/":true,"kagent.dev/a2a/task-created-at":"2026-09-30T10:21:50.596374Z"},"status":{"state":"TASK_STATE_COMPLETED","timestamp":"2026-09-30T10:21:50.631986754Z"}}}}
+

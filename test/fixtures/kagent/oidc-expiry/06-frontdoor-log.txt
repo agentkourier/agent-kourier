@@ -1,0 +1,2 @@
+[2026/09/30 10:23:09] [jwt_session.go:54] Error retrieving session from token in Authorization header: [unable to verify bearer token, failed to verify token: oidc: token is expired (Token Expiry: 2026-09-30 10:22:53 +0000 UTC)]
+[2026/09/30 10:23:09] [jwt_session.go:54] Error retrieving session from token in Authorization header: [unable to verify bearer token, failed to verify token: oidc: token is expired (Token Expiry: 2026-09-30 10:22:53 +0000 UTC)]
