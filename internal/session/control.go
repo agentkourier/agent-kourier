@@ -83,3 +83,24 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, by string) (a2a.Tas
 		return id, false, err
 	}
 }
+
+// Answer sends msg, an answer to the paused task msg.TaskID (built by the dialect, validated,
+// with the Slack user as attribution), through the conversation's runner, which streams what
+// follows to the sink under the turn that paused. It returns once the runner has it: ErrNotPaused
+// means the conversation is not paused on that task, or it was already answered. How the send
+// ends, a rejection or a busy task included, reaches the thread as a notice, and the queued
+// replies go on when the task ends.
+func (m *Manager) Answer(_ context.Context, key Key, msg *a2a.Message) error {
+	if msg == nil || msg.TaskID == "" || msg.ID == "" {
+		return fmt.Errorf("answer: a message with an ID and a task is required: %w", store.ErrInvalid)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.convos[key]
+	if c == nil || c.parked != msg.TaskID || c.released {
+		return ErrNotPaused
+	}
+	c.released = true
+	c.answers <- msg // one per park, and the channel holds one: never blocks
+	return nil
+}

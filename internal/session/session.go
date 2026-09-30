@@ -39,6 +39,7 @@ type AgentAPI interface {
 	Follow(ctx context.Context, id a2a.TaskID, h agent.Handler) error
 	GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error)
 	CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error)
+	Answer(ctx context.Context, msg *a2a.Message, h agent.Handler) error
 	FindTask(ctx context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
 }
 
@@ -98,6 +99,10 @@ const (
 	// NoticeBindingGone says the thread's Binding is no longer configured, so its turns cannot be
 	// sent.
 	NoticeBindingGone NoticeKind = "binding_gone"
+	// NoticeAnswerRejected says the agent rejected an answer and its task was cancelled (R17).
+	NoticeAnswerRejected NoticeKind = "answer_rejected"
+	// NoticeAnswerDropped says an answer arrived after its task had ended, and was not sent.
+	NoticeAnswerDropped NoticeKind = "answer_dropped"
 	// NoticeStopped says a person stopped a task that was not streaming, so there is nothing else
 	// to show it (spec 8.2).
 	NoticeStopped NoticeKind = "stopped"

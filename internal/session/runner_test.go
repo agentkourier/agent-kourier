@@ -38,7 +38,9 @@ type fakeAgent struct {
 	cancels   []a2a.TaskID
 	cancelErr func(attempt int) error // the error of the n-th CancelTask (1-based), if any
 	onCancel  func(id a2a.TaskID)     // runs inside CancelTask, before it returns
-	seq       []string                // the calls in order: send, find, follow
+	answer    func(msg *a2a.Message, h agent.Handler) error
+	answers   []*a2a.Message
+	seq       []string // the calls in order: send, find, follow
 }
 
 func (a *fakeAgent) FindTask(_ context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
@@ -74,6 +76,14 @@ func (a *fakeAgent) CancelTask(_ context.Context, id a2a.TaskID) (*a2a.Task, err
 		}
 	}
 	return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
+}
+
+func (a *fakeAgent) Answer(_ context.Context, msg *a2a.Message, h agent.Handler) error {
+	a.mu.Lock()
+	a.answers = append(a.answers, msg)
+	answer := a.answer
+	a.mu.Unlock()
+	return answer(msg, h)
 }
 
 func (a *fakeAgent) Follow(_ context.Context, id a2a.TaskID, h agent.Handler) error {
@@ -122,6 +132,7 @@ type fakeSink struct {
 	mu      sync.Mutex
 	events  []agent.Event
 	notices []Notice
+	refs    []TurnRef
 	finals  chan struct{}
 	onFinal func(*a2a.Task) // runs inside the handler, before finals is signalled
 }
@@ -132,7 +143,10 @@ func (s *fakeSink) Notice(_ context.Context, _ Key, n Notice) {
 	s.mu.Unlock()
 }
 
-func (s *fakeSink) Turn(context.Context, TurnRef) agent.Handler {
+func (s *fakeSink) Turn(_ context.Context, ref TurnRef) agent.Handler {
+	s.mu.Lock()
+	s.refs = append(s.refs, ref)
+	s.mu.Unlock()
 	return func(e agent.Event) {
 		s.mu.Lock()
 		s.events = append(s.events, e)
