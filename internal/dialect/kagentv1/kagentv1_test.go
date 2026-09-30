@@ -77,6 +77,10 @@ func TestAuthenticate(t *testing.T) {
 		{name: "static cookie, any case", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"cOOkie": {canary}}}, wantErr: true},
 		{name: "static X-Agent-Name", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Agent-Name": {canary}}}, wantErr: true},
 		{name: "static x-agent-name, any case", creds: dialect.Credentials{Token: "t", Headers: http.Header{"x-agent-name": {canary}}}, wantErr: true},
+		{name: "static X-Share-Token", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Share-Token": {canary}}}, wantErr: true},
+		{name: "static x-share-token", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"x-share-token": {canary}}}, wantErr: true},
+		{name: "static X-Kagent-Insecure-Runtime-Identity", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"X-Kagent-Insecure-Runtime-Identity": {canary}}}, wantErr: true},
+		{name: "static x-kagent-insecure-runtime-identity", creds: dialect.Credentials{UserID: "u", Headers: http.Header{"x-kagent-insecure-runtime-identity": {canary}}}, wantErr: true},
 		{name: "token with a line break", creds: dialect.Credentials{Token: canary + "\r\nX-Evil: 1"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
