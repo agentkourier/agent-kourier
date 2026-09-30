@@ -1,6 +1,8 @@
 # The courier front door: a second oauth2-proxy that verifies the Binding's Dex token (signature
 # by the issuer's keys, issuer, audience = courier-binding, expiry) and forwards only /agents/ to
-# the kagent controller. kagent's own OIDC mode decodes JWTs without verifying them, so courier
+# the kagent controller. Signature and audience are measured by verify.sh; the issuer and expiry
+# checks are INFERRED from oauth2-proxy's OIDC verifier and not yet tested (WP-03 tests expiry).
+# kagent's own OIDC mode decodes JWTs without verifying them, so courier
 # must never reach port 8083 except through this pod (spec D32, R4). A separate instance because
 # the chart's oauth2-proxy has one `upstream` (the UI) and its extraArgs map cannot repeat it.
 # Chosen over agentgateway because the image and the token logic are already in this cluster.
