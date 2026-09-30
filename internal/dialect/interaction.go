@@ -17,7 +17,7 @@ const (
 // Question is one question of an AskUser interaction.
 type Question struct {
 	Text     string
-	Choices  []string // empty means free text
+	Choices  []string // empty (nil or zero-length) means free text; test with len
 	Multiple bool     // more than one choice may be selected
 }
 

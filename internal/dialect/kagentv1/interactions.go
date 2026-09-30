@@ -78,14 +78,16 @@ func unusable(reason string) error {
 // tool, whose id, not the top-level one, is what the answer echoes
 // (processNestedAskUser). A nested tool approval decides only the nested tools, with no
 // fallback to the top-level ones, and needs exactly one top-level tool
-// (processNestedApproval).
+// (processNestedApproval). That tool's id must be non-empty because it becomes the parent
+// FunctionResponse id, so an empty one could never resume the task. This is stricter than
+// kagent's own check, but it cannot reject a pause that could be resumed.
 func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	if task.Status.State != a2a.TaskStateInputRequired {
 		return nil, nil // no structured pause is the documented "nothing to parse", not a failure
 	}
 	msg := task.Status.Message
 	if msg == nil || msg.Metadata[HITLExtension] == nil {
-		return nil, unusable("no HITL payload, so the request lacked the extension header")
+		return nil, unusable("no HITL payload (was the extension header sent?)")
 	}
 	raw, err := json.Marshal(msg.Metadata[HITLExtension])
 	var req hitlRequest
