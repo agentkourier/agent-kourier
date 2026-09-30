@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
+
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
@@ -23,7 +25,9 @@ const (
 	maxAttempts = 3
 )
 
-// fakeClock is single-goroutine: RunOnce and its handlers run on the test goroutine.
+// fakeClock is not synchronized. RunOnce tests run everything on the test
+// goroutine; Run tests are race-free because the clock is advanced only
+// between Run calls, when no worker goroutine is alive.
 type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) Now() time.Time          { return c.t }
@@ -35,6 +39,8 @@ type fixture struct {
 	clock *fakeClock
 	log   *bytes.Buffer
 	w     *Worker
+	// ignore lists the goroutines that predate the worker (the store's), for goleak.
+	ignore goleak.Option
 }
 
 // newFixture builds a Worker over a temp-dir SQLite store with a fixed backoff
@@ -47,7 +53,7 @@ func newFixture(t *testing.T, h HandlerFunc, mod ...func(*Config)) *fixture {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	f := &fixture{ctx: ctx, store: s, clock: &fakeClock{t: t0}, log: &bytes.Buffer{}}
+	f := &fixture{ctx: ctx, store: s, clock: &fakeClock{t: t0}, log: &bytes.Buffer{}, ignore: goleak.IgnoreCurrent()}
 	cfg := Config{
 		Queue: s, Handler: h, Lease: lease, MaxAttempts: maxAttempts,
 		Backoff: func(int) time.Duration { return retryDelay },
@@ -281,7 +287,7 @@ func TestNewValidatesAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(valid, defaults unset) = %v", err)
 	}
-	if w.cfg.Now == nil || w.cfg.Logger == nil || w.cfg.Backoff == nil {
+	if w.cfg.Now == nil || w.cfg.Logger == nil || w.cfg.Backoff == nil || w.cfg.PollInterval <= 0 {
 		t.Fatalf("New left defaults unset: %+v", w.cfg)
 	}
 	for name, mod := range map[string]func(*Config){
@@ -290,6 +296,7 @@ func TestNewValidatesAndDefaults(t *testing.T) {
 		"zero lease":   func(c *Config) { c.Lease = 0 },
 		"zero max":     func(c *Config) { c.MaxAttempts = 0 },
 		"neg lease":    func(c *Config) { c.Lease = -time.Second },
+		"neg drain":    func(c *Config) { c.DrainTimeout = -time.Second },
 		"neg attempts": func(c *Config) { c.MaxAttempts = -1 },
 	} {
 		cfg := valid

@@ -5,6 +5,7 @@ go 1.27.1
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 require (
+	go.uber.org/goleak v1.3.0
 	k8s.io/apimachinery v0.36.1
 	modernc.org/sqlite v1.60.1
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730

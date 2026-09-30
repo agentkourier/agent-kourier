@@ -52,11 +52,21 @@ type Config struct {
 	// Backoff returns the delay before retrying after the given failed attempt
 	// (1 for the first). Nil means ExponentialBackoff(1s, 5m).
 	Backoff func(attempt int) time.Duration
+	// PollInterval is how long Run waits after finding the queue empty. Zero
+	// means one second.
+	PollInterval time.Duration
+	// DrainTimeout is how long Run lets an in-flight handler finish after its
+	// context is cancelled, before cancelling the handler's own context. Zero
+	// means no grace.
+	DrainTimeout time.Duration
 	// Now is the worker's clock. Nil means time.Now.
 	Now func() time.Time
 	// Logger receives worker logs. Nil means slog.Default().
 	Logger *slog.Logger
 }
+
+// defaultPollInterval is used when Config.PollInterval is unset.
+const defaultPollInterval = time.Second
 
 // Worker applies the queue's processing policy: retry with backoff, and
 // dead-letter after MaxAttempts.
@@ -73,6 +83,11 @@ func New(cfg Config) (*Worker, error) {
 		return nil, fmt.Errorf("queue: Lease must be positive, got %v", cfg.Lease)
 	case cfg.MaxAttempts < 1:
 		return nil, fmt.Errorf("queue: MaxAttempts must be at least 1, got %d", cfg.MaxAttempts)
+	case cfg.DrainTimeout < 0:
+		return nil, fmt.Errorf("queue: DrainTimeout must not be negative, got %v", cfg.DrainTimeout)
+	}
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = defaultPollInterval
 	}
 	if cfg.Backoff == nil {
 		cfg.Backoff = ExponentialBackoff(defaultBackoffBase, defaultBackoffCeiling)
@@ -90,6 +105,10 @@ func New(cfg Config) (*Worker, error) {
 // was claimed. A handler failure or a lost lease is not an error: the outcome
 // is recorded (or, for a lost lease, left to the new holder) and RunOnce
 // returns nil. Only store failures are returned.
+//
+// If ctx is cancelled while the handler runs, the handler gets DrainTimeout,
+// then its context is cancelled; a failure after that is abandoned to lease
+// expiry. Outcomes are recorded even after ctx is cancelled.
 func (w *Worker) RunOnce(ctx context.Context) (handled bool, err error) {
 	e, err := w.cfg.Queue.ClaimEvent(ctx, w.cfg.Now(), w.cfg.Lease)
 	if errors.Is(err, store.ErrNotFound) {
@@ -101,19 +120,51 @@ func (w *Worker) RunOnce(ctx context.Context) (handled bool, err error) {
 	return true, w.settle(ctx, e)
 }
 
+// Run claims and processes events until ctx is cancelled, waiting PollInterval
+// whenever the queue is empty or the store fails. Cancelling ctx stops claiming;
+// a handler already running gets DrainTimeout to finish and is then cancelled
+// and abandoned to lease expiry. Run returns nil once that is done, and no
+// goroutine it started outlives it.
+func (w *Worker) Run(ctx context.Context) error {
+	for ctx.Err() == nil {
+		handled, err := w.RunOnce(ctx)
+		// A claim that fails because ctx was cancelled is expected (handled is
+		// false); a failed outcome write (handled is true) must never vanish.
+		if err != nil && (handled || ctx.Err() == nil) {
+			w.cfg.Logger.Error("queue worker", "error", err)
+		}
+		if handled && err == nil {
+			continue // more events may be waiting
+		}
+		timer := time.NewTimer(w.cfg.PollInterval)
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	return nil
+}
+
 // settle runs the handler on a claimed event and records the outcome, passing
 // the claim's attempt as the fencing token. A claim past MaxAttempts (after
-// crashes) is dead-lettered without running the handler.
+// crashes) is dead-lettered without running the handler. Outcomes are written
+// with a context that outlives ctx's cancellation, so a handler that finishes
+// during the drain is still recorded.
 func (w *Worker) settle(ctx context.Context, e store.Event) error {
 	log := w.cfg.Logger.With("event", e.ID, "attempt", e.Attempts)
 	q, maxAttempts := w.cfg.Queue, w.cfg.MaxAttempts
+	wctx := context.WithoutCancel(ctx)
 	var err error
 	if e.Attempts > maxAttempts {
 		log.Error("dead-lettering event claimed past its attempt limit", "limit", maxAttempts)
 		msg := fmt.Sprintf("attempt %d exceeds limit %d", e.Attempts, maxAttempts)
-		err = q.FailEvent(ctx, e.ID, e.Attempts, w.cfg.Now(), maxAttempts, msg)
-	} else if herr := w.handle(ctx, e, log); herr == nil {
-		err = q.CompleteEvent(ctx, e.ID, e.Attempts)
+		err = q.FailEvent(wctx, e.ID, e.Attempts, w.cfg.Now(), maxAttempts, msg)
+	} else if abandoned, herr := w.runHandler(ctx, e, log); abandoned {
+		log.Warn("handler abandoned at shutdown; its lease will expire", "error", herr)
+		return nil
+	} else if herr == nil {
+		err = q.CompleteEvent(wctx, e.ID, e.Attempts)
 	} else {
 		retryAt := w.cfg.Now().Add(w.cfg.Backoff(e.Attempts))
 		if e.Attempts == maxAttempts { // no retry will happen, so no retry_at
@@ -122,7 +173,7 @@ func (w *Worker) settle(ctx context.Context, e store.Event) error {
 		} else {
 			log.Warn("handler failed", "error", herr, "retry_at", retryAt)
 		}
-		err = q.FailEvent(ctx, e.ID, e.Attempts, retryAt, maxAttempts, herr.Error())
+		err = q.FailEvent(wctx, e.ID, e.Attempts, retryAt, maxAttempts, herr.Error())
 	}
 	if errors.Is(err, store.ErrConflict) {
 		log.Warn("lease lost; leaving the event to its new holder", "error", err)
@@ -132,6 +183,37 @@ func (w *Worker) settle(ctx context.Context, e store.Event) error {
 		return fmt.Errorf("record outcome of event %q: %w", e.ID, err)
 	}
 	return nil
+}
+
+// runHandler runs the handler with a context detached from ctx, so cancelling
+// ctx does not interrupt it at once. One watcher goroutine starts the drain
+// timer when ctx is cancelled and cancels the handler's context when it fires;
+// runHandler waits for the watcher before returning. abandoned reports that
+// the handler failed after that cancellation, so its outcome is not recorded.
+func (w *Worker) runHandler(ctx context.Context, e store.Event, log *slog.Logger) (abandoned bool, err error) {
+	hctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	finished, watcherDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-finished:
+			return
+		case <-ctx.Done():
+		}
+		timer := time.NewTimer(w.cfg.DrainTimeout)
+		defer timer.Stop()
+		select {
+		case <-finished:
+		case <-timer.C:
+			cancel()
+		}
+	}()
+	err = w.handle(hctx, e, log)
+	cancelled := hctx.Err() != nil // before the handler returned, not after finished closes
+	close(finished)
+	<-watcherDone
+	return err != nil && cancelled, err
 }
 
 // handle calls the handler, converting a panic into an error so that a buggy
