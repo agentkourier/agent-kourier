@@ -38,8 +38,8 @@ type HandlerFunc func(ctx context.Context, e store.Event) error
 // Handle calls f.
 func (f HandlerFunc) Handle(ctx context.Context, e store.Event) error { return f(ctx, e) }
 
-// Config configures a Worker. Queue, Handler, Lease, MaxAttempts, and Backoff
-// are required.
+// Config configures a Worker. Queue, Handler, Lease, and MaxAttempts are
+// required.
 type Config struct {
 	// Queue is the store's event queue.
 	Queue store.Queue
@@ -50,7 +50,7 @@ type Config struct {
 	// MaxAttempts is how many times an event is claimed before it is dead-lettered.
 	MaxAttempts int
 	// Backoff returns the delay before retrying after the given failed attempt
-	// (1 for the first).
+	// (1 for the first). Nil means ExponentialBackoff(1s, 5m).
 	Backoff func(attempt int) time.Duration
 	// Now is the worker's clock. Nil means time.Now.
 	Now func() time.Time
@@ -73,8 +73,9 @@ func New(cfg Config) (*Worker, error) {
 		return nil, fmt.Errorf("queue: Lease must be positive, got %v", cfg.Lease)
 	case cfg.MaxAttempts < 1:
 		return nil, fmt.Errorf("queue: MaxAttempts must be at least 1, got %d", cfg.MaxAttempts)
-	case cfg.Backoff == nil:
-		return nil, errors.New("queue: Backoff is required")
+	}
+	if cfg.Backoff == nil {
+		cfg.Backoff = ExponentialBackoff(defaultBackoffBase, defaultBackoffCeiling)
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -115,9 +116,11 @@ func (w *Worker) settle(ctx context.Context, e store.Event) error {
 		err = q.CompleteEvent(ctx, e.ID, e.Attempts)
 	} else {
 		retryAt := w.cfg.Now().Add(w.cfg.Backoff(e.Attempts))
-		log.Warn("handler failed", "error", herr, "retry_at", retryAt)
-		if e.Attempts == maxAttempts {
+		if e.Attempts == maxAttempts { // no retry will happen, so no retry_at
+			log.Warn("handler failed", "error", herr)
 			log.Error("dead-lettering event after its final attempt", "limit", maxAttempts)
+		} else {
+			log.Warn("handler failed", "error", herr, "retry_at", retryAt)
 		}
 		err = q.FailEvent(ctx, e.ID, e.Attempts, retryAt, maxAttempts, herr.Error())
 	}

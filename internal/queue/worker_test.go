@@ -3,6 +3,7 @@ package queue
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"path/filepath"
@@ -51,7 +52,7 @@ func newFixture(t *testing.T, h HandlerFunc, mod ...func(*Config)) *fixture {
 		Queue: s, Handler: h, Lease: lease, MaxAttempts: maxAttempts,
 		Backoff: func(int) time.Duration { return retryDelay },
 		Now:     f.clock.Now,
-		Logger:  slog.New(slog.NewTextHandler(f.log, nil)),
+		Logger:  slog.New(slog.NewJSONHandler(f.log, nil)),
 	}
 	for _, m := range mod {
 		m(&cfg)
@@ -60,6 +61,22 @@ func newFixture(t *testing.T, h HandlerFunc, mod ...func(*Config)) *fixture {
 		t.Fatalf("New: %v", err)
 	}
 	return f
+}
+
+// logs decodes the JSON log lines at the given level whose msg starts with prefix.
+func (f *fixture) logs(t *testing.T, level, prefix string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for dec := json.NewDecoder(bytes.NewReader(f.log.Bytes())); dec.More(); {
+		var r map[string]any
+		if err := dec.Decode(&r); err != nil {
+			t.Fatalf("log line is not JSON: %v", err)
+		}
+		if msg, _ := r["msg"].(string); r["level"] == level && strings.HasPrefix(msg, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (f *fixture) append(t *testing.T, id string) {
@@ -149,10 +166,19 @@ func TestRunOnceDeadLettersAfterMaxAttempts(t *testing.T) {
 	if calls != maxAttempts {
 		t.Fatalf("handler ran %d times; want %d", calls, maxAttempts)
 	}
-	log := f.log.String()
-	if strings.Count(log, "level=WARN msg=\"handler failed\"") != maxAttempts ||
-		strings.Count(log, "level=ERROR msg=\"dead-lettering") != 1 || !strings.Contains(log, "retry_at=") {
-		t.Fatalf("want a warning per failure and one dead-letter error, got: %s", log)
+	warns := f.logs(t, "WARN", "handler failed")
+	if len(warns) != maxAttempts {
+		t.Fatalf("got %d handler-failed warnings; want %d: %s", len(warns), maxAttempts, f.log)
+	}
+	for i, r := range warns {
+		_, hasRetry := r["retry_at"]
+		if r["event"] != "ev" || r["attempt"] != float64(i+1) || r["error"] != "always" ||
+			hasRetry != (i+1 < maxAttempts) { // the final attempt has no retry
+			t.Errorf("warning %d = %v; want event, attempt, error, and retry_at except on the final attempt", i+1, r)
+		}
+	}
+	if errs := f.logs(t, "ERROR", ""); len(errs) != 1 || !strings.HasPrefix(errs[0]["msg"].(string), "dead-lettering") {
+		t.Errorf("want exactly one dead-lettering error record, got %v", errs)
 	}
 }
 
@@ -175,8 +201,9 @@ func TestRunOnceDeadLettersClaimPastMaxWithoutHandling(t *testing.T) {
 	if got.Status != store.EventDead || got.Attempts != 3 || !strings.Contains(got.LastError, "exceeds") {
 		t.Fatalf("event = %+v; want dead at attempt 3 with an explanatory error", got)
 	}
-	if !strings.Contains(f.log.String(), "level=ERROR") {
-		t.Fatalf("dead-lettering was not logged at error level: %s", f.log)
+	const want = "dead-lettering event claimed past its attempt limit"
+	if errs := f.logs(t, "ERROR", ""); len(errs) != 1 || errs[0]["msg"] != want {
+		t.Fatalf("want exactly one %q error record, got %v", want, errs)
 	}
 }
 
@@ -216,8 +243,8 @@ func TestRunOnceLostLeaseIsNotAnError(t *testing.T) {
 
 			got := f.get(t, "ev")
 			if got.Status != store.EventProcessing || got.Attempts != 2 || got.LastError != "" ||
-				!strings.Contains(f.log.String(), "lease lost") {
-				t.Fatalf("event = %+v, log %q; want B's lease untouched and a lease-lost log", got, f.log)
+				len(f.logs(t, "WARN", "lease lost")) != 1 {
+				t.Fatalf("event = %+v, log %s; want B's lease untouched and a lease-lost warning", got, f.log)
 			}
 		})
 	}
@@ -232,8 +259,10 @@ func TestRunOnceRecoversHandlerPanic(t *testing.T) {
 	if got.Status != store.EventPending || got.LastError != "panic: kaboom" || !got.NextAttemptAt.Equal(t0.Add(retryDelay)) {
 		t.Fatalf("event = %+v; want pending at %v with last error %q", got, t0.Add(retryDelay), "panic: kaboom")
 	}
-	if log := f.log.String(); !strings.Contains(log, "kaboom") || !strings.Contains(log, "TestRunOnceRecoversHandlerPanic") {
-		t.Fatalf("log lacks the panic value and stack: %s", log)
+	panics := f.logs(t, "ERROR", "handler panicked")
+	if len(panics) != 1 || panics[0]["panic"] != "kaboom" ||
+		!strings.Contains(panics[0]["stack"].(string), "TestRunOnceRecoversHandlerPanic") {
+		t.Fatalf("want one panic record with the value and stack, got %v", panics)
 	}
 }
 
@@ -247,18 +276,17 @@ func TestRunOnceReturnsStoreErrors(t *testing.T) {
 
 func TestNewValidatesAndDefaults(t *testing.T) {
 	s, h := &sqlite.Store{}, HandlerFunc(func(context.Context, store.Event) error { return nil })
-	valid := Config{Queue: s, Handler: h, Lease: lease, MaxAttempts: 1, Backoff: func(int) time.Duration { return 0 }}
+	valid := Config{Queue: s, Handler: h, Lease: lease, MaxAttempts: 1}
 	w, err := New(valid)
 	if err != nil {
 		t.Fatalf("New(valid, defaults unset) = %v", err)
 	}
-	if w.cfg.Now == nil || w.cfg.Logger == nil {
-		t.Fatalf("New left defaults unset: Now nil = %v, Logger nil = %v", w.cfg.Now == nil, w.cfg.Logger == nil)
+	if w.cfg.Now == nil || w.cfg.Logger == nil || w.cfg.Backoff == nil {
+		t.Fatalf("New left defaults unset: %+v", w.cfg)
 	}
 	for name, mod := range map[string]func(*Config){
 		"nil queue":    func(c *Config) { c.Queue = nil },
 		"nil handler":  func(c *Config) { c.Handler = nil },
-		"nil backoff":  func(c *Config) { c.Backoff = nil },
 		"zero lease":   func(c *Config) { c.Lease = 0 },
 		"zero max":     func(c *Config) { c.MaxAttempts = 0 },
 		"neg lease":    func(c *Config) { c.Lease = -time.Second },
