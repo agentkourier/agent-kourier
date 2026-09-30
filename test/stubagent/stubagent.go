@@ -27,13 +27,14 @@ const HITLExtension = "https://kagent.dev/extensions/hitl/v1"
 // Server serves any number of stub agents. It is an http.Handler and is safe for concurrent
 // use.
 type Server struct {
-	srv  *httptest.Server // nil when used only as a handler
-	now  func() time.Time
-	tick time.Duration
-	ctx  context.Context // ends the running turns
-	stop context.CancelFunc
-	wg   sync.WaitGroup // running turns
-	seq  atomic.Int64
+	srv         *httptest.Server // nil when used only as a handler
+	now         func() time.Time
+	tick        time.Duration
+	requireAuth bool
+	ctx         context.Context // ends the running turns
+	stop        context.CancelFunc
+	wg          sync.WaitGroup // running turns
+	seq         atomic.Int64
 
 	mu     sync.Mutex
 	agents map[string]*Agent        // by "ns/name", guarded by mu
@@ -140,7 +141,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	a := s.agents[parts[1]+"/"+parts[2]]
 	s.mu.Unlock()
-	switch {
+	switch _, ok := bearer(r); {
+	case s.requireAuth && !ok:
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	case a == nil:
 		http.NotFound(w, r)
 	case len(parts) == 4 && parts[3] == cardFile && r.Method == http.MethodGet:

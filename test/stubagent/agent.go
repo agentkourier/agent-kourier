@@ -78,7 +78,7 @@ func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request) {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params"`
 	}
-	o := &rw{s: a.s, w: w, ext: strings.Contains(r.Header.Get("A2A-Extensions"), HITLExtension)}
+	o := &rw{s: a.s, w: w, owner: ownerOf(r), ext: strings.Contains(r.Header.Get("A2A-Extensions"), HITLExtension)}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		o.fail(&rpcError{codeParse, "parse error", "PARSE_ERROR"})
 		return
@@ -112,7 +112,7 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 		o.fail(invalidParams("params.message is required"))
 		return
 	}
-	st, err := a.admit(p.Message) //nolint:contextcheck // the turn outlives the request; the server's context bounds it
+	st, err := a.admit(p.Message, o.owner) //nolint:contextcheck // the turn outlives the request; the server's context bounds it
 	if err != nil {
 		o.fail(err)
 		return
@@ -126,7 +126,7 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 //
 // A message whose messageId was accepted before is a replay: it joins that task, and runs no
 // turn (WP-02, measured). A message that is rejected is not remembered, so it can be resent.
-func (a *Agent) admit(m obj) (*stream, *rpcError) {
+func (a *Agent) admit(m obj, owner string) (*stream, *rpcError) {
 	id, _ := m["messageId"].(string)
 	if id == "" {
 		return nil, invalidParams("params.message.messageId is required")
@@ -135,13 +135,19 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if prior := a.messages[id]; prior != nil {
+		if prior.sess.owner != owner {
+			return nil, deniedError()
+		}
 		return prior.join(), nil
 	}
 	if taskID, _ := m["taskId"].(string); taskID != "" {
-		return a.resume(id, taskID, m)
+		return a.resume(id, taskID, m, owner)
 	}
 	ctxID, _ := m["contextId"].(string)
-	sess := a.session(ctxID)
+	sess, err := a.session(ctxID, owner)
+	if err != nil {
+		return nil, err
+	}
 	if a.busy(sess) {
 		return nil, busyError("resource conflict")
 	}
@@ -171,11 +177,13 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 // Only a task that is waiting for input takes a reply. One that is working, including one
 // wedged by an earlier bad reply, is busy (WP-02, measured).
 // UNCONFIRMED: a reply to a task that has ended is answered with -32004 too.
-func (a *Agent) resume(id, taskID string, m obj) (*stream, *rpcError) {
+func (a *Agent) resume(id, taskID string, m obj, owner string) (*stream, *rpcError) {
 	t := a.tasks[taskID]
 	switch {
 	case t == nil:
 		return nil, taskNotFound()
+	case t.sess.owner != owner:
+		return nil, deniedError()
 	case t.state == working:
 		return nil, busyError("resource conflict")
 	case t.pause == nil:
@@ -214,24 +222,28 @@ func (a *Agent) busy(sess *session) bool {
 	return false
 }
 
-// find returns the task that params name. The caller holds s.mu.
-func (a *Agent) find(params json.RawMessage) (*task, *rpcError) {
+// find returns the task that params name, if owner may use it. The caller holds s.mu.
+func (a *Agent) find(params json.RawMessage, owner string) (*task, *rpcError) {
 	var p struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
 		return nil, invalidParams("params.id is required")
 	}
-	if a.tasks[p.ID] == nil {
+	t := a.tasks[p.ID]
+	switch {
+	case t == nil:
 		return nil, taskNotFound()
+	case t.sess.owner != owner:
+		return nil, deniedError()
 	}
-	return a.tasks[p.ID], nil
+	return t, nil
 }
 
 // getTask answers with the task as it is now, its text so far included.
 func (a *Agent) getTask(o *rw, params json.RawMessage) {
 	a.s.mu.Lock()
-	t, err := a.find(params)
+	t, err := a.find(params, o.owner)
 	var snap obj
 	if err == nil {
 		snap = t.snapshot()
@@ -249,7 +261,7 @@ func (a *Agent) getTask(o *rw, params json.RawMessage) {
 // UNCONFIRMED: cancelling a task that is already completed or cancelled answers -32002.
 func (a *Agent) cancelTask(o *rw, params json.RawMessage) {
 	a.s.mu.Lock()
-	t, err := a.find(params)
+	t, err := a.find(params, o.owner)
 	if err == nil && (t.state == completed || t.state == canceled) {
 		err = &rpcError{codeNotCancelable, "task is already " + t.state, "TASK_NOT_CANCELABLE"}
 	}
@@ -269,16 +281,20 @@ func (a *Agent) cancelTask(o *rw, params json.RawMessage) {
 	o.done()
 }
 
-// session finds the session for a contextId, or opens one. An empty contextId gets a new id.
+// session finds the session for a contextId, or opens one for owner. An empty contextId gets a
+// new id. A session is its owner's alone.
 // UNCONFIRMED: a contextId that names no session opens one with that id.
-func (a *Agent) session(ctxID string) *session {
+func (a *Agent) session(ctxID, owner string) (*session, *rpcError) {
 	if ctxID == "" {
 		ctxID = a.s.newID("context")
 	}
 	if a.sessions[ctxID] == nil {
-		a.sessions[ctxID] = &session{id: ctxID}
+		a.sessions[ctxID] = &session{id: ctxID, owner: owner}
 	}
-	return a.sessions[ctxID]
+	if a.sessions[ctxID].owner != owner {
+		return nil, deniedError()
+	}
+	return a.sessions[ctxID], nil
 }
 
 // launch plays steps for the task in the background. The caller holds s.mu.
@@ -303,7 +319,7 @@ func (a *Agent) launch(t *task, steps []Step) {
 // what happens next. For a task that is not running, the snapshot is the whole answer.
 func (a *Agent) subscribeTask(ctx context.Context, o *rw, params json.RawMessage) {
 	a.s.mu.Lock()
-	t, err := a.find(params)
+	t, err := a.find(params, o.owner)
 	var st *stream
 	if err == nil {
 		st = t.join()

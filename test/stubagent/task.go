@@ -17,7 +17,8 @@ const adkExtension = "https://google.github.io/adk-docs/a2a/a2a-extension/"
 
 // session is one contextId. A message with a new contextId, or none, opens one.
 type session struct {
-	id string
+	id    string
+	owner string // the identity that opened it, see ownerOf
 }
 
 // task is one A2A task. Everything but the id and session is guarded by Server.mu.

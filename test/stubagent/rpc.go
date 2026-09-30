@@ -20,6 +20,7 @@ const (
 	codeTaskNotFound  = -32001
 	codeNotCancelable = -32002
 	codeBusy          = -32004 // A2A's unsupported operation, which kagent answers a busy session with
+	codeDenied        = -31403 // another identity's session or task
 )
 
 // rpcError is a JSON-RPC error. reason is the google.rpc.ErrorInfo reason kagent attaches.
@@ -72,9 +73,10 @@ type rw struct {
 	w      http.ResponseWriter
 	id     json.RawMessage
 	stream bool
-	ext    bool // the request names the HITL extension
-	held   obj  // a non-streaming call answers with the last result it was given
-	failed bool // an error has been written
+	ext    bool   // the request names the HITL extension
+	owner  string // the identity the request acts as
+	held   obj    // a non-streaming call answers with the last result it was given
+	failed bool   // an error has been written
 }
 
 // view is a result as this client sees it. The HITL request in a paused task's status message,
