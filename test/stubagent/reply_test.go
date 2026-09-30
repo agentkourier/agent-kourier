@@ -235,9 +235,13 @@ func TestReplayOfAnAnswerIsRefused(t *testing.T) {
 	_, taskID, ctxID, request := paused(t, c)
 	answer := reply("m2", "x", ctxID, taskID, answers(request["id"].(string), []string{"MySQL"}))
 	st := c.open("SendStreamingMessage", answer)
-	for range 4 { // WORKING, the echo, WORKING, the answer's function_response
-		if _, ok := st.next(); !ok {
-			t.Fatal("the answer's stream ended early")
+	for { // read until the turn has produced output: it is running
+		ev, ok := st.next()
+		if !ok {
+			t.Fatal("the answer's stream ended before its first artifact")
+		}
+		if kind, _ := body(ev); kind == "artifactUpdate" {
+			break
 		}
 	}
 	_ = st.resp.Body.Close() // the turn runs on, held at the gate
@@ -249,9 +253,16 @@ func TestReplayOfAnAnswerIsRefused(t *testing.T) {
 	}
 	ended := c.first("SendStreamingMessage", answer)
 
-	for label, got := range map[string]obj{"while the task works": running, "after it ended": ended} {
-		if dig(got, "error", "code") != float64(-32004) {
-			t.Errorf("replay of the answer %s = %v, want -32004", label, got)
+	// The two refusals have different messages, so the branches cannot be swapped unnoticed.
+	for label, tc := range map[string]struct {
+		got     obj
+		message string
+	}{
+		"while the task works": {running, "resource conflict"},
+		"after it ended":       {ended, "task is not waiting for input"},
+	} {
+		if dig(tc.got, "error", "code") != float64(-32004) || dig(tc.got, "error", "message") != tc.message {
+			t.Errorf("replay of the answer %s = %v, want -32004 %q", label, tc.got, tc.message)
 		}
 	}
 	if calls != 1 {

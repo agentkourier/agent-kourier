@@ -77,6 +77,9 @@ func TestSendRejectsWhatIsNotAMessage(t *testing.T) {
 		{"a part with nothing in it", oneMessage("m1", obj{}), parse, "parse error: unknown part content type: []"},
 		{"a part with an unknown field", oneMessage("m1", obj{"foo": 1}), parse, "parse error: unknown part content type: [foo]"},
 		{"a part with an empty url", oneMessage("m1", obj{"url": ""}), parse, "parse error: unknown part content type: [url]"},
+		{"a null text is not content", oneMessage("m1", obj{"text": nil}), parse, "parse error: unknown part content type: [text]"},
+		{"a null data is not content", oneMessage("m1", obj{"data": nil}), parse, "parse error: unknown part content type: [data]"},
+		{"a null url is not content", oneMessage("m1", obj{"url": nil}), parse, "parse error: unknown part content type: [url]"},
 		{"a part with two contents", oneMessage("m1", obj{"text": "hi", "data": obj{}}), parse, "parse error: expected exactly one of text, raw, data, or url, got 2"},
 		{"a bad part in a message with no ID", oneMessage("", obj{}), parse, "parse error: unknown part content type: []"},
 	} {
@@ -87,9 +90,10 @@ func TestSendRejectsWhatIsNotAMessage(t *testing.T) {
 			t.Errorf("%s = HTTP %d %v, want error %v %q", tc.name, status, body, tc.code, tc.message)
 		}
 	}
-	// Each rejection left its queued turn alone, so seven are waiting: a part of any one kind
-	// is accepted, and the turns run out only after the accepted ones.
-	for i, part := range []obj{{"text": "hi"}, {"data": obj{"a": 1}}, {"raw": "aGk="}, {"url": "http://example.test/x"}} {
+	// Each rejection left its queued turn alone, so they are all still waiting: a part of any
+	// one kind is accepted, a null beside a real content is not content, and the turns are not
+	// used up by the rejections.
+	for i, part := range []obj{{"text": "hi"}, {"data": obj{"a": 1}}, {"raw": "aGk="}, {"url": "http://example.test/x"}, {"text": "hi", "data": nil}} {
 		if _, body := c.call("SendMessage", oneMessage("ok-"+strconv.Itoa(i), part)); dig(body, "error") != nil {
 			t.Errorf("send with part %v = %v, want it accepted", part, body)
 		}

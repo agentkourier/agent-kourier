@@ -158,14 +158,14 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 // Part.UnmarshalJSON): its error is not a json.UnmarshalTypeError, so it is -32700 "parse
 // error: ...", with the same texts. The stub sorts the field names it lists, which a2a-go leaves
 // in map order. Then a2asrv/handler.go handleSendMessage answers -32602 for a message with no
-// ID, no parts or no role. An empty url does not count as content.
+// ID, no parts or no role. A null value and an empty url do not count as content.
 func validateMessage(m obj) *rpcError {
 	parts, _ := m["parts"].([]any)
 	for _, p := range parts {
 		part, _ := p.(obj)
 		n := 0
 		for _, kind := range []string{"text", "raw", "data", "url"} {
-			if v, ok := part[kind]; ok && (kind != "url" || v != "") {
+			if v, ok := part[kind]; ok && v != nil && (kind != "url" || v != "") { // null is not content
 				n++
 			}
 		}
