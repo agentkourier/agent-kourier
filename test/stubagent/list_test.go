@@ -29,6 +29,15 @@ func messageIDs(tk any) []string {
 	return ids
 }
 
+// TestSkeletonComparesEveryElement guards the fixture comparisons of the ListTasks tests: a list
+// differs from the recorded one in its length, and in any element, not only the first.
+func TestSkeletonComparesEveryElement(t *testing.T) {
+	one, same := []any{obj{"a": "x"}, obj{"b": 1.0}}, []any{obj{"a": "y"}, obj{"b": 2.0}}
+	if skeleton(one) != skeleton(same) || skeleton(one) == skeleton(one[:1]) || skeleton(one) == skeleton([]any{one[0], obj{"c": 1.0}}) {
+		t.Errorf("skeleton(%v) must equal one of the same fields, and differ in length and in a later element", one)
+	}
+}
+
 // TestListTasksFindsBothTasksOfADuplicateRun reproduces oidc-replay 04 and 07: m1 completes and
 // is replayed with the contextId (a second task, spec 8.2), then m2 runs in the context. The
 // list shows all three in the order they began, each with its messageId, m2's WORKING.

@@ -302,10 +302,10 @@ func TestAnswerWaitsForABusySession(t *testing.T) {
 	}
 }
 
-// TestHeaderlessHistoryHidesOnlyTheAgentsRequest: read without the extension, a task's history
-// loses the HITL request the agent sent, and keeps the user's own messages as they were sent.
-// UNCONFIRMED, like the rest of the per-request header rule.
-func TestHeaderlessHistoryHidesOnlyTheAgentsRequest(t *testing.T) {
+// TestHistoryKeepsTheAgentsRequestAsMade: read without the extension, a task's history still has
+// the HITL request the agent sent with it, as well as the user's own messages as they were sent.
+// UNCONFIRMED, like the rest of how a pause is read (see TestAPauseIsReadAsItWasMade).
+func TestHistoryKeepsTheAgentsRequestAsMade(t *testing.T) {
 	_, agent, c := newAgent(t)
 	agent.Next(dbAsk(nil))
 	c = withHITL(c)
@@ -320,8 +320,8 @@ func TestHeaderlessHistoryHidesOnlyTheAgentsRequest(t *testing.T) {
 		t.Fatalf("history has %d messages, want 3", len(hist))
 	}
 	agentMsg, userReply := hist[1], hist[2]
-	if dig(agentMsg, "extensions") != nil || dig(agentMsg, "metadata", hitlURI) != nil || dig(agentMsg, "metadata", "kagent.dev/a2a/timeline-position") == nil {
-		t.Errorf("the agent's request in the history = %v, want no extension and no payload, other metadata kept", agentMsg)
+	if !reflect.DeepEqual(dig(agentMsg, "extensions"), []any{hitlURI}) || dig(agentMsg, "metadata", hitlURI) == nil {
+		t.Errorf("the agent's request in the history = %v, want its extension and payload as made", agentMsg)
 	}
 	if !reflect.DeepEqual(dig(userReply, "extensions"), []any{hitlURI}) || dig(userReply, "metadata", hitlURI) == nil {
 		t.Errorf("the user's reply in the history = %v, want it as sent, with its extension and payload", userReply)

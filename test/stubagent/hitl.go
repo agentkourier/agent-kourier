@@ -28,24 +28,36 @@ type pause struct {
 	id      string // the request id, which a reply repeats
 	msgID   string // the id of the status message
 	text    string // the status message text: all a client without the extension sees
-	request obj    // the HITL request, sent only to a client that asked for the extension
+	request obj    // the HITL request, shown only if ext
+	ext     bool   // the request that made the pause named the HITL extension
 	decode  func(payload obj) (Response, *rpcError)
 	then    func(Response) []Step
 	stamp   string
 }
 
-// message is the task's status message while it waits: the agent's request. A client without
-// the extension gets it stripped down to the text (see rw.view).
+// message is the task's status message while it waits: the agent's request. It is stored as
+// made, so every read shows the same: a pause made for a client that did not name the extension
+// is only the text, however the task is read.
+// Measured (WP-02): without the header the pause is INPUT_REQUIRED with the text and no payload,
+// and with it the payload is there. Measured for ListTasks (oidc-identity/16): a list with no
+// header carries the payload of a pause made with one, and not of a pause made without.
+// UNCONFIRMED for GetTask, SubscribeToTask and a replay: inferred from that and from
+// a2a-go's handler, which returns the stored task to every reader. The history keeps the
+// agent's message as the pause made it.
 func (p *pause) message(t *task) obj {
-	return obj{
-		"messageId":  p.msgID,
-		"contextId":  t.sess.id,
-		"taskId":     t.id,
-		"role":       "ROLE_AGENT",
-		"parts":      textParts(p.text),
-		"extensions": []string{HITLExtension},
-		"metadata":   obj{HITLExtension: p.request, "kagent.dev/a2a/timeline-position": p.stamp},
+	m := obj{
+		"messageId": p.msgID,
+		"contextId": t.sess.id,
+		"taskId":    t.id,
+		"role":      "ROLE_AGENT",
+		"parts":     textParts(p.text),
+		"metadata":  obj{"kagent.dev/a2a/timeline-position": p.stamp},
 	}
+	if p.ext {
+		m["extensions"] = []string{HITLExtension}
+		m["metadata"].(obj)[HITLExtension] = p.request
+	}
+	return m
 }
 
 // Ask ends the turn with an ask-user request, as kagent's ask_user tool does. The task goes

@@ -84,17 +84,9 @@ func (a *Agent) page(owner, ctxID string, size int, token string) (obj, *rpcErro
 	return obj{"tasks": page, "totalSize": len(mine), "pageSize": size, "nextPageToken": next}, nil
 }
 
-// listed is the task as ListTasks shows it: as GetTask does, less the artifacts. Measured
-// (oidc-identity/16): a list from a client that names no extension carries the HITL request of
-// one pause and only the text of another, so a pause lists as the request that made it left it.
-// Here a pause made for a client that did not name the extension shows only its text.
-// UNCONFIRMED: that GetTask does the same (the stub's goes by the reading request's header, see
-// rw.view), and that a task resumed by an answer takes the answer's extension.
+// listed is the task as ListTasks shows it: as GetTask does, less the artifacts (oidc-replay 04).
 func (t *task) listed() obj {
 	snap := t.snapshot()
 	delete(snap, "artifacts")
-	if !t.ext {
-		snap = withoutHITL(snap)
-	}
 	return snap
 }

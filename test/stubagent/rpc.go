@@ -3,9 +3,7 @@ package stubagent
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 )
@@ -122,85 +120,8 @@ func namesHITL(h http.Header) bool {
 	return false
 }
 
-// view is a result as this client sees it. The HITL request in a paused task's status message,
-// and the extension URI listing it, are there only for a client that named the extension.
-// Measured (WP-02): without the header the pause is INPUT_REQUIRED with the text and no payload,
-// and with it the payload is there.
-// UNCONFIRMED: what kagent shows a client that asks differently from the one the task paused
-// for. The stub goes by the header of each request, and strips the agent's request from the
-// history as well as from the status.
-func (o *rw) view(res obj) obj {
-	if o.ext {
-		return res
-	}
-	if _, ok := res["status"]; ok { // GetTask and CancelTask: the result is the task
-		return withoutHITL(res)
-	}
-	out := maps.Clone(res)
-	for kind, v := range res { // task and statusUpdate results
-		if e, ok := v.(obj); ok {
-			out[kind] = withoutHITL(e)
-		}
-	}
-	return out
-}
-
-// withoutHITL returns a task or status update without the HITL parts of the messages in its
-// status and its history.
-func withoutHITL(e obj) obj {
-	out := maps.Clone(e)
-	if status, ok := e["status"].(obj); ok {
-		if message, ok := status["message"].(obj); ok {
-			status = maps.Clone(status)
-			status["message"] = withoutHITLParts(message)
-			out["status"] = status
-		}
-	}
-	if history, ok := e["history"].([]obj); ok {
-		stripped := make([]obj, len(history))
-		for i, m := range history {
-			stripped[i] = withoutHITLParts(m)
-		}
-		out["history"] = stripped
-	}
-	return out
-}
-
-// withoutHITLParts returns an agent's message without the HITL extension URI, leaving any
-// other extension in the list, and without the HITL payload. A user's message is the client's
-// own and stays as it was sent.
-func withoutHITLParts(m obj) obj {
-	if m["role"] != "ROLE_AGENT" || m["extensions"] == nil {
-		return m
-	}
-	m = maps.Clone(m)
-	var kept []string
-	switch list := m["extensions"].(type) {
-	case []string:
-		kept = slices.DeleteFunc(slices.Clone(list), func(e string) bool { return e == HITLExtension })
-	case []any:
-		for _, e := range list {
-			if e != HITLExtension {
-				kept = append(kept, fmt.Sprint(e))
-			}
-		}
-	}
-	if len(kept) > 0 {
-		m["extensions"] = kept
-	} else {
-		delete(m, "extensions")
-	}
-	if metadata, ok := m["metadata"].(obj); ok {
-		metadata = maps.Clone(metadata)
-		delete(metadata, HITLExtension)
-		m["metadata"] = metadata
-	}
-	return m
-}
-
 // event delivers a result: at once when streaming, else it replaces the pending answer.
 func (o *rw) event(res obj) {
-	res = o.view(res)
 	if o.stream {
 		o.write(obj{"jsonrpc": "2.0", "id": o.id, "result": res})
 		return

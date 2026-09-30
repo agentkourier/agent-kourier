@@ -130,7 +130,7 @@ func (r *run) endText() bool {
 // pause ends the turn with the task INPUT_REQUIRED, the snapshot as the last event.
 func (r *run) pause(p *pause) bool {
 	return r.emit(func(t *task) (obj, bool) {
-		p.stamp = r.s.stamp()
+		p.stamp, p.ext = r.s.stamp(), t.ext
 		t.pause = p
 		t.setState(inputRequired, p.stamp)
 		return obj{"task": t.snapshot()}, true

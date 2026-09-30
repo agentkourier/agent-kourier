@@ -94,16 +94,38 @@ func TestAskWithoutTheExtensionHasOnlyTheQuestionText(t *testing.T) {
 	if request != nil || text(dig(last(evs), "result", "task", "status", "message", "parts")) != dbQuestion {
 		t.Errorf("paused task = %v, want the question as text and no HITL payload", dig(last(evs), "result", "task", "status", "message"))
 	}
-	// UNCONFIRMED: kagent's answer for a task that paused for one client and is read by another.
-	// The stub decides by the header of each request, so the same task read with it has the payload.
+	// UNCONFIRMED: the pause is stored as it was made, so a reader that names the extension does
+	// not get a payload that was never generated.
 	_, got := withHITL(c).call("GetTask", obj{"id": taskID})
-	if dig(got, "result", "status", "message", "metadata", hitlURI) == nil {
-		t.Errorf("GetTask with the extension = %v, want the HITL payload", got)
-	}
-	c.hdr.Del("A2A-Extensions")
-	_, got = c.call("GetTask", obj{"id": taskID})
 	if dig(got, "result", "status", "message", "extensions") != nil || dig(got, "result", "status", "message", "metadata", hitlURI) != nil {
-		t.Errorf("GetTask without the extension = %v, want no HITL payload", got)
+		t.Errorf("GetTask with the extension = %v, want no HITL payload", got)
+	}
+}
+
+// TestAPauseIsReadAsItWasMade: UNCONFIRMED for GetTask, SubscribeToTask and a replay
+// (measured for ListTasks, oidc-identity/16): the pause made for a client that named the
+// extension keeps its payload for a reader that does not.
+func TestAPauseIsReadAsItWasMade(t *testing.T) {
+	for _, method := range []string{"GetTask", "SubscribeToTask", "replay"} {
+		t.Run(method, func(t *testing.T) {
+			_, agent, c := newAgent(t)
+			agent.Next(dbAsk(nil))
+			_, taskID, _, _ := paused(t, withHITL(c))
+			c.hdr.Del("A2A-Extensions")
+
+			var got obj
+			switch method {
+			case "replay":
+				got = c.first("SendStreamingMessage", msg("m1", "ask", ""))
+			default:
+				got = c.first(method, obj{"id": taskID})
+			}
+
+			_, e := body(got)
+			if dig(e, "status", "message", "metadata", hitlURI) == nil || dig(e, "status", "message", "extensions") == nil {
+				t.Errorf("%s without the extension = %v, want the pause as made, with its payload", method, got)
+			}
+		})
 	}
 }
 
