@@ -276,17 +276,27 @@ func TestConnectPointsEveryJSONRPCInterfaceAtTheFrontDoor(t *testing.T) {
 }
 
 func TestCredentialsGoOnlyToTheFrontDoor(t *testing.T) {
-	foreign, hits := otherHost(t)
-	hc := New(0).httpClient(dialect.Credentials{Token: canary}, &url.URL{Scheme: "http", Host: "front-door.example:4180"})
-	body := &spyBody{Reader: strings.NewReader("x")}
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, foreign.URL, body)
-	resp, err := hc.Do(req)
-	if err == nil {
-		_ = resp.Body.Close()
-		t.Fatal("a request to another host was sent")
-	}
-	if strings.Contains(err.Error(), canary) || hits.Load() != 0 || !body.closed {
-		t.Errorf("err = %v, hits = %d, body closed = %v", err, hits.Load(), body.closed)
+	foreign, hits := otherHost(t) // listens on plain http; every request below targets it
+	for _, tc := range []struct {
+		name      string
+		frontDoor url.URL
+	}{
+		{"another host", url.URL{Scheme: "http", Host: "front-door.example:4180"}},
+		{"same host, https configured, http request: no downgrade", url.URL{Scheme: "https", Host: foreign.Listener.Addr().String()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hc := New(0).httpClient(dialect.Credentials{Token: canary}, &tc.frontDoor)
+			body := &spyBody{Reader: strings.NewReader("x")}
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, foreign.URL, body)
+			resp, err := hc.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				t.Fatal("the request was sent")
+			}
+			if strings.Contains(err.Error(), canary) || hits.Load() != 0 || !body.closed {
+				t.Errorf("err = %v, hits = %d, body closed = %v", err, hits.Load(), body.closed)
+			}
+		})
 	}
 }
 
@@ -300,7 +310,7 @@ func (b *spyBody) Close() error { b.closed = true; return nil }
 
 // The bearer token must not follow HTTP_PROXY. net/http caches that variable per process,
 // so the test pins the transport instead of the environment.
-func TestTransportHonorsNoProxy(t *testing.T) {
+func TestTransportIgnoresProxyEnvironment(t *testing.T) {
 	if tr, ok := New(0).base.(*http.Transport); !ok || tr.Proxy != nil {
 		t.Errorf("transport = %T with Proxy set, want a Transport that dials directly", New(0).base)
 	}

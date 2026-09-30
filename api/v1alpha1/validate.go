@@ -16,9 +16,9 @@ import (
 // channelID matches Slack channel IDs; its literal must equal ChatBinding.Channel's Pattern marker.
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
-// isReservedHeader reports whether name carries or could forge the Binding identity (D14),
-// so an AgentBackend must not set it. Keep it in step with the dialects' Authenticate.
-func isReservedHeader(name string) bool {
+// IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
+// so an AgentBackend must not set it. Dialects refuse it too.
+func IsReservedHeader(name string) bool {
 	switch http.CanonicalHeaderKey(name) {
 	case "Authorization", "Proxy-Authorization", "Cookie", "X-User-Id":
 		return true
@@ -120,7 +120,7 @@ func (a *AgentBackend) Validate() error {
 	for i, h := range s.Headers {
 		path := fmt.Sprintf("spec.headers[%d]", i)
 		p.required(path+".name", h.Name)
-		if isReservedHeader(h.Name) {
+		if IsReservedHeader(h.Name) {
 			p.add(path+".name", "header %q is reserved for the Binding identity (D14)", h.Name)
 		}
 		if (h.Value == "") == (h.ValueSecretRef == nil) {

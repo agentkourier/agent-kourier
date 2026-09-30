@@ -57,8 +57,7 @@ func (*Dialect) Endpoint(backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef
 // identity (D14; Validate rejects them earlier). Errors never contain a credential.
 func (*Dialect) Authenticate(req *http.Request, creds dialect.Credentials) error {
 	for name := range creds.Headers {
-		switch canon := http.CanonicalHeaderKey(name); canon {
-		case "Authorization", "Proxy-Authorization", "Cookie", "X-User-Id":
+		if v1alpha1.IsReservedHeader(name) {
 			return fmt.Errorf("static header %q is reserved for the Binding identity (D14)", name)
 		}
 	}
