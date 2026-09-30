@@ -1,7 +1,9 @@
-// Package fakeslack is an in-memory fake of the Slack Web API, for courier's
-// unit and end-to-end tests (spec 12.1). Courier reaches it through slack-go's
-// slack.OptionAPIURL(fake.URL() + "/"), or, when the fake runs behind another
-// listener, by serving the Server as an http.Handler.
+// Package fakeslack is an in-memory fake of the Slack Web API and Socket Mode,
+// for courier's unit and end-to-end tests (spec 12.1). Courier reaches it
+// through slack-go's slack.OptionAPIURL(fake.URL() + "/"), or, when the fake
+// runs behind another listener, by serving the Server as an http.Handler.
+// Socket Mode clients connect with an xapp- token; apps.connections.open
+// answers with a websocket URL on the same listener.
 //
 // It is built from Slack's API documentation and slack-go's request and
 // response types, not from captured traffic. Comments name the docs page for
@@ -16,6 +18,8 @@
 //     for apps.connections.open), the not_authed and invalid_auth codes, and
 //     invalid_auth for the wrong token type, where Slack may say
 //     not_allowed_token_type.
+//   - Socket Mode (socketmode.go): the websocket path and its lack of a
+//     ticket; and the content of hello.
 //   - Bot identity: a bot post carrying user, bot_id and app_id together, with
 //     no subtype.
 //   - Content limits (validate.go): 50 blocks; 40000 characters of message
@@ -72,7 +76,9 @@ type Server struct {
 	srv *httptest.Server // nil when used only as a handler
 	now func() time.Time
 
-	bot botIdentity
+	pingEvery time.Duration
+	bot       botIdentity
+	sock      sockets
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
@@ -94,11 +100,12 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 // its own.
 func NewHandler(opts ...Option) *Server {
 	s := &Server{
-		now:      time.Now,
-		bot:      botIdentity{user: "UFAKEBOT", id: "BFAKEBOT", app: "AFAKEAPP"},
-		channels: map[string][]*Message{},
-		users:    map[string]User{},
-		members:  map[string][]string{},
+		now:       time.Now,
+		pingEvery: defaultPingInterval,
+		bot:       botIdentity{user: "UFAKEBOT", id: "BFAKEBOT", app: "AFAKEAPP"},
+		channels:  map[string][]*Message{},
+		users:     map[string]User{},
+		members:   map[string][]string{},
 	}
 	for _, o := range opts {
 		o(s)
@@ -123,8 +130,11 @@ func (s *Server) URL() string {
 	return s.srv.URL
 }
 
-// Close shuts down a Server started with New. It does nothing otherwise.
+// Close drops every Socket Mode client and waits for their goroutines, then
+// shuts down a Server started with New. Call it on a Server from NewHandler
+// too.
 func (s *Server) Close() {
+	s.sock.stop()
 	if s.srv != nil {
 		s.srv.Close()
 	}
@@ -136,6 +146,10 @@ type response map[string]any
 // ServeHTTP authenticates a request, dispatches it to its method, and writes
 // Slack's envelope: HTTP 200 with ok=true, or ok=false and an error code.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == socketPath {
+		s.serveSocket(w, r)
+		return
+	}
 	out, code := s.dispatch(r)
 	if code != "" {
 		out = response{"ok": false, "error": code}
@@ -148,6 +162,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dispatch(r *http.Request) (response, string) {
 	// Form-encoded requests only: slack-go sends these methods as forms.
+	// apps.connections.open takes no parameters, so its JSON body is ignored.
 	if err := r.ParseForm(); err != nil {
 		return nil, "invalid_arguments"
 	}
@@ -156,6 +171,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return nil, code
 	}
 	switch method {
+	case "apps.connections.open":
+		return s.connectionsOpen(r)
 	case "chat.postMessage":
 		return s.postMessage(r.Form)
 	case "chat.update":
