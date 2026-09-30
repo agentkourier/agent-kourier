@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	secretval "github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // canary is planted in every place a Secret holds a value; it must never come back out.
@@ -106,7 +108,9 @@ func watchRegistered(client *fake.Clientset) <-chan struct{} {
 	return registered
 }
 
-func TestCacheHoldsKeysOnly(t *testing.T) {
+// TestCacheKeepsOnlyIdentityAndData: the values are cached for Value, but nothing else of the
+// Secret is, least of all the annotation that can hold a copy of them.
+func TestCacheKeepsOnlyIdentityAndData(t *testing.T) {
 	r := start(t, fake.NewClientset(secret("sre", "creds")))
 	s, err := r.namespaces["sre"].lister.Secrets("sre").Get("creds")
 	if err != nil {
@@ -116,8 +120,8 @@ func TestCacheHoldsKeysOnly(t *testing.T) {
 		t.Errorf("cached Data has %d keys, want 3", len(s.Data))
 	}
 	for k, v := range s.Data {
-		if v != nil {
-			t.Errorf("cached Data[%q] holds a value", k)
+		if string(v) != canary {
+			t.Errorf("cached Data[%q] = %q, want the value", k, v)
 		}
 	}
 	if s.StringData != nil {
@@ -125,6 +129,118 @@ func TestCacheHoldsKeysOnly(t *testing.T) {
 	}
 	if want := (metav1.ObjectMeta{Namespace: "sre", Name: "creds", ResourceVersion: s.ResourceVersion}); !reflect.DeepEqual(s.ObjectMeta, want) {
 		t.Errorf("cached ObjectMeta = %+v, want only name, namespace and resourceVersion", s.ObjectMeta)
+	}
+}
+
+// TestValue reads through the watch: a rotated value shows on the next read, and reads make
+// no API call.
+func TestValue(t *testing.T) {
+	s := secret("sre", "creds")
+	s.Data["alpha"] = []byte("alpha-value")
+	client := fake.NewClientset(s)
+	registered := watchRegistered(client)
+	r := New(client, []string{"sre"})
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	<-registered
+	ctx := context.Background()
+	calls := len(client.Actions())
+	for _, tc := range []struct{ key, want string }{
+		{"", canary}, // an empty key is the default, "token"
+		{"token", canary},
+		{"alpha", "alpha-value"},
+		{"middle", canary}, // from StringData
+	} {
+		v, err := r.Value(ctx, "sre", "creds", tc.key)
+		if err != nil {
+			t.Fatalf("Value(%q): %v", tc.key, err)
+		}
+		if got := v.Reveal(); got != tc.want {
+			t.Errorf("Value(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+	if got := len(client.Actions()); got != calls {
+		t.Errorf("reads made %d API calls, want 0", got-calls)
+	}
+
+	before, err := r.Value(ctx, "sre", "creds", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := secret("sre", "creds")
+	rotated.Data["token"] = []byte("rotated-value")
+	if _, err := client.CoreV1().Secrets("sre").Update(ctx, rotated, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		v, err := r.Value(ctx, "sre", "creds", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Reveal() == "rotated-value" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the rotated value never reached the cache")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := before.Reveal(); got != canary {
+		t.Errorf("a Value read earlier changed to %q; it must be a snapshot", got)
+	}
+}
+
+func TestValueErrors(t *testing.T) {
+	s := secret("sre", "creds")
+	s.Data["empty"] = []byte{}
+	r := start(t, fake.NewClientset(s))
+	unstarted := New(fake.NewClientset(s), []string{"sre"})
+	stopped := New(fake.NewClientset(s), []string{"sre"})
+	if err := stopped.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stopped.Stop()
+	all := []error{config.ErrSecretNotFound, secretval.ErrKeyNotFound, secretval.ErrEmptyValue, ErrNamespaceNotWatched, ErrNotSynced, ErrStopped} // each case matches exactly one
+	tests := []struct {
+		name              string
+		resolver          *Resolver
+		namespace, secret string
+		key, wantKey      string // wantKey is the key the message must name; "" defaults to "token"
+		want              error
+	}{
+		{"missing Secret", r, "sre", "absent", "token", "token", config.ErrSecretNotFound},
+		{"missing key", r, "sre", "creds", "nokey", "nokey", secretval.ErrKeyNotFound},
+		{"missing Secret, default key", r, "payments", "creds", "", "token", config.ErrSecretNotFound},
+		{"empty value", r, "sre", "creds", "empty", "empty", secretval.ErrEmptyValue},
+		{"unwatched namespace", r, "kube-system", "creds", "token", "token", ErrNamespaceNotWatched},
+		{"cache not synced", unstarted, "sre", "creds", "token", "token", ErrNotSynced},
+		{"stopped", stopped, "sre", "creds", "token", "token", ErrStopped},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := tc.resolver.Value(context.Background(), tc.namespace, tc.secret, tc.key)
+			if err == nil {
+				t.Fatalf("Value = %v, want an error", v)
+			}
+			for _, e := range all {
+				if got, want := errors.Is(err, e), errors.Is(tc.want, e); got != want {
+					t.Errorf("errors.Is(err, %v) = %v, want %v; err = %v", e, got, want, err)
+				}
+			}
+			msg := err.Error()
+			for _, part := range []string{tc.namespace, tc.secret, strconv.Quote(tc.wantKey)} {
+				if !strings.Contains(msg, part) {
+					t.Errorf("error %q does not name %q", msg, part)
+				}
+			}
+			// The Secret holds the canary; no error path may echo it.
+			if strings.Contains(msg, canary) || v.Reveal() != "" {
+				t.Errorf("error %q or the returned Value carries a Secret value", msg)
+			}
+		})
 	}
 }
 

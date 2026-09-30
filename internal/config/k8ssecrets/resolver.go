@@ -19,10 +19,11 @@
 //
 // # Values
 //
-// Only key names are kept. The informer's transform strips each Secret to its name and key
-// names before it enters the cache, so values are in memory only while a list or watch
-// event is in flight, and annotations such as last-applied-configuration (which can hold a
-// copy of the values) are dropped too.
+// The cache holds each Secret's name and data, values included, so that Value costs no API
+// call, and nothing else: the informer's transform drops annotations such as
+// last-applied-configuration, which can hold a second copy of the values. Keys returns names
+// only. Value returns a secret.Value, which no formatting path can print, built from a copy
+// of the bytes, so a Secret's rotation never changes a Value already read.
 //
 // The transform runs after client-go has decoded the response, and client-go logs response
 // bodies, Secret lists included, through klog at verbosity 8 and above. klog verbosity must
@@ -44,7 +45,9 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	secretval "github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 var (
@@ -86,7 +89,7 @@ func New(client kubernetes.Interface, namespaces []string) *Resolver {
 		if _, ok := r.namespaces[ns]; ok {
 			continue
 		}
-		f := informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithNamespace(ns), informers.WithTransform(keysOnly))
+		f := informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithNamespace(ns), informers.WithTransform(trim))
 		secrets := f.Core().V1().Secrets()
 		r.namespaces[ns] = watched{factory: f, lister: secrets.Lister(), synced: secrets.Informer().HasSynced}
 	}
@@ -126,11 +129,10 @@ func (r *Resolver) Stop() {
 	}
 }
 
-// Keys returns the sorted key names of the Secret from the cache. It wraps
-// config.ErrSecretNotFound when the Secret does not exist, ErrNamespaceNotWatched when
-// namespace is not one of the watched namespaces, ErrNotSynced while that namespace's cache
-// has not synced, and ErrStopped after Stop.
-func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, error) {
+// get returns the cached Secret. It wraps config.ErrSecretNotFound when the Secret does not
+// exist, ErrNamespaceNotWatched when namespace is not one of the watched namespaces,
+// ErrNotSynced while that namespace's cache has not synced, and ErrStopped after Stop.
+func (r *Resolver) get(namespace, name string) (*corev1.Secret, error) {
 	w, ok := r.namespaces[namespace]
 	switch {
 	case !ok:
@@ -147,16 +149,47 @@ func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, er
 	case err != nil:
 		return nil, fmt.Errorf("read secret %s/%s from cache: %w", namespace, name, err)
 	}
+	return s, nil
+}
+
+// Keys returns the sorted key names of the Secret from the cache. It fails as get does.
+func (r *Resolver) Keys(_ context.Context, namespace, name string) ([]string, error) {
+	s, err := r.get(namespace, name)
+	if err != nil {
+		return nil, err
+	}
 	return slices.Sorted(maps.Keys(s.Data)), nil
 }
 
-// keysOnly is the informer transform. It reduces a Secret to its identity and its key
-// names (in Data, with nil values; StringData keys are folded in). It returns anything that
-// is not a Secret unchanged.
+// Value returns the value of key in the Secret from the cache; an empty key means
+// v1alpha1.DefaultSecretKey. It fails as get does, and wraps secret.ErrKeyNotFound when the
+// Secret has no such key and secret.ErrEmptyValue when the key holds no bytes. Error
+// messages name the namespace, Secret and key, never the value.
+func (r *Resolver) Value(_ context.Context, namespace, name, key string) (secretval.Value, error) {
+	if key == "" {
+		key = v1alpha1.DefaultSecretKey
+	}
+	s, err := r.get(namespace, name)
+	if err != nil {
+		return secretval.Value{}, fmt.Errorf("read key %q: %w", key, err)
+	}
+	v, ok := s.Data[key]
+	switch {
+	case !ok:
+		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrKeyNotFound)
+	case len(v) == 0:
+		return secretval.Value{}, fmt.Errorf("secret %s/%s key %q: %w", namespace, name, key, secretval.ErrEmptyValue)
+	}
+	return secretval.New(string(v)), nil
+}
+
+// trim is the informer transform. It reduces a Secret to its identity and its data, with
+// StringData folded in as the API server does on write (it wins over Data for a key in both).
+// It returns anything that is not a Secret unchanged.
 //
 // It must never return an error: when the store rejects an object, client-go's reflector
 // logs the untransformed object.
-func keysOnly(obj any) (any, error) {
+func trim(obj any) (any, error) {
 	s, ok := obj.(*corev1.Secret)
 	if !ok {
 		return obj, nil
@@ -165,11 +198,9 @@ func keysOnly(obj any) (any, error) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: s.Name, ResourceVersion: s.ResourceVersion},
 		Data:       make(map[string][]byte, len(s.Data)+len(s.StringData)),
 	}
-	for k := range s.Data {
-		out.Data[k] = nil
-	}
-	for k := range s.StringData {
-		out.Data[k] = nil
+	maps.Copy(out.Data, s.Data)
+	for k, v := range s.StringData {
+		out.Data[k] = []byte(v)
 	}
 	return out, nil
 }
