@@ -28,6 +28,24 @@ func (ts textStep) play(r *run) bool {
 	return true
 }
 
+// Hold makes the turn wait at a gate until Server.Release opens it. It lets a test freeze a
+// task mid-turn, with the text so far, and inspect it.
+func Hold(gate string) Step { return holdStep(gate) }
+
+type holdStep string
+
+func (h holdStep) play(r *run) bool {
+	r.s.mu.Lock()
+	gate := r.s.gateLocked(string(h))
+	r.s.mu.Unlock()
+	select {
+	case <-gate:
+		return true
+	case <-r.ctx.Done():
+		return false
+	}
+}
+
 // run is one playing turn of a task.
 type run struct {
 	s    *Server

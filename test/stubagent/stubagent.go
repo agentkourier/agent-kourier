@@ -36,7 +36,8 @@ type Server struct {
 	seq  atomic.Int64
 
 	mu     sync.Mutex
-	agents map[string]*Agent // by "ns/name", guarded by mu
+	agents map[string]*Agent        // by "ns/name", guarded by mu
+	gates  map[string]chan struct{} // closed once released, guarded by mu
 }
 
 // Option configures a Server.
@@ -52,7 +53,7 @@ func WithTick(d time.Duration) Option { return func(s *Server) { s.tick = d } }
 // NewHandler returns a Server for use as an http.Handler, with no listener of its own. Call
 // Close when done.
 func NewHandler(opts ...Option) *Server {
-	s := &Server{now: time.Now, agents: map[string]*Agent{}}
+	s := &Server{now: time.Now, agents: map[string]*Agent{}, gates: map[string]chan struct{}{}}
 	s.ctx, s.stop = context.WithCancel(context.Background())
 	for _, o := range opts {
 		o(s)
@@ -90,6 +91,26 @@ func (s *Server) Close() {
 	s.wg.Wait()
 }
 
+// Release opens the gate that Hold steps wait at. A gate stays open, so releasing it before a
+// turn gets there lets that turn straight through.
+func (s *Server) Release(gate string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.gateLocked(gate):
+	default:
+		close(s.gateLocked(gate))
+	}
+}
+
+// gateLocked returns the gate's channel, creating it. The caller holds mu.
+func (s *Server) gateLocked(gate string) chan struct{} {
+	if s.gates[gate] == nil {
+		s.gates[gate] = make(chan struct{})
+	}
+	return s.gates[gate]
+}
+
 func (s *Server) newID(kind string) string { return fmt.Sprintf("%s-%d", kind, s.seq.Add(1)) }
 
 func (s *Server) stamp() string { return s.now().UTC().Format(time.RFC3339Nano) }
@@ -101,7 +122,8 @@ func (s *Server) Agent(ns, name string) *Agent {
 	defer s.mu.Unlock()
 	key := ns + "/" + name
 	if s.agents[key] == nil {
-		s.agents[key] = &Agent{s: s, ns: ns, name: name, sessions: map[string]*session{}}
+		s.agents[key] = &Agent{s: s, ns: ns, name: name,
+			sessions: map[string]*session{}, tasks: map[string]*task{}}
 	}
 	return s.agents[key]
 }

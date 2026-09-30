@@ -18,6 +18,7 @@ type Agent struct {
 	turns    [][]Step
 	reply    func(prompt string) []Step
 	sessions map[string]*session
+	tasks    map[string]*task
 }
 
 // Next queues a turn for the next message the agent accepts. Turns run in the order queued.
@@ -88,6 +89,13 @@ func (a *Agent) serveRPC(w http.ResponseWriter, r *http.Request) {
 	case "SendStreamingMessage":
 		o.stream = true
 		a.send(r.Context(), o, req.Params)
+	case "GetTask":
+		a.getTask(o, req.Params)
+	case "CancelTask":
+		a.cancelTask(o, req.Params)
+	case "SubscribeToTask":
+		o.stream = true
+		a.subscribeTask(r.Context(), o, req.Params)
 	default:
 		o.fail(&rpcError{codeMethod, "method not found: " + req.Method, "METHOD_NOT_FOUND"})
 	}
@@ -103,7 +111,7 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 		o.fail(invalidParams("params.message is required"))
 		return
 	}
-	st, err := a.admit(p.Message)
+	st, err := a.admit(p.Message) //nolint:contextcheck // the turn outlives the request; the server's context bounds it
 	if err != nil {
 		o.fail(err)
 		return
@@ -140,8 +148,64 @@ func (a *Agent) admit(m obj) (*stream, *rpcError) {
 	t.history = []obj{withTask(in, t.id)}
 	t.setState(working, now)
 	t.push(t.statusEvent(), false)
+	a.tasks[t.id] = t
 	a.launch(t, steps)
 	return &stream{t: t}, nil
+}
+
+// find returns the task that params name. The caller holds s.mu.
+func (a *Agent) find(params json.RawMessage) (*task, *rpcError) {
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
+		return nil, invalidParams("params.id is required")
+	}
+	if a.tasks[p.ID] == nil {
+		return nil, &rpcError{codeTaskNotFound, "task not found", "TASK_NOT_FOUND"}
+	}
+	return a.tasks[p.ID], nil
+}
+
+// getTask answers with the task as it is now, its text so far included.
+func (a *Agent) getTask(o *rw, params json.RawMessage) {
+	a.s.mu.Lock()
+	t, err := a.find(params)
+	var snap obj
+	if err == nil {
+		snap = t.snapshot()
+	}
+	a.s.mu.Unlock()
+	if err != nil {
+		o.fail(err)
+		return
+	}
+	o.event(snap)
+	o.done()
+}
+
+// cancelTask stops the task's turn and ends its streams with the CANCELED task.
+// UNCONFIRMED: cancelling a task that is already completed or cancelled answers -32002.
+func (a *Agent) cancelTask(o *rw, params json.RawMessage) {
+	a.s.mu.Lock()
+	t, err := a.find(params)
+	if err == nil && (t.state == completed || t.state == canceled) {
+		err = &rpcError{codeNotCancelable, "task is already " + t.state, "TASK_NOT_CANCELABLE"}
+	}
+	var snap obj
+	if err == nil {
+		t.stop()
+		t.setState(canceled, a.s.stamp())
+		snap = t.snapshot()
+		t.push(obj{"task": snap}, true)
+	}
+	a.s.mu.Unlock()
+	if err != nil {
+		o.fail(err)
+		return
+	}
+	o.event(snap)
+	o.done()
 }
 
 // session finds the session for a contextId, or opens one. An empty contextId gets a new id.
@@ -158,10 +222,13 @@ func (a *Agent) session(ctxID string) *session {
 
 // launch plays steps for the task in the background. The caller holds s.mu.
 func (a *Agent) launch(t *task, steps []Step) {
+	ctx, stop := context.WithCancel(a.s.ctx)
+	t.stop = stop
 	a.s.wg.Add(1)
 	go func() {
 		defer a.s.wg.Done()
-		r := &run{s: a.s, t: t, ctx: a.s.ctx}
+		defer stop()
+		r := &run{s: a.s, t: t, ctx: ctx}
 		for _, st := range steps {
 			if !st.play(r) {
 				return
@@ -171,15 +238,41 @@ func (a *Agent) launch(t *task, steps []Step) {
 	}()
 }
 
-// stream says where a response starts in a task's log.
-type stream struct {
-	t    *task
-	from int
+// subscribeTask streams a task that is already running: a snapshot with the text so far, then
+// what happens next. For a task that is not running, the snapshot is the whole answer.
+func (a *Agent) subscribeTask(ctx context.Context, o *rw, params json.RawMessage) {
+	a.s.mu.Lock()
+	t, err := a.find(params)
+	var st *stream
+	if err == nil {
+		st = t.join()
+	}
+	a.s.mu.Unlock()
+	if err != nil {
+		o.fail(err)
+		return
+	}
+	a.s.follow(ctx, o, st)
 }
 
-// follow writes the task's events from st.from until one is final, the client goes away, or
-// the server closes. The turn runs on regardless of the client.
+// stream says where a response starts. A live join starts with a snapshot of the task, then
+// the log from the index it had when the snapshot was taken, so nothing is missed or repeated.
+type stream struct {
+	t     *task
+	first obj  // the snapshot event that opens a join, or nil
+	from  int  // the first log index to send after it
+	end   bool // the snapshot is the whole answer
+}
+
+// follow writes the stream until a final event, the client going away, or the server closing.
+// The turn runs on regardless of the client.
 func (s *Server) follow(ctx context.Context, o *rw, st *stream) {
+	if st.first != nil {
+		o.event(st.first)
+		if st.end {
+			return
+		}
+	}
 	from := st.from
 	for {
 		s.mu.Lock()

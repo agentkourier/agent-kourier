@@ -1,10 +1,13 @@
 package stubagent
 
+import "context"
+
 // A2A 1.0 task states.
 const (
 	submitted = "TASK_STATE_SUBMITTED"
 	working   = "TASK_STATE_WORKING"
 	completed = "TASK_STATE_COMPLETED"
+	canceled  = "TASK_STATE_CANCELED"
 )
 
 // adkExtension is the marker ADK's A2A server puts in the metadata of tasks and updates.
@@ -27,8 +30,9 @@ type task struct {
 	state   string
 	history []obj
 	arts    []*artifact
-	log     []event       // every stream event so far, in order; followers read from an index
-	changed chan struct{} // closed and replaced whenever log grows
+	log     []event            // every stream event so far, in order; followers read from an index
+	changed chan struct{}      // closed and replaced whenever log grows
+	stop    context.CancelFunc // ends the playing turn
 }
 
 // artifact is one artifactId. Its parts always hold what a snapshot shows: the text so far.
@@ -81,6 +85,17 @@ func (t *task) snapshot() obj {
 		snap["artifacts"] = arts
 	}
 	return snap
+}
+
+// join is the stream that opens with a snapshot of the task: a live stream of what happens
+// next when the task is working, else the snapshot alone. A snapshot of a working task has no
+// created-at in its metadata, as kagent's has none (WP-02, measured); GetTask's has.
+func (t *task) join() *stream {
+	snap := t.snapshot()
+	if t.state == working {
+		snap["metadata"] = obj{adkExtension: true}
+	}
+	return &stream{t: t, first: obj{"task": snap}, from: len(t.log), end: t.state != working}
 }
 
 // artifactEvent is an artifactUpdate result carrying parts of a.

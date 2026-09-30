@@ -12,10 +12,12 @@ type obj = map[string]any
 
 // JSON-RPC error codes the stub answers with.
 const (
-	codeParse    = -32700
-	codeMethod   = -32601
-	codeParams   = -32602
-	codeInternal = -32603
+	codeParse         = -32700
+	codeMethod        = -32601
+	codeParams        = -32602
+	codeInternal      = -32603
+	codeTaskNotFound  = -32001
+	codeNotCancelable = -32002
 )
 
 // rpcError is a JSON-RPC error. reason is the google.rpc.ErrorInfo reason kagent attaches.
