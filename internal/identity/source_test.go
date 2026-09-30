@@ -1,10 +1,12 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,9 +24,11 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // canary is planted in every Secret value; it must never come back out of a formatted value,
@@ -33,11 +37,43 @@ const canary = "canary-9f3a-value-do-not-print"
 
 var _ agent.CredentialsFunc = (*Source)(nil).Credentials
 
+// memAudit is a store.Audit in memory that can be made to fail.
+type memAudit struct {
+	mu   sync.Mutex
+	rows []store.AuditEntry
+	err  error
+}
+
+func (m *memAudit) AppendAudit(_ context.Context, e store.AuditEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.rows = append(m.rows, e)
+	return nil
+}
+
+func (m *memAudit) ListAudit(context.Context, time.Time, int64, int) ([]store.AuditEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]store.AuditEntry(nil), m.rows...), nil
+}
+
+func (m *memAudit) entries() []store.AuditEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]store.AuditEntry(nil), m.rows...)
+}
+
 // fixture is a Binding in "sre" that reaches an AgentBackend in "platform".
 type fixture struct {
 	binding *v1alpha1.Binding
 	backend *v1alpha1.AgentBackend
 	reader  *fakeReader
+	store   *memAudit
+	logs    *bytes.Buffer
+	metric  []string // the Binding of each OnRejected call
 }
 
 func newFixture(id v1alpha1.Identity, headers ...v1alpha1.Header) *fixture {
@@ -54,10 +90,15 @@ func newFixture(id v1alpha1.Identity, headers ...v1alpha1.Header) *fixture {
 			Spec:       v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: "http://127.0.0.1:1", Headers: headers},
 		},
 		reader: newReader(map[string]string{}),
+		store:  &memAudit{},
+		logs:   &bytes.Buffer{},
 	}
 }
 
-func (f *fixture) source() *Source { return New(f.binding, f.backend, f.reader) }
+func (f *fixture) source() *Source {
+	w := audit.New(f.store, audit.Options{Logger: slog.New(slog.NewTextHandler(f.logs, nil))})
+	return New(f.binding, f.backend, f.reader, w, Options{OnRejected: func(b string) { f.metric = append(f.metric, b) }})
+}
 
 func tokenRef() *v1alpha1.SecretKeyRef { return &v1alpha1.SecretKeyRef{Name: "creds"} }
 
@@ -204,7 +245,7 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 
 	f := newFixture(v1alpha1.Identity{TokenSecretRef: tokenRef()}, v1alpha1.Header{Name: "X-Api-Key", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "creds", Key: "key"}})
 	f.backend.Namespace = "sre" // header secrets live beside the backend
-	s := New(f.binding, f.backend, r)
+	s := New(f.binding, f.backend, r, audit.New(f.store, audit.Options{}), Options{})
 	before, err := s.Credentials(t.Context())
 	if err != nil || before.Token != "old-token" || before.Headers.Get("X-Api-Key") != "old-key" {
 		t.Fatalf("first Credentials = %v, %v", before.Token, err)
@@ -231,8 +272,120 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 	}
 }
 
+var errRejection = fmt.Errorf("send message: %w", errors.Join(agent.ErrNotSent, agent.ErrCredentialsRejected, &dialect.HTTPStatusError{Code: 401}))
+
+func TestRejected(t *testing.T) {
+	call := audit.Call{Op: audit.OpSend, ContextID: "ctx-1", MessageID: "msg-1", Err: errRejection}
+	user := audit.Actor{User: "U1", Identity: "sa/investigator"}
+
+	t.Run("re-reads, audits and counts", func(t *testing.T) {
+		f := newFixture(v1alpha1.Identity{TokenSecretRef: tokenRef()})
+		f.reader.vals = map[string]string{"sre/creds/token": "t"}
+		if err := f.source().Rejected(t.Context(), user, call); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.reader.count(); got != 1 {
+			t.Errorf("%d reads, want 1 re-read of the token Secret", got)
+		}
+		rows := f.store.entries()
+		if len(rows) != 1 {
+			t.Fatalf("%d audit rows, want 1: %+v", len(rows), rows)
+		}
+		want := store.AuditEntry{Kind: store.AuditAgentCall, User: "U1", Identity: "sa/investigator", Binding: "sre/oncall",
+			Subject: "context=ctx-1 message=msg-1", Outcome: "send: failed credentials_rejected,not_sent,http_401"}
+		got := rows[0]
+		got.At = time.Time{}
+		if got != want {
+			t.Errorf("audit row = %+v, want %+v", got, want)
+		}
+		if len(f.metric) != 1 || f.metric[0] != "sre/oncall" {
+			t.Errorf("OnRejected calls = %v, want one for sre/oncall", f.metric)
+		}
+	})
+
+	t.Run("anything else is left alone", func(t *testing.T) {
+		for _, err := range []error{nil, agent.ErrBusy, fmt.Errorf("x: %w", agent.ErrNotSent), context.Canceled} {
+			f := newFixture(v1alpha1.Identity{TokenSecretRef: tokenRef()})
+			c := call
+			c.Err = err
+			if got := f.source().Rejected(t.Context(), user, c); got != nil {
+				t.Errorf("Rejected(%v) = %v", err, got)
+			}
+			if f.reader.count() != 0 || len(f.store.entries()) != 0 || len(f.metric) != 0 {
+				t.Errorf("Rejected(%v) re-read, audited or counted", err)
+			}
+		}
+	})
+
+	t.Run("a token that is now unreadable is reported, and still audited and counted", func(t *testing.T) {
+		f := newFixture(v1alpha1.Identity{TokenSecretRef: tokenRef()})
+		err := f.source().Rejected(t.Context(), user, call)
+		if !errors.Is(err, ErrTokenUnreadable) {
+			t.Errorf("Rejected = %v, want ErrTokenUnreadable", err)
+		}
+		if len(f.store.entries()) != 1 || len(f.metric) != 1 {
+			t.Errorf("%d audit rows and %d counts, want 1 each", len(f.store.entries()), len(f.metric))
+		}
+	})
+
+	t.Run("a failed audit write is returned, and the re-read and the count still happen", func(t *testing.T) {
+		f := newFixture(v1alpha1.Identity{TokenSecretRef: tokenRef()})
+		f.reader.vals = map[string]string{"sre/creds/token": "t"}
+		errDisk := errors.New("disk full")
+		f.store.err = errDisk
+		if err := f.source().Rejected(t.Context(), user, call); !errors.Is(err, errDisk) {
+			t.Errorf("Rejected = %v, want the audit error", err)
+		}
+		if f.reader.count() != 1 || len(f.metric) != 1 {
+			t.Errorf("%d reads and %d counts, want 1 each", f.reader.count(), len(f.metric))
+		}
+	})
+
+	t.Run("no token secret, nothing to re-read", func(t *testing.T) {
+		f := newFixture(v1alpha1.Identity{UserID: "svc"})
+		if err := f.source().Rejected(t.Context(), user, call); err != nil {
+			t.Fatal(err)
+		}
+		if f.reader.count() != 0 || len(f.store.entries()) != 1 || len(f.metric) != 1 {
+			t.Errorf("%d reads, %d rows, %d counts; want 0, 1, 1", f.reader.count(), len(f.store.entries()), len(f.metric))
+		}
+	})
+}
+
+// fakeToken stands in for a later client-credentials source.
+type fakeToken struct {
+	token     string
+	refreshes int
+}
+
+func (f *fakeToken) Token(context.Context) (secret.Value, error) { return secret.New(f.token), nil }
+func (f *fakeToken) Refresh(context.Context) error               { f.refreshes++; return nil }
+
+// TestAnyTokenSourceFitsTheSeam: a Source given another TokenSource asks it for the token,
+// requires the token although the Binding has no tokenSecretRef, and refreshes it on a
+// rejection.
+func TestAnyTokenSourceFitsTheSeam(t *testing.T) {
+	f := newFixture(v1alpha1.Identity{UserID: "svc"})
+	ft := &fakeToken{token: "minted"}
+	s := New(f.binding, f.backend, f.reader, audit.New(f.store, audit.Options{}), Options{Token: ft})
+	got, err := s.Credentials(t.Context())
+	if err != nil || got.Token != "minted" {
+		t.Fatalf("Credentials = %q, %v", got.Token, err)
+	}
+	if !s.Target().TokenRequired {
+		t.Error("TokenRequired is false with a TokenSource")
+	}
+	if err := s.Rejected(t.Context(), audit.Actor{}, audit.Call{Op: audit.OpSend, MessageID: "m", Err: errRejection}); err != nil || ft.refreshes != 1 {
+		t.Errorf("Rejected = %v after %d refreshes, want nil after 1", err, ft.refreshes)
+	}
+	if f.reader.count() != 0 {
+		t.Error("the static reader was used")
+	}
+}
+
 // TestSecretValuesNeverPrinted plants a canary in the token and in a header, then formats
-// and formats everything a caller can reach, on the success path and the failure paths.
+// and logs everything a caller can reach, on the success path, the failure paths and the
+// rejection.
 func TestSecretValuesNeverPrinted(t *testing.T) {
 	f := newFixture(v1alpha1.Identity{UserID: "svc", TokenSecretRef: tokenRef()},
 		v1alpha1.Header{Name: "X-Api-Key", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "gw"}})
@@ -263,7 +416,7 @@ func TestSecretValuesNeverPrinted(t *testing.T) {
 	note("token", tok)
 	note("static token", NewStaticToken(f.reader, "sre", *tokenRef()))
 
-	// Failure paths.
+	// Failure paths, and the rejection with its audit write, log and metric.
 	f.reader.setErr(fmt.Errorf("upstream: %w", secret.ErrEmptyValue))
 	_, err = s.Credentials(ctx)
 	note("unreadable token", err)
@@ -272,10 +425,19 @@ func TestSecretValuesNeverPrinted(t *testing.T) {
 	delete(f.reader.vals, "platform/gw/token")
 	_, err = s.Credentials(ctx)
 	note("unreadable header", err)
+	err = s.Rejected(ctx, audit.Actor{User: "U1"}, audit.Call{Op: audit.OpSend, MessageID: "m", Err: errRejection})
+	note("rejected", err)
+	f.store.err = errors.New("disk full")
+	err = s.Rejected(ctx, audit.Actor{User: "U1"}, audit.Call{Op: audit.OpSend, MessageID: "m", Err: errRejection})
+	note("rejected, audit failing", err)
+	seen = append(seen, f.logs.String(), fmt.Sprintf("%+v", f.store.entries()))
 
 	for _, out := range seen {
 		if strings.Contains(out, canary) {
 			t.Errorf("the canary leaked: %s", out)
 		}
+	}
+	if !strings.Contains(strings.Join(seen, "\n"), "audit write failed") {
+		t.Error("the failing audit write was not logged; the log was not exercised")
 	}
 }
