@@ -745,6 +745,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | Q6 | Is one Binding per channel too restrictive for teams wanting several agents in one channel? | Pilot review |
 | Q7 | Which team runs the pilot, and which alerts (by name and severity) are routed first? | Before Phase 2 |
 | Q8 | Where does the pilot kagent install run, and how does production Alertmanager reach courier over TLS? | Phase 0 |
+| Q10 | How does courier obtain and refresh the Binding's OIDC bearer token? A token stored in a Secret expires (Dex: 24 h) and needs external rotation; alternatively courier holds client credentials and mints tokens itself (client-credentials grant; see Q9). Also: courier needs Secret VALUES (Slack tokens, webhook tokens, header values, identity credentials), but the WP-21d resolver returns key names only by design. | Phase 0, after WP-03 |
 | Q9 | Which OIDC provider issues Binding service tokens? It must support the client-credentials grant (Dex does not); otherwise a static service user with the password grant, which is weaker. Client-credentials tokens often lack an `email` claim: the front door must accept them (oauth2-proxy may need `oidc-email-claim`), and kagent falls back to `sub` for identity. | Phase 0 (H-02) |
 
 Q5 (queue rate-limited alerts) was resolved in v0.3 by D26: digest line, no queue.
