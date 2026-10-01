@@ -122,6 +122,7 @@ func TestExtractAnswerInvalid(t *testing.T) {
 		"a signed number":               {4, text("+2")},
 		"a padded number":               {4, text("02")},
 		"two numbers for one":           {3, text("1, 2")},
+		"two values in a numbers input": {4, text("1", "2")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			answers := map[int]slack.Input{0: text("x"), 1: radio("0"), 2: checks("1"), 3: text("1"), 4: text("2")}
