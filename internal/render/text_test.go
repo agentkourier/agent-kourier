@@ -133,7 +133,7 @@ func TestCapIsExactRuneSafeAndVisible(t *testing.T) {
 func TestToolLineIsOneInertLine(t *testing.T) {
 	line := ToolLine("<!channel>\nrun", map[string]any{
 		"url": "<https://evil.example|click>", "who": "<@U1> & co", "b\nad": "\u202ex", "n": 3,
-	})
+	}, FlavourText)
 	assertInert(t, "tool line", line)
 	if strings.ContainsAny(line, "\n\t") {
 		t.Errorf("tool line %q is not one line", line)
@@ -145,9 +145,9 @@ func TestToolLineIsOneInertLine(t *testing.T) {
 }
 
 func TestToolLineCapsNameAndArguments(t *testing.T) {
-	line := ToolLine(strings.Repeat("n", 500), map[string]any{"q": strings.Repeat("v", 5000)})
-	if got, most := utf8.RuneCountInString(line), len("Calling ")+maxToolName+len("(")+maxToolArgs+len(")"); got > most {
-		t.Errorf("tool line is %d runes, want at most %d", got, most)
+	line := ToolLine(strings.Repeat("n", 500), map[string]any{"q": strings.Repeat("v", 5000)}, FlavourText)
+	if got, most := utf16Len(line), len("Calling ")+maxToolName+len("(")+maxToolArgs+len(")"); got > most {
+		t.Errorf("tool line is %d units, want at most %d", got, most)
 	}
 	if strings.Count(line, Truncated) != 2 {
 		t.Errorf("tool line %q should mark both the name and the arguments as truncated", line)
@@ -194,7 +194,7 @@ func TestToolLineRedactsBeforeItShowsOrCaps(t *testing.T) {
 		"cfg":           map[string]any{"DB_Password": "hunter2hunter2", "hosts": []any{map[string]any{"apiKey": "k-1234567890", "name": "db1"}}},
 		"url":           "https://admin:s3cretpass@db.example/x",
 		"cmd":           "curl -H 'Authorization: Bearer xoxb-123-456-abcdefghijkl' https://db.example",
-	})
+	}, FlavourText)
 	for _, secret := range []string{"hunter2hunter2", "s3cretpass", "k-1234567890", "abcdefghijklmnop", "xoxb-123-456", "admin:"} {
 		if strings.Contains(line, secret) {
 			t.Errorf("tool line %q shows %q", line, secret)
@@ -204,16 +204,41 @@ func TestToolLineRedactsBeforeItShowsOrCaps(t *testing.T) {
 		t.Errorf("tool line %q lost a value that is no secret", line)
 	}
 	// A token's shape is enough, whatever its key is called.
-	if got := ToolLine("run", map[string]any{"cmd": "curl -H 'Authorization: Bearer xoxb-123-456-abcdefghijkl'"}); strings.Contains(got, "xoxb-123-456") {
+	if got := ToolLine("run", map[string]any{"cmd": "curl -H 'Authorization: Bearer xoxb-123-456-abcdefghijkl'"}, FlavourText); strings.Contains(got, "xoxb-123-456") {
 		t.Errorf("tool line %q shows a token", got)
 	}
-	if got, want := ToolLine("run", map[string]any{"url": "https://admin:s3cretpass@db.example/x"}), `Calling run(url="https://[redacted]@db.example/x")`; got != want {
-		t.Errorf("a URL with credentials = %q, want %q", got, want)
+	for _, tc := range []struct{ url, want string }{
+		{"https://admin:s3cretpass@db.example/x", "https://[redacted]@db.example/x"},
+		{"https://user:pa/ss@h", "https://[redacted]@h"},    // a "/" in the password
+		{"https://user:p@ss@h/x", "https://[redacted]@h/x"}, // an "@" in the password
+	} {
+		if got, want := ToolLine("run", map[string]any{"url": tc.url}, FlavourText), `Calling run(url="`+tc.want+`")`; got != want {
+			t.Errorf("ToolLine of %q = %q, want %q", tc.url, got, want)
+		}
 	}
 	// A secret that sits across the argument cap must not show as a prefix: redaction comes first.
-	cut := ToolLine("run", map[string]any{"a": strings.Repeat("x", 118), "u": "https://user:s3cretpass@host", "z": strings.Repeat("y", 50)})
+	cut := ToolLine("run", map[string]any{"a": strings.Repeat("x", 118), "u": "https://user:s3cretpass@host", "z": strings.Repeat("y", 50)}, FlavourText)
 	if strings.Contains(cut, "s3c") || strings.Contains(cut, "user:") {
 		t.Errorf("tool line %q shows part of a secret at the cap", cut)
+	}
+}
+
+func TestToolLineInMarkdownLeavesNoLink(t *testing.T) {
+	got := ToolLine("[x](https://evil.example)", map[string]any{"v": "[your bank](https://evil.example)"}, FlavourMarkdown)
+	want := `Calling \[x\](https://evil.example)(v="\[your bank\](https://evil.example)")`
+	if got != want {
+		t.Errorf("ToolLine in markdown = %q, want %q", got, want)
+	}
+	assertMarkdownEscapes(t, "tool line", got)
+}
+
+// TestEveryKeyAlternativeRedacts has one key for each of secretKey's alternatives.
+func TestEveryKeyAlternativeRedacts(t *testing.T) {
+	for _, key := range []string{"passwd", "client_secret", "access_token", "api_key", "Authorization", "my_credentials", "session_cookie"} {
+		got := ToolLine("run", map[string]any{key: "VALUE-NOT-TO-SHOW"}, FlavourText)
+		if strings.Contains(got, "VALUE-NOT-TO-SHOW") || !strings.Contains(got, "[redacted]") {
+			t.Errorf("an argument named %q: %q; want its value redacted", key, got)
+		}
 	}
 }
 
@@ -234,10 +259,15 @@ func FuzzTextIsInert(f *testing.F) {
 		}
 		assertMarkdownEscapes(t, "Markdown", md)
 		assertMarkdownEscapes(t, "Body markdown", Body(ev, limit, FlavourMarkdown))
-		line := ToolLine(s, map[string]any{s: s})
-		assertInert(t, "ToolLine", line)
-		if most := len("Calling ") + maxToolName + len("(") + maxToolArgs + len(")"); utf16Len(line) > most {
-			t.Errorf("ToolLine = %q is %d units; most %d", line, utf16Len(line), most)
+		for flavour, label := range map[Flavour]string{FlavourText: "ToolLine", FlavourMarkdown: "ToolLine markdown"} {
+			line := ToolLine(s, map[string]any{s: s}, flavour)
+			assertInert(t, label, line)
+			if most := len("Calling ") + maxToolName + len("(") + maxToolArgs + len(")"); utf16Len(line) > most {
+				t.Errorf("%s = %q is %d units; most %d", label, line, utf16Len(line), most)
+			}
+			if flavour == FlavourMarkdown {
+				assertMarkdownEscapes(t, label, line)
+			}
 		}
 	})
 }

@@ -97,15 +97,19 @@ func Body(events []agent.TextEvent, limit int, flavour Flavour) string {
 // secretKey matches the names of arguments whose values are never shown (spec 8.4).
 var secretKey = regexp.MustCompile(`(?i)pass|secret|token|key|auth|credential|cookie`)
 
-// urlUserinfo matches the credentials in "scheme://user:pass@host".
-var urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s/@]*@`)
+// urlUserinfo matches the credentials in "scheme://user:pass@host": everything up to the last "@"
+// of the word, so an "@" or a "/" in the password does not end it early. A path with an "@" in it
+// is redacted too, which loses a little and leaks nothing.
+var urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s"]*@`)
 
 // ToolLine returns the status line for a tool call: the tool's name and a summary of its
 // arguments, sorted by key, as "Calling name(key=value, ...)". Secrets are taken out first, before
 // anything is shown or cut: the value of an argument whose name matches secretKey, at any depth,
 // the credentials in a URL, and anything store.RedactSecrets knows for a token. Then name and
 // summary are each made inert, on one line, and capped, so the line is short whatever the agent sent.
-func ToolLine(name string, args map[string]any) string {
+// flavour is the text it will sit in: for FlavourMarkdown, "[text](url)" in a name or an argument
+// is escaped too, and does not become a link.
+func ToolLine(name string, args map[string]any, flavour Flavour) string {
 	shown := redactArgs(args).(map[string]any)
 	keys := make([]string, 0, len(shown))
 	for k := range shown {
@@ -117,7 +121,8 @@ func ToolLine(name string, args map[string]any) string {
 		parts[i] = k + "=" + jsonValue(shown[k])
 	}
 	summary := store.RedactSecrets(urlUserinfo.ReplaceAllString(strings.Join(parts, ", "), "${1}[redacted]@"))
-	return "Calling " + render(name, maxToolName, false, false) + "(" + render(summary, maxToolArgs, false, false) + ")"
+	md := flavour == FlavourMarkdown
+	return "Calling " + render(name, maxToolName, md, false) + "(" + render(summary, maxToolArgs, md, false) + ")"
 }
 
 // redactArgs returns v with the value of every map key that matches secretKey replaced, in nested
