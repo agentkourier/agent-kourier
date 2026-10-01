@@ -80,11 +80,13 @@ type tapRig struct {
 	logs   *logBuf
 }
 
-// newTap builds a tap over fakes and closes it when the test ends.
+// newTap builds a tap over fakes, whose Binding times a pause out after three minutes, on a clock that
+// stands at d0 unless mod sets another, and closes it when the test ends.
 func newTap(t *testing.T, mod func(*interact.TapConfig)) *tapRig {
 	t.Helper()
 	r := &tapRig{inner: &tapInner{}, pauses: &fakePauses{}, logs: &logBuf{}}
-	cfg := interact.TapConfig{Sink: r.inner, Handler: r.pauses, Logger: slog.New(slog.NewTextHandler(r.logs, nil))}
+	cfg := interact.TapConfig{Sink: r.inner, Handler: r.pauses, Lookup: lookup{interact.Binding{Timeout: 3 * time.Minute}},
+		Now: func() time.Time { return d0 }, Logger: slog.New(slog.NewTextHandler(r.logs, nil))}
 	if mod != nil {
 		mod(&cfg)
 	}
@@ -154,6 +156,78 @@ func TestOtherEventsAreNotHandedOff(t *testing.T) {
 	}
 }
 
+func TestAFailingPauseIsTriedAgainAfterAGrowingWait(t *testing.T) {
+	r := newTap(t, func(c *interact.TapConfig) { c.Backoff, c.MaxBackoff = 20*time.Millisecond, 60*time.Millisecond })
+	r.pauses.handle = func(_ context.Context, n int, _ interact.Pause) error {
+		if n < 5 {
+			return errBoom
+		}
+		return nil
+	}
+	task := pausedTask("task-1", "msg-1", d0)
+	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
+	waitFor(t, "five tries", func() bool { return r.pauses.calls() == 5 })
+	r.pauses.mu.Lock()
+	at := append([]time.Time(nil), r.pauses.at...)
+	r.pauses.mu.Unlock()
+	for i, want := range []time.Duration{20, 40, 60, 60} { // doubling, to the cap
+		if got := at[i+1].Sub(at[i]); got < want*time.Millisecond {
+			t.Errorf("try %d came %v after the one before; want at least %v", i+2, got, want*time.Millisecond)
+		}
+	}
+	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "boom") {
+		t.Errorf("log %q; want a warning that names the error", r.logs.String())
+	}
+}
+
+// TestTheFirstWaitIsASecond: by default a failing pause is tried again after a second, and that doubles.
+func TestTheFirstWaitIsASecond(t *testing.T) {
+	r := newTap(t, nil)
+	r.pauses.handle = func(context.Context, int, interact.Pause) error { return errBoom }
+	task := pausedTask("task-1", "msg-1", d0)
+	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
+	waitFor(t, "the first try", func() bool { return r.pauses.calls() == 1 })
+	time.Sleep(200 * time.Millisecond) // an immediate retry, or a wait of milliseconds, would have come by now
+	if got := r.pauses.calls(); got != 1 {
+		t.Errorf("%d tries after 200ms; want one: the first wait is a second", got)
+	}
+}
+
+// TestAPauseIsGivenUpAtItsOwnDeadline: the deadline is the task's own time plus the Binding's timeout, as the
+// interaction's is, so it does not move with the clock at the hand-off. After it the sweep owns the pause, or
+// nothing does, and the tap says so, at Error.
+func TestAPauseIsGivenUpAtItsOwnDeadline(t *testing.T) {
+	var step atomic.Int64 // each failed try moves the clock on 30 seconds
+	r := newTap(t, func(c *interact.TapConfig) {
+		c.Backoff, c.MaxBackoff = time.Millisecond, time.Millisecond
+		c.Now = func() time.Time { return d0.Add(2*time.Minute + time.Duration(step.Load())*30*time.Second) } // 2 minutes after the pause
+	})
+	r.pauses.handle = func(context.Context, int, interact.Pause) error { step.Add(1); return errBoom }
+	task := pausedTask("task-1", "msg-1", d0) // due at d0 + 3 minutes
+	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
+	waitFor(t, "an Error log", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
+	if err := r.close(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.pauses.calls(); got != 2 { // at 2:30 it is not due; at 3:00 it is
+		t.Errorf("%d tries; want 2: the second ends at the deadline", got)
+	}
+	if log := r.logs.String(); !strings.Contains(log, "task-1") || !strings.Contains(log, "boom") {
+		t.Errorf("log %q; want the error to name the task and the cause", log)
+	}
+}
+
+func TestAPauseTheIntakeCannotRenderIsNotTriedAgain(t *testing.T) {
+	r := newTap(t, func(c *interact.TapConfig) { c.Backoff, c.MaxBackoff = time.Millisecond, time.Millisecond })
+	r.pauses.handle = func(context.Context, int, interact.Pause) error { return interact.ErrDisallowed }
+	task := pausedTask("task-1", "msg-1", d0)
+	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
+	waitFor(t, "an Error log", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
+	if err := r.close(t); err != nil || r.pauses.calls() != 1 {
+		t.Errorf("Close = %v after %d tries; want one: no retry can change what the Binding allows", err, r.pauses.calls())
+	}
+}
+
 // TestAPauseSeenAgainIsHandedOffAgain: nothing is remembered once a hand-off is over, because the intake is
 // what knows what is done, and a pause that comes again after a restart is how an answered one is sent again
 // (28h). A pause whose hand-off is still running is not started twice, and another pause of the same task is.
@@ -191,31 +265,32 @@ func TestAPauseInFlightIsNotHandedOffTwice(t *testing.T) {
 	}
 }
 
-// TestCloseEndsTheHandOffsAndWaitsForThem: a hand-off in the intake is cut short through its context, and
-// nothing more is started after.
+// TestCloseEndsTheHandOffsAndWaitsForThem: a hand-off in the intake is cut short through its context, one
+// waiting out a backoff is stopped, and nothing more is started after.
 func TestCloseEndsTheHandOffsAndWaitsForThem(t *testing.T) {
 	before := goleak.IgnoreCurrent()
-	r := newTap(t, nil)
-	var held atomic.Int32
-	r.pauses.handle = func(ctx context.Context, _ int, _ interact.Pause) error {
-		held.Add(1)
+	r := newTap(t, func(c *interact.TapConfig) { c.Backoff, c.MaxBackoff = time.Hour, time.Hour })
+	var inIntake atomic.Bool
+	r.pauses.handle = func(ctx context.Context, n int, _ interact.Pause) error {
+		if n == 1 { // the first fails, and waits an hour; the second is held in the intake
+			return errBoom
+		}
+		inIntake.Store(true)
 		<-ctx.Done()
 		return ctx.Err()
 	}
 	h := r.tap.Turn(t.Context(), tapRef)
 	one, two := pausedTask("task-1", "m", d0), pausedTask("task-2", "m", d0)
 	h(agent.FinalEvent{Task: &one})
+	waitFor(t, "the first, which fails", func() bool { return r.pauses.calls() == 1 })
 	h(agent.FinalEvent{Task: &two})
-	waitFor(t, "both in the intake", func() bool { return held.Load() == 2 })
+	waitFor(t, "the second, in the intake", inIntake.Load)
 	if err := r.close(t); err != nil {
 		t.Fatalf("Close = %v; want nil once both are over", err)
 	}
 	h(agent.FinalEvent{Task: &one})
 	if err := r.close(t); err != nil || r.pauses.calls() != 2 {
 		t.Errorf("Close again = %v, %d calls; want nil, and nothing started after Close", err, r.pauses.calls())
-	}
-	if strings.Contains(r.logs.String(), "could not be taken up") {
-		t.Errorf("log %q; want a hand-off cut off by Close not reported as a failure", r.logs.String())
 	}
 	goleak.VerifyNone(t, before)
 }
@@ -236,15 +311,13 @@ func TestCloseIsBoundedByItsContext(t *testing.T) {
 	}
 }
 
-// TestAFailingPauseIsLoggedAndHandedOffNoMore: until the retry (WP-35h2b) the next start finds it again.
-func TestAFailingPauseIsLoggedAndHandedOffNoMore(t *testing.T) {
-	r := newTap(t, nil)
-	r.pauses.handle = func(context.Context, int, interact.Pause) error { return errBoom }
+func TestABindingThatCannotBeReadStillGetsTheHandOffAndAWarning(t *testing.T) {
+	r := newTap(t, func(c *interact.TapConfig) { c.Lookup = lookupErr{errBoom} })
 	task := pausedTask("task-1", "msg-1", d0)
 	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "the warning", func() bool { return strings.Contains(r.logs.String(), "level=WARN") })
-	if err := r.close(t); err != nil || r.pauses.calls() != 1 || !strings.Contains(r.logs.String(), "boom") {
-		t.Errorf("Close = %v, %d tries, log %q; want one try and a warning that names the error", err, r.pauses.calls(), r.logs.String())
+	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+	if !strings.Contains(r.logs.String(), "level=WARN") {
+		t.Errorf("log %q; want a warning that the Binding could not be read", r.logs.String())
 	}
 }
 
@@ -255,3 +328,7 @@ func TestNoticesGoToTheSinkItWraps(t *testing.T) {
 		t.Errorf("notices %+v; want the one given to the tap, passed on", r.inner.notices)
 	}
 }
+
+type lookupErr struct{ err error }
+
+func (l lookupErr) Binding(string) (interact.Binding, error) { return interact.Binding{}, l.err }

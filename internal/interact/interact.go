@@ -162,6 +162,14 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	return nil
 }
 
+// pausedAt is when the pause began: the task's own timestamp, or now if that is earlier or there is none.
+func pausedAt(task a2a.Task, now time.Time) time.Time {
+	if ts := task.Status.Timestamp; ts != nil && ts.Before(now) {
+		return *ts
+	}
+	return now
+}
+
 // record creates the interaction for in, or finds the one that exists. The deadline is the task's own
 // timestamp, or courier's clock if that is earlier, plus the Binding's timeout, so a pause seen again
 // after a restart keeps its deadline and kagent's clock cannot push it out (the clock is UNCONFIRMED(WP-02)).
@@ -177,10 +185,7 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 	if err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: encode the pause: %w", err)
 	}
-	at := i.cfg.Now()
-	if ts := p.Task.Status.Timestamp; ts != nil && ts.Before(at) {
-		at = *ts
-	}
+	at := pausedAt(p.Task, i.cfg.Now())
 	kind := store.InteractionAskUser
 	switch {
 	case in.Nested != nil:
