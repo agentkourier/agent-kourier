@@ -23,6 +23,7 @@ IMAGE=courier-e2e/runner:dev
 JOB=e2e-runner
 # How long to wait for the Job; its own activeDeadlineSeconds (600) is the backstop.
 WAIT_SECONDS=${E2E_WAIT_SECONDS:-420}
+[[ "${WAIT_SECONDS}" =~ ^[0-9]+$ ]] || die "E2E_WAIT_SECONDS must be a whole number of seconds"
 
 for tool in docker kind kubectl go; do
   command -v "${tool}" >/dev/null || die "${tool} is required"

@@ -45,10 +45,11 @@ cluster_exists() {
 
 # assert_context TIER: die unless the kubeconfig context in CTX, which the scripts pass to every
 # kubectl and helm call, is the local kind cluster of that tier: kind-courier-fast or
-# kind-courier-full, checked literally against the kubeconfig. The API server must be on loopback,
-# which no remote cluster is.
+# kind-courier-full, checked literally against the kubeconfig. Its API server must be on loopback
+# and must be the one kind itself reports for that cluster (kind get kubeconfig), so a loopback
+# tunnel to another cluster under the same context name is refused too.
 assert_context() {
-  local tier=$1 name server
+  local tier=$1 name server kind_server
   case "${tier}" in
     fast | full) ;;
     *) die "assert_context: unknown tier '${tier}' (want fast or full)" ;;
@@ -61,6 +62,10 @@ assert_context() {
     https://127.0.0.1:* | https://localhost:*) ;;
     *) die "context ${CTX} points at a non-local API server; refusing to run kubectl or helm" ;;
   esac
+  kind_server=$(kubectl config view --kubeconfig <(kind get kubeconfig --name "courier-${tier}" 2>/dev/null) \
+    -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || kind_server=
+  [ -n "${kind_server}" ] && [ "${server}" = "${kind_server}" ] ||
+    die "context ${CTX} points at ${server}, not at kind's courier-${tier} (${kind_server:-no such cluster}); refusing to run kubectl or helm"
 }
 
 # assert_owned: die unless the existing courier-full cluster was created by this tooling.

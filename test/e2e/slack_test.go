@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,35 +33,41 @@ func newFixture(t *testing.T) fixture {
 	return fixture{NewSlack(fake.URL()), fake, bot}
 }
 
-func (f fixture) connect(t *testing.T, ack bool) { t.Helper(); connectSocket(t, f.bot, f.sl, ack) }
+func (f fixture) connect(t *testing.T, ack bool) { t.Helper(); connectSocket(t, f.bot, ack) }
 
-// connectSocket runs a Socket Mode client for bot, as courier does, and waits until the fake counts
-// a connection. It acks every envelope if ack is set. It stops with the test.
-func connectSocket(t *testing.T, bot *slack.Client, sl *Slack, ack bool) {
+// connectSocket runs a Socket Mode client for bot, as courier does, and returns once the fake has
+// sent this client its hello. The fake registers a connection before it says hello and sends each
+// envelope to its newest connection only, so after hello this client is the one that gets the next
+// event; counting connections would not tell it from an older one. It acks every envelope if ack is
+// set, and stops with the test.
+func connectSocket(t *testing.T, bot *slack.Client, ack bool) {
 	t.Helper()
 	smc := socketmode.New(bot)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = smc.RunContext(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
+	hello := make(chan struct{})
 	go func() { // slack-go never closes Events, so this ends with the test's context
+		var once sync.Once
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case ev := <-smc.Events:
+				if ev.Type == socketmode.EventTypeHello {
+					once.Do(func() { close(hello) })
+				}
 				if ack && ev.Request != nil {
 					_ = smc.Ack(*ev.Request)
 				}
 			}
 		}
 	}()
-	err := Wait(ctx, 5*time.Second, "a Socket Mode client", func(ctx context.Context) (bool, error) {
-		n, err := sl.Connections(ctx)
-		return n >= 1, err
-	})
-	if err != nil {
-		t.Fatal(err)
+	select {
+	case <-hello:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Socket Mode client got no hello from the fake")
 	}
 }
 
@@ -226,5 +233,23 @@ func TestSlackFailedDeliveryStillReturnsTheStoredMessage(t *testing.T) {
 	var se *StatusError
 	if !errors.As(err, &se) || got.TS != "1.2" || got.Channel != "C1" || len(got.Envelopes) != 1 {
 		t.Fatalf("Mention = %+v, %v; want the 409 and the stored message", got, err)
+	}
+}
+
+func TestConnectSocketWaitsForItsOwnConnection(t *testing.T) {
+	// The fake sends each envelope to its newest connection only. If connectSocket returned while an
+	// older client already counted as connected, the mention would go to that client, which never
+	// acks, and AckWait would time out or pass against the wrong client.
+	f, ctx := newFixture(t), t.Context()
+	f.connect(t, false)
+	f.connect(t, true)
+	mention, err := f.sl.Mention(ctx, "C1", "U1", fakeMention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range mention.Envelopes {
+		if _, err := f.sl.AckWait(ctx, 2*time.Second, id); err != nil {
+			t.Fatalf("the acking client never got the event: %v", err)
+		}
 	}
 }

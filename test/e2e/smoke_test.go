@@ -49,7 +49,7 @@ func TestSmoke(t *testing.T) {
 
 	sl := NewSlack(env.SlackURL)
 	bot := slack.New("xoxb-fake-test-token", slack.OptionAPIURL(env.SlackURL+"/"), slack.OptionAppLevelToken("xapp-fake-test-token"))
-	connectSocket(t, bot, sl, true)
+	connectSocket(t, bot, true)
 	mention, err := sl.Mention(ctx, "C1", "USMOKE", "<@UFAKEBOT> smoke "+name)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,9 @@ func TestSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pods.Restart(ctx, kube.Namespace, "app=sink"); err != nil {
+	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // a stuck replacement fails here, with its reason
+	defer cancel()
+	if _, err := pods.Restart(restartCtx, kube.Namespace, "app=sink"); err != nil {
 		t.Fatal(err)
 	}
 	// The new sink answers and no longer holds this run's alert. It is not empty in general: an
