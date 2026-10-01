@@ -170,8 +170,8 @@ func TestPersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("session after reopen = %+v, %v", got, err)
 	}
 	var n int
-	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 9 {
-		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 9", n, err)
+	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 10 {
+		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 10", n, err)
 	}
 }
 
@@ -223,5 +223,27 @@ func TestInTxRollsBackOnPanic(t *testing.T) {
 	// A leaked Tx would hold the only write connection and time this out.
 	if _, err := s.AppendEvent(ctx, store.Event{ID: "after-panic", Kind: "alert", ReceivedAt: t0}); err != nil {
 		t.Fatalf("write after a panicking transaction: %v", err)
+	}
+}
+
+// TestOutboxTakesEveryRole: the role set is checked in Go and by a trigger, and both know the same
+// roles, the reaction among them. A role the trigger does not list is refused even to raw SQL.
+func TestOutboxTakesEveryRole(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	for _, role := range []store.OutboxRole{store.OutboxRoot, store.OutboxReply, store.OutboxDigest, store.OutboxNotice, store.OutboxReaction} {
+		if !role.Valid() {
+			t.Errorf("%q is not Valid", role)
+		}
+		e := store.OutboxEntry{ID: "e/" + string(role), EventID: "e", Role: role, Channel: "C", CreatedAt: t0}
+		if created, err := s.CreateOutbox(ctx, e); err != nil || !created {
+			t.Errorf("CreateOutbox with role %q = %v, %v; want it created", role, created, err)
+		}
+		if _, err := s.write.ExecContext(ctx, `UPDATE outbox SET role = ? WHERE id = ?`, role, e.ID); err != nil {
+			t.Errorf("update to role %q = %v; want it allowed", role, err)
+		}
+	}
+	if store.OutboxRole("bogus").Valid() {
+		t.Error("a made-up role is Valid")
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	slackgo "github.com/slack-go/slack"
+
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -59,5 +61,30 @@ func TestPostBadBlocksAreInvalid(t *testing.T) {
 	_, err := c.Post(t.Context(), "C1", "", slack.Content{Text: "hi", Blocks: json.RawMessage("{")}, "ev1")
 	if !errors.Is(err, store.ErrInvalid) {
 		t.Fatalf("Post with bad blocks = %v; want ErrInvalid", err)
+	}
+}
+
+// TestReactionPermanentCode: a reaction can never be made if the message, the name or the channel is
+// wrong; a rate limit or an outage may pass, and the posts' own codes are not its set.
+func TestReactionPermanentCode(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{slackgo.SlackErrorResponse{Err: "message_not_found"}, "message_not_found"},
+		{slackgo.SlackErrorResponse{Err: "invalid_name"}, "invalid_name"},
+		{slackgo.SlackErrorResponse{Err: "no_item_specified"}, "no_item_specified"},
+		{slackgo.SlackErrorResponse{Err: "not_in_channel"}, "not_in_channel"},
+		{slackgo.SlackErrorResponse{Err: "channel_not_found"}, "channel_not_found"},
+		{fmt.Errorf("deliver: %w", slackgo.SlackErrorResponse{Err: "message_not_found"}), "message_not_found"},
+		{slackgo.SlackErrorResponse{Err: "ratelimited"}, ""},
+		{slackgo.SlackErrorResponse{Err: "invalid_auth"}, ""},
+		{slackgo.SlackErrorResponse{Err: "msg_too_long"}, ""}, // a post's code, not a reaction's
+		{errors.New("message_not_found"), ""},                 // by the code Slack gave, not by text
+		{nil, ""},
+	} {
+		if got := slack.ReactionPermanentCode(tc.err); got != tc.want {
+			t.Errorf("ReactionPermanentCode(%v) = %q; want %q", tc.err, got, tc.want)
+		}
 	}
 }

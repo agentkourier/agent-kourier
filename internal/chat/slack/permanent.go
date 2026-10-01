@@ -27,6 +27,27 @@ func PermanentCode(err error) string {
 	return ""
 }
 
+// ReactionPermanentCode returns the Slack error code in err if it says that the same reaction will
+// never be made, and "" otherwise: a message, a name or a channel that is not there, courier not in
+// the channel, or no item given. It is not PermanentCode, which is for posts; the two sets differ
+// (a reaction has no text to be too long). A rate limit, a server error or a timeout may pass on
+// another try. It reads the code scrub keeps, through any wrapping, so it is "" for an error whose
+// text merely mentions a code.
+//
+// UNCONFIRMED(WP-04): that these are the codes Slack answers with, in particular for a message that
+// was deleted and for a channel courier was removed from, and that no other is permanent.
+func ReactionPermanentCode(err error) string {
+	var resp slackgo.SlackErrorResponse
+	if !errors.As(err, &resp) {
+		return ""
+	}
+	switch resp.Err {
+	case "message_not_found", "invalid_name", "no_item_specified", "not_in_channel", "channel_not_found":
+		return resp.Err
+	}
+	return ""
+}
+
 // FatalAuthCode returns the Slack error code in err if it says that the tokens will never work: a
 // rejected, revoked or missing token, or a deactivated account. Running again cannot cure it, so the
 // process exits and says why, where any other error from Run is retried with a backoff. It is not

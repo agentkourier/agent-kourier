@@ -14,12 +14,15 @@ const (
 	OutboxReply  OutboxRole = "reply"
 	OutboxDigest OutboxRole = "digest"
 	OutboxNotice OutboxRole = "notice"
+	// OutboxReaction is a reaction to a message, not a post: its row holds the target and the emoji,
+	// and its ref is the ts of the message it was made on.
+	OutboxReaction OutboxRole = "reaction"
 )
 
 // Valid reports whether r is one of the defined roles.
 func (r OutboxRole) Valid() bool {
 	switch r {
-	case OutboxRoot, OutboxReply, OutboxDigest, OutboxNotice:
+	case OutboxRoot, OutboxReply, OutboxDigest, OutboxNotice, OutboxReaction:
 		return true
 	}
 	return false
