@@ -222,3 +222,16 @@ func TestRunDrainsAtStartRelistsAndEnds(t *testing.T) {
 	}
 	goleak.VerifyNone(t, before)
 }
+
+// TestRunRepairsAtOnceAndNotAfterTheFirstTick: what a crash left is repaired when the process starts, not
+// an interval later.
+func TestRunRepairsAtOnceAndNotAfterTheFirstTick(t *testing.T) {
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Interval = time.Hour })
+	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- r.r.Run(ctx) }()
+	waitFor(t, "the prompt, long before the first tick", func() bool { return len(r.up.list()) == 1 })
+	cancel()
+	<-done
+}
