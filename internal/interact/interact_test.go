@@ -157,7 +157,7 @@ func TestPausedRecordsOnePendingInteractionAndPostsOnePrompt(t *testing.T) {
 	}
 }
 
-// TestCrashAtEachSeam...: the first Paused dies at a seam, the second is the pause coming again, and
+// TestCrashAtEachSeam: the first Paused dies at a seam, the second is the pause coming again, and
 // between them the thread has exactly one prompt.
 func TestCrashAtEachSeamLeavesOneInteractionAndOnePrompt(t *testing.T) {
 	for name, crash := range map[string]func(*rig){
@@ -190,6 +190,9 @@ func TestInteractionIDIsDeterministic(t *testing.T) {
 	if id != interact.InteractionID(ask) || interact.InteractionID(tools) != interact.InteractionID(reordered) {
 		t.Error("the same pause got two IDs")
 	}
+	if interact.InteractionID(dialect.Interaction{TaskID: "ab", RequestID: "c"}) == interact.InteractionID(dialect.Interaction{TaskID: "a", RequestID: "bc"}) {
+		t.Error("fields that run together hash alike: the length prefixes are not doing their job")
+	}
 	for _, other := range []dialect.Interaction{{Kind: dialect.AskUser, TaskID: "task-1", RequestID: "req-2"}, {Kind: dialect.AskUser, TaskID: "task-2", RequestID: "req-1"}, tools} {
 		if got := interact.InteractionID(other); got == id || len(got) > 40 {
 			t.Errorf("%+v: ID %q; want one that is different and short", other, got)
@@ -219,5 +222,33 @@ func TestPausesThatAreNotPrompts(t *testing.T) {
 				t.Error("something was posted for a pause that is not a prompt")
 			}
 		})
+	}
+}
+
+// TestAReusedRequestIDIsNotTheSamePause: kagent's request ID is the model's tool call ID, and a model
+// may repeat it (UNCONFIRMED(WP-02)), so a second question under a seen ID is not the first one
+// again. It is refused as unusable, and the first prompt stands.
+func TestAReusedRequestIDIsNotTheSamePause(t *testing.T) {
+	r := newRig(t, nil)
+	if err := r.paused(t, askUser("req-1")); err != nil {
+		t.Fatal(err)
+	}
+	other := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "A different question?"}}})
+	if err := r.paused(t, other); !errors.Is(err, dialect.ErrUnusablePause) || len(r.slack.posted) != 1 {
+		t.Errorf("Paused = %v with %d posts; want ErrUnusablePause and the first prompt alone", err, len(r.slack.posted))
+	}
+}
+
+// TestTheDeadlineNeverRunsPastCouriersClock: a task timestamp ahead of courier's clock (kagent's
+// clock is UNCONFIRMED(WP-02)) cannot push the deadline out.
+func TestTheDeadlineNeverRunsPastCouriersClock(t *testing.T) {
+	r, task := newRig(t, nil), askUser("req-1")
+	future := t0.Add(3 * time.Hour) // the rig's clock is t0 plus one hour
+	task.Status.Timestamp = &future
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	if row := r.row(t, task); !row.CreatedAt.Equal(t0.Add(time.Hour)) || !row.Deadline.Equal(t0.Add(time.Hour+timeout)) {
+		t.Errorf("created %v, due %v; want courier's own time plus the timeout", row.CreatedAt, row.Deadline)
 	}
 }

@@ -4,6 +4,7 @@
 package interact
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -45,7 +46,7 @@ type Prompt struct {
 	Deadline    time.Time
 }
 
-// PromptRenderer renders a prompt (WP-33b1); what the agent wrote is untrusted, and its to escape.
+// PromptRenderer renders a prompt (WP-33b1); what the agent wrote is untrusted, and the renderer's to escape.
 type PromptRenderer interface {
 	Prompt(p Prompt) (slack.Content, error)
 }
@@ -135,14 +136,19 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 }
 
 // record creates the interaction for in, or finds the one that exists. The deadline is the task's own
-// timestamp plus the Binding's timeout, so a pause seen again after a restart keeps its deadline.
+// timestamp, or courier's clock if that is earlier, plus the Binding's timeout, so a pause seen again
+// after a restart keeps its deadline and kagent's clock cannot push it out (the clock is UNCONFIRMED(WP-02)).
+//
+// The ID names a pause by its task and request ID, which is UNCONFIRMED(WP-02) to be unique: kagent's
+// ID is the model's tool call ID, which a model may repeat. So the stored request must be the one just
+// parsed; if it is not, this is another question under a seen ID, and it is refused as unusable.
 func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Interaction) (store.Interaction, error) {
 	request, err := json.Marshal(in) // the dialect reads it back unchanged to build the answer
 	if err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: encode the pause: %w", err)
 	}
 	at := i.cfg.Now()
-	if ts := p.Task.Status.Timestamp; ts != nil {
+	if ts := p.Task.Status.Timestamp; ts != nil && ts.Before(at) {
 		at = *ts
 	}
 	kind := store.InteractionAskUser
@@ -156,6 +162,9 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 	}
 	if row, err = i.cfg.Store.GetInteraction(ctx, id); err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: read %s: %w", id, err)
+	}
+	if !bytes.Equal(row.Request, request) {
+		return store.Interaction{}, fmt.Errorf("%w: a second, different pause under the ID of %s", dialect.ErrUnusablePause, id)
 	}
 	return row, nil
 }
