@@ -236,8 +236,10 @@ func (o *Outbox) settle(id string, err error) {
 func (o *Outbox) Reconcile(ctx context.Context) error {
 	var errs []error
 	now := o.cfg.Now()
-	o.mu.Lock()                                                                          // so that no row is purged while its post is in flight
-	expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now) // before any lookup of them
+	// The purge comes before any lookup of the rows it takes, and under the lock, so that no row is
+	// purged while its post is in flight.
+	o.mu.Lock()
+	expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("drop expired outbox text: %w", err))
 	}
