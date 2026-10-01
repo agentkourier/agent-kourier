@@ -91,7 +91,7 @@ func TestWaitReady(t *testing.T) {
 			wantErr: context.DeadlineExceeded, wantMsg: "no pods match"},
 		{name: "terminating is not ready", pods: []runtime.Object{terminating}, timeout: 30 * time.Millisecond,
 			wantErr: context.DeadlineExceeded, wantMsg: "not Ready: sink-gone"},
-		{name: "list error returns at once", listErr: errBoom, timeout: time.Minute, wantErr: errBoom},
+		{name: "list error returns at once", listErr: errBoom, timeout: 2 * time.Second, wantErr: errBoom},
 		{name: "success wins over a spent context", pods: []runtime.Object{sink("sink-a", "u1", true)},
 			timeout: time.Minute, cancelled: true},
 	}
