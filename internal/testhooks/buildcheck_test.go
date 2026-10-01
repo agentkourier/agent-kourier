@@ -35,6 +35,25 @@ func run(t *testing.T, bin string) (string, error) {
 	return string(out), err
 }
 
+// traces reports which traces of the hooks the binary at bin holds: the crash function's symbol, and
+// the names of the two environment variables, which only the testhooks files refer to.
+func traces(t *testing.T, bin string) map[string]bool {
+	t.Helper()
+	nm, err := exec.CommandContext(t.Context(), "go", "tool", "nm", bin).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]bool{
+		"the crash function (symbol)":    strings.Contains(string(nm), "testhooks.crashSelf"),
+		"the COURIER_FAULT name":         bytes.Contains(raw, []byte("COURIER_FAULT")),
+		"the COURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("COURIER_SLACK_API_URL")),
+	}
+}
+
 // TestDefaultBuildHasNeitherHook builds the probe both ways and inspects the binaries. The tagged
 // build is the control: it must show what the default build must not, so the checks are not vacuous.
 func TestDefaultBuildHasNeitherHook(t *testing.T) {
@@ -44,19 +63,7 @@ func TestDefaultBuildHasNeitherHook(t *testing.T) {
 	}{{"default", false}, {"testhooks", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := build(t, tc.tagged)
-			nm, err := exec.CommandContext(t.Context(), "go", "tool", "nm", bin).Output()
-			if err != nil {
-				t.Fatal(err)
-			}
-			raw, err := os.ReadFile(bin)
-			if err != nil {
-				t.Fatal(err)
-			}
-			checks := map[string]bool{
-				"the crash function (symbol)":    strings.Contains(string(nm), "testhooks.crashSelf"),
-				"the COURIER_FAULT name":         bytes.Contains(raw, []byte("COURIER_FAULT")),
-				"the COURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("COURIER_SLACK_API_URL")),
-			}
+			checks := traces(t, bin)
 			for what, present := range checks {
 				if present != tc.tagged {
 					t.Errorf("%s build: %s present = %v, want %v", tc.name, what, present, tc.tagged)

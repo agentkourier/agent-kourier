@@ -1,0 +1,18 @@
+# What the image build does not need: the context is the repository, and COPY . . would otherwise send
+# git history, other worktrees, build output and local files.
+.git
+.claude
+bin
+scratchpad
+docs
+tasks
+spike
+hack
+**/*.test
+# At any depth: a pattern without **/ matches only at the root of the context.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/kubeconfig*
+**/*.db

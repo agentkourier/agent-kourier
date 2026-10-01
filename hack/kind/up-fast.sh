@@ -13,12 +13,10 @@
 # The operator's CRDs are installed by helm on first install only; helm never upgrades them. To
 # change OPERATOR_CHART_VERSION (in lib.sh), run `hack/kind/down.sh fast` first.
 #
-# Courier's image (COURIER_IMAGE, default courier:dev) is loaded if Docker has it. The courier
-# binary is not a broker until WP-35, which adds the Dockerfile; until then the step says so and
-# skips.
+# Courier's testhooks image (courier-e2e/courier-testhooks:dev, built from the repo's Dockerfile) is
+# built and loaded into the cluster, after a check that it carries its label. The manifests that run it
+# come with WP-35g2.
 set -eEuo pipefail
-
-COURIER_IMAGE=${COURIER_IMAGE:-courier:dev}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "${HERE}/../.." && pwd)
@@ -67,12 +65,12 @@ build_doubles_image
 step "fake Slack, stub agent, sink, Alertmanager"
 apply_doubles
 
-step "courier image ${COURIER_IMAGE}"
-if docker image inspect "${COURIER_IMAGE}" >/dev/null 2>&1; then
-  kind load docker-image "${COURIER_IMAGE}" --name "${CLUSTER}"
-else
-  echo "skipping: no Docker image ${COURIER_IMAGE}. Courier is not a broker until WP-35, which adds its Dockerfile; build the image and re-run to load it."
-fi
+step "courier image ${TESTHOOKS_IMAGE}"
+# The tier runs the testhooks build, which only it can point at the fake Slack. The label check keeps a
+# production image out of the tier; nothing here pushes either image.
+build_courier_image testhooks
+assert_testhooks_image "${TESTHOOKS_IMAGE}"
+kind load docker-image "${TESTHOOKS_IMAGE}" --name "${CLUSTER}"
 
 step "verify"
 "${FAST}/verify.sh"

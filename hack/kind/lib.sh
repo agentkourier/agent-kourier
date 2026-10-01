@@ -6,6 +6,8 @@
 # shellcheck disable=SC2034
 NODE_IMAGE=kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
+# The Go image courier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.1.
+GO_IMAGE=golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190
 # One full tier per Docker host: the cluster name is fixed, so two checkouts share it. The fast
 # tier is a separate cluster; use_tier fast points CLUSTER and OWNER_LABEL at it.
 CLUSTER=courier-full
@@ -169,4 +171,31 @@ assert_never_published() {
   assert "the kind node publishes the API server, 6443/tcp on 127.0.0.1: [${ports}]" grep -q -E "${apiserver}" <<<"${ports}"
   hostports=$(grep -v -E "${apiserver}" <<<"${ports}" || true) # grep exits 1 when nothing else is published
   assert "the kind node publishes nothing but the API server: [${hostports}]" is_empty "${hostports}"
+}
+
+# The courier images, built from the repo's Dockerfile. COURIER_IMAGE is the production build, which no
+# kind tier runs. TESTHOOKS_IMAGE is built with the testhooks tag (the crash hook and the Slack API URL
+# override of internal/testhooks): the tiers run it, because only it can be pointed at the fake Slack
+# and made to crash. It is never pushed, it lives under the local courier-e2e/ prefix, and it carries
+# TESTHOOKS_LABEL, which the load into a tier checks.
+COURIER_IMAGE=courier:dev
+TESTHOOKS_IMAGE=courier-e2e/courier-testhooks:dev
+TESTHOOKS_LABEL=dev.agent-courier.testhooks
+
+# build_courier_image [testhooks]: build COURIER_IMAGE, or with "testhooks" TESTHOOKS_IMAGE, for the
+# Docker daemon's own architecture. Needs ROOT, the repository root.
+build_courier_image() {
+  local image=${COURIER_IMAGE} tags=() label=()
+  if [ "${1:-}" = testhooks ]; then
+    image=${TESTHOOKS_IMAGE} tags=(--build-arg TAGS=testhooks) label=(--label "${TESTHOOKS_LABEL}=true")
+  fi
+  docker build -q -f "${ROOT}/Dockerfile" --build-arg "GO_IMAGE=${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" \
+    ${tags[@]+"${tags[@]}"} ${label[@]+"${label[@]}"} -t "${image}" "${ROOT}" >/dev/null # (an empty array is unset to bash 3.2)
+}
+
+# assert_testhooks_image IMAGE: die unless IMAGE carries TESTHOOKS_LABEL, so a production image is never
+# loaded into a tier by mistake. Run it before every kind load of a courier image.
+assert_testhooks_image() {
+  [ "$(docker image inspect --format "{{index .Config.Labels \"${TESTHOOKS_LABEL}\"}}" "$1" 2>/dev/null)" = true ] ||
+    die "$1 is not a testhooks image (no ${TESTHOOKS_LABEL}=true label); refusing to load it into a tier"
 }

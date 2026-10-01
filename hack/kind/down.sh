@@ -30,7 +30,7 @@ for tier in "${tiers[@]}"; do
     echo "kind cluster ${CLUSTER} does not exist"
   fi
   # Both tiers build the test doubles and the runner; only the full tier builds mockllm.
-  repos=(courier-e2e/fast-doubles courier-e2e/runner)
+  repos=(courier-e2e/fast-doubles courier-e2e/runner courier-e2e/courier-testhooks)
   [ "${tier}" = full ] && repos+=(courier-e2e/mockllm)
   for repo in "${repos[@]}"; do
     for image in $(docker image ls -q "${repo}" | sort -u); do
