@@ -22,7 +22,13 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/klog/v2"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // startConfig is a RunConfig that would run: the example config in a temp dir, a fake cluster that
@@ -34,7 +40,85 @@ func startConfig(t *testing.T) RunConfig {
 	c.DBPath = filepath.Join(t.TempDir(), "courier.db")
 	c.Client = cluster()
 	c.SyncTimeout = 30 * time.Second
+	c.newSlack = func(slack.Config) slackAPI { return idleSlack{} } // offline: the default build cannot reach a fake
 	return c
+}
+
+// idleSlack is a Slack client that holds its connection until its context ends and calls nothing.
+type idleSlack struct{}
+
+func (idleSlack) Run(ctx context.Context, _ slack.Sink) error { <-ctx.Done(); return ctx.Err() }
+
+func (idleSlack) Post(context.Context, string, string, slack.Content, string) (string, error) {
+	return "", errors.New("idleSlack posts nothing")
+}
+
+func (idleSlack) Find(context.Context, string, string, string, time.Time) (string, bool, error) {
+	return "", false, nil
+}
+
+func (idleSlack) ResolveUser(context.Context, string) (dialect.User, error) {
+	return dialect.User{}, errors.New("idleSlack knows no one")
+}
+
+// revokedSlack is idleSlack whose posts fail the way a revoked bot token fails them.
+type revokedSlack struct{ idleSlack }
+
+func (revokedSlack) Post(context.Context, string, string, slack.Content, string) (string, error) {
+	return "", slackErr("token_revoked")
+}
+
+func (revokedSlack) Find(context.Context, string, string, string, time.Time) (string, bool, error) {
+	return "", false, slackErr("token_revoked")
+}
+
+// A bot token revoked while the connection is up fails the posts the outbox makes, which the outbox
+// treats as transient. Run must still end with ErrSlackAuth: here a post left unsent by an earlier run
+// is what finds the token revoked.
+func TestRunEndsWithSlackAuthWhenAPostFindsTheTokenRevoked(t *testing.T) {
+	c := startConfig(t)
+	c.newSlack = func(slack.Config) slackAPI { return revokedSlack{} }
+	seed, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outbox.New(outbox.Config{Store: seed, Poster: idleSlack{}}).Enqueue(t.Context(),
+		outbox.Post{Source: "ev1", Role: store.OutboxNotice, Channel: "C0123456789", Content: slack.Content{Text: "hi"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, c)
+
+	err = r.wait()
+
+	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("Run = %v, want ErrSlackAuth naming token_revoked, from the post", err)
+	}
+}
+
+// What Run hands the Slack client is the connection's own tokens, read at startup, and an API URL
+// that a production build can never set: the environment variable that a test image reads is
+// ignored here, so a bot token cannot be redirected.
+func TestRunBuildsTheSlackConfigFromTheConnectionSecret(t *testing.T) {
+	t.Setenv(testhooks.SlackAPIURLEnv, "http://evil.example/")
+	var got slack.Config
+	c := startConfig(t)
+	c.newSlack = func(sc slack.Config) slackAPI { got = sc; return idleSlack{} }
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got.BotToken.Reveal() != "fake-value" || got.AppToken.Reveal() != "fake-value" {
+		t.Error("the Slack config does not carry the tokens of the connection's Secret")
+	}
+	if wantURL := testhooks.SlackAPIURL(); got.APIURL != wantURL {
+		t.Errorf("APIURL = %q, want %q: the testhooks value, and nothing from the environment in any other build", got.APIURL, wantURL)
+	}
 }
 
 // running is a Run in progress.

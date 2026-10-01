@@ -37,6 +37,11 @@ type RunConfig struct {
 	Sink         session.Sink
 	Interactions func(ctx context.Context, i slack.Interaction) error
 
+	// newSlack builds the Slack client from its config; nil means slack.New. It is a seam for this
+	// package's tests, which run Run offline with a client that does not call Slack. It is
+	// unexported, so no other package, and no config, can replace the client.
+	newSlack func(slack.Config) slackAPI
+
 	testOptions // NoRenderer and NoInteractions in a testhooks build; nothing otherwise
 }
 
