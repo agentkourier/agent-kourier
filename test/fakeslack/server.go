@@ -130,7 +130,13 @@ type Server struct {
 	ownPending   []ownEvent             // events queued by the request holding ownMu, for flushOwn; guarded by mu
 	ownSent      map[ownKey][]string    // envelope IDs of events sent for each bot message, guarded by mu
 
-	ownMu sync.Mutex // held from dispatch to flushOwn by the methods that queue events, so one request's queue is its own
+	// ownMu is held from dispatch to flushOwn by the methods that queue events, so one request's queue
+	// is its own. That includes flushOwn's writes to the socket, which have a 5 second deadline: a
+	// client that connects and stops reading stalls every own-post call, one after another, for up to
+	// 5 seconds each, and the event whose write times out is dropped, with no envelope recorded, as
+	// Slack drops events for an app that is not keeping up. The call itself still succeeds. A test
+	// that wants that case must read the socket, or expect the stall.
+	ownMu sync.Mutex
 
 	afterDispatch func() // a test hook, called between queueing a request's own events and sending them
 }

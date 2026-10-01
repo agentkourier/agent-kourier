@@ -2,6 +2,8 @@ package fakeslack_test
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -176,5 +178,37 @@ func TestStreamTextAccumulationIsBounded(t *testing.T) {
 	}
 	if m := fake.Messages("C1"); len(m[len(m)-1].Text) != 40000 {
 		t.Fatalf("a rejected append changed the text: %d characters", len(m[len(m)-1].Text))
+	}
+}
+
+// A block or element type Slack does not have is refused, wherever it sits: a misspelling in courier
+// must fail here as it does there, not be stored. These go over the wire as raw JSON because slack-go
+// has no builder for a type it does not know.
+func TestUnknownBlockAndElementTypesAreRefused(t *testing.T) {
+	fake, _ := newFake(t)
+	text := `{"type":"mrkdwn","text":"x"}`
+	btn := `{"type":"button","action_id":"a","text":{"type":"plain_text","text":"Go"},"value":"v"}`
+	var inputs []string
+	for i, typ := range []string{"plain_text_input", "static_select", "multi_static_select", "radio_buttons", "checkboxes"} {
+		inputs = append(inputs, fmt.Sprintf(`{"type":"input","block_id":"b%d","label":{"type":"plain_text","text":"l"},"element":{"type":%q,"action_id":"a"}}`, i, typ))
+	}
+	for name, tc := range map[string]struct{ blocks, want string }{
+		"an unknown block type":                  {`[{"type":"markdownx","text":"x"}]`, "invalid_blocks"},
+		"an empty block type":                    {`[{"type":""}]`, "invalid_blocks"},
+		"an unknown element in an actions block": {`[{"type":"actions","block_id":"b","elements":[{"type":"buttonx","action_id":"a"}]}]`, "invalid_blocks"},
+		"an unknown element in a context block":  {`[{"type":"context","elements":[{"type":"markdown","text":"x"}]}]`, "invalid_blocks"},
+		"an unknown section accessory":           {`[{"type":"section","text":` + text + `,"accessory":{"type":"spinner"}}]`, "invalid_blocks"},
+		"an unknown input element":               {`[{"type":"input","block_id":"b","label":{"type":"plain_text","text":"l"},"element":{"type":"plain_text_inputx","action_id":"a"}}]`, "invalid_blocks"},
+		"a markdown block":                       {`[{"type":"markdown","text":"x"}]`, ""},
+		"a context block of text and image":      {`[{"type":"context","elements":[` + text + `,{"type":"plain_text","text":"p"},{"type":"image","image_url":"https://example.com/a.png","alt_text":"a"}]}]`, ""},
+		"a section with a button accessory":      {`[{"type":"section","text":` + text + `,"accessory":` + btn + `}]`, ""},
+		"an input block of each courier control": {"[" + strings.Join(inputs, ",") + "]", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := rawBody(t, fake, "chat.postMessage", url.Values{"token": {testToken}, "channel": {"C1"}, "text": {"x"}, "blocks": {tc.blocks}})
+			if got := strings.Contains(body, `"ok":true`); got != (tc.want == "") || (tc.want != "" && !strings.Contains(body, tc.want)) {
+				t.Errorf("response %s; want error %q", body, tc.want)
+			}
+		})
 	}
 }

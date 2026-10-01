@@ -119,6 +119,7 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 		Fields    json.RawMessage   `json:"fields"`
 		Accessory json.RawMessage   `json:"accessory"`
 		Elements  []json.RawMessage `json:"elements"`
+		Element   json.RawMessage   `json:"element"` // an input block's
 	}
 	if json.Unmarshal(raw, &b) != nil || b.Type == "" || runes(b.BlockID) > maxID {
 		return false
@@ -128,6 +129,9 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 			return false
 		}
 		ids[b.BlockID] = true
+	}
+	if b.Element != nil && !elementKnown(b.Element) {
+		return false
 	}
 	actionIDs := map[string]bool{}
 	for _, e := range b.Elements {
@@ -140,6 +144,9 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 			}
 			actionIDs[id.ActionID] = true
 		}
+	}
+	if !knownBlock(b.Type) {
+		return false
 	}
 	switch b.Type {
 	case "alert", "card", "carousel":
@@ -157,13 +164,18 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 	case "section":
 		return sectionOK(b.Text, b.Fields, b.Accessory)
 	case "context":
+		for _, e := range b.Elements {
+			if !elementKnown(e) {
+				return false
+			}
+		}
 		return len(b.Elements) <= maxContextElements
 	case "actions":
 		if len(b.Elements) > maxActionsElements {
 			return false
 		}
 		for _, e := range b.Elements {
-			if !actionElementOK(e) {
+			if !elementKnown(e) || !actionElementOK(e) {
 				return false
 			}
 		}
@@ -178,7 +190,7 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 // UNCONFIRMED(WP-04): that a section must have text or fields, and that its
 // accessory is held to the button limits.
 func sectionOK(text, fields, accessory json.RawMessage) bool {
-	if accessory != nil && !actionElementOK(accessory) {
+	if accessory != nil && (!elementKnown(accessory) || !actionElementOK(accessory)) {
 		return false
 	}
 	if text != nil {
@@ -217,4 +229,41 @@ func actionElementOK(raw json.RawMessage) bool {
 	}
 	n, ok := textLen(e.Text)
 	return ok && n >= 1 && n <= maxButtonText && runes(e.Value) <= maxButtonValue
+}
+
+// knownBlock reports whether t is a block type Slack has. A type courier misspells, such as
+// "markdownx", must fail here as it does there, not be stored.
+//
+// UNCONFIRMED(WP-04): the list, which is the block types the Block Kit reference names, and
+// invalid_blocks as the error for one that is not on it.
+func knownBlock(t string) bool {
+	switch t {
+	case "actions", "alert", "card", "carousel", "context", "divider", "file", "header", "image", "input",
+		"markdown", "rich_text", "section", "table", "video":
+		return true
+	}
+	return false
+}
+
+// elementKnown reports whether raw is a block element, or a text object or image of a context block,
+// of a type Slack has.
+//
+// UNCONFIRMED(WP-04): the list, which is the element types the Block Kit reference names.
+func elementKnown(raw json.RawMessage) bool {
+	var e struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &e) != nil {
+		return false
+	}
+	switch e.Type {
+	case "button", "channels_select", "checkboxes", "conversations_select", "datepicker", "datetimepicker",
+		"email_text_input", "external_select", "feedback_buttons", "file_input", "icon_button", "image",
+		"mrkdwn", "multi_channels_select", "multi_conversations_select", "multi_external_select",
+		"multi_static_select", "multi_users_select", "number_input", "overflow", "plain_text",
+		"plain_text_input", "radio_buttons", "rich_text_input", "static_select", "timepicker",
+		"url_text_input", "users_select", "workflow_button":
+		return true
+	}
+	return false
 }
