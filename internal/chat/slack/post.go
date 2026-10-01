@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	slackgo "github.com/slack-go/slack"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // MetadataEventType is the event_type of the metadata on every message courier posts. Its
@@ -41,8 +43,8 @@ func (c *Client) Post(ctx context.Context, channel, threadTS string, content Con
 		return "", fmt.Errorf("slack post: %w", err)
 	}
 	opts, err := blockOptions(content.Blocks)
-	if err != nil {
-		return "", fmt.Errorf("slack post: %w", err)
+	if err != nil { // blocks that are not blocks never post
+		return "", fmt.Errorf("slack post: %w: %w", store.ErrInvalid, err)
 	}
 	opts = append(opts, slackgo.MsgOptionText(content.Text, false), tag)
 	opts = append(opts, inertOptions()...)
