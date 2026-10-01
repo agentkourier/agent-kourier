@@ -14,8 +14,8 @@
 # change OPERATOR_CHART_VERSION (in lib.sh), run `hack/kind/down.sh fast` first.
 #
 # Courier's testhooks image (courier-e2e/courier-testhooks:dev, built from the repo's Dockerfile) is
-# built and loaded into the cluster, after a check that it carries its label. The manifests that run it
-# come with WP-35g2.
+# built and loaded into the cluster, after a check that it carries its label, and run by the Deployment in
+# hack/kind/fast/courier. The tier is up only when courier is ready and connected to the fake Slack.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -85,8 +85,8 @@ b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
   --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"courier-fast@example.test"}')." --dry-run=client -o yaml | apply
 "${K[@]}" -n courier create configmap courier-config --from-file="${FAST}/courier/config" --dry-run=client -o yaml | apply
 "${K[@]}" apply -f "${FAST}/courier" >/dev/null
-# Restart so a rebuilt image (same tag) or a changed ConfigMap is picked up. Nothing waits for it to be
-# ready: courier is not a broker until WP-35f2d, and verifying readiness is WP-35g3's.
+# Restart so a rebuilt image (same tag) or a changed ConfigMap is picked up. verify.sh waits for the rollout
+# and shows courier's log if it does not become ready.
 "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
 
 step "verify"

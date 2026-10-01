@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"testing"
 
@@ -132,6 +133,29 @@ func TestDeployment(t *testing.T) {
 		if p.HostPort != 0 {
 			t.Errorf("port %d is published on the host", p.HostPort)
 		}
+	}
+	// The environment cmd/courier reads (its package comment), explicit even where it is the default, so that
+	// the Deployment says what courier runs with. No value comes from a Secret: the tokens are read by the
+	// resolver from the API, never from the environment.
+	env := map[string]string{}
+	for _, e := range c.Env {
+		if e.ValueFrom != nil {
+			t.Errorf("env %s comes from %+v; want literal values only", e.Name, e.ValueFrom)
+		}
+		env[e.Name] = e.Value
+	}
+	wantEnv := map[string]string{"COURIER_CONFIG_DIR": "/etc/courier", "COURIER_DB_PATH": "/data/courier.db", "COURIER_LISTEN": ":8080",
+		"COURIER_LOG_LEVEL": "info", "COURIER_KLOG_V": "0", "COURIER_SLACK_API_URL": "http://fakeslack.e2e.svc.cluster.local:8080/"}
+	if !maps.Equal(env, wantEnv) {
+		t.Errorf("env %v; want %v", env, wantEnv)
+	}
+	if len(c.Args) != 0 || len(c.Command) != 0 {
+		t.Errorf("command %v and args %v; want none: the image's entrypoint runs courier, and the environment configures it", c.Command, c.Args)
+	}
+	// The listen address, the named port and the probes are one port: a probe on another would never pass.
+	if len(c.Ports) != 1 || c.Ports[0].Name != "http" || c.Ports[0].ContainerPort != 8080 || c.StartupProbe.HTTPGet.Port.StrVal != "http" ||
+		c.LivenessProbe.HTTPGet.Port.StrVal != "http" || c.ReadinessProbe.HTTPGet.Port.StrVal != "http" {
+		t.Errorf("ports %+v; want http on 8080, which COURIER_LISTEN names, probed by all three probes", c.Ports)
 	}
 	mounts := map[string]bool{}
 	for _, m := range c.VolumeMounts {

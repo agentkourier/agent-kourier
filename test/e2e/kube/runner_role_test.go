@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"slices"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -66,6 +68,16 @@ func TestRunnerRoles(t *testing.T) {
 		for g := range want {
 			if !got[g] {
 				t.Errorf("Role in courier lacks %s", g)
+			}
+		}
+	}
+	// Patching a Deployment is limited to courier's own: a runner that could patch any would be able to
+	// change the test doubles' images or arguments.
+	for _, r := range roles["courier"] {
+		for _, rule := range r.Rules {
+			named := fmt.Sprint(rule.ResourceNames)
+			if isDeployments := slices.Contains(rule.Resources, "deployments"); isDeployments && named != "[courier]" || !isDeployments && named != "[]" {
+				t.Errorf("rule %v in courier has resourceNames %s; want deployments limited to [courier], and pods unlimited", rule.Resources, named)
 			}
 		}
 	}

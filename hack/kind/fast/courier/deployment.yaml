@@ -5,9 +5,11 @@
 # never pulled or pushed), so that COURIER_SLACK_API_URL can point it at the fake Slack. The pod carries
 # app.kubernetes.io/name=courier, the label the full tier's NetworkPolicy trusts; the test runner never does.
 #
-# TODO(WP-35g3): cmd/courier is only `--version` until WP-35f2d, so this pod exits at once and cycles
-# until then. 35g3 sets its args and env per 35f2d (the config directory /etc/courier, the database
-# under /data, the listen address, klog and log level) and checks the probe port, which is a guess.
+# cmd/courier takes no arguments and is configured by the environment below (its package comment lists
+# every variable). COURIER_LISTEN is the address of /healthz, /readyz and /metrics, and the container's
+# named port and all three probes are on it. The Slack tokens are not in the environment: the resolver
+# reads the Secrets through the API, which the Role in rbac.yaml allows. Only the testhooks build, which this
+# tier runs, starts without a renderer and interactions (WP-35h), so a failure to become ready names them.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +32,11 @@ spec:
           image: courier-e2e/courier-testhooks:dev
           imagePullPolicy: Never
           env:
+            - {name: COURIER_CONFIG_DIR, value: /etc/courier}
+            - {name: COURIER_DB_PATH, value: /data/courier.db}
+            - {name: COURIER_LISTEN, value: ":8080"}
+            - {name: COURIER_LOG_LEVEL, value: info}
+            - {name: COURIER_KLOG_V, value: "0"}
             - {name: COURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
           ports: [{name: http, containerPort: 8080}]
           # Bootstrap waits up to 30 s for the Secret caches, so startup is allowed 80 s before the

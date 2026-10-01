@@ -1,8 +1,9 @@
 # The E2E runner: the test binary as a Job in namespace e2e, so it reaches the test doubles by their
 # ClusterIP Service names and nothing is published to the host (the fake Slack's /_control/ has no
 # authentication). Its service account may list and delete pods in e2e only, to restart a double. In
-# courier's namespace it may only read pods and patch the Deployment, to set a fault through the
-# environment (kube.Pods.SetFault); never delete a pod there, which would bypass strategy: Recreate.
+# courier's namespace it may only read pods and get and patch the Deployment named courier, to set a fault
+# through the environment (kube.Pods.SetFault) or restart it (kube.Pods.RolloutRestart); never delete a
+# pod there, which would bypass strategy: Recreate, and never patch another Deployment.
 # The pod must never carry the label app.kubernetes.io/name=courier: the full tier's NetworkPolicy
 # admits that label to the kagent front door.
 apiVersion: v1
@@ -41,6 +42,7 @@ rules:
     verbs: [get, list]
   - apiGroups: [apps]
     resources: [deployments]
+    resourceNames: [courier]
     verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -58,7 +60,7 @@ metadata:
   namespace: e2e
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 600
+  activeDeadlineSeconds: 780
   template:
     metadata:
       labels: {app: e2e-runner}
@@ -70,5 +72,5 @@ spec:
         - name: e2e
           image: courier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^TestSmoke$", "-test.timeout=5m"]
+          args: ["-test.v", "-test.run=^(TestSmoke|TestFaultArmsAndDisarmsOnTheRealDeployment)$", "-test.timeout=8m"]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

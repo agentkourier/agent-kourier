@@ -7,7 +7,10 @@
 #     selects the fake Slack's or the stub agent's pods is ClusterIP with no nodePort, external IP
 #     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
 #     hostNetwork; the kind node publishes only the API server, on loopback;
-#  2. one probe pod in the cluster: fake Slack auth.test and /_control/connections; the stub
+#  2. courier: one pod, ready (the Deployment's rollout has finished and the API server can reach
+#     /healthz and /readyz on the pod, through its proxy);
+#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows courier
+#     connected over Socket Mode (at least one connection, waited for); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
 #     (204, with no token, as the fake Slack's); Alertmanager's API; the
 #     sink taking a POST and reading it back; and an alert posted to Alertmanager reaching the sink.
@@ -30,6 +33,25 @@ done
 assert_context fast
 assert_never_published
 
+echo "== courier: ready"
+# The testhooks image starts without a renderer and interactions (WP-35h), and reaches ready. A courier that
+# does not is shown with its own log, which holds no token or Secret value, and its pod's events.
+courier_fail() {
+  echo "FAIL: $1" >&2
+  "${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o wide >&2 || true
+  "${K[@]}" -n courier logs deploy/courier --tail=60 >&2 || true
+  "${K[@]}" -n courier describe pods -l app.kubernetes.io/name=courier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  exit 1
+}
+"${K[@]}" -n courier rollout status deploy/courier --timeout=180s || courier_fail "courier's rollout did not finish"
+pod=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o jsonpath='{.items[*].metadata.name}')
+[[ "${pod}" != *" "* && -n "${pod}" ]] || courier_fail "want exactly one courier pod, have: ${pod:-none}"
+echo "ok: one courier pod, ${pod}, rolled out"
+for path in healthz readyz; do
+  "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/${path}" >/dev/null || courier_fail "courier's /${path} does not answer 200"
+  echo "ok: courier's /${path} answers 200"
+done
+
 echo "== in the cluster: each component answers"
 # --rm removes the probe when kubectl attaches and finishes; the trap covers a kubectl that fails
 # before that, or an interrupt.
@@ -49,7 +71,13 @@ b64() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
 code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$@"; } # CURL ARG...
 
 assert "fake Slack auth.test" has "$(curl -s -m 10 -X POST -H 'Authorization: Bearer xoxb-fake-test-token' "$FS/auth.test")" '"ok":true'
-assert "fake Slack /_control/connections" has "$(curl -s -m 10 "$FS/_control/connections")" '"connections":0'
+conns=0
+for _ in $(seq 30); do
+  conns=$(curl -s -m 10 "$FS/_control/connections" | sed -n 's/.*"connections":\([0-9]*\).*/\1/p')
+  [ "${conns:-0}" -ge 1 ] && break
+  sleep 1
+done
+assert "courier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 
 jwt="$(b64 '{"alg":"none"}').$(b64 '{"email":"verify@example.test"}')."
 card=$(curl -s -m 10 -H "Authorization: Bearer $jwt" "$AGENT/.well-known/agent-card.json")
