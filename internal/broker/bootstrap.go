@@ -1,0 +1,79 @@
+package broker
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
+)
+
+// defaultSyncTimeout bounds how long Bootstrap waits for the Secret caches.
+const defaultSyncTimeout = 30 * time.Second
+
+// BootstrapOptions configures Bootstrap.
+type BootstrapOptions struct {
+	// Dir is the config directory.
+	Dir string
+	// SyncTimeout bounds the wait for the Secret caches to sync; zero means 30 s.
+	SyncTimeout time.Duration
+	// PollInterval and SecretsInterval are the reloader's; zero means its defaults.
+	PollInterval, SecretsInterval time.Duration
+	// OnReloadError is called for each failed reload, for a metric; see config.ReloaderConfig.
+	OnReloadError func(error)
+	// Logger receives the reloader's and the resolver's reports. It defaults to slog.Default().
+	Logger *slog.Logger
+}
+
+// Config is the loaded config and the Secrets it reads: a Reloader whose snapshots are checked
+// against a resolver that watches the namespaces the config names.
+type Config struct {
+	// Reloader holds the current snapshot, and is the Snapshots that Bindings reads.
+	Reloader *config.Reloader
+	// Secrets is the resolver the Reloader checks against, and the identity package reads through.
+	Secrets *k8ssecrets.Resolver
+}
+
+// Stale reports whether the latest reload failed, so the current snapshot lags the config on
+// disk. A reload that adds a Secret namespace fails this way until the process restarts with
+// the RBAC for it: the resolver is not rebuilt in place.
+func (c *Config) Stale() bool { return c.Reloader.Status().Stale }
+
+// Stop stops the Secret informers. The reloader stops with the context given to Bootstrap.
+func (c *Config) Stop() { c.Secrets.Stop() }
+
+// Bootstrap loads the config once to learn which namespaces hold the Secrets it refers to,
+// starts a resolver that watches exactly those and waits for its caches (an error names the
+// cause, so a denied list fails at once with "forbidden"), then starts the Reloader over it. The
+// Reloader runs until ctx ends. On failure nothing is left running.
+func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapOptions) (*Config, error) {
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	set, err := config.Load(ctx, opts.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	secrets := k8ssecrets.New(client, set.SecretNamespaces(), k8ssecrets.WithLogger(log))
+	syncCtx, cancel := context.WithTimeout(ctx, cmp.Or(opts.SyncTimeout, defaultSyncTimeout))
+	defer cancel()
+	if err := secrets.Start(syncCtx); err != nil {
+		secrets.Stop()
+		return nil, fmt.Errorf("start the secret resolver: %w", err)
+	}
+	rl := config.NewReloader(config.ReloaderConfig{
+		Dir: opts.Dir, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval,
+		Logger: log, OnError: opts.OnReloadError,
+	})
+	if err := rl.Start(ctx); err != nil {
+		secrets.Stop()
+		return nil, err
+	}
+	return &Config{Reloader: rl, Secrets: secrets}, nil
+}
