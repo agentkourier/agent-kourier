@@ -170,6 +170,9 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 // ID is the model's tool call ID, which a model may repeat. So the stored request must be the one just
 // parsed; if it is not, this is another question under a seen ID, and it is refused as unusable.
 func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Interaction) (store.Interaction, error) {
+	if b.Timeout <= 0 { // config forbids it, but a Lookup is another's code, and a zero would expire every submit
+		return store.Interaction{}, fmt.Errorf("interact: Binding %q has no interaction timeout", p.Binding)
+	}
 	request, err := json.Marshal(in) // the dialect reads it back unchanged to build the answer
 	if err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: encode the pause: %w", err)

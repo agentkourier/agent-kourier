@@ -131,3 +131,28 @@ func TestAReusedToolIDIsRefusedAsUnusable(t *testing.T) {
 		t.Errorf("Paused = %v with %d answers, %d cancels, hook %v; want the first denial alone and the second cancelled as unusable", err, len(r.sess.answers), len(r.sess.cancels), r.hook)
 	}
 }
+
+// TestAConcurrentAutoDenyCountsOnce: the live FinalEvent and 28h's re-emit can deny one pause at the
+// same moment. The call that loses the claim (SubmitInteraction says ErrConflict) neither audits twice
+// nor counts, but still enqueues the notice and sends the stored denial, which are idempotent.
+func TestAConcurrentAutoDenyCountsOnce(t *testing.T) {
+	r := newRig(t, nil)
+	r.st.beforeSubmit = func(id string, answer []byte, decider string, now time.Time) {
+		_ = r.st.Store.SubmitInteraction(t.Context(), id, answer, decider, now) // the other call wins the claim
+	}
+	if err := r.paused(t, approval()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.hook) != 0 || len(r.sess.answers) != 1 || len(r.notices(t)) != 1 {
+		t.Errorf("hook %v, %d sends, %d notices; want the loser to count nothing, and still send the denial and enqueue the notice", r.hook, len(r.sess.answers), len(r.notices(t)))
+	}
+}
+
+// TestABindingWithNoTimeoutIsRefusedClearly: config forbids a zero timeout (it defaults to 30 minutes),
+// but a Lookup is another's code, and a zero would fail every submit as expired.
+func TestABindingWithNoTimeoutIsRefusedClearly(t *testing.T) {
+	r := newRig(t, func(b *interact.Binding) { b.Timeout = 0 })
+	if err := r.paused(t, approval()); err == nil || !strings.Contains(err.Error(), "timeout") || len(r.sess.answers) != 0 {
+		t.Errorf("Paused = %v with %d sends; want an error naming the missing timeout, and nothing sent", err, len(r.sess.answers))
+	}
+}

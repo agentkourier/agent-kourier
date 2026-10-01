@@ -67,7 +67,15 @@ func (p *poster) Find(_ context.Context, _, _, id string, _ time.Time) (string, 
 // refStore fails the next SetInteractionMessageRef, as a crash would.
 type refStore struct {
 	*sqlite.Store
-	failRef bool
+	failRef      bool
+	beforeSubmit func(id string, answer []byte, decider string, now time.Time) // runs as a submit is made
+}
+
+func (s *refStore) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
+	if s.beforeSubmit != nil {
+		s.beforeSubmit(id, answer, decider, now)
+	}
+	return s.Store.SubmitInteraction(ctx, id, answer, decider, now)
 }
 
 func (s *refStore) SetInteractionMessageRef(ctx context.Context, id, ref string) error {
