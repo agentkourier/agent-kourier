@@ -3,23 +3,34 @@
 // message: no mention, broadcast, link or hidden character survives, and the text fits Slack's
 // limits. They are pure: no Slack client, no I/O. Courier's interaction prompts (WP-33) use them
 // too.
+//
+// The contract has two halves, and this package keeps only one. Its output is inert only when it is
+// posted with no parse, no link_names and no unfurling, which the Slack client's inertOptions (in
+// internal/chat/slack) puts on every post, update and stream; with link_names on, a plain "@here"
+// would still broadcast, and an unfurl would make Slack fetch a URL the agent wrote. So plain
+// "@here", "#general" and bare URLs pass through here as text, on purpose. And text is rendered
+// once, at the last step before it is sent: rendering rendered text escapes its entities again,
+// and nothing here unescapes.
 package render
 
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // Slack's limits, in characters. UNCONFIRMED(WP-04): the 12000 of a markdown block or a stream
-// append and the 40000 of a message are Slack's documented numbers, not measured.
+// append and the 40000 of a message are Slack's documented numbers, not measured, and so is the
+// unit: whether Slack counts runes or UTF-16 units. Every cap here counts UTF-16 units, which is
+// never fewer than runes, so the text fits either way.
 const (
 	MaxBlock   = 12000
 	MaxMessage = 40000
@@ -28,8 +39,19 @@ const (
 	// further message. It holds nothing that needs escaping, in any style.
 	Truncated = "… (truncated)"
 
-	maxToolName = 64  // runes of a tool name in a status line
-	maxToolArgs = 160 // runes of the argument summary in a status line
+	maxToolName = 64  // units of a tool name in a status line
+	maxToolArgs = 160 // units of the argument summary in a status line
+)
+
+// Flavour is the kind of Slack text to render.
+type Flavour int
+
+// The flavours.
+const (
+	// FlavourText is message text and mrkdwn: Text.
+	FlavourText Flavour = iota
+	// FlavourMarkdown is a markdown block or a stream's markdown_text: Markdown.
+	FlavourMarkdown
 )
 
 // Text returns s as inert Slack text of at most limit characters: control and format characters
@@ -44,13 +66,17 @@ func Text(s string, limit int) string { return render(s, limit, false, true) }
 // Markdown is Text for a markdown block, which also treats "[text](url)" and "![alt](url)" as a
 // link and an image whose label the author chooses. It escapes "\", "[" and "]" with a backslash
 // too, so none of those forms survives. A bare URL still becomes a link showing its own address.
+//
+// UNCONFIRMED(WP-04): that Slack honours CommonMark backslash escapes in a markdown block and in
+// markdown_text, and shows "&lt;" there as the literal text; the safety of this flavour rests on it.
 func Markdown(s string, limit int) string { return render(s, limit, true, true) }
 
 // Body returns the text of a turn: each artifact's latest text, in the order the artifacts first
-// appeared, one blank line between them, as Text of at most limit characters. events are the
-// TextEvents of the turn in arrival order. A TextEvent holds an artifact's whole text so far, so
-// a later one replaces an earlier one and keeps its place. An artifact with only white space is left out.
-func Body(events []agent.TextEvent, limit int) string {
+// appeared, one blank line between them, rendered as flavour and at most limit units long. events
+// are the TextEvents of the turn in arrival order. A TextEvent holds an artifact's whole text so
+// far, so a later one replaces an earlier one and keeps its place. An artifact with nothing to
+// show once cleaned, such as white space and zero-width characters, is left out.
+func Body(events []agent.TextEvent, limit int, flavour Flavour) string {
 	var order []a2a.ArtifactID
 	latest := map[a2a.ArtifactID]string{}
 	for _, e := range events {
@@ -61,28 +87,61 @@ func Body(events []agent.TextEvent, limit int) string {
 	}
 	var parts []string
 	for _, id := range order {
-		if strings.TrimSpace(latest[id]) != "" {
-			parts = append(parts, latest[id])
+		if text := clean(latest[id], true); strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
 		}
 	}
-	return Text(strings.Join(parts, "\n\n"), limit)
+	return render(strings.Join(parts, "\n\n"), limit, flavour == FlavourMarkdown, true)
 }
 
+// secretKey matches the names of arguments whose values are never shown (spec 8.4).
+var secretKey = regexp.MustCompile(`(?i)pass|secret|token|key|auth|credential|cookie`)
+
+// urlUserinfo matches the credentials in "scheme://user:pass@host".
+var urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s/@]*@`)
+
 // ToolLine returns the status line for a tool call: the tool's name and a summary of its
-// arguments, sorted by key, as "Calling name(key=value, ...)". Name and summary are each inert,
-// on one line, and capped, so the line is short whatever the agent sent.
+// arguments, sorted by key, as "Calling name(key=value, ...)". Secrets are taken out first, before
+// anything is shown or cut: the value of an argument whose name matches secretKey, at any depth,
+// the credentials in a URL, and anything store.RedactSecrets knows for a token. Then name and
+// summary are each made inert, on one line, and capped, so the line is short whatever the agent sent.
 func ToolLine(name string, args map[string]any) string {
-	keys := make([]string, 0, len(args))
-	for k := range args {
+	shown := redactArgs(args).(map[string]any)
+	keys := make([]string, 0, len(shown))
+	for k := range shown {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	parts := make([]string, len(keys))
 	for i, k := range keys {
-		parts[i] = k + "=" + jsonValue(args[k])
+		parts[i] = k + "=" + jsonValue(shown[k])
 	}
-	return "Calling " + render(name, maxToolName, false, false) +
-		"(" + render(strings.Join(parts, ", "), maxToolArgs, false, false) + ")"
+	summary := store.RedactSecrets(urlUserinfo.ReplaceAllString(strings.Join(parts, ", "), "${1}[redacted]@"))
+	return "Calling " + render(name, maxToolName, false, false) + "(" + render(summary, maxToolArgs, false, false) + ")"
+}
+
+// redactArgs returns v with the value of every map key that matches secretKey replaced, in nested
+// maps and lists too.
+func redactArgs(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			if secretKey.MatchString(k) {
+				out[k] = "[redacted]"
+			} else {
+				out[k] = redactArgs(x)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = redactArgs(x)
+		}
+		return out
+	}
+	return v
 }
 
 // jsonValue is v as compact JSON, with "<", ">" and "&" left as they are for render to escape.
@@ -96,7 +155,7 @@ func jsonValue(v any) string {
 	return strings.TrimSpace(b.String())
 }
 
-// render cleans s, escapes it and cuts it to limit characters. The cut is made on the escaped
+// render cleans s, escapes it and cuts it to limit UTF-16 units. The cut is made on the escaped
 // text, one character at a time, so it never splits a rune or an entity such as "&amp;".
 func render(s string, limit int, markdown, multiline bool) string {
 	s = clean(s, multiline)
@@ -105,26 +164,37 @@ func render(s string, limit int, markdown, multiline bool) string {
 	for _, r := range s {
 		u := escape(r, markdown)
 		out.WriteString(u)
-		total += utf8.RuneCountInString(u)
+		total += units(u)
 	}
 	if total <= limit {
 		return out.String()
 	}
-	marker := utf8.RuneCountInString(Truncated)
-	if limit <= marker {
+	if limit <= units(Truncated) {
 		return string([]rune(Truncated)[:max(limit, 0)])
 	}
 	out.Reset()
 	used := 0
 	for _, r := range s {
 		u := escape(r, markdown)
-		if used+utf8.RuneCountInString(u) > limit-marker {
+		if used+units(u) > limit-units(Truncated) {
 			break
 		}
 		out.WriteString(u)
-		used += utf8.RuneCountInString(u)
+		used += units(u)
 	}
 	return out.String() + Truncated
+}
+
+// units is the length of s in UTF-16 units: a rune outside the Basic Multilingual Plane takes two.
+func units(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++
+		}
+	}
+	return n
 }
 
 // escape returns r as it may appear in Slack text. Slack's mrkdwn and message text use "&amp;",
@@ -147,7 +217,8 @@ func escape(r rune, markdown bool) string {
 
 // clean removes what cannot be shown or can hide text: invalid UTF-8 becomes U+FFFD, format
 // characters (category Cf: zero-width space and joiners, bidi marks, overrides and isolates, the
-// BOM, the soft hyphen, tag characters) and control characters (Cc) are deleted, and carriage
+// BOM, the soft hyphen, tag characters), control characters (Cc), private use characters (Co) and
+// the two blank fillers Hangul (U+3164) and Braille (U+2800) are deleted, and carriage
 // returns and the Unicode line and paragraph separators become newlines. With multiline false
 // every newline and tab becomes a space, for a one-line status. It is the same character classes
 // as the audit writer's clean, which also drops them, except that newlines are kept.
@@ -166,7 +237,7 @@ func clean(s string, multiline bool) string {
 				return r
 			}
 			return ' '
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || r == '\u3164' || r == '\u2800':
 			return -1
 		}
 		return r

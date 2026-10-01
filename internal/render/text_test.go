@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -24,12 +25,35 @@ func assertInert(t *testing.T, label, out string) {
 		t.Errorf("%s: %q holds a bare ampersand", label, out)
 	}
 	for _, r := range out {
-		if r != '\n' && r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) {
+		if r != '\n' && r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || r == '\u3164' || r == '\u2800') {
 			t.Errorf("%s: %q holds the invisible character %U", label, out, r)
 		}
 	}
 	if !utf8.ValidString(out) {
 		t.Errorf("%s: %q is not valid UTF-8", label, out)
+	}
+}
+
+// utf16Len is how many UTF-16 units s takes: Slack's limits are counted in characters, which may be
+// units (UNCONFIRMED(WP-04)), so the caps are met in units, which is never fewer than runes.
+func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// assertMarkdownEscapes fails if a backslash in out does not start a pair with a backslash, "["
+// or "]", or a bracket stands bare: no "[text](url)" can survive.
+func assertMarkdownEscapes(t *testing.T, label, out string) {
+	t.Helper()
+	for i := 0; i < len(out); i++ {
+		switch out[i] {
+		case '\\':
+			if i+1 >= len(out) || !strings.ContainsRune(`\[]`, rune(out[i+1])) {
+				t.Errorf("%s: %q holds a backslash that does not start an escape pair", label, out)
+				return
+			}
+			i++
+		case '[', ']':
+			t.Errorf("%s: %q holds an unescaped bracket", label, out)
+			return
+		}
 	}
 }
 
@@ -51,6 +75,8 @@ var hostile = []struct{ name, in, want string }{
 	{"newlines and tabs stay", "a\nb\tc", "a\nb\tc"},
 	{"carriage returns become newlines", "a\r\nb\rc\u2028d\u2029e", "a\nb\nc\nd\ne"},
 	{"invalid UTF-8", "a\xffb", "a\ufffdb"},
+	{"private use and blank fillers", "a\ue000\u3164\u2800b", "ab"},
+	{"@here, #general and a bare URL stay plain text", "@here #general https://example.com/a?b=c", "@here #general https://example.com/a?b=c"},
 }
 
 func TestTextMakesHostileInputInert(t *testing.T) {
@@ -89,13 +115,17 @@ func TestCapIsExactRuneSafeAndVisible(t *testing.T) {
 		{"fits exactly", strings.Repeat("a", 30), 30, strings.Repeat("a", 30)},
 		{"one over", strings.Repeat("a", 31), 30, strings.Repeat("a", 30-runes(Truncated)) + Truncated},
 		{"multi-byte rune at the boundary", strings.Repeat("é", 40), 20, strings.Repeat("é", 20-runes(Truncated)) + Truncated},
-		{"four-byte runes", strings.Repeat("😀", 40), 20, strings.Repeat("😀", 20-runes(Truncated)) + Truncated},
+		{"four-byte runes count as two units", strings.Repeat("😀", 40), 20, strings.Repeat("😀", 3) + Truncated},
 		{"an entity is never cut", strings.Repeat("&", 50), 30, strings.Repeat("&amp;", 3) + Truncated},
 		{"a limit below the marker", strings.Repeat("a", 50), 5, string([]rune(Truncated)[:5])},
+		{"a limit of the marker's length", strings.Repeat("a", 50), 13, Truncated},
+		{"text that fits at the marker's length", strings.Repeat("a", 13), 13, strings.Repeat("a", 13)},
+		{"a limit of zero", "abc", 0, ""},
+		{"a negative limit", "abc", -1, ""},
 	} {
 		got := Text(tc.in, tc.limit)
-		if got != tc.want || !utf8.ValidString(got) || runes(got) > tc.limit {
-			t.Errorf("%s: Text(%d runes, %d) = %q (%d runes), want %q", tc.name, runes(tc.in), tc.limit, got, runes(got), tc.want)
+		if got != tc.want || !utf8.ValidString(got) || utf16Len(got) > max(tc.limit, 0) {
+			t.Errorf("%s: Text(%d runes, %d) = %q (%d units), want %q", tc.name, runes(tc.in), tc.limit, got, utf16Len(got), tc.want)
 		}
 	}
 }
@@ -131,24 +161,79 @@ func TestBodyKeepsArtifactsInOrderOfFirstAppearance(t *testing.T) {
 		{ArtifactID: "c", Text: "  "},
 		{ArtifactID: "a", Text: "first, grown"}, // replaces a's text and keeps a's place
 	}
-	got := Body(events, MaxMessage)
+	got := Body(events, MaxMessage, FlavourText)
 	if want := "first, grown\n\n&lt;!channel&gt; second"; got != want {
 		t.Errorf("Body = %q, want %q", got, want)
 	}
-	if got := Body(events, 20); utf8.RuneCountInString(got) > 20 || !strings.HasSuffix(got, Truncated) {
+	if got := Body(events, 20, FlavourText); utf16Len(got) > 20 || !strings.HasSuffix(got, Truncated) {
 		t.Errorf("Body capped at 20 = %q, want at most 20 runes ending in the marker", got)
 	}
-	if got := Body(nil, MaxMessage); got != "" {
+	if got := Body(nil, MaxMessage, FlavourText); got != "" {
 		t.Errorf("Body(nil) = %q, want empty", got)
+	}
+}
+
+func TestBodyHasNoFlavourSurprises(t *testing.T) {
+	events := []agent.TextEvent{
+		{ArtifactID: "a", Text: "x [link](https://evil.example)"},
+		{ArtifactID: "b", Text: "\u200b\u200d"}, // nothing once cleaned: no blank paragraph for it
+		{ArtifactID: "c", Text: "y"},
+	}
+	if got, want := Body(events, MaxBlock, FlavourMarkdown), `x \[link\](https://evil.example)`+"\n\ny"; got != want {
+		t.Errorf("Body in markdown = %q, want %q", got, want)
+	}
+	if got, want := Body(events, MaxMessage, FlavourText), "x [link](https://evil.example)\n\ny"; got != want {
+		t.Errorf("Body in text = %q, want %q", got, want)
+	}
+}
+
+func TestToolLineRedactsBeforeItShowsOrCaps(t *testing.T) {
+	line := ToolLine("run", map[string]any{
+		"password":      "hunter2hunter2",
+		"Authorization": "Bearer abcdefghijklmnop",
+		"cfg":           map[string]any{"DB_Password": "hunter2hunter2", "hosts": []any{map[string]any{"apiKey": "k-1234567890", "name": "db1"}}},
+		"url":           "https://admin:s3cretpass@db.example/x",
+		"cmd":           "curl -H 'Authorization: Bearer xoxb-123-456-abcdefghijkl' https://db.example",
+	})
+	for _, secret := range []string{"hunter2hunter2", "s3cretpass", "k-1234567890", "abcdefghijklmnop", "xoxb-123-456", "admin:"} {
+		if strings.Contains(line, secret) {
+			t.Errorf("tool line %q shows %q", line, secret)
+		}
+	}
+	if !strings.Contains(line, "db1") { // what is not secret is shown
+		t.Errorf("tool line %q lost a value that is no secret", line)
+	}
+	if got, want := ToolLine("run", map[string]any{"url": "https://admin:s3cretpass@db.example/x"}), `Calling run(url="https://[redacted]@db.example/x")`; got != want {
+		t.Errorf("a URL with credentials = %q, want %q", got, want)
+	}
+	// A secret that sits across the argument cap must not show as a prefix: redaction comes first.
+	cut := ToolLine("run", map[string]any{"a": strings.Repeat("x", 118), "u": "https://user:s3cretpass@host"})
+	if strings.Contains(cut, "s3c") || strings.Contains(cut, "user:") {
+		t.Errorf("tool line %q shows part of a secret at the cap", cut)
 	}
 }
 
 func FuzzTextIsInert(f *testing.F) {
 	for _, tc := range hostile {
-		f.Add(tc.in)
+		f.Add(tc.in, uint8(200))
 	}
-	f.Fuzz(func(t *testing.T, s string) {
-		assertInert(t, "Text", Text(s, 200))
-		assertInert(t, "ToolLine", ToolLine(s, map[string]any{s: s}))
+	f.Add("[x](https://evil.example) \\ ]", uint8(7))
+	f.Fuzz(func(t *testing.T, s string, l uint8) {
+		limit := int(l)
+		text, md := Text(s, limit), Markdown(s, limit)
+		ev := []agent.TextEvent{{ArtifactID: "a", Text: s}, {ArtifactID: "b", Text: s}}
+		for label, out := range map[string]string{"Text": text, "Markdown": md, "Body": Body(ev, limit, FlavourText), "Body markdown": Body(ev, limit, FlavourMarkdown)} {
+			assertInert(t, label, out)
+			if utf16Len(out) > limit {
+				t.Errorf("%s = %q is %d units; limit %d", label, out, utf16Len(out), limit)
+			}
+		}
+		assertMarkdownEscapes(t, "Markdown", md)
+		assertMarkdownEscapes(t, "Body markdown", Body(ev, limit, FlavourMarkdown))
+		line := ToolLine(s, map[string]any{s: s})
+		assertInert(t, "ToolLine", line)
+		if most := len("Calling ") + maxToolName + len("(") + maxToolArgs + len(")"); utf16Len(line) > most {
+			t.Errorf("ToolLine = %q is %d units; most %d", line, utf16Len(line), most)
+		}
 	})
 }
