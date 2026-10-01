@@ -13,7 +13,8 @@
 // A post that can never succeed is abandoned, not retried for ever: Slack's permanent errors (a
 // channel that is gone or archived, courier not in it, text too long, blocks Slack refuses), a
 // message that is not valid, and a lookup that has timed out five times in a row. The row keeps its
-// place and loses its text, Config.OnAbandon is called once and one warning is logged. A row still
+// place and loses its text, Config.OnAbandon is called once and one warning is logged; the reason
+// is in that warning and that call only, and the store keeps none. A row still
 // unposted after Config.Retention loses its text the same way. Send of an abandoned row returns
 // ErrAbandoned and never posts it again; a producer that wants the same words posted anew needs a
 // new source ID.
@@ -235,11 +236,11 @@ func (o *Outbox) settle(id string, err error) {
 func (o *Outbox) Reconcile(ctx context.Context) error {
 	var errs []error
 	now := o.cfg.Now()
+	o.mu.Lock()                                                                          // so that no row is purged while its post is in flight
 	expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now) // before any lookup of them
 	if err != nil {
 		errs = append(errs, fmt.Errorf("drop expired outbox text: %w", err))
 	}
-	o.mu.Lock()
 	for _, id := range expired {
 		delete(o.retry, id)
 		o.reportAbandon(ctx, id, AbandonExpired, nil)
