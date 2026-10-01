@@ -72,6 +72,23 @@ build_courier_image testhooks
 assert_testhooks_image "${TESTHOOKS_IMAGE}"
 kind load docker-image "${TESTHOOKS_IMAGE}" --name "${CLUSTER}"
 
+step "courier: namespace, config, Secrets, Deployment"
+# Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
+# here and never committed: the Slack tokens carry the prefixes the fake Slack checks, and the agent token
+# is an unsigned JWT with an email claim, which is all the stub agent (-require-auth) asks of a bearer.
+apply() { "${K[@]}" apply -f - >/dev/null; }
+"${K[@]}" create namespace courier --dry-run=client -o yaml | apply
+b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
+"${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
+  --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | apply
+"${K[@]}" -n courier create secret generic courier-agent-token \
+  --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"courier-fast@example.test"}')." --dry-run=client -o yaml | apply
+"${K[@]}" -n courier create configmap courier-config --from-file="${FAST}/courier/config" --dry-run=client -o yaml | apply
+"${K[@]}" apply -f "${FAST}/courier" >/dev/null
+# Restart so a rebuilt image (same tag) or a changed ConfigMap is picked up. Nothing waits for it to be
+# ready: courier is not a broker until WP-35f2d, and verifying readiness is WP-35g3's.
+"${K[@]}" -n courier rollout restart deploy/courier >/dev/null
+
 step "verify"
 "${FAST}/verify.sh"
 echo "fast tier up in ${SECONDS}s (context ${CTX})"
