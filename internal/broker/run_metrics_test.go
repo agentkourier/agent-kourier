@@ -91,7 +91,32 @@ func TestRunCountsAFailedConfigReload(t *testing.T) {
 var (
 	_ = interact.Config{OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
 	_ = interact.SweepConfig{OnTimeout: (*Metrics)(nil).InteractionTimeout}
+	_ = interact.DecideConfig{OnDecision: (*Metrics)(nil).InteractionDecision}
 )
+
+// The results of a decision are a closed set, so no text from a dialect or a person can grow the series.
+func TestInteractionDecisionCountsByResultAndFoldsTheRest(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for _, r := range []string{"answered", "answered", "superseded", "late", "invalid", "a result nobody defined", ""} {
+		m.InteractionDecision(r)
+	}
+
+	got := strings.Join(samples(t, m), "\n")
+	for _, want := range []string{
+		`courier_interaction_decisions_total{result=answered} 2`,
+		`courier_interaction_decisions_total{result=superseded} 1`,
+		`courier_interaction_decisions_total{result=late} 1`,
+		`courier_interaction_decisions_total{result=invalid} 1`,
+		`courier_interaction_decisions_total{result=other} 2`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the series lack %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "nobody defined") {
+		t.Error("a result text became a label")
+	}
+}
 
 func TestApprovalOutcomeAndTimeoutHooksMoveTheirCounters(t *testing.T) {
 	m := mustMetrics(t, nil)

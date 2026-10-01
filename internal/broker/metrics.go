@@ -27,6 +27,7 @@ type Metrics struct {
 	reloadErrors  prometheus.Counter
 	approvals     *prometheus.CounterVec
 	timeouts      prometheus.Counter
+	decisions     *prometheus.CounterVec
 }
 
 // NewMetrics returns the metrics. stale is read at each scrape for courier_config_stale, and
@@ -46,6 +47,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Pauses a Binding's policy turned away, by Binding and outcome."}, []string{"binding", "outcome"}),
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
+		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_interaction_decisions_total",
+			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
 	}
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "courier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
@@ -55,7 +58,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.decisions, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -81,7 +84,6 @@ func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
 
 // ApprovalOutcome counts a pause a Binding's policy turned away: interact.Config.OnApprovalOutcome.
 // An outcome outside the closed set is one series, "other".
-// TODO(33d2): OnDecision, which counts an interaction decided by a person, joins these once it lands.
 func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 	label := string(outcome)
 	switch outcome {
@@ -90,6 +92,17 @@ func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 		label = otherLabel
 	}
 	m.approvals.WithLabelValues(binding, label).Inc()
+}
+
+// InteractionDecision counts a press that was decided: interact.DecideConfig.OnDecision. The results are
+// the closed set that DecideConfig documents; any other is one series, "other".
+func (m *Metrics) InteractionDecision(result string) {
+	switch result {
+	case "answered", "superseded", "late", "invalid":
+	default:
+		result = otherLabel
+	}
+	m.decisions.WithLabelValues(result).Inc()
 }
 
 // InteractionTimeout counts an interaction that timed out: interact's SweepConfig.OnTimeout. The ID is

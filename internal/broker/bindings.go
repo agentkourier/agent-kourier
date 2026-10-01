@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/identity"
+	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -37,15 +38,19 @@ type Options struct {
 	OnRejected func(binding string)
 }
 
-// kit is what one dialect needs: the pool that connects through it, its attribution, and how to
-// close the idle connections of the transport its clients share.
+// kit is what one dialect needs: the dialect itself, the pool that connects through it, its
+// attribution, and how to close the idle connections of the transport its clients share.
 type kit struct {
+	dialect   dialect.Dialect
 	pool      *agent.Pool
 	attribute func(*a2a.Message, dialect.User)
 	closeIdle func()
 }
 
-var _ session.Bindings = (*Bindings)(nil)
+var (
+	_ session.Bindings = (*Bindings)(nil)
+	_ interact.Lookup  = (*Bindings)(nil)
+)
 
 // Bindings is a session.Bindings over the config's current snapshot. Every call looks the Binding
 // up in the snapshot that is current then, so a reload takes effect on the next call, and builds
@@ -66,7 +71,7 @@ func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Au
 	d := kagentv1.New(opts.ResponseTimeout)
 	return &Bindings{
 		snaps: snaps, secrets: secrets, aud: aud, opts: opts,
-		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}},
+		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}},
 	}
 }
 
@@ -79,24 +84,34 @@ func (b *Bindings) Close() {
 	}
 }
 
+// resolve finds the Binding named "namespace/name" in the current snapshot, and the kit of its
+// backend's dialect. The errors are those of Backend.
+func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
+	snap := b.snaps.Current()
+	if snap == nil {
+		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: the config has not loaded yet", name)
+	}
+	ns, n, ok := strings.Cut(name, "/")
+	rb, found := snap.Binding(ns, n)
+	if !ok || !found {
+		return config.ResolvedBinding{}, kit{}, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
+	}
+	k, ok := b.kits[rb.Backend.Spec.Dialect]
+	if !ok {
+		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: backend %s uses the %q dialect, and only %q is supported",
+			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1)
+	}
+	return rb, k, nil
+}
+
 // Backend returns the backend of the Binding named "namespace/name". An error wrapping
 // session.ErrUnknownBinding means the config has no such Binding. Any other error means the
 // Binding cannot be served now: no config has loaded yet, or its backend speaks a dialect
 // courier has not built.
 func (b *Bindings) Backend(name string) (session.Backend, error) {
-	snap := b.snaps.Current()
-	if snap == nil {
-		return session.Backend{}, fmt.Errorf("broker: Binding %s: the config has not loaded yet", name)
-	}
-	ns, n, ok := strings.Cut(name, "/")
-	rb, found := snap.Binding(ns, n)
-	if !ok || !found {
-		return session.Backend{}, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
-	}
-	k, ok := b.kits[rb.Backend.Spec.Dialect]
-	if !ok {
-		return session.Backend{}, fmt.Errorf("broker: Binding %s: backend %s uses the %q dialect, and only %q is supported",
-			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1)
+	rb, k, err := b.resolve(name)
+	if err != nil {
+		return session.Backend{}, err
 	}
 	src, err := identity.New(rb.Binding, rb.Backend, b.secrets, b.aud, identity.Options{OnRejected: b.opts.OnRejected})
 	if err != nil {
@@ -108,5 +123,24 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Attribute: k.attribute,
 		Rejected:  src.Rejected,
 		Identity:  src.Identity(),
+	}, nil
+}
+
+// Binding returns what the interactions need of the Binding named "namespace/name", from the
+// snapshot that is current: the dialect that reads and answers its pauses, the identity its audit
+// rows name, which pauses it allows, and how long one waits. Its errors are those of Backend: one
+// wrapping session.ErrUnknownBinding means the config has no such Binding.
+func (b *Bindings) Binding(name string) (interact.Binding, error) {
+	rb, k, err := b.resolve(name)
+	if err != nil {
+		return interact.Binding{}, err
+	}
+	src, err := identity.New(rb.Binding, rb.Backend, b.secrets, b.aud, identity.Options{})
+	if err != nil {
+		return interact.Binding{}, fmt.Errorf("broker: Binding %s: %w", name, err)
+	}
+	in := rb.Binding.Spec.Interactions
+	return interact.Binding{
+		Dialect: k.dialect, Identity: src.Identity(), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals, Timeout: in.Timeout.Duration,
 	}, nil
 }
