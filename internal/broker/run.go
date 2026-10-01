@@ -27,7 +27,7 @@ func (c *cleanups) run() {
 }
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
-// (ctx ended), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
+// (ctx ended, even while it was still starting), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
 // k8ssecrets.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/courier
 // maps them to exit codes.
 //
@@ -42,6 +42,11 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return err
 	}
 	log := cfg.logger()
+	defer func() { // a signal during startup makes some step fail with the context's error: a clean stop
+		if err != nil && ctx.Err() != nil {
+			err = nil
+		}
+	}()
 	if err := RouteKlog(log, cfg.KlogVerbosity); err != nil {
 		return fmt.Errorf("route klog: %w", err)
 	}
@@ -58,7 +63,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 
 	// replaced in 35f2b4 for the hooks; the stale gauge already reads the Config once Bootstrap has made it.
 	var current atomic.Pointer[Config]
-	metrics, err := NewMetrics(func() bool { c := current.Load(); return c != nil && c.Stale() })
+	// Stale until the first load: nothing is known to be fresh before it, and /readyz says "starting".
+	metrics, err := NewMetrics(func() bool { c := current.Load(); return c == nil || c.Stale() })
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}

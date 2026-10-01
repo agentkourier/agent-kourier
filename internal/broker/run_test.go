@@ -125,6 +125,54 @@ func TestRunAnswersHealthzWhileReadyzIsStillStarting(t *testing.T) {
 	}
 }
 
+// Before the first config load nothing is known to be fresh, so the gauge says stale: exporting 0 there
+// would claim a state courier has not reached, and an alert could key on it.
+func TestRunExportsTheConfigAsStaleUntilItHasLoaded(t *testing.T) {
+	gate := make(chan struct{})
+	var open sync.Once
+	c := startConfig(t)
+	c.Client.(*fake.Clientset).PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-gate
+		return false, nil, nil
+	})
+	r := start(t, c)
+	t.Cleanup(func() { open.Do(func() { close(gate) }) })
+
+	r.until("/healthz", http.StatusOK)
+	if _, body := r.get("/metrics"); !strings.Contains(body, "courier_config_stale 1\n") {
+		t.Errorf("a scrape before Bootstrap finishes lacks courier_config_stale 1:\n%s", body)
+	}
+	open.Do(func() { close(gate) })
+	r.until("/readyz", http.StatusOK)
+	if _, body := r.get("/metrics"); !strings.Contains(body, "courier_config_stale 0\n") {
+		t.Errorf("a scrape after the first load lacks courier_config_stale 0:\n%s", body)
+	}
+}
+
+// A signal during startup, here while Bootstrap waits for the Secret caches, is a clean stop; a
+// denial that comes while the context is live is not, and stays distinct from a cancellation.
+func TestRunStopsCleanlyWhenTheContextEndsDuringStartup(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	gate := make(chan struct{})
+	var open sync.Once
+	c := startConfig(t)
+	c.Client.(*fake.Clientset).PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-gate
+		return false, nil, nil
+	})
+	r := start(t, c)
+	t.Cleanup(func() { open.Do(func() { close(gate) }) })
+	r.until("/healthz", http.StatusOK) // Run is in Bootstrap
+
+	r.cancel()
+	open.Do(func() { close(gate) })
+
+	if err := r.wait(); err != nil {
+		t.Errorf("Run = %v after a signal during startup, want nil", err)
+	}
+	goleak.VerifyNone(t, before)
+}
+
 func TestRunReturnsNilWhenItsContextEndsAndLeavesNothingRunning(t *testing.T) {
 	before := goleak.IgnoreCurrent()
 	r := start(t, startConfig(t))
