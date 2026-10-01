@@ -1,0 +1,94 @@
+package broker
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+// otherLabel is the value of a label whose input is outside the fixed set it takes.
+const otherLabel = "other"
+
+// Metrics is the broker's Prometheus registry and the hooks that feed it. It is not the global
+// registry: each broker has its own, so tests and a second broker in one process do not collide.
+// The labels are Binding names, audit kinds and the abandon reasons of abandonLabel, never a user or a
+// channel. Its methods are safe for concurrent use.
+type Metrics struct {
+	reg           *prometheus.Registry
+	auditFailures *prometheus.CounterVec
+	rejections    *prometheus.CounterVec
+	abandons      *prometheus.CounterVec
+	reloadErrors  prometheus.Counter
+}
+
+// NewMetrics returns the metrics. stale is read at each scrape for courier_config_stale, and
+// may be nil (never stale): it is Config.Stale.
+func NewMetrics(stale func() bool) (*Metrics, error) {
+	m := &Metrics{
+		reg: prometheus.NewRegistry(),
+		auditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_audit_write_failures_total",
+			Help: "Audit entries that could not be written, by kind."}, []string{"kind"}),
+		rejections: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_credential_rejections_total",
+			Help: "Credentials an agent rejected, by Binding."}, []string{"binding"}),
+		abandons: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_outbox_abandoned_total",
+			Help: "Outbound posts given up on, by reason."}, []string{"reason"}),
+		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_config_reload_errors_total",
+			Help: "Config reloads that failed."}),
+	}
+	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "courier_config_stale",
+		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
+		if stale != nil && stale() {
+			return 1
+		}
+		return 0
+	})
+	var err error
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, staleGauge} {
+		err = errors.Join(err, m.reg.Register(c))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// AuditFailure counts a failed audit write: audit.Options.OnFailure.
+func (m *Metrics) AuditFailure(kind store.AuditKind) {
+	label := string(kind)
+	if !kind.Valid() {
+		label = otherLabel
+	}
+	m.auditFailures.WithLabelValues(label).Inc()
+}
+
+// CredentialRejected counts a credential an agent rejected: Options.OnRejected.
+func (m *Metrics) CredentialRejected(binding string) { m.rejections.WithLabelValues(binding).Inc() }
+
+// ReloadError counts a failed config reload: BootstrapOptions.OnReloadError.
+func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
+
+// OutboxAbandoned counts an abandoned post: outbox.Config.OnAbandon. The row's ID is not a label.
+func (m *Metrics) OutboxAbandoned(_, reason string) {
+	m.abandons.WithLabelValues(abandonLabel(reason)).Inc()
+}
+
+// abandonLabel is reason if it is one the outbox gives, or a Slack code it treats as permanent
+// (slack.PermanentCode), and "other" for anything else, so that no reason text can grow the series.
+func abandonLabel(reason string) string {
+	switch reason {
+	case outbox.AbandonInvalid, outbox.AbandonLookupTimeout, outbox.AbandonExpired,
+		"channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format":
+		return reason
+	}
+	return otherLabel
+}
+
+// Handler serves the registry in the Prometheus text format.
+func (m *Metrics) Handler() http.Handler {
+	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+}
