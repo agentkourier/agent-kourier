@@ -38,6 +38,19 @@ func newTestShutdown(out *logBuffer, total, floor time.Duration) *shutdown {
 	return s
 }
 
+// runWithin runs the shutdown and fails the test if it has not finished within limit. A shutdown that
+// does not cut a stuck step never finishes, and the test must say so, not wait for the binary's timeout.
+func runWithin(t *testing.T, s *shutdown, limit time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); s.run(t.Context()) }()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		t.Fatalf("the shutdown did not finish within %s: a stuck step was not cut", limit)
+	}
+}
+
 // The order is the contract: the intake stops first, so nothing new reaches the manager, and the store
 // closes last, after everything that writes to it. Registration order does not matter.
 func TestShutdownRunsTheStepsInTheAgreedOrderWhateverTheRegistrationOrder(t *testing.T) {
@@ -80,7 +93,7 @@ func TestShutdownCutsAStepThatOverrunsItsBoundAndSaysSo(t *testing.T) {
 	s.add(stepStore, r.step("store"))
 
 	begin := time.Now()
-	s.run(t.Context())
+	runWithin(t, s, 2*time.Second)
 
 	if took := time.Since(begin); took > 2*time.Second {
 		t.Errorf("shutdown took %s with a 50 ms bound on the stuck step", took)
@@ -108,7 +121,7 @@ func TestShutdownTotalBudgetCapsItAndLaterStepsKeepTheirFloor(t *testing.T) {
 	s.add(stepStore, r.step("store"))
 
 	begin := time.Now()
-	s.run(t.Context())
+	runWithin(t, s, 2*time.Second)
 
 	if took := time.Since(begin); took > 700*time.Millisecond { // 150 ms, then 40 ms for each later step; the bounds are 800 ms
 		t.Errorf("shutdown took %s with a 150 ms total", took)

@@ -102,6 +102,53 @@ func TestRunStopsTheSlackRunAndWaitsForItBeforeTheManager(t *testing.T) {
 	}
 }
 
+// ctxSlack is an idle Slack that keeps the context its Run was given.
+type ctxSlack struct {
+	idleSlack
+	got chan context.Context // receives the context when Run begins
+}
+
+func (s *ctxSlack) Run(ctx context.Context, _ slack.Sink) error {
+	s.got <- ctx
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A signal after startup ends Run's own context and nothing else: each part sees its context end at its
+// own shutdown step. Here the Slack run must still be live when the intake step begins, and that is
+// after the signal, so the test gives a context that a signal cancelled by mistake time to show it.
+func TestRunKeepsThePartsRunningUntilTheirShutdownStepAfterASignal(t *testing.T) {
+	slk := &ctxSlack{got: make(chan context.Context, 1)}
+	var slackCtx context.Context // set before the signal, read after it
+	var liveAtIntake, ended atomic.Bool
+	trace := &stepTrace{hook: func(step string) {
+		if step != "intake" {
+			return
+		}
+		time.Sleep(200 * time.Millisecond) // a cancellation that the signal sent in error arrives within this
+		liveAtIntake.Store(slackCtx.Err() == nil)
+		ended.Store(true)
+	}}
+	c := startConfig(t)
+	c.newSlack = func(slack.Config) slackAPI { return slk }
+	c.shutdownTrace = trace.record
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	slackCtx = <-slk.got // the Slack run has begun, so startup is over
+
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatalf("Run = %v after its context ended, want nil", err)
+	}
+
+	if !ended.Load() {
+		t.Fatal("the intake step never began")
+	}
+	if !liveAtIntake.Load() {
+		t.Error("the Slack run's context had ended by the time the intake step began: the signal cancelled the parts, instead of the shutdown stopping them in order")
+	}
+}
+
 // rpcLog wraps a stub agent and notes the A2A methods it is asked.
 type rpcLog struct {
 	next    http.Handler

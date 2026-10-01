@@ -23,8 +23,9 @@ func (n stepName) String() string {
 	return [...]string{"intake", "manager", "drain", "pool", "resolver", "store", "health"}[n]
 }
 
-// Defaults of a shutdown: the total stays inside Kubernetes' 30 s grace period, and a step is never
-// left less than the floor, so a late step such as the store's still gets its turn.
+// Defaults of a shutdown: the total stays inside the Deployment's 40 s terminationGracePeriodSeconds
+// (and Kubernetes' default of 30 s), and a step is never left less than the floor, so a late step such
+// as the store's still gets its turn.
 const (
 	shutdownTotal = 25 * time.Second
 	shutdownFloor = time.Second

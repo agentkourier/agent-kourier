@@ -128,12 +128,18 @@ func start(t *testing.T, c RunConfig) *running {
 // wait returns Run's error, or fails the test if Run has not returned in 10 s.
 func (r *running) wait() error {
 	r.t.Helper()
+	return r.waitWithin(10 * time.Second)
+}
+
+// waitWithin returns Run's error, or fails the test if Run has not returned within d.
+func (r *running) waitWithin(d time.Duration) error {
+	r.t.Helper()
 	select {
 	case err := <-r.done:
 		r.done <- err // for the cleanup, which waits too
 		return err
-	case <-time.After(10 * time.Second):
-		r.t.Fatal("Run did not return")
+	case <-time.After(d):
+		r.t.Fatalf("Run did not return within %s", d)
 		return nil
 	}
 }
@@ -220,15 +226,17 @@ func TestRunExportsTheConfigAsStaleUntilItHasLoaded(t *testing.T) {
 	}
 }
 
-// A signal during startup, here while Bootstrap waits for the Secret caches, is a clean stop; a
-// denial that comes while the context is live is not, and stays distinct from a cancellation.
+// A signal during startup, here while Bootstrap waits for the Secret caches, is a clean stop, and it
+// aborts the wait: the caches never sync here, so Run must not be left to run out SyncTimeout (30 s in
+// this test, and 40 s of grace in the Deployment) before it notices. A denial that comes while the
+// context is live is not a clean stop, and stays distinct from a cancellation.
 func TestRunStopsCleanlyWhenTheContextEndsDuringStartup(t *testing.T) {
 	before := goleak.IgnoreCurrent()
 	gate := make(chan struct{})
 	var open sync.Once
 	c := startConfig(t)
 	c.Client.(*fake.Clientset).PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		<-gate
+		<-gate // never opened until Run has returned
 		return false, nil, nil
 	})
 	r := start(t, c)
@@ -236,11 +244,11 @@ func TestRunStopsCleanlyWhenTheContextEndsDuringStartup(t *testing.T) {
 	r.until("/healthz", http.StatusOK) // Run is in Bootstrap
 
 	r.cancel()
-	open.Do(func() { close(gate) })
 
-	if err := r.wait(); err != nil {
+	if err := r.waitWithin(2 * time.Second); err != nil {
 		t.Errorf("Run = %v after a signal during startup, want nil", err)
 	}
+	open.Do(func() { close(gate) })
 	goleak.VerifyNone(t, before)
 }
 
