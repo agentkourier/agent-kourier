@@ -27,6 +27,7 @@ internal/render         agent output to Slack messages
 internal/audit          audit log
 internal/broker         composition: Bindings, lifecycle, health, shutdown order
 internal/interact       interactions: pause intake, button presses, timeout sweep
+internal/redact         shared secret redaction for display and audit text
 test/{fakeslack,stubagent,e2e,fixtures}
 hack/kind/              kind cluster scripts
 spike/                  throwaway A2A and Slack experiments
