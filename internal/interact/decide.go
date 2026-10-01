@@ -102,6 +102,12 @@ const (
 // audit write stops it (spec 8.6 step 7): the error is returned, and the press, which stays recorded, is
 // decided again. It returns nil when the press is decided for good, whichever way it came out.
 //
+// The audit is at least once, and written before the decision takes effect, so it can be ahead of what
+// happened. If the sweep, or another process, decides in the window between the read and the write, the
+// press has an `answered` row for a decision that never took effect, followed by `superseded`. A crash
+// between the audit and the write audits `answered` again when the press is decided again. Both are
+// accepted over a decision that takes effect unaudited.
+//
 // The interaction is recorded as answered at PressedAt, so a press made before the deadline wins even if
 // it is decided after it. One made at or after the deadline is no decision: it is told so and not audited.
 func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
@@ -178,10 +184,14 @@ func (d *Decider) take(ctx context.Context, pd PressDecision) (verdict, store.In
 }
 
 // settle is the verdict on a press for an interaction that is no longer pending: the press decided
-// again by the person who won is a retry, and anyone else lost, which is audited. The caller holds d.mu.
+// again by the person who won is a retry; one made at or after the deadline is late, as it is for a
+// pending one, and is not audited; anyone else lost, which is audited. The caller holds d.mu.
 func (d *Decider) settle(ctx context.Context, pd PressDecision, cur store.Interaction) (verdict, store.Interaction, error) {
 	if cur.State == store.InteractionAnswered && cur.Decider == pd.User {
 		return again, cur, nil
+	}
+	if !pd.PressedAt.Before(cur.Deadline) {
+		return late, cur, nil
 	}
 	actor := audit.Actor{User: pd.User, Binding: pd.BindingName, Identity: pd.Binding.Identity}
 	decision := audit.Decision{InteractionID: cur.ID, TaskID: a2a.TaskID(cur.TaskID), Result: audit.DecisionSuperseded, At: pd.PressedAt}

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,11 +33,15 @@ var (
 // orderedStore logs the submits, so the order of the steps can be asserted against the audit rows.
 type orderedStore struct {
 	*sqlite.Store
-	log *callLog
+	log          *callLog
+	beforeSubmit func() // runs between the decider's read and its write, as another process or the sweep would
 }
 
 func (s *orderedStore) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
 	s.log.add("submit")
+	if s.beforeSubmit != nil {
+		s.beforeSubmit()
+	}
 	return s.Store.SubmitInteraction(ctx, id, answer, decider, now)
 }
 
@@ -44,10 +49,17 @@ func (s *orderedStore) SubmitInteraction(ctx context.Context, id string, answer 
 type orderedAudit struct {
 	*audits
 	log *callLog
+	// gate, if set, holds the first Decision inside until it is closed, after entered is closed.
+	gate, entered chan struct{}
+	first         atomic.Bool
 }
 
 func (a *orderedAudit) Decision(ctx context.Context, actor audit.Actor, d audit.Decision) error {
 	a.log.add("audit:" + string(d.Result))
+	if a.gate != nil && a.first.CompareAndSwap(false, true) {
+		close(a.entered)
+		<-a.gate
+	}
 	return a.audits.Decision(ctx, actor, d)
 }
 
@@ -325,5 +337,92 @@ func TestAnEphemeralThatFailsDoesNotFailTheDecision(t *testing.T) {
 func TestNewDeciderNeedsItsParts(t *testing.T) {
 	if _, err := interact.NewDecider(interact.DecideConfig{}); err == nil {
 		t.Error("NewDecider accepted no Store, Auditor or Ephemerals")
+	}
+}
+
+// TestALatePressOnAQuestionTheSweepTimedOutIsJustLate: the sweep resolved it, and the press, made after
+// the deadline, is no decision: it is told so and not audited as one lost.
+func TestALatePressOnAQuestionTheSweepTimedOutIsJustLate(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	if err := r.st.ResolveInteraction(t.Context(), "ix-1", store.InteractionTimedOut, deadline); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline.Add(time.Minute), "req-1")); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls.list()) != 0 || !slices.Equal(r.hooked(), []string{"late"}) || len(r.eph.list()) != 1 {
+		t.Errorf("calls %q, hooks %q, ephemerals %q; want one late, told, and no audit", r.calls.list(), r.hooked(), r.eph.list())
+	}
+}
+
+// TestTwoPressesAreTakenOneAtATime holds the first press inside its audit write. The second arrives
+// and must wait for it: without that, both audit as the winner.
+func TestTwoPressesAreTakenOneAtATime(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.aud.gate, r.aud.entered = make(chan struct{}), make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")) })
+	<-r.aud.entered
+	wg.Go(func() { _ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(time.Minute), "req-1")) })
+	time.Sleep(50 * time.Millisecond) // the second gets as far as it can while the first is held
+	close(r.aud.gate)
+	wg.Wait()
+	results := map[audit.DecisionResult]int{}
+	for _, d := range r.aud.got {
+		results[d.Result]++
+	}
+	if results[audit.DecisionAnswered] != 1 || results[audit.DecisionSuperseded] != 1 || len(r.aud.got) != 2 || r.row(t).Decider != "UALICE1" {
+		t.Errorf("audits %v, decider %q; want the first press the winner, and one answered and one superseded", results, r.row(t).Decider)
+	}
+}
+
+// TestAWinnerThatIsNoSlackIDIsNotNamed: what names the winner to the loser is a mention, so only
+// something shaped like a Slack user ID is put in one.
+func TestAWinnerThatIsNoSlackIDIsNotNamed(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	_ = r.d.Decide(t.Context(), r.press(t, "<!channel>", d0.Add(time.Minute), "req-1"))
+	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1"))
+	if got := r.eph.list(); len(got) != 1 || got[0] != "UBOB22: Someone else answered this question first." {
+		t.Errorf("ephemerals %q; want the winner unnamed", got)
+	}
+}
+
+// TestADecisionTakenBetweenTheReadAndTheWrite: another process answered, or the sweep timed the question
+// out, after the decider read it pending. The write is refused, and the press lost: it is audited as
+// superseded (after the answered row written before the write, which stands for a decision that never took
+// effect) and told so.
+func TestADecisionTakenBetweenTheReadAndTheWrite(t *testing.T) {
+	for name, tc := range map[string]struct {
+		intervene func(*decideRig, *testing.T)
+		wantTold  string
+	}{
+		"another answer": {func(r *decideRig, t *testing.T) {
+			if err := r.st.Store.SubmitInteraction(t.Context(), "ix-1", []byte(`{"RequestID":"req-1"}`), "UROB333", d0.Add(30*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+		}, "<@UROB333> answered this question first."},
+		"the sweep": {func(r *decideRig, t *testing.T) {
+			if err := r.st.ResolveInteraction(t.Context(), "ix-1", store.InteractionTimedOut, deadline); err != nil {
+				t.Fatal(err)
+			}
+		}, "This question has timed out."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newDecideRig(t)
+			r.pending(t)
+			r.st.beforeSubmit = func() { r.st.beforeSubmit = nil; tc.intervene(r, t) }
+			if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := r.calls.list(), []string{"audit:answered", "submit", "audit:superseded"}; !slices.Equal(got, want) {
+				t.Errorf("calls %q; want %q", got, want)
+			}
+			if got := r.eph.list(); len(got) != 1 || got[0] != "UALICE1: "+tc.wantTold || !slices.Equal(r.hooked(), []string{"superseded"}) {
+				t.Errorf("ephemerals %q, hooks %q; want it told %q and counted superseded", got, r.hooked(), tc.wantTold)
+			}
+		})
 	}
 }
