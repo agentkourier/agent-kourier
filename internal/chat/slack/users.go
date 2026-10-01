@@ -10,7 +10,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // cachedUser is a resolved user and when it was fetched.
@@ -99,5 +99,5 @@ func (c *Client) clean(s string) string {
 			s = strings.ReplaceAll(s, t, "[redacted]")
 		}
 	}
-	return store.RedactSecrets(s)
+	return redact.Secrets(s)
 }

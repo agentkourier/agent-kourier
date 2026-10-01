@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 const redacted = "[redacted]"
@@ -184,7 +184,7 @@ var (
 	bareRun = regexp.MustCompile(`[A-Za-z0-9/+=]+`)
 )
 
-// redactSummary takes secrets out of display text: URL credentials, then what store.RedactSecrets
+// redactSummary takes secrets out of display text: URL credentials, then what redact.Secrets
 // knows for a token, a private key, the value of any "name=value" whose name isSecretName, and
 // an AWS secret access key by its shape. It runs before the text is cut, so no prefix of a
 // secret is shown.
@@ -192,7 +192,7 @@ func redactSummary(s string) string {
 	s = urlUserinfo.ReplaceAllString(s, "${1}"+redacted+"@")
 	s = urlSpaced.ReplaceAllString(s, "${1}"+redacted+"@")
 	s = plainUserinfo.ReplaceAllString(s, redacted+"@")
-	s = store.RedactSecrets(s)
+	s = redact.Secrets(s)
 	s = pemKey.ReplaceAllString(s, redacted)
 	s = redactNamed(s, pair, true)
 	s = redactNamed(s, secretFlag, false)

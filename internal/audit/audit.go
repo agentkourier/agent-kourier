@@ -3,7 +3,7 @@
 // The router, the session manager and the interaction flow call it, so no caller builds a
 // store.AuditEntry by hand. It takes identifiers and typed outcomes, never payloads. Every
 // string that reaches a row (identifiers, and an unusable pause's reason, which is fixed
-// dialect text, spec 8.4 step 1) is cleaned, run through store.RedactSecrets and capped.
+// dialect text, spec 8.4 step 1) is cleaned, run through redact.Secrets and capped.
 // This repeats the store's own redaction (every field but Email, after WP-23c) on purpose:
 // only this package also deletes invisible characters and unifies spaces first. Returned
 // errors and the failure log are cleaned the same way.
@@ -33,6 +33,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -357,7 +358,7 @@ func orElse[T ~string](have, fallback T) T {
 	return fallback
 }
 
-// gluedBearer catches what store.RedactSecrets, which needs a gap after "bearer", misses:
+// gluedBearer catches what redact.Secrets, which needs a gap after "bearer", misses:
 // a colon separator ("Bearer: X"), and a token glued to the scheme after a format character
 // (a zero-width space, say) vanished. The glued form needs a run of 8 or more characters
 // starting with a letter or digit, so an identifier such as "ns/bearer-gateway" survives.
@@ -368,7 +369,7 @@ var gluedBearer = regexp.MustCompile(`(?i)bearer(?::\s*\S+|[A-Za-z0-9]\S{7,})`)
 // clean makes s safe for a row: it deletes format characters, turns control characters and
 // every Unicode space into an ASCII space, redacts secrets, and caps s at limit bytes,
 // ending in "..." when it cut. The order matters. Format characters are deleted and spaces
-// unified first, as defence in depth: the store's RedactSecrets handles Unicode gaps on its
+// unified first, as defence in depth: the redact package's Secrets handles Unicode gaps on its
 // own since WP-23c, and the redaction does not depend on this step. Redaction runs before the
 // cut, so a token cannot be cut short of its pattern.
 func clean(s string, limit int) string {
@@ -381,7 +382,7 @@ func clean(s string, limit int) string {
 		}
 		return r
 	}, s)
-	s = gluedBearer.ReplaceAllString(store.RedactSecrets(s), "[redacted]")
+	s = gluedBearer.ReplaceAllString(redact.Secrets(s), "[redacted]")
 	if len(s) <= limit {
 		return s
 	}

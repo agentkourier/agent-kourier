@@ -1,4 +1,4 @@
-package store
+package redact
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"unicode"
 )
 
-func TestRedactSecrets(t *testing.T) {
+func TestSecrets(t *testing.T) {
 	const b64 = "dXNlcjpwYXNzd29yZA=="
 	for _, c := range []struct{ name, in, want string }{
 		{"slack bot token", "auth failed for xoxb-FAKE-1234-abcd today", "auth failed for [redacted] today"},
@@ -103,20 +103,20 @@ func TestRedactSecrets(t *testing.T) {
 		{"basic with a short token", "Basic dXNlcjp", "Basic dXNlcjp"},
 		{"prose around a credential", "Basic setup: Authorization: Basic " + b64 + " is banned", "Basic setup: Authorization: [redacted] is banned"},
 	} {
-		got := RedactSecrets(c.in)
+		got := Secrets(c.in)
 		if got != c.want {
-			t.Errorf("%s: RedactSecrets(%q) = %q; want %q", c.name, c.in, got, c.want)
+			t.Errorf("%s: Secrets(%q) = %q; want %q", c.name, c.in, got, c.want)
 		}
-		if again := RedactSecrets(got); again != got {
+		if again := Secrets(got); again != got {
 			t.Errorf("%s: not idempotent: %q then %q", c.name, got, again)
 		}
 	}
 }
 
-// TestRedactSecretsAnyGapRune sweeps every rune that unicode.IsSpace or the Cf
+// TestSecretsAnyGapRune sweeps every rune that unicode.IsSpace or the Cf
 // or Cc category reports and checks each one is a legal gap between a scheme and its
 // credential, so a new Unicode version cannot open a hole.
-func TestRedactSecretsAnyGapRune(t *testing.T) {
+func TestSecretsAnyGapRune(t *testing.T) {
 	credentials := map[string]string{"Bearer": "FAKETOKEN", "Basic": "dXNlcjpwYXNzd29yZA=="}
 	n := 0
 	for r := rune(0); r <= unicode.MaxRune; r++ {
@@ -126,21 +126,21 @@ func TestRedactSecretsAnyGapRune(t *testing.T) {
 		n++
 		for scheme, token := range credentials {
 			in := "x " + scheme + string(r) + token + " y"
-			if got := RedactSecrets(in); got != "x [redacted] y" {
-				t.Errorf("RedactSecrets(%q) = %q; want the credential redacted (U+%04X)", in, got, r)
+			if got := Secrets(in); got != "x [redacted] y" {
+				t.Errorf("Secrets(%q) = %q; want the credential redacted (U+%04X)", in, got, r)
 			}
 			// Go's quoting turns an invisible rune into a literal escape.
 			for _, verb := range []string{"%q", "%+q"} {
-				if got, want := RedactSecrets(fmt.Sprintf(verb, in)), `"x [redacted] y"`; got != want {
-					t.Errorf("RedactSecrets(%s of %q) = %s; want %s (U+%04X)", verb, in, got, want, r)
+				if got, want := Secrets(fmt.Sprintf(verb, in)), `"x [redacted] y"`; got != want {
+					t.Errorf("Secrets(%s of %q) = %s; want %s (U+%04X)", verb, in, got, want, r)
 				}
 			}
 		}
 		// The same runes may pad an OAuth key from its colon and its value.
 		g := string(r)
 		in := "x access_token" + g + ":" + g + "FAKETOKEN y"
-		if got, want := RedactSecrets(in), "x access_token"+g+":"+g+"[redacted] y"; got != want {
-			t.Errorf("RedactSecrets(%q) = %q; want %q (U+%04X)", in, got, want, r)
+		if got, want := Secrets(in), "x access_token"+g+":"+g+"[redacted] y"; got != want {
+			t.Errorf("Secrets(%q) = %q; want %q (U+%04X)", in, got, want, r)
 		}
 	}
 	if n < 100 {
@@ -148,27 +148,27 @@ func TestRedactSecretsAnyGapRune(t *testing.T) {
 	}
 }
 
-// TestRedactSecretsQuotedBody feeds RedactSecrets what %q prints for a
+// TestSecretsQuotedBody feeds Secrets what %q prints for a
 // token-endpoint body, which is the form an audit field gets when a caller
 // logs one: no token survives and the neighbouring fields do.
-func TestRedactSecretsQuotedBody(t *testing.T) {
+func TestSecretsQuotedBody(t *testing.T) {
 	for _, c := range []struct{ name, body, keep string }{
 		{"snake_case", `{"access_token":"FAKEa1","refresh_token":"FAKEr1","id_token":"FAKEi1","client_secret":"FAKEc1","expires_in":3600}`, `\"expires_in\":3600`},
 		{"camelCase", `{"accessToken":"FAKEa1","refreshToken":"FAKEr1","idToken":"FAKEi1","clientSecret":"FAKEc1","expiresIn":3600}`, `\"expiresIn\":3600`},
 		{"bearer", `{"auth":"Bearer FAKEa1","user":"U1"}`, `\"user\":\"U1\"`},
 		{"slack", `{"auth":"xoxb-FAKE-a1","user":"U1"}`, `\"user\":\"U1\"`},
 	} {
-		got := RedactSecrets(fmt.Sprintf("denied %q", c.body))
+		got := Secrets(fmt.Sprintf("denied %q", c.body))
 		if strings.Contains(got, "FAKE") || !strings.Contains(got, c.keep) {
-			t.Errorf("%s: RedactSecrets(%%q of body) = %s; want every FAKE token gone and %s kept", c.name, got, c.keep)
+			t.Errorf("%s: Secrets(%%q of body) = %s; want every FAKE token gone and %s kept", c.name, got, c.keep)
 		}
 	}
 }
 
-// TestRedactSecretsKnownLimits pins what RedactSecrets documents it does not
+// TestSecretsKnownLimits pins what Secrets documents it does not
 // catch. Each leak is deliberate: when one gets fixed, flip its case to a
-// redaction test and update the doc on RedactSecrets.
-func TestRedactSecretsKnownLimits(t *testing.T) {
+// redaction test and update the doc on Secrets.
+func TestSecretsKnownLimits(t *testing.T) {
 	for _, c := range []struct{ name, in, leak string }{
 		{"object value", `{"access_token":{"value":"FAKE"}}`, "FAKE"},
 		{"array value", `{"access_token":["FAKE"]}`, "FAKE"},
@@ -180,8 +180,8 @@ func TestRedactSecretsKnownLimits(t *testing.T) {
 		{"fullwidth scheme", "\uff22earer FAKE", "FAKE"},
 		{"spaced equals with a non-empty value after it", "client_secret= \"FAKE\"", "FAKE"},
 	} {
-		if got := RedactSecrets(c.in); !strings.Contains(got, c.leak) {
-			t.Errorf("%s: RedactSecrets(%q) = %q; the documented limit no longer leaks %q", c.name, c.in, got, c.leak)
+		if got := Secrets(c.in); !strings.Contains(got, c.leak) {
+			t.Errorf("%s: Secrets(%q) = %q; the documented limit no longer leaks %q", c.name, c.in, got, c.leak)
 		}
 	}
 }

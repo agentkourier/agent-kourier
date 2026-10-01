@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // AuditKind is the category of an audited action (spec G8, section 10).
@@ -33,7 +35,7 @@ const MaxAuditOutcome = 200
 // It holds identifiers and a short outcome only. Never put a payload, message
 // text, token, or any Secret content in it: the audit table is read by people
 // and exported (spec section 10). As a backstop, AppendAudit passes every text
-// field except Email through RedactSecrets (see Redacted).
+// field except Email through redact.Secrets (see Redacted).
 type AuditEntry struct {
 	// Sequence is assigned by the store on append.
 	Sequence int64
@@ -53,17 +55,17 @@ type AuditEntry struct {
 	Outcome string
 }
 
-// Redacted returns e with RedactSecrets applied to every free-text field: User,
+// Redacted returns e with redact.Secrets applied to every free-text field: User,
 // Identity, Binding, Subject and Outcome. Kind is a validated enum, and Email is
 // an identity field by design (spec 8.5), so both stay as they are. Every Audit
 // implementation must store the result of Redacted, never e itself: the store
 // is the last line of defence behind the audit writer.
 func (e AuditEntry) Redacted() AuditEntry {
-	e.User = RedactSecrets(e.User)
-	e.Identity = RedactSecrets(e.Identity)
-	e.Binding = RedactSecrets(e.Binding)
-	e.Subject = RedactSecrets(e.Subject)
-	e.Outcome = RedactSecrets(e.Outcome)
+	e.User = redact.Secrets(e.User)
+	e.Identity = redact.Secrets(e.Identity)
+	e.Binding = redact.Secrets(e.Binding)
+	e.Subject = redact.Secrets(e.Subject)
+	e.Outcome = redact.Secrets(e.Outcome)
 	return e
 }
 

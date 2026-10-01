@@ -1,4 +1,6 @@
-package store
+// Package redact takes secrets out of text that is shown or stored: courier's one place that
+// knows what a token, a credential or a secret value looks like (spec 8.4, 8.6 step 7).
+package redact
 
 import (
 	"regexp"
@@ -88,14 +90,14 @@ var (
 
 	// basicPattern matches "Basic" and a base64 credential of at least 8
 	// characters (user:pass encodes to that or longer). Basic is a common
-	// English word, so RedactSecrets also spares plain words.
+	// English word, so Secrets also spares plain words.
 	basicPattern = regexp.MustCompile(`(?i:` + spell("basic") + `)` + sep + `([A-Za-z0-9+/]{8,}={0,2})`)
 
 	// plainWord is a word with at most a leading capital: prose, not base64.
 	plainWord = regexp.MustCompile(`^[A-Z]?[a-z]+$`)
 )
 
-// RedactSecrets replaces anything in s that looks like a Slack token, a Bearer
+// Secrets replaces anything in s that looks like a Slack token, a Bearer
 // or Basic credential, a JWT, or the value of an OAuth access_token,
 // refresh_token, id_token or client_secret field with "[redacted]". Schemes
 // and credentials may be separated by any Unicode white space, format or
@@ -111,7 +113,7 @@ var (
 // value and leaves "next" alone. It is a backstop for free-text audit fields,
 // not a license to put secrets in them.
 //
-// Known limits, all deliberate; TestRedactSecretsKnownLimits pins them:
+// Known limits, all deliberate; TestSecretsKnownLimits pins them:
 //   - A value that is a JSON object or array ({"access_token":{...}}) is not
 //     redacted past its first character.
 //   - A quote escaped inside a value ("ab\"cd") ends the value at the backslash.
@@ -126,7 +128,7 @@ var (
 //     with ordinary words).
 //   - A scheme or key written in fullwidth or other compatibility forms (U+FF22
 //     for B) is not matched, because that would need NFKC normalization first.
-func RedactSecrets(s string) string {
+func Secrets(s string) string {
 	s = secretPattern.ReplaceAllString(s, redacted)
 	s = oauthPattern.ReplaceAllString(s, "${1}"+redacted)
 	return basicPattern.ReplaceAllStringFunc(s, func(m string) string {
