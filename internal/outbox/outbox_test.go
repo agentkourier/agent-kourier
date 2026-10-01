@@ -206,8 +206,8 @@ func TestReconcile(t *testing.T) {
 		}
 		return nil
 	}
-	if err := ob.Reconcile(t.Context()); !errors.Is(err, boom) {
-		t.Fatalf("Reconcile = %v; want the one lookup error", err)
+	if err := ob.Reconcile(t.Context()); !errors.Is(err, boom) || errors.Is(err, store.ErrInvalid) {
+		t.Fatalf("Reconcile = %v; want the one lookup error, and none for the stream row", err)
 	}
 	for id, want := range map[string]string{"adopted/reply": "55.5", "absent/reply": "100.001", "stream/reply": "", "broken/reply": ""} {
 		if got, _ := st.GetOutbox(t.Context(), id); got.MessageRef != want {
