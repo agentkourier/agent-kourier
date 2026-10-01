@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -58,5 +60,46 @@ func TestOutboxPayload(t *testing.T) {
 	}
 	if err := s.RecordMessageRef(ctx, o.ID, "1700.99"); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a different ref = %v; want ErrConflict", err)
+	}
+}
+
+// TestMigration0007KeepsExistingRows migrates a database to 0006 and gives it outbox rows, one
+// posted and one not, then opens it: 0007 runs over existing rows and must keep them.
+func TestMigration0007KeepsExistingRows(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "courier.db")
+	old := fstest.MapFS{}
+	files, err := fs.Glob(migrationFiles, "migrations/000[1-6]_*.sql")
+	if err != nil || len(files) != 6 {
+		t.Fatalf("migrations 1 to 6 = %v, %v", files, err)
+	}
+	for _, f := range files {
+		data, err := migrationFiles.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[f] = &fstest.MapFile{Data: data}
+	}
+	db, err := openPool(ctx, path, 1, "journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, db, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at, message_ref) VALUES
+		('unposted', 'e', 'root', 'C1', '', 1, ''), ('posted', 'e', 'reply', 'C1', '1.1', 2, '5.5')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := openAt(t, path) // applies 0007
+	if got, err := s.GetOutbox(ctx, "unposted"); err != nil || got.Payload != "" || got.MessageRef != "" {
+		t.Fatalf("unposted row after 0007 = %+v, %v", got, err)
+	}
+	if got, err := s.GetOutbox(ctx, "posted"); err != nil || got.MessageRef != "5.5" || got.ThreadTS != "1.1" {
+		t.Fatalf("posted row after 0007 = %+v, %v", got, err)
 	}
 }
