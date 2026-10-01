@@ -25,8 +25,6 @@ type RunConfig struct {
 	Listener net.Listener
 	// Client is the Kubernetes client the Secret informers use. Nil means InClusterClient.
 	Client kubernetes.Interface
-	// SlackAPIURL overrides Slack's Web API URL, for the fake Slack of a test image. Empty means Slack's.
-	SlackAPIURL string
 	// SyncTimeout bounds the wait for the Secret caches; zero means Bootstrap's default.
 	SyncTimeout time.Duration
 	// KlogVerbosity is the verbosity requested for klog; RouteKlog holds it below 8.
@@ -59,7 +57,6 @@ func (c RunConfig) validate() error {
 		slices.Sort(missing)
 		return fmt.Errorf("%w: RunConfig lacks %v", ErrWiring, missing)
 	}
-	c.warnTestOptions(c.logger())
 	return nil
 }
 
@@ -69,6 +66,11 @@ func (c RunConfig) logger() *slog.Logger {
 	}
 	return slog.Default()
 }
+
+// WarnTestOptions logs, once and loudly, what a testhooks build is running without. Run calls it as
+// its first act, not validate, which may be called any number of times. In the default build there is
+// nothing to say.
+func (c RunConfig) WarnTestOptions() { c.warnTestOptions(c.logger()) }
 
 // InClusterClient returns a Kubernetes client for the API server of the cluster courier runs in,
 // from its pod's ServiceAccount, and nothing else: there is no kubeconfig path, because a kubeconfig
