@@ -104,13 +104,13 @@ func (r *running) until(path string, want int) {
 func TestRunAnswersHealthzWhileReadyzIsStillStarting(t *testing.T) {
 	gate := make(chan struct{})
 	var open sync.Once
-	t.Cleanup(func() { open.Do(func() { close(gate) }) })
 	c := startConfig(t)
 	c.Client.(*fake.Clientset).PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		<-gate // the Secret caches cannot sync, so Bootstrap cannot finish
 		return false, nil, nil
 	})
 	r := start(t, c)
+	t.Cleanup(func() { open.Do(func() { close(gate) }) }) // after start's own, so it runs first: Run cannot return while Bootstrap waits
 
 	r.until("/healthz", http.StatusOK)
 	if code, body := r.get("/readyz"); code != http.StatusServiceUnavailable || !strings.Contains(body, "starting") {
