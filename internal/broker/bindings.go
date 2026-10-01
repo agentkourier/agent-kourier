@@ -32,15 +32,20 @@ type Options struct {
 	// the dialect's default.
 	ResponseTimeout time.Duration
 	// OnRejected is called once for each credential a backend rejected, for a metric, with the
-	// Binding's namespace/name.
+	// Binding's namespace/name. Turns run concurrently, so it may be called from several
+	// goroutines at once and must be safe for that.
 	OnRejected func(binding string)
 }
 
-// kit is what one dialect needs: the pool that connects through it, and its attribution.
+// kit is what one dialect needs: the pool that connects through it, its attribution, and how to
+// close the idle connections of the transport its clients share.
 type kit struct {
 	pool      *agent.Pool
 	attribute func(*a2a.Message, dialect.User)
+	closeIdle func()
 }
+
+var _ session.Bindings = (*Bindings)(nil)
 
 // Bindings is a session.Bindings over the config's current snapshot. Every call looks the Binding
 // up in the snapshot that is current then, so a reload takes effect on the next call, and builds
@@ -61,14 +66,16 @@ func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Au
 	d := kagentv1.New(opts.ResponseTimeout)
 	return &Bindings{
 		snaps: snaps, secrets: secrets, aud: aud, opts: opts,
-		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {agent.NewPool(d, opts.Agent), d.Attribute}},
+		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}},
 	}
 }
 
-// Close closes the agent pools. Calls after it fail.
+// Close closes the agent pools, then the idle connections of the dialects' transports, so that
+// no goroutine outlives it. Calls after it fail.
 func (b *Bindings) Close() {
 	for _, k := range b.kits {
 		k.pool.Close()
+		k.closeIdle()
 	}
 }
 

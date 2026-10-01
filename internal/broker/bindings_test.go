@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"go.uber.org/goleak"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -25,7 +27,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
-var _ session.Bindings = (*Bindings)(nil)
+func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
 
 // jwt is an unsigned token with an email claim, which the stub reads as the owner.
 func jwt(email string) string {
@@ -78,30 +80,34 @@ type snaps struct {
 
 func (s *snaps) Current() *config.Snapshot { return s.p.Load() }
 
-// snapshot resolves a config with one Binding, sre/oncall, on the backend at url, whose agent
-// speaks dialect and keeps threads for ttl.
-func snapshot(t *testing.T, url string, d v1alpha1.Dialect, ttl time.Duration) *config.Snapshot {
+// snapshot resolves a config with a Binding oncall in namespace sre, and one in each of others,
+// all on the one agent of the backend at url, which speaks dialect, and keeping threads for ttl.
+// Each Binding reads its own token from the Secret creds of its namespace.
+func snapshot(t *testing.T, url string, d v1alpha1.Dialect, ttl time.Duration, others ...string) *config.Snapshot {
 	t.Helper()
+	namespaces := append([]string{"sre"}, others...)
 	be := v1alpha1.AgentBackend{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "kagent"},
-		Spec:       v1alpha1.AgentBackendSpec{Dialect: d, URL: url, AllowedNamespaces: []string{"sre"}},
+		Spec:       v1alpha1.AgentBackendSpec{Dialect: d, URL: url, AllowedNamespaces: namespaces},
 	}
 	conn := v1alpha1.ChatConnection{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack"},
 		Spec: v1alpha1.ChatConnectionSpec{
-			Platform: "slack", CredentialsSecretRef: v1alpha1.SecretRef{Name: "slack"}, AllowedNamespaces: []string{"sre"},
+			Platform: "slack", CredentialsSecretRef: v1alpha1.SecretRef{Name: "slack"}, AllowedNamespaces: namespaces,
 		},
 	}
-	b := v1alpha1.Binding{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "oncall"},
-		Spec: v1alpha1.BindingSpec{
-			Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "kagent"}, Name: "test-agent", Namespace: "kagent"},
-			Identity: v1alpha1.Identity{TokenSecretRef: &v1alpha1.SecretKeyRef{Name: "creds"}},
-			Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Channel: "C1"},
-			Session:  v1alpha1.Session{ThreadTTL: metav1.Duration{Duration: ttl}},
-		},
+	set := &config.Set{AgentBackends: []v1alpha1.AgentBackend{be}, ChatConnections: []v1alpha1.ChatConnection{conn}}
+	for i, ns := range namespaces {
+		set.Bindings = append(set.Bindings, v1alpha1.Binding{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "oncall"},
+			Spec: v1alpha1.BindingSpec{
+				Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "kagent"}, Name: "test-agent", Namespace: "kagent"},
+				Identity: v1alpha1.Identity{TokenSecretRef: &v1alpha1.SecretKeyRef{Name: "creds"}},
+				Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Channel: "C" + strconv.Itoa(i+1)},
+				Session:  v1alpha1.Session{ThreadTTL: metav1.Duration{Duration: ttl}},
+			},
+		})
 	}
-	set := &config.Set{AgentBackends: []v1alpha1.AgentBackend{be}, ChatConnections: []v1alpha1.ChatConnection{conn}, Bindings: []v1alpha1.Binding{b}}
 	snap, err := config.Resolve(t.Context(), set, keys{})
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +223,58 @@ func TestTokenRotationTakesEffectOnTheNextCall(t *testing.T) {
 	if got, want := f.lastAuth(), "Bearer "+jwt("b@example.test"); got != want {
 		t.Errorf("a new Backend sent %q after rotation, want the new token", got)
 	}
+}
+
+// Two Bindings may share a backend and an agent. Each must still send its own token: handing
+// one the other's Agent would run its turns, and audit them, as the other identity (D14).
+func TestBindingsOnOneAgentEachSendTheirOwnToken(t *testing.T) {
+	f := newFixture(t)
+	f.snaps.p.Store(snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour, "dev"))
+	f.reader.set("dev/creds/token", jwt("dev@example.test"))
+	a, err := f.b.Backend("sre/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.b.Backend("dev/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sre, dev := "Bearer "+jwt("a@example.test"), "Bearer "+jwt("dev@example.test")
+	for i, step := range []struct {
+		who  session.Backend
+		want string
+	}{{a, sre}, {b, dev}, {a, sre}, {b, dev}} {
+		_, _ = step.who.Agent.GetTask(t.Context(), a2a.TaskID("task-"+strconv.Itoa(i)))
+		if got := f.lastAuth(); got != step.want {
+			t.Fatalf("call %d sent %q, want its own Binding's token %q", i+1, got, step.want)
+		}
+	}
+
+	f.reader.set("dev/creds/token", jwt("rotated@example.test")) // rotating one leaves the other alone
+	_, _ = b.Agent.GetTask(t.Context(), "task-5")
+	if got, want := f.lastAuth(), "Bearer "+jwt("rotated@example.test"); got != want {
+		t.Errorf("rotated Binding sent %q, want its new token", got)
+	}
+	_, _ = a.Agent.GetTask(t.Context(), "task-6")
+	if got := f.lastAuth(); got != sre {
+		t.Errorf("the other Binding sent %q after the rotation, want its own token", got)
+	}
+}
+
+// The server is still up when Close returns, so a keep-alive connection left open would show as a
+// client goroutine. The server's own goroutines are the test's, not Bindings'.
+func TestCloseLeavesNoClientConnectionGoroutines(t *testing.T) {
+	f := newFixture(t)
+	be, err := f.b.Backend("sre/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = be.Agent.GetTask(t.Context(), "task-1") // opens a connection and keeps it alive
+
+	f.b.Close()
+
+	goleak.VerifyNone(t, goleak.IgnoreAnyFunction("net/http.(*Server).Serve"), goleak.IgnoreAnyFunction("net/http.(*conn).serve"))
 }
 
 func TestRejectedIsWiredAndAuditedOnce(t *testing.T) {

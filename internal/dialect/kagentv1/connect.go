@@ -52,6 +52,15 @@ func New(responseTimeout time.Duration) *Dialect {
 	}}
 }
 
+// CloseIdleConnections closes the idle keep-alive connections of the transport that every
+// client of this Dialect shares, and the goroutines that serve them. Call it after the clients
+// are done, at shutdown: an idle connection otherwise lives until its idle timeout.
+func (d *Dialect) CloseIdleConnections() {
+	if c, ok := d.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
+
 // Connect resolves the agent's card through the front door and returns an A2A client for it.
 // It fetches the card from the full .well-known URL, then points every JSON-RPC interface
 // at the front door and drops the others: the card advertises the controller port (:8083),
