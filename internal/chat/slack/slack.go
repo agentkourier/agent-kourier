@@ -4,9 +4,12 @@
 package slack
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -21,11 +24,13 @@ type Config struct {
 	BotToken, AppToken secret.Value
 	// APIURL is the Web API base URL with a trailing slash; Slack's by default. A test sets the fake's.
 	APIURL string
+	Logger *slog.Logger // slog.Default() if nil
 }
 
 // Client is courier's connection to one Slack workspace. It is safe for concurrent use.
 type Client struct {
 	api *slackgo.Client
+	log *slog.Logger
 }
 
 // New returns a Client over cfg. It makes no request: a missing or wrong token fails Run.
@@ -34,7 +39,7 @@ func New(cfg Config) *Client {
 	if cfg.APIURL != "" {
 		opts = append(opts, slackgo.OptionAPIURL(cfg.APIURL))
 	}
-	return &Client{api: slackgo.New(cfg.BotToken.Reveal(), opts...)}
+	return &Client{api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default())}
 }
 
 // Run connects over Socket Mode and gives sink each message that may be a turn, one at a
@@ -44,12 +49,15 @@ func New(cfg Config) *Client {
 // An events_api envelope is acknowledged only after the sink returns nil, so a turn the
 // sink could not take is sent again by Slack; events that are not turns are acknowledged
 // as soon as they are decoded. Other envelope kinds (interactions) are not handled here.
-// The sink runs on the reading goroutine and must return promptly: Slack expects the
-// acknowledgement within 3 seconds.
+// Run calls the sink itself, between reads of the connection, so a slow sink delays the
+// acknowledgements: Slack expects each within 3 seconds, and sends the event again if late.
 func (c *Client) Run(ctx context.Context, sink Sink) error {
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
 		return fmt.Errorf("slack auth.test: %w", err)
+	}
+	if auth.UserID == "" { // without it courier cannot tell its own posts that arrive with no bot_id
+		return errors.New("slack auth.test: no bot user ID")
 	}
 	smc := socketmode.New(c.api)
 	done := make(chan error, 1)
@@ -57,7 +65,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	for {
 		select {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
-			handle(ctx, smc, auth.UserID, sink, ev)
+			c.handle(ctx, smc, auth.UserID, sink, ev)
 		case err := <-done:
 			return fmt.Errorf("slack socket mode: %w", err)
 		}
@@ -65,20 +73,23 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 }
 
 // handle gives sink the message of an events_api event, then acknowledges the event.
-func handle(ctx context.Context, smc *socketmode.Client, botUser string, sink Sink, ev socketmode.Event) {
+func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser string, sink Sink, ev socketmode.Event) {
 	if ev.Type != socketmode.EventTypeEventsAPI || ev.Request == nil {
 		return
 	}
 	if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
 		if m, ok := decode(botUser, outer.InnerEvent.Data); ok {
 			if err := sink.Message(ctx, m); err != nil {
-				slog.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
+				c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
 					"channel", m.Channel, "ts", m.TS, "err", err)
 				return
 			}
 		}
 	}
-	if err := smc.AckCtx(ctx, ev.Request.EnvelopeID, nil); err != nil {
-		slog.WarnContext(ctx, "slack: acknowledging an event failed", "err", err)
+	// Bounded: slack-go queues the ack for a writer that is gone after a disconnect, and a full queue would block here.
+	ackCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := smc.AckCtx(ackCtx, ev.Request.EnvelopeID, nil); err != nil {
+		c.log.WarnContext(ctx, "slack: acknowledging an event failed", "err", err)
 	}
 }

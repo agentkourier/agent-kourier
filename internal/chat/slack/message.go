@@ -43,6 +43,11 @@ func decode(botUser string, inner any) (Message, bool) {
 	var botID string
 	switch e := inner.(type) {
 	case *slackevents.AppMentionEvent:
+		// An edit that adds a mention arrives as an app_mention with edited set; edits are ignored.
+		// UNCONFIRMED(WP-04): that Slack sends it so.
+		if e.Edited != nil {
+			return Message{}, false
+		}
 		m = Message{Channel: e.Channel, TS: e.TimeStamp, ThreadTS: e.ThreadTimeStamp, User: e.User, Text: e.Text, Mentioned: true}
 		botID = e.BotID
 	case *slackevents.MessageEvent:

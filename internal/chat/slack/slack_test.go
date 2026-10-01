@@ -3,6 +3,9 @@ package slack_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -50,20 +53,21 @@ func (s *sink) messages() []slack.Message {
 }
 
 // newFake starts a fake Slack and fails the test if it leaves goroutines behind.
-func newFake(t *testing.T) *fakeslack.Server {
+func newFake(t *testing.T, opts ...fakeslack.Option) *fakeslack.Server {
 	t.Helper()
 	before := goleak.IgnoreCurrent()
 	t.Cleanup(func() {
 		http.DefaultTransport.(*http.Transport).CloseIdleConnections()
 		goleak.VerifyNone(t, before)
 	})
-	fake := fakeslack.New()
+	fake := fakeslack.New(opts...)
 	t.Cleanup(fake.Close)
 	return fake
 }
 
 func config(fake *fakeslack.Server) slack.Config {
-	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/"}
+	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
 // run starts c.Run, which the end of the test cancels. wait returns Run's error.
@@ -104,9 +108,7 @@ func waitConnected(t *testing.T, fake *fakeslack.Server) {
 // message returns a message event; extra overrides its fields.
 func message(extra map[string]any) map[string]any {
 	ev := map[string]any{"type": "message", "user": "U1", "text": "hello", "ts": "1.1", "event_ts": "1.1", "channel": "C1", "channel_type": "channel"}
-	for k, v := range extra {
-		ev[k] = v
-	}
+	maps.Copy(ev, extra)
 	return ev
 }
 
@@ -173,6 +175,7 @@ func TestFiltersEvents(t *testing.T) {
 		{"channel_join", message(map[string]any{"subtype": "channel_join"}), false},
 		{"direct message", message(map[string]any{"channel": "D1", "channel_type": "im"}), false},
 		{"empty text", message(map[string]any{"text": ""}), false},
+		{"mention in an edit", message(map[string]any{"type": "app_mention", "edited": map[string]any{"user": "U1", "ts": "1.2"}}), false},
 		{"mention by a bot", message(map[string]any{"type": "app_mention", "bot_id": "BOTHER"}), false},
 	}
 	for _, tt := range tests {
@@ -222,7 +225,11 @@ func TestAckFollowsTheSink(t *testing.T) {
 		return errors.New("store unavailable")
 	}
 	first := send(t, fake, message(map[string]any{"text": "first"}))
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sink was not called")
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	defer cancel()
 	if err := fake.WaitAck(ctx, first); !errors.Is(err, context.DeadlineExceeded) {
@@ -250,5 +257,14 @@ func TestRunEnds(t *testing.T) {
 				t.Fatalf("Run = %v; want invalid_auth, without the token", err)
 			}
 		})
+	}
+}
+
+// TestRunFailsClosedWithoutABotUserID: with no user ID from auth.test, courier could not
+// recognise its own posts that arrive with no bot_id, so it must not run.
+func TestRunFailsClosedWithoutABotUserID(t *testing.T) {
+	_, wait := run(t, slack.New(config(newFake(t, fakeslack.WithBot("", "BFAKEBOT", "AFAKEAPP")))), &sink{})
+	if err := wait(); err == nil || !strings.Contains(err.Error(), "no bot user ID") {
+		t.Fatalf("Run = %v; want it to refuse a bot with no user ID", err)
 	}
 }
