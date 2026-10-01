@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -610,5 +611,31 @@ func TestAnAnswerTheSessionCallsInvalidIsFinal(t *testing.T) {
 	}
 	if out := r.logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "ix-1") {
 		t.Errorf("log = %q; want an error naming ix-1", out)
+	}
+}
+
+// failingSessions is a session store that cannot be read.
+type failingSessions struct{ err error }
+
+func (f failingSessions) GetSession(context.Context, store.ConversationKey, time.Duration, time.Time) (store.Session, error) {
+	return store.Session{}, f.err
+}
+
+// TestASessionThatCannotBeReadRetriesTheAnswer: whether the task has ended is not known, so no notice
+// says the answer was not sent, and the error is returned for the press to be decided again.
+func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	d, err := interact.NewDecider(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: failingSessions{errBoom},
+		Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.sess.errs = []error{session.ErrNotPaused}
+	if err := d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
+		t.Fatalf("Decide = %v; want the session read's error, for the press to be tried again", err)
+	}
+	if got := r.out.list(); len(got) != 0 {
+		t.Errorf("notices %+v; want none while it cannot be known that the task has ended", got)
 	}
 }
