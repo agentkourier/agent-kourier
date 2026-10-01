@@ -218,6 +218,24 @@ func TestARateLimitIsWaitedOutFromWhenItArrives(t *testing.T) {
 	}
 }
 
+// TestARateLimitWithNoRetryAfterStillWaitsASecond: a 429 that names no wait is not a licence to try again at
+// once, and so be refused again, every tick.
+func TestARateLimitWithNoRetryAfterStillWaitsASecond(t *testing.T) {
+	r := newRepairRig(t, nil)
+	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
+	r.up.err = fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{})
+	_ = r.r.Repair(t.Context())
+	_ = r.r.Repair(t.Context()) // the same instant
+	if got := len(r.up.list()); got != 1 {
+		t.Fatalf("%d attempts at the same instant; want the second pass to wait", got)
+	}
+	r.advance(time.Second)
+	_ = r.r.Repair(t.Context())
+	if got := len(r.up.list()); got != 2 {
+		t.Errorf("%d attempts a second later; want it tried again", got)
+	}
+}
+
 // TestRepairIsPacedByTheBatch: after a restart many prompts may be waiting, and a pass edits only a batch.
 func TestRepairIsPacedByTheBatch(t *testing.T) {
 	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Batch = 10 })
