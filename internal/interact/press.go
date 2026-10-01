@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -18,19 +20,28 @@ import (
 // slack.Config.AuthzTimeout to it, and a non-positive value there means the client's own default.
 const PressAuthzTimeout = 10 * time.Second
 
-// errNotDecidable is what Process returns for a press that is found and open: WP-33d1c2 adds who may
-// answer, reading the answer and deciding it.
-var errNotDecidable = errors.New("interact: an open press cannot be decided yet")
-
 // ErrNotInteraction is returned by Press for a button whose value is not an interaction's ID: it is
 // someone else's button, for the router to hand to another handler.
 var ErrNotInteraction = errors.New("interact: the pressed button is not an interaction's")
 
 // The fixed texts told to a person alone. None holds anything the agent wrote.
 const (
-	textGone     = "This question is no longer available."
-	textNotReady = "This question is not ready yet. Please press Submit again in a moment."
+	textGone       = "This question is no longer available."
+	textNotReady   = "This question is not ready yet. Please press Submit again in a moment."
+	textNotMember  = "Only members of this channel can answer this question."
+	textUnverified = "Couldn't verify that you can answer this question. Please try again."
 )
+
+// Authorizer says who may answer: *slack.Client. Both fail closed, IsBot by returning true with its error.
+type Authorizer interface {
+	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
+	IsBot(ctx context.Context, user string) (bool, error)
+}
+
+// PressDecider takes the decision on a complete press: *Decider.
+type PressDecider interface {
+	Decide(ctx context.Context, pd PressDecision) error
+}
 
 // PressStore is what the pipeline keeps and reads: the presses waiting, and the interactions they answer.
 type PressStore interface {
@@ -38,10 +49,14 @@ type PressStore interface {
 	GetInteraction(ctx context.Context, id string) (store.Interaction, error)
 }
 
-// PressConfig configures a Pipeline. Store and Ephemerals are required.
+// PressConfig configures a Pipeline. Everything but Now, Logger, Limits, EarlyFor and Notify is required.
 type PressConfig struct {
 	Store      PressStore
+	Sessions   SessionReader
+	Lookup     Lookup
+	Authorizer Authorizer
 	Ephemerals Ephemeral
+	Decider    PressDecider
 	Now        func() time.Time // time.Now if nil
 	Logger     *slog.Logger     // slog.Default() if nil
 	// Limits bounds the presses waiting (default 200 in all, 10 for one person).
@@ -63,8 +78,8 @@ type Pipeline struct{ cfg PressConfig }
 
 // NewPipeline returns a Pipeline over cfg.
 func NewPipeline(cfg PressConfig) (*Pipeline, error) {
-	if cfg.Store == nil || cfg.Ephemerals == nil {
-		return nil, errors.New("interact: Store and Ephemerals are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Authorizer == nil || cfg.Ephemerals == nil || cfg.Decider == nil {
+		return nil, errors.New("interact: Store, Sessions, Lookup, Authorizer, Ephemerals and Decider are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -114,10 +129,12 @@ const (
 	Retry
 )
 
-// Process works one recorded press through: find the interaction (a press for none, or for another
-// message than the prompt's, is dropped), and see that it is still open (anyone else's press on an
-// answered or closed one is told who answered, or that it is closed). A press for a prompt whose message
-// is not recorded yet is tried again for EarlyFor. The press is deleted only when it is finished.
+// Process works one recorded press through, in this order: find the interaction (a press for none, or
+// for another message than the prompt's, is dropped), see that it is still open (anyone else's press on
+// an answered or closed one is told who answered, or that it is closed), check that the person is a
+// member and not a bot, read their answer, and hand a complete one to the decider. The press is deleted
+// only when it is finished: after the decider returns nil, or after a refusal that is final. A failure
+// to check, or to decide, is an error and leaves the press for another try.
 func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, error) {
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
@@ -136,13 +153,72 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 	case !p.open(row, press.User):
 		return p.finish(ctx, press, row.Key.ThreadTS, lostText(row))
 	}
-	return Retry, errNotDecidable
+	return p.authorized(ctx, press, row)
 }
 
 // open reports whether user's press can still be decided: the question is pending, or user's own answer
 // is recorded and the press is the same person's retry after a crash, which the decider sends again.
 func (p *Pipeline) open(row store.Interaction, user string) bool {
 	return row.State == store.InteractionPending || (row.State == store.InteractionAnswered && row.Decider == user)
+}
+
+// authorized checks who pressed, reads the answer and decides it.
+func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.Interaction) (Result, error) {
+	switch member, err := p.cfg.Authorizer.IsChannelMember(ctx, row.Key.Channel, press.User); {
+	case err != nil:
+		return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
+	case !member:
+		return p.finish(ctx, press, row.Key.ThreadTS, textNotMember)
+	}
+	if bot, err := p.cfg.Authorizer.IsBot(ctx, press.User); err != nil {
+		return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
+	} else if bot {
+		p.cfg.Logger.InfoContext(ctx, "interact: a bot pressed a prompt's button", "interaction", row.ID)
+		return p.finish(ctx, press, "", "")
+	}
+	var in dialect.Interaction
+	var inputs map[string]map[string]slack.Input
+	if err := errors.Join(json.Unmarshal(row.Request, &in), json.Unmarshal(press.Inputs, &inputs)); err != nil {
+		p.cfg.Logger.ErrorContext(ctx, "interact: a press or its interaction cannot be read", "interaction", row.ID, "err", err)
+		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+	}
+	controls, err := Controls(row.ID, in)
+	if err != nil {
+		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+	}
+	answer, problems, err := ExtractAnswer(in, controls, inputs)
+	if err != nil {
+		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+	} else if len(problems) > 0 {
+		return p.finish(ctx, press, row.Key.ThreadTS, incompleteText(problems))
+	}
+	name, b, err := p.binding(ctx, row)
+	if err != nil {
+		return Retry, err
+	} else if b == nil {
+		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+	}
+	pd := PressDecision{Interaction: row, In: in, Answer: answer, User: press.User, PressedAt: press.PressedAt, BindingName: name, Binding: *b}
+	if err := p.cfg.Decider.Decide(ctx, pd); err != nil {
+		return Retry, err
+	}
+	return p.finish(ctx, press, "", "")
+}
+
+// binding is the Binding of the interaction's thread, or nil if the thread or its Binding is gone.
+func (p *Pipeline) binding(ctx context.Context, row store.Interaction) (string, *Binding, error) {
+	s, err := p.cfg.Sessions.GetSession(ctx, row.Key, readAll, p.cfg.Now())
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil, nil
+	} else if err != nil {
+		return "", nil, fmt.Errorf("interact: read the session of %s: %w", row.ID, err)
+	}
+	b, err := p.cfg.Lookup.Binding(s.Binding)
+	if err != nil { // a Binding removed from the config: the press can never be decided
+		p.cfg.Logger.WarnContext(ctx, "interact: the Binding of a press is gone", "binding", s.Binding, "err", err)
+		return "", nil, nil
+	}
+	return s.Binding, &b, nil
 }
 
 // finish tells the person text, if there is any, in thread (the interaction's: a prompt lives in a thread), and deletes the press. Telling is best-effort: a person
@@ -158,4 +234,22 @@ func (p *Pipeline) finish(ctx context.Context, press store.Press, thread, text s
 		return Retry, fmt.Errorf("interact: delete the press %d: %w", press.Seq, err)
 	}
 	return Done, nil
+}
+
+// incompleteText names the questions that need an answer, by number only.
+func incompleteText(problems []Problem) string {
+	var unanswered, invalid []string
+	for _, pr := range problems {
+		if pr.Kind == Invalid {
+			invalid = append(invalid, strconv.Itoa(pr.Question+1))
+		} else {
+			unanswered = append(unanswered, strconv.Itoa(pr.Question+1))
+		}
+	}
+	switch {
+	case len(invalid) > 0:
+		return "Question " + strings.Join(invalid, ", ") + " could not be read. Please check it and press Submit again."
+	default:
+		return "Please answer question " + strings.Join(unanswered, ", ") + ", then press Submit again."
+	}
 }
