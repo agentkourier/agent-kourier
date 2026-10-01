@@ -71,6 +71,8 @@
 //   - chat.update: omitted fields are kept, blocks=[] clears blocks, and
 //     invalid_arguments for a missing ts; a message still streaming is
 //     rejected with cant_update_message.
+//   - Ephemerals (ephemeral.go) being readable through GET /_control/ephemerals alone, for e2e
+//     tests, and through no other read path, where Slack shows one to its recipient only.
 //   - reactions.add (reactions.go): already_reacted, message_not_found (and the code for a
 //     deleted message), the characters a name may have, and no event being sent.
 //   - conversations.history and conversations.replies: invalid_limit; metadata

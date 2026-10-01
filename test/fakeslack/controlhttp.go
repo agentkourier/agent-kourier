@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 	"time"
 )
@@ -141,8 +142,39 @@ func (s *Server) newControlRoutes() controlRoutes {
 		}
 		writeControl(w, http.StatusOK, views(thread))
 	})
+	// The one read path that shows ephemerals, which no user but the recipient may see, so it is for
+	// e2e tests only: every other read path, Slack's and the rest of this surface, is blind to them.
+	mux.HandleFunc("GET /_control/ephemerals", func(w http.ResponseWriter, r *http.Request) {
+		channel := r.URL.Query().Get("channel")
+		if channel == "" {
+			writeControlError(w, invalid("fakeslack: ephemerals need a channel"), nil)
+			return
+		}
+		writeControl(w, http.StatusOK, s.Ephemerals(channel))
+	})
+	mux.HandleFunc("GET /_control/reactions", s.controlReactions)
 	mux.HandleFunc("GET /_control/acks/{id}", s.controlAck)
 	return controlRoutes{mux}
+}
+
+// controlReactions answers with the reactions on a message: none is an empty list, and a message
+// the fake does not hold is a 404, so that a wrong ts is not mistaken for a message nobody reacted to.
+func (s *Server) controlReactions(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	channel, ts := q.Get("channel"), q.Get("ts")
+	if channel == "" || ts == "" {
+		writeControlError(w, invalid("fakeslack: reactions need a channel and a ts"), nil)
+		return
+	}
+	if !slices.ContainsFunc(s.Messages(channel), func(m Message) bool { return m.TS == ts }) {
+		writeControlError(w, ErrNotFound, nil)
+		return
+	}
+	reactions := s.Reactions(channel, ts)
+	if reactions == nil {
+		reactions = []Reaction{}
+	}
+	writeControl(w, http.StatusOK, reactions)
 }
 
 // controlAck answers whether an envelope has been acked, waiting up to the

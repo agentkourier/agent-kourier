@@ -9,11 +9,15 @@ import (
 // user only, and in no history. Message.User is the bot, as for any bot post.
 type Ephemeral struct {
 	Message
-	Recipient string
+	Recipient string `json:"recipient"`
 }
 
 // Ephemerals returns the ephemeral messages sent in channel, oldest first. They
-// are for test assertions, and are copies.
+// are for test assertions, and are copies. This and GET /_control/ephemerals are
+// the only read paths that show them: Slack shows an ephemeral to its recipient
+// alone, so history, replies, Messages, Thread and the control surface's
+// messages and thread are all blind to them. The control endpoint is for e2e
+// tests only, which have no user to look through.
 func (s *Server) Ephemerals(channel string) []Ephemeral {
 	s.mu.Lock()
 	defer s.mu.Unlock()
