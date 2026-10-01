@@ -250,8 +250,8 @@ func valueEnd(s string, i int) int {
 		return i + len(redacted) // taken out already, by the pass over the string itself
 	case strings.HasPrefix(s[i:], `\"`): // JSON inside a JSON string: its quote is a backslash and a quote
 		for j := i + 2; j < len(s); j++ {
-			switch {
-			case s[j] == '\\': // a run of backslashes: one before a quote closes, more escape it
+			switch s[j] {
+			case '\\': // a run of backslashes: one before a quote closes, more escape it
 				k := j
 				for k < len(s) && s[k] == '\\' {
 					k++
@@ -260,7 +260,7 @@ func valueEnd(s string, i int) int {
 					return k + 1
 				}
 				j = k // past the run, and the quote it escapes
-			case s[j] == '"':
+			case '"':
 				return j + 1
 			}
 		}
