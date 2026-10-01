@@ -67,15 +67,11 @@ func (s *Server) addReaction(form url.Values) (response, string) {
 		if m.TS != ts {
 			continue
 		}
-		i := slices.IndexFunc(m.Reactions, func(r Reaction) bool { return r.Name == name })
-		switch {
-		case i < 0:
-			m.Reactions = append(m.Reactions, Reaction{Name: name, Users: []string{s.bot.user}})
-		case slices.Contains(m.Reactions[i].Users, s.bot.user):
+		// Only the bot adds reactions here, so an existing one of this name is the bot's own.
+		if slices.ContainsFunc(m.Reactions, func(r Reaction) bool { return r.Name == name }) {
 			return nil, "already_reacted"
-		default:
-			m.Reactions[i].Users = append(m.Reactions[i].Users, s.bot.user)
 		}
+		m.Reactions = append(m.Reactions, Reaction{Name: name, Users: []string{s.bot.user}})
 		return response{}, ""
 	}
 	return nil, "message_not_found"
