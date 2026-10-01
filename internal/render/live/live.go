@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -320,6 +319,17 @@ func (u *Run) want(c slack.Content, body string, final bool) string {
 	return c.Text + string(c.Blocks)
 }
 
+// notStreaming reports whether err is Slack saying the message is not a stream: it ended, or it
+// never was one (an update-path message's ts). Matched by the code of the response, never by text.
+// UNCONFIRMED(WP-04): the code real Slack gives for a ts that was never a stream. Neither slack-go
+// nor the fake's sources pin it; the fake gives message_not_in_streaming_state for both cases, so that is
+// all that is tolerated. If real Slack says another thing, the turn retries the stop until its
+// deadline and the final is not written, and the code is to be added here.
+func notStreaming(err error) bool {
+	var resp slackgo.SlackErrorResponse
+	return errors.As(err, &resp) && resp.Err == "message_not_in_streaming_state"
+}
+
 // write posts the message the first time, through the outbox, and updates it after, or, on the
 // stream path, takes the next step of the stream.
 func (u *Run) write(ctx context.Context, ts *string, c slack.Content, body string, final bool) error {
@@ -331,7 +341,7 @@ func (u *Run) write(ctx context.Context, ts *string, c slack.Content, body strin
 	if *ts != "" {
 		if u.adoptStop { // an earlier run's stream: end it, or Slack refuses the update
 			err := u.cfg.Streamer.StopStream(ctx, u.turn.Channel, *ts, "", nil, outbox.ID(u.turn.Source, store.OutboxReply))
-			if err != nil && !strings.Contains(err.Error(), "message_not_in_streaming_state") { // UNCONFIRMED(WP-04)
+			if err != nil && !notStreaming(err) {
 				return err
 			}
 			u.adoptStop = false

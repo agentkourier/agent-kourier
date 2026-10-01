@@ -106,6 +106,7 @@ type recorder struct {
 	forms       map[string][]url.Values
 	failUpdates int
 	rateLimited int // the next chat.update requests answered 429, with a Retry-After of 30 s
+	hangUpdates int // the next chat.update requests never answer, until their context ends
 	losePosts   int // the next chat.postMessage requests reach Slack, and their answers are lost
 	// holdStart, if set, makes chat.startStream wait for it to close, as a slow Slack would. A request
 	// whose context ends while it waits is still taken by Slack, though its answer is lost.
@@ -138,7 +139,15 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	if limited {
 		r.rateLimited--
 	}
+	hang := req.URL.Path == "/chat.update" && r.hangUpdates > 0
+	if hang {
+		r.hangUpdates--
+	}
 	r.mu.Unlock()
+	if hang {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}
 	if hold != nil {
 		select {
 		case <-hold:
@@ -210,6 +219,7 @@ type env struct {
 	store *sqlite.Store
 	ob    *outbox.Outbox
 	rf    *recordFail
+	cfg   live.Config // what live was made from, for a test that needs another Renderer
 	live  *live.Renderer
 	root  string
 	logs  *bytes.Buffer
@@ -237,7 +247,8 @@ func setup(t *testing.T) *env {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
-	e.live = live.New(live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))})
+	e.cfg = live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
+	e.live = live.New(e.cfg)
 	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
 		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
 			e.clk.advance(throttle)

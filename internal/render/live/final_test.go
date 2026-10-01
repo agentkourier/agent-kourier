@@ -279,3 +279,20 @@ func TestFinalModeWaitsForTheFinal(t *testing.T) {
 		t.Fatalf("%d posts, %d updates, message %q; want one post of the whole answer", posts, e.updates(), e.reply().Text)
 	}
 }
+
+// TestAHungWriteIsAbandonedAtWriteTimeout: Slack never answers an update. A write watches no context
+// but its own timeout, which is all that bounds it; when it runs out the final is tried again, inside
+// the final's deadline, and arrives.
+func TestAHungWriteIsAbandonedAtWriteTimeout(t *testing.T) {
+	e := setup(t)
+	e.cfg.WriteTimeout = 100 * time.Millisecond
+	e.live = live.New(e.cfg)
+	e.rec.hangUpdates = 1
+	run, _ := e.partial(t)
+	run.Handle(text("a", "the final answer"))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	if got := e.reply().Text; got != "the final answer" || e.updates() != 2 {
+		t.Fatalf("the message says %q after %d updates; want the final text on the second, after the first was abandoned", got, e.updates())
+	}
+}

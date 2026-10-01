@@ -1,9 +1,16 @@
 package live_test
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -252,5 +259,80 @@ func TestCancelDuringTheStartDoesNotOrphanAStream(t *testing.T) {
 	th := e.fake.Thread("C1", e.root)
 	if len(e.rec.sent("/chat.startStream")) != 1 || len(th) != 2 || err != nil || row.MessageRef != th[1].TS {
 		t.Fatalf("%d starts, thread %d long, row %+v, %v; want one stream, and its ts recorded", len(e.rec.sent("/chat.startStream")), len(th), row, err)
+	}
+}
+
+// stopFails is a Streamer whose stops fail with err, what Slack says to a stop.
+type stopFails struct {
+	live.Streamer
+	err error
+}
+
+func (s stopFails) StopStream(context.Context, string, string, string, json.RawMessage, string) error {
+	return s.err
+}
+
+// postedByUpdate runs a turn on the update path (no recipient), posts its message and abandons it, so
+// that a recovered turn with a recipient finds the row of a message that was never a stream.
+func (e *env) postedByUpdate(t *testing.T) {
+	t.Helper()
+	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
+	first.Handle(text("a", "partial"))
+	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	cancel()
+	<-first.Done()
+}
+
+// TestRecoveredTurnTakesOverAMessageThatWasNeverAStream: the row's ts is of a message the update path
+// posted, so ending it as a stream is refused. That is no reason to leave it: it is updated.
+func TestRecoveredTurnTakesOverAMessageThatWasNeverAStream(t *testing.T) {
+	e := setup(t)
+	e.postedByUpdate(t)
+	again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+	again.Handle(text("a", "the whole answer"))
+	again.Handle(agent.FinalEvent{})
+	e.finish(t, again)
+	th := e.fake.Thread("C1", e.root)
+	if len(th) != 2 || th[1].Text != "the whole answer" || len(e.rec.sent("/chat.startStream")) != 0 || len(e.rec.sent("/chat.stopStream")) != 1 || e.updates() != 1 {
+		t.Fatalf("thread %+v, %d starts, %d stops, %d updates; want one message with the whole text, never started, one stop refused, one update",
+			th, len(e.rec.sent("/chat.startStream")), len(e.rec.sent("/chat.stopStream")), e.updates())
+	}
+}
+
+// TestNotStreamingIsMatchedByTypeNotByText: the refusal to stop a message that is not a stream is
+// told by the code Slack gave, not by a message that happens to mention it.
+func TestNotStreamingIsMatchedByTypeNotByText(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		updates int // 1: the turn went on to update the message; 0: the stop failed and was retried until the deadline
+	}{
+		{"the code, wrapped", fmt.Errorf("stop: %w", slackgo.SlackErrorResponse{Err: "message_not_in_streaming_state"}), 1},
+		{"text that mentions it", errors.New("proxy said message_not_in_streaming_state"), 0},
+		{"another code", fmt.Errorf("stop: %w", slackgo.SlackErrorResponse{Err: "channel_not_found"}), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			e.postedByUpdate(t)
+			e.cfg.Streamer = stopFails{Streamer: e.cfg.Streamer, err: tc.err}
+			e.live = live.New(e.cfg)
+			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+			again.Handle(text("a", "the whole answer"))
+			again.Handle(agent.FinalEvent{})
+			eventually(t, "the run to end", func() bool {
+				select {
+				case <-again.Done():
+					return true
+				default:
+				}
+				if e.clk.waiting() > 0 {
+					e.clk.advance(30 * time.Second)
+				}
+				return false
+			})
+			if e.updates() != tc.updates {
+				t.Fatalf("%d updates; want %d", e.updates(), tc.updates)
+			}
+		})
 	}
 }
