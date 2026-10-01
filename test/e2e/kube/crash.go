@@ -3,9 +3,11 @@ package kube
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Termination is how a container last ended.
@@ -17,29 +19,45 @@ type Termination struct {
 	Restarts int32
 }
 
-// Restarts returns how many times the named container of the pod matching selector has been restarted:
-// the baseline a scenario takes before it arms a fault, and gives [Pods.WaitCrash]. It fails if no pod
-// matches, or none has the container.
-func (p *Pods) Restarts(ctx context.Context, namespace, selector, container string) (int32, error) {
+// Baseline is what a container's terminations looked like when a scenario began to watch it, so that
+// [Pods.WaitCrash] answers only for one after it. It names the pod by its UID, because arming a fault is a
+// rollout: the pod that crashes is a new one, whose restart count starts again at 0, and a count from the
+// pod before it would never be passed.
+type Baseline struct {
+	pod  types.UID
+	seen []time.Time // when the terminations the pod's container already showed finished
+}
+
+// Baseline reads the named container of the pod matching selector: its pod and the terminations it
+// already shows, which are not crashes to wait for. Take it before the action that causes the crash, or
+// after the rollout that arms it; either way, a crash of the pod that replaces this one counts. It fails if
+// no pod matches, or none has the container.
+func (p *Pods) Baseline(ctx context.Context, namespace, selector, container string) (Baseline, error) {
 	pods, err := p.List(ctx, namespace, selector)
 	if err != nil {
-		return 0, err
+		return Baseline{}, err
 	}
 	for i := range pods {
 		if cs := containerStatus(&pods[i], container); cs != nil {
-			return cs.RestartCount, nil
+			b := Baseline{pod: pods[i].UID}
+			for _, t := range []*corev1.ContainerStateTerminated{cs.State.Terminated, cs.LastTerminationState.Terminated} {
+				if t != nil {
+					b.seen = append(b.seen, t.FinishedAt.Time)
+				}
+			}
+			return b, nil
 		}
 	}
-	return 0, fmt.Errorf("restarts of %s in %s: no pod of %q has the container %q", container, namespace, selector, container)
+	return Baseline{}, fmt.Errorf("baseline of %s in %s: no pod of %q has the container %q", container, namespace, selector, container)
 }
 
-// WaitCrash blocks until the named container of a pod matching selector has crashed since the
-// baseline (its restart count at [Pods.Restarts]), and returns how: a non-zero exit, either in the
-// container's last termination, once it has been restarted past the baseline, or still as its state,
-// before the kubelet restarts it. A termination that was there at the baseline is not an answer. It
-// polls, and never sleeps for a set time; ctx bounds it, and the error then says what it last saw.
-// A failed list ends the wait at once.
-func (p *Pods) WaitCrash(ctx context.Context, namespace, selector, container string, baseline int32) (Termination, error) {
+// WaitCrash blocks until the named container of a pod matching selector has crashed since the baseline,
+// and returns how: a non-zero exit, in the container's last termination or still as its state, before the
+// kubelet restarts it. A termination that the baseline already showed is not an answer, and in a pod that is
+// not the baseline's, which is a rollout's new one, every termination is. A clean exit is never a crash.
+// It polls, and never sleeps for a set time; ctx bounds it, and the error then says what it last saw. A
+// failed list ends the wait at once.
+func (p *Pods) WaitCrash(ctx context.Context, namespace, selector, container string, since Baseline) (Termination, error) {
 	var got Termination
 	err := p.wait(ctx, namespace, selector, func(pods []corev1.Pod) string {
 		seen := fmt.Sprintf("no pod of %q has the container %q", selector, container)
@@ -48,13 +66,11 @@ func (p *Pods) WaitCrash(ctx context.Context, namespace, selector, container str
 			if cs == nil {
 				continue
 			}
-			switch t := crashed(cs, baseline); {
-			case t != nil:
+			if t := crashed(cs, since, pods[i].UID == since.pod); t != nil {
 				got = Termination{ExitCode: t.ExitCode, Reason: t.Reason, FinishedAt: t.FinishedAt.Time, Restarts: cs.RestartCount}
 				return ""
-			default:
-				seen = fmt.Sprintf("%s has not crashed since restart %d (at restart %d)", container, baseline, cs.RestartCount)
 			}
+			seen = fmt.Sprintf("%s has not crashed since the baseline (restart count %d)", container, cs.RestartCount)
 		}
 		return seen
 	})
@@ -64,13 +80,16 @@ func (p *Pods) WaitCrash(ctx context.Context, namespace, selector, container str
 	return got, nil
 }
 
-// crashed returns the non-zero termination of cs that is after baseline, or nil.
-func crashed(cs *corev1.ContainerStatus, baseline int32) *corev1.ContainerStateTerminated {
-	if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && cs.RestartCount >= baseline {
-		return t
-	}
-	if t := cs.LastTerminationState.Terminated; t != nil && t.ExitCode != 0 && cs.RestartCount > baseline {
-		return t
+// crashed returns the non-zero termination of cs that the baseline did not show, or nil. samePod says
+// cs is the baseline's pod, the only one whose earlier terminations are known.
+func crashed(cs *corev1.ContainerStatus, since Baseline, samePod bool) *corev1.ContainerStateTerminated {
+	for _, t := range []*corev1.ContainerStateTerminated{cs.State.Terminated, cs.LastTerminationState.Terminated} {
+		if t == nil || t.ExitCode == 0 {
+			continue
+		}
+		if known := samePod && slices.ContainsFunc(since.seen, t.FinishedAt.Time.Equal); !known {
+			return t
+		}
 	}
 	return nil
 }
