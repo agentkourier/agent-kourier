@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -66,10 +65,10 @@ func TestDefaultBuildHasNeitherHook(t *testing.T) {
 
 			out, err := run(t, bin)
 			var exit *exec.ExitError
-			killed := errors.As(err, &exit) && exit.Sys().(syscall.WaitStatus).Signal() == syscall.SIGKILL
+			crashed := errors.As(err, &exit) && exit.ExitCode() == 137
 			switch {
-			case tc.tagged && (!killed || !strings.Contains(out, `slack="http://fake.test"`)):
-				t.Errorf("tagged probe with both hooks armed: err %v, output %q; want the override applied, then a SIGKILL", err, out)
+			case tc.tagged && (!crashed || !strings.Contains(out, `slack="http://fake.test"`)):
+				t.Errorf("tagged probe with both hooks armed: err %v, output %q; want the override applied, then exit 137", err, out)
 			case !tc.tagged && (err != nil || !strings.Contains(out, `slack=""`) || !strings.Contains(out, "after-post-returned")):
 				t.Errorf("default probe with both hooks armed: err %v, output %q; want no override and no crash", err, out)
 			}

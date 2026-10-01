@@ -36,7 +36,7 @@ spike/                  throwaway A2A and Slack experiments
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`; `build` writes `bin/courier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...` and then `go test -race -tags testhooks ./internal/...`; `build` writes `bin/courier`.
 - `make e2e-fast-up` / `e2e-full-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down` and `e2e-down` (both) tear them down. `e2e-fast` / `e2e-full` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).

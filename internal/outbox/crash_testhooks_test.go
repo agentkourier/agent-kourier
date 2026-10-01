@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -50,15 +49,15 @@ func child(t *testing.T, path, fault string) (string, error) {
 	return string(out), err
 }
 
-// TestFaultHookKillsBetweenPostAndRecord is S5's server half: armed, the process dies between the post and the record,
+// TestFaultHookKillsBetweenPostAndRecord is S5's server half: armed, the process exits with 137 between the post and the record,
 // so the message is in Slack and the row has no ref; unarmed, the same code records it.
 func TestFaultHookKillsBetweenPostAndRecord(t *testing.T) {
 	dir := t.TempDir()
 	crashed := filepath.Join(dir, "crash.db")
 	out, err := child(t, crashed, "crash-after-post")
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-		t.Fatalf("armed child: %v, output %q; want it killed by SIGKILL", err, out)
+	if !errors.As(err, &exit) || exit.ExitCode() != 137 {
+		t.Fatalf("armed child: %v, output %q; want exit code 137", err, out)
 	}
 	if !strings.Contains(out, "posted ev1/reply") || strings.Contains(out, "recorded") {
 		t.Fatalf("armed child output %q; want it to have posted and never recorded", out)
