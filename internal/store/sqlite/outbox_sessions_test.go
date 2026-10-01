@@ -170,8 +170,8 @@ func TestPersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("session after reopen = %+v, %v", got, err)
 	}
 	var n int
-	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 8 {
-		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 8", n, err)
+	if err := s.read.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 9 {
+		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 9", n, err)
 	}
 }
 

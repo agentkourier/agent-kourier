@@ -21,6 +21,8 @@ var (
 	// ErrConflict is returned when a row exists but is not in a state that
 	// allows the requested change.
 	ErrConflict = errors.New("store: conflict")
+	// ErrLimit is returned when a bound on what the store holds would be passed.
+	ErrLimit = errors.New("store: limit reached")
 )
 
 // Store is the full persistence surface, composed of one interface per concern.
@@ -31,6 +33,7 @@ type Store interface {
 	Sessions
 	SessionTasks
 	Interactions
+	Presses
 	ReplyQueue
 	Audit
 	Recovery
