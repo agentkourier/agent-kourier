@@ -64,8 +64,12 @@ func (m *Manager) recoverKey(key Key) {
 		return
 	}
 	backend, err := m.cfg.Bindings.Backend(sess.Binding)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrUnknownBinding):
 		log.Warn("recover: skipping a session whose Binding is not configured", "skip", "unknown_binding", "binding", sess.Binding, "error", err)
+		return
+	case err != nil: // a dialect it cannot build, a snapshot not loaded yet: not the same as a Binding that left
+		log.Error("recover: skipping a session whose Binding has no usable backend", "skip", "backend_error", "binding", sess.Binding, "error", err)
 		return
 	}
 	if _, err := m.cfg.Store.GetSession(m.ctx, key, backend.ThreadTTL, m.cfg.Now()); errors.Is(err, store.ErrExpired) {

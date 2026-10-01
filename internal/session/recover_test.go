@@ -181,30 +181,41 @@ func TestRecoverRetriesWhileTheAgentIsDown(t *testing.T) {
 }
 
 // What recovery cannot serve it leaves as it found it: a session past its threadTTL is never
-// touched back to life, and one whose Binding left the config has nobody to ask.
-func TestRecoverSkipsExpiredSessionsAndUnknownBindings(t *testing.T) {
+// touched back to life, one whose Binding left the config has nobody to ask, and one whose
+// backend cannot be built says so under its own reason, with the error.
+func TestRecoverSkipsWhatItCannotServe(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		binding string
 		age     time.Duration
+		lookup  error // every Binding lookup fails with it, if set
+		want    []string
 	}{
-		{"expired", "ns/b1", 2 * time.Hour},
-		{"unknown Binding", "ns/gone", 0},
+		{"expired", "ns/b1", 2 * time.Hour, nil, []string{"skip=expired"}},
+		{"unknown Binding", "ns/gone", 0, nil, []string{"skip=unknown_binding"}},
+		{"a backend that cannot be built", "ns/b1", 0, errors.New("dialect unsupported"), []string{"skip=backend_error", "dialect unsupported"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := restarted(t)
 			var logs bytes.Buffer // written by the recovery goroutine, read after it is done
 			f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 			seeded := f.seed(tc.binding, tc.age)
+			f.amu.Lock()
+			f.bindingErr = tc.lookup
+			f.amu.Unlock()
 			f.recover(t)
 			f.m.wg.Wait() // the recovery goroutines, and any runner they wrongly started, are done
 			sess, err := f.st.GetSession(t.Context(), key, 1000*time.Hour, t0)
 			if sess != seeded || err != nil && !errors.Is(err, store.ErrExpired) {
 				t.Errorf("session = %+v, %v; want it untouched", sess, err)
 			}
-			wantLog := map[string]string{"expired": "skip=expired", "unknown Binding": "skip=unknown_binding"}[tc.name]
-			if !strings.Contains(logs.String(), wantLog) {
-				t.Errorf("log = %q; want the skip to say %q", logs.String(), wantLog)
+			for _, want := range tc.want {
+				if !strings.Contains(logs.String(), want) {
+					t.Errorf("log = %q; want it to say %q", logs.String(), want)
+				}
+			}
+			if strings.Contains(logs.String(), "unknown_binding") != (tc.name == "unknown Binding") {
+				t.Errorf("log = %q; unknown_binding is the reason for a Binding that left the config, and for nothing else", logs.String())
 			}
 			if sends, finds, follows := f.agent.counts(); sends+finds+follows != 0 || len(f.cancelled()) != 0 {
 				t.Errorf("%d sends, %d lookups, %d follows, cancelled %v; want no call", sends, finds, follows, f.cancelled())
