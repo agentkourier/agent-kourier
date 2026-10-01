@@ -99,6 +99,7 @@ func TestCounterRefusesWhatItCannotRead(t *testing.T) {
 		"courier_x_total{outcome=\"denied\"} one\n", // a value that is no number
 		"courier_x_total\n",                         // no value
 		"courier_x_total{o=\"a\\q\"} 1\n",           // an escape Prometheus does not have
+		"courier_x_total 1 2 3\n",                   // more than a value and a timestamp
 	} {
 		if _, err := metricsServer(t, body).Counter(t.Context(), "courier_x_total", nil); err == nil || errors.Is(err, ErrNoSample) {
 			t.Errorf("Counter over %q = %v; want a parse error, not a missing sample", body, err)
