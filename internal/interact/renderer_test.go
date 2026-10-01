@@ -173,7 +173,8 @@ func TestPromptTooLargeAndUnusableKinds(t *testing.T) {
 	if _, err := r.Prompt(interact.Prompt{ID: "ix-1", Interaction: askUserOf(make([]dialect.Question, 49)...), Deadline: askBy}); !errors.Is(err, render.ErrPromptTooLarge) {
 		t.Errorf("a prompt of 51 blocks = %v; want ErrPromptTooLarge", err)
 	}
-	tool := dialect.Interaction{Kind: dialect.ToolApproval, TaskID: "t1", RequestID: "r1", Tools: []dialect.Tool{{ID: "c1", Name: "rm"}}}
+	// Even with a question in it, which would render, a tool approval is not an ask-user prompt.
+	tool := dialect.Interaction{Kind: dialect.ToolApproval, TaskID: "t1", RequestID: "r1", Questions: []dialect.Question{{Text: "q"}}, Tools: []dialect.Tool{{ID: "c1", Name: "rm"}}}
 	if _, err := r.Prompt(interact.Prompt{ID: "ix-1", Interaction: tool}); err == nil {
 		t.Error("a tool approval was rendered as a prompt")
 	}
