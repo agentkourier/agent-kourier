@@ -34,6 +34,9 @@ type Config struct {
 	// users are (default 1000).
 	UserTTL       time.Duration
 	UserCacheSize int
+	// UserTimeout bounds one users.info call (default 5 seconds): the caller's context may have
+	// no deadline, and an http.Client has none either.
+	UserTimeout time.Duration
 }
 
 // Client is courier's connection to one Slack workspace. It is safe for concurrent use.
@@ -43,6 +46,7 @@ type Client struct {
 	bot, app secret.Value // kept as Values: they are revealed only to scrub them from an error
 	now      func() time.Time
 	ttl      time.Duration
+	timeout  time.Duration
 	max      int
 
 	mu    sync.Mutex
@@ -63,7 +67,7 @@ func New(cfg Config) *Client {
 	}
 	return &Client{
 		api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default()), bot: cfg.BotToken, app: cfg.AppToken,
-		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), max: cmp.Or(cfg.UserCacheSize, 1000),
+		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), timeout: cmp.Or(cfg.UserTimeout, 5*time.Second), max: cmp.Or(cfg.UserCacheSize, 1000),
 		users: map[string]cachedUser{},
 	}
 }
@@ -80,7 +84,7 @@ func New(cfg Config) *Client {
 func (c *Client) Run(ctx context.Context, sink Sink) error {
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return c.scrub(ctx, "auth.test", err)
+		return c.scrub("auth.test", err)
 	}
 	if auth.UserID == "" { // without it courier cannot tell its own posts that arrive with no bot_id
 		return errors.New("slack auth.test: no bot user ID")
@@ -93,7 +97,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
 			c.handle(ctx, smc, auth.UserID, sink, ev)
 		case err := <-done:
-			return c.scrub(ctx, "socket mode", err)
+			return c.scrub("socket mode", err)
 		}
 	}
 }

@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -20,20 +24,30 @@ import (
 // Client resolves users for the session manager.
 var _ session.Users = (*slack.Client)(nil)
 
-// counter is an http.RoundTripper that counts requests by path, and fails them all if err is set.
+// counter is an http.RoundTripper that counts requests by path. It answers each one with err,
+// if set, else with the status, if set (and a Retry-After of 7 s), else by hanging until the
+// request's context ends, if hang is set; otherwise it passes it on.
 type counter struct {
-	mu  sync.Mutex
-	n   map[string]int
-	err error
+	mu     sync.Mutex
+	n      map[string]int
+	err    error
+	status int
+	hang   bool
 }
 
 func (c *counter) RoundTrip(r *http.Request) (*http.Response, error) {
 	c.mu.Lock()
 	c.n[r.URL.Path]++
-	err := c.err
+	err, status, hang := c.err, c.status, c.hang
 	c.mu.Unlock()
-	if err != nil {
+	switch {
+	case err != nil:
 		return nil, err
+	case status != 0:
+		return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: http.Header{"Retry-After": {"7"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+	case hang:
+		<-r.Context().Done()
+		return nil, r.Context().Err()
 	}
 	return http.DefaultTransport.RoundTrip(r)
 }
@@ -92,7 +106,7 @@ func TestResolveUserCache(t *testing.T) {
 		{"U1", 0, 1},               // cached
 		{"U2", 0, 2},               // another user is another entry
 		{"U1", time.Minute - 1, 2}, // still within the TTL
-		{"U1", 2, 3},               // expired
+		{"U1", 1, 3},               // exactly the TTL old: expired
 		{"U1", 0, 3},               // and cached again
 		{"U2", 2 * time.Minute, 4}, // expired long ago
 	}
@@ -147,14 +161,58 @@ func TestErrorsNameNoToken(t *testing.T) {
 				t.Errorf("%s error holds %q: %v", name, tok, err)
 			}
 		}
+		if ue := new(*url.Error); errors.As(err, ue) { // its text quotes what it was given
+			t.Errorf("%s error unwraps to the transport's error: %v", name, *ue)
+		}
 	}
 }
 
-func TestResolveUserKeepsContextErrors(t *testing.T) {
-	c, _, _ := userClient(t, nil)
-	ctx, cancel := context.WithCancel(t.Context())
+// TestContextErrorsAreKept: errors.Is finds the context error whether the caller's context
+// ended or the HTTP stack hit a deadline of its own.
+func TestContextErrorsAreKept(t *testing.T) {
+	c, calls, _ := userClient(t, nil)
+	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := c.ResolveUser(ctx, "U1"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ResolveUser with a cancelled context = %v; want context.Canceled", err)
+	if _, err := c.ResolveUser(cancelled, "U1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("ResolveUser with a cancelled context = %v; want context.Canceled", err)
+	}
+	calls.err = fmt.Errorf("dial: %w", context.DeadlineExceeded)
+	if _, err := c.ResolveUser(t.Context(), "U1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("ResolveUser after a transport deadline = %v; want context.DeadlineExceeded", err)
+	}
+}
+
+// TestErrorsKeepSlackCodes: what a caller needs to act on an error, such as a restart policy
+// for a revoked token, is there to errors.As, and is only a code.
+func TestErrorsKeepSlackCodes(t *testing.T) {
+	const revoked = "canary-revoked-token"
+	cfg := clientConfig(newFake(t))
+	cfg.BotToken = secret.New(revoked)
+	err := func() error { _, wait := run(t, slack.New(cfg), &sink{}); return wait() }()
+	if code := new(slackgo.SlackErrorResponse); !errors.As(err, code) || code.Err != "invalid_auth" || strings.Contains(err.Error(), revoked) {
+		t.Errorf("Run with a revoked token = %v; want an invalid_auth code, and no token", err)
+	}
+	c, calls, _ := userClient(t, nil)
+	calls.status = http.StatusTooManyRequests
+	_, err = c.ResolveUser(t.Context(), "U1")
+	if rl := new(*slackgo.RateLimitedError); !errors.As(err, rl) || (*rl).RetryAfter != 7*time.Second {
+		t.Errorf("ResolveUser on a 429 = %v; want a RateLimitedError with its delay", err)
+	}
+	calls.status = http.StatusBadGateway
+	_, err = c.ResolveUser(t.Context(), "U1")
+	if sc := new(slackgo.StatusCodeError); !errors.As(err, sc) || sc.Code != http.StatusBadGateway {
+		t.Errorf("ResolveUser on a 502 = %v; want a StatusCodeError", err)
+	}
+}
+
+// TestResolveUserTimesOut: a Web API call that never answers is cut off at the configured
+// timeout, though the caller's context (the runner's, long-lived) has no deadline of its own.
+func TestResolveUserTimesOut(t *testing.T) {
+	c, calls, _ := userClient(t, func(c *slack.Config) { c.UserTimeout = 50 * time.Millisecond })
+	calls.hang = true
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // so that a missing timeout fails the test
+	defer cancel()
+	if _, err := c.ResolveUser(ctx, "U1"); !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		t.Fatalf("ResolveUser = %v, caller's context: %v; want the call's own deadline to end it", err, ctx.Err())
 	}
 }

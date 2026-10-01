@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	slackgo "github.com/slack-go/slack"
+
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -29,9 +31,11 @@ func (c *Client) ResolveUser(ctx context.Context, id string) (dialect.User, erro
 	if ok && now.Sub(e.fetched) < c.ttl {
 		return e.user, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	u, err := c.api.GetUserInfoContext(ctx, id)
 	if err != nil {
-		return dialect.User{}, c.scrub(ctx, "users.info", err)
+		return dialect.User{}, c.scrub("users.info", err)
 	}
 	user := dialect.User{ID: id, Name: cmp.Or(u.Profile.DisplayName, u.Profile.RealName, u.Name), Email: u.Profile.Email}
 	c.mu.Lock()
@@ -53,31 +57,42 @@ func (c *Client) ResolveUser(ctx context.Context, id string) (dialect.User, erro
 	return user, nil
 }
 
-// scrubbed is an error whose text has had both tokens taken out. It unwraps to the context
-// error behind it, if any, so that errors.Is(err, context.Canceled) still works.
+// scrubbed is an error whose text has had both tokens taken out. It unwraps to what a caller
+// may act on and that cannot hold a token: the context errors, and slack-go's code-only
+// errors (as copies with only the code, delay or status), so errors.Is and errors.As work.
+// It never unwraps to the original, whose text may quote a token, as a *url.Error does.
 type scrubbed struct {
-	msg   string
-	cause error
+	msg    string
+	causes []error
 }
 
-func (e *scrubbed) Error() string { return e.msg }
-func (e *scrubbed) Unwrap() error { return e.cause }
+func (e *scrubbed) Error() string   { return e.msg }
+func (e *scrubbed) Unwrap() []error { return e.causes }
 
 // scrub returns err as an error that holds no token. A Web API call fails with an error from
 // the HTTP stack or slack-go, whose text may quote what it was given, and the session manager
 // logs these errors. It replaces the configured tokens, then anything shaped like a Slack token.
-func (c *Client) scrub(ctx context.Context, op string, err error) error {
+func (c *Client) scrub(op string, err error) error {
 	msg := err.Error()
 	for _, t := range []string{c.bot.Reveal(), c.app.Reveal()} {
 		if t != "" {
 			msg = strings.ReplaceAll(msg, t, "[redacted]")
 		}
 	}
-	cause := ctx.Err()
+	var causes []error
 	for _, e := range []error{context.Canceled, context.DeadlineExceeded} {
-		if cause == nil && errors.Is(err, e) {
-			cause = e
+		if errors.Is(err, e) {
+			causes = append(causes, e)
 		}
 	}
-	return &scrubbed{msg: "slack " + op + ": " + store.RedactSecrets(msg), cause: cause}
+	if code := new(slackgo.SlackErrorResponse); errors.As(err, code) {
+		causes = append(causes, slackgo.SlackErrorResponse{Err: code.Err})
+	}
+	if rl := new(*slackgo.RateLimitedError); errors.As(err, rl) {
+		causes = append(causes, &slackgo.RateLimitedError{RetryAfter: (*rl).RetryAfter})
+	}
+	if sc := new(slackgo.StatusCodeError); errors.As(err, sc) {
+		causes = append(causes, slackgo.StatusCodeError{Code: sc.Code, Status: sc.Status})
+	}
+	return &scrubbed{msg: "slack " + op + ": " + store.RedactSecrets(msg), causes: causes}
 }
