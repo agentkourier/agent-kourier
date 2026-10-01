@@ -71,6 +71,8 @@
 //   - chat.update: omitted fields are kept, blocks=[] clears blocks, and
 //     invalid_arguments for a missing ts; a message still streaming is
 //     rejected with cant_update_message.
+//   - reactions.add (reactions.go): already_reacted, message_not_found (and the code for a
+//     deleted message), the characters a name may have, and no event being sent.
 //   - conversations.history and conversations.replies: invalid_limit; metadata
 //     only with include_all_metadata=1; with only oldest set, results stay
 //     newest first and cursors walk back toward oldest; replies return the
@@ -282,6 +284,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.postMessage(r.Form)
 	case "chat.update":
 		return s.updateMessage(r.Form)
+	case "reactions.add":
+		return s.addReaction(r.Form)
 	case "conversations.history":
 		return s.history(r.Form)
 	case "conversations.replies":

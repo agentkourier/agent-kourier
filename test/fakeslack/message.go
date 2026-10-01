@@ -39,6 +39,8 @@ type Message struct {
 	Blocks   json.RawMessage `json:"blocks,omitempty"`
 	Metadata *Metadata       `json:"metadata,omitempty"`
 	Edited   *Edited         `json:"edited,omitempty"`
+	// Reactions are the emoji added with reactions.add.
+	Reactions []Reaction `json:"reactions,omitempty"`
 
 	// ReplyCount and LatestReply are filled in on thread parents by
 	// conversations.history; the store leaves them zero.
@@ -68,6 +70,7 @@ func (m *Message) clone() Message {
 		e := *m.Edited
 		c.Edited = &e
 	}
+	c.Reactions = cloneReactions(m.Reactions)
 	if m.Chunks != nil {
 		c.Chunks = make([]json.RawMessage, len(m.Chunks))
 		for i, ch := range m.Chunks {
