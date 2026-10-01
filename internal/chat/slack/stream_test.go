@@ -80,21 +80,32 @@ func TestTeamIDIsAskedOnce(t *testing.T) {
 }
 
 // TestStreamErrorsNameNoToken makes every request fail with an error that quotes both tokens;
-// no method may return them.
+// no method may return them. TeamID is asked first, on a client that has not cached the team,
+// and the others on one that has, so that each fails in its own call.
 func TestStreamErrorsNameNoToken(t *testing.T) {
-	const bot, app = "canary-bot-token", "canary-app-token"
-	fake, calls := newFake(t), &counter{n: map[string]int{}}
-	cfg := clientConfig(fake)
-	cfg.BotToken, cfg.AppToken, cfg.HTTPClient = secret.New(bot), secret.New(app), &http.Client{Transport: calls}
-	c := slack.New(cfg)
-	calls.err = fmt.Errorf("proxy refused %s and %s", bot, app)
+	const bot, app = "xoxb-canary-bot-token", "xapp-canary-app-token" // with the prefixes the fake accepts
+	fake := newFake(t)
+	client := func(warm bool) *slack.Client {
+		calls := &counter{n: map[string]int{}}
+		cfg := clientConfig(fake)
+		cfg.BotToken, cfg.AppToken, cfg.HTTPClient = secret.New(bot), secret.New(app), &http.Client{Transport: calls}
+		c := slack.New(cfg)
+		if warm {
+			if _, err := c.TeamID(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		calls.err = fmt.Errorf("proxy refused %s and %s", bot, app)
+		return c
+	}
 	ctx := t.Context()
+	cold, warm := client(false), client(true)
 	for name, call := range map[string]func() error{
-		"Update":       func() error { return c.Update(ctx, "C1", "1.1", "x", nil) },
-		"StartStream":  func() error { _, err := c.StartStream(ctx, "C1", "1.1", "U1", "x"); return err },
-		"AppendStream": func() error { return c.AppendStream(ctx, "C1", "1.1", "x") },
-		"StopStream":   func() error { return c.StopStream(ctx, "C1", "1.1", "x", nil, "ob") },
-		"TeamID":       func() error { _, err := c.TeamID(ctx); return err },
+		"TeamID":       func() error { _, err := cold.TeamID(ctx); return err },
+		"Update":       func() error { return warm.Update(ctx, "C1", "1.1", "x", nil) },
+		"StartStream":  func() error { _, err := warm.StartStream(ctx, "C1", "1.1", "U1", "x"); return err },
+		"AppendStream": func() error { return warm.AppendStream(ctx, "C1", "1.1", "x") },
+		"StopStream":   func() error { return warm.StopStream(ctx, "C1", "1.1", "x", nil, "ob") },
 	} {
 		err := call()
 		if err == nil {
