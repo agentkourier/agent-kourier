@@ -49,9 +49,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 	}
 	// runCtx is the broker's own: a signal ends ctx, and the shutdown then stops the parts in order, one
-	// step at a time, where a context derived from ctx would stop them all at once. Until the broker is
-	// ready, though, a signal does cancel it, so that a slow Bootstrap can be interrupted. After that
-	// only the shutdown cancels the parts, and the steps of startup that remain run to their end.
+	// step at a time, where a context derived from ctx would stop them all at once. Until startup has
+	// finished, though, a signal does cancel it, so that a slow Bootstrap, Reconcile or Recover cannot
+	// hold a signal for the length of the grace period.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stopStartupWatch := context.AfterFunc(ctx, cancel)
 	defer stopStartupWatch()
@@ -106,7 +106,6 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
-	stopStartupWatch() // from here a signal ends ctx only, and the shutdown stops the parts in order
 	log.InfoContext(ctx, "ready")
 
 	// Slack: its client posts for the outbox, and a token revoked mid-run, which only a post sees,
@@ -162,6 +161,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		transport.CloseIdleConnections()
 	})
 
+	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal between
+	// ready.Set and this line still cancels everything at once: that window is accepted, because it is
+	// still startup, and the alternative is a Recover or Reconcile that ignores a signal and spends the grace period.
+	stopStartupWatch()
 	select {
 	case <-ctx.Done():
 		return nil
