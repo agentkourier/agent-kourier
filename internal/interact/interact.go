@@ -1,0 +1,177 @@
+// Package interact turns an agent's pause into a question in the thread (spec 8.4). The intake
+// records a pause as an interaction and posts its prompt through the outbox, and when the same pause
+// comes again after a crash it finishes what the crash left undone.
+package interact
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+// ErrDisallowed is returned for a pause the Binding does not allow, or that Phase 5 would render.
+var ErrDisallowed = errors.New("interact: the Binding does not allow that kind of pause")
+
+// Binding is what the intake needs of a thread's Binding: which pauses it allows, and how long one waits.
+type Binding struct {
+	Dialect                dialect.Dialect
+	AskUser, ToolApprovals bool
+	Timeout                time.Duration
+}
+
+// Lookup returns the Binding of a name; the broker implements it (WP-35h).
+type Lookup interface {
+	Binding(name string) (Binding, error)
+}
+
+// Prompt is what a renderer turns into the message that asks. ID is what a press carries back.
+type Prompt struct {
+	ID          string
+	Interaction dialect.Interaction
+	Deadline    time.Time
+}
+
+// PromptRenderer renders a prompt (WP-33b1); what the agent wrote is untrusted, and its to escape.
+type PromptRenderer interface {
+	Prompt(p Prompt) (slack.Content, error)
+}
+
+// Sender is *outbox.Outbox.
+type Sender interface {
+	Send(ctx context.Context, p outbox.Post) (string, error)
+}
+
+// Config configures an Intake. Store, Lookup, Prompts and Outbox are required.
+type Config struct {
+	Store   store.Interactions
+	Lookup  Lookup
+	Prompts PromptRenderer
+	Outbox  Sender
+	Now     func() time.Time // time.Now if nil
+	Logger  *slog.Logger     // slog.Default() if nil
+}
+
+// Intake records pauses as interactions and posts their prompts. It is safe for concurrent use.
+type Intake struct{ cfg Config }
+
+// New returns an Intake over cfg.
+func New(cfg Config) (*Intake, error) {
+	if cfg.Store == nil || cfg.Lookup == nil || cfg.Prompts == nil || cfg.Outbox == nil {
+		return nil, errors.New("interact: Store, Lookup, Prompts and Outbox are required")
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	return &Intake{cfg}, nil
+}
+
+// Pause is a task paused on input, as the turn's FinalEvent carried it; reconciliation re-emits it after a restart.
+type Pause struct {
+	Key     store.ConversationKey
+	Binding string
+	Task    a2a.Task
+}
+
+// InteractionID is the ID a pause becomes: a hash of its kind, task, request ID and tool IDs, so the
+// same pause always has the same ID and agent text never reaches one.
+func InteractionID(in dialect.Interaction) string {
+	tools := make([]string, len(in.Tools))
+	for i, t := range in.Tools {
+		tools[i] = t.ID
+	}
+	slices.Sort(tools)
+	var b strings.Builder
+	for _, f := range append([]string{string(in.Kind), string(in.TaskID), in.RequestID}, tools...) {
+		fmt.Fprintf(&b, "%d:%s;", len(f), f) // length-prefixed, so no two field lists hash alike
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return "ix-" + hex.EncodeToString(sum[:])[:32]
+}
+
+// Paused takes up a pause. Every step is idempotent, so a crash between two leaves the next call to
+// finish the work and never repeat it: it creates the interaction, posts the prompt if that is not
+// done (the outbox adopts a post made and not recorded), and records the message. It does I/O, so a
+// caller on the agent's stream goroutine runs it elsewhere.
+func (i *Intake) Paused(ctx context.Context, p Pause) error {
+	b, err := i.cfg.Lookup.Binding(p.Binding)
+	if err != nil {
+		return fmt.Errorf("interact: Binding %q: %w", p.Binding, err)
+	}
+	in, err := b.Dialect.ParseInteraction(p.Task)
+	switch {
+	case errors.Is(err, dialect.ErrUnusablePause):
+		return err // WP-33c2 reports it in the thread, audits it and cancels the task
+	case err != nil:
+		return fmt.Errorf("interact: parse the pause of task %s: %w", p.Task.ID, err)
+	case in == nil:
+		return nil // nothing structured to answer: the thread's own replies carry on
+	}
+	// A tool approval is not posted even where allowed: Phase 5 renders it. WP-33c2 handles both.
+	if in.Kind == dialect.ToolApproval || !b.AskUser {
+		return ErrDisallowed
+	}
+	row, err := i.record(ctx, p, b, *in)
+	if err != nil {
+		return err
+	}
+	if row.State == store.InteractionPending && row.MessageRef == "" {
+		return i.post(ctx, p, row, *in)
+	}
+	return nil
+}
+
+// record creates the interaction for in, or finds the one that exists. The deadline is the task's own
+// timestamp plus the Binding's timeout, so a pause seen again after a restart keeps its deadline.
+func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Interaction) (store.Interaction, error) {
+	request, err := json.Marshal(in) // the dialect reads it back unchanged to build the answer
+	if err != nil {
+		return store.Interaction{}, fmt.Errorf("interact: encode the pause: %w", err)
+	}
+	at := i.cfg.Now()
+	if ts := p.Task.Status.Timestamp; ts != nil {
+		at = *ts
+	}
+	kind := store.InteractionAskUser
+	if in.Nested != nil {
+		kind = store.InteractionNested
+	}
+	id := InteractionID(in)
+	row := store.Interaction{ID: id, Key: p.Key, TaskID: string(in.TaskID), Kind: kind, Request: request, CreatedAt: at, Deadline: at.Add(b.Timeout)}
+	if _, err := i.cfg.Store.CreateInteraction(ctx, row); err != nil {
+		return store.Interaction{}, fmt.Errorf("interact: record %s: %w", id, err)
+	}
+	if row, err = i.cfg.Store.GetInteraction(ctx, id); err != nil {
+		return store.Interaction{}, fmt.Errorf("interact: read %s: %w", id, err)
+	}
+	return row, nil
+}
+
+// post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5).
+func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in dialect.Interaction) error {
+	content, err := i.cfg.Prompts.Prompt(Prompt{ID: row.ID, Interaction: in, Deadline: row.Deadline})
+	if err != nil {
+		return fmt.Errorf("interact: render the prompt of %s: %w", row.ID, err)
+	}
+	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Content: content})
+	if err != nil {
+		return fmt.Errorf("interact: post the prompt of %s: %w", row.ID, err)
+	}
+	if err := i.cfg.Store.SetInteractionMessageRef(ctx, row.ID, ref); err != nil {
+		return fmt.Errorf("interact: record the prompt of %s: %w", row.ID, err)
+	}
+	return nil
+}
