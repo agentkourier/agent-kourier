@@ -74,7 +74,8 @@ func (r *running) get(path string) (int, string) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// A listener nobody serves on still accepts connections, so a request needs a deadline of its own.
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
 	if err != nil {
 		r.t.Fatal(err)
 	}
