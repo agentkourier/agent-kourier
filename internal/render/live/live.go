@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -77,7 +78,10 @@ type Config struct {
 }
 
 // Renderer starts the rendering of turns. It is safe for concurrent use.
-type Renderer struct{ cfg Config }
+type Renderer struct {
+	cfg  Config
+	runs sync.WaitGroup // the goroutines of the turns started and not over
+}
 
 // New returns a Renderer over cfg.
 func New(cfg Config) *Renderer {
@@ -102,7 +106,22 @@ func New(cfg Config) *Renderer {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Renderer{cfg}
+	return &Renderer{cfg: cfg}
+}
+
+// Wait returns once every turn started so far has ended, or with ctx's error if that comes first, so that
+// a shutdown can wait for the final texts that are still being written, which a turn's own context does
+// not stop. It is for after the turns have stopped being started: a turn started during Wait may or may
+// not be waited for.
+func (r *Renderer) Wait(ctx context.Context) error {
+	over := make(chan struct{})
+	go func() { r.runs.Wait(); close(over) }()
+	select {
+	case <-over:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("live: wait for the renders: %w", ctx.Err())
+	}
 }
 
 // Turn is where one turn's output goes.
@@ -158,7 +177,8 @@ type Run struct {
 // written, or given up on, or when ctx ends.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	u := &Run{cfg: r.cfg, turn: t, streaming: t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.cfg.Streamer != nil && r.cfg.Store != nil, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
-	go u.run(ctx)
+	r.runs.Add(1)
+	go func() { defer r.runs.Done(); u.run(ctx) }()
 	return u
 }
 

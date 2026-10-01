@@ -400,6 +400,51 @@ func TestFailedUpdateIsRetriedAndLosesNoText(t *testing.T) {
 	}
 }
 
+// Wait is for the shutdown: it returns once every run has ended, so that no render goroutine outlives the
+// broker that started it. A run that has seen its final text is still writing it after the turn's
+// context has ended, and Wait is what waits for that.
+func TestWaitReturnsOnceEveryRunHasEnded(t *testing.T) {
+	e := setup(t)
+	run, cancel := e.start(t, v1alpha1.OutputLive, false)
+	run.Handle(text("a", "the answer"))
+	run.Handle(agent.FinalEvent{})
+	cancel() // the turn is over, and its run is still writing the final text
+	waited := make(chan error, 1)
+	go func() { waited <- e.live.Wait(t.Context()) }()
+
+	e.finish(t, run)
+
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Errorf("Wait = %v, want nil once the run had ended", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait did not return after the run ended")
+	}
+}
+
+func TestWaitGivesUpWhenItsContextEndsAndLeavesTheRunToItsOwn(t *testing.T) {
+	e := setup(t)
+	run, cancel := e.start(t, v1alpha1.OutputLive, false)
+	run.Handle(text("a", "partial"))
+	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
+	run.Handle(text("a", "partial, more")) // the run waits for its window and does not end of itself
+	ctx, end := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer end()
+
+	err := e.live.Wait(ctx)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Wait = %v, want the context's deadline, the run being still alive", err)
+	}
+	cancel()
+	<-run.Done()
+	if err := e.live.Wait(t.Context()); err != nil {
+		t.Errorf("Wait after the run ended = %v, want nil", err)
+	}
+}
+
 func TestAbandonedTurnEndsWithItsContext(t *testing.T) {
 	e := setup(t)
 	run, cancel := e.start(t, v1alpha1.OutputLive, false)
