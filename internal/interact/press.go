@@ -63,12 +63,14 @@ type PressConfig struct {
 	Auditor    Auditor
 	Now        func() time.Time // time.Now if nil
 	Logger     *slog.Logger     // slog.Default() if nil
-	// Limits bounds the presses waiting (default 200 in all, 10 for one person).
+	// Limits bounds the presses waiting (default 1000 in all, 10 for one person).
 	Limits store.PressLimits
 	// EarlyFor is how long a press for a prompt whose message is not recorded yet is tried again
 	// (default 2 minutes), before the person is told to press again.
 	EarlyFor time.Duration
-	// Notify, if set, is called with each press recorded, for the worker (WP-33d1d) to pick it up.
+	// Notify, if set, is called with each press recorded, for the worker (WP-33d1d) to pick it up. It runs
+	// in Press, on the path that acknowledges the button to Slack, so it must never block: a hand-off to a
+	// buffered or unbounded queue, as Worker.Submit is, and not to a channel a worker may not be reading.
 	Notify func(store.Press)
 }
 
@@ -92,7 +94,7 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Limits.Total <= 0 || cfg.Limits.PerUser <= 0 {
-		cfg.Limits = store.PressLimits{Total: 200, PerUser: 10}
+		cfg.Limits = store.PressLimits{Total: 1000, PerUser: 10}
 	}
 	if cfg.EarlyFor <= 0 {
 		cfg.EarlyFor = 2 * time.Minute
@@ -141,7 +143,8 @@ const (
 // refused as not a member, or a bot, or for an incomplete answer, is audited first (denied, or incomplete
 // with the answer's shape and no values); a press on a question that is already decided is not, since only
 // a press that races into the decider is a decision lost. A failure to check, to audit or to decide is an
-// error and leaves the press for another try.
+// error and leaves the press for another try. A check of who pressed that keeps failing is no decision
+// either, and is tried again for EarlyFor of the press's age, as an early press is, before the person is told.
 func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, error) {
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
@@ -190,12 +193,12 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	}
 	switch member, err := p.cfg.Authorizer.IsChannelMember(ctx, row.Key.Channel, press.User); {
 	case err != nil:
-		return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
+		return p.unverified(ctx, press, row, err)
 	case !member:
 		return refuse(audit.DecisionDenied, nil, textNotMember)
 	}
 	if bot, err := p.cfg.Authorizer.IsBot(ctx, press.User); err != nil {
-		return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
+		return p.unverified(ctx, press, row, err)
 	} else if bot {
 		return refuse(audit.DecisionDenied, nil, "")
 	}
@@ -221,6 +224,17 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		return Retry, err
 	}
 	return p.finish(ctx, press, "", "")
+}
+
+// unverified is a check of who pressed that could not be made. It is no decision, so the press is kept and
+// tried again, as an early one is, for EarlyFor of its age: a Slack error near the deadline must not lose an
+// answer that came in time. Only then is the person told, and the press deleted.
+func (p *Pipeline) unverified(ctx context.Context, press store.Press, row store.Interaction, err error) (Result, error) {
+	if p.cfg.Now().Sub(press.PressedAt) < p.cfg.EarlyFor {
+		return Retry, fmt.Errorf("interact: check who pressed %s: %w", row.ID, err)
+	}
+	p.cfg.Logger.WarnContext(ctx, "interact: a press could not be checked in time", "interaction", row.ID, "err", err)
+	return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
 }
 
 // binding is the Binding of the interaction's thread, or nil if the thread or its Binding is gone.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -209,12 +210,10 @@ func TestOnlyMembersWhoAreNotBotsAreDecided(t *testing.T) {
 		mod    func(*authz)
 		user   string
 		want   string // what the person is told; empty: nothing
-		denied int    // audit rows: a refusal of a person is a decision, a check that failed is not
+		denied int    // audit rows: a refusal of a person is a decision
 	}{
-		"not a member":              {func(*authz) {}, "UOUTSIDE", "UOUTSIDE: Only members of this channel can answer this question.", 1},
-		"membership cannot be read": {func(a *authz) { a.memberErr = errBoom }, "UALICE1", "UALICE1: Couldn't verify that you can answer this question. Please try again.", 0},
-		"bot status cannot be read": {func(a *authz) { a.botErr = errBoom }, "UALICE1", "UALICE1: Couldn't verify that you can answer this question. Please try again.", 0},
-		"a bot":                     {func(a *authz) { a.bots = map[string]bool{"UALICE1": true} }, "UALICE1", "", 1},
+		"not a member": {func(*authz) {}, "UOUTSIDE", "UOUTSIDE: Only members of this channel can answer this question.", 1},
+		"a bot":        {func(a *authz) { a.bots = map[string]bool{"UALICE1": true} }, "UALICE1", "", 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newPressRig(t)
@@ -229,6 +228,35 @@ func TestOnlyMembersWhoAreNotBotsAreDecided(t *testing.T) {
 			}
 			if tc.denied == 1 && (r.aud.got[0].Result != audit.DecisionDenied || r.aud.act[0] != (audit.Actor{User: tc.user, Binding: "ns/b", Identity: "secret:ns/tok"}) || !r.aud.got[0].At.Equal(r.now)) {
 				t.Errorf("audit row %+v by %+v; want a denied decision by the person, at the press's time, under the Binding", r.aud.got[0], r.aud.act[0])
+			}
+		})
+	}
+}
+
+// TestACheckThatFailsKeepsThePressForTwoMinutes: a check that cannot be made is no decision. A transient error
+// near the deadline must not lose an answer that was in time, so the press is kept and tried again, until it is
+// as old as an early press may be, and only then is the person told.
+func TestACheckThatFailsKeepsThePressForTwoMinutes(t *testing.T) {
+	for name, mod := range map[string]func(*authz){
+		"membership cannot be read": func(a *authz) { a.memberErr = errBoom },
+		"bot status cannot be read": func(a *authz) { a.botErr = errBoom },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newPressRig(t)
+			r.open(t)
+			mod(r.az)
+			if err := r.pl.Press(t.Context(), r.submit(t, "UALICE1", 0)); err != nil {
+				t.Fatal(err)
+			}
+			presses, _ := r.st.ListPresses(t.Context())
+			r.now = r.now.Add(2*time.Minute - time.Second)
+			if res, err := r.pl.Process(t.Context(), presses[0]); !errors.Is(err, errBoom) || res != interact.Retry || r.waiting(t) != 1 || len(r.eph.list()) != 0 || len(r.aud.got) != 0 {
+				t.Fatalf("Process just before 2 minutes = %v, %v, %d waiting, told %q; want Retry with the error, the press kept, no one told and nothing audited", res, err, r.waiting(t), r.eph.list())
+			}
+			r.now = r.now.Add(time.Second)
+			want := "UALICE1: Couldn't verify that you can answer this question. Please try again."
+			if res, err := r.pl.Process(t.Context(), presses[0]); err != nil || res != interact.Done || r.waiting(t) != 0 || strings.Join(r.eph.list(), "|") != want || len(r.sess.answers()) != 0 {
+				t.Errorf("Process at 2 minutes = %v, %v, %d waiting, told %q; want the person told, the press done and nothing sent", res, err, r.waiting(t), r.eph.list())
 			}
 		})
 	}
@@ -283,6 +311,11 @@ func TestAPressForNothingOrForAnotherMessageIsDropped(t *testing.T) {
 	if res, err := r.process(t, other); err != nil || res != interact.Done || len(r.eph.list()) != 0 || len(r.sess.answers()) != 0 || r.waiting(t) != 0 {
 		t.Errorf("a press on another message = %v, %v, told %q; want it dropped quietly", res, err, r.eph.list())
 	}
+	elsewhere := r.submit(t, "UALICE1", 0)
+	elsewhere.Channel = "C9" // the message's ts is the prompt's, but it is in another channel
+	if res, err := r.process(t, elsewhere); err != nil || res != interact.Done || len(r.eph.list()) != 0 || len(r.sess.answers()) != 0 || r.waiting(t) != 0 {
+		t.Errorf("a press in another channel = %v, %v, told %q; want it dropped quietly", res, err, r.eph.list())
+	}
 	none := r.submit(t, "UALICE1", 0)
 	none.Value = "ix-nosuch"
 	if _, err := r.process(t, none); err != nil || len(r.eph.list()) != 1 || !strings.Contains(r.eph.list()[0], "no longer available") {
@@ -329,5 +362,35 @@ func TestARefusalIsAuditedBeforeThePersonIsToldAndNotWithoutIt(t *testing.T) {
 				t.Errorf("Process again = %v, %v, told %q, %d audit attempts; want it done and told once", res, err, r.eph.list(), len(r.aud.got))
 			}
 		})
+	}
+}
+
+// TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson.
+func TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson(t *testing.T) {
+	r := newPressRig(t)
+	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud})
+	if err != nil {
+		t.Fatal(err)
+	}
+	press := func(user string) error {
+		return pl.Press(t.Context(), slack.Interaction{User: user, Channel: "C1", MessageTS: "100.1", Value: "ix-1"})
+	}
+	for i := range 10 {
+		if err := press("U0"); err != nil {
+			t.Fatalf("press %d by one person: %v", i+1, err)
+		}
+	}
+	if err := press("U0"); !errors.Is(err, store.ErrLimit) {
+		t.Errorf("an eleventh press by one person = %v; want store.ErrLimit", err)
+	}
+	for u := 1; u < 100; u++ {
+		for range 10 {
+			if err := press(fmt.Sprintf("U%d", u)); err != nil {
+				t.Fatalf("a press by U%d: %v", u, err)
+			}
+		}
+	}
+	if err := press("UOTHER"); !errors.Is(err, store.ErrLimit) {
+		t.Errorf("the 1001st press = %v; want store.ErrLimit", err)
 	}
 }
