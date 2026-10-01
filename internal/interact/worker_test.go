@@ -187,3 +187,37 @@ func TestAPressThatCannotBeProcessedYetIsLeftRecordedAndTheLaneGoesOn(t *testing
 		t.Errorf("tried %v, log %q; want press 1 tried once and a warning that names the error", f.processed(), logs.String())
 	}
 }
+
+// TestRecordingAPressNeverWaitsForTheWorker: Notify runs on the path that acknowledges the button to Slack,
+// so Worker.Submit, which is what it is given, must return even when every worker is busy and presses queue.
+func TestRecordingAPressNeverWaitsForTheWorker(t *testing.T) {
+	r := newPressRig(t)
+	gate := make(chan struct{})
+	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { <-gate; return interact.Done, nil }}
+	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers = 1 })
+	t.Cleanup(func() { close(gate) }) // before the worker is stopped
+	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+		Limits: store.PressLimits{Total: 100, PerUser: 100}, Notify: w.Submit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	button := r.submit(t, "UALICE1", 0)
+	pressed := make(chan error, 1)
+	go func() {
+		for range 50 {
+			if err := pl.Press(t.Context(), button); err != nil {
+				pressed <- err
+				return
+			}
+		}
+		pressed <- nil
+	}()
+	select {
+	case err := <-pressed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Press did not return while the only worker was busy")
+	}
+}
