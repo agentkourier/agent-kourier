@@ -105,6 +105,10 @@ func TestCounterRefusesWhatItCannotRead(t *testing.T) {
 			t.Errorf("Counter over %q = %v; want a parse error, not a missing sample", body, err)
 		}
 	}
+	huge := "# " + strings.Repeat("x", maxMetrics) + "\n" // over what is read
+	if _, err := metricsServer(t, huge).Counter(t.Context(), "courier_x_total", nil); !errors.Is(err, errTooLarge) {
+		t.Errorf("Counter over a body of %d bytes = %v; want errTooLarge", len(huge), err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "no metrics", http.StatusInternalServerError)
 	}))

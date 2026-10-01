@@ -25,6 +25,10 @@ func TestControlShowsEphemeralsAndNothingElseDoes(t *testing.T) {
 		got[0].Recipient != "U1" || got[0].Text != "answer every question" || got[0].ThreadTS != root {
 		t.Fatalf("ephemerals = %d, %+v; want one for U1, in the thread", s, got)
 	}
+	var raw []map[string]any // the key is the contract, not only the Go field that round-trips it
+	if s := control(t, fake, "GET", "/_control/ephemerals"+q, nil, &raw); s != 200 || len(raw) != 1 || raw[0]["recipient"] != "U1" {
+		t.Fatalf("ephemerals as JSON = %d, %v; want a recipient key", s, raw)
+	}
 	for _, path := range []string{"/_control/messages" + q, "/_control/thread?" + url.Values{"channel": {"C1"}, "ts": {root}}.Encode()} {
 		var msgs []fakeslack.MessageView
 		if s := control(t, fake, "GET", path, nil, &msgs); s != 200 || len(msgs) != 1 || msgs[0].Text != "root" {
