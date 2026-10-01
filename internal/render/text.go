@@ -11,6 +11,11 @@
 // "@here", "#general" and bare URLs pass through here as text, on purpose. And text is rendered
 // once, at the last step before it is sent: rendering rendered text escapes its entities again,
 // and nothing here unescapes.
+//
+// Threat model of the redaction in tool lines (redact.go): it stops accidental exposure, a
+// credential in an argument that an honest agent passed to a tool. It does not stop a determined
+// agent. Letters that only look like Latin ones (a Cyrillic "a" in "password") are not matched, and
+// the agent can write a secret into its own reply, which is body text and is never redacted.
 package render
 
 import (
