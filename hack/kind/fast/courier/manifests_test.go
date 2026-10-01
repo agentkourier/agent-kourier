@@ -113,8 +113,9 @@ func TestDeployment(t *testing.T) {
 	}
 	sc := c.SecurityContext
 	if sc == nil || *sc.AllowPrivilegeEscalation || !*sc.ReadOnlyRootFilesystem || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" ||
-		pod.SecurityContext == nil || !*pod.SecurityContext.RunAsNonRoot || *pod.SecurityContext.RunAsUser != 65532 {
-		t.Errorf("security contexts %+v and %+v; want non-root 65532, a read-only root, no escalation, every capability dropped", pod.SecurityContext, sc)
+		pod.SecurityContext == nil || !*pod.SecurityContext.RunAsNonRoot || *pod.SecurityContext.RunAsUser != 65532 ||
+		pod.SecurityContext.SeccompProfile == nil || pod.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("security contexts %+v and %+v; want non-root 65532, the RuntimeDefault seccomp profile, a read-only root, no escalation, every capability dropped", pod.SecurityContext, sc)
 	}
 	if c.StartupProbe == nil || c.StartupProbe.HTTPGet.Path != "/healthz" || c.StartupProbe.PeriodSeconds*c.StartupProbe.FailureThreshold < 60 ||
 		c.LivenessProbe == nil || c.LivenessProbe.HTTPGet.Path != "/healthz" || c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet.Path != "/readyz" {
@@ -144,8 +145,8 @@ func TestDeployment(t *testing.T) {
 	}
 }
 
-// TestRBAC: courier reads Secrets, and only in its own namespace; it never needs get on all of them
-// cluster-wide, and holds no Role to write anything.
+// TestRBAC: courier reads Secrets through shared informers, which only list and watch, so it never gets
+// one by name (WP-21d); and only in its own namespace. It holds no Role to write anything.
 func TestRBAC(t *testing.T) {
 	var sa corev1.ServiceAccount
 	var role rbacv1.Role
@@ -156,9 +157,9 @@ func TestRBAC(t *testing.T) {
 	if sa.AutomountServiceAccountToken == nil || !*sa.AutomountServiceAccountToken {
 		t.Error("the ServiceAccount must automount its token: courier reads Secrets through the API")
 	}
-	if len(role.Rules) != 1 || fmt.Sprint(role.Rules[0].Resources, role.Rules[0].Verbs, role.Rules[0].APIGroups) != "[secrets] [get list watch] []" ||
+	if len(role.Rules) != 1 || fmt.Sprint(role.Rules[0].Resources, role.Rules[0].Verbs, role.Rules[0].APIGroups) != "[secrets] [list watch] []" ||
 		role.Namespace != "courier" || rb.Namespace != "courier" || rb.RoleRef.Name != role.Name || len(rb.Subjects) != 1 || rb.Subjects[0].Name != sa.Name {
-		t.Errorf("Role %+v bound by %+v; want get, list and watch on Secrets in courier alone, bound to the ServiceAccount", role, rb)
+		t.Errorf("Role %+v bound by %+v; want list and watch, never get, on Secrets in courier alone, bound to the ServiceAccount", role, rb)
 	}
 	var pvc corev1.PersistentVolumeClaim
 	load(t, "pvc.yaml", "PersistentVolumeClaim", &pvc)
