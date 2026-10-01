@@ -49,7 +49,15 @@ var userID = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
 // mrkdwn sections and context blocks, through Text; the mention and the date are built here, from a
 // verified user ID and a time. No field is plain_text, so no Plain flavour is needed.
 func Replacement(e Ending) (text string, blocks []map[string]any) {
-	verb := [...]string{Answered: "Answered", TimedOut: "Timed out", Cancelled: "Cancelled"}[e.Outcome]
+	verb := "Ended" // an Outcome this does not know says only that
+	switch e.Outcome {
+	case Answered:
+		verb = "Answered"
+	case TimedOut:
+		verb = "Timed out"
+	case Cancelled:
+		verb = "Cancelled"
+	}
 	status := "*" + verb + "*"
 	if e.By != "" {
 		who := "someone"
@@ -64,9 +72,9 @@ func Replacement(e Ending) (text string, blocks []map[string]any) {
 	blocks = []map[string]any{{"type": "section", "text": mrkdwn(status)}}
 	var context []map[string]any
 	if e.Subagent != "" {
-		context = append(context, mrkdwn("Raised by sub-agent *"+Text(e.Subagent, maxOptionText)+"*"))
+		context = append(context, mrkdwn("Raised by sub-agent *"+oneLine(e.Subagent, maxOptionText)+"*"))
 	}
-	if hint := Text(e.Hint, maxHeader); hint != "" {
+	if hint := strings.TrimSpace(oneLine(e.Hint, maxHeader)); hint != "" {
 		context = append(context, mrkdwn(hint))
 	}
 	if len(context) > 0 {
@@ -81,6 +89,10 @@ func Replacement(e Ending) (text string, blocks []map[string]any) {
 func mrkdwn(s string) map[string]any { return map[string]any{"type": "mrkdwn", "text": s} }
 
 // answerSections is a line for each question and its answer, in sections of at most 3000 characters.
+// Every line is one line: nothing a question or a choice says can start a line of its own, such as one
+// that looks like a status. A free-text answer is never shown, only that there is one: what a person
+// types may be a secret, and the channel keeps what it is shown (the owner's decision). A chosen
+// choice is the agent's own text, and is shown.
 func answerSections(qs []dialect.Question, answers [][]string) []map[string]any {
 	var sections []map[string]any
 	var b strings.Builder
@@ -89,7 +101,15 @@ func answerSections(qs []dialect.Question, answers [][]string) []map[string]any 
 		if i < len(answers) {
 			given = answers[i]
 		}
-		line := "*" + cmp.Or(Text(q.Text, maxListLine/2), "Question "+strconv.Itoa(i+1)) + "* " + cmp.Or(Text(strings.Join(given, ", "), 2*maxListLine), "(no answer)") + "\n"
+		answer := "(no answer)"
+		switch {
+		case len(given) == 0:
+		case len(q.Choices) == 0:
+			answer = "(answered)"
+		default:
+			answer = cmp.Or(oneLine(strings.Join(given, ", "), 2*maxListLine), answer)
+		}
+		line := "*" + cmp.Or(oneLine(q.Text, maxListLine/2), "Question "+strconv.Itoa(i+1)) + "* " + answer + "\n"
 		if b.Len() > 0 && units(b.String())+units(line) > maxSectionText {
 			sections = append(sections, map[string]any{"type": "section", "text": mrkdwn(b.String())})
 			b.Reset()

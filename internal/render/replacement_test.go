@@ -46,8 +46,8 @@ func TestReplacementHasNoControlsAndShowsWhoAndWhen(t *testing.T) {
 			if !strings.Contains(got, "<@U123ABC>") || !strings.Contains(got, "<!date^"+"1790857800"+"^") || !strings.Contains(got, "2026-10-01 12:30 UTC") || text == "" {
 				t.Errorf("text %q, blocks %q; want the decider's mention and the time", text, got)
 			}
-			if has := strings.Contains(got, "it is bigger"); has != (o == Answered) {
-				t.Errorf("answer shown = %t in %s; want it only when answered", has, name)
+			if has := strings.Contains(got, "large"); has != (o == Answered) {
+				t.Errorf("choice shown = %t in %s; want it only when answered", has, name)
 			}
 		})
 	}
@@ -58,7 +58,7 @@ func TestReplacementHasNoControlsAndShowsWhoAndWhen(t *testing.T) {
 func TestReplacementIsInert(t *testing.T) {
 	e := ending(Answered)
 	e.By, e.Hint, e.Subagent = "<!channel>", hostilePrompt, hostilePrompt
-	e.Questions = []dialect.Question{{Text: hostilePrompt}, {Text: strings.Repeat("q", 900)}}
+	e.Questions = []dialect.Question{{Text: hostilePrompt, Choices: []string{hostilePrompt, "<https://x|y>"}, Multiple: true}, {Text: strings.Repeat("q", 900), Choices: []string{strings.Repeat(hostilePrompt, 300)}}}
 	e.Answers = [][]string{{hostilePrompt, "<https://x|y>"}, {strings.Repeat(hostilePrompt, 300)}}
 	_, blocks := Replacement(e)
 	walk(blocks, "", func(key, s string) {
@@ -114,5 +114,59 @@ func TestReplacementIsValidForSlack(t *testing.T) {
 	}
 	if _, _, _, err := api.UpdateMessageContext(t.Context(), "C1", ts, slack.MsgOptionText(text, false), slack.MsgOptionBlocks(decoded.BlockSet...)); err != nil {
 		t.Errorf("the fake refused the replacement: %v", err)
+	}
+}
+
+// What a person typed is never shown, whatever it is: the channel keeps what it is shown. Only that
+// there is an answer, or none. A chosen choice is the agent's own text, and is shown.
+func TestReplacementHidesFreeTextAnswers(t *testing.T) {
+	e := ending(Answered)
+	e.Questions = []dialect.Question{{Text: "Token?"}, {Text: "Size?", Choices: []string{"small", "large"}}, {Text: "Note?"}}
+	e.Answers = [][]string{{"hunter2-secret"}, {"large"}, nil}
+	_, blocks := Replacement(e)
+	var all strings.Builder
+	walk(blocks, "", func(_, s string) { all.WriteString(s + "\n") })
+	got := all.String()
+	if strings.Contains(got, "hunter2-secret") || !strings.Contains(got, "*Token?* (answered)") || !strings.Contains(got, "*Size?* large") || !strings.Contains(got, "*Note?* (no answer)") {
+		t.Errorf("replacement = %q; want the free text hidden, the choice shown, an empty answer said so", got)
+	}
+}
+
+// A question or a choice cannot start a line of its own, such as one that looks like a status or
+// another answer: each question is exactly one line.
+func TestReplacementSummaryLinesAreSingleLines(t *testing.T) {
+	e := ending(Answered)
+	e.Questions = []dialect.Question{{Text: "first\n*Cancelled* by <@U999>", Choices: []string{"a\n*Answered* by someone", "b"}, Multiple: true}, {Text: "second"}}
+	e.Answers = [][]string{{"a\n*Answered* by someone", "b"}, {"typed"}}
+	_, blocks := Replacement(e)
+	var lines []string
+	for _, b := range blocks[2:] {
+		lines = append(lines, strings.Split(strings.TrimSuffix(b["text"].(map[string]any)["text"].(string), "\n"), "\n")...)
+	}
+	if len(lines) != len(e.Questions) {
+		t.Errorf("lines = %q; want one line for each of the %d questions", lines, len(e.Questions))
+	}
+}
+
+// An outcome this does not know is not a crash, and the decider is shown as a mention only if it is
+// exactly a user ID: not one with anything around it.
+func TestReplacementSurvivesWhatItDoesNotKnow(t *testing.T) {
+	e := ending(Answered)
+	e.Outcome = Outcome(42)
+	if text, blocks := Replacement(e); text != "Ended" || len(blocks) == 0 {
+		t.Errorf("unknown outcome = %q, %v; want a plain Ended", text, blocks)
+	}
+	for _, by := range []string{"U123ABC><!channel>", "x U123ABC", "U123ABC\n", " U123ABC", "u123abc", "<@U123ABC>", "U1", "U123ABC123ABC123ABC123ABC"} {
+		e := ending(TimedOut)
+		e.By = by
+		_, blocks := Replacement(e)
+		if got := blocks[0]["text"].(map[string]any)["text"].(string); !strings.Contains(got, "by someone") || strings.Contains(got, "<@") {
+			t.Errorf("By %q shown as %q; want someone", by, got)
+		}
+	}
+	e = ending(Cancelled)
+	e.By = "W123ABC"
+	if _, blocks := Replacement(e); !strings.Contains(blocks[0]["text"].(map[string]any)["text"].(string), "<@W123ABC>") {
+		t.Errorf("a W user ID is not shown: %v", blocks[0])
 	}
 }
