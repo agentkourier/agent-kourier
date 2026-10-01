@@ -84,17 +84,6 @@ func newSlackWorld(t *testing.T, botToken string) *slackWorld {
 	return &slackWorld{cfg: c, fake: fake, sink: sink, stub: stub, botTk: botToken}
 }
 
-// slackCluster is a cluster whose connection Secret holds botToken and whose Binding token is one the stub
-// accepts.
-func slackCluster(botToken string) *fake.Clientset {
-	conn := secretOf("courier-system", "slack-main", "appToken")
-	conn.Data["botToken"] = []byte(botToken)
-	conn.Data["appToken"] = []byte("xapp-fake-app")
-	oidc := secretOf("sre", "courier-sre-alerts-oidc", "token")
-	oidc.Data["token"] = []byte(jwt("courier@example.test"))
-	return fake.NewClientset(conn, oidc, secretOf("sre", "courier-webhook-token", "token"))
-}
-
 // rejectedWorld is a world whose Binding token the stub refuses (a malformed bearer is a 401), so
 // the first turn finds its credentials rejected.
 func rejectedWorld(t *testing.T) *slackWorld {

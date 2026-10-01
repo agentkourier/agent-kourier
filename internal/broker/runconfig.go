@@ -47,6 +47,8 @@ type RunConfig struct {
 	// without waiting 10 s and an audit write can be made to fail.
 	reloadPoll time.Duration
 	auditStore func(store.Audit) store.Audit
+	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
+	shutdownTrace func(step string)
 
 	testOptions // NoRenderer and NoInteractions in a testhooks build; nothing otherwise
 }

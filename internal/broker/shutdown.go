@@ -46,6 +46,7 @@ type shutdown struct {
 	log    *slog.Logger
 	steps  map[stepName]func(context.Context)
 	total  time.Duration
+	trace  func(step string) // a test's: called as each step begins, before it runs
 	floor  time.Duration
 	bounds map[stepName]time.Duration
 }
@@ -76,6 +77,9 @@ func (s *shutdown) run(ctx context.Context) {
 			continue
 		}
 		delete(s.steps, n)
+		if s.trace != nil {
+			s.trace(n.String())
+		}
 		bound := min(s.bounds[n], max(time.Until(deadline), s.floor))
 		stepCtx, cancel := context.WithCancel(base)
 		done := make(chan struct{})

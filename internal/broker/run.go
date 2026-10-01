@@ -55,6 +55,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	defer stopStartupWatch()
 	defer cancel()
 	sd := newShutdown(log)
+	sd.trace = cfg.shutdownTrace
 	defer sd.run(ctx)
 
 	// replaced in 35f2b4 for the hooks; the stale gauge already reads the Config once Bootstrap has made it.
