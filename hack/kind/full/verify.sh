@@ -18,8 +18,13 @@
 set -euo pipefail
 
 CTX=kind-courier-full
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR source=../lib.sh
+. "${HERE}/../lib.sh"
 CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
 K="kubectl --context ${CTX}"
+# Safe to run on its own: nothing below runs against any other context.
+assert_context full
 
 # Shell prelude for the probe pods. The Binding identity signs in with Dex's password grant
 # (Dex has no client_credentials); its ID token is the bearer credential and is never printed.
@@ -109,7 +114,13 @@ spoof_all() {
 # Only a timeout counts as refused: a policy drop must not be confused with another failure.
 refused() { rc=0; curl -s -m 8 -o /dev/null "$1" || rc=$?; [ "$rc" = 28 ]; }
 has() { printf %s "$1" | grep -q -- "$2"; } # TEXT PATTERN
-lacks() { ! has "$@"; }
+# A negative check must not pass because its command failed: lacks needs a non-empty TEXT, and an
+# empty answer (curl failed) is a failure. absent allows an empty TEXT, so use it only for a body
+# whose request a status check, just before it, has shown was answered. not200 wants a real status
+# other than 200: curl's 000 (no answer) is neither.
+lacks() { [ -n "$1" ] && ! has "$@"; }
+absent() { ! has "$@"; }
+not200() { [ -n "$1" ] && [ "$1" != 000 ] && [ "$1" != 200 ]; } # STATUS
 eq() { [ "$1" = "$2" ]; }
 assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; exit 1; fi; } # DESCRIPTION COMMAND...
 EOF
@@ -150,13 +161,13 @@ assert "front door forwards only /agents/" eq "$(code "$tok" "$FD/api/agents")" 
 for p in /agents/../api/agents /agents/..%2Fapi%2Fagents /agents/kagent%2F..%2F..%2Fapi/agents; do
   for flag in "" -L; do
     trav "$p" $flag
-    assert "traversal $p ${flag:-no redirect}: status $tst is not 200" [ "$tst" != 200 ]
-    assert "traversal $p ${flag:-no redirect}: no controller /api body" lacks "$tbody" 'test-agent'
+    assert "traversal $p ${flag:-no redirect}: status $tst is not 200" not200 "$tst"
+    assert "traversal $p ${flag:-no redirect}: no controller /api body" absent "$tbody" 'test-agent'
   done
 done
 trav /agents/../mcp -X POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT"
-assert "traversal /agents/../mcp: status $tst is not 200" [ "$tst" != 200 ]
-assert "traversal /agents/../mcp: no MCP answer" lacks "$tbody" protocolVersion
+assert "traversal /agents/../mcp: status $tst is not 200" not200 "$tst"
+assert "traversal /agents/../mcp: no MCP answer" absent "$tbody" protocolVersion
 # The slow agent's model emits a chunk a second for five seconds. Buffered, every event would
 # reach this loop in one burst; streamed, the first and last arrive seconds apart.
 stream=$(rpc "$tok" slow-agent SendStreamingMessage go | while IFS= read -r line; do case "$line" in data:*) echo "$(date +%s) $line" ;; esac; done)
