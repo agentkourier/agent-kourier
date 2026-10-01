@@ -254,6 +254,8 @@ func TestRunRefusesAQuestionOnABindingThatAllowsNone(t *testing.T) {
 	w.mention(t, r)
 
 	w.waitFor(t, "the refusal", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "does not allow questions") })
+	// The notice is queued before the cancel, so only a counted refusal is one whose cancel was made.
+	r.waitMetric(`courier_approval_outcomes_total{binding="sre/sre-alerts",outcome="ask_user_cancelled"} 1`)
 }
 
 // With no sink of its own, Run renders turns itself, through the Slack client and its own outbox: the
