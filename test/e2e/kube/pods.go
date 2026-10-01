@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,11 @@ type Pods struct {
 	client kubernetes.Interface
 	poll   time.Duration // how often the wait helpers re-list
 }
+
+// ErrDeleteRefused is returned, wrapped, for a pod delete outside namespace [Namespace]. Courier's
+// Deployment uses strategy: Recreate on one SQLite volume, and a pod delete bypasses it; a fault is
+// set through the Deployment instead ([Pods.SetFault]).
+var ErrDeleteRefused = errors.New("kube: refusing to delete pods outside " + Namespace)
 
 func newPods(client kubernetes.Interface) *Pods {
 	return &Pods{client: client, poll: 500 * time.Millisecond}
@@ -36,6 +42,9 @@ func (p *Pods) List(ctx context.Context, namespace, selector string) ([]corev1.P
 // may still send SIGTERM with a short grace, so this is not a crash. Real crash injection
 // belongs to WP-35's fault hook.
 func (p *Pods) Kill(ctx context.Context, namespace, name string) error {
+	if namespace != Namespace {
+		return fmt.Errorf("%w: %s", ErrDeleteRefused, namespace)
+	}
 	grace := int64(0)
 	err := p.client.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: &grace})
 	if err != nil {
@@ -51,6 +60,9 @@ func (p *Pods) Kill(ctx context.Context, namespace, name string) error {
 // Use it on the test doubles, never on courier: deleting a pod bypasses the Deployment's
 // strategy: Recreate, so two courier pods could share the SQLite volume.
 func (p *Pods) Restart(ctx context.Context, namespace, selector string) (*corev1.Pod, error) {
+	if namespace != Namespace {
+		return nil, fmt.Errorf("%w: %s", ErrDeleteRefused, namespace)
+	}
 	pods, err := p.List(ctx, namespace, selector)
 	if err != nil {
 		return nil, err

@@ -51,6 +51,8 @@ kind load docker-image "${IMAGE}" --name "${CLUSTER}"
 echo "==> run the Job in ${CTX}"
 # A Job's pod template cannot change, so a leftover Job from an interrupted run goes first.
 "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found >/dev/null
+# The runner's Role in courier's namespace needs the namespace to exist.
+"${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null
 "${K[@]}" apply -f "${HERE}/e2e/runner.yaml" >/dev/null
 result=
 deadline=$((SECONDS + WAIT_SECONDS))

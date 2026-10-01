@@ -1,6 +1,8 @@
 # The E2E runner: the test binary as a Job in namespace e2e, so it reaches the test doubles by their
 # ClusterIP Service names and nothing is published to the host (the fake Slack's /_control/ has no
-# authentication). Its service account may list and delete pods in e2e only, to restart a double.
+# authentication). Its service account may list and delete pods in e2e only, to restart a double. In
+# courier's namespace it may only read pods and patch the Deployment, to set a fault through the
+# environment (kube.Pods.SetFault); never delete a pod there, which would bypass strategy: Recreate.
 # The pod must never carry the label app.kubernetes.io/name=courier: the full tier's NetworkPolicy
 # admits that label to the kagent front door.
 apiVersion: v1
@@ -24,6 +26,28 @@ kind: RoleBinding
 metadata:
   name: e2e-runner
   namespace: e2e
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
+# courier is created by up-full.sh, by e2e-run.sh, and by WP-35g's deployment; they are idempotent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner
+  namespace: courier
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner
+  namespace: courier
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner}
 subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
 ---
