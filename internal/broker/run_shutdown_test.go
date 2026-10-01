@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,7 +95,7 @@ func TestRunStopsTheSlackRunAndWaitsForItBeforeTheManager(t *testing.T) {
 		t.Fatalf("Run = %v after its context ended, want nil", err)
 	}
 
-	if want := "intake,manager,drain,pool,resolver,store,health"; trace.got() != want {
+	if want := "intake,interactions,manager,drain,pool,resolver,store,health"; trace.got() != want {
 		t.Errorf("Run shut down as %s, want %s", trace.got(), want)
 	}
 	if stopped := slow.stopped.Load(); stopped == 0 || managerAt.Load() < stopped {
@@ -146,6 +147,75 @@ func TestRunKeepsThePartsRunningUntilTheirShutdownStepAfterASignal(t *testing.T)
 	}
 	if !liveAtIntake.Load() {
 		t.Error("the Slack run's context had ended by the time the intake step began: the signal cancelled the parts, instead of the shutdown stopping them in order")
+	}
+}
+
+// connSlack is an idle Slack that makes one request with the HTTP client Run gave it, as the real
+// client does, so that its connection is left idle in the transport that Run closes at shutdown.
+type connSlack struct {
+	idleSlack
+	client  *http.Client
+	url     string
+	started chan struct{} // closed once the request is done
+}
+
+func (s *connSlack) Run(ctx context.Context, _ slack.Sink) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body) // read to the end, so that the connection goes back to the pool
+	_ = resp.Body.Close()
+	close(s.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// The Slack client's idle connections are closed after the final drain, which posts through that
+// client, and not at the intake step: closed earlier, the drain's own calls would open connections that
+// nothing closes. The connection is still open when the drain begins, and is closed by the time Run returns.
+func TestRunClosesTheSlackConnectionsAfterTheFinalDrain(t *testing.T) {
+	var closed atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateClosed {
+			closed.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	slk := &connSlack{url: srv.URL, started: make(chan struct{})}
+	var openAtDrain atomic.Int32
+	openAtDrain.Store(-1)
+	trace := &stepTrace{hook: func(step string) {
+		if step == "drain" {
+			time.Sleep(200 * time.Millisecond) // a connection closed too early is seen as closed within this
+			openAtDrain.Store(closed.Load())
+		}
+	}}
+	c := startConfig(t)
+	c.newSlack = func(sc slack.Config) slackAPI { slk.client = sc.HTTPClient; return slk }
+	c.shutdownTrace = trace.record
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	<-slk.started
+
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := openAtDrain.Load(); n != 0 {
+		t.Errorf("%d connections of the Slack client were closed when the drain began, want none: they close after it", n)
+	}
+	for deadline := time.Now().Add(2 * time.Second); closed.Load() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the Slack client's idle connection was never closed")
+		}
 	}
 }
 

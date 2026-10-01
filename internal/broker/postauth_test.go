@@ -117,3 +117,36 @@ func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 		t.Errorf("RunSlack after a signal = %v, want a clean stop", err)
 	}
 }
+
+// reactor is an outbox.Reactor that answers with the error the test sets.
+type reactor struct{ err error }
+
+func (r reactor) React(context.Context, string, string, string) error { return r.err }
+
+// WatchReacts is WatchPosts for the reactions (D6): a fatal auth code is reported once, the error passes
+// through untouched, and any other error, or none, reports nothing.
+func TestWatchReactsReportsOnlyFatalAuthAndPassesTheErrorThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string // the code reported, "" for none
+	}{
+		{"revoked token", slackErr("token_revoked"), "token_revoked"},
+		{"invalid auth", slackErr("invalid_auth"), "invalid_auth"},
+		{"a message that is gone", slackErr("message_not_found"), ""},
+		{"a rate limit", slackErr("ratelimited"), ""},
+		{"success", nil, ""},
+	} {
+		var reported []string
+		w := WatchReacts(reactor{tc.err}, func(code string) { reported = append(reported, code) })
+
+		err := w.React(t.Context(), "C1", "1.1", "eyes")
+
+		if !errors.Is(err, tc.err) && tc.err != nil || tc.err == nil && err != nil {
+			t.Errorf("%s: React = %v, want the reactor's own error", tc.name, err)
+		}
+		if tc.want == "" && len(reported) != 0 || tc.want != "" && (len(reported) != 1 || reported[0] != tc.want) {
+			t.Errorf("%s: reported %v, want %q", tc.name, reported, tc.want)
+		}
+	}
+}

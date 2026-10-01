@@ -51,19 +51,66 @@ func runWithin(t *testing.T, s *shutdown, limit time.Duration) {
 	}
 }
 
-// The order is the contract: the intake stops first, so nothing new reaches the manager, and the store
-// closes last, after everything that writes to it. Registration order does not matter.
+// The order is the contract: the intake stops first, so nothing new reaches the interactions, which
+// stop before the manager they feed, and the store closes last, after everything that writes to it.
+// Registration order does not matter.
 func TestShutdownRunsTheStepsInTheAgreedOrderWhateverTheRegistrationOrder(t *testing.T) {
 	var r recorder
 	s := newTestShutdown(&logBuffer{}, 10*time.Second, time.Second)
-	for _, n := range []stepName{stepStore, stepHealth, stepResolver, stepIntake, stepPool, stepDrain, stepManager} { // scrambled
+	for _, n := range []stepName{stepStore, stepHealth, stepResolver, stepInteractions, stepIntake, stepPool, stepDrain, stepManager} { // scrambled
 		s.add(n, r.step(n.String()))
 	}
 
 	s.run(t.Context())
 
-	if want := "intake,manager,drain,pool,resolver,store,health"; r.got() != want {
+	if want := "intake,interactions,manager,drain,pool,resolver,store,health"; r.got() != want {
 		t.Errorf("shutdown ran %s, want %s", r.got(), want)
+	}
+}
+
+// The bounds are agreed (D7), and the seven that make up the total add up to it, so a step that is cut
+// has never been given time that the steps after it need.
+func TestShutdownDefaultBoundsAreTheAgreedOnesAndFitTheTotal(t *testing.T) {
+	want := map[stepName]time.Duration{
+		stepIntake: 4 * time.Second, stepInteractions: 3 * time.Second, stepManager: 7 * time.Second, stepDrain: 5 * time.Second,
+		stepPool: 2 * time.Second, stepResolver: 2 * time.Second, stepStore: 2 * time.Second, stepHealth: 2 * time.Second,
+	}
+	got := defaultBounds()
+	var sum time.Duration
+	for n, d := range want {
+		if got[n] != d {
+			t.Errorf("the bound of %s is %s, want %s", n, got[n], d)
+		}
+		if n != stepHealth { // the health server stops last, outside the budget, so that /healthz answers to the end
+			sum += got[n]
+		}
+	}
+	if len(got) != len(want) || sum != shutdownTotal {
+		t.Errorf("%d bounds adding up to %s (without health), want %d adding up to %s", len(got), sum, len(want), shutdownTotal)
+	}
+}
+
+// The stops of the interactions' parts run, last started first, each with the step's own context, and
+// one that is slow does not keep the others from running once the step's context has ended.
+func TestStopListRunsEveryStopLastAddedFirst(t *testing.T) {
+	var r recorder
+	var s stopList
+	s.add(r.step("first"))
+	s.add(func(ctx context.Context) { <-ctx.Done(); r.step("second")(ctx) }) // holds until the step is cut
+	s.add(r.step("third"))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); s.run(ctx) }()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stops did not finish once their context ended")
+	}
+
+	if want := "third,second,first"; r.got() != want {
+		t.Errorf("the stops ran as %s, want %s", r.got(), want)
 	}
 }
 

@@ -139,9 +139,9 @@ func fail(stderr io.Writer, err error) int {
 		return code
 	}
 	_, _ = fmt.Fprintln(stderr, "courier:", err)
-	// The hint keys on the broker's message text; WP-35h builds the renderer and the interactions and deletes it.
-	if code == exitUsage && (strings.Contains(err.Error(), "Sink") || strings.Contains(err.Error(), "Interactions")) {
-		_, _ = fmt.Fprintln(stderr, "courier: this build has no renderer and no interactions yet (WP-35h), so it cannot serve; "+
+	// The hint keys on the broker's message text; WP-35h9 builds the interactions and deletes it.
+	if code == exitUsage && strings.Contains(err.Error(), "Interactions") {
+		_, _ = fmt.Fprintln(stderr, "courier: this build has no interactions yet (WP-35h9), so it cannot serve; "+
 			"only the testhooks test image runs without them")
 	}
 	return code

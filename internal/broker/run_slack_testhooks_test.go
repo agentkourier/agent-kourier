@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
@@ -29,9 +31,17 @@ import (
 
 // turns is a session.Sink that records what the agent said, so a test can see a turn run.
 type turns struct {
-	mu    sync.Mutex
-	texts []string
-	seen  chan struct{}
+	mu      sync.Mutex
+	texts   []string
+	notices []session.NoticeKind
+	seen    chan struct{}
+}
+
+// noticed says whether a notice of kind has been handed to the sink.
+func (s *turns) noticed(kind session.NoticeKind) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.notices, kind)
 }
 
 func (s *turns) Turn(context.Context, session.TurnRef) agent.Handler {
@@ -48,7 +58,17 @@ func (s *turns) Turn(context.Context, session.TurnRef) agent.Handler {
 	}
 }
 
-func (*turns) Notice(context.Context, session.Key, session.Notice) {}
+func (s *turns) Notice(ctx context.Context, key session.Key, n session.Notice) {
+	_ = s.QueueNotice(ctx, key, n)
+}
+
+// QueueNotice is what the Slack intake raises its notices through.
+func (s *turns) QueueNotice(_ context.Context, _ session.Key, n session.Notice) error {
+	s.mu.Lock()
+	s.notices = append(s.notices, n.Kind)
+	s.mu.Unlock()
+	return nil
+}
 
 // slackWorld is the example config wired to a fake Slack and a stub agent, as Run sees them.
 type slackWorld struct {
@@ -80,7 +100,7 @@ func newSlackWorld(t *testing.T, botToken string) *slackWorld {
 	c.Client = slackCluster(botToken)
 	c.newSlack = nil // the real client, against the fake
 	sink := &turns{seen: make(chan struct{}, 8)}
-	c.Sink = sink
+	c.sink = sink
 	return &slackWorld{cfg: c, fake: fake, sink: sink, stub: stub, botTk: botToken}
 }
 
@@ -131,6 +151,67 @@ func TestRunCountsAnAuditWriteThatFailed(t *testing.T) {
 	w.mention(t, r)
 
 	r.waitMetric(`courier_audit_write_failures_total{kind="agent_call"} 1`)
+}
+
+// With no sink of its own, Run renders turns itself, through the Slack client and its own outbox: the
+// agent's answer ends up in the thread.
+func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil
+	r := start(t, w.cfg)
+
+	w.mention(t, r)
+
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		for _, m := range w.fake.Messages("C0123456789") {
+			if m.BotID != "" && strings.Contains(m.Text, "the answer") && !m.Streaming {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent's answer never appeared in the channel: %+v", w.fake.Messages("C0123456789"))
+		}
+	}
+}
+
+// A thread that has expired is told so by the notice the intake raises, which Run connects to the same
+// sink as the turns' output: here the notice is what the test's sink is handed.
+func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	r := start(t, w.cfg)
+	w.mention(t, r)
+	select {
+	case <-w.sink.seen:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first turn never ran")
+	}
+	first := w.fake.Messages("C0123456789")
+	if len(first) == 0 {
+		t.Fatal("the mention is not in the channel")
+	}
+	thread := first[0].TS
+	// The thread has been quiet for longer than any threadTTL.
+	st, err := sqlite.Open(t.Context(), w.cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", ThreadTS: thread}
+	if err := st.TouchSession(t.Context(), key, time.Now().Add(-10000*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := w.fake.Reply("C0123456789", thread, "U1", "still there?"); err != nil {
+		t.Fatal(err)
+	}
+
+	for deadline := time.Now().Add(10 * time.Second); !w.sink.noticed(session.NoticeExpired); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the intake's expiry notice never reached the sink: IntakeConfig.Notice is not connected")
+		}
+	}
 }
 
 func TestRunTakesAMentionFromSlackThroughTheSessionToTheAgent(t *testing.T) {

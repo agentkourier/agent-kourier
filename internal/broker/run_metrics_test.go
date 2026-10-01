@@ -32,6 +32,22 @@ func seedPost(t *testing.T, c RunConfig) {
 	}
 }
 
+// seedReaction leaves one unmade reaction in the store, as seedPost leaves a post.
+func seedReaction(t *testing.T, c RunConfig) {
+	t.Helper()
+	seed, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	react := outbox.Reaction{Source: "ev1/queued", Channel: "C0123456789", TS: "1.1", Name: "hourglass_flowing_sand"}
+	if _, err := outbox.New(outbox.Config{Store: seed, Poster: idleSlack{}}).EnqueueReaction(t.Context(), react); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // waitMetric polls /metrics until it holds line, or fails after 10 s.
 func (r *running) waitMetric(line string) {
 	r.t.Helper()

@@ -13,7 +13,6 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
-	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -32,16 +31,18 @@ type RunConfig struct {
 	KlogVerbosity int
 	Logger        *slog.Logger // slog.Default() if nil
 
-	// Sink renders agent output, and Interactions takes the presses of buttons. Both are required:
-	// until the renderer and the interactions exist (WP-35h) only a testhooks build may go without,
-	// by NoRenderer and NoInteractions, which the default build does not have.
-	Sink         session.Sink
+	// Interactions takes the presses of buttons. It is required: until the interactions exist (WP-35h9)
+	// only a testhooks build may go without, by NoInteractions, which the default build does not have.
+	// The renderer is not here: Run builds it, from its own outbox and Slack client.
 	Interactions func(ctx context.Context, i slack.Interaction) error
 
 	// newSlack builds the Slack client from its config; nil means slack.New. It is a seam for this
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
+	// sink replaces the renderer Run builds, for this package's tests that need to see what a turn
+	// or a notice was handed. Like newSlack it is unexported, so nothing else can swap the renderer.
+	sink renderSink
 	// reloadPoll is how often the config directory is checked, and auditStore wraps the store that
 	// audit rows are written to: seams for this package's tests, so that a reload can be seen
 	// without waiting 10 s and an audit write can be made to fail.
@@ -50,7 +51,7 @@ type RunConfig struct {
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
 
-	testOptions // NoRenderer and NoInteractions in a testhooks build; nothing otherwise
+	testOptions // NoInteractions in a testhooks build; nothing otherwise
 }
 
 // validate says whether c can run. A missing field is an error wrapping ErrWiring, which is a usage
@@ -59,7 +60,6 @@ func (c RunConfig) validate() error {
 	var missing []string
 	for name, ok := range map[string]bool{
 		"ConfigDir": c.ConfigDir != "", "DBPath": c.DBPath != "", "Listener": c.Listener != nil,
-		"Sink":         c.Sink != nil || c.allowsNoRenderer(),
 		"Interactions": c.Interactions != nil || c.allowsNoInteractions(),
 	} {
 		if !ok {

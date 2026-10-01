@@ -67,7 +67,7 @@ func imageTraces(t *testing.T, bin string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, w := range []string{"testhooks build: running with no renderer", "testhooks build: running with no interactions"} {
+	for _, w := range []string{"testhooks build: this binary", "testhooks build: running with no interactions"} {
 		found["the warning "+w] = bytes.Contains(raw, []byte(w))
 	}
 	return found

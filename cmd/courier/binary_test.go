@@ -17,7 +17,6 @@ var hookTraces = []string{
 	"COURIER_FAULT",
 	"COURIER_SLACK_API_URL",
 	"testhooks build: this binary",
-	"testhooks build: running with no renderer",
 	"testhooks build: running with no interactions",
 }
 

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
@@ -58,6 +60,31 @@ func (idleSlack) ResolveUser(context.Context, string) (dialect.User, error) {
 	return dialect.User{}, errors.New("idleSlack knows no one")
 }
 
+// The rest of what Run asks of its Slack client: edits, streams, ephemerals, membership and reactions.
+// idleSlack answers each as a Slack that has nothing against it would, and calls nothing.
+func (idleSlack) Update(context.Context, string, string, slack.Content) error { return nil }
+
+func (idleSlack) StartStream(context.Context, string, string, string, string) (string, error) {
+	return "1.0", nil
+}
+func (idleSlack) AppendStream(context.Context, string, string, string) error { return nil }
+func (idleSlack) StopStream(context.Context, string, string, string, json.RawMessage, string) error {
+	return nil
+}
+func (idleSlack) PostEphemeral(context.Context, string, string, string, slack.Content) error {
+	return nil
+}
+func (idleSlack) IsChannelMember(context.Context, string, string) (bool, error) { return false, nil }
+func (idleSlack) IsBot(context.Context, string) (bool, error)                   { return false, nil }
+func (idleSlack) React(context.Context, string, string, string) error           { return nil }
+
+// revokedReacts is idleSlack whose reactions fail the way a revoked bot token fails them.
+type revokedReacts struct{ idleSlack }
+
+func (revokedReacts) React(context.Context, string, string, string) error {
+	return slackErr("token_revoked")
+}
+
 // revokedSlack is idleSlack whose posts fail the way a revoked bot token fails them.
 type revokedSlack struct{ idleSlack }
 
@@ -85,6 +112,21 @@ func TestRunEndsWithSlackAuthWhenAPostFindsTheTokenRevoked(t *testing.T) {
 	}
 }
 
+// Reactions are made by the outbox through the same client, and a revoked token finds them out the same
+// way: here a reaction row an earlier run left is what finds the token revoked (D6).
+func TestRunEndsWithSlackAuthWhenAReactionFindsTheTokenRevoked(t *testing.T) {
+	c := startConfig(t)
+	c.newSlack = func(slack.Config) slackAPI { return revokedReacts{} }
+	seedReaction(t, c)
+	r := start(t, c)
+
+	err := r.wait()
+
+	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("Run = %v, want ErrSlackAuth naming token_revoked, from the reaction", err)
+	}
+}
+
 // What Run hands the Slack client is the connection's own tokens, read at startup, and an API URL
 // that a production build can never set: the environment variable that a test image reads is
 // ignored here, so a bot token cannot be redirected.
@@ -102,6 +144,9 @@ func TestRunBuildsTheSlackConfigFromTheConnectionSecret(t *testing.T) {
 
 	if got.BotToken.Reveal() != "fake-value" || got.AppToken.Reveal() != "fake-value" {
 		t.Error("the Slack config does not carry the tokens of the connection's Secret")
+	}
+	if got.AuthzTimeout != interact.PressAuthzTimeout {
+		t.Errorf("AuthzTimeout = %s, want the %s a press is given for its membership checks", got.AuthzTimeout, interact.PressAuthzTimeout)
 	}
 	if wantURL := testhooks.SlackAPIURL(); got.APIURL != wantURL {
 		t.Errorf("APIURL = %q, want %q: the testhooks value, and nothing from the environment in any other build", got.APIURL, wantURL)
@@ -312,7 +357,7 @@ func TestRunPassesAnRBACDenialThroughAsAccessDenied(t *testing.T) {
 
 func TestRunRefusesAnIncompleteConfigBeforeStartingAnything(t *testing.T) {
 	c := startConfig(t)
-	c.Sink = nil
+	c.Interactions = nil
 	r := start(t, c)
 
 	if err := r.wait(); !errors.Is(err, ErrWiring) {

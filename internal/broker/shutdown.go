@@ -10,17 +10,18 @@ import (
 type stepName int
 
 const (
-	stepIntake   stepName = iota // the Slack run and its intake stop, so nothing new reaches the manager
-	stepManager                  // the session manager stops its runners
-	stepDrain                    // the outbox stops, then posts what is pending one last time
-	stepPool                     // the agent clients close
-	stepResolver                 // the Reloader stops, then the Secret informers
-	stepStore                    // the store closes, after everything that writes to it
-	stepHealth                   // the health server goes last, so /healthz answers to the end
+	stepIntake       stepName = iota // the Slack run and its intake stop, so nothing new reaches the interactions
+	stepInteractions                 // what the interactions started stops: the press worker, the sweeper, the replacer, retention and the pause tap
+	stepManager                      // the session manager stops its runners
+	stepDrain                        // the outbox stops, then posts what is pending one last time, and Slack's idle connections close
+	stepPool                         // the agent clients close
+	stepResolver                     // the Reloader stops, then the Secret informers
+	stepStore                        // the store closes, after everything that writes to it
+	stepHealth                       // the health server goes last, so /healthz answers to the end
 )
 
 func (n stepName) String() string {
-	return [...]string{"intake", "manager", "drain", "pool", "resolver", "store", "health"}[n]
+	return [...]string{"intake", "interactions", "manager", "drain", "pool", "resolver", "store", "health"}[n]
 }
 
 // Defaults of a shutdown: the total stays inside the Deployment's 40 s terminationGracePeriodSeconds
@@ -31,12 +32,28 @@ const (
 	shutdownFloor = time.Second
 )
 
-// defaultBounds are how long each step may take. The first six add up to the total, and the total
-// caps them all.
+// defaultBounds are how long each step may take (D7). The first seven add up to the total, and the
+// total caps them all.
 func defaultBounds() map[stepName]time.Duration {
 	return map[stepName]time.Duration{
-		stepIntake: 5 * time.Second, stepManager: 8 * time.Second, stepDrain: 5 * time.Second,
-		stepPool: 2 * time.Second, stepResolver: 3 * time.Second, stepStore: 2 * time.Second, stepHealth: 2 * time.Second,
+		stepIntake: 4 * time.Second, stepInteractions: 3 * time.Second, stepManager: 7 * time.Second, stepDrain: 5 * time.Second,
+		stepPool: 2 * time.Second, stepResolver: 2 * time.Second, stepStore: 2 * time.Second, stepHealth: 2 * time.Second,
+	}
+}
+
+// stopList collects what the interactions start and must stop (the press worker, the sweeper, the
+// replacer, the retention loop and the pause tap add theirs as WP-35h2, 35h8 and 35h9 build them), to
+// be run at stepInteractions.
+type stopList struct{ fns []func(context.Context) }
+
+// add registers fn, which must return when its context ends.
+func (s *stopList) add(fn func(context.Context)) { s.fns = append(s.fns, fn) }
+
+// run calls every stop, the one added last first, as parts stop in the reverse order of their start.
+// A stop that waits on its context holds up the ones after it only until the step is cut.
+func (s *stopList) run(ctx context.Context) {
+	for i := len(s.fns) - 1; i >= 0; i-- {
+		s.fns[i](ctx)
 	}
 }
 

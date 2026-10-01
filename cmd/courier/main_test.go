@@ -97,9 +97,9 @@ func TestEnvConfigRefusesWhatItCannotRead(t *testing.T) {
 	}
 }
 
-// Started with a good environment but no cluster and no renderer, courier exits 2 and says exactly
-// what is missing. The default build has no renderer and no interactions until WP-35h, so it says
-// that, and only the test image, which runs without them, gets as far as saying it needs a cluster.
+// Started with a good environment but no cluster and no interactions, courier exits 2 and says exactly
+// what is missing. The default build has no interactions until WP-35h9, so it says that, and only the
+// test image, which runs without them, gets as far as saying it needs a cluster.
 func TestStartSaysWhatIsMissing(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
@@ -110,7 +110,7 @@ func TestStartSaysWhatIsMissing(t *testing.T) {
 	if code != exitUsage {
 		t.Errorf("exit code = %d, want %d (stderr %q)", code, exitUsage, stderr.String())
 	}
-	want := []string{"renderer", "interactions", "WP-35h"}
+	want := []string{"interactions", "WP-35h9"}
 	if testHooksBuild {
 		want = []string{"only in a cluster"}
 	}

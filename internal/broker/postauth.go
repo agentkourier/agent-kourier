@@ -43,6 +43,27 @@ func (w authWatch) check(err error) {
 	}
 }
 
+// reactWatch is an outbox.Reactor that reports a fatal auth error of the Reactor it wraps.
+type reactWatch struct {
+	outbox.Reactor
+	report func(code string)
+}
+
+// WatchReacts is WatchPosts for reactions: a React that fails with an error that says the tokens will
+// never work calls report with its code, and the error is returned unchanged. The edits, the stream
+// calls and the ephemerals are not watched yet (hardening).
+func WatchReacts(r outbox.Reactor, report func(code string)) outbox.Reactor {
+	return reactWatch{r, report}
+}
+
+func (w reactWatch) React(ctx context.Context, channel, ts, name string) error {
+	err := w.Reactor.React(ctx, channel, ts, name)
+	if code := slack.FatalAuthCode(err); code != "" {
+		w.report(code)
+	}
+	return err
+}
+
 // stopped is the error of a Slack run whose context has ended: the context's cause if a post
 // reported a rejection (WithAuthFailure), which is a failure, and otherwise a shutdown, wrapping
 // the context's error.

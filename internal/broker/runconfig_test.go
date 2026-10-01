@@ -10,16 +10,8 @@ import (
 
 	"k8s.io/client-go/rest"
 
-	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
-	"github.com/agentkourier/agent-kourier/internal/session"
 )
-
-// noSink is a session.Sink that does nothing, so a config can have one without a renderer.
-type noSink struct{}
-
-func (noSink) Turn(context.Context, session.TurnRef) agent.Handler { return func(agent.Event) {} }
-func (noSink) Notice(context.Context, session.Key, session.Notice) {}
 
 // valid returns a RunConfig that passes validate: every required field set.
 func valid(t *testing.T) RunConfig {
@@ -31,8 +23,8 @@ func valid(t *testing.T) RunConfig {
 	t.Cleanup(func() { _ = ln.Close() })
 	return RunConfig{
 		ConfigDir: "/etc/courier", DBPath: "/data/courier.db", Listener: ln,
-		Sink: noSink{}, Interactions: func(context.Context, slack.Interaction) error { return nil },
-		Logger: slog.New(slog.DiscardHandler),
+		Interactions: func(context.Context, slack.Interaction) error { return nil },
+		Logger:       slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -47,7 +39,6 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 		mutate func(*RunConfig)
 		names  string
 	}{
-		"no renderer":     {func(c *RunConfig) { c.Sink = nil }, "Sink"},
 		"no interactions": {func(c *RunConfig) { c.Interactions = nil }, "Interactions"},
 		"no config dir":   {func(c *RunConfig) { c.ConfigDir = "" }, "ConfigDir"},
 		"no database":     {func(c *RunConfig) { c.DBPath = "" }, "DBPath"},
