@@ -68,6 +68,16 @@ func (d interactionDeps) traced(step string) {
 	}
 }
 
+// recovered runs a recovery and, if it succeeded, tells the trace it is done: the step is told by the
+// call itself, so the trace cannot say a recovery happened where the call does not.
+func (d interactionDeps) recovered(step string, fn func() error) error {
+	if err := fn(); err != nil {
+		return err
+	}
+	d.traced(step)
+	return nil
+}
+
 // newTap builds the intake of pauses, with a session that is bound later, and the tap that hands the
 // renderer's turns' pauses to it. The manager is built over the tap, and the session bound to the manager.
 func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession, error) {
@@ -130,19 +140,18 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		return nil, fmt.Errorf("interactions: the backstop: %w", err)
 	}
 
-	if err := worker.Recover(ctx, d.st); err != nil {
+	if err := d.recovered("recover-presses", func() error { return worker.Recover(ctx, d.st) }); err != nil {
 		return nil, fmt.Errorf("recover presses: %w", err)
 	}
-	d.traced("recover-presses")
 
 	// Stops run last added first: the tap, which hands the intake no more pauses, then the worker, the
 	// sweeper and the rest.
-	stops.add(startLoop(ctx, retention.Run))
-	stops.add(startLoop(ctx, backstop.Run))
-	stops.add(startLoop(ctx, replacer.Run))
-	stops.add(startLoop(ctx, sweeper.Run))
-	stops.add(startLoop(ctx, worker.Run))
-	stops.add(func(c context.Context) {
+	stops.add("retention", startLoop(ctx, retention.Run))
+	stops.add("backstop", startLoop(ctx, backstop.Run))
+	stops.add("replacer", startLoop(ctx, replacer.Run))
+	stops.add("sweeper", startLoop(ctx, sweeper.Run))
+	stops.add("worker", startLoop(ctx, worker.Run))
+	stops.add("tap", func(c context.Context) {
 		if err := tap.Close(c); err != nil {
 			d.log.Warn("closing the pause tap", "error", err)
 		}

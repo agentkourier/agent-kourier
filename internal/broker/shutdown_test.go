@@ -93,11 +93,11 @@ func TestShutdownDefaultBoundsAreTheAgreedOnesAndFitTheTotal(t *testing.T) {
 // The stops of the interactions' parts run, last started first, each with the step's own context, and
 // one that is slow does not keep the others from running once the step's context has ended.
 func TestStopListRunsEveryStopLastAddedFirst(t *testing.T) {
-	var r recorder
-	var s stopList
-	s.add(r.step("first"))
-	s.add(func(ctx context.Context) { <-ctx.Done(); r.step("second")(ctx) }) // holds until the step is cut
-	s.add(r.step("third"))
+	var r, told recorder
+	s := stopList{trace: func(name string) { told.step(name)(context.Background()) }} // told each stop as it begins
+	s.add("first", r.step("first"))
+	s.add("second", func(ctx context.Context) { <-ctx.Done(); r.step("second")(ctx) }) // holds until the step is cut
+	s.add("third", r.step("third"))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); s.run(ctx) }()
@@ -109,8 +109,8 @@ func TestStopListRunsEveryStopLastAddedFirst(t *testing.T) {
 		t.Fatal("the stops did not finish once their context ended")
 	}
 
-	if want := "third,second,first"; r.got() != want {
-		t.Errorf("the stops ran as %s, want %s", r.got(), want)
+	if want := "third,second,first"; r.got() != want || told.got() != want {
+		t.Errorf("the stops ran as %s and were told as %s, want %s for both", r.got(), told.got(), want)
 	}
 }
 

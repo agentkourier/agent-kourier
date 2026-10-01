@@ -44,16 +44,29 @@ func defaultBounds() map[stepName]time.Duration {
 // stopList collects what the interactions start and must stop (the press worker, the sweeper, the
 // replacer, the retention loop and the pause tap add theirs as WP-35h2, 35h8 and 35h9 build them), to
 // be run at stepInteractions.
-type stopList struct{ fns []func(context.Context) }
+type stopList struct {
+	stops []namedStop
+	trace func(name string) // a test's: told each stop's name as it begins
+}
 
-// add registers fn, which must return when its context ends.
-func (s *stopList) add(fn func(context.Context)) { s.fns = append(s.fns, fn) }
+type namedStop struct {
+	name string
+	fn   func(context.Context)
+}
+
+// add registers fn, which must return when its context ends, under name.
+func (s *stopList) add(name string, fn func(context.Context)) {
+	s.stops = append(s.stops, namedStop{name, fn})
+}
 
 // run calls every stop, the one added last first, as parts stop in the reverse order of their start.
 // A stop that waits on its context holds up the ones after it only until the step is cut.
 func (s *stopList) run(ctx context.Context) {
-	for i := len(s.fns) - 1; i >= 0; i-- {
-		s.fns[i](ctx)
+	for i := len(s.stops) - 1; i >= 0; i-- {
+		if s.trace != nil {
+			s.trace(s.stops[i].name)
+		}
+		s.stops[i].fn(ctx)
 	}
 }
 

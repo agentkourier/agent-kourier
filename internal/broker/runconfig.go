@@ -47,6 +47,9 @@ type RunConfig struct {
 	auditStore func(store.Audit) store.Audit
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
+	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see
+	// the order inside the step, which shutdownTrace, which sees the steps, cannot.
+	stopTrace func(name string)
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)

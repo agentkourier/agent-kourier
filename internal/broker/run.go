@@ -154,7 +154,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// intake answers through the manager, so its session is bound once the manager is built (D2).
 	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
 	// them, and the manager, which they feed.
-	var stops stopList
+	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
 	parts := interactionDeps{st: st, ob: ob, sl: sl, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
 	tap, late, err := parts.newTap(sink)
@@ -176,10 +176,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			log.Warn("waiting for the renders of the last turns", "error", err)
 		}
 	})
-	if err := mgr.Recover(runCtx); err != nil {
+	if err := parts.recovered("recover-sessions", func() error { return mgr.Recover(runCtx) }); err != nil {
 		return fmt.Errorf("recover sessions: %w", err)
 	}
-	parts.traced("recover-sessions")
 	interactions, err := parts.start(runCtx, mgr, tap, &stops)
 	if err != nil {
 		return err

@@ -8,18 +8,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.uber.org/goleak"
-
-	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -217,6 +219,63 @@ func (w *slackWorld) waitFor(t *testing.T, what string, found func(fakeslack.Mes
 		if time.Now().After(deadline) {
 			t.Fatalf("no message with %s appeared: %+v", what, w.fake.Messages("C0123456789"))
 		}
+	}
+}
+
+// promptsDown is a Slack client whose posts of blocks, which are prompts, fail, so that the intake cannot
+// take a pause up and the tap keeps trying: a hand-off in flight.
+type promptsDown struct{ slackAPI }
+
+func (p promptsDown) Post(ctx context.Context, channel, threadTS string, c slack.Content, id string) (string, error) {
+	if len(c.Blocks) > 0 {
+		return "", errors.New("slack is down for prompts")
+	}
+	return p.slackAPI.Post(ctx, channel, threadTS, c, id)
+}
+
+// tapHandOffAlive says whether a hand-off of a pause to the intake is running now.
+func tapHandOffAlive() bool {
+	buf := make([]byte, 1<<22)
+	return strings.Contains(string(buf[:runtime.Stack(buf, true)]), "interact.(*Tap).run")
+}
+
+// A pause the intake cannot take up is in the tap's hands, retrying, when the shutdown comes. The tap is
+// stopped first in the interactions' step, so that the intake is handed no more and nothing is left
+// retrying, then the worker and the rest in the reverse order of their start, and no goroutine is left
+// (the package's goleak).
+func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
+	w := askWorld(t)
+	notes := &stepNotes{}
+	w.cfg.stopTrace = notes.note
+	w.cfg.newSlack = func(sc slack.Config) slackAPI { return promptsDown{slack.New(sc)} }
+	var aliveAtStep atomic.Bool
+	trace := &stepTrace{hook: func(step string) {
+		if step == "interactions" {
+			aliveAtStep.Store(tapHandOffAlive())
+		}
+	}}
+	w.cfg.shutdownTrace = trace.record
+	r := start(t, w.cfg)
+	w.mention(t, r)
+	for deadline := time.Now().Add(15 * time.Second); !tapHandOffAlive(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the pause never reached the tap's hand-off")
+		}
+	}
+
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !aliveAtStep.Load() {
+		t.Error("no hand-off was in flight when the interactions' step began (the control: the scan finds it)")
+	}
+	if want := "tap,worker,sweeper,replacer,backstop,retention"; notes.got() != want {
+		t.Errorf("the interactions stopped as %s, want %s", notes.got(), want)
+	}
+	if tapHandOffAlive() {
+		t.Error("a hand-off was still running after Run returned")
 	}
 }
 
