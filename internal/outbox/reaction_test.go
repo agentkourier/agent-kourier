@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -245,4 +246,27 @@ func TestRunMakesAnEnqueuedReaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the reaction", func() bool { return ref(st, queuedReaction.Source+"/reaction") == "1.5" })
+}
+
+// TestAHungReactionEndsAtCallTimeout: React does not bound its own call, so the outbox does, as for a
+// post: a Slack that never answers must not hold the delivery lock for ever. The row stays unposted,
+// for a retry, and the error is the timeout.
+func TestAHungReactionEndsAtCallTimeout(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	o, hooks, _ := abandoning(t, st, &poster{}, func(c *outbox.Config) { c.Reactor, c.CallTimeout = hangingReactor{}, 50*time.Millisecond })
+	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	err := o.Reconcile(t.Context())
+	if !errors.Is(err, context.DeadlineExceeded) || ref(st, queuedReaction.Source+"/reaction") != "" || len(hooks.list()) != 0 {
+		t.Fatalf("Reconcile = %v, ref %q, abandons %q; want the timeout, an unposted row, and no abandon", err, ref(st, queuedReaction.Source+"/reaction"), hooks.list())
+	}
+}
+
+// hangingReactor waits for its context to end, as a Slack that never answers does.
+type hangingReactor struct{}
+
+func (hangingReactor) React(ctx context.Context, _, _, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
