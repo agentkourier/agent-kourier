@@ -66,7 +66,7 @@ func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPol
 		started := now()
 		err := runner.Run(ctx, sink)
 		if ctx.Err() != nil {
-			return fmt.Errorf("slack run stopped: %w", ctx.Err())
+			return stopped(ctx)
 		}
 		if code := slack.FatalAuthCode(err); code != "" {
 			return fmt.Errorf("%w: %s", ErrSlackAuth, code)
@@ -77,7 +77,7 @@ func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPol
 		log.WarnContext(ctx, "slack connection ended; connecting again", "error", err, "after", pause)
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("slack run stopped: %w", ctx.Err())
+			return stopped(ctx)
 		case <-after(pause):
 		}
 		pause = min(pause*2, limit)
