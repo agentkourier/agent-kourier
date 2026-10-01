@@ -210,7 +210,20 @@ func inbound(ts string) Inbound {
 	return Inbound{Key: key, Binding: "ns/b1", MessageID: SlackMessageID("slack", "C1", ts), MessageTS: ts, UserID: "U1", Text: "hello", Create: true}
 }
 
-func (f *fixture) submit(in Inbound) (Result, error) { return f.m.Submit(f.t.Context(), in) }
+// submit queues a turn the test expects to be taken: a Submit that answers anything but Created
+// or Accepted, with no error, fails the test, so that a turn refused in silence (an expired thread,
+// a thread nobody owns) cannot hide behind a test that waits for what it would have caused.
+func (f *fixture) submit(in Inbound) (Result, error) {
+	f.t.Helper()
+	res, err := f.submitAny(in)
+	if err == nil && res.Disposition != Created && res.Disposition != Accepted {
+		f.t.Errorf("submit %s = %+v; want the turn taken", in.MessageID, res) // Errorf: a test may call it off its own goroutine
+	}
+	return res, err
+}
+
+// submitAny is submit for a test that expects a turn to be refused, or checks what Submit says.
+func (f *fixture) submitAny(in Inbound) (Result, error) { return f.m.Submit(f.t.Context(), in) }
 
 func (f *fixture) session() (store.Session, error) {
 	return f.st.GetSession(f.t.Context(), key, 100*365*24*time.Hour, t0)
@@ -241,7 +254,7 @@ func TestSubmitNotOwned(t *testing.T) {
 	f := newFixture(t)
 	in := inbound("1700.01")
 	in.Create = false
-	res, err := f.submit(in)
+	res, err := f.submitAny(in)
 	if _, serr := f.session(); err != nil || res.Disposition != NotOwned || !errors.Is(serr, store.ErrNotFound) || f.woke != 0 || len(f.drain()) != 0 {
 		t.Errorf("Submit = %+v, %v; session %v, woke %d; want NotOwned and nothing written or woken", res, err, serr, f.woke)
 	}
@@ -307,7 +320,7 @@ func TestSubmitExistingSession(t *testing.T) {
 			seeded := f.seed("ns/b1", tc.age)
 			in := inbound("1700.05")
 			in.Binding, in.Create = tc.binding, tc.create
-			res, err := f.submit(in)
+			res, err := f.submitAny(in)
 			got, _ := f.session()
 			if tc.want == Accepted {
 				seeded.LastActivity = t0 // touched, and nothing else changed
@@ -443,7 +456,7 @@ func TestSubmitConcurrentCreate(t *testing.T) {
 func TestSubmitBindingGone(t *testing.T) {
 	f := newFixture(t)
 	seeded := f.seed("ns/gone", 100*time.Hour)
-	res, err := f.submit(inbound("1700.01"))
+	res, err := f.submitAny(inbound("1700.01"))
 	if got, _ := f.session(); err != nil || res.Disposition != BindingGone || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
 		t.Errorf("Submit = %+v, %v; session %+v, %d touches, woke %d; want BindingGone and no change", res, err, got, f.st.touches, f.woke)
 	}

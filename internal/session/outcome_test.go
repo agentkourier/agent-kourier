@@ -568,8 +568,8 @@ func (f *fixture) submitTurns(turns ...string) {
 	f.agent.mu.Unlock()
 	defer close(hold) // also when a Fatal leaves the loop: the runner must not wait for ever
 	for _, ts := range turns {
-		if res, err := f.submit(inbound(ts)); err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
-			f.t.Fatalf("submit %s = %+v, %v; want it taken", ts, res, err)
+		if _, err := f.submit(inbound(ts)); err != nil {
+			f.t.Fatal(err)
 		}
 	}
 }
