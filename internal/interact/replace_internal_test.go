@@ -1,0 +1,73 @@
+package interact
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+)
+
+// failsOn is an Updater that fails for the messages in bad and succeeds for the rest.
+type failsOn map[string]bool
+
+func (f failsOn) Update(_ context.Context, _, ts string, _ slack.Content) error {
+	if f[ts] {
+		return errors.New("slack chat.update: message_not_found")
+	}
+	return nil
+}
+
+// TestWhatLeftTheHorizonIsForgotten: the repair keeps what it has replaced, and what has failed, only while
+// the interaction can still be listed; otherwise both would grow by one entry per interaction for as long
+// as the process runs.
+func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	add := func(id, ref string, decidedAt time.Time) {
+		t.Helper()
+		row := store.Interaction{ID: id, Key: store.ConversationKey{Connection: "slack/main", Channel: "C1", ThreadTS: "1.1"}, TaskID: "task-1",
+			Kind: store.InteractionAskUser, Request: []byte(`{}`), CreatedAt: base, Deadline: base.Add(time.Minute)}
+		if _, err := st.CreateInteraction(t.Context(), row); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetInteractionMessageRef(t.Context(), id, ref); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.ResolveInteraction(t.Context(), id, store.InteractionCancelled, decidedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("old-done", "1.1", base)
+	add("old-failed", "bad", base)
+	add("recent-done", "2.2", base.Add(20*time.Hour))
+	add("recent-failed", "bad", base.Add(20*time.Hour))
+	now := base.Add(21 * time.Hour)
+	r, err := NewReplacer(ReplacerConfig{Store: st, Updater: failsOn{"bad": true}, Now: func() time.Time { return now },
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Repair(t.Context())
+	if len(r.done) != 2 || len(r.failures) != 2 {
+		t.Fatalf("done %v, failures %v; want two of each before anything leaves the horizon", r.done, r.failures)
+	}
+	now = now.Add(4 * time.Hour) // the old ones are now 25 hours old; the recent ones 5
+	_ = r.Repair(t.Context())
+	if _, ok := r.done["recent-done"]; !ok || len(r.done) != 1 {
+		t.Errorf("done %v; want only recent-done kept", r.done)
+	}
+	if n := r.failures["recent-failed"]; n != 2 || len(r.failures) != 1 {
+		t.Errorf("failures %v; want only recent-failed kept, and still counted (it was tried again)", r.failures)
+	}
+}

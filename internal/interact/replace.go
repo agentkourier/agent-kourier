@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -148,11 +149,17 @@ func (r *Replacer) Repair(ctx context.Context) error {
 		}
 		r.mu.Lock()
 		r.todo, r.listed = nil, now
+		listed := make(map[string]struct{}, len(rows))
 		for _, row := range rows {
+			listed[row.ID] = struct{}{}
 			if row.MessageRef != "" {
 				r.todo = append(r.todo, row.ID)
 			}
 		}
+		// What is no longer listed is past the horizon and will not be looked at again, so what is kept of
+		// it is dropped, or both maps would grow by one entry per interaction for as long as the process runs.
+		maps.DeleteFunc(r.done, func(id string, _ struct{}) bool { _, ok := listed[id]; return !ok })
+		maps.DeleteFunc(r.failures, func(id string, _ int) bool { _, ok := listed[id]; return !ok })
 		r.mu.Unlock()
 	}
 	r.mu.Lock()
