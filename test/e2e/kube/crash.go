@@ -25,13 +25,14 @@ type Termination struct {
 // pod before it would never be passed.
 type Baseline struct {
 	pod  types.UID
-	seen []time.Time // when the terminations the pod's container already showed finished
+	seen []string // the container runs whose terminations the pod's container already showed, by ID
 }
 
 // Baseline reads the named container of the pod matching selector: its pod and the terminations it
-// already shows, which are not crashes to wait for. Take it before the action that causes the crash, or
-// after the rollout that arms it; either way, a crash of the pod that replaces this one counts. It fails if
-// no pod matches, or none has the container.
+// already shows, which are not crashes to wait for. A scenario that arms a fault by a rollout takes it after
+// that rollout, from the pod the rollout left, so that the exit of the pod the rollout stopped is not in
+// question; a crash of any pod that replaces this one counts, and so does one of this pod's later runs. It
+// fails if no pod matches, or none has the container.
 func (p *Pods) Baseline(ctx context.Context, namespace, selector, container string) (Baseline, error) {
 	pods, err := p.List(ctx, namespace, selector)
 	if err != nil {
@@ -42,7 +43,7 @@ func (p *Pods) Baseline(ctx context.Context, namespace, selector, container stri
 			b := Baseline{pod: pods[i].UID}
 			for _, t := range []*corev1.ContainerStateTerminated{cs.State.Terminated, cs.LastTerminationState.Terminated} {
 				if t != nil {
-					b.seen = append(b.seen, t.FinishedAt.Time)
+					b.seen = append(b.seen, terminationID(t))
 				}
 			}
 			return b, nil
@@ -54,7 +55,8 @@ func (p *Pods) Baseline(ctx context.Context, namespace, selector, container stri
 // WaitCrash blocks until the named container of a pod matching selector has crashed since the baseline,
 // and returns how: a non-zero exit, in the container's last termination or still as its state, before the
 // kubelet restarts it. A termination that the baseline already showed is not an answer, and in a pod that is
-// not the baseline's, which is a rollout's new one, every termination is. A clean exit is never a crash.
+// not the baseline's, which is a rollout's new one, every termination is. A clean exit is never a crash, and
+// neither is anything a pod that is being deleted does: a rollout stops its container, which may exit 137.
 // It polls, and never sleeps for a set time; ctx bounds it, and the error then says what it last saw. A
 // failed list ends the wait at once.
 func (p *Pods) WaitCrash(ctx context.Context, namespace, selector, container string, since Baseline) (Termination, error) {
@@ -63,7 +65,7 @@ func (p *Pods) WaitCrash(ctx context.Context, namespace, selector, container str
 		seen := fmt.Sprintf("no pod of %q has the container %q", selector, container)
 		for i := range pods {
 			cs := containerStatus(&pods[i], container)
-			if cs == nil {
+			if cs == nil || pods[i].DeletionTimestamp != nil {
 				continue
 			}
 			if t := crashed(cs, since, pods[i].UID == since.pod); t != nil {
@@ -87,11 +89,22 @@ func crashed(cs *corev1.ContainerStatus, since Baseline, samePod bool) *corev1.C
 		if t == nil || t.ExitCode == 0 {
 			continue
 		}
-		if known := samePod && slices.ContainsFunc(since.seen, t.FinishedAt.Time.Equal); !known {
+		if known := samePod && slices.Contains(since.seen, terminationID(t)); !known {
 			return t
 		}
 	}
 	return nil
+}
+
+// terminationID names the run of the container that ended, by its container ID, which a restart changes.
+// Its end time cannot: Kubernetes keeps whole seconds, and a container that crashes again within the second
+// of a crash that was already seen has still crashed again. A termination with no ID, which the kubelet does
+// not give, is named by when it ended.
+func terminationID(t *corev1.ContainerStateTerminated) string {
+	if t.ContainerID != "" {
+		return t.ContainerID
+	}
+	return "finished:" + t.FinishedAt.UTC().Format(time.RFC3339)
 }
 
 func containerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {
