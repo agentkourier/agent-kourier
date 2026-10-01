@@ -140,8 +140,8 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 			return i.post(ctx, p, row, *in)
 		}
 	case store.InteractionAnswered: // the pause is back, so the answer did not arrive
-		return i.resend(ctx, p, b, row, *in)
-	case store.InteractionTimedOut: // the cancel may not have been made
+		return i.resend(ctx, p, b, row)
+	case store.InteractionTimedOut, store.InteractionCancelled: // the cancel may not have been made
 		err := i.cfg.Session.Cancel(ctx, p.Key, a2a.TaskID(row.TaskID), "the interaction timed out")
 		if err != nil && !errors.Is(err, session.ErrNotPaused) {
 			return fmt.Errorf("interact: cancel the task of %s again: %w", row.ID, err)

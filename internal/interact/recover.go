@@ -19,12 +19,14 @@ type Session interface {
 	Cancel(ctx context.Context, key store.ConversationKey, taskID a2a.TaskID, reason string) error
 }
 
-// resend sends the stored answer of an answered interaction whose pause has come again. A task that
-// has moved on is not paused, and the answer is dropped.
-func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Interaction, in dialect.Interaction) error {
+// resend sends the stored answer of an answered interaction whose pause has come again. The answer is
+// built from the stored request, the question the person saw, never from the pause just parsed. A task
+// that has moved on is not paused, and the answer is dropped.
+func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Interaction) error {
+	var in dialect.Interaction
 	var answer dialect.Answer
-	if err := json.Unmarshal(row.Answer, &answer); err != nil {
-		return fmt.Errorf("interact: the stored answer of %s: %w", row.ID, err)
+	if err := errors.Join(json.Unmarshal(row.Request, &in), json.Unmarshal(row.Answer, &answer)); err != nil {
+		return fmt.Errorf("interact: the stored request or answer of %s: %w", row.ID, err)
 	}
 	msg, err := AnswerMessage(b.Dialect, row.ID, in, answer, row.Decider)
 	if err != nil {
@@ -41,7 +43,8 @@ func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Inter
 
 // AnswerMessage builds the message that sends an interaction's answer (the stored answer is the
 // dialect.Answer as JSON): the dialect's, with a message ID fixed by the interaction, so sending it
-// again is the same message, and the person who decided as its attribution.
+// again is the same message, and the person who decided as its attribution. What kagent does with a
+// repeated message ID on an answer is UNCONFIRMED(WP-02).
 func AnswerMessage(d dialect.Dialect, id string, in dialect.Interaction, answer dialect.Answer, decider string) (a2a.Message, error) {
 	msg, err := d.BuildResponse(in, answer)
 	if err != nil {
