@@ -15,6 +15,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
@@ -142,7 +143,8 @@ type fakeSink struct {
 	events   []agent.Event
 	notices  []Notice
 	refs     []TurnRef
-	taken    int // FinalEvents finalTask has returned
+	ctxs     []context.Context // the context each Turn was given
+	taken    int               // FinalEvents finalTask has returned
 	finals   chan struct{}
 	onFinal  func(*a2a.Task) // runs inside the handler, before finals is signalled
 	onNotice func(Notice)    // runs inside Notice, before it is recorded
@@ -157,9 +159,9 @@ func (s *fakeSink) Notice(_ context.Context, _ Key, n Notice) {
 	s.mu.Unlock()
 }
 
-func (s *fakeSink) Turn(_ context.Context, ref TurnRef) agent.Handler {
+func (s *fakeSink) Turn(ctx context.Context, ref TurnRef) agent.Handler {
 	s.mu.Lock()
-	s.refs = append(s.refs, ref)
+	s.refs, s.ctxs = append(s.refs, ref), append(s.ctxs, ctx)
 	s.mu.Unlock()
 	return func(e agent.Event) {
 		s.mu.Lock()
@@ -260,6 +262,35 @@ func TestTurnAttribution(t *testing.T) {
 	}
 	if got := logs.String(); !strings.Contains(got, "U2") || !strings.Contains(got, "no such user") {
 		t.Errorf("log = %q; want the failed resolution of U2 and its cause", got)
+	}
+}
+
+// A turn's sink is given a context of its own, which ends when the send returns, so that a turn
+// that ends with no FinalEvent frees what the renderer started for it. It is told who asked (the
+// system user for an alert) and the Binding's output mode.
+func TestSinkTurnGetsItsOwnContextAndWhatTheRendererNeeds(t *testing.T) {
+	f := newFixture(t)
+	f.output = v1alpha1.OutputFinal
+	sink := f.live()
+	for _, user := range []string{"U1", ""} {
+		in := inbound(user + "x")
+		in.UserID = user
+		if _, err := f.submit(in); err != nil {
+			t.Fatal(err)
+		}
+		<-sink.finals
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 2 || sink.refs[0].UserID != "U1" || sink.refs[1].UserID != SystemUser || sink.refs[0].Output != v1alpha1.OutputFinal || sink.refs[0].Recovered {
+		t.Fatalf("turn refs = %+v; want the asking user, the system user for an alert, and the output mode", sink.refs)
+	}
+	for i, ctx := range sink.ctxs {
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the context of turn %d is still open after its send returned", i)
+		}
 	}
 }
 

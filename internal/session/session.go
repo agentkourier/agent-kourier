@@ -13,6 +13,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -59,6 +60,9 @@ type Backend struct {
 	Rejected func(ctx context.Context, actor audit.Actor, call audit.Call) error
 	// Identity names the Binding's service identity for the audit rows the manager writes.
 	Identity string
+	// Output is the Binding's chat output mode (live or final), which the sink is told of each
+	// turn. Empty means live.
+	Output v1alpha1.OutputMode
 }
 
 // Auditor records agent calls: *audit.Writer. A failed write is logged, never fatal (spec 8.6).
@@ -79,10 +83,19 @@ type Users interface {
 
 // TurnRef names the turn a Sink is asked to render.
 type TurnRef struct {
-	Key       Key
+	Key Key
+	// MessageID names the message the output is posted as: the turn's, or, for the output of an
+	// answer to a pause, the answer's.
 	MessageID string
-	// Recovered says the output is of a task found again after a restart: some of it may already
-	// be in the thread, so the renderer updates what it posted before, or posts the whole.
+	// UserID is the Slack user who wrote the turn, which the renderer shows a stream to; SystemUser
+	// for an alert's prompt, which has none.
+	UserID string
+	// Output is the Binding's output mode.
+	Output v1alpha1.OutputMode
+	// Recovered says the output continues a message that may exist already: the task was found
+	// again after a restart, or followed again after a lost stream. Some of it may be in the
+	// thread, so the renderer updates what it posted before, or posts the whole. The output of an
+	// answer to a pause is not that: its MessageID is the answer's own, a new message.
 	Recovered bool
 }
 

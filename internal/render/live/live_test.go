@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -41,8 +42,9 @@ type clock struct {
 }
 
 type timer struct {
-	at time.Time
-	ch chan time.Time
+	at   time.Time
+	ch   chan time.Time
+	long bool // the final text's deadline, which no test waits on
 }
 
 func (c *clock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
@@ -51,7 +53,7 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch := make(chan time.Time, 1)
-	c.timers = append(c.timers, timer{c.now.Add(d), ch})
+	c.timers = append(c.timers, timer{c.now.Add(d), ch, d == 10*time.Minute})
 	return ch
 }
 
@@ -59,16 +61,27 @@ func (c *clock) After(d time.Duration) <-chan time.Time {
 func (c *clock) due() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	earliest := c.timers[0].at
+	var earliest time.Time
 	for _, tm := range c.timers {
-		if tm.at.Before(earliest) {
+		if !tm.long && (earliest.IsZero() || tm.at.Before(earliest)) {
 			earliest = tm.at
 		}
 	}
 	return earliest
 }
 
-func (c *clock) waiting() int { c.mu.Lock(); defer c.mu.Unlock(); return len(c.timers) }
+// waiting is how many timers are pending, but for the final text's deadline.
+func (c *clock) waiting() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, tm := range c.timers {
+		if !tm.long {
+			n++
+		}
+	}
+	return n
+}
 
 func (c *clock) advance(d time.Duration) {
 	c.mu.Lock()
@@ -94,6 +107,10 @@ type recorder struct {
 	failUpdates int
 	rateLimited int // the next chat.update requests answered 429, with a Retry-After of 30 s
 	losePosts   int // the next chat.postMessage requests reach Slack, and their answers are lost
+	// holdStart, if set, makes chat.startStream wait for it to close, as a slow Slack would. A request
+	// whose context ends while it waits is still taken by Slack, though its answer is lost.
+	holdStart chan struct{}
+	held      bool
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -111,11 +128,27 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	if lose {
 		r.losePosts--
 	}
+	hold := r.holdStart
+	if req.URL.Path == "/chat.startStream" && hold != nil {
+		r.held = true
+	} else {
+		hold = nil
+	}
 	limited := req.URL.Path == "/chat.update" && r.rateLimited > 0
 	if limited {
 		r.rateLimited--
 	}
 	r.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-req.Context().Done():
+			if resp, err := http.DefaultTransport.RoundTrip(req); err == nil {
+				_ = resp.Body.Close()
+			}
+			return nil, req.Context().Err()
+		}
+	}
 	if lose {
 		if resp, err := http.DefaultTransport.RoundTrip(req); err == nil {
 			_ = resp.Body.Close()
@@ -129,6 +162,12 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":false,"error":"internal_error"}`)), Request: req}, nil
 	}
 	return http.DefaultTransport.RoundTrip(req)
+}
+
+func (r *recorder) holding() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.held
 }
 
 func (r *recorder) orderOf() []string {
@@ -156,6 +195,12 @@ func (s *recordFail) RecordMessageRef(ctx context.Context, id, ref string) error
 		return errors.New("the process died")
 	}
 	return s.Outbox.RecordMessageRef(ctx, id, ref)
+}
+
+// runsAlive says whether a live.Run goroutine is still running.
+func runsAlive() bool {
+	buf := make([]byte, 1<<20)
+	return strings.Contains(string(buf[:runtime.Stack(buf, true)]), "live.(*Run).run")
 }
 
 type env struct {
@@ -192,7 +237,12 @@ func setup(t *testing.T) *env {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
-	e.live = live.New(live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))})
+	e.live = live.New(live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))})
+	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
+		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			e.clk.advance(throttle)
+		}
+	})
 	return e
 }
 

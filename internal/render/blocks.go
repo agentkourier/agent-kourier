@@ -52,3 +52,15 @@ func Message(events []agent.TextEvent, tool *agent.ToolCallEvent) (text string, 
 	}
 	return text, blocks
 }
+
+// NoticeText is the text of a notice: fixed wording that courier wrote, and, if there is one, a
+// short detail, which is untrusted like everything else and is escaped and capped. It is for a
+// message's top-level text only.
+func NoticeText(fixed, detail string) string {
+	if detail == "" {
+		return fixed
+	}
+	return fixed + " " + Text(detail, maxNoticeDetail)
+}
+
+const maxNoticeDetail = 200 // units of a notice's detail

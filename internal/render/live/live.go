@@ -65,9 +65,12 @@ type Config struct {
 	// Attempts is how many times in a row a write may fail before it is given up (default 5). A
 	// rate limit is not an attempt: Slack says when to come back, and the write waits for it.
 	Attempts int
-	// FlushTimeout bounds the one write that settles a turn whose context ended after its final
-	// event, which runs on a context that is no longer cancelled (default 10 seconds).
-	FlushTimeout time.Duration
+	// WriteTimeout bounds each write to Slack (default 30 seconds). A write never watches the
+	// turn's context: a request cut short may still have been taken, and a retry would repeat it.
+	WriteTimeout time.Duration
+	// FinalDeadline is how long the final text is tried for, from the moment the run sees it
+	// (default 3 minutes). It outlasts the turn's context, which ends when the send returns.
+	FinalDeadline time.Duration
 	// Now and After are the clock, which a test injects: time.Now and time.After by default.
 	Now    func() time.Time
 	After  func(time.Duration) <-chan time.Time
@@ -85,8 +88,11 @@ func New(cfg Config) *Renderer {
 	if cfg.Attempts <= 0 {
 		cfg.Attempts = 5
 	}
-	if cfg.FlushTimeout <= 0 {
-		cfg.FlushTimeout = 10 * time.Second
+	if cfg.WriteTimeout <= 0 {
+		cfg.WriteTimeout = 30 * time.Second
+	}
+	if cfg.FinalDeadline <= 0 {
+		cfg.FinalDeadline = 3 * time.Minute
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -134,8 +140,9 @@ type Run struct {
 	final bool
 
 	// Below: the goroutine's alone.
-	sends int  // Sends tried
-	stale bool // the message may hold older content than the last Send was given
+	deadline <-chan time.Time // the final text's own deadline, once the final is seen
+	sends    int              // Sends tried
+	stale    bool             // the message may hold older content than the last Send was given
 
 	sent      string // what is shown, as want says
 	streaming bool   // this turn streams
@@ -199,18 +206,17 @@ func (u *Run) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			u.flush(ctx, &ts)
-			return
+			if !u.isFinal() { // a turn that never ended owes nothing
+				return
+			}
 		case <-u.wake:
 		}
 		for {
-			if d := next.Sub(u.cfg.Now()); d > 0 {
-				select {
-				case <-ctx.Done():
-					u.flush(ctx, &ts)
-					return
-				case <-u.cfg.After(d):
+			if d := next.Sub(u.cfg.Now()); d > 0 && !u.sleep(ctx, d) {
+				if u.isFinal() {
+					u.cfg.Logger.ErrorContext(ctx, "live: the final text was not written before its deadline", "channel", u.turn.Channel)
 				}
+				return
 			}
 			c, body, final, ok := u.snapshot() // after the wait, so that what is sent is the latest
 			if !ok && final {                  // the turn ended with nothing to show
@@ -272,32 +278,36 @@ func placeholder() slack.Content {
 	return slack.Content{Text: render.NoOutput, Blocks: blocks}
 }
 
-// flush settles a turn whose context ended after its final event: the task is over, nothing will
-// send the final text again, so it is written once, now, on a context that is not cancelled and is
-// bounded by FlushTimeout. A turn that is not final owes nothing, and is left.
-func (u *Run) flush(ctx context.Context, ts *string) {
-	c, body, final, ok := u.snapshot()
-	if !final {
-		return
-	}
-	if !ok {
-		if *ts == "" {
-			return
+// isFinal says whether the turn's final event has arrived.
+func (u *Run) isFinal() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.final
+}
+
+// sleep waits d, and says whether the run goes on. Only the waits watch the turn's context, and
+// only until the final event is in: from then on the run keeps writing, for the FinalDeadline,
+// because the task is over and nothing else will say what it said.
+func (u *Run) sleep(ctx context.Context, d time.Duration) bool {
+	timer := u.cfg.After(d)
+	if !u.isFinal() {
+		select {
+		case <-timer:
+			return true
+		case <-ctx.Done():
+			if !u.isFinal() {
+				return false
+			}
 		}
-		c, body = placeholder(), render.NoOutput
 	}
-	if u.want(c, body, final) == u.sent {
-		return
+	if u.deadline == nil {
+		u.deadline = u.cfg.After(u.cfg.FinalDeadline)
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.FlushTimeout)
-	defer cancel()
-	err := u.write(ctx, ts, c, body, final)
-	if err == nil && u.stale { // the post may be the old message, not this text
-		u.stale = false
-		err = u.write(ctx, ts, c, body, final)
-	}
-	if err != nil {
-		u.cfg.Logger.ErrorContext(ctx, "live: the final text was not written at shutdown", "channel", u.turn.Channel, "err", err)
+	select {
+	case <-timer:
+		return true
+	case <-u.deadline:
+		return false
 	}
 }
 
@@ -313,6 +323,8 @@ func (u *Run) want(c slack.Content, body string, final bool) string {
 // write posts the message the first time, through the outbox, and updates it after, or, on the
 // stream path, takes the next step of the stream.
 func (u *Run) write(ctx context.Context, ts *string, c slack.Content, body string, final bool) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout) // see WriteTimeout
+	defer cancel()
 	if u.streaming {
 		return u.writeStream(ctx, ts, c, body, final)
 	}

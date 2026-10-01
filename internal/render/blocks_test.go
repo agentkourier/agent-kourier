@@ -70,3 +70,15 @@ func TestNoOutputBlockIsAMarkdownBlock(t *testing.T) {
 		t.Errorf("NoOutputBlock = %v; want a markdown block saying %q", b, NoOutput)
 	}
 }
+
+func TestNoticeTextEscapesItsDetailOnly(t *testing.T) {
+	if got, want := NoticeText("Stopped.", "<!channel> & [x](u)"), "Stopped. &lt;!channel&gt; &amp; [x](u)"; got != want {
+		t.Errorf("NoticeText = %q; want %q", got, want)
+	}
+	if got := NoticeText("Stopped.", ""); got != "Stopped." {
+		t.Errorf("NoticeText with no detail = %q", got)
+	}
+	if got := NoticeText("x", strings.Repeat("d", 500)); utf16Len(got) > 2+maxNoticeDetail || !strings.HasSuffix(got, Truncated) {
+		t.Errorf("a long detail gives %d units; want it capped and marked", utf16Len(got))
+	}
+}

@@ -185,8 +185,8 @@ func TestAnswerResumesAPausedTask(t *testing.T) {
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if refs := sink.refs; len(refs) < 2 || refs[1].MessageID != inbound("1").MessageID {
-		t.Errorf("turn refs = %+v; want the answer's output under turn 1", refs)
+	if refs := sink.refs; len(refs) < 2 || refs[1].MessageID != "ans-1" || refs[1].Recovered {
+		t.Errorf("turn refs = %+v; want the answer's output as a message of its own, named after the answer", refs)
 	}
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()

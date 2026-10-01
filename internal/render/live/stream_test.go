@@ -157,7 +157,7 @@ func TestShutdownAfterTheFinalStopsTheStream(t *testing.T) {
 	run.Handle(agent.FinalEvent{})
 	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
-	<-run.Done()
+	e.finish(t, run)
 	if m := e.reply(); m.Streaming || m.Text != "Hello world" || m.Metadata == nil {
 		t.Fatalf("after the shutdown: %+v; want the stream stopped with the whole text and the tag", m)
 	}
@@ -229,5 +229,28 @@ func TestRowWithNoTsPostsAnew(t *testing.T) {
 	e.finish(t, run)
 	if _, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1/recovered", "reply")); err != nil || len(e.rec.sent("/chat.startStream")) != 0 || e.reply().Text != "the whole answer" {
 		t.Fatalf("row %v, %d streams, message %q; want a new post under its own row and no stream", err, len(e.rec.sent("/chat.startStream")), e.reply().Text)
+	}
+}
+
+// TestCancelDuringTheStartDoesNotOrphanAStream: the turn's context ends while startStream is in
+// flight. The write does not watch that context, so it completes: the stream is recorded, and the
+// run, which never saw a final, then ends. A cut request would leave a stream nobody holds the ts of.
+func TestCancelDuringTheStartDoesNotOrphanAStream(t *testing.T) {
+	e := setup(t)
+	e.rec.holdStart = make(chan struct{})
+	run, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
+	run.Handle(text("a", "hello"))
+	eventually(t, "the start to be in flight", func() bool { return e.rec.holding() })
+	cancel()
+	close(e.rec.holdStart)
+	select {
+	case <-run.Done():
+	case <-timeoutAfter():
+		t.Fatal("the run did not end")
+	}
+	row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
+	th := e.fake.Thread("C1", e.root)
+	if len(e.rec.sent("/chat.startStream")) != 1 || len(th) != 2 || err != nil || row.MessageRef != th[1].TS {
+		t.Fatalf("%d starts, thread %d long, row %+v, %v; want one stream, and its ts recorded", len(e.rec.sent("/chat.startStream")), len(th), row, err)
 	}
 }

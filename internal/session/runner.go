@@ -415,8 +415,17 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	}()
 	sctx := context.WithoutCancel(m.ctx)
 	h := func(agent.Event) {}
+	// The sink's context ends when the send returns, not with the manager: a turn that ends with
+	// no FinalEvent frees what the sink started for it. A sink that must settle a finished turn
+	// does so on a context of its own (the renderer's bounded flush).
+	tctx, endTurn := context.WithCancel(m.ctx)
+	defer endTurn()
 	if m.cfg.Sink != nil {
-		if sh := m.cfg.Sink.Turn(m.ctx, TurnRef{Key: key, MessageID: r.ID, Recovered: t.recovered}); sh != nil {
+		// An answer's output is a message of its own, named after the answer: it must not overwrite
+		// the output of the turn that paused. A task found again after a restart, or followed again
+		// after a lost stream, continues the message it had.
+		ref := TurnRef{Key: key, MessageID: cmp.Or(t.nid, r.ID), UserID: r.UserID, Output: t.b.Output, Recovered: t.recovered || t.follow}
+		if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
 			h = sh
 		}
 	}

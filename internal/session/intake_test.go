@@ -14,6 +14,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -150,6 +151,7 @@ type fixture struct {
 	attr             func(*a2a.Message, dialect.User)
 	bindingErr       error // when set, every Binding lookup fails with it (guarded by amu)
 	noRejected       bool  // the Backend has no identity Source to call Rejected on
+	output           v1alpha1.OutputMode
 }
 
 func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
@@ -183,7 +185,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token"}
+	b := Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output}
 	if f.noRejected {
 		b.Rejected = nil
 	}

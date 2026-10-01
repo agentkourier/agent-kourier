@@ -38,13 +38,54 @@ func TestShutdownAfterTheFinalStillWritesTheFinalText(t *testing.T) {
 	run.Handle(agent.FinalEvent{})
 	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
 	cancel()
-	select {
-	case <-run.Done():
-	case <-timeoutAfter():
-		t.Fatal("the run did not end")
-	}
+	e.finish(t, run) // the context ended, and the run still writes the final when its window opens
 	if got := e.reply().Text; got != "partial, then the final answer" {
 		t.Fatalf("the message says %q after the shutdown; want the final text", got)
+	}
+}
+
+// TestFinalFollowedAtOnceByTheCancelIsRetriedThroughARateLimit: drive returns right after the final
+// event and the session cancels the turn's context. The first update is rate-limited; the run waits
+// as Slack asked and the final text arrives, rather than being given up on after one attempt.
+func TestFinalFollowedAtOnceByTheCancelIsRetriedThroughARateLimit(t *testing.T) {
+	e := setup(t)
+	e.rec.rateLimited = 1
+	run, cancel := e.partial(t)
+	run.Handle(text("a", "the final answer"))
+	run.Handle(agent.FinalEvent{})
+	cancel()
+	eventually(t, "the final to wait for its window", func() bool { return e.clk.waiting() == 1 })
+	e.clk.advance(throttle)
+	eventually(t, "the rate-limited request", func() bool { return e.updates() == 1 })
+	eventually(t, "the wait for Retry-After", func() bool { return e.clk.waiting() == 1 })
+	e.finish(t, run)
+	if got := e.reply().Text; got != "the final answer" || e.updates() != 2 {
+		t.Fatalf("the message says %q after %d updates; want the final text on the second", got, e.updates())
+	}
+}
+
+// TestFinalIsGivenUpOnAtItsOwnDeadline: a final that cannot be written is tried for FinalDeadline and
+// no longer, though the context of the turn ended long before.
+func TestFinalIsGivenUpOnAtItsOwnDeadline(t *testing.T) {
+	e := setup(t)
+	e.rec.rateLimited = 1000 // Slack never lets it through
+	run, cancel := e.partial(t)
+	run.Handle(text("a", "the final answer"))
+	run.Handle(agent.FinalEvent{})
+	cancel()
+	eventually(t, "the run to end at its deadline", func() bool {
+		select {
+		case <-run.Done():
+			return true
+		default:
+		}
+		if e.clk.waiting() > 0 {
+			e.clk.advance(30 * time.Second)
+		}
+		return false
+	})
+	if !strings.Contains(e.logs.String(), "before its deadline") {
+		t.Fatalf("log %q; want the missed deadline logged", e.logs.String())
 	}
 }
 
@@ -170,7 +211,7 @@ func TestInterruptedFirstPostIsSettledAtShutdown(t *testing.T) {
 	run.Handle(text("a", "partial, then the final answer"))
 	run.Handle(agent.FinalEvent{})
 	cancel()
-	<-run.Done()
+	e.finish(t, run)
 	if got := e.reply().Text; got != "partial, then the final answer" {
 		t.Fatalf("the message says %q after the shutdown; want the final text", got)
 	}
