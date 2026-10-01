@@ -31,7 +31,7 @@ image: ## Build the production courier image, courier:dev (hack/kind/build-couri
 image-testhooks: ## Build the test image, courier-e2e/courier-testhooks:dev, which the kind tiers run and nothing pushes
 	hack/kind/build-courier.sh testhooks
 
-image-check: image ## Prove the production image's binary lacks the test hooks
+image-check: image image-testhooks ## Prove the production image's binary lacks the test hooks, and the test image's has them
 	go test -tags image -count=1 -run TestImageHasNeitherHook ./internal/testhooks
 
 stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and with -no-auth (about 2 minutes)

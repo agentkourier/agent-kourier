@@ -3,6 +3,7 @@
 package testhooks_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -42,12 +43,32 @@ func TestImageHasNeitherHook(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(user)) != "65532:65532" {
 		t.Errorf("%s runs as %q, %v; want the non-root 65532:65532", image, user, err)
 	}
-	for what, present := range traces(t, imageBinary(t, image)) {
+	prod := imageBinary(t, image)
+	for what, present := range imageTraces(t, prod) {
 		if present {
 			t.Errorf("%s: %s is in the production image", image, what)
 		}
 	}
-	// TODO(WP-35f2d): cmd/courier does not link the outbox or the broker yet, so this holds for any
-	// binary. Once it does, add the control: the testhooks image (courier-e2e/courier-testhooks:dev)
-	// must show all three traces, or the checks above prove nothing.
+	// The control: the testhooks image (make image-testhooks) must show every trace, or the checks
+	// above prove nothing, as they would not if cmd/courier stopped linking the hooks at all.
+	const testImage = "courier-e2e/courier-testhooks:dev"
+	for what, present := range imageTraces(t, imageBinary(t, testImage)) {
+		if !present {
+			t.Errorf("%s: %s is missing, so the production image's lack of it proves nothing (make image-testhooks)", testImage, what)
+		}
+	}
+}
+
+// imageTraces is traces plus the two warnings a testhooks build logs about what it runs without.
+func imageTraces(t *testing.T, bin string) map[string]bool {
+	t.Helper()
+	found := traces(t, bin)
+	raw, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"testhooks build: running with no renderer", "testhooks build: running with no interactions"} {
+		found["the warning "+w] = bytes.Contains(raw, []byte(w))
+	}
+	return found
 }
