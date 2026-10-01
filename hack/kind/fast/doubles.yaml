@@ -1,6 +1,7 @@
 # The fast tier's test doubles, from the one image up-fast.sh builds and loads. Every Service is
-# ClusterIP and stays that way: the fake Slack's /_control/ has no authentication, so its port
-# is never published (no NodePort, Ingress, LoadBalancer or hostPort). verify.sh checks that.
+# ClusterIP and stays that way: the fake Slack's /_control/ and the stub agent's
+# /_control/release/ have no authentication, so their ports are never published (no NodePort,
+# Ingress, LoadBalancer or hostPort). verify.sh checks that for both.
 # Courier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
 # stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent> and sink.e2e.svc.cluster.local:8080.
 apiVersion: v1

@@ -2,18 +2,20 @@ package stubagent
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
-// ScenarioSlowTicks is how many ticks scenario-slow streams. At cmd/stubagent's default tick it
-// runs about six seconds, a window in which a second message reliably meets a running task.
-const ScenarioSlowTicks = 20
+// gatePattern finds the gate a prompt names, "gate:" then letters, digits, "_" or "-".
+var gatePattern = regexp.MustCompile(`gate:([\w-]+)`)
 
 // ScenarioAgents registers the agents that only the Phase 1 E2E scenarios need, in the namespace
 // kagent, beside SpikeAgents:
 //
-//   - scenario-slow streams ScenarioSlowTicks ticks, "tick 1 " to "tick 20 ", paced by WithTick.
+//   - scenario-gated streams "Holding on gate G.", holds until Server.Release("G"), then streams
+//     " Released." and finishes. G is the word after "gate:" in the prompt, unique per run; with
+//     no gate in the prompt it finishes at once, so a reply that names none never wedges.
 //   - scenario-memory says how many turns its context has had and quotes the earlier ones:
 //     `Message 3. Earlier: "one", "two".`, or `Message 1. Earlier: none.` for a new context.
 //   - scenario-ask asks the two questions of spike-ask's "two questions" (a multi-select and a
@@ -22,26 +24,28 @@ const ScenarioSlowTicks = 20
 //
 // The scenarios and the agents that serve them in the cluster:
 //
-//	S1   see WP-14g       spike-slow's eight ticks take 2.1 s at the default tick of
-//	                      cmd/stubagent (300 ms), about the 2 s edit throttle: the final text and
-//	                      at most one update, so live output is not shown
+//	S1   scenario-gated   the first chunk is visible while the task is held, before the end;
+//	                      release it through cmd/stubagent's /_control/release/{gate}. (spike-slow
+//	                      takes 2.1 s at the 300 ms default tick, about the 2 s edit throttle, so
+//	                      it shows the final text and at most one update)
 //	S2   scenario-memory  "Message 3" with the earlier texts after a courier restart proves the
 //	                      contextId was kept; "Message 1" with none proves it was lost
 //	S3   scenario-ask     "Answers: ... | (none)." means an incomplete answer reached the agent.
 //	                      Neither the stub nor spike-ask rejects one (spike-ask says "Both
 //	                      answered." to [[x], []]), so courier's check is the only guard
-//	S4   see WP-14g       scenario-slow runs about six seconds, a window and not a gate
+//	S4   scenario-gated   mention with "gate:G1", reply with "gate:G2" while G1 is held, so the
+//	                      reply is queued; release G1, then G2. Neither depends on timing
 //	S5   test-agent       one instant chunk, so the kill lands between post and record
 //	S11  spike-approve    "I have added 3 and 5..." would mean the tool ran; courier's denial
 //	                      gives "Resumed after the tool result."
 func ScenarioAgents(s *Server) {
 	const ns = "kagent"
-	s.Agent(ns, "scenario-slow").Reply(func(string) []Step {
-		var ticks []string
-		for n := 1; n <= ScenarioSlowTicks; n++ {
-			ticks = append(ticks, "tick "+strconv.Itoa(n)+" ")
+	s.Agent(ns, "scenario-gated").Reply(func(prompt string) []Step {
+		m := gatePattern.FindStringSubmatch(prompt)
+		if m == nil {
+			return []Step{Text("No gate named, not holding.")}
 		}
-		return []Step{Text(ticks...)}
+		return []Step{Text("Holding on gate " + m[1] + "."), Hold(m[1]), Text(" Released.")}
 	})
 	s.Agent(ns, "scenario-memory").ReplyWithHistory(func(prior []string, _ string) []Step {
 		earlier := "none"

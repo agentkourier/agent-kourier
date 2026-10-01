@@ -1,11 +1,13 @@
 package stubagent_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
@@ -64,16 +66,6 @@ func TestScenarioMemoryAgentProvesTheContext(t *testing.T) {
 	}
 }
 
-func TestScenarioSlowAgentStreamsItsTicks(t *testing.T) {
-	var want strings.Builder
-	for n := 1; n <= stubagent.ScenarioSlowTicks; n++ {
-		want.WriteString("tick " + strconv.Itoa(n) + " ")
-	}
-	if got := taskText(last(scenario(t, "scenario-slow").send(msg("m1", "go slowly", "")))); got != want.String() {
-		t.Errorf("scenario-slow said %q, want %d ticks", got, stubagent.ScenarioSlowTicks)
-	}
-}
-
 func TestReplyWithHistoryShowsAReplayThatRanTwice(t *testing.T) {
 	_, agent, c := newAgent(t)
 	var priors [][]string
@@ -117,5 +109,58 @@ func TestScenarioAskAsksTheTwoQuestions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(request["questions"], want) {
 		t.Errorf("questions = %v, want %v", request["questions"], want)
+	}
+}
+
+func TestScenarioGatedAgentHoldsUntilReleased(t *testing.T) {
+	s := stubagent.New()
+	t.Cleanup(s.Close)
+	stubagent.ScenarioAgents(s)
+	c := withHITL(&client{t: t, url: s.AgentURL("kagent", "scenario-gated"), hdr: http.Header{}})
+
+	st := c.open("SendStreamingMessage", msg("m1", "investigate gate:run-1", ""))
+	var taskID, streamed string
+	for !strings.Contains(streamed, "Holding") { // reading on would wait for the release
+		ev, ok := st.next()
+		if !ok {
+			t.Fatalf("the stream ended after %q, before the first chunk", streamed)
+		}
+		if id, _, _ := ids(ev); id != "" {
+			taskID = id
+		}
+		if kind, e := body(ev); kind == "artifactUpdate" {
+			streamed += text(dig(e, "artifact", "parts"))
+		}
+	}
+	if streamed != "Holding on gate run-1." {
+		t.Fatalf("streamed %q before the gate, want the one chunk", streamed)
+	}
+
+	// The turn cannot end while the gate is shut, so waiting for it times out, on any machine.
+	short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := s.WaitTurn(short, taskID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the turn ended before its gate was released: %v", err)
+	}
+	if _, got := c.call("GetTask", obj{"id": taskID}); describe(got) != "task:WORKING" {
+		t.Errorf("held task is %s, want task:WORKING", describe(got))
+	}
+
+	s.Release("run-1")
+	long, cancelLong := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelLong()
+	if err := s.WaitTurn(long, taskID); err != nil {
+		t.Fatalf("the turn did not end after its gate was released: %v", err)
+	}
+	evs := st.all()
+	if got, want := taskText(last(evs)), "Holding on gate run-1. Released."; got != want {
+		t.Errorf("final text %q, want %q", got, want)
+	}
+}
+
+func TestScenarioGatedAgentDoesNotHoldWithoutAGate(t *testing.T) {
+	c := scenario(t, "scenario-gated")
+	if got := taskText(last(c.send(msg("m1", "investigate", "")))); got != "No gate named, not holding." {
+		t.Errorf("said %q, want it to finish at once", got)
 	}
 }

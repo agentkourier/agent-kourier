@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,6 +57,25 @@ func newStub(tick time.Duration, requireAuth bool) *stubagent.Server {
 	return stub
 }
 
+// releasePath is the control surface's one route: POST releasePath+gate opens the gate that
+// scenario-gated holds on, and answers 204.
+const releasePath = "/_control/release/"
+
+// withControl serves POST /_control/release/{gate} for stub and passes everything else on. Like
+// the fake Slack's /_control/ it has no authentication, not even with -require-auth, so the
+// Service that reaches it must stay ClusterIP (hack/kind/fast/verify.sh checks that).
+func withControl(stub *stubagent.Server) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gate, ok := strings.CutPrefix(r.URL.Path, releasePath)
+		if !ok || gate == "" || strings.Contains(gate, "/") || r.Method != http.MethodPost {
+			stub.ServeHTTP(w, r)
+			return
+		}
+		stub.Release(gate)
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
 func run(addr string, tick time.Duration, requireAuth bool) error {
 	stub := newStub(tick, requireAuth)
 	defer stub.Close()
@@ -65,7 +85,7 @@ func run(addr string, tick time.Duration, requireAuth bool) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	srv := &http.Server{Handler: stub, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: withControl(stub), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Shutdown(context.WithoutCancel(ctx)) // the shutdown must outlive the signal that starts it
