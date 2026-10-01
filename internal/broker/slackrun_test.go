@@ -87,10 +87,15 @@ func TestRunSlackBacksOffFromOneSecondToAMinute(t *testing.T) {
 
 func TestRunSlackStopsAtOnceOnAFatalAuthError(t *testing.T) {
 	for _, code := range []string{"invalid_auth", "token_revoked", "account_inactive", "not_authed"} {
+		ctx, cancel := context.WithCancel(t.Context())
 		c := &clock{}
-		r := &runner{steps: []func(int) error{fails(fmt.Errorf("slack auth.test: %w", slackgo.SlackErrorResponse{Err: code}))}}
+		r := &runner{steps: []func(int) error{
+			fails(fmt.Errorf("slack auth.test: %w", slackgo.SlackErrorResponse{Err: code})),
+			stopAfter(cancel), // a second run only happens if the error was retried
+		}}
 
-		err := RunSlack(t.Context(), r, nil, policy(c))
+		err := RunSlack(ctx, r, nil, policy(c))
+		cancel()
 
 		if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), code) {
 			t.Errorf("%s: RunSlack = %v, want ErrSlackAuth naming the code", code, err)
