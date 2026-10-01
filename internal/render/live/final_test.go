@@ -283,9 +283,14 @@ func TestFinalModeWaitsForTheFinal(t *testing.T) {
 // TestAHungWriteIsAbandonedAtWriteTimeout: Slack never answers an update. A write watches no context
 // but its own timeout, which is all that bounds it; when it runs out the final is tried again, inside
 // the final's deadline, and arrives.
+//
+// The timeout is real time, and it bounds the retry too: a retry that takes longer than the timeout is
+// itself abandoned, and a third update follows. At 100 ms that happened to an ordinary request on a
+// loaded machine (a third update, all three of the final text), so the timeout is long enough for the
+// request that is not hung, and the test waits it out once, for the one that is.
 func TestAHungWriteIsAbandonedAtWriteTimeout(t *testing.T) {
 	e := setup(t)
-	e.cfg.WriteTimeout = 100 * time.Millisecond
+	e.cfg.WriteTimeout = time.Second
 	e.live = live.New(e.cfg)
 	e.rec.hangUpdates = 1
 	run, _ := e.partial(t)
