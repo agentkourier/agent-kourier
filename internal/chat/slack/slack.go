@@ -54,6 +54,7 @@ type Client struct {
 
 	mu    sync.Mutex
 	users map[string]cachedUser // guarded by mu
+	team  string                // the workspace ID, from auth.test; guarded by mu
 }
 
 // New returns a Client over cfg. It makes no request: a missing or wrong token fails Run.
