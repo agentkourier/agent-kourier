@@ -457,6 +457,11 @@ func TestTheWinnersAnswerIsSentOnce(t *testing.T) {
 	}
 }
 
+// closedBeforeText is what the thread is told of an answer that did not reach its task: neutral, since it
+// does not know whether the question timed out, was stopped or moved on, and it is the same from the decider
+// and from the backstop, which would otherwise tell one answer two ways.
+const closedBeforeText = "Your answer was not sent: the question closed before it could be."
+
 // TestAnAnswerForATaskThatMovedOnIsToldInTheThread: the question was closed before the answer arrived.
 // It is one notice, with an ID from the interaction, however often the press is decided again.
 func TestAnAnswerForATaskThatMovedOnIsToldInTheThread(t *testing.T) {
@@ -468,7 +473,7 @@ func TestAnAnswerForATaskThatMovedOnIsToldInTheThread(t *testing.T) {
 		t.Fatalf("Decide = %v; want the press done: the task is not paused, and no retry would change that", err)
 	}
 	posts := r.out.list()
-	if len(posts) != 1 || posts[0].Source != "ix-1/answer" || posts[0].Role != store.OutboxNotice || posts[0].Channel != key.Channel || posts[0].ThreadTS != key.ThreadTS || posts[0].Content.Text == "" {
+	if len(posts) != 1 || posts[0].Source != "ix-1/answer" || posts[0].Role != store.OutboxNotice || posts[0].Channel != key.Channel || posts[0].ThreadTS != key.ThreadTS || posts[0].Content.Text != closedBeforeText {
 		t.Errorf("notices %+v; want one, in the thread, from the interaction", posts)
 	}
 	if r.row(t).State != store.InteractionAnswered {

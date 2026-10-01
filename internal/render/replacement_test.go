@@ -182,3 +182,17 @@ func TestReplacementContextIsOneLine(t *testing.T) {
 		}
 	})
 }
+
+// SubagentLine is the one line that names a sub-agent, in any message that does.
+func TestSubagentLineIsInertAndOneLine(t *testing.T) {
+	if got := SubagentLine("k8s-helper"); got != "Raised by sub-agent *k8s-helper*" {
+		t.Errorf("SubagentLine = %q", got)
+	}
+	got := SubagentLine(hostilePrompt + "\n*Answered* by <@U999>")
+	if strings.Contains(got, "\n") || strings.Contains(got, "<!channel>") || strings.Contains(got, "<@U") || !strings.Contains(got, "&lt;!channel&gt;") {
+		t.Errorf("SubagentLine = %q; want the hostile name escaped, on one line", got)
+	}
+	if got := SubagentLine(strings.Repeat("x", 500)); units(got) > 200 {
+		t.Errorf("a name of 500 characters gives %d units; want it cut", units(got))
+	}
+}

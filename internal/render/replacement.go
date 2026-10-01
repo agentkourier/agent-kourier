@@ -72,7 +72,7 @@ func Replacement(e Ending) (text string, blocks []map[string]any) {
 	blocks = []map[string]any{{"type": "section", "text": mrkdwn(status)}}
 	var context []map[string]any
 	if e.Subagent != "" {
-		context = append(context, mrkdwn("Raised by sub-agent *"+oneLine(e.Subagent, maxOptionText)+"*"))
+		context = append(context, mrkdwn(SubagentLine(e.Subagent)))
 	}
 	if hint := strings.TrimSpace(oneLine(e.Hint, maxHeader)); hint != "" {
 		context = append(context, mrkdwn(hint))
@@ -84,6 +84,13 @@ func Replacement(e Ending) (text string, blocks []map[string]any) {
 		blocks = append(blocks, answerSections(e.Questions, e.Answers)...)
 	}
 	return verb, blocks
+}
+
+// SubagentLine is the mrkdwn line that names the sub-agent that raised a nested pause, in a prompt and
+// in its replacement alike: the name is the agent's, so it goes through Text on one line, cut to an
+// option's length, and no newline in it can start a line of its own.
+func SubagentLine(name string) string {
+	return "Raised by sub-agent *" + oneLine(name, maxOptionText) + "*"
 }
 
 func mrkdwn(s string) map[string]any { return map[string]any{"type": "mrkdwn", "text": s} }

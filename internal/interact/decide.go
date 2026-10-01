@@ -55,8 +55,10 @@ type PressDecision struct {
 	Binding     Binding
 }
 
-// textClosedBefore tells the thread that an answer reached a task that was no longer waiting for it.
-const textClosedBefore = "An answer arrived after the question was closed, so it was not sent."
+// textClosedBefore tells the thread that an answer reached a task that was no longer waiting for it. It is
+// neutral: courier does not know whether the question timed out, was stopped or was left behind. The
+// decider and the backstop use it alike, so one answer is never told two ways.
+const textClosedBefore = "Your answer was not sent: the question closed before it could be."
 
 // PromptReplacer takes the controls off the prompt of an interaction that has ended: *Replacer.
 type PromptReplacer interface {

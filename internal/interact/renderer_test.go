@@ -215,3 +215,34 @@ var (
 	_ interact.PromptRenderer      = interact.Renderer{}
 	_ interact.ReplacementRenderer = interact.Renderer{}
 )
+
+// TestNestedPromptNamesItsSubagent: a pause that a sub-agent raised says so, in a line under the header
+// (as the replacement does), escaped as every word of the agent's is; a pause that no sub-agent raised
+// has no such line; and a prompt with no room for the line goes without it rather than fail.
+func TestNestedPromptNamesItsSubagent(t *testing.T) {
+	var r interact.Renderer
+	line := func(c slack.Content) []map[string]any { return blocksOf(t, c)[1:2] }
+	in := askUserOf(dialect.Question{Text: "Why?"})
+	in.Nested = &dialect.Nested{Subagent: hostile + "\nlookalike"}
+	c, err := r.Prompt(interact.Prompt{ID: "ix-1", Interaction: in})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(flat(t, slack.Content{Blocks: mustJSON(t, line(c))})) // the encoder ends its output with a newline
+	if blocks := blocksOf(t, c); len(blocks) != 4 || blocks[1]["type"] != "context" || !strings.Contains(got, "Raised by sub-agent *&lt;!channel&gt; &lt;@U123&gt;") ||
+		strings.Contains(got, "<!channel>") || strings.Contains(got, "\n") {
+		t.Fatalf("blocks %v; want header, the escaped one-line sub-agent, the input and Submit", blocks)
+	}
+	if c, err := r.Prompt(interact.Prompt{ID: "ix-1", Interaction: askUserOf(dialect.Question{Text: "Why?"})}); err != nil || len(blocksOf(t, c)) != 3 || strings.Contains(flat(t, c), "sub-agent") {
+		t.Fatalf("a pause with no sub-agent = %s, %v; want no sub-agent line", flat(t, c), err)
+	}
+	full := askUserOf(make([]dialect.Question, 48)...)
+	full.Nested = in.Nested
+	if c, err := r.Prompt(interact.Prompt{ID: "ix-1", Interaction: full}); err != nil || len(blocksOf(t, c)) != 50 {
+		t.Fatalf("a full nested prompt = %d blocks, %v; want 50 and no sub-agent line", len(blocksOf(t, c)), err)
+	}
+	// With both lines, the sub-agent's is under the header and the deadline's above Submit.
+	if c, err := r.Prompt(interact.Prompt{ID: "ix-1", Interaction: in, Deadline: askBy}); err != nil || len(blocksOf(t, c)) != 5 || blocksOf(t, c)[1]["type"] != "context" || blocksOf(t, c)[3]["type"] != "context" {
+		t.Fatalf("a nested prompt with a deadline = %v, %v; want both context lines", blocksOf(t, c), err)
+	}
+}

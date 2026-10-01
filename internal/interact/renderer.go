@@ -24,9 +24,10 @@ type Renderer struct{}
 
 // Prompt renders an ask-user prompt: a header from the agent's hint, an input for each question, a
 // line with the deadline, and the Submit button valued with the interaction's ID (render.PromptBlocks).
+// A pause that a sub-agent raised names it in a line under the header, as its replacement does.
 // Everything the agent wrote is escaped there. A prompt that does not fit in one message is
 // render.ErrPromptTooLarge, which no retry mends. The deadline line is left out of a prompt that has
-// no room for it, rather than refusing a prompt that would otherwise fit.
+// no room for it, as is the sub-agent's line, rather than refusing a prompt that would otherwise fit.
 func (Renderer) Prompt(p Prompt) (slack.Content, error) {
 	if p.Interaction.Kind != dialect.AskUser {
 		return slack.Content{}, fmt.Errorf("interact: no prompt is rendered for a %q pause", p.Interaction.Kind)
@@ -34,6 +35,10 @@ func (Renderer) Prompt(p Prompt) (slack.Content, error) {
 	blocks, _, err := render.PromptBlocks(p.ID, p.Interaction.Hint, p.Interaction.Questions)
 	if err != nil {
 		return slack.Content{}, fmt.Errorf("interact: render the prompt: %w", err)
+	}
+	if n := p.Interaction.Nested; n != nil && n.Subagent != "" && len(blocks) < maxBlocks { // under the header
+		line := map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": render.SubagentLine(n.Subagent)}}}
+		blocks = append(blocks[:1:1], append([]map[string]any{line}, blocks[1:]...)...)
 	}
 	text := promptText
 	if !p.Deadline.IsZero() {

@@ -124,6 +124,18 @@ func TestRetentionLogsAFailedPurgeAndGoesOn(t *testing.T) {
 	}
 }
 
+// countingPurger counts the purges it passes on, so a test can wait for ticks instead of sleeping.
+type countingPurger struct {
+	interact.PressPurger
+	n atomic.Int32
+}
+
+func (c *countingPurger) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (int, error) {
+	n, err := c.PressPurger.PurgePresses(ctx, now, grace)
+	c.n.Add(1)
+	return n, err
+}
+
 // TestRetentionLogsWhatItPurged: the count is logged when there is one, and only then.
 func TestRetentionLogsWhatItPurged(t *testing.T) {
 	r := newPressRig(t)
@@ -132,10 +144,12 @@ func TestRetentionLogsWhatItPurged(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := &logBuf{}
-	startRetention(t, interact.RetentionConfig{Store: r.st, Interval: 5 * time.Millisecond, Grace: time.Hour, Logger: slog.New(slog.NewTextHandler(logs, nil)),
+	counted := &countingPurger{PressPurger: r.st}
+	startRetention(t, interact.RetentionConfig{Store: counted, Interval: 5 * time.Millisecond, Grace: time.Hour, Logger: slog.New(slog.NewTextHandler(logs, nil)),
 		Now: func() time.Time { return deadline.Add(2 * time.Hour) }})
-	waitFor(t, "the press to be purged", func() bool { return r.waiting(t) == 0 })
-	time.Sleep(20 * time.Millisecond) // later ticks purge nothing
+	waitFor(t, "the purge to be logged", func() bool { return strings.Contains(logs.String(), "purged=1") })
+	seen := counted.n.Load()
+	waitFor(t, "two more ticks, which purge nothing", func() bool { return counted.n.Load() >= seen+2 })
 	if out := logs.String(); strings.Count(out, "level=INFO") != 1 || !strings.Contains(out, "purged=1") {
 		t.Errorf("log = %q; want the purge logged once, with its count", out)
 	}
