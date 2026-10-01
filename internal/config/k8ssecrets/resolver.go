@@ -72,6 +72,10 @@ var (
 	// ErrStopped is returned after Stop, when the caches no longer update and would serve
 	// stale data.
 	ErrStopped = errors.New("secret resolver stopped")
+	// ErrAccessDenied is wrapped by the error Start returns when the API server answered a list or
+	// watch with forbidden or unauthorized. It is a configuration failure, not a cancellation or a
+	// timeout, and the error also wraps the API server's own answer.
+	ErrAccessDenied = errors.New("the API server denied access to Secrets")
 )
 
 var _ config.SecretResolver = (*Resolver)(nil)
@@ -149,13 +153,13 @@ func (r *Resolver) Start(ctx context.Context) error {
 	for _, w := range r.namespaces {
 		w.factory.Start(r.ctx.Done())
 	}
-	wait, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer context.AfterFunc(r.ctx, cancel)() //nolint:contextcheck // r.ctx is the informers' lifetime, deliberately not derived from Start's ctx
+	wait, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	defer context.AfterFunc(r.ctx, func() { cancel(nil) })() //nolint:contextcheck // r.ctx is the informers' lifetime, deliberately not derived from Start's ctx
 	go func() {
 		select {
 		case <-r.denied:
-			cancel()
+			cancel(ErrAccessDenied) // so the error is not a Canceled, which a caller may read as a shutdown
 		case <-wait.Done():
 		}
 	}()
@@ -167,7 +171,7 @@ func (r *Resolver) Start(ctx context.Context) error {
 	}
 	if len(unsynced) > 0 {
 		slices.Sort(unsynced)
-		err := wait.Err()
+		err := context.Cause(wait) // the timeout, the caller's cancellation, or ErrAccessDenied
 		if causes := r.causesOf(unsynced); len(causes) > 0 {
 			err = fmt.Errorf("%w: %w", err, errors.Join(causes...))
 		}

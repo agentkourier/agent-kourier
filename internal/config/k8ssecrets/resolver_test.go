@@ -405,22 +405,37 @@ func (l *logBuffer) String() string {
 
 // A denied list never syncs, so waiting out the timeout would only hide the reason: Start fails
 // as soon as the API server says forbidden, and the error names the namespace and the cause.
-func TestStartFailsFastAndNamesAForbiddenList(t *testing.T) {
-	client := fake.NewClientset()
-	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denied() })
-	r := New(client, []string{"sre"})
-	t.Cleanup(r.Stop)
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
-	defer cancel()
+func TestStartFailsFastAndNamesADeniedList(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		is    func(error) bool
+		words string
+	}{
+		{"forbidden", denied(), apierrors.IsForbidden, "forbidden"},
+		{"unauthorized", apierrors.NewUnauthorized("token expired"), apierrors.IsUnauthorized, "token expired"},
+	} {
+		client := fake.NewClientset()
+		client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, tc.err })
+		r := New(client, []string{"sre"})
+		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 
-	begin := time.Now()
-	err := r.Start(ctx)
+		begin := time.Now()
+		err := r.Start(ctx)
+		took := time.Since(begin)
+		cancel()
+		r.Stop()
 
-	if !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), "forbidden") || !strings.Contains(err.Error(), `["sre"]`) {
-		t.Errorf("Start = %v, want an error naming namespace sre and wrapping the forbidden cause", err)
-	}
-	if took := time.Since(begin); took > 2*time.Second {
-		t.Errorf("Start took %s, want it to fail at the first denial, well before its 4s timeout", took)
+		if !tc.is(err) || !strings.Contains(err.Error(), tc.words) || !strings.Contains(err.Error(), `["sre"]`) {
+			t.Errorf("%s: Start = %v, want an error naming namespace sre and wrapping the cause", tc.name, err)
+		}
+		if took > 2*time.Second {
+			t.Errorf("%s: Start took %s, want it to fail at the first denial, well before its 4s timeout", tc.name, took)
+		}
+		// A denial must not look like a shutdown or a timeout to a caller that decides its exit from it.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrAccessDenied) {
+			t.Errorf("%s: Start = %v; want ErrAccessDenied, and neither Canceled nor DeadlineExceeded", tc.name, err)
+		}
 	}
 }
 
@@ -440,17 +455,26 @@ func TestStartNamesATransientCauseAtTheTimeout(t *testing.T) {
 	}
 }
 
-// A watch that is denied leaves a cache that never updates. Whether the denial arrives before
-// Start has seen the first list sync is a race, so either outcome must name the cause: Start
-// fails with it, or it succeeds and the cause is in the log.
+// A watch that is denied after the list was allowed is not fatal: the cache has synced, though it
+// will not update, so Start succeeds and the denial is reported in the log. The watch is held
+// until Start has returned, so the order is fixed.
 func TestDeniedWatchIsReported(t *testing.T) {
 	client := fake.NewClientset(secret("sre", "creds"))
-	client.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) { return true, nil, denied() })
+	started := make(chan struct{})
+	client.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) {
+		<-started
+		return true, nil, denied()
+	})
 	logs := &logBuffer{}
 	r := New(client, []string{"sre"}, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
-	t.Cleanup(r.Stop)
-	if err := r.Start(t.Context()); err != nil && !apierrors.IsForbidden(err) {
-		t.Fatalf("Start = %v, want success or the forbidden cause", err)
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(started) }); r.Stop() })
+
+	err := r.Start(t.Context())
+	release.Do(func() { close(started) })
+
+	if err != nil {
+		t.Fatalf("Start = %v; a denied watch after an allowed list must not fail it", err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for !strings.Contains(logs.String(), "forbidden") {
