@@ -41,6 +41,9 @@ type OutboxEntry struct {
 	// Payload is the message to post, as JSON the store never interprets. It is cleared when
 	// the ref is recorded: from then on the text lives in Slack, not in the database too.
 	Payload string
+	// AbandonedAt is when courier gave up on posting the message; zero if it did not (see
+	// AbandonOutbox).
+	AbandonedAt time.Time
 }
 
 // Outbox persists intended posts and their resulting message refs. Rows are
@@ -57,7 +60,16 @@ type Outbox interface {
 	RecordMessageRef(ctx context.Context, id, ref string) error
 	// GetOutbox returns the row with the given ID, or ErrNotFound.
 	GetOutbox(ctx context.Context, id string) (OutboxEntry, error)
-	// ListUnposted returns rows with no message ref, oldest first, for
+	// AbandonOutbox gives up on an unposted row that will never post: it records at and clears
+	// the Payload, so an agent's text is not kept for a post that will not happen. It reports
+	// whether the row was newly abandoned, and an abandoned row stays so, with its first time.
+	// ErrNotFound if the row does not exist; ErrConflict if it already has a message ref.
+	AbandonOutbox(ctx context.Context, id string, at time.Time) (abandoned bool, err error)
+	// AbandonOutboxBefore abandons, as of at, every row created before the cutoff that has a
+	// Payload and no message ref and is not abandoned, and returns their IDs: the retention
+	// limit on unposted text. A row with no Payload, a stream's, is left alone.
+	AbandonOutboxBefore(ctx context.Context, before, at time.Time) (ids []string, err error)
+	// ListUnposted returns rows with no message ref that are not abandoned, oldest first, for
 	// recovery reconciliation.
 	ListUnposted(ctx context.Context) ([]OutboxEntry, error)
 }

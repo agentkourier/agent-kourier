@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -35,16 +36,19 @@ func (s *Store) RecordMessageRef(ctx context.Context, id, ref string) error {
 }
 
 // outboxColumns are the columns scanOutbox reads.
-const outboxColumns = `id, event_id, role, channel, thread_ts, created_at, message_ref, payload`
+const outboxColumns = `id, event_id, role, channel, thread_ts, created_at, message_ref, payload, abandoned_at`
 
 // scanOutbox reads one row selected with outboxColumns.
 func scanOutbox(r interface{ Scan(...any) error }) (store.OutboxEntry, error) {
 	var o store.OutboxEntry
-	var created int64
-	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.ThreadTS, &created, &o.MessageRef, &o.Payload); err != nil {
+	var created, abandoned int64
+	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.ThreadTS, &created, &o.MessageRef, &o.Payload, &abandoned); err != nil {
 		return store.OutboxEntry{}, err
 	}
 	o.CreatedAt = fromTS(created)
+	if abandoned != 0 {
+		o.AbandonedAt = fromTS(abandoned)
+	}
 	return o, nil
 }
 
@@ -62,7 +66,7 @@ func (s *Store) GetOutbox(ctx context.Context, id string) (store.OutboxEntry, er
 
 // ListUnposted implements store.Outbox.
 func (s *Store) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE message_ref = '' ORDER BY created_at, id`)
+	rows, err := s.read.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE message_ref = '' AND abandoned_at = 0 ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list unposted outbox: %w", err)
 	}
@@ -79,4 +83,55 @@ func (s *Store) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
 		return nil, fmt.Errorf("list unposted outbox: %w", err)
 	}
 	return out, nil
+}
+
+// AbandonOutbox implements store.Outbox.
+func (s *Store) AbandonOutbox(ctx context.Context, id string, at time.Time) (bool, error) {
+	var abandoned bool
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		n, err := execRows(ctx, tx, `UPDATE outbox SET abandoned_at = ?, payload = '' WHERE id = ? AND message_ref = '' AND abandoned_at = 0`, ts(at), id)
+		if err != nil || n > 0 {
+			abandoned = n > 0
+			return err
+		}
+		var ref string // no change: the row is missing, posted, or already abandoned
+		switch err := tx.QueryRowContext(ctx, `SELECT message_ref FROM outbox WHERE id = ?`, id).Scan(&ref); {
+		case errors.Is(err, sql.ErrNoRows):
+			return store.ErrNotFound
+		case err != nil:
+			return err
+		case ref != "":
+			return fmt.Errorf("it is posted as %s: %w", ref, store.ErrConflict)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("abandon outbox %q: %w", id, err)
+	}
+	return abandoned, nil
+}
+
+// AbandonOutboxBefore implements store.Outbox.
+func (s *Store) AbandonOutboxBefore(ctx context.Context, before, at time.Time) ([]string, error) {
+	var ids []string
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `UPDATE outbox SET abandoned_at = ?, payload = ''
+			WHERE message_ref = '' AND abandoned_at = 0 AND payload <> '' AND created_at < ? RETURNING id`, ts(at), ts(before))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }() // rows.Err below reports read failures
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("abandon old outbox rows: %w", err)
+	}
+	return ids, nil
 }

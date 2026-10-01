@@ -63,17 +63,17 @@ func TestOutboxPayload(t *testing.T) {
 	}
 }
 
-// TestMigration0007KeepsExistingRows migrates a database to 0006 and gives it outbox rows, one
-// posted and one not, then opens it: 0007 runs over existing rows and must keep them.
-func TestMigration0007KeepsExistingRows(t *testing.T) {
+// databaseAt creates the database at path with the migrations up to number last only, and two
+// outbox rows in it, one posted and one not.
+func databaseAt(t *testing.T, path string, last int) {
+	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "courier.db")
 	old := fstest.MapFS{}
-	files, err := fs.Glob(migrationFiles, "migrations/000[1-6]_*.sql")
-	if err != nil || len(files) != 6 {
-		t.Fatalf("migrations 1 to 6 = %v, %v", files, err)
+	files, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil || len(files) < last {
+		t.Fatalf("migrations = %v, %v", files, err)
 	}
-	for _, f := range files {
+	for _, f := range files[:last] {
 		data, err := migrationFiles.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -94,8 +94,15 @@ func TestMigration0007KeepsExistingRows(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
 
+// TestMigration0007KeepsExistingRows opens a database migrated to 0006 with outbox rows in it:
+// 0007 runs over existing rows and must keep them.
+func TestMigration0007KeepsExistingRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "courier.db")
+	databaseAt(t, path, 6)
 	s := openAt(t, path) // applies 0007
+	ctx := context.Background()
 	if got, err := s.GetOutbox(ctx, "unposted"); err != nil || got.Payload != "" || got.MessageRef != "" {
 		t.Fatalf("unposted row after 0007 = %+v, %v", got, err)
 	}
