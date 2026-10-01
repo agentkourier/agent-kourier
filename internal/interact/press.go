@@ -29,10 +29,9 @@ var ErrNotInteraction = errors.New("interact: the pressed button is not an inter
 
 // The fixed texts told to a person alone. None holds anything the agent wrote.
 const (
-	textGone       = "This question is no longer available."
-	textNotReady   = "This question is not ready yet. Please press Submit again in a moment."
-	textNotMember  = "Only members of this channel can answer this question."
-	textUnverified = "Couldn't verify that you can answer this question. Please try again."
+	textGone      = "This question is no longer available."
+	textNotReady  = "This question is not ready yet. Please press Submit again in a moment."
+	textNotMember = "Only members of this channel can answer this question."
 )
 
 // Authorizer says who may answer: *slack.Client. Both fail closed, IsBot by returning true with its error.
@@ -66,7 +65,8 @@ type PressConfig struct {
 	// Limits bounds the presses waiting (default 1000 in all, 10 for one person).
 	Limits store.PressLimits
 	// EarlyFor is how long a press for a prompt whose message is not recorded yet is tried again
-	// (default 2 minutes), before the person is told to press again.
+	// (default 2 minutes), before the person is told to press again. It is for that alone: a press whose
+	// check of the person fails is kept until the worker gives up on it.
 	EarlyFor time.Duration
 	// Notify, if set, is called with each press recorded, for the worker (WP-33d1d) to pick it up. It runs
 	// in Press, on the path that acknowledges the button to Slack, so it must never block: a hand-off to a
@@ -143,8 +143,8 @@ const (
 // refused as not a member, or a bot, or for an incomplete answer, is audited first (denied, or incomplete
 // with the answer's shape and no values); a press on a question that is already decided is not, since only
 // a press that races into the decider is a decision lost. A failure to check, to audit or to decide is an
-// error and leaves the press for another try. A check of who pressed that keeps failing is no decision
-// either, and is tried again for EarlyFor of the press's age, as an early press is, before the person is told.
+// error and leaves the press for another try, however old it is: a check that cannot be made is no decision,
+// and only the worker's cap ends such a press (GiveUp).
 func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, error) {
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
@@ -193,12 +193,12 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	}
 	switch member, err := p.cfg.Authorizer.IsChannelMember(ctx, row.Key.Channel, press.User); {
 	case err != nil:
-		return p.unverified(ctx, press, row, err)
+		return p.unverified(row, err)
 	case !member:
 		return refuse(audit.DecisionDenied, nil, textNotMember)
 	}
 	if bot, err := p.cfg.Authorizer.IsBot(ctx, press.User); err != nil {
-		return p.unverified(ctx, press, row, err)
+		return p.unverified(row, err)
 	} else if bot {
 		return refuse(audit.DecisionDenied, nil, "")
 	}
@@ -226,15 +226,12 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	return p.finish(ctx, press, "", "")
 }
 
-// unverified is a check of who pressed that could not be made. It is no decision, so the press is kept and
-// tried again, as an early one is, for EarlyFor of its age: a Slack error near the deadline must not lose an
-// answer that came in time. Only then is the person told, and the press deleted.
-func (p *Pipeline) unverified(ctx context.Context, press store.Press, row store.Interaction, err error) (Result, error) {
-	if p.cfg.Now().Sub(press.PressedAt) < p.cfg.EarlyFor {
-		return Retry, fmt.Errorf("interact: check who pressed %s: %w", row.ID, err)
-	}
-	p.cfg.Logger.WarnContext(ctx, "interact: a press could not be checked in time", "interaction", row.ID, "err", err)
-	return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
+// unverified is a check of who pressed that could not be made. It is no decision, so the press is kept for
+// the worker to try again, at whatever age: a Slack error that outlasts a window, and straddles the deadline,
+// must not lose an answer that came in time. Only the worker's cap ends such a press, through GiveUp, which
+// tells the person to press again.
+func (p *Pipeline) unverified(row store.Interaction, err error) (Result, error) {
+	return Retry, fmt.Errorf("interact: check who pressed %s: %w", row.ID, err)
 }
 
 // textGaveUp is told to a person whose press the worker gave up on. Pressing again is the way on: an

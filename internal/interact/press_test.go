@@ -234,10 +234,11 @@ func TestOnlyMembersWhoAreNotBotsAreDecided(t *testing.T) {
 	}
 }
 
-// TestACheckThatFailsKeepsThePressForTwoMinutes: a check that cannot be made is no decision. A transient error
-// near the deadline must not lose an answer that was in time, so the press is kept and tried again, until it is
-// as old as an early press may be, and only then is the person told.
-func TestACheckThatFailsKeepsThePressForTwoMinutes(t *testing.T) {
+// TestACheckThatFailsKeepsThePressWhateverItsAge: a check that cannot be made is no decision. A users-API
+// outage that straddles the deadline must not lose an answer that came in time, so the press is kept for the
+// worker to try again, at any age: ending it is the worker's cap (GiveUp), and not a window of the pipeline's
+// own, which would end it, with the person told the check failed, long before the cap.
+func TestACheckThatFailsKeepsThePressWhateverItsAge(t *testing.T) {
 	for name, mod := range map[string]func(*authz){
 		"membership cannot be read": func(a *authz) { a.memberErr = errBoom },
 		"bot status cannot be read": func(a *authz) { a.botErr = errBoom },
@@ -250,14 +251,15 @@ func TestACheckThatFailsKeepsThePressForTwoMinutes(t *testing.T) {
 				t.Fatal(err)
 			}
 			presses, _ := r.st.ListPresses(t.Context())
-			r.now = r.now.Add(2*time.Minute - time.Second)
-			if res, err := r.pl.Process(t.Context(), presses[0]); !errors.Is(err, errBoom) || res != interact.Retry || r.waiting(t) != 1 || len(r.eph.list()) != 0 || len(r.aud.got) != 0 {
-				t.Fatalf("Process just before 2 minutes = %v, %v, %d waiting, told %q; want Retry with the error, the press kept, no one told and nothing audited", res, err, r.waiting(t), r.eph.list())
+			pressed := r.now
+			for _, age := range []time.Duration{2*time.Minute - time.Second, 2*time.Minute + time.Second, 59 * time.Minute, 24 * time.Hour} {
+				r.now = pressed.Add(age)
+				if res, err := r.pl.Process(t.Context(), presses[0]); !errors.Is(err, errBoom) || res != interact.Retry || r.waiting(t) != 1 || len(r.eph.list()) != 0 || len(r.aud.got) != 0 {
+					t.Fatalf("Process at %v = %v, %v, %d waiting, told %q; want Retry with the error, the press kept, no one told and nothing audited", age, res, err, r.waiting(t), r.eph.list())
+				}
 			}
-			r.now = r.now.Add(time.Second)
-			want := "UALICE1: Couldn't verify that you can answer this question. Please try again."
-			if res, err := r.pl.Process(t.Context(), presses[0]); err != nil || res != interact.Done || r.waiting(t) != 0 || strings.Join(r.eph.list(), "|") != want || len(r.sess.answers()) != 0 {
-				t.Errorf("Process at 2 minutes = %v, %v, %d waiting, told %q; want the person told, the press done and nothing sent", res, err, r.waiting(t), r.eph.list())
+			if len(r.sess.answers()) != 0 {
+				t.Errorf("%d answers sent; want none while the person cannot be checked", len(r.sess.answers()))
 			}
 		})
 	}

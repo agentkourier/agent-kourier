@@ -477,6 +477,25 @@ func (c crashRig) restart(t *testing.T, mod func(*interact.WorkerConfig)) (stop 
 	return stop
 }
 
+// TestAPressThatCannotBeCheckedIsEndedByTheWorkersCapAlone: the users API is down past the deadline. The press
+// is not ended at 2 minutes with a message that the check failed: it waits for the worker's cap, and is
+// then given up on, which tells the person to press again.
+func TestAPressThatCannotBeCheckedIsEndedByTheWorkersCapAlone(t *testing.T) {
+	c := crashRig{newPressRig(t)}
+	c.open(t)
+	c.az.memberErr = errBoom
+	if err := c.pl.Press(t.Context(), c.submit(t, "UALICE1", 0)); err != nil {
+		t.Fatal(err)
+	}
+	c.now = c.now.Add(61 * time.Minute) // past the cap, and the deadline: before the restart, so no goroutine races the clock
+	c.restart(t, nil)
+	waitFor(t, "the press to be given up on", func() bool { return c.waiting(t) == 0 })
+	want := "UALICE1: Couldn't process your answer. Please press Submit again."
+	if got := strings.Join(c.eph.list(), "|"); got != want || c.row(t).State != store.InteractionPending || len(c.aud.got) != 0 {
+		t.Errorf("told %q, state %s, %d audit rows; want the person told to press again, the question untouched and nothing audited", got, c.row(t).State, len(c.aud.got))
+	}
+}
+
 // TestAPressRecordedBeforeACrashIsDecidedAfterIt: the crash is after the record and before any work.
 func TestAPressRecordedBeforeACrashIsDecidedAfterIt(t *testing.T) {
 	c := crashRig{newPressRig(t)}
