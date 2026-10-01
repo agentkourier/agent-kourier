@@ -21,9 +21,9 @@ CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 IMAGE=courier-e2e/runner:dev
 JOB=e2e-runner
-# How long to wait for the Job (the test binary's own timeout is 8 minutes, for the rollouts of the fault
-# test); its own activeDeadlineSeconds (780) is the backstop.
-WAIT_SECONDS=${E2E_WAIT_SECONDS:-660}
+# How long to wait for the Job (the test binary's own timeout is 20 minutes, for the scenarios, which roll
+# courier out and wait on it); its own activeDeadlineSeconds (1500) is the backstop.
+WAIT_SECONDS=${E2E_WAIT_SECONDS:-1320}
 [[ "${WAIT_SECONDS}" =~ ^[0-9]+$ ]] || die "E2E_WAIT_SECONDS must be a whole number of seconds"
 
 for tool in docker kind kubectl go; do

@@ -60,7 +60,7 @@ metadata:
   namespace: e2e
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 780
+  activeDeadlineSeconds: 1500
   template:
     metadata:
       labels: {app: e2e-runner}
@@ -72,7 +72,7 @@ spec:
         - name: e2e
           image: courier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^(TestSmoke|TestFaultArmsAndDisarmsOnTheRealDeployment)$", "-test.timeout=8m"]
+          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*)$", "-test.timeout=20m"]
           # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
           # that has courier from one that does not yet.
           env: [{name: E2E_TIER, value: "@TIER@"}]
