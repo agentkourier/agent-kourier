@@ -203,11 +203,15 @@ func TestToolLineRedactsBeforeItShowsOrCaps(t *testing.T) {
 	if !strings.Contains(line, "db1") { // what is not secret is shown
 		t.Errorf("tool line %q lost a value that is no secret", line)
 	}
+	// A token's shape is enough, whatever its key is called.
+	if got := ToolLine("run", map[string]any{"cmd": "curl -H 'Authorization: Bearer xoxb-123-456-abcdefghijkl'"}); strings.Contains(got, "xoxb-123-456") {
+		t.Errorf("tool line %q shows a token", got)
+	}
 	if got, want := ToolLine("run", map[string]any{"url": "https://admin:s3cretpass@db.example/x"}), `Calling run(url="https://[redacted]@db.example/x")`; got != want {
 		t.Errorf("a URL with credentials = %q, want %q", got, want)
 	}
 	// A secret that sits across the argument cap must not show as a prefix: redaction comes first.
-	cut := ToolLine("run", map[string]any{"a": strings.Repeat("x", 118), "u": "https://user:s3cretpass@host"})
+	cut := ToolLine("run", map[string]any{"a": strings.Repeat("x", 118), "u": "https://user:s3cretpass@host", "z": strings.Repeat("y", 50)})
 	if strings.Contains(cut, "s3c") || strings.Contains(cut, "user:") {
 		t.Errorf("tool line %q shows part of a secret at the cap", cut)
 	}
