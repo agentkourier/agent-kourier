@@ -2,10 +2,23 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/broker"
+	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 )
 
-func TestRun(t *testing.T) {
+// env is a fake environment.
+type env map[string]string
+
+func (e env) get(k string) string { return e[k] }
+
+func TestRunVersionAndUsage(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
@@ -14,22 +27,97 @@ func TestRun(t *testing.T) {
 		wantStderr bool
 	}{
 		{name: "version flag prints version", args: []string{"--version"}, wantCode: 0, wantStdout: "v1.2.3\n"},
-		{name: "no args prints nothing", args: nil, wantCode: 0},
-		{name: "unknown flag fails", args: []string{"--nope"}, wantCode: 2, wantStderr: true},
+		{name: "unknown flag fails", args: []string{"--nope"}, wantCode: exitUsage, wantStderr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := run(tt.args, "v1.2.3", &stdout, &stderr)
-			if code != tt.wantCode {
-				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
-			}
-			if got := stdout.String(); got != tt.wantStdout {
-				t.Errorf("stdout = %q, want %q", got, tt.wantStdout)
-			}
-			if gotErr := stderr.Len() > 0; gotErr != tt.wantStderr {
-				t.Errorf("stderr non-empty = %v, want %v (%q)", gotErr, tt.wantStderr, stderr.String())
+			code := run(tt.args, "v1.2.3", &stdout, &stderr, env{}.get)
+			if code != tt.wantCode || stdout.String() != tt.wantStdout || (stderr.Len() > 0) != tt.wantStderr {
+				t.Errorf("run = %d, stdout %q, stderr %q; want %d, %q, stderr %t", code, stdout.String(), stderr.String(), tt.wantCode, tt.wantStdout, tt.wantStderr)
 			}
 		})
 	}
 }
+
+// Every outcome of the broker has its own exit code, so a supervisor, or a person reading `kubectl
+// describe pod`, can tell a bad token from missing RBAC from a bad config without reading the log.
+func TestExitCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"a clean stop", nil, exitOK},
+		{"Slack rejected the tokens", fmt.Errorf("run: %w", broker.ErrSlackAuth), exitSlackAuth},
+		{"the config or the wiring is wrong", fmt.Errorf("run: %w", broker.ErrWiring), exitUsage},
+		{"RBAC denied access to Secrets", fmt.Errorf("bootstrap: %w", k8ssecrets.ErrAccessDenied), exitRBAC},
+		{"any other failure", errors.New("store: disk full"), exitFailure},
+	} {
+		if got := exitCode(tc.err); got != tc.want {
+			t.Errorf("%s: exitCode = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	codes := map[int]bool{exitOK: true, exitSlackAuth: true, exitUsage: true, exitRBAC: true, exitFailure: true}
+	if len(codes) != 5 || exitOK != 0 || exitSlackAuth != 1 || exitUsage != 2 || exitRBAC != 3 {
+		t.Errorf("the exit codes are %v, want 0 clean, 1 Slack auth, 2 wiring or usage, 3 RBAC, and one more for the rest", codes)
+	}
+}
+
+func TestEnvConfigDefaultsAndOverrides(t *testing.T) {
+	d, err := loadEnv(env{}.get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.configDir != "/etc/courier" || d.dbPath != "/data/courier.db" || d.listen != ":8080" || d.syncTimeout != 30*time.Second || d.klogV != 0 || d.logLevel != slog.LevelInfo {
+		t.Errorf("defaults = %+v", d)
+	}
+	o, err := loadEnv(env{
+		"COURIER_CONFIG_DIR": "/c", "COURIER_DB_PATH": "/d/x.db", "COURIER_LISTEN": "127.0.0.1:9", "COURIER_SYNC_TIMEOUT": "5s", "COURIER_KLOG_V": "3", "COURIER_LOG_LEVEL": "debug",
+	}.get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.configDir != "/c" || o.dbPath != "/d/x.db" || o.listen != "127.0.0.1:9" || o.syncTimeout != 5*time.Second || o.klogV != 3 || o.logLevel != slog.LevelDebug {
+		t.Errorf("overrides = %+v", o)
+	}
+}
+
+// A value that cannot be read is a usage error that names the variable and, for a number or a
+// duration, says what it expects: nothing is guessed.
+func TestEnvConfigRefusesWhatItCannotRead(t *testing.T) {
+	for name, tc := range map[string]struct{ key, value string }{
+		"sync timeout": {"COURIER_SYNC_TIMEOUT", "soon"}, "negative timeout": {"COURIER_SYNC_TIMEOUT", "-5s"},
+		"klog v": {"COURIER_KLOG_V", "loud"}, "log level": {"COURIER_LOG_LEVEL", "chatty"},
+	} {
+		_, err := loadEnv(env{tc.key: tc.value}.get)
+		if !errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), tc.key) {
+			t.Errorf("%s: loadEnv = %v, want an ErrWiring naming %s", name, err, tc.key)
+		}
+	}
+}
+
+// Started with a good environment but no cluster and no renderer, courier exits 2 and says exactly
+// what is missing. The default build has no renderer and no interactions until WP-35h, so it says
+// that, and only the test image, which runs without them, gets as far as saying it needs a cluster.
+func TestStartSaysWhatIsMissing(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	var stdout, stderr bytes.Buffer
+
+	code := run(nil, "dev", &stdout, &stderr, env{"COURIER_LISTEN": "127.0.0.1:0"}.get)
+
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want %d (stderr %q)", code, exitUsage, stderr.String())
+	}
+	want := []string{"renderer", "interactions", "WP-35h"}
+	if testHooksBuild {
+		want = []string{"only in a cluster"}
+	}
+	for _, w := range want {
+		if !strings.Contains(stderr.String(), w) {
+			t.Errorf("stderr %q should mention %q", stderr.String(), w)
+		}
+	}
+}
+
