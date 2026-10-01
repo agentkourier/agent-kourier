@@ -234,6 +234,9 @@ func keyOf(in dialect.Interaction) pauseKey {
 	for _, t := range in.Tools {
 		k.Tools = append(k.Tools, toolKey{t.ID, t.Name, t.Args})
 	}
+	// In the order of their IDs, as InteractionID takes them: the same tools listed in another order
+	// are the same pause, and must not be refused as a different one under the same ID.
+	slices.SortFunc(k.Tools, func(a, b toolKey) int { return strings.Compare(a.ID, b.ID) })
 	return k
 }
 

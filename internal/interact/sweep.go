@@ -190,18 +190,19 @@ func (s *Sweeper) timeOut(ctx context.Context, row store.Interaction, now time.T
 	for _, step := range []struct {
 		name      string
 		essential bool // never given up on
+		edit      bool // giving it up leaves the prompt with its controls
 		do        func() error
 	}{
-		{"cancel the task", true, func() error { return s.cancel(ctx, row) }},
-		{"replace the prompt", false, func() error { return s.replace(ctx, row) }},
-		{"enqueue the notice", false, func() error { return s.notify(ctx, row) }},
+		{"cancel the task", true, false, func() error { return s.cancel(ctx, row) }},
+		{"replace the prompt", false, true, func() error { return s.replace(ctx, row) }},
+		{"enqueue the notice", false, false, func() error { return s.notify(ctx, row) }},
 	} {
 		err := step.do()
 		switch {
 		case err == nil:
 		case step.essential || !final:
 			return fmt.Errorf("interact: time out %s: %s: %w", row.ID, step.name, err)
-		case step.name == "replace the prompt":
+		case step.edit:
 			// The prompt keeps its buttons although the question timed out: a press on one is refused,
 			// but nothing yet edits it again. WP-33d3 repairs it, and finds it by this line.
 			s.cfg.Logger.WarnContext(ctx, "interact: the prompt of a timed-out interaction keeps its controls: the edit was given up on", "interaction", row.ID, "err", err)
