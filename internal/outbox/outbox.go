@@ -40,7 +40,7 @@ var ErrAbandoned = errors.New("outbox: the post was abandoned")
 // The reasons OnAbandon is given besides a Slack error code.
 const (
 	AbandonInvalid       = "invalid"        // the message cannot be posted at all
-	AbandonLookupTimeout = "lookup_timeout" // looking for it timed out lookupTimeouts times in a row
+	AbandonLookupTimeout = "lookup_timeout" // looking for it keeps timing out, with Slack otherwise working
 	AbandonExpired       = "expired"        // it was still unposted after Config.Retention
 )
 
@@ -49,7 +49,9 @@ const (
 // a few milliseconds must not make a local write time out under load.
 const storeWriteTimeout = 10 * time.Second
 
-// lookupTimeouts is how many lookups of a row in a row may time out before it is abandoned.
+// lookupTimeouts is how many lookups of a row in a row must time out, over at least
+// Config.LookupTimeoutFloor and with some other Slack call working in between, before it is
+// abandoned.
 const lookupTimeouts = 5
 
 // Poster is the Slack side of the outbox, which *slack.Client satisfies.
@@ -78,6 +80,13 @@ type Config struct {
 	// Retention is how long a post may stay unposted before its text is dropped and it is
 	// abandoned (default 7 days).
 	Retention time.Duration
+	// LookupTimeoutFloor is how long the lookups of a row must have been timing out, from the first
+	// of five in a row, before it is abandoned for them (default 1 hour). The rule is for a lookup
+	// that can never finish, not for a Slack outage that hangs every request: so it also needs some
+	// other Slack call to have worked since the first timeout.
+	LookupTimeoutFloor time.Duration
+	// PurgeInterval is how often Reconcile drops the text of expired rows (default 5 minutes).
+	PurgeInterval time.Duration
 	// OnAbandon, if set, is called once for each row that is abandoned, with its ID and the reason:
 	// a Slack error code, or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
 	// metric, and runs under the delivery lock, so it must not block.
@@ -105,14 +114,19 @@ type Outbox struct {
 	// two deliveries of one row could post it twice.
 	mu    sync.Mutex
 	retry map[string]retryState // rows whose delivery failed; guarded by mu
-	wake  chan struct{}         // Enqueue's signal to Run; one slot, since a drain takes every row
+	// slackOK is when a call to Slack last worked, and lastPurge when the retention purge last ran.
+	// Both are guarded by mu.
+	slackOK, lastPurge time.Time
+	wake               chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
 }
 
 // retryState is how often a row's delivery has failed in a row, and when it may be tried again.
 type retryState struct {
 	fails    int
 	timeouts int // lookups in a row that timed out
-	next     time.Time
+	// firstTimeout is when the first of them did.
+	firstTimeout time.Time
+	next         time.Time
 }
 
 // New returns an Outbox over cfg.
@@ -134,6 +148,12 @@ func New(cfg Config) *Outbox {
 	}
 	if cfg.RetryMax <= 0 {
 		cfg.RetryMax = 5 * time.Minute
+	}
+	if cfg.LookupTimeoutFloor <= 0 {
+		cfg.LookupTimeoutFloor = time.Hour
+	}
+	if cfg.PurgeInterval <= 0 {
+		cfg.PurgeInterval = 5 * time.Minute
 	}
 	if cfg.Retention <= 0 {
 		cfg.Retention = 7 * 24 * time.Hour
@@ -235,22 +255,27 @@ func (o *Outbox) settle(id string, err error) {
 
 // Reconcile delivers every row that has a payload and no ref, oldest first, looking each up
 // before it posts: it is for startup, after a crash may have left posts unrecorded, and is one
-// pass of Run. A row with no payload is not one of Send's or Enqueue's (they refuse empty content): it is a stream's, whose renderer records the ref itself, and is
-// left alone, as is a row still waiting out its retry delay. It goes on past a row it cannot
-// reconcile, and returns every such error joined.
+// pass of Run. A row with no payload is not one of Send's or Enqueue's (they refuse empty
+// content): it is a stream's, whose renderer records the ref itself, and is left alone, as is a
+// row still waiting out its retry delay. The retention purge runs in it at most every
+// PurgeInterval. It goes on past a row it cannot reconcile, and returns every such error joined.
 func (o *Outbox) Reconcile(ctx context.Context) error {
 	var errs []error
 	now := o.cfg.Now()
 	// The purge comes before any lookup of the rows it takes, and under the lock, so that no row is
 	// purged while its post is in flight.
 	o.mu.Lock()
-	expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("drop expired outbox text: %w", err))
-	}
-	for _, id := range expired {
-		delete(o.retry, id)
-		o.reportAbandon(ctx, id, AbandonExpired, nil)
+	if o.lastPurge.IsZero() || now.Sub(o.lastPurge) >= o.cfg.PurgeInterval { // a write, so not on every pass
+		expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("drop expired outbox text: %w", err))
+		} else {
+			o.lastPurge = now
+		}
+		for _, id := range expired {
+			delete(o.retry, id)
+			o.reportAbandon(ctx, id, AbandonExpired, nil)
+		}
 	}
 	o.mu.Unlock()
 	rows, err := o.cfg.Store.ListUnposted(ctx)
@@ -299,8 +324,13 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 	}
 	if lookup {
 		ts, found, err := o.find(ctx, row)
+		if err == nil {
+			o.slackOK = o.cfg.Now()
+		} else if reason := slack.PermanentCode(err); reason != "" { // as for a post: it will not pass
+			return "", o.abandon(ctx, row, reason, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
+		}
 		timedOut := err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)
-		if o.countTimeout(id, timedOut) >= lookupTimeouts {
+		if o.lookupGivesUp(id, timedOut) {
 			return "", o.abandon(ctx, row, AbandonLookupTimeout, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
 		}
 		if err != nil {
@@ -324,24 +354,32 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 		}
 		return "", err
 	}
+	o.slackOK = o.cfg.Now()
 	testhooks.AfterPost() // a no-op unless this is a test image, where it can crash the process here
 	return o.record(ctx, id, ts)
 }
 
-// countTimeout notes how a lookup of id ended and returns how many in a row have timed out: a
-// timeout adds one, and any other end starts the count again. The caller holds o.mu.
-func (o *Outbox) countTimeout(id string, timedOut bool) int {
+// lookupGivesUp notes how a lookup of id ended and reports whether the row should now be abandoned
+// for its lookups: a timeout adds one to the count in a row, and any other end starts it again.
+// It needs five, spread over LookupTimeoutFloor from the first, and some other Slack call that has
+// worked since that first one; otherwise it is Slack that is down, not this lookup that cannot
+// finish. The caller holds o.mu.
+func (o *Outbox) lookupGivesUp(id string, timedOut bool) bool {
 	r, ok := o.retry[id]
-	switch {
-	case timedOut:
-		r.timeouts++
-	case ok:
-		r.timeouts = 0
-	default:
-		return 0
+	if !timedOut {
+		if ok {
+			r.timeouts, r.firstTimeout = 0, time.Time{}
+			o.retry[id] = r
+		}
+		return false
 	}
+	now := o.cfg.Now()
+	if r.timeouts == 0 {
+		r.firstTimeout = now
+	}
+	r.timeouts++
 	o.retry[id] = r
-	return r.timeouts
+	return r.timeouts >= lookupTimeouts && now.Sub(r.firstTimeout) >= o.cfg.LookupTimeoutFloor && o.slackOK.After(r.firstTimeout)
 }
 
 // abandon gives up on the row, which will never post, and returns an error that wraps ErrAbandoned

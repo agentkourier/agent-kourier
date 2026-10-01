@@ -112,7 +112,9 @@ func TestTransientFailuresNeverAbandon(t *testing.T) {
 }
 
 // TestFiveLookupTimeoutsInARowAbandon: the script says how each pass's lookup ends, T for a
-// timeout. Four in a row are not enough, and one lookup that ends otherwise starts the count again.
+// timeout, an hour apart. Four in a row are not enough, and one lookup that ends otherwise starts
+// the count again. Another post goes through after the first of the last five (the rule needs a
+// working Slack), and the hour since it is long past.
 func TestFiveLookupTimeoutsInARowAbandon(t *testing.T) {
 	const script = "TTTTNTTTTT"
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
@@ -120,7 +122,13 @@ func TestFiveLookupTimeoutsInARowAbandon(t *testing.T) {
 		t.Fatal(err)
 	}
 	var clock, pass atomic.Int64
-	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
+	var other atomic.Bool // set while another row is being posted, which works
+	p := &poster{onPost: func(context.Context) error {
+		if other.Load() {
+			return nil
+		}
+		return errors.New("connection reset")
+	}}
 	p.onFind = func(ctx context.Context) error {
 		if script[pass.Load()] == 'T' {
 			<-ctx.Done()
@@ -134,6 +142,13 @@ func TestFiveLookupTimeoutsInARowAbandon(t *testing.T) {
 	for i := range script {
 		pass.Store(int64(i))
 		clock.Add(int64(time.Hour)) // past any retry delay
+		if i == 6 {
+			other.Store(true)
+			if _, err := ob.Send(t.Context(), reply("other")); err != nil {
+				t.Fatal(err)
+			}
+			other.Store(false)
+		}
 		_ = ob.Reconcile(t.Context())
 		row, _ := st.GetOutbox(t.Context(), "ev1/reply")
 		if gone := !row.AbandonedAt.IsZero(); gone != (i == len(script)-1) {
