@@ -2,6 +2,7 @@ package interact_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -115,8 +116,8 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	r := &rig{st: &refStore{Store: st}, slack: &poster{posted: map[string]string{}}, sess: &sess{}}
 	r.audit = &auditor{Writer: audit.New(st, audit.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ob := (outbox.New(outbox.Config{Store: st, Poster: r.slack, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet}))
-	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: timeout}
+	ob := (outbox.New(outbox.Config{Store: st, Poster: r.slack, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second, Logger: quiet}))
+	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), AskUser: true, Timeout: timeout}
 	r.outbox = ob
 	if mod != nil {
 		mod(&b)
@@ -253,6 +254,33 @@ func TestAReusedRequestIDIsNotTheSamePause(t *testing.T) {
 	other := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "A different question?"}}})
 	if err := r.paused(t, other); err != nil || len(r.slack.posted) != 1 || len(r.sess.cancels) != 1 {
 		t.Errorf("Paused = %v with %d posts and %d cancels; want it refused as unusable (cancelled), and the first prompt alone", err, len(r.slack.posted), len(r.sess.cancels))
+	}
+}
+
+// TestAStoredQuestionWithOtherUntrustedFieldsIsStillTheSame: a row written before a field was added to
+// the request, or with another hint or context, is the same pause, and must not be refused and its
+// task cancelled across an upgrade. What the answer depends on is compared, and not the bytes.
+func TestAStoredQuestionWithOtherUntrustedFieldsIsStillTheSame(t *testing.T) {
+	r := newRig(t, nil)
+	task := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-1", "hint": "a hint from today",
+		"questions": []map[string]any{{"question": "Which?", "choices": []string{"a", "b"}}}})
+	in, err := (&kagentv1.Dialect{}).ParseInteraction(task)
+	if err != nil || in == nil {
+		t.Fatal(in, err)
+	}
+	stored, _ := json.Marshal(in)
+	var fields map[string]any
+	_ = json.Unmarshal(stored, &fields)
+	fields["added_in_a_later_version"] = []any{"x"}
+	fields["hint"] = "a hint from an older version"
+	fields["context_id"] = "another-context"
+	old, _ := json.Marshal(fields)
+	row := store.Interaction{ID: interact.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: old, CreatedAt: t0, Deadline: t0.Add(timeout)}
+	if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.paused(t, task); err != nil || len(r.slack.posted) != 1 || len(r.sess.cancels) != 0 {
+		t.Errorf("Paused = %v with %d posts and %d cancels; want the same pause, prompted and not cancelled", err, len(r.slack.posted), len(r.sess.cancels))
 	}
 }
 

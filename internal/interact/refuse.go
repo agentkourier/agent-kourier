@@ -40,7 +40,8 @@ const (
 	autoDecider    = "courier" // who the interaction records as having decided
 )
 
-// Auditor is what the refusals record through: *audit.Writer.
+// Auditor is what the package records through: *audit.Writer. The refusals write the unusable pause and
+// its cancel; the refusals and the sweep write decisions.
 type Auditor interface {
 	UnusablePause(ctx context.Context, a audit.Actor, taskID a2a.TaskID, contextID string, cause error) error
 	UnusablePauseCancel(ctx context.Context, a audit.Actor, taskID a2a.TaskID, contextID string, cancelErr error) error

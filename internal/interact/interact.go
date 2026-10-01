@@ -4,7 +4,6 @@
 package interact
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -196,10 +196,45 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 	if row, err = i.cfg.Store.GetInteraction(ctx, id); err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: read %s: %w", id, err)
 	}
-	if !bytes.Equal(row.Request, request) {
+	if !samePause(row.Request, request) {
 		return store.Interaction{}, fmt.Errorf("%w: a second, different pause under the ID of %s", dialect.ErrUnusablePause, id)
 	}
 	return row, nil
+}
+
+// pauseKey is what an answer depends on in a pause: what it asks and of which task. The agent's hint
+// and the context are not in it, and neither is anything a later version adds to dialect.Interaction.
+type pauseKey struct {
+	Kind      dialect.Kind
+	TaskID    a2a.TaskID
+	RequestID string
+	Questions []dialect.Question
+	Tools     []toolKey
+	Nested    *dialect.Nested
+}
+
+type toolKey struct {
+	ID, Name string
+	Args     map[string]any
+}
+
+// samePause reports whether the stored request and the one just made are the same pause, by their
+// decoded fields and not their bytes, so that a row written by an older version, with another hint or a
+// field since added, is still the pause it was. A request that cannot be read is not the same.
+func samePause(stored, fresh []byte) bool {
+	var a, b dialect.Interaction
+	if json.Unmarshal(stored, &a) != nil || json.Unmarshal(fresh, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(keyOf(a), keyOf(b))
+}
+
+func keyOf(in dialect.Interaction) pauseKey {
+	k := pauseKey{Kind: in.Kind, TaskID: in.TaskID, RequestID: in.RequestID, Questions: in.Questions, Nested: in.Nested}
+	for _, t := range in.Tools {
+		k.Tools = append(k.Tools, toolKey{t.ID, t.Name, t.Args})
+	}
+	return k
 }
 
 // post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5).
