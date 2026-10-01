@@ -37,7 +37,7 @@ func (c *cleanups) run() {
 // and then readiness: /readyz says 503 "starting" until the last of those is done. The connection
 // comes before the store, so a config that v1 cannot serve leaves no database behind.
 func Run(ctx context.Context, cfg RunConfig) (err error) {
-	cfg.WarnTestOptions()
+	cfg.logTestOptions()
 	if err := cfg.validate(); err != nil {
 		return err
 	}

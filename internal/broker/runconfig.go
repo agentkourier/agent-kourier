@@ -67,10 +67,10 @@ func (c RunConfig) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// WarnTestOptions logs, once and loudly, what a testhooks build is running without. Run calls it as
+// logTestOptions logs, once and loudly, what a testhooks build is running without. Run calls it as
 // its first act, not validate, which may be called any number of times. In the default build there is
 // nothing to say.
-func (c RunConfig) WarnTestOptions() { c.warnTestOptions(c.logger()) }
+func (c RunConfig) logTestOptions() { c.warnTestOptions(c.logger()) }
 
 // InClusterClient returns a Kubernetes client for the API server of the cluster courier runs in,
 // from its pod's ServiceAccount, and nothing else: there is no kubeconfig path, because a kubeconfig
