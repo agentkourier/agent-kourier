@@ -161,6 +161,27 @@ func TestARateLimitIsWaitedOutAndNotCountedAsAFailure(t *testing.T) {
 	}
 }
 
+// TestARateLimitEndsThePass: Slack has refused one edit and asked for a wait, so the rest of the batch is not
+// tried, which would only be refused too. The prompts it did not reach are edited after the wait.
+func TestARateLimitEndsThePass(t *testing.T) {
+	r := newRepairRig(t, nil)
+	for i := range 5 {
+		r.decided(t, fmt.Sprintf("ix-%d", i), asked, r.resolve(store.InteractionTimedOut))
+	}
+	r.up.err = fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 30 * time.Second})
+	_ = r.r.Repair(t.Context())
+	if got := len(r.up.list()); got != 1 {
+		t.Fatalf("%d edits in the pass; want it to end at the first rate limit", got)
+	}
+	r.up.mu.Lock()
+	r.up.err = nil
+	r.up.mu.Unlock()
+	r.advance(31 * time.Second)
+	if err := r.r.Repair(t.Context()); err != nil || len(r.up.list()) != 6 {
+		t.Errorf("after the wait: Repair = %v, %d edits; want the five prompts edited, the first of them again", err, len(r.up.list())-1)
+	}
+}
+
 // TestRepairIsPacedByTheBatch: after a restart many prompts may be waiting, and a pass edits only a batch.
 func TestRepairIsPacedByTheBatch(t *testing.T) {
 	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Batch = 10 })
