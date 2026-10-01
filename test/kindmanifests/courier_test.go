@@ -21,6 +21,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/test/e2e"
 )
@@ -215,14 +216,15 @@ func TestScenarioBindings(t *testing.T) {
 	for _, tc := range []struct {
 		scenario, channel, agent string
 		askUser                  bool
+		output                   v1alpha1.OutputMode // S5's is final: a reply to a person is streamed, and only a post goes through the outbox where the crash hook is
 	}{
-		{"smoke", e2e.ChannelSmoke, "test-agent", false},
-		{"S1", e2e.ChannelS1, "scenario-gated", false},
-		{"S2", e2e.ChannelS2, "scenario-memory", false},
-		{"S3", e2e.ChannelS3, "scenario-ask", true},
-		{"S4", e2e.ChannelS4, "scenario-gated", false},
-		{"S5", e2e.ChannelS5, "test-agent", false},
-		{"S11", e2e.ChannelS11, "spike-approve", false},
+		{"smoke", e2e.ChannelSmoke, "test-agent", false, v1alpha1.OutputLive},
+		{"S1", e2e.ChannelS1, "scenario-gated", false, v1alpha1.OutputLive},
+		{"S2", e2e.ChannelS2, "scenario-memory", false, v1alpha1.OutputLive},
+		{"S3", e2e.ChannelS3, "scenario-ask", true, v1alpha1.OutputLive},
+		{"S4", e2e.ChannelS4, "scenario-gated", false, v1alpha1.OutputLive},
+		{"S5", e2e.ChannelS5, "test-agent", false, v1alpha1.OutputFinal},
+		{"S11", e2e.ChannelS11, "spike-approve", false, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
 		if !ok {
@@ -233,6 +235,9 @@ func TestScenarioBindings(t *testing.T) {
 		if spec.Agent.Name != tc.agent || spec.Agent.Namespace != "kagent" || spec.Interactions.AskUser != tc.askUser || spec.Interactions.ToolApprovals {
 			t.Errorf("%s: channel %s is bound to %s/%s with askUser %t and toolApprovals %t; want %s, askUser %t and toolApprovals off", tc.scenario, tc.channel,
 				spec.Agent.Namespace, spec.Agent.Name, spec.Interactions.AskUser, spec.Interactions.ToolApprovals, tc.agent, tc.askUser)
+		}
+		if spec.Chat.Output != tc.output {
+			t.Errorf("%s: channel %s has output %q; want %q", tc.scenario, tc.channel, spec.Chat.Output, tc.output)
 		}
 		if seen[tc.channel] {
 			t.Errorf("%s: channel %s is another scenario's too; scenarios must not share a thread", tc.scenario, tc.channel)
