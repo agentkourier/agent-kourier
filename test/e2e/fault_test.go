@@ -14,18 +14,18 @@ import (
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 )
 
-// Courier's namespace, Deployment and container (hack/kind/fast/courier/deployment.yaml), and the label of its pod.
+// Courier's container and the label of its pod (hack/kind/fast/courier/deployment.yaml); its namespace
+// and Deployment are kube.CourierNamespace and kube.CourierDeployment.
 const (
-	courierNS   = "courier"
-	courierName = "courier"
-	courierPods = "app.kubernetes.io/name=" + courierName
+	courierContainer = "courier"
+	courierPods      = "app.kubernetes.io/name=courier"
 )
 
 // faultOf is the COURIER_FAULT the pod's courier container runs with ("" if unset).
 func faultOf(t *testing.T, pod corev1.Pod) string {
 	t.Helper()
 	for _, c := range pod.Spec.Containers {
-		if c.Name != courierName {
+		if c.Name != courierContainer {
 			continue
 		}
 		for _, e := range c.Env {
@@ -35,14 +35,14 @@ func faultOf(t *testing.T, pod corev1.Pod) string {
 		}
 		return ""
 	}
-	t.Fatalf("pod %s has no %s container", pod.Name, courierName)
+	t.Fatalf("pod %s has no %s container", pod.Name, courierContainer)
 	return ""
 }
 
 // onePod is courier's only pod, which a Recreate rollout leaves once it has finished.
 func onePod(ctx context.Context, t *testing.T, pods *kube.Pods) corev1.Pod {
 	t.Helper()
-	list, err := pods.List(ctx, courierNS, courierPods)
+	list, err := pods.List(ctx, kube.CourierNamespace, courierPods)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("courier's pods = %d, %v; want exactly one after a rollout", len(list), err)
 	}
@@ -59,16 +59,23 @@ func TestFaultArmsAndDisarmsOnTheRealDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list, err := pods.List(ctx, courierNS, courierPods); err != nil {
+	expected, err := CourierExpected(env.Tier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expected {
+		t.Skip("TODO(WP-35i): courier is not deployed in the full tier yet")
+	}
+	if list, err := pods.List(ctx, kube.CourierNamespace, courierPods); err != nil {
 		t.Fatal(err)
 	} else if len(list) == 0 {
-		t.Skip("courier is not deployed in this tier") // the full tier has none until WP-35i
+		t.Fatal("the fast tier has no courier pod: its Deployment is missing or was rejected")
 	}
 	// A failure part way must not leave courier armed for the tests after it.
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
 		defer cancel()
-		if err := pods.SetFault(cleanup, courierNS, courierName, courierName, ""); err != nil {
+		if err := pods.SetFault(cleanup, kube.CourierNamespace, kube.CourierDeployment, courierContainer, ""); err != nil {
 			t.Errorf("disarm at the end: %v", err)
 		}
 	})
@@ -76,7 +83,7 @@ func TestFaultArmsAndDisarmsOnTheRealDeployment(t *testing.T) {
 		t.Helper()
 		rollout, cancel := context.WithTimeout(ctx, 3*time.Minute) // a stuck rollout fails here, with its reason
 		defer cancel()
-		if err := pods.SetFault(rollout, courierNS, courierName, courierName, fault); err != nil {
+		if err := pods.SetFault(rollout, kube.CourierNamespace, kube.CourierDeployment, courierContainer, fault); err != nil {
 			t.Fatal(err)
 		}
 		return onePod(ctx, t, pods)

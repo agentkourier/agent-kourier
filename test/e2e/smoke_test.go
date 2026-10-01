@@ -55,9 +55,14 @@ func TestSmoke(t *testing.T) {
 	// or rejected Deployment is a failure here, not a reason to skip. The full tier gets courier with
 	// WP-35i, so there the part is skipped, and said to be.
 	sl := NewSlack(env.SlackURL)
-	switch env.Tier {
-	case "fast":
-		deployed, err := pods.List(ctx, "courier", "app.kubernetes.io/name=courier")
+	expected, err := CourierExpected(env.Tier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expected {
+		t.Log("TODO(WP-35i): the full tier has no courier yet, so the mention is not driven")
+	} else {
+		deployed, err := pods.List(ctx, kube.CourierNamespace, "app.kubernetes.io/name=courier")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,10 +89,6 @@ func TestSmoke(t *testing.T) {
 		if err != nil || len(thread) == 0 || !strings.Contains(thread[0].Text, name) {
 			t.Fatalf("Thread = %+v, %v; want the mention read back first", thread, err)
 		}
-	case "full":
-		t.Log("TODO(WP-35i): the full tier has no courier yet, so the mention is not driven")
-	default:
-		t.Fatalf("E2E_TIER = %q; want fast or full (hack/kind/e2e-run.sh sets it)", env.Tier)
 	}
 
 	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // a stuck replacement fails here, with its reason
