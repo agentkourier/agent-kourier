@@ -35,6 +35,7 @@ type spyStore struct {
 	fail    map[string]error // fails a call once
 	stuck   map[string]error // fails a call every time
 	onSet   func()           // runs when a task is cleared
+	onNext  func()           // runs before NextReply reads the queue
 	gate    chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
 	reads   int
 }
@@ -78,6 +79,16 @@ func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID 
 		return err
 	}
 	return s.Store.SetSessionTask(ctx, k, contextID, taskID)
+}
+
+func (s *spyStore) NextReply(ctx context.Context, k Key) (store.Reply, error) {
+	s.mu.Lock()
+	hook := s.onNext
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return s.Store.NextReply(ctx, k)
 }
 
 func (s *spyStore) ResetSession(ctx context.Context, k Key) error {

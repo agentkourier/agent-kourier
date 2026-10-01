@@ -224,14 +224,21 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 // Store writes ignore a shutdown, so an accepted turn is never left unrecorded.
 func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	m.mu.Lock()
+	var taken *tstate
 	if a := c.attach; a != nil { // Recover found a task for this conversation
 		c.attach = nil
 		if c.follow == nil {
 			c.follow, c.ttl, c.since = a, a.b.ThreadTTL, m.cfg.Now()
 			c.driving = a.taskID // from now on the runner drives it: no second attachment in the gap before resume
+			taken = a
 		}
 	}
 	m.mu.Unlock()
+	if taken != nil && m.superseded(taken) { // it ended, or was stopped, since Recover read the session
+		m.mu.Lock()
+		c.follow, c.driving = nil, ""
+		m.mu.Unlock()
+	}
 	if c.follow != nil { // a stream was lost: the task is followed before anything else is sent
 		return m.resume(c)
 	}
@@ -300,6 +307,14 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		m.release(key, r.ID) // reconciled: followed, or the agent never had it
 	}
 	return m.drive(t, send)
+}
+
+// superseded reports whether the session no longer records the task t, which Recover read some
+// time ago: following it now would render its end again, and clear whatever the session holds
+// by then. A read that fails does not drop the task: following it is the safe side.
+func (m *Manager) superseded(t *tstate) bool {
+	sess, err := m.cfg.Store.GetSession(context.WithoutCancel(m.ctx), t.key, readAll, m.cfg.Now())
+	return errors.Is(err, store.ErrNotFound) || (err == nil && sess.TaskID != string(t.taskID))
 }
 
 // settle forgets the retry state of the head turn: it was taken, failed for good, or ended.

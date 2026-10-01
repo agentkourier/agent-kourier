@@ -2,10 +2,12 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +60,39 @@ func TestRecoverFollowsARunningTask(t *testing.T) {
 	}
 	if _, _, fo := f.agent.counts(); fo != 1 {
 		t.Errorf("%d follows; want one", fo)
+	}
+}
+
+// What recovery read about a conversation can be stale by the time it is acted on: the task it
+// found may end, or be stopped, in between, and must then not be followed, or its end recorded
+// over whatever the session holds now.
+func TestRecoverDropsATaskThatEndedWhileItWasLookedAt(t *testing.T) {
+	f, sink := restarted(t)
+	var once sync.Once
+	f.st.mu.Lock()
+	f.st.onNext = func() {
+		once.Do(func() { // a Stop lands while recovery reads the queue
+			if err := f.st.Store.SetSessionTask(context.Background(), key, "c1", ""); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	f.st.mu.Unlock()
+	f.recover(t)
+	drained := make(chan struct{})
+	go func() { f.m.wg.Wait(); close(drained) }() // recovery and every runner it started are done
+	select {
+	case <-drained:
+	case <-time.After(10 * time.Second):
+		t.Fatal("recovery did not finish")
+	}
+	if _, _, fo := f.agent.counts(); fo != 0 {
+		t.Errorf("%d follows; want none: the task was no longer recorded", fo)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 0 || len(sink.finals) != 0 {
+		t.Errorf("%d turn refs, %d finals; want nothing rendered", len(sink.refs), len(sink.finals))
 	}
 }
 
