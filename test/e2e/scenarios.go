@@ -5,7 +5,7 @@ package e2e
 // scenarios never share a thread. test/kindmanifests pins the pairing, so a change on either side fails
 // `make test`. The full tier gets its own with WP-35i.
 const (
-	// ChannelSmoke is the Binding for the stub's test-agent that the smoke test and S5 use.
+	// ChannelSmoke is the Binding for the stub's test-agent that the smoke test uses. S5 has its own, below.
 	ChannelSmoke = "C1"
 	// ChannelS1 is S1's: scenario-gated, live output.
 	ChannelS1 = "CS1"

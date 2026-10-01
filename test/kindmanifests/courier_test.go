@@ -12,9 +12,11 @@ import (
 	"io"
 	"maps"
 	"os"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -264,5 +266,26 @@ func TestService(t *testing.T) {
 	}
 	if len(c.Ports) != 1 || c.Ports[0].Name != "http" {
 		t.Errorf("container ports %+v; want only http: a receiver port added here must not reach the Service until WP-47", c.Ports)
+	}
+}
+
+// TestRunnerJobGetsItsTier: the Job runs the tests of one tier, and a test that needs courier (the smoke
+// test's mention) must be able to tell the fast tier, which has it, from the full tier, which does not
+// yet. The Job's template carries a placeholder and e2e-run.sh fills it with the tier it was given.
+func TestRunnerJobGetsItsTier(t *testing.T) {
+	var job batchv1.Job
+	load(t, "../../hack/kind/e2e/runner.yaml", "Job", &job)
+	var tier string
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "E2E_TIER" {
+			tier = e.Value
+		}
+	}
+	script, err := os.ReadFile("../../hack/kind/e2e-run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tier != "@TIER@" || !strings.Contains(string(script), `sed "s/@TIER@/${tier}/" "${HERE}/e2e/runner.yaml"`) {
+		t.Errorf("E2E_TIER = %q in the Job; want the placeholder @TIER@, and e2e-run.sh to substitute the tier it runs", tier)
 	}
 }

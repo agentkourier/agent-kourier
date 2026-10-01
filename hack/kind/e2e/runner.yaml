@@ -73,4 +73,7 @@ spec:
           image: courier-e2e/runner:dev
           imagePullPolicy: Never
           args: ["-test.v", "-test.run=^(TestSmoke|TestFaultArmsAndDisarmsOnTheRealDeployment)$", "-test.timeout=8m"]
+          # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
+          # that has courier from one that does not yet.
+          env: [{name: E2E_TIER, value: "@TIER@"}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

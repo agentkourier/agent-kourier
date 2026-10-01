@@ -260,3 +260,19 @@ func TestNilReadinessIsStarting(t *testing.T) {
 		t.Errorf("/readyz with no Readiness = %d %q, want 503 starting", code, body)
 	}
 }
+
+// The handler serves health, readiness and metrics, and nothing else: the Alertmanager receiver is not
+// on this mux (WP-47 serves it separately), so a request for a webhook path is a 404 and the receiver
+// cannot be reached through the Service that exposes this port.
+func TestHandlerHasNoReceiver(t *testing.T) {
+	h := NewHandler(mustMetrics(t, nil), &Readiness{})
+	for _, path := range []string{"/hooks/alertmanager/sre/sre-alerts", "/hooks/", "/hooks", "/", "/api/v2/alerts"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader("{}")))
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s %s = %d; want 404: the receiver is not served here", method, path, rec.Code)
+			}
+		}
+	}
+}

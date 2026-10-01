@@ -51,15 +51,20 @@ func TestSmoke(t *testing.T) {
 	}
 	// A fake Slack user mentions courier, which is connected to the fake as it would be to Slack: the
 	// test opens no Socket Mode client of its own, because the fake sends envelopes to the newest
-	// connection and a second one would take them from courier. The full tier has no courier until
+	// connection and a second one would take them from courier. The fast tier has courier, and a missing
+	// or rejected Deployment is a failure here, not a reason to skip. The full tier gets courier with
 	// WP-35i, so there the part is skipped, and said to be.
 	sl := NewSlack(env.SlackURL)
-	if deployed, err := pods.List(ctx, "courier", "app.kubernetes.io/name=courier"); err != nil {
-		t.Fatal(err)
-	} else if len(deployed) == 0 {
-		t.Log("no courier pod in this tier: the mention is not driven")
-	} else {
-		err := Wait(ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
+	switch env.Tier {
+	case "fast":
+		deployed, err := pods.List(ctx, "courier", "app.kubernetes.io/name=courier")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(deployed) == 0 {
+			t.Fatal("the fast tier has no courier pod: its Deployment is missing or was rejected")
+		}
+		err = Wait(ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
 			n, err := sl.Connections(ctx)
 			return n > 0, err
 		})
@@ -79,6 +84,10 @@ func TestSmoke(t *testing.T) {
 		if err != nil || len(thread) == 0 || !strings.Contains(thread[0].Text, name) {
 			t.Fatalf("Thread = %+v, %v; want the mention read back first", thread, err)
 		}
+	case "full":
+		t.Log("TODO(WP-35i): the full tier has no courier yet, so the mention is not driven")
+	default:
+		t.Fatalf("E2E_TIER = %q; want fast or full (hack/kind/e2e-run.sh sets it)", env.Tier)
 	}
 
 	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // a stuck replacement fails here, with its reason
