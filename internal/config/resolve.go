@@ -28,6 +28,7 @@ type channelKey struct {
 // any number of goroutines may use it at once. Everything it returns is shared with it and
 // with other callers, and callers must treat it as read-only, as with client-go's listers.
 type Snapshot struct {
+	conns     map[identity]*v1alpha1.ChatConnection
 	bindings  map[identity]ResolvedBinding
 	byChannel map[channelKey]ResolvedBinding
 	byPath    map[string]ResolvedBinding
@@ -44,6 +45,20 @@ func (s *Snapshot) Binding(namespace, name string) (ResolvedBinding, bool) {
 func (s *Snapshot) BindingForChannel(connNamespace, connName, channel string) (ResolvedBinding, bool) {
 	rb, ok := s.byChannel[channelKey{identity{"ChatConnection", connNamespace, connName}, channel}]
 	return rb, ok
+}
+
+// ChatConnections returns every ChatConnection of the config, sorted by namespace and name:
+// those no Binding uses, and those that only name a Binding as their DM default, too. A
+// chat adapter is started for each. The slice is the caller's; the connections are read-only.
+func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
+	out := make([]*v1alpha1.ChatConnection, 0, len(s.conns))
+	for _, c := range s.conns {
+		out = append(out, c)
+	}
+	slices.SortFunc(out, func(a, b *v1alpha1.ChatConnection) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	return out
 }
 
 // WebhookPath is the path Alertmanager posts to for the Binding with the given namespace and
@@ -78,6 +93,7 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 		conns:    index("ChatConnection", set.ChatConnections),
 		bindings: index("Binding", set.Bindings),
 		snap: &Snapshot{
+			conns:     index("ChatConnection", set.ChatConnections),
 			bindings:  map[identity]ResolvedBinding{},
 			byChannel: map[channelKey]ResolvedBinding{},
 			byPath:    map[string]ResolvedBinding{},

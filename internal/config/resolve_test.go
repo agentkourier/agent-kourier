@@ -230,3 +230,26 @@ func TestSnapshotConcurrentLookups(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestSnapshotListsEveryConnection: the list holds each ChatConnection, whether or not a
+// Binding uses it, sorted by namespace and name, so that a Slack client is started for each.
+func TestSnapshotListsEveryConnection(t *testing.T) {
+	set := specSet(t)
+	for _, name := range []string{"zzz-idle", "aaa-idle"} { // no Binding, and no DM default
+		c := set.ChatConnections[0]
+		c.Name, c.Spec.DirectMessages = name, nil
+		set.ChatConnections = append(set.ChatConnections, c)
+	}
+	snap, err := Resolve(context.Background(), set, specSecrets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range snap.ChatConnections() {
+		got = append(got, c.Namespace+"/"+c.Name)
+	}
+	want := []string{"courier-system/aaa-idle", "courier-system/slack-main", "courier-system/zzz-idle"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ChatConnections = %v; want %v", got, want)
+	}
+}
