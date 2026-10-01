@@ -73,26 +73,31 @@ func (e *scrubbed) Unwrap() []error { return e.causes }
 // the HTTP stack or slack-go, whose text may quote what it was given, and the session manager
 // logs these errors. It replaces the configured tokens, then anything shaped like a Slack token.
 func (c *Client) scrub(op string, err error) error {
-	msg := err.Error()
-	for _, t := range []string{c.bot.Reveal(), c.app.Reveal()} {
-		if t != "" {
-			msg = strings.ReplaceAll(msg, t, "[redacted]")
-		}
-	}
 	var causes []error
 	for _, e := range []error{context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, e) {
 			causes = append(causes, e)
 		}
 	}
+	// The server's own words, the code and the status line, are cleaned like the text.
 	if code := new(slackgo.SlackErrorResponse); errors.As(err, code) {
-		causes = append(causes, slackgo.SlackErrorResponse{Err: code.Err})
+		causes = append(causes, slackgo.SlackErrorResponse{Err: c.clean(code.Err)})
 	}
 	if rl := new(*slackgo.RateLimitedError); errors.As(err, rl) {
 		causes = append(causes, &slackgo.RateLimitedError{RetryAfter: (*rl).RetryAfter})
 	}
 	if sc := new(slackgo.StatusCodeError); errors.As(err, sc) {
-		causes = append(causes, slackgo.StatusCodeError{Code: sc.Code, Status: sc.Status})
+		causes = append(causes, slackgo.StatusCodeError{Code: sc.Code, Status: c.clean(sc.Status)})
 	}
-	return &scrubbed{msg: "slack " + op + ": " + store.RedactSecrets(msg), causes: causes}
+	return &scrubbed{msg: "slack " + op + ": " + c.clean(err.Error()), causes: causes}
+}
+
+// clean returns s with the configured tokens, and anything shaped like a Slack token, replaced.
+func (c *Client) clean(s string) string {
+	for _, t := range []string{c.bot.Reveal(), c.app.Reveal()} {
+		if t != "" {
+			s = strings.ReplaceAll(s, t, "[redacted]")
+		}
+	}
+	return store.RedactSecrets(s)
 }

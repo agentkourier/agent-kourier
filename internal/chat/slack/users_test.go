@@ -1,6 +1,7 @@
 package slack_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -25,26 +26,28 @@ import (
 var _ session.Users = (*slack.Client)(nil)
 
 // counter is an http.RoundTripper that counts requests by path. It answers each one with err,
-// if set, else with the status, if set (and a Retry-After of 7 s), else by hanging until the
-// request's context ends, if hang is set; otherwise it passes it on.
+// if set, else with the status, if set (with statusText, or the usual, the body and a
+// Retry-After of 7 s), else by hanging until the request's context ends, if hang is set;
+// otherwise it passes it on.
 type counter struct {
-	mu     sync.Mutex
-	n      map[string]int
-	err    error
-	status int
-	hang   bool
+	mu               sync.Mutex
+	n                map[string]int
+	err              error
+	status           int
+	statusText, body string
+	hang             bool
 }
 
 func (c *counter) RoundTrip(r *http.Request) (*http.Response, error) {
 	c.mu.Lock()
 	c.n[r.URL.Path]++
-	err, status, hang := c.err, c.status, c.hang
+	err, status, hang, text, body := c.err, c.status, c.hang, c.statusText, c.body
 	c.mu.Unlock()
 	switch {
 	case err != nil:
 		return nil, err
 	case status != 0:
-		return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: http.Header{"Retry-After": {"7"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+		return &http.Response{StatusCode: status, Status: cmp.Or(text, http.StatusText(status)), Header: http.Header{"Retry-After": {"7"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	case hang:
 		<-r.Context().Done()
 		return nil, r.Context().Err()
@@ -202,6 +205,23 @@ func TestErrorsKeepSlackCodes(t *testing.T) {
 	_, err = c.ResolveUser(t.Context(), "U1")
 	if sc := new(slackgo.StatusCodeError); !errors.As(err, sc) || sc.Code != http.StatusBadGateway {
 		t.Errorf("ResolveUser on a 502 = %v; want a StatusCodeError", err)
+	}
+}
+
+// TestCausesQuoteNoToken: a Slack error code and a status line are the server's words, and
+// a server may echo a token into either. The causes errors.As hands out must not carry one.
+func TestCausesQuoteNoToken(t *testing.T) {
+	const bot, other = "canary-bot-token", "xoxp-1234-5678-abcdefgh"
+	c, calls, _ := userClient(t, func(c *slack.Config) { c.BotToken = secret.New(bot) })
+	calls.status, calls.body = http.StatusOK, `{"ok":false,"error":"bad `+bot+` `+other+`"}`
+	_, err := c.ResolveUser(t.Context(), "U1")
+	if code := new(slackgo.SlackErrorResponse); !errors.As(err, code) || strings.Contains(code.Err, bot) || strings.Contains(code.Err, other) {
+		t.Errorf("the Slack error code is %+v; want it found, without a token", code)
+	}
+	calls.status, calls.statusText = http.StatusBadGateway, "502 "+bot+" "+other
+	_, err = c.ResolveUser(t.Context(), "U1")
+	if sc := new(slackgo.StatusCodeError); !errors.As(err, sc) || strings.Contains(sc.Status, bot) || strings.Contains(sc.Status, other) {
+		t.Errorf("the status error is %+v; want it found, without a token", sc)
 	}
 }
 
