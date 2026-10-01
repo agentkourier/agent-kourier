@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -53,26 +54,41 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	return s.runs.Start(ctx, Turn{Source: t.MessageID, Channel: t.Key.Channel, ThreadTS: t.Key.ThreadTS, Mode: mode, Recipient: recipient, Recovered: t.Recovered}).Handle
 }
 
-// Notice queues the notice in the thread. Its row is named after the notice's own ID, so the same
-// notice, raised twice, is one row and one post. A reply that waits for the active task (the
-// queued notice) is shown by a reaction on its message, not a message: that is a row too, and is
-// made later, off the acknowledgement path.
+// Notice is QueueNotice for the session manager's Sink: it has no way to retry, so a notice that could
+// not be written is logged and dropped.
 func (s *Sink) Notice(ctx context.Context, key session.Key, n session.Notice) {
-	if n.Kind == session.NoticeQueued {
-		if _, err := s.queue.EnqueueReaction(ctx, outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageTS, Name: queuedReaction}); err != nil {
-			s.log.WarnContext(ctx, "live: a reaction was not queued", "kind", n.Kind, "channel", key.Channel, "err", err)
-		}
-		return
-	}
-	text, ok := noticeText(n.Kind)
-	if !ok { // a kind nobody wrote wording for
-		s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
-		return
-	}
-	post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, ThreadTS: key.ThreadTS, Content: slack.Content{Text: render.NoticeText(text, n.Detail)}}
-	if _, err := s.queue.Enqueue(ctx, post); err != nil {
+	if err := s.QueueNotice(ctx, key, n); err != nil {
 		s.log.WarnContext(ctx, "live: a notice was not queued", "kind", n.Kind, "channel", key.Channel, "err", err)
 	}
+}
+
+// QueueNotice queues the notice in the thread, and returns the error of the write if it failed, for a
+// caller that can try again, such as the Slack intake, which then leaves its event unacknowledged. Its
+// row is named after the notice's own ID, so the same notice, raised or retried any number of times,
+// is one row and one post. A reply that waits for the active task (the queued notice) is shown by a
+// reaction on its message, not a message: that is a row too, and is made later, off the
+// acknowledgement path.
+//
+// What no retry can mend is logged and is not an error: a kind nobody wrote wording for, and a
+// notice that is no valid row (a reaction on no message).
+func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notice) error {
+	var err error
+	if n.Kind == session.NoticeQueued {
+		_, err = s.queue.EnqueueReaction(ctx, outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageTS, Name: queuedReaction})
+	} else {
+		text, ok := noticeText(n.Kind)
+		if !ok { // a kind nobody wrote wording for
+			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
+			return nil
+		}
+		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, ThreadTS: key.ThreadTS, Content: slack.Content{Text: render.NoticeText(text, n.Detail)}}
+		_, err = s.queue.Enqueue(ctx, post)
+	}
+	if errors.Is(err, store.ErrInvalid) {
+		s.log.WarnContext(ctx, "live: a notice that is no valid row was dropped", "kind", n.Kind, "channel", key.Channel, "err", err)
+		return nil
+	}
+	return err
 }
 
 // noticeText is what a notice of the kind says, which courier wrote; a notice's Detail is added after

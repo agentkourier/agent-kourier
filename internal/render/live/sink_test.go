@@ -3,6 +3,7 @@ package live_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -110,7 +112,7 @@ func TestQueuedNoticeWithoutAMessageIsLogged(t *testing.T) {
 	logs := &strings.Builder{}
 	sink := live.NewSink(e.live, e.ob, slog.New(slog.NewTextHandler(logs, nil)))
 	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued})
-	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 0 || !strings.Contains(logs.String(), "reaction was not queued") {
+	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 0 || !strings.Contains(logs.String(), "no valid row was dropped") {
 		t.Fatalf("%d rows, log %q; want none, and the failure logged", len(rows), logs.String())
 	}
 }
@@ -262,4 +264,103 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 			t.Errorf("%s: text %q, %v; want %q", kind, content.Text, err, want)
 		}
 	}
+}
+
+// flaky is an Enqueuer whose first fails calls fail with err, and that then writes through to q.
+type flaky struct {
+	q     live.Enqueuer
+	err   error
+	fails int
+}
+
+func (f *flaky) Enqueue(ctx context.Context, p outbox.Post) (string, error) {
+	if f.fails > 0 {
+		f.fails--
+		return "", f.err
+	}
+	return f.q.Enqueue(ctx, p)
+}
+
+func (f *flaky) EnqueueReaction(ctx context.Context, r outbox.Reaction) (string, error) {
+	if f.fails > 0 {
+		f.fails--
+		return "", f.err
+	}
+	return f.q.EnqueueReaction(ctx, r)
+}
+
+// TestQueueNoticeReturnsWhatKeepsANoticeFromBeingWritten: a notice that was not written is the
+// caller's to retry, so QueueNotice returns the error of the write, for a message and for a
+// reaction. What no retry can mend is not an error but a log: a notice of no wording, and one
+// that is no valid row. Notice, the Sink's own, drops the error after logging it.
+func TestQueueNoticeReturnsWhatKeepsANoticeFromBeingWritten(t *testing.T) {
+	e := setup(t)
+	boom := errors.New("disk full")
+	logs := &strings.Builder{}
+	sink := live.NewSink(e.live, &flaky{q: e.ob, err: boom, fails: 100}, slog.New(slog.NewTextHandler(logs, nil)))
+	for _, n := range []session.Notice{
+		{ID: "m/failed", Kind: session.NoticeFailed},
+		{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"},
+	} {
+		if err := sink.QueueNotice(t.Context(), thread, n); !errors.Is(err, boom) {
+			t.Errorf("QueueNotice(%s) = %v; want the error of the write", n.Kind, err)
+		}
+		logs.Reset()
+		sink.Notice(t.Context(), thread, n) // the plain one cannot return it
+		if !strings.Contains(logs.String(), "disk full") {
+			t.Errorf("Notice(%s) logged %q; want the failure logged", n.Kind, logs.String())
+		}
+	}
+	good := e.sink(t, e.ob)
+	for name, n := range map[string]session.Notice{
+		"no wording":                 {ID: "m/odd", Kind: "never_heard_of_it"},
+		"a reaction with no message": {ID: "m/queued", Kind: session.NoticeQueued},
+	} {
+		if err := good.QueueNotice(t.Context(), thread, n); err != nil {
+			t.Errorf("QueueNotice(%s) = %v; want nil: no retry mends it", name, err)
+		}
+	}
+	if err := good.QueueNotice(t.Context(), thread, session.Notice{ID: "m/failed", Kind: session.NoticeFailed}); err != nil {
+		t.Errorf("QueueNotice of a good notice = %v", err)
+	}
+}
+
+// TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered: the whole path. A reply in an expired thread
+// raises a notice, its write fails once, and Slack redelivers the event: the notice is written then,
+// and a further redelivery asks for nothing. The row's ID comes from the message, so there is one.
+func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
+	e := setup(t)
+	flake := &flaky{q: e.ob, err: errors.New("disk full"), fails: 1}
+	sink := e.sink(t, flake)
+	submits := 0
+	in := slack.NewIntake(slack.IntakeConfig{
+		Connection: v1alpha1.ObjectRef{Namespace: "ns", Name: "conn"},
+		Snapshot:   func() *config.Snapshot { return nil },
+		Submitter: submitFunc(func(session.Inbound) (session.Result, error) {
+			submits++
+			return session.Result{Disposition: session.Expired}, nil
+		}),
+		Notice: sink.QueueNotice,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: e.root, User: "U1", Text: "hi"}
+	if err := in.Message(t.Context(), m); err == nil {
+		t.Fatal("Message with a notice that failed to write = nil; the event would be acknowledged and lost")
+	}
+	for i := range 2 { // the redelivery, and one more
+		if err := in.Message(t.Context(), m); err != nil {
+			t.Fatalf("redelivery %d = %v", i+1, err)
+		}
+	}
+	id := outbox.ID(session.SlackMessageID("ns/conn", "C1", "5.5")+"/expired", store.OutboxNotice)
+	rows, err := e.store.ListUnposted(t.Context())
+	if err != nil || len(rows) != 1 || rows[0].ID != id || submits != 2 {
+		t.Fatalf("rows %+v, %v after %d submits; want the one notice %s, written on the second delivery and not the third", rows, err, submits, id)
+	}
+}
+
+type submitFunc func(session.Inbound) (session.Result, error)
+
+func (f submitFunc) Submit(_ context.Context, in session.Inbound) (session.Result, error) {
+	return f(in)
 }

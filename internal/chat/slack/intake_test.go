@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -61,7 +62,7 @@ func (allKeys) Keys(context.Context, string, string) ([]string, error) {
 func newIntake(t *testing.T) (*slack.Intake, *submitter) { return newIntakeNotifying(t, nil) }
 
 // newIntakeNotifying is newIntake with the func that takes a notice for a thread courier cannot continue.
-func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice)) (*slack.Intake, *submitter) {
+func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*slack.Intake, *submitter) {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string) v1alpha1.Binding {
@@ -247,15 +248,22 @@ func TestIntakePassesInteractionsOn(t *testing.T) {
 
 // notices records what the intake asks to tell a thread.
 type notices struct {
-	mu  sync.Mutex
-	got []session.Notice
-	key []session.Key
+	mu   sync.Mutex
+	got  []session.Notice
+	key  []session.Key
+	fail []error // the error of each next call, in order; none left means success
 }
 
-func (n *notices) take(_ context.Context, key session.Key, notice session.Notice) {
+func (n *notices) take(_ context.Context, key session.Key, notice session.Notice) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.got, n.key = append(n.got, notice), append(n.key, key)
+	if len(n.fail) == 0 {
+		return nil
+	}
+	err := n.fail[0]
+	n.fail = n.fail[1:]
+	return err
 }
 
 // A reply in a thread courier cannot continue, past its threadTTL or with its Binding gone, is
@@ -328,5 +336,30 @@ func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
 		if err := in.Message(t.Context(), slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi"}); err != nil {
 			t.Errorf("%s with no notice func: %v; want it quiet", d, err)
 		}
+	}
+}
+
+// TestAFailedNoticeLeavesTheEventToBeRedelivered: a notice that could not be written is the event's
+// to retry. The error reaches Run, which leaves the event unacknowledged, and the message is not
+// remembered, so the redelivery, and the mention's other event, are tried again. The notice ID is the
+// same each time, so a notice written after all is still one row.
+func TestAFailedNoticeLeavesTheEventToBeRedelivered(t *testing.T) {
+	got := notices{fail: []error{errors.New("disk full")}}
+	in, sub := newIntakeNotifying(t, got.take)
+	sub.fn = func(session.Inbound) (session.Result, error) {
+		return session.Result{Disposition: session.Expired}, nil
+	}
+	m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi", Mentioned: true}
+	if err := in.Message(t.Context(), m); err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Message with a failing notice = %v; want its error, so the event is not acknowledged", err)
+	}
+	if err := in.Message(t.Context(), m); err != nil { // the redelivery
+		t.Fatalf("Message again = %v", err)
+	}
+	if err := in.Message(t.Context(), m); err != nil { // now remembered: nothing is asked again
+		t.Fatalf("Message a third time = %v", err)
+	}
+	if len(got.got) != 2 || got.got[0] != got.got[1] || len(sub.submitted()) != 2 {
+		t.Fatalf("%d notices %+v and %d submits; want the same notice twice, then none, and Submit with it", len(got.got), got.got, len(sub.submitted()))
 	}
 }

@@ -34,9 +34,11 @@ type IntakeConfig struct {
 	// Notice, if set, tells a thread that courier cannot continue it: session.NoticeExpired for a
 	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config.
 	// The notice ID is the message's ID and a suffix, so a notice for the same message is the same
-	// row for the outbox. It is session.Sink's Notice, which queues and does not call Slack. Nil only
-	// logs them.
-	Notice func(ctx context.Context, key session.Key, n session.Notice)
+	// row for the outbox. It queues and does not call Slack (live.Sink.QueueNotice). Its error means
+	// the notice was not written: Message returns it, so Run leaves the event unacknowledged and Slack
+	// redelivers it, and the message is not remembered, so the redelivery asks again. The same ID
+	// makes that safe. Nil only logs them.
+	Notice func(ctx context.Context, key session.Key, n session.Notice) error
 	Logger *slog.Logger // slog.Default() if nil
 }
 
@@ -64,9 +66,9 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //
 // It returns an error only when Submit failed in a way a retry may cure, so Run leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
-// A message is remembered once a turn is queued for it, or a notice raised for it (see
+// A message is remembered once a turn is queued for it, or a notice written for it (see
 // IntakeConfig.Notice), so the second event of a mention (app_mention and message) is skipped; an
-// event that queued nothing may be tried again.
+// event that queued nothing, or whose notice failed to write, may be tried again.
 func (in *Intake) Message(ctx context.Context, m Message) error {
 	seen := [2]string{m.Channel, m.TS}
 	if in.seen.has(seen) {
@@ -101,7 +103,9 @@ func (in *Intake) Message(ctx context.Context, m Message) error {
 			if res.Disposition == session.BindingGone {
 				kind, suffix = session.NoticeBindingGone, "/binding_gone"
 			}
-			in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: kind, MessageTS: m.TS})
+			if err := in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: kind, MessageTS: m.TS}); err != nil {
+				return fmt.Errorf("notice %s%s: %w", req.MessageID, suffix, err)
+			}
 			in.seen.add(seen) // the mention's other event is the same message, and the same notice
 		}
 	}
