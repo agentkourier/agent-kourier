@@ -26,32 +26,27 @@ func interactions(t *testing.T, f *fixture, in v1alpha1.Interactions) {
 
 func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	f := newFixture(t)
-	interactions(t, f, v1alpha1.Interactions{AskUser: true, ToolApprovals: true, Timeout: metav1.Duration{Duration: 7 * time.Minute}})
+	// Each flag on its own, so that a swap of the two is seen.
+	for _, flags := range []struct{ ask, tools bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		interactions(t, f, v1alpha1.Interactions{AskUser: flags.ask, ToolApprovals: flags.tools, Timeout: metav1.Duration{Duration: 7 * time.Minute}})
+		got, err := f.b.Binding("sre/oncall")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.AskUser != flags.ask || got.ToolApprovals != flags.tools || got.Timeout != 7*time.Minute {
+			t.Errorf("Binding = %+v, want AskUser %t, ToolApprovals %t and the 7m timeout of the spec", got, flags.ask, flags.tools)
+		}
+	}
 
 	got, err := f.b.Binding("sre/oncall")
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if !got.AskUser || !got.ToolApprovals || got.Timeout != 7*time.Minute {
-		t.Errorf("Binding = %+v, want AskUser, ToolApprovals and the 7m timeout of the spec", got)
 	}
 	if got.Identity != "secret:sre/creds" {
 		t.Errorf("Identity = %q, want the token Secret, as the audit rows of Backend name it", got.Identity)
 	}
 	if got.Dialect == nil || got.Dialect != f.b.kits[v1alpha1.DialectKagentV1].dialect {
 		t.Errorf("Dialect = %v, want the dialect the agent pool of that backend connects through", got.Dialect)
-	}
-}
-
-func TestBindingAllowsNoPauseWhenTheSpecAllowsNone(t *testing.T) {
-	f := newFixture(t)
-	interactions(t, f, v1alpha1.Interactions{})
-
-	got, err := f.b.Binding("sre/oncall")
-
-	if err != nil || got.AskUser || got.ToolApprovals {
-		t.Errorf("Binding = %+v, %v; want no pause allowed when the spec allows none", got, err)
 	}
 }
 
