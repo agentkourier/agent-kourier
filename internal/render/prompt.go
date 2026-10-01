@@ -66,10 +66,13 @@ type Control struct {
 // A question whose choices cannot be options (more than 100, or one longer than 75 characters)
 // is shown as a numbered list with a free-text input for the numbers: no choice is dropped.
 func PromptBlocks(id, hint string, questions []dialect.Question) (blocks []map[string]any, controls []Control, err error) {
-	if id == "" || len(questions) == 0 || units(id) > maxValue {
+	if id == "" || len(questions) == 0 {
 		return nil, nil, errors.New("render: a prompt needs an interaction ID and at least one question")
 	}
-	blocks = []map[string]any{{"type": "header", "text": plainText(cmp.Or(Text(hint, maxHeader), defaultHeader))}}
+	if n := units(id); n > maxValue {
+		return nil, nil, fmt.Errorf("render: the interaction ID is %d units; a button's value holds at most %d", n, maxValue)
+	}
+	blocks = []map[string]any{{"type": "header", "text": plainText(cmp.Or(strings.TrimSpace(oneLine(hint, maxHeader)), defaultHeader))}}
 	for i, q := range questions {
 		bs, c := questionBlocks(i, q)
 		blocks, controls = append(blocks, bs...), append(controls, c)
@@ -85,15 +88,19 @@ func PromptBlocks(id, hint string, questions []dialect.Question) (blocks []map[s
 // questionBlocks is the blocks of question i, and its control.
 func questionBlocks(i int, q dialect.Question) ([]map[string]any, Control) {
 	c := Control{BlockID: "q" + strconv.Itoa(i), ActionID: "a" + strconv.Itoa(i)}
-	label := cmp.Or(Text(q.Text, maxLabel), "Question "+strconv.Itoa(i+1))
+	label := cmp.Or(strings.TrimSpace(oneLine(q.Text, maxLabel)), "Question "+strconv.Itoa(i+1))
 	if len(q.Choices) == 0 {
 		return layout(c, label, textInput("")), c
 	}
 	options, ok := options(q.Choices)
 	if !ok {
 		c.Kind = ControlNumbers
-		input := layout(c, "Your answer: the number or numbers, separated by commas", textInput("For example: 2 or 1, 3"))
-		return append(numberedList(q.Text, q.Choices), input...), c
+		ask, example := "Your answer: the number", "For example: 2"
+		if q.Multiple {
+			ask, example = "Your answer: the number or numbers, separated by commas", "For example: 2 or 1, 3"
+		}
+		input := layout(c, ask, textInput(example))
+		return append(numberedList(label, q.Choices), input...), c
 	}
 	c.Kind = ControlChoice
 	kind := "radio_buttons"
@@ -135,7 +142,17 @@ func textInput(placeholder string) map[string]any {
 	return el
 }
 
+// plainText is a plain_text object. Every one courier builds from agent text is a single line
+// (oneLine), so that no newline in a label or an option can forge a second one.
+//
+// UNCONFIRMED(WP-04): that Slack shows "&amp;", "&lt;" and "&gt;" in a plain_text field as the
+// characters, not literally. The text is escaped as for mrkdwn; if plain_text does not decode them,
+// render needs a flavour that cleans and caps without escaping (plain_text never parses mentions).
 func plainText(s string) map[string]any { return map[string]any{"type": "plain_text", "text": s} }
+
+// oneLine is s as inert single-line text of at most limit units: Text without the newlines, which
+// become spaces, so nothing the agent wrote can start a line of its own.
+func oneLine(s string, limit int) string { return render(s, limit, false, false) }
 
 // options are choices as options valued by index, or ok false if they cannot be: too many, or one
 // that is empty or too long for an option's text once escaped.
@@ -144,7 +161,7 @@ func options(choices []string) (opts []map[string]any, ok bool) {
 		return nil, false
 	}
 	for i, c := range choices {
-		text := Text(c, math.MaxInt32)
+		text := oneLine(c, math.MaxInt32)
 		if strings.TrimSpace(text) == "" || units(text) > maxOptionText {
 			return nil, false
 		}
@@ -153,10 +170,11 @@ func options(choices []string) (opts []map[string]any, ok bool) {
 	return opts, true
 }
 
-// numberedList is the question and its choices as numbered mrkdwn sections of at most 3000
-// characters, each choice on a line of its own, cut visibly if it is long. Every choice is in it.
+// numberedList is the question, on a line of its own, and then its choices as numbered mrkdwn
+// sections of at most 3000 characters, each choice on one line (a newline in a choice cannot start
+// an entry), cut visibly if it is long. Every choice is in it.
 func numberedList(question string, choices []string) []map[string]any {
-	var sections []map[string]any
+	sections := []map[string]any{{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": oneLine(question, maxQuestionLine)}}}
 	var b strings.Builder
 	flush := func() {
 		if b.Len() > 0 {
@@ -164,9 +182,8 @@ func numberedList(question string, choices []string) []map[string]any {
 			b.Reset()
 		}
 	}
-	b.WriteString(Text(question, maxQuestionLine) + "\n")
 	for i, c := range choices {
-		line := strconv.Itoa(i+1) + ". " + cmp.Or(strings.TrimSpace(Text(c, maxListLine)), "(blank)") + "\n"
+		line := strconv.Itoa(i+1) + ". " + cmp.Or(strings.TrimSpace(oneLine(c, maxListLine)), "(blank)") + "\n"
 		if units(b.String())+units(line) > maxSectionText {
 			flush()
 		}

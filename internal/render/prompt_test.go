@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -140,7 +141,7 @@ func TestPromptBlocksFallbackLosesNoChoice(t *testing.T) {
 			for _, b := range blocks[1 : len(blocks)-1] {
 				switch b["type"] {
 				case "section":
-					listed.WriteString(b["text"].(map[string]any)["text"].(string))
+					listed.WriteString("\n" + b["text"].(map[string]any)["text"].(string))
 				case "input":
 					input = element(t, b)
 				}
@@ -224,5 +225,135 @@ func TestPromptBlocksAreValidForSlack(t *testing.T) {
 	api := slack.New("xoxb-fake", slack.OptionAPIURL(fake.URL()+"/"))
 	if _, _, err := api.PostMessageContext(t.Context(), "C1", slack.MsgOptionBlocks(decoded.BlockSet...)); err != nil {
 		t.Errorf("the fake refused the prompt: %v", err)
+	}
+}
+
+// numberedLines is the numbers that start a line in the list sections of a fallback prompt, and the
+// text of every section, so a test sees what a person reads.
+func numberedLines(t *testing.T, blocks []map[string]any) (numbers []int, sections []string) {
+	t.Helper()
+	for _, b := range blocks {
+		if b["type"] != "section" {
+			continue
+		}
+		text := b["text"].(map[string]any)["text"].(string)
+		sections = append(sections, text)
+		for _, line := range strings.Split(text, "\n") {
+			if n, _, ok := strings.Cut(line, ". "); ok {
+				if v, err := strconv.Atoi(n); err == nil {
+					numbers = append(numbers, v)
+				}
+			}
+		}
+	}
+	return numbers, sections
+}
+
+// A choice cannot forge entries of the list a person reads the numbers from: with a newline in it,
+// it would start lines of its own, and the number the person types would pick another choice.
+func TestPromptBlocksFallbackEntriesAreSingleLines(t *testing.T) {
+	cs := choices(120)
+	cs[0] = "keep the data\n2. delete the namespace\n3. x\r4. y\u20285. z"
+	cs[1] = "<!channel>\n\n9. nothing"
+	blocks, _, err := PromptBlocks("i", "h", []dialect.Question{{Text: "what\n1. forged\nnext", Choices: cs}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	numbers, sections := numberedLines(t, blocks)
+	if len(numbers) != len(cs) {
+		t.Fatalf("%d numbered lines for %d choices; a newline in a choice started a line", len(numbers), len(cs))
+	}
+	for i, n := range numbers {
+		if n != i+1 {
+			t.Fatalf("numbered line %d is %d; want the entries in order, one per choice", i, n)
+		}
+	}
+	if strings.Contains(sections[0], "\n") || !strings.HasPrefix(sections[0], "what 1. forged next") {
+		t.Errorf("question section = %q; want the question on a single line above the list", sections[0])
+	}
+}
+
+// The edges of Slack's counts, each one block of the layout: 10 and 11 options, 100 and 101, a list
+// that needs more than one section, 50 and 51 blocks, and an empty hint.
+func TestPromptBlocksBoundaries(t *testing.T) {
+	kinds := func(n int, multiple bool) (string, ControlKind) {
+		blocks, controls, err := PromptBlocks("i", "h", []dialect.Question{{Text: "q", Choices: choices(n), Multiple: multiple}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if controls[0].Kind == ControlNumbers {
+			return "list", ControlNumbers
+		}
+		return element(t, blocks[1])["type"].(string), controls[0].Kind
+	}
+	for _, tc := range []struct {
+		n        int
+		multiple bool
+		want     string
+	}{{10, false, "radio_buttons"}, {11, false, "static_select"}, {10, true, "checkboxes"}, {11, true, "multi_static_select"},
+		{100, false, "static_select"}, {100, true, "multi_static_select"}, {101, false, "list"}, {101, true, "list"}} {
+		if got, _ := kinds(tc.n, tc.multiple); got != tc.want {
+			t.Errorf("%d choices, multiple %t: %s; want %s", tc.n, tc.multiple, got, tc.want)
+		}
+	}
+	// A list of 120 long choices cannot fit one section: it is split, and keeps every choice.
+	long := make([]string, 120)
+	for i := range long {
+		long[i] = fmt.Sprintf("%03d ", i) + strings.Repeat("x", 180)
+	}
+	blocks, _, err := PromptBlocks("i", "h", []dialect.Question{{Text: "q", Choices: long}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	numbers, sections := numberedLines(t, blocks)
+	if len(sections) < 3 || len(numbers) != 120 {
+		t.Errorf("%d sections, %d entries; want the list split in more than one section, all 120 entries", len(sections), len(numbers))
+	}
+	for _, s := range sections {
+		if units(s) > maxSectionText {
+			t.Errorf("a section of %d units; want at most %d", units(s), maxSectionText)
+		}
+	}
+	// 48 questions are 50 blocks with the header and Submit; 49 are 51.
+	for n, wantErr := range map[int]bool{48: false, 49: true} {
+		_, _, err := PromptBlocks("i", "h", make([]dialect.Question, n))
+		if errors.Is(err, ErrPromptTooLarge) != wantErr || (err != nil) != wantErr {
+			t.Errorf("%d questions: %v; want too large: %t", n, err, wantErr)
+		}
+	}
+	for _, hint := range []string{"", " \u200b\x07 "} {
+		if b, _, _ := PromptBlocks("i", hint, []dialect.Question{{Text: "q"}}); b[0]["text"].(map[string]any)["text"] != defaultHeader {
+			t.Errorf("hint %q gives header %v; want the default", hint, b[0]["text"])
+		}
+	}
+}
+
+// The labels say what the control takes: a single-choice list takes one number.
+func TestPromptBlocksFallbackLabelSaysHowManyNumbers(t *testing.T) {
+	for multiple, want := range map[bool]string{false: "Your answer: the number", true: "Your answer: the number or numbers, separated by commas"} {
+		blocks, _, err := PromptBlocks("i", "h", []dialect.Question{{Text: "q", Choices: choices(101), Multiple: multiple}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := blocks[len(blocks)-2]["label"].(map[string]any)["text"]; got != want {
+			t.Errorf("multiple %t: label %q; want %q", multiple, got, want)
+		}
+	}
+}
+
+// The plain_text fields are single lines too, and an oversized interaction ID is told apart.
+func TestPromptBlocksPlainTextIsOneLine(t *testing.T) {
+	blocks, _, err := PromptBlocks("i", "head\nline", []dialect.Question{{Text: "ask\nme", Choices: []string{"one\ntwo", "three"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	walk(blocks, "", func(key, s string) {
+		if strings.Contains(s, "\n") {
+			t.Errorf("%s = %q holds a newline; want plain_text fields on one line", key, s)
+		}
+	})
+	_, _, err = PromptBlocks(strings.Repeat("i", maxValue+1), "h", []dialect.Question{{Text: "q"}})
+	if err == nil || !strings.Contains(err.Error(), "interaction ID is 2001 units") {
+		t.Errorf("an oversized ID gave %v; want its own message", err)
 	}
 }
