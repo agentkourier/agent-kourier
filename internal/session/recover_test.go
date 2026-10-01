@@ -55,8 +55,8 @@ func TestRecoverFollowsARunningTask(t *testing.T) {
 	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.refs) != 1 || !sink.refs[0].Recovered || sink.refs[0].Key != key {
-		t.Errorf("turn refs = %+v; want one, marked recovered", sink.refs)
+	if len(sink.refs) != 1 || !sink.refs[0].Recovered || sink.refs[0].Key != key || sink.refs[0].Binding != "ns/b1" {
+		t.Errorf("turn refs = %+v; want one, marked recovered, with the Binding of the thread (a pause found again needs it)", sink.refs)
 	}
 	if _, _, fo := f.agent.counts(); fo != 1 {
 		t.Errorf("%d follows; want one", fo)

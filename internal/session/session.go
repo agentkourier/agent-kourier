@@ -84,6 +84,9 @@ type Users interface {
 // TurnRef names the turn a Sink is asked to render.
 type TurnRef struct {
 	Key Key
+	// Binding is the name of the thread's Binding, namespace/name, which a renderer that hands a pause on
+	// needs to find the Binding's policy.
+	Binding string
 	// MessageID names the message the output is posted as: the turn's, or, for the output of an
 	// answer to a pause, the answer's.
 	MessageID string

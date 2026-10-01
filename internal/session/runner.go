@@ -424,7 +424,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 		// An answer's output is a message of its own, named after the answer: it must not overwrite
 		// the output of the turn that paused. A task found again after a restart, or followed again
 		// after a lost stream, continues the message it had.
-		ref := TurnRef{Key: key, MessageID: cmp.Or(t.nid, r.ID), UserID: r.UserID, Output: t.b.Output, Recovered: t.recovered || t.follow}
+		ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: cmp.Or(t.nid, r.ID), UserID: r.UserID, Output: t.b.Output, Recovered: t.recovered || t.follow}
 		if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
 			h = sh
 		}

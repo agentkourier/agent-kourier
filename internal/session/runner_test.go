@@ -282,8 +282,8 @@ func TestSinkTurnGetsItsOwnContextAndWhatTheRendererNeeds(t *testing.T) {
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.refs) != 2 || sink.refs[0].UserID != "U1" || sink.refs[1].UserID != SystemUser || sink.refs[0].Output != v1alpha1.OutputFinal || sink.refs[0].Recovered {
-		t.Fatalf("turn refs = %+v; want the asking user, the system user for an alert, and the output mode", sink.refs)
+	if len(sink.refs) != 2 || sink.refs[0].UserID != "U1" || sink.refs[1].UserID != SystemUser || sink.refs[0].Output != v1alpha1.OutputFinal || sink.refs[0].Recovered || sink.refs[0].Binding != "ns/b1" || sink.refs[1].Binding != "ns/b1" {
+		t.Fatalf("turn refs = %+v; want the asking user, the system user for an alert, the output mode and the Binding of the thread", sink.refs)
 	}
 	for i, ctx := range sink.ctxs {
 		select {
