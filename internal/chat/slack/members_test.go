@@ -165,6 +165,7 @@ func TestMembershipAndBotChecksAreBoundedAtTwoSecondsAndTheBoundIsTunable(t *tes
 		}
 	}
 	check("default", nil, 1900*time.Millisecond, 3*time.Second)
+	check("a negative AuthzTimeout, which means the default", func(c *slack.Config) { c.AuthzTimeout = -time.Second }, 1900*time.Millisecond, 3*time.Second)
 	check("AuthzTimeout of 300 ms", func(c *slack.Config) { c.AuthzTimeout = 300 * time.Millisecond }, 250*time.Millisecond, time.Second)
 }
 
