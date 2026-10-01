@@ -44,6 +44,11 @@ const (
 	AbandonExpired       = "expired"        // it was still unposted after Config.Retention
 )
 
+// storeWriteTimeout bounds the store writes that must outlive a cancelled context (recording a ref,
+// abandoning a row). It is not CallTimeout, which is for calls to Slack: a test that sets that to
+// a few milliseconds must not make a local write time out under load.
+const storeWriteTimeout = 10 * time.Second
+
 // lookupTimeouts is how many lookups of a row in a row may time out before it is abandoned.
 const lookupTimeouts = 5
 
@@ -343,7 +348,7 @@ func (o *Outbox) countTimeout(id string, timedOut bool) int {
 // and cause. If the store cannot record it, the row is still work and that error is returned alone.
 // The caller holds o.mu.
 func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason string, cause error) error {
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.cfg.CallTimeout)
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
 	newly, err := o.cfg.Store.AbandonOutbox(wctx, row.ID, o.cfg.Now())
 	if err != nil {
@@ -376,10 +381,10 @@ func (o *Outbox) find(ctx context.Context, row store.OutboxEntry) (string, bool,
 }
 
 // record stores the message's ts on the row and returns it. The message is already in Slack, so it
-// is recorded even if ctx has ended (a shutdown right after the post), within the call timeout; a
+// is recorded even if ctx has ended (a shutdown right after the post), within storeWriteTimeout; a
 // failure here leaves it for the next lookup to adopt.
 func (o *Outbox) record(ctx context.Context, id, ts string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.cfg.CallTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
 	if err := o.cfg.Store.RecordMessageRef(ctx, id, ts); err != nil {
 		return "", fmt.Errorf("deliver %s: record the message ref: %w", id, err)
