@@ -37,6 +37,10 @@ func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Inter
 		i.cfg.Logger.InfoContext(ctx, "interact: dropped an answer whose task has moved on", "interaction", row.ID, "task", row.TaskID)
 	case err != nil:
 		return fmt.Errorf("interact: send the answer of %s again: %w", row.ID, err)
+	default: // the session took it: that is what is marked, so that the backstop does not take it for lost
+		if err := i.cfg.Store.MarkInteractionDelivered(ctx, row.ID, i.cfg.Now()); err != nil {
+			i.cfg.Logger.ErrorContext(ctx, "interact: an answer was sent again and could not be marked delivered", "interaction", row.ID, "err", err)
+		}
 	}
 	return nil
 }

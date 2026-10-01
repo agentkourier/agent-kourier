@@ -65,6 +65,11 @@ type Interaction struct {
 	Answer    []byte
 	Decider   string // Slack user ID
 	DecidedAt time.Time
+	// DeliveredAt is when the answer was handed to the session, which took it; zero until MarkInteractionDelivered.
+	// A zero on an answered interaction is not proof that it never arrived: a crash can come between the
+	// session taking the answer and the mark. Answers decided before the column existed are marked
+	// delivered at their decision.
+	DeliveredAt time.Time
 }
 
 // Interactions persists interactions. For CreateInteraction, ID, the three key
@@ -84,6 +89,11 @@ type Interactions interface {
 	// controls. since is required (ErrInvalid otherwise). No index serves it: it reads the table,
 	// which is small, and is run at start and now and then, not for each interaction.
 	ListDecidedInteractions(ctx context.Context, since time.Time) ([]Interaction, error)
+	// MarkInteractionDelivered records, at the first call, that the answer of an answered interaction was
+	// handed to the session; a later call changes nothing and is no error. ErrNotFound if the
+	// interaction does not exist, ErrConflict if it is not answered, ErrInvalid for an empty id or a
+	// zero time.
+	MarkInteractionDelivered(ctx context.Context, id string, at time.Time) error
 	// SubmitInteraction records the first complete answer: an atomic
 	// transition from pending to answered, valid while now is before the
 	// deadline. answer, decider and now are required. Errors: ErrNotFound if

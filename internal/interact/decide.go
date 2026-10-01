@@ -258,6 +258,7 @@ func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, r
 	err := d.cfg.Session.Answer(ctx, row.Key, &msg)
 	switch {
 	case err == nil:
+		d.markDelivered(ctx, row.ID)
 		return nil
 	case errors.Is(err, store.ErrInvalid):
 		d.cfg.Logger.ErrorContext(ctx, "interact: the session refused an answer for good, and it was not sent", "interaction", row.ID, "err", err)
@@ -281,6 +282,16 @@ func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, r
 		return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
 	}
 	return nil
+}
+
+// markDelivered records that the session took the answer, which is all that tells an answer that arrived
+// from one that did not (WP-33d4). The answer is sent and the decision is done, so a failed mark is
+// logged and never fails the decision: deciding it again would send the answer again. The backstop may
+// then tell the thread, wrongly, that the answer did not arrive, if the task ends.
+func (d *Decider) markDelivered(ctx context.Context, id string) {
+	if err := d.cfg.Store.MarkInteractionDelivered(ctx, id, d.cfg.Now()); err != nil {
+		d.cfg.Logger.ErrorContext(ctx, "interact: an answer was sent and could not be marked delivered", "interaction", id, "err", err)
+	}
 }
 
 // lostText says why a press did not decide the question.

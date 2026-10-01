@@ -78,3 +78,25 @@ func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) er
 	}
 	return nil
 }
+
+// MarkInteractionDelivered implements store.Interactions.
+func (s *Store) MarkInteractionDelivered(ctx context.Context, id string, at time.Time) error {
+	if id == "" || at.IsZero() {
+		return fmt.Errorf("mark interaction %q delivered: an ID and a time are required: %w", id, store.ErrInvalid)
+	}
+	n, err := s.exec(ctx, `UPDATE interactions SET delivered_at = ? WHERE id = ? AND state = 'answered' AND delivered_at = 0`, ts(at), id)
+	if err != nil {
+		return fmt.Errorf("mark interaction %q delivered: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	cur, err := s.GetInteraction(ctx, id) // already marked, not answered, or not there
+	switch {
+	case err != nil:
+		return fmt.Errorf("mark interaction %q delivered: %w", id, err)
+	case cur.State != store.InteractionAnswered:
+		return fmt.Errorf("mark interaction %q delivered: it is %s, not answered: %w", id, cur.State, store.ErrConflict)
+	}
+	return nil
+}

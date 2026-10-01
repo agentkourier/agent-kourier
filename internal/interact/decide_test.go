@@ -728,3 +728,63 @@ func TestAHungEditDoesNotHoldUpThePress(t *testing.T) {
 		t.Errorf("log = %q; want a warning naming ix-1", out)
 	}
 }
+
+// The answer is marked delivered once the session has taken it, and not before or otherwise: that mark is
+// all that tells a delivered answer from one that never arrived, which the backstop (WP-33d4) acts on.
+func TestAnAnswerIsMarkedDeliveredWhenTheSessionTakesIt(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	if got := r.row(t); !got.DeliveredAt.IsZero() {
+		t.Fatalf("a pending interaction is delivered at %v", got.DeliveredAt)
+	}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.row(t); got.State != store.InteractionAnswered || got.DeliveredAt.IsZero() {
+		t.Errorf("after a send the session took: state %s, delivered at %v; want answered and marked", got.State, got.DeliveredAt)
+	}
+}
+
+func TestAnAnswerTheSessionDidNotTakeIsNotMarked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		errs      []error
+		sessionOn string // the task the session records at the time
+		wantErrs  []bool // whether each Decide returns an error
+	}{
+		"a send that failed":                       {[]error{errBoom}, "", []bool{true}},
+		"a task the session has not parked on yet": {[]error{session.ErrNotPaused, session.ErrNotPaused}, "task-1", []bool{true, false}},
+		"a task that has moved on":                 {[]error{session.ErrNotPaused}, "task-2", []bool{false}},
+		"a refusal for good":                       {[]error{store.ErrInvalid}, "", []bool{false}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newDecideRig(t)
+			r.pending(t)
+			if tc.sessionOn != "" {
+				r.task(t, tc.sessionOn)
+			}
+			r.sess.errs = tc.errs
+			for i, wantErr := range tc.wantErrs {
+				if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); (err != nil) != wantErr {
+					t.Fatalf("Decide %d = %v; want an error: %t", i+1, err, wantErr)
+				}
+			}
+			if got := r.row(t); got.State != store.InteractionAnswered || !got.DeliveredAt.IsZero() {
+				t.Errorf("state %s, delivered at %v; want answered and not marked: the session did not take it", got.State, got.DeliveredAt)
+			}
+		})
+	}
+}
+
+// A send that failed and was retried, and then taken, is marked at the retry.
+func TestARetriedAnswerTheSessionTakesIsMarked(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.sess.errs = []error{errBoom}
+	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.row(t); got.DeliveredAt.IsZero() {
+		t.Error("the answer the retry delivered is not marked")
+	}
+}

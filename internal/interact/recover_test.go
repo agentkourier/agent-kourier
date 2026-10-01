@@ -106,3 +106,29 @@ func TestAnAnswerIsNeverSentToADifferentQuestion(t *testing.T) {
 		t.Errorf("Paused = %v after %d answers sent and %d cancels; want no answer, and the task cancelled as unusable", err, len(r.sess.answers), len(r.sess.cancels))
 	}
 }
+
+// An answer sent again after a restart is marked delivered when the session takes it, and not when the task
+// has moved on, which says nothing of whether the first send got through.
+func TestARecoveredAnswerIsMarkedDeliveredWhenTheSessionTakesIt(t *testing.T) {
+	task := askUser("req-1")
+	answer, _ := json.Marshal(dialect.Answer{RequestID: "req-1", Answers: [][]string{{"a"}}})
+	for name, tc := range map[string]struct {
+		answerErr error
+		marked    bool
+	}{"taken": {nil, true}, "the task has moved on": {session.ErrNotPaused, false}} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, nil)
+			if err := r.paused(t, task); err != nil {
+				t.Fatal(err)
+			}
+			_ = r.st.SubmitInteraction(t.Context(), r.row(t, task).ID, answer, "U1", t0.Add(time.Minute))
+			r.sess.answerErr = tc.answerErr
+			if err := r.paused(t, task); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.row(t, task); got.DeliveredAt.IsZero() == tc.marked {
+				t.Errorf("delivered at %v; want it marked: %t", got.DeliveredAt, tc.marked)
+			}
+		})
+	}
+}

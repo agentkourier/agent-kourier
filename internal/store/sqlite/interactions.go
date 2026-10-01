@@ -11,20 +11,23 @@ import (
 )
 
 const interactionCols = `id, connection, channel, thread_ts, task_id, kind, state, request, message_ref,
-	created_at, deadline, answer, decider, decided_at`
+	created_at, deadline, answer, decider, decided_at, delivered_at`
 
 // scanInteraction reads one row selected with interactionCols.
 func scanInteraction(row interface{ Scan(...any) error }) (store.Interaction, error) {
 	var i store.Interaction
-	var created, deadline, decided int64
+	var created, deadline, decided, delivered int64
 	err := row.Scan(&i.ID, &i.Key.Connection, &i.Key.Channel, &i.Key.ThreadTS, &i.TaskID, &i.Kind, &i.State,
-		&i.Request, &i.MessageRef, &created, &deadline, &i.Answer, &i.Decider, &decided)
+		&i.Request, &i.MessageRef, &created, &deadline, &i.Answer, &i.Decider, &decided, &delivered)
 	if err != nil {
 		return store.Interaction{}, err
 	}
 	i.CreatedAt, i.Deadline = fromTS(created), fromTS(deadline)
 	if decided != 0 {
 		i.DecidedAt = fromTS(decided)
+	}
+	if delivered != 0 {
+		i.DeliveredAt = fromTS(delivered)
 	}
 	return i, nil
 }
