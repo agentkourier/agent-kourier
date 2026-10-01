@@ -10,6 +10,10 @@
 // take the Slack message's (channel, ts), because a mention arrives as two events and both reach
 // Submit, and one ID makes them one row and one post.
 //
+// A reaction (EnqueueReaction) is a row too, with the role reaction: durable and made once per ID, with
+// no lookup, since making it twice is harmless (Slack says it is there already) and a reaction has
+// no message of its own to find. Its ref is the ts of the message it was made on.
+//
 // A post that can never succeed is abandoned, not retried for ever: Slack's permanent errors (a
 // channel that is gone or archived, courier not in it, text too long, blocks Slack refuses), a
 // message that is not valid, and a lookup that has timed out five times in a row. The row keeps its
@@ -63,12 +67,21 @@ type Poster interface {
 	Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error)
 }
 
+// Reactor makes reactions: *slack.Client. A reaction that is there already is success, as
+// (*slack.Client).React gives it.
+type Reactor interface {
+	React(ctx context.Context, channel, ts, name string) error
+}
+
 // Config configures an Outbox. Store and Poster are required.
 type Config struct {
 	Store  store.Outbox
 	Poster Poster
-	Now    func() time.Time // time.Now if nil
-	Logger *slog.Logger     // slog.Default() if nil
+	// Reactor makes the reactions of EnqueueReaction. A reaction row with none is abandoned as
+	// invalid and logged: nothing could ever make it.
+	Reactor Reactor
+	Now     func() time.Time // time.Now if nil
+	Logger  *slog.Logger     // slog.Default() if nil
 	// CallTimeout bounds each Post and Find (default 30 seconds), because the delivery lock is
 	// held across them and an unbounded Slack call would hold it for good.
 	CallTimeout time.Duration
@@ -187,6 +200,9 @@ func (o *Outbox) Send(ctx context.Context, p Post) (string, error) {
 // blocks is ErrInvalid: such a row would never be delivered, and would hold its ID for good.
 func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
 	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Channel: p.Channel, ThreadTS: p.ThreadTS, CreatedAt: o.cfg.Now()}
+	if p.Role == store.OutboxReaction {
+		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: a reaction is not a post, use EnqueueReaction: %w", row.ID, store.ErrInvalid)
+	}
 	if p.Content.Text == "" && len(p.Content.Blocks) == 0 {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: no text or blocks: %w", row.ID, store.ErrInvalid)
 	}
@@ -206,6 +222,11 @@ func (o *Outbox) Enqueue(ctx context.Context, p Post) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return o.enqueue(ctx, row)
+}
+
+// enqueue writes row and wakes Run.
+func (o *Outbox) enqueue(ctx context.Context, row store.OutboxEntry) (string, error) {
 	if _, err := o.cfg.Store.CreateOutbox(ctx, row); err != nil {
 		return "", err
 	}
@@ -214,6 +235,34 @@ func (o *Outbox) Enqueue(ctx context.Context, p Post) (string, error) {
 	default: // a signal is already waiting, and the drain it starts will take this row too
 	}
 	return row.ID, nil
+}
+
+// Reaction is a reaction to make on the message TS in Channel: Name is the bare emoji name. Source
+// gives its row's ID, which is ID(Source, store.OutboxReaction), and must differ for each reaction
+// of one source.
+type Reaction struct {
+	Source, Channel, TS, Name string
+}
+
+// reactionPayload is a reaction row's payload.
+type reactionPayload struct {
+	TS   string `json:"ts"`
+	Name string `json:"name"`
+}
+
+// EnqueueReaction writes the row for r and returns its ID, and does nothing else: no Slack call, so
+// it is safe where Slack waits for an answer. Run delivers the row. The same ID enqueued twice is
+// one row and one reaction. An empty field is ErrInvalid.
+func (o *Outbox) EnqueueReaction(ctx context.Context, r Reaction) (string, error) {
+	id := ID(r.Source, store.OutboxReaction)
+	if r.Source == "" || r.Channel == "" || r.TS == "" || r.Name == "" {
+		return "", fmt.Errorf("outbox reaction %s: the source, channel, ts and name are required: %w", id, store.ErrInvalid)
+	}
+	payload, err := json.Marshal(reactionPayload{TS: r.TS, Name: r.Name})
+	if err != nil {
+		return "", fmt.Errorf("outbox reaction %s: %w", id, err)
+	}
+	return o.enqueue(ctx, store.OutboxEntry{ID: id, EventID: r.Source, Role: store.OutboxReaction, Channel: r.Channel, CreatedAt: o.cfg.Now(), Payload: string(payload)})
 }
 
 // Run drains the outbox until ctx ends, and returns its error. It drains at once, which recovers
@@ -315,6 +364,9 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 	if !row.AbandonedAt.IsZero() {
 		return "", fmt.Errorf("deliver %s: %w", id, ErrAbandoned)
 	}
+	if row.Role == store.OutboxReaction {
+		return o.react(ctx, row)
+	}
 	var content slack.Content
 	if row.Payload == "" {
 		return "", fmt.Errorf("deliver %s: the row has no payload: %w", id, store.ErrInvalid)
@@ -357,6 +409,33 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 	o.slackOK = o.cfg.Now()
 	testhooks.AfterPost() // a no-op unless this is a test image, where it can crash the process here
 	return o.record(ctx, id, ts)
+}
+
+// react makes the reaction of row and records the ts of its message as the ref. There is no lookup:
+// a reaction made twice is made once, and one made before a crash is simply found there. The caller
+// holds o.mu.
+func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (string, error) {
+	var p reactionPayload
+	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil || p.TS == "" || p.Name == "" {
+		return "", o.abandon(ctx, row, AbandonInvalid, fmt.Errorf("deliver %s: the reaction's payload is not usable: %w", row.ID, store.ErrInvalid))
+	}
+	if o.cfg.Reactor == nil {
+		return "", o.abandon(ctx, row, AbandonInvalid, fmt.Errorf("deliver %s: no Reactor is configured: %w", row.ID, store.ErrInvalid))
+	}
+	callCtx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
+	defer cancel()
+	if err := o.cfg.Reactor.React(callCtx, row.Channel, p.TS, p.Name); err != nil {
+		err = fmt.Errorf("deliver %s: react: %w", row.ID, err)
+		if reason := slack.ReactionPermanentCode(err); reason != "" {
+			return "", o.abandon(ctx, row, reason, err)
+		}
+		if errors.Is(err, store.ErrInvalid) {
+			return "", o.abandon(ctx, row, AbandonInvalid, err)
+		}
+		return "", err
+	}
+	o.slackOK = o.cfg.Now()
+	return o.record(ctx, row.ID, p.TS)
 }
 
 // lookupGivesUp notes how a lookup of id ended and reports whether the row should now be abandoned
