@@ -117,3 +117,17 @@ func TestADenialReachesTheAgent(t *testing.T) {
 		t.Errorf("the agent said %q after the denial; want it to resume without running the tool", got.text)
 	}
 }
+
+// TestAReusedToolIDIsRefusedAsUnusable: an approval under tool IDs courier has seen, but for other
+// calls, is not the denied one again (UNCONFIRMED(WP-02)); it is cancelled as unusable, not answered.
+func TestAReusedToolIDIsRefusedAsUnusable(t *testing.T) {
+	r := newRig(t, nil)
+	if err := r.paused(t, approval()); err != nil {
+		t.Fatal(err)
+	}
+	other := pausedOn(map[string]any{"type": "tool_approval_request", "tools": []map[string]any{
+		{"id": "t1", "call_id": "c1", "name": "something_else"}, {"id": "t2", "call_id": "c2", "name": "add_numbers"}}})
+	if err := r.paused(t, other); err != nil || len(r.sess.answers) != 1 || len(r.sess.cancels) != 1 || len(r.hook) != 1 {
+		t.Errorf("Paused = %v with %d answers, %d cancels, hook %v; want the first denial alone and the second cancelled as unusable", err, len(r.sess.answers), len(r.sess.cancels), r.hook)
+	}
+}

@@ -120,7 +120,9 @@ func short(fields ...string) string {
 // than risk a denial that is not on record.
 func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.Interaction) error {
 	row, err := i.record(ctx, p, b, in)
-	if err != nil {
+	if errors.Is(err, dialect.ErrUnusablePause) { // a second approval under a seen ID
+		return i.refuseUnusable(ctx, p, b, err)
+	} else if err != nil {
 		return err
 	}
 	if row.State == store.InteractionPending {
@@ -156,5 +158,5 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return fmt.Errorf("interact: enqueue the notice of %s: %w", row.ID, err)
 	}
-	return i.resend(ctx, p, b, row, in)
+	return i.resend(ctx, p, b, row)
 }
