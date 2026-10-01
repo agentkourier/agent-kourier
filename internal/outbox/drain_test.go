@@ -93,12 +93,12 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 	stream := outbox.Post{Source: "s1", Role: store.OutboxReply, Channel: "C1"} // no content: a stream, never delivered
 	p := &poster{found: map[string]string{"left/notice": "55.5"}}
 	o := outbox.New(drainConfig(st, p))
+	start(t, o) // nothing is enqueued yet, so only the drain at start can deliver the row a crash left
+	eventually(t, "the drain at start", func() bool { return ref(st, "left/notice") == "55.5" })
+
 	if _, err := o.Enqueue(t.Context(), stream); err != nil {
 		t.Fatal(err)
 	}
-	start(t, o)
-	eventually(t, "the drain at start", func() bool { return ref(st, "left/notice") == "55.5" })
-
 	for range 2 { // one row, however many times it is enqueued
 		if _, err := o.Enqueue(t.Context(), reply("ev1")); err != nil {
 			t.Fatal(err)
