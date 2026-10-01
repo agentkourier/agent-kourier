@@ -87,13 +87,14 @@ type promptFn func(interact.Prompt) (slack.Content, error)
 func (f promptFn) Prompt(p interact.Prompt) (slack.Content, error) { return f(p) }
 
 type rig struct {
-	in    *interact.Intake
-	st    *refStore
-	slack *poster
-	asked []interact.Prompt // what the renderer was asked for
-	sess  *sess
-	audit *auditor
-	hook  []interact.Outcome // what OnApprovalOutcome was told
+	in     *interact.Intake
+	st     *refStore
+	slack  *poster
+	asked  []interact.Prompt // what the renderer was asked for
+	sess   *sess
+	audit  *auditor
+	outbox *outbox.Outbox
+	hook   []interact.Outcome // what OnApprovalOutcome was told
 }
 
 func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
@@ -108,6 +109,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ob := (outbox.New(outbox.Config{Store: st, Poster: r.slack, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet}))
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: timeout}
+	r.outbox = ob
 	if mod != nil {
 		mod(&b)
 	}
@@ -205,8 +207,8 @@ func TestInteractionIDIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestPausesThatAreNotPrompts: no prompt is rendered or posted for them. A tool approval comes back
-// as ErrDisallowed until WP-33c2b.
+// TestPausesThatAreNotPrompts: no prompt is rendered or posted for them. A tool approval is denied; one the
+// Binding allows is not handled until Phase 5, and comes back as ErrDisallowed.
 func TestPausesThatAreNotPrompts(t *testing.T) {
 	approval := pausedOn(map[string]any{"type": "tool_approval_request", "id": "r", "tools": []map[string]any{{"id": "t1", "name": "x"}}})
 	for name, tc := range map[string]struct {
@@ -215,7 +217,8 @@ func TestPausesThatAreNotPrompts(t *testing.T) {
 		want error
 	}{
 		"an unusable pause":         {pausedOn(map[string]any{"type": "nonsense"}), nil, nil},
-		"a tool approval":           {approval, nil, interact.ErrDisallowed},
+		"a tool approval":           {approval, nil, nil},
+		"an approval, allowed":      {approval, func(b *interact.Binding) { b.ToolApprovals = true }, interact.ErrDisallowed},
 		"ask-user on askUser false": {askUser("req-1"), func(b *interact.Binding) { b.AskUser = false }, nil},
 		"a task that is not paused": {a2a.Task{ID: "task-9", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil, nil},
 	} {

@@ -25,7 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// ErrDisallowed is returned for a tool approval, which is not handled yet (WP-33c2b).
+// ErrDisallowed is returned for a tool approval on a Binding that allows them, which Phase 5 renders.
 var ErrDisallowed = errors.New("interact: the Binding does not allow that kind of pause")
 
 // Binding is what the intake needs of a thread's Binding: which pauses it allows, and how long one waits.
@@ -133,7 +133,9 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 		return nil // nothing structured to answer: the thread's own replies carry on
 	}
 	switch {
-	case in.Kind == dialect.ToolApproval: // not posted even where allowed: Phase 5 renders it (WP-33c2b denies it)
+	case in.Kind == dialect.ToolApproval && !b.ToolApprovals:
+		return i.autoDeny(ctx, p, b, *in)
+	case in.Kind == dialect.ToolApproval: // allowed, but Phase 5 renders it
 		return ErrDisallowed
 	case !b.AskUser:
 		return i.refuseAskUser(ctx, p, b, *in)
@@ -177,8 +179,11 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 		at = *ts
 	}
 	kind := store.InteractionAskUser
-	if in.Nested != nil {
+	switch {
+	case in.Nested != nil:
 		kind = store.InteractionNested
+	case in.Kind == dialect.ToolApproval:
+		kind = store.InteractionToolApproval
 	}
 	id := InteractionID(in)
 	row := store.Interaction{ID: id, Key: p.Key, TaskID: string(in.TaskID), Kind: kind, Request: request, CreatedAt: at, Deadline: at.Add(b.Timeout)}

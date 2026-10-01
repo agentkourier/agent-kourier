@@ -19,10 +19,14 @@ type sess struct {
 	answers              []*a2a.Message
 	cancels              []a2a.TaskID
 	answerErr, cancelErr error
+	onAnswer             func() // runs as an answer arrives
 }
 
 func (s *sess) Answer(_ context.Context, _ store.ConversationKey, m *a2a.Message) error {
 	s.answers = append(s.answers, m)
+	if s.onAnswer != nil {
+		s.onAnswer()
+	}
 	return s.answerErr
 }
 

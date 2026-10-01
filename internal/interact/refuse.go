@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -25,6 +26,8 @@ type Outcome string
 const (
 	// OutcomeAskUserCancelled: the agent asked a question on a Binding with askUser false.
 	OutcomeAskUserCancelled Outcome = "ask_user_cancelled"
+	// OutcomeAutoDenied: the agent asked to approve tool calls on a Binding with toolApprovals false.
+	OutcomeAutoDenied Outcome = "auto_denied"
 )
 
 // The notices are fixed text: nothing the agent wrote reaches the thread through them (spec 8.4, R2).
@@ -32,6 +35,9 @@ const (
 const (
 	noticeUnusable = "The agent paused for input in a way courier cannot use, so courier is cancelling the task."
 	noticeAskUser  = "The agent asked a question, but this Binding does not allow questions, so courier is cancelling the task."
+	noticeDenied   = "The agent asked to run a tool that needs approval, but this Binding does not allow approvals, so courier is denying the request."
+	denyReason     = "denied by courier: this Binding does not allow tool approvals"
+	autoDecider    = "courier" // who the interaction records as having decided
 )
 
 // Auditor is what the refusals record through: *audit.Writer.
@@ -99,4 +105,56 @@ func short(fields ...string) string {
 		h.Write([]byte(f + "\x00"))
 	}
 	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// autoDeny turns away a tool approval on a Binding that does not allow them: every tool call is denied
+// through the dialect, the thread is told, and the denial is audited and counted.
+//
+// The decision record authorizes the denial, so it is written first and a failed write stops everything
+// (spec 8.6 step 7). Then the interaction's first answer is recorded (SubmitInteraction, which only one
+// call wins), and that call counts it. The notice is enqueued, and the stored answer sent, in every call
+// that finds the interaction answered, because each is idempotent (a fixed outbox ID, and an answer
+// with a fixed message ID that is dropped once the task is no longer paused). So a pause that comes
+// again after a failed or interrupted send finishes the send and does not audit or count it again; the
+// one window is a crash between the audit write and the answer's record, which audits twice rather
+// than risk a denial that is not on record.
+func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.Interaction) error {
+	row, err := i.record(ctx, p, b, in)
+	if err != nil {
+		return err
+	}
+	if row.State == store.InteractionPending {
+		answer := dialect.Answer{RequestID: in.RequestID}
+		for _, t := range in.Tools {
+			answer.Decisions = append(answer.Decisions, dialect.Decision{ToolID: t.ID, Approved: false, Reason: denyReason})
+		}
+		a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
+		if err := i.cfg.Audit.Decision(ctx, a, audit.Decision{InteractionID: row.ID, TaskID: in.TaskID, Result: audit.DecisionAutoDenied, Answer: &answer}); err != nil {
+			return fmt.Errorf("interact: audit the denial of %s, which was not sent: %w", row.ID, err)
+		}
+		raw, err := json.Marshal(answer)
+		if err != nil {
+			return fmt.Errorf("interact: encode the denial of %s: %w", row.ID, err)
+		}
+		// The denial is decided by policy when the pause arrives, so it is dated then.
+		switch err := i.cfg.Store.SubmitInteraction(ctx, row.ID, raw, autoDecider, row.CreatedAt); {
+		case err == nil:
+			if i.cfg.OnApprovalOutcome != nil {
+				i.cfg.OnApprovalOutcome(p.Binding, OutcomeAutoDenied)
+			}
+		case !errors.Is(err, store.ErrConflict): // a conflict is another call's win, which this one finishes
+			return fmt.Errorf("interact: record the denial of %s: %w", row.ID, err)
+		}
+		if row, err = i.cfg.Store.GetInteraction(ctx, row.ID); err != nil {
+			return fmt.Errorf("interact: read %s: %w", row.ID, err)
+		}
+	}
+	if row.State != store.InteractionAnswered {
+		return nil
+	}
+	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Content: slack.Content{Text: noticeDenied}}
+	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
+		return fmt.Errorf("interact: enqueue the notice of %s: %w", row.ID, err)
+	}
+	return i.resend(ctx, p, b, row, in)
 }
