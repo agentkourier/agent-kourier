@@ -34,7 +34,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	log := cfg.logger()
 	defer func() { // a signal during startup makes some step fail with the context's error: a clean stop
-		if err != nil && ctx.Err() != nil {
+		// A rejected token that was reported first stays a failure whatever signal follows it.
+		if err != nil && ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) {
 			err = nil
 		}
 	}()

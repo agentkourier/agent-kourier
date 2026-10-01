@@ -89,8 +89,8 @@ func TestRunCountsAFailedConfigReload(t *testing.T) {
 // The hooks that the interactions (WP-33) call exist on Metrics with the signatures of the fields they
 // fill, and each moves its counter. 35h connects them when the interactions are built.
 var (
-	_ func(string, interact.Outcome) = (*Metrics)(nil).ApprovalOutcome
-	_ func(string)                   = (*Metrics)(nil).InteractionTimeout
+	_ = interact.Config{OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
+	_ = interact.SweepConfig{OnTimeout: (*Metrics)(nil).InteractionTimeout}
 )
 
 func TestApprovalOutcomeAndTimeoutHooksMoveTheirCounters(t *testing.T) {
