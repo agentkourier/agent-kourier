@@ -3,6 +3,7 @@ package interact
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -107,6 +108,26 @@ func (w *Worker) Submit(p store.Press) {
 	w.lanes[l.id] = l
 	w.ready = append(w.ready, l)
 	w.signal()
+}
+
+// PressSource lists the presses that are recorded and not finished, oldest first: store.Presses.
+type PressSource interface {
+	ListPresses(ctx context.Context) ([]store.Press, error)
+}
+
+// Recover hands the Worker every press the store still holds, oldest first, which is how a press recorded
+// before a crash, or one the Worker did not finish, is found again (spec 8.4 step 3). A press the Worker
+// already holds is ignored, so Recover may run before or after Run starts. It should run before the
+// intake is open: a press listed just before it is finished, and announced after, would be processed again.
+func (w *Worker) Recover(ctx context.Context, src PressSource) error {
+	presses, err := src.ListPresses(ctx)
+	if err != nil {
+		return fmt.Errorf("interact: list the presses waiting: %w", err)
+	}
+	for _, p := range presses {
+		w.Submit(p)
+	}
+	return nil
 }
 
 // Run processes presses until ctx ends, then returns its error once every worker has stopped. It is for one

@@ -2,6 +2,7 @@ package interact_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -413,5 +415,125 @@ func TestRecordingAPressNeverWaitsForTheWorker(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Press did not return while the only worker was busy")
+	}
+}
+
+// fakeSource lists the presses it is given, or the error it is given.
+type fakeSource struct {
+	presses []store.Press
+	err     error
+}
+
+func (f fakeSource) ListPresses(context.Context) ([]store.Press, error) { return f.presses, f.err }
+
+func TestRecoverSubmitsEveryRecordedPressOnceAndInOrder(t *testing.T) {
+	var mu sync.Mutex
+	var order []int64
+	gate := make(chan struct{}) // holds press 2 in flight while it is listed
+	f := &fakeProc{handle: func(_ context.Context, p store.Press) (interact.Result, error) {
+		<-gate
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, p.Seq)
+		return interact.Done, nil
+	}}
+	w, _, _ := startWorker(t, f, nil)
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)      // before the worker is stopped
+	w.Submit(pr(2, "ix-1")) // announced by the sink as well as listed: it still runs once
+	waitFor(t, "press 2 to be in flight", func() bool { return f.processed()[2] == 1 })
+	src := fakeSource{presses: []store.Press{pr(1, "ix-1"), pr(2, "ix-1"), pr(3, "ix-1")}}
+	if err := w.Recover(t.Context(), src); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	waitFor(t, "three presses", func() bool { mu.Lock(); defer mu.Unlock(); return len(order) == 3 })
+	if got := f.processed(); got[1] != 1 || got[2] != 1 || got[3] != 1 || !slices.Equal(order[1:], []int64{1, 3}) {
+		t.Errorf("processed %v, in order %v; want each press once, the listed ones oldest first", got, order)
+	}
+	if err := w.Recover(t.Context(), fakeSource{err: errBoom}); !errors.Is(err, errBoom) {
+		t.Errorf("Recover with a store that fails = %v; want its error", err)
+	}
+}
+
+// crashRig is a press rig whose worker can be killed and started again over the same store, as a restart is.
+type crashRig struct {
+	*pressRig
+}
+
+// restart starts a worker over the store, recovers its presses and returns the stop that ends it.
+func (c crashRig) restart(t *testing.T, mod func(*interact.WorkerConfig)) (stop func() error) {
+	t.Helper()
+	w, _, stop := startWorker(t, c.pl, func(cfg *interact.WorkerConfig) {
+		cfg.Now = func() time.Time { return c.now }
+		if mod != nil {
+			mod(cfg)
+		}
+	})
+	if err := w.Recover(t.Context(), c.st); err != nil {
+		t.Fatal(err)
+	}
+	return stop
+}
+
+// TestAPressRecordedBeforeACrashIsDecidedAfterIt: the crash is after the record and before any work.
+func TestAPressRecordedBeforeACrashIsDecidedAfterIt(t *testing.T) {
+	c := crashRig{newPressRig(t)}
+	c.open(t)
+	if err := c.pl.Press(t.Context(), c.submit(t, "UALICE1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if c.waiting(t) != 1 || c.row(t).State != store.InteractionPending {
+		t.Fatalf("%d presses waiting, state %s; want the press recorded and nothing decided", c.waiting(t), c.row(t).State)
+	}
+	c.restart(t, nil)
+	waitFor(t, "the press to be decided", func() bool { return c.waiting(t) == 0 })
+	if row := c.row(t); row.State != store.InteractionAnswered || row.Decider != "UALICE1" || len(c.sess.answers()) != 1 || len(c.eph.list()) != 0 {
+		t.Errorf("state %s by %q, %d sends, told %q; want answered by the presser, sent once, no one told", row.State, row.Decider, len(c.sess.answers()), c.eph.list())
+	}
+}
+
+// TestACrashAfterTheDecisionIsRecordedSendsTheAnswerAgain: the press found its answer recorded by the same
+// person, and the decider sends it again, as the same message, without a second decision.
+func TestACrashAfterTheDecisionIsRecordedSendsTheAnswerAgain(t *testing.T) {
+	c := crashRig{newPressRig(t)} // its store keeps goroutines of its own until the test ends
+	before := goleak.IgnoreCurrent()
+	c.open(t)
+	c.sess.errs = []error{errBoom} // the send fails, as a crash right after the decision would leave it
+	if err := c.pl.Press(t.Context(), c.submit(t, "UALICE1", 0)); err != nil {
+		t.Fatal(err)
+	}
+	stop := c.restart(t, func(cfg *interact.WorkerConfig) { cfg.Backoff, cfg.MaxBackoff = time.Hour, time.Hour })
+	waitFor(t, "the decision and its failed send", func() bool { return len(c.sess.answers()) == 1 })
+	_ = stop() // the crash
+	if c.row(t).State != store.InteractionAnswered || c.waiting(t) != 1 {
+		t.Fatalf("state %s, %d presses waiting; want the answer recorded and the press kept", c.row(t).State, c.waiting(t))
+	}
+	stop = c.restart(t, nil)
+	waitFor(t, "the press to be decided again", func() bool { return c.waiting(t) == 0 })
+	sent := c.sess.answers()
+	if len(sent) != 2 || sent[0].ID != sent[1].ID || len(c.aud.got) != 1 || len(c.eph.list()) != 0 || c.row(t).Decider != "UALICE1" {
+		t.Errorf("%d sends, %d audit rows, told %q; want the same message sent twice, one decision, and no one told they lost", len(sent), len(c.aud.got), c.eph.list())
+	}
+	_ = stop()
+	goleak.VerifyNone(t, before)
+}
+
+// TestPressesRecordedTwiceAreDecidedOnceInOrder: a person pressing twice, then another: one decision, the
+// same answer sent for the repeat, and the other told who was first, which is no decision to audit.
+func TestPressesRecordedTwiceAreDecidedOnceInOrder(t *testing.T) {
+	c := crashRig{newPressRig(t)}
+	c.open(t)
+	for _, user := range []string{"UALICE1", "UALICE1", "UBOB22"} {
+		if err := c.pl.Press(t.Context(), c.submit(t, user, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.restart(t, nil)
+	waitFor(t, "all three presses", func() bool { return c.waiting(t) == 0 })
+	want := []string{"UBOB22: <@UALICE1> answered this question first."}
+	if got := c.eph.list(); !slices.Equal(got, want) || len(c.sess.answers()) != 2 || len(c.aud.got) != 1 || c.aud.got[0].Result != audit.DecisionAnswered {
+		t.Errorf("told %q, %d sends, audit %+v; want the repeat sent again, the other told, and the one decision audited", got, len(c.sess.answers()), c.aud.got)
 	}
 }
