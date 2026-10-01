@@ -269,9 +269,12 @@ func (o *Outbox) find(ctx context.Context, row store.OutboxEntry) (string, bool,
 	return o.cfg.Poster.Find(ctx, row.Channel, row.ThreadTS, row.ID, row.CreatedAt)
 }
 
-// record stores the message's ts on the row and returns it. The message is already in Slack, so a
+// record stores the message's ts on the row and returns it. The message is already in Slack, so it
+// is recorded even if ctx has ended (a shutdown right after the post), within the call timeout; a
 // failure here leaves it for the next lookup to adopt.
 func (o *Outbox) record(ctx context.Context, id, ts string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.cfg.CallTimeout)
+	defer cancel()
 	if err := o.cfg.Store.RecordMessageRef(ctx, id, ts); err != nil {
 		return "", fmt.Errorf("deliver %s: record the message ref: %w", id, err)
 	}

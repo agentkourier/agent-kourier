@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ type poster struct {
 	mu             sync.Mutex
 	posts, finds   int
 	found          map[string]string // ts of a message already in Slack, by outbox ID
+	lastSince      time.Time         // the since of the last Find
 	onPost, onFind func(ctx context.Context) error
 }
 
@@ -53,9 +55,10 @@ func (p *poster) Post(ctx context.Context, _, _ string, _ slack.Content, _ strin
 	return fmt.Sprintf("100.%03d", n), nil
 }
 
-func (p *poster) Find(ctx context.Context, _, _, id string, _ time.Time) (string, bool, error) {
+func (p *poster) Find(ctx context.Context, _, _, id string, since time.Time) (string, bool, error) {
 	p.mu.Lock()
 	p.finds++
+	p.lastSince = since
 	fn, ts := p.onFind, p.found[id]
 	p.mu.Unlock()
 	if fn != nil {
@@ -192,16 +195,16 @@ func TestReconcile(t *testing.T) {
 		}
 	}
 	row("adopted", `{"text":"a"}`, 0)
-	row("absent", `{"text":"b"}`, time.Second)
+	row("broken", `{"text":"c"}`, time.Second)
 	row("stream", "", 2*time.Second) // no payload: a stream, which the renderer records itself
-	row("broken", `{"text":"c"}`, 3*time.Second)
+	row("absent", `{"text":"b"}`, 3*time.Second)
 	boom := errors.New("history unavailable")
 	p := &poster{found: map[string]string{"adopted/reply": "55.5"}}
 	ob := newOutbox(t, st, p)
-	// The lookup of "broken" fails; the rows around it are still reconciled.
+	// The lookup of "broken", between two rows that are reconciled, fails: the rows after it still are.
 	lookups := 0
 	p.onFind = func(context.Context) error {
-		if lookups++; lookups == 3 {
+		if lookups++; lookups == 2 {
 			return boom
 		}
 		return nil
@@ -328,5 +331,34 @@ func TestCrashAfterPost(t *testing.T) {
 		if len(msgs) != before+1 || err != nil || row.MessageRef != msgs[len(msgs)-1].TS || row.Payload != "" {
 			t.Fatalf("thread %q after restart: %d messages (want %d), row %+v, %v; want one message adopted by the row", thread, len(msgs), before+1, row, err)
 		}
+	}
+}
+
+// TestShutdownAfterAPostStillRecords ends the context while the post is in flight: the message is
+// in Slack, so its ref is recorded all the same.
+func TestShutdownAfterAPostStillRecords(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	ctx, cancel := context.WithCancel(t.Context())
+	ob := newOutbox(t, st, &poster{onPost: func(context.Context) error { cancel(); return nil }})
+	ts, err := ob.Send(ctx, reply("ev1"))
+	if row, _ := st.GetOutbox(t.Context(), "ev1/reply"); err != nil || row.MessageRef != ts || ts == "" {
+		t.Fatalf("Send = %q, %v; row %+v; want the ref recorded", ts, err, row)
+	}
+}
+
+// TestLookupStartsWhereTheRowWasMade: a retry long after the row was written looks from its
+// creation, not from now, or it would miss the message it is looking for.
+func TestLookupStartsWhereTheRowWasMade(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	var clock atomic.Int64
+	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
+	ob := outbox.New(outbox.Config{Store: st, Poster: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
+	if _, err := ob.Send(t.Context(), reply("ev1")); err == nil {
+		t.Fatal("Send with a failing post succeeded")
+	}
+	clock.Store(int64(10 * time.Minute)) // past the lookup's five minutes of skew
+	_, _ = ob.Send(t.Context(), reply("ev1"))
+	if !p.lastSince.Equal(t0) {
+		t.Fatalf("the lookup started at %v; want the row's creation, %v", p.lastSince, t0)
 	}
 }
