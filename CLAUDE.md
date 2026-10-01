@@ -25,6 +25,7 @@ internal/store          SQLite (later Postgres) persistence
 internal/outbox         durable outbound posting
 internal/render         agent output to Slack messages
 internal/audit          audit log
+internal/broker         composition: Bindings, lifecycle, health, shutdown order
 test/{fakeslack,stubagent,e2e,fixtures}
 hack/kind/              kind cluster scripts
 spike/                  throwaway A2A and Slack experiments
