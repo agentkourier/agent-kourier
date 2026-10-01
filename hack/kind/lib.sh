@@ -128,3 +128,45 @@ apply_doubles() {
   "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/courier --timeout=180s
 }
+
+# Host-side assertions, for the verify scripts: "ok: ..." or "FAIL: ..." and exit 1. (The probe pods
+# have their own, in the scripts they run.)
+assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; exit 1; fi; } # DESCRIPTION COMMAND...
+is_empty() { [ -z "$1" ]; }
+not_empty() { [ -n "$1" ]; }
+
+# assert_never_published: prove the test doubles' unauthenticated control surfaces, the fake Slack's
+# /_control/ and the stub agent's /_control/release/, are published nowhere (spec 12.1), in whichever
+# tier holds them. Needs K (kubectl on the tier's context, as an array), NODE (the kind node's
+# container name), jq and docker. For each of the two apps: every Service that selects its pods is
+# ClusterIP with no nodePort, external IP or load-balancer ingress, and none of its pods has a
+# hostPort or hostNetwork. Once: no Ingress sits in namespace e2e (an Ingress can only name Services
+# in its own namespace, so that is every Ingress that could reach the doubles; the full tier's
+# charts may have their own elsewhere), and the kind node publishes only the API server, on loopback.
+assert_never_published() {
+  local app pods published ingresses exposed ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
+  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication"
+  for app in fakeslack stubagent; do
+    pods=$("${K[@]}" -n e2e get pods -l "app=${app}" -o json)
+    assert "a ${app} pod exists (the checks below are not vacuous)" not_empty "$(jq -r '.items[].metadata.name' <<<"${pods}")"
+    # A Service selects the pods when every selector pair is one of a pod's labels. A Service with
+    # no selector and hand-written EndpointSlices is out of scope: nothing here makes one.
+    published=$("${K[@]}" -n e2e get services -o json | jq -r --argjson pods "$(jq '[.items[].metadata.labels]' <<<"${pods}")" '
+      .items[]
+      | (.spec.selector // {}) as $sel
+      | select(($sel | length) > 0 and any($pods[]; . as $l | all(($sel | to_entries[]); $l[.key] == .value)))
+      | select(.spec.type != "ClusterIP" or any(.spec.ports[]?; .nodePort != null)
+               or ((.spec.externalIPs // []) | length > 0) or ((.status.loadBalancer.ingress // []) | length > 0))
+      | .metadata.name')
+    assert "no Service for ${app} is NodePort, LoadBalancer or has external IPs: [${published}]" is_empty "${published}"
+    assert "${app} has a ClusterIP Service" not_empty "$("${K[@]}" -n e2e get service "${app}" -o jsonpath='{.spec.clusterIP}')"
+    exposed=$(jq -r '.items[] | select(.spec.hostNetwork == true or any(.spec.containers[].ports[]?; .hostPort != null)) | .metadata.name' <<<"${pods}")
+    assert "no ${app} pod uses hostPort or hostNetwork: [${exposed}]" is_empty "${exposed}"
+  done
+  ingresses=$("${K[@]}" -n e2e get ingress -o name)
+  assert "no Ingress in namespace e2e: [${ingresses}]" is_empty "${ingresses}"
+  ports=$(docker port "${NODE}" 2>/dev/null) || ports=
+  assert "the kind node publishes the API server, 6443/tcp on 127.0.0.1: [${ports}]" grep -q -E "${apiserver}" <<<"${ports}"
+  hostports=$(grep -v -E "${apiserver}" <<<"${ports}" || true) # grep exits 1 when nothing else is published
+  assert "the kind node publishes nothing but the API server: [${hostports}]" is_empty "${hostports}"
+}

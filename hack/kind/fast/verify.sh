@@ -3,9 +3,10 @@
 # that the unauthenticated /_control/ surfaces, the fake Slack's and the stub agent's release
 # endpoint, are published nowhere (spec 12.1).
 # Every check prints "ok: ..." or "FAIL: ..." (exit 1). Two groups:
-#  1. host side: every Service that selects the fake Slack's or the stub agent's pods is ClusterIP
-#     with no nodePort, external IP or load-balancer ingress; no Ingress exists; none of those
-#     pods has a hostPort or hostNetwork; the kind node publishes only the API server, on loopback;
+#  1. host side, lib.sh's assert_never_published (full/verify.sh runs it too): every Service that
+#     selects the fake Slack's or the stub agent's pods is ClusterIP with no nodePort, external IP
+#     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
+#     hostNetwork; the kind node publishes only the API server, on loopback;
 #  2. one probe pod in the cluster: fake Slack auth.test and /_control/connections; the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
 #     (204, with no token, as the fake Slack's); Alertmanager's API; the
@@ -27,35 +28,7 @@ for tool in kubectl docker jq; do
 done
 # Safe to run on its own: nothing below runs against any other context.
 assert_context fast
-assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; exit 1; fi; } # DESCRIPTION COMMAND...
-is_empty() { [ -z "$1" ]; }
-not_empty() { [ -n "$1" ]; }
-
-echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication"
-for app in fakeslack stubagent; do
-  pods=$("${K[@]}" -n e2e get pods -l "app=${app}" -o json)
-  assert "a ${app} pod exists (the checks below are not vacuous)" not_empty "$(jq -r '.items[].metadata.name' <<<"${pods}")"
-  # A Service selects the pods when every selector pair is one of a pod's labels. A Service with
-  # no selector and hand-written EndpointSlices is out of scope: nothing here makes one.
-  published=$("${K[@]}" -n e2e get services -o json | jq -r --argjson pods "$(jq '[.items[].metadata.labels]' <<<"${pods}")" '
-    .items[]
-    | (.spec.selector // {}) as $sel
-    | select(($sel | length) > 0 and any($pods[]; . as $l | all(($sel | to_entries[]); $l[.key] == .value)))
-    | select(.spec.type != "ClusterIP" or any(.spec.ports[]?; .nodePort != null)
-             or ((.spec.externalIPs // []) | length > 0) or ((.status.loadBalancer.ingress // []) | length > 0))
-    | .metadata.name')
-  assert "no Service for ${app} is NodePort, LoadBalancer or has external IPs: [${published}]" is_empty "${published}"
-  assert "${app} has a ClusterIP Service" not_empty "$("${K[@]}" -n e2e get service "${app}" -o jsonpath='{.spec.clusterIP}')"
-  exposed=$(jq -r '.items[] | select(.spec.hostNetwork == true or any(.spec.containers[].ports[]?; .hostPort != null)) | .metadata.name' <<<"${pods}")
-  assert "no ${app} pod uses hostPort or hostNetwork: [${exposed}]" is_empty "${exposed}"
-done
-ingresses=$("${K[@]}" get ingress -A -o name)
-assert "no Ingress in the cluster: [${ingresses}]" is_empty "${ingresses}"
-apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
-ports=$(docker port "${NODE}" 2>/dev/null) || ports=
-assert "the kind node publishes the API server, 6443/tcp on 127.0.0.1: [${ports}]" grep -q -E "${apiserver}" <<<"${ports}"
-hostports=$(grep -v -E "${apiserver}" <<<"${ports}" || true) # grep exits 1 when nothing else is published
-assert "the kind node publishes nothing but the API server: [${hostports}]" is_empty "${hostports}"
+assert_never_published
 
 echo "== in the cluster: each component answers"
 # --rm removes the probe when kubectl attaches and finishes; the trap covers a kubectl that fails

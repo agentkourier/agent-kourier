@@ -80,6 +80,7 @@ if cluster_exists; then
   fi
 else
   kind create cluster --name "${CLUSTER}" --config "${FULL}/kind-config.yaml" --image "${NODE_IMAGE}"
+  assert_context full
   "${K[@]}" annotate nodes -l "${OWNER_LABEL}" "${CHECKOUT_KEY}=${ROOT}" >/dev/null
 fi
 assert_context full

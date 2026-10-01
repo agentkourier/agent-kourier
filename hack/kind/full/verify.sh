@@ -22,7 +22,11 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=../lib.sh
 . "${HERE}/../lib.sh"
 CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
-K="kubectl --context ${CTX}"
+K=(kubectl --context "${CTX}")
+NODE=courier-full-control-plane
+for tool in kubectl docker jq; do
+  command -v "${tool}" >/dev/null || die "${tool} is required"
+done
 # Safe to run on its own: nothing below runs against any other context.
 assert_context full
 
@@ -130,18 +134,20 @@ EOF
 # failed before that, or an interrupt, leaves behind.
 PROBE_NS=''
 PROBE_POD=''
-trap '[ -z "${PROBE_POD}" ] || ${K} -n "${PROBE_NS}" delete pod "${PROBE_POD}" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+trap '[ -z "${PROBE_POD}" ] || "${K[@]}" -n "${PROBE_NS}" delete pod "${PROBE_POD}" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
 trap 'exit 130' INT TERM
 
 # probe NAMESPACE LABELS: run the script on stdin in a throwaway curl pod with those labels.
 probe() {
   PROBE_NS=$1 PROBE_POD=probe-${RANDOM}
   { printf '%s\n' "${PRELUDE}"; cat; } |
-    ${K} -n "$1" run "${PROBE_POD}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" \
+    "${K[@]}" -n "$1" run "${PROBE_POD}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" \
       --labels="$2" --command -- sh -s
 }
 
-${K} get namespace courier >/dev/null 2>&1 || ${K} create namespace courier >/dev/null
+"${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null
+
+assert_never_published
 
 echo "== courier pod: A2A through the front door, nothing else reachable"
 probe courier app.kubernetes.io/name=courier <<'EOF'
@@ -255,6 +261,7 @@ EOF
 }
 fenced default app.kubernetes.io/name=courier "courier-labelled pod in another namespace"
 fenced courier app=intruder "unlabelled pod"
+fenced e2e app=e2e-runner "pod in e2e, where the test doubles and the runner run"
 # The labels the policies trust, on pods outside the namespace those policies select.
 fenced default app.kubernetes.io/component=ui,app.kubernetes.io/name=kagent-frontdoor "pod in default labelled as the UI and the front door (8083 trust)"
 fenced default app.kubernetes.io/name=oauth2-proxy "pod in default labelled as the UI's oauth2-proxy (8080 trust)"
