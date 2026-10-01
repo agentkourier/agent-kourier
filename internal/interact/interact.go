@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -149,7 +150,11 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	switch row.State {
 	case store.InteractionPending:
 		if row.MessageRef == "" {
-			return i.post(ctx, p, row, *in)
+			err := i.post(ctx, p, row, *in)
+			if errors.Is(err, render.ErrPromptTooLarge) {
+				return i.refuseTooLarge(ctx, p, b, row, err)
+			}
+			return err
 		}
 	case store.InteractionAnswered: // the pause is back, so the answer did not arrive
 		return i.resend(ctx, p, b, row)

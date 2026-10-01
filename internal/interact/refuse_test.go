@@ -2,6 +2,8 @@ package interact_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +12,9 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // auditor is the real audit writer, which can be made to fail.
@@ -137,6 +141,39 @@ func TestAuditFailureNeverBlocksTheCancel(t *testing.T) {
 	r.audit.fail = true
 	if err := r.paused(t, unusable()); err == nil || len(r.sess.cancels) != 1 {
 		t.Errorf("Paused = %v after %d cancels; want the audit error, and the cancel made", err, len(r.sess.cancels))
+	}
+}
+
+// A prompt that does not fit in one message (render.ErrPromptTooLarge, which no retry mends) is no
+// different to the thread from a pause courier cannot take: it is told, the task is cancelled, and both
+// are audited, once. The interaction is closed with the task, so that the sweep has no prompt to replace.
+func TestAPromptThatIsTooLargeIsRefusedAsUnusable(t *testing.T) {
+	r := newRig(t, nil)
+	r.promptErr = fmt.Errorf("render the prompt: %w", render.ErrPromptTooLarge)
+	task := askUser("req-1")
+
+	err := r.paused(t, task)
+
+	rows := strings.Join(r.auditRows(t), "|")
+	if err != nil || len(r.sess.cancels) != 1 || len(r.notices(t)) != 1 || strings.Count(rows, "unusable_pause: ") != 1 || strings.Count(rows, "unusable_pause_cancel: ok") != 1 {
+		t.Errorf("Paused = %v, %d cancels, %d notices, audit %q; want the task cancelled, the thread told, and the pause and its cancel audited once",
+			err, len(r.sess.cancels), len(r.notices(t)), rows)
+	}
+	if row := r.row(t, task); row.State != store.InteractionCancelled || row.MessageRef != "" {
+		t.Errorf("the interaction is %s with ref %q; want it cancelled and without a prompt", row.State, row.MessageRef)
+	}
+	if len(r.slack.posted) != 0 {
+		t.Errorf("%d posts reached Slack, want none: nothing could be posted", len(r.slack.posted))
+	}
+}
+
+// A prompt that fails for any other reason is not refused: the tap tries it again.
+func TestAPromptThatFailsForAnotherReasonIsReturnedForARetry(t *testing.T) {
+	r := newRig(t, nil)
+	r.promptErr = errBoom
+
+	if err := r.paused(t, askUser("req-1")); !errors.Is(err, errBoom) || len(r.sess.cancels) != 0 {
+		t.Errorf("Paused = %v with %d cancels; want the error, and the task left paused", err, len(r.sess.cancels))
 	}
 }
 

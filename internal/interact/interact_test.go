@@ -104,6 +104,8 @@ type rig struct {
 	audit  *auditor
 	outbox *outbox.Outbox
 	hook   []interact.Outcome // what OnApprovalOutcome was told
+	// promptErr, if set, is what the renderer returns instead of a prompt.
+	promptErr error
 }
 
 func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
@@ -124,6 +126,9 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	}
 	prompts := promptFn(func(p interact.Prompt) (slack.Content, error) {
 		r.asked = append(r.asked, p)
+		if r.promptErr != nil {
+			return slack.Content{}, r.promptErr
+		}
 		return slack.Content{Text: "prompt " + p.ID}, nil
 	})
 	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Prompts: prompts, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {

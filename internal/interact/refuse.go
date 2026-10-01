@@ -70,6 +70,20 @@ func (i *Intake) refuseUnusable(ctx context.Context, p Pause, b Binding, cause e
 		i.cfg.Audit.UnusablePauseCancel(ctx, a, p.Task.ID, p.Task.ContextID, nil))
 }
 
+// refuseTooLarge turns away a pause whose prompt does not fit in one message, which no retry mends: it
+// is refused as unusable, and the interaction, which has no prompt and never will, is closed with the
+// task, so that the sweep has no prompt to replace. cause wraps render.ErrPromptTooLarge.
+func (i *Intake) refuseTooLarge(ctx context.Context, p Pause, b Binding, row store.Interaction, cause error) error {
+	if err := i.refuseUnusable(ctx, p, b, fmt.Errorf("%w: %w", dialect.ErrUnusablePause, cause)); err != nil {
+		return err
+	}
+	err := i.cfg.Store.ResolveInteraction(ctx, row.ID, store.InteractionCancelled, i.cfg.Now())
+	if err != nil && !errors.Is(err, store.ErrConflict) { // a conflict is a close that was made before
+		return fmt.Errorf("interact: close %s, which has no prompt: %w", row.ID, err)
+	}
+	return nil
+}
+
 // refuseAskUser turns away a question on a Binding that does not allow them: the thread is told, the
 // task is cancelled, and the decision is audited and counted, once, by the same rule as refuseUnusable.
 func (i *Intake) refuseAskUser(ctx context.Context, p Pause, b Binding, in dialect.Interaction) error {
