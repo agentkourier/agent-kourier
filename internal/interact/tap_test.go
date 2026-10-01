@@ -94,10 +94,15 @@ func newTap(t *testing.T, mod func(*interact.TapConfig)) *tapRig {
 	if r.tap, err = interact.NewTap(cfg); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { // bounded: a Close that waits for ever would hold the whole run to go test's timeout
+	t.Cleanup(func() { // bounded: a Close that waits for ever, even one stuck on the tap's lock, must not hold the run
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
-		_ = r.tap.Close(ctx)
+		done := make(chan struct{})
+		go func() { _ = r.tap.Close(ctx); close(done) }()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
 	})
 	return r
 }
