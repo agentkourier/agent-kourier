@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // runner is a SlackRunner that plays one scripted step for each Run.
@@ -162,7 +163,7 @@ func slackConnections(t *testing.T, names ...string) *config.Snapshot {
 		ns, name, _ := strings.Cut(n, "/")
 		set.ChatConnections = append(set.ChatConnections, v1alpha1.ChatConnection{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       v1alpha1.ChatConnectionSpec{Platform: "slack", CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-" + name}},
+			Spec:       v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-" + name}},
 		})
 	}
 	snap, err := config.Resolve(t.Context(), set, keys{})
@@ -222,9 +223,71 @@ func TestChooseConnectionRefusesWhatV1CannotRun(t *testing.T) {
 }
 
 func TestChooseConnectionNamesAMissingKeyNotItsValue(t *testing.T) {
-	r := &reader{vals: map[string]string{"platform/creds-slack/botToken": "xoxb-fake-bot"}} // no appToken
+	r := &reader{vals: map[string]string{"platform/creds-slack/botToken": "xoxb-fake-bot"}} // no appToken: the fake reads it as empty
 	_, err := ChooseConnection(t.Context(), slackConnections(t, "platform/slack"), r)
 	if err == nil || !strings.Contains(err.Error(), "appToken") || strings.Contains(err.Error(), "xoxb-fake-bot") {
 		t.Errorf("ChooseConnection = %v, want an error naming appToken and holding no token", err)
+	}
+	if !errors.Is(err, ErrWiring) {
+		t.Errorf("an empty token: %v, want ErrWiring, which exits 2", err)
+	}
+}
+
+// failing is a reader whose every read fails with err.
+type failing struct{ err error }
+
+func (f failing) Value(context.Context, string, string, string) (secret.Value, error) {
+	return secret.Value{}, f.err
+}
+
+// A Secret or key that is missing is the operator's wiring; a Secret that cannot be read just now is not.
+func TestChooseConnectionWiringErrorsAreOnlyTheOperators(t *testing.T) {
+	snap := slackConnections(t, "platform/slack")
+	for name, tc := range map[string]struct {
+		err    error
+		wiring bool
+	}{
+		"key missing":     {fmt.Errorf("read: %w", secret.ErrKeyNotFound), true},
+		"Secret missing":  {fmt.Errorf("read: %w", config.ErrSecretNotFound), true},
+		"value empty":     {fmt.Errorf("read: %w", secret.ErrEmptyValue), true},
+		"cache not ready": {errors.New("secret cache not synced"), false},
+	} {
+		_, err := ChooseConnection(t.Context(), snap, failing{tc.err})
+		if err == nil || errors.Is(err, ErrWiring) != tc.wiring || !errors.Is(err, tc.err) {
+			t.Errorf("%s: ChooseConnection = %v, want wiring=%t and the cause kept", name, err, tc.wiring)
+		}
+	}
+}
+
+// A connection that stayed up for exactly ResetAfter counts as healthy.
+func TestRunSlackResetsAtExactlyTheThreshold(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	c := &clock{}
+	short := fails(errors.New("reset"))
+	r := &runner{steps: []func(int) error{
+		short, short, // waits 1, 2
+		func(int) error { c.now = c.now.Add(120 * time.Second); return errors.New("reset") }, // exactly 120 s: wait 1
+		stopAfter(cancel),
+	}}
+
+	_ = RunSlack(ctx, r, nil, policy(c))
+
+	if want := secs(1, 2, 1); !slices.Equal(c.waits, want) {
+		t.Errorf("waits = %v, want %v", c.waits, want)
+	}
+}
+
+// A Base above Max still never waits longer than Max.
+func TestRunSlackFirstPauseIsCappedToo(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	c := &clock{}
+	p := policy(c)
+	p.Base, p.Max = 90*time.Second, 60*time.Second
+	r := &runner{steps: []func(int) error{fails(errors.New("reset")), stopAfter(cancel)}}
+
+	_ = RunSlack(ctx, r, nil, p)
+
+	if want := secs(60); !slices.Equal(c.waits, want) {
+		t.Errorf("waits = %v, want %v", c.waits, want)
 	}
 }

@@ -61,7 +61,7 @@ func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPol
 	if log == nil {
 		log = slog.Default()
 	}
-	pause := base
+	pause := min(base, limit)
 	for {
 		started := now()
 		err := runner.Run(ctx, sink)
@@ -72,7 +72,7 @@ func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPol
 			return fmt.Errorf("%w: %s", ErrSlackAuth, code)
 		}
 		if now().Sub(started) >= reset {
-			pause = base
+			pause = min(base, limit)
 		}
 		log.WarnContext(ctx, "slack connection ended; connecting again", "error", err, "after", pause)
 		select {
@@ -110,7 +110,7 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 	}
 	c := conns[0]
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
-	if c.Spec.Platform != "slack" || (c.Spec.Mode != "" && c.Spec.Mode != v1alpha1.ModeSocket) {
+	if c.Spec.Platform != v1alpha1.PlatformSlack || (c.Spec.Mode != "" && c.Spec.Mode != v1alpha1.ModeSocket) {
 		return SlackConnection{}, fmt.Errorf("%w: ChatConnection %s is %q in mode %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform, c.Spec.Mode)
 	}
 	read := func(key string) (secret.Value, error) {
@@ -119,7 +119,13 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 			err = secret.ErrEmptyValue
 		}
 		if err != nil {
-			return secret.Value{}, fmt.Errorf("ChatConnection %s: read %s of Secret %s: %w", name, key, v1alpha1.NamespacedName(c.Namespace, c.Spec.CredentialsSecretRef.Name), err)
+			// A Secret, key or value that is missing is the operator's to fix, so a usage error. One that
+			// cannot be read just now (a cache that has not synced) is not.
+			err = fmt.Errorf("ChatConnection %s: read %s of Secret %s: %w", name, key, v1alpha1.NamespacedName(c.Namespace, c.Spec.CredentialsSecretRef.Name), err)
+			if errors.Is(err, secret.ErrKeyNotFound) || errors.Is(err, secret.ErrEmptyValue) || errors.Is(err, config.ErrSecretNotFound) {
+				err = fmt.Errorf("%w: %w", ErrWiring, err)
+			}
+			return secret.Value{}, err
 		}
 		return v, nil
 	}
