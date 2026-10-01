@@ -100,7 +100,7 @@ func questionBlocks(i int, q dialect.Question) ([]map[string]any, Control) {
 			ask, example = "Your answer: the number or numbers, separated by commas", "For example: 2 or 1, 3"
 		}
 		input := layout(c, ask, textInput(example))
-		return append(numberedList(label, q.Choices), input...), c
+		return append(numberedList(i, q.Text, q.Choices), input...), c
 	}
 	c.Kind = ControlChoice
 	kind := "radio_buttons"
@@ -170,11 +170,12 @@ func options(choices []string) (opts []map[string]any, ok bool) {
 	return opts, true
 }
 
-// numberedList is the question, on a line of its own, and then its choices as numbered mrkdwn
+// numberedList is question i, on a line of its own, and then its choices as numbered mrkdwn
 // sections of at most 3000 characters, each choice on one line (a newline in a choice cannot start
 // an entry), cut visibly if it is long. Every choice is in it.
-func numberedList(question string, choices []string) []map[string]any {
-	sections := []map[string]any{{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": oneLine(question, maxQuestionLine)}}}
+func numberedList(i int, question string, choices []string) []map[string]any {
+	head := cmp.Or(strings.TrimSpace(oneLine(question, maxQuestionLine)), "Question "+strconv.Itoa(i+1))
+	sections := []map[string]any{{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": head}}}
 	var b strings.Builder
 	flush := func() {
 		if b.Len() > 0 {
@@ -182,8 +183,8 @@ func numberedList(question string, choices []string) []map[string]any {
 			b.Reset()
 		}
 	}
-	for i, c := range choices {
-		line := strconv.Itoa(i+1) + ". " + cmp.Or(strings.TrimSpace(oneLine(c, maxListLine)), "(blank)") + "\n"
+	for n, c := range choices {
+		line := strconv.Itoa(n+1) + ". " + cmp.Or(strings.TrimSpace(oneLine(c, maxListLine)), "(blank)") + "\n"
 		if units(b.String())+units(line) > maxSectionText {
 			flush()
 		}

@@ -357,3 +357,17 @@ func TestPromptBlocksPlainTextIsOneLine(t *testing.T) {
 		t.Errorf("an oversized ID gave %v; want its own message", err)
 	}
 }
+
+// The question above a fallback list is escaped once: what a person typed or an agent wrote as
+// "<b> & c" is shown as that, not as the entities of an escape that was escaped again.
+func TestPromptBlocksFallbackQuestionIsEscapedOnce(t *testing.T) {
+	for question, want := range map[string]string{"<b> & c": "&lt;b&gt; &amp; c", "": "Question 1", " \u200b ": "Question 1"} {
+		blocks, _, err := PromptBlocks("i", "h", []dialect.Question{{Text: question, Choices: choices(101)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, sections := numberedLines(t, blocks); sections[0] != want {
+			t.Errorf("question %q is shown as %q; want %q", question, sections[0], want)
+		}
+	}
+}
