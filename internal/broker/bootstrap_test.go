@@ -137,7 +137,15 @@ spec:
   identity: { tokenSecretRef: { name: pay-token } }
   chat: { connectionRef: { namespace: courier-system, name: slack-main }, channel: C0PAYMENTS01 }
 `
-	if err := os.WriteFile(filepath.Join(dir, "payments.yaml"), []byte(added), 0o600); err != nil {
+	// The file appears whole. A plain WriteFile truncates first, and the reloader, polling every
+	// 5 ms, can load the empty file (a good reload, which replaces the snapshot with an equal one,
+	// so "the snapshot is unchanged" would be false) or see the file change twice (two failures).
+	// A ConfigMap mount, which is how the config arrives, is replaced atomically too.
+	staging := filepath.Join(dir, ".payments.yaml.tmp") // a dot name is not a config file
+	if err := os.WriteFile(staging, []byte(added), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(staging, filepath.Join(dir, "payments.yaml")); err != nil {
 		t.Fatal(err)
 	}
 
