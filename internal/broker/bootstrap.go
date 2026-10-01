@@ -44,7 +44,10 @@ type Config struct {
 // the RBAC for it: the resolver is not rebuilt in place.
 func (c *Config) Stale() bool { return c.Reloader.Status().Stale }
 
-// Stop stops the Secret informers. The reloader stops with the context given to Bootstrap.
+// Stop stops the Secret informers. The reloader stops with the context given to Bootstrap, so
+// shut down in this order: cancel that context, wait for the reloader (Reloader.Wait), then Stop.
+// Stopped the other way round, the reloader's next check finds every Secret unreadable, fails the
+// reload and calls OnReloadError, which a metric would count as a real failure.
 func (c *Config) Stop() { c.Secrets.Stop() }
 
 // Bootstrap loads the config once to learn which namespaces hold the Secrets it refers to,

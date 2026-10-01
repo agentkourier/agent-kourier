@@ -3,10 +3,15 @@ package broker
 import (
 	"bytes"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 )
 
@@ -73,6 +78,42 @@ func TestNoSecretBodyReachesTheLogAtAnyRequestedVerbosity(t *testing.T) {
 		}
 		if got := logs.String(); strings.Contains(got, secretBody) {
 			t.Errorf("verbosity %d asked: a Secret body reached the log: %q", asked, got)
+		}
+	}
+}
+
+// client-go asks klog.FromContext(ctx).V(8).Enabled() before it logs a response body. With an slog
+// logger set, that question goes to the slog handler as level -8 and klog's -v is not consulted,
+// so the cap must also be in the handler klog is given. The handler here accepts every level.
+func TestClientGoCannotLogASecretBodyWhateverTheHandlerAllows(t *testing.T) {
+	logs := routed(t, 100)
+	klog.Background().V(7).Info("bg seven") // what is under the cap still gets through
+	klog.Background().V(8).Info("bg " + secretBody)
+	klog.FromContext(t.Context()).V(8).Info("ctx " + secretBody)
+	klog.FromContext(t.Context()).V(9).Info("ctx " + secretBody)
+	klog.Background().WithValues("k", "v").WithName("n").V(8).Info("derived " + secretBody) // a derived logger is capped too
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"SecretList","apiVersion":"v1","metadata":{},"items":[{"metadata":{"name":"s"},` +
+			`"data":{"token":"Y2FuYXJ5LXRva2Vu"},"stringData":{"x":"clientgo-` + secretBody + `"}}]}`))
+	}))
+	defer srv.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CoreV1().Secrets("ns").List(t.Context(), metav1.ListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := logs.String()
+	if !strings.Contains(got, "bg seven") {
+		t.Errorf("a level 7 message never arrived: %q", got)
+	}
+	for _, leak := range []string{secretBody, "Y2FuYXJ5LXRva2Vu"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("the log holds %q, from a verbosity 8 or 9 message or from client-go's body logging: %q", leak, got)
 		}
 	}
 }

@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -64,6 +66,26 @@ func TestBootstrapWatchesTheNamespacesTheConfigNames(t *testing.T) {
 	if _, ok := c.Reloader.Current().Binding("sre", "sre-alerts"); !ok || c.Stale() {
 		t.Errorf("after bootstrap: Binding found %t, stale %t; want the Binding and fresh", ok, c.Stale())
 	}
+}
+
+// When the Reloader cannot load the config, the resolver Bootstrap started must be stopped, or its
+// informers outlive the failed start.
+func TestBootstrapStopsTheResolverWhenTheConfigDoesNotResolve(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	client := fake.NewClientset( // the Binding's token Secret, sre/courier-sre-alerts-oidc, is missing
+		secretOf("courier-system", "slack-main", "botToken", "appToken"),
+		secretOf("sre", "courier-webhook-token", "token"),
+	)
+
+	c, err := Bootstrap(t.Context(), client, options(configDir(t)))
+
+	if err == nil || c != nil {
+		t.Fatalf("Bootstrap = %v, %v; want an error and no Config", c, err)
+	}
+	if !strings.Contains(err.Error(), "courier-sre-alerts-oidc") {
+		t.Errorf("Bootstrap = %v, want it to name the missing Secret", err)
+	}
+	goleak.VerifyNone(t, before)
 }
 
 func TestBootstrapFailsAtTheFirstDenialAndNamesIt(t *testing.T) {
