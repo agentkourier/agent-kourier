@@ -78,6 +78,8 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 		return "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one.", true
 	case session.NoticeBindingGone:
 		return "This thread's agent is no longer set up, so I can't pass your messages on.", true
+	case session.NoticeExpired:
+		return "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one.", true
 	case session.NoticeAnswerRejected:
 		return "The agent rejected that answer, so I cancelled its task. You can ask again.", true
 	case session.NoticeAnswerDropped:

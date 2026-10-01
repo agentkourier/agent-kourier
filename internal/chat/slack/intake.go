@@ -31,7 +31,13 @@ type IntakeConfig struct {
 	// Interactions takes the presses of buttons. Nil drops them, acknowledged, until the
 	// renderer that posts buttons is wired in (WP-33).
 	Interactions func(ctx context.Context, i Interaction) error
-	Logger       *slog.Logger // slog.Default() if nil
+	// Notice, if set, tells a thread that courier cannot continue it: session.NoticeExpired for a
+	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config.
+	// The notice ID is the message's ID and a suffix, so a notice for the same message is the same
+	// row for the outbox. It is session.Sink's Notice, which queues and does not call Slack. Nil only
+	// logs them.
+	Notice func(ctx context.Context, key session.Key, n session.Notice)
+	Logger *slog.Logger // slog.Default() if nil
 }
 
 // Intake is a Sink that applies spec 8.2's trigger table: it turns each message into a turn
@@ -58,8 +64,9 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //
 // It returns an error only when Submit failed in a way a retry may cure, so Run leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
-// A message is remembered once a turn is queued for it, so the second event of a mention
-// (app_mention and message) is skipped; an event that queued nothing may be tried again.
+// A message is remembered once a turn is queued for it, or a notice raised for it (see
+// IntakeConfig.Notice), so the second event of a mention (app_mention and message) is skipped; an
+// event that queued nothing may be tried again.
 func (in *Intake) Message(ctx context.Context, m Message) error {
 	seen := [2]string{m.Channel, m.TS}
 	if in.seen.has(seen) {
@@ -87,8 +94,16 @@ func (in *Intake) Message(ctx context.Context, m Message) error {
 	switch res.Disposition {
 	case session.Created, session.Accepted:
 		in.seen.add(seen)
-	case session.Expired, session.BindingGone: // WP-32 posts the notice; until then the user sees nothing
+	case session.Expired, session.BindingGone:
 		in.log.WarnContext(ctx, "slack: reply in a thread courier cannot continue", "channel", m.Channel, "thread", req.Key.ThreadTS, "disposition", res.Disposition)
+		if in.cfg.Notice != nil {
+			kind, suffix := session.NoticeExpired, "/expired"
+			if res.Disposition == session.BindingGone {
+				kind, suffix = session.NoticeBindingGone, "/binding_gone"
+			}
+			in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: kind, MessageTS: m.TS})
+			in.seen.add(seen) // the mention's other event is the same message, and the same notice
+		}
 	}
 	return nil
 }

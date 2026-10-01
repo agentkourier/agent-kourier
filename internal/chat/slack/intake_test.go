@@ -58,7 +58,10 @@ func (allKeys) Keys(context.Context, string, string) ([]string, error) {
 
 // newIntake returns an Intake for the connection, over a config that binds C1 to sre/sre-alerts
 // and the private channel G1 to payments/pay.
-func newIntake(t *testing.T) (*slack.Intake, *submitter) {
+func newIntake(t *testing.T) (*slack.Intake, *submitter) { return newIntakeNotifying(t, nil) }
+
+// newIntakeNotifying is newIntake with the func that takes a notice for a thread courier cannot continue.
+func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice)) (*slack.Intake, *submitter) {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string) v1alpha1.Binding {
@@ -78,7 +81,7 @@ func newIntake(t *testing.T) (*slack.Intake, *submitter) {
 	sub := &submitter{}
 	return slack.NewIntake(slack.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
-		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub,
+		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Notice: notice,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), sub
 }
 
@@ -239,5 +242,91 @@ func TestIntakePassesInteractionsOn(t *testing.T) {
 	// With no handler the press is dropped, and acknowledged.
 	if err := slack.NewIntake(slack.IntakeConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Interaction(t.Context(), press); err != nil {
 		t.Fatalf("Interaction with no handler = %v; want nil", err)
+	}
+}
+
+// notices records what the intake asks to tell a thread.
+type notices struct {
+	mu  sync.Mutex
+	got []session.Notice
+	key []session.Key
+}
+
+func (n *notices) take(_ context.Context, key session.Key, notice session.Notice) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.got, n.key = append(n.got, notice), append(n.key, key)
+}
+
+// A reply in a thread courier cannot continue, past its threadTTL or with its Binding gone, is
+// answered with a notice (spec 8.2). Its ID is built from the message, so the two events of a
+// mention are one notice; the thread it goes to is the one the reply is in.
+func TestAThreadCourierCannotContinueGetsOneNotice(t *testing.T) {
+	for name, tc := range map[string]struct {
+		disposition session.Disposition
+		kind        session.NoticeKind
+		suffix      string
+	}{
+		"expired":      {session.Expired, session.NoticeExpired, "/expired"},
+		"binding gone": {session.BindingGone, session.NoticeBindingGone, "/binding_gone"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got notices
+			in, sub := newIntakeNotifying(t, got.take)
+			sub.fn = func(session.Inbound) (session.Result, error) { return session.Result{Disposition: tc.disposition}, nil }
+			// The app_mention and the message event of one mention: the same message, two events.
+			m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "<!channel> <@U2> [x](https://evil.example) & \u202e", Mentioned: true}
+			withType := m
+			withType.ChannelType = "channel"
+			for _, ev := range []slack.Message{m, withType} {
+				if err := in.Message(t.Context(), ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := session.Notice{ID: session.SlackMessageID(conn, "C1", "5.5") + tc.suffix, Kind: tc.kind, MessageTS: "5.5"}
+			if len(got.got) != 1 || got.got[0] != want || got.key[0] != (session.Key{Connection: conn, Channel: "C1", ThreadTS: "4.4"}) {
+				t.Errorf("notices %+v for keys %+v; want exactly %+v in the thread of the reply, with no text of the message in it", got.got, got.key, want)
+			}
+			// Another message in the thread is its own notice.
+			other := m
+			other.TS = "6.6"
+			if err := in.Message(t.Context(), other); err != nil || len(got.got) != 2 || got.got[1].ID == want.ID {
+				t.Errorf("a second message: %v, notices %+v; want a notice of its own", err, got.got)
+			}
+		})
+	}
+}
+
+// Nothing else is noticed: a turn that was taken, a thread courier does not own, a reply that fails
+// to submit. And a thread that cannot be continued is quiet, not a crash, when no one takes notices.
+func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
+	disposition := func(d session.Disposition) func(session.Inbound) (session.Result, error) {
+		return func(session.Inbound) (session.Result, error) { return session.Result{Disposition: d}, nil }
+	}
+	for name, fn := range map[string]func(session.Inbound) (session.Result, error){
+		"created":   disposition(session.Created),
+		"accepted":  disposition(session.Accepted),
+		"not owned": disposition(session.NotOwned),
+		"invalid": func(session.Inbound) (session.Result, error) {
+			return session.Result{}, fmt.Errorf("x: %w", store.ErrInvalid)
+		},
+		"failed": func(session.Inbound) (session.Result, error) { return session.Result{}, errors.New("disk full") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got notices
+			in, sub := newIntakeNotifying(t, got.take)
+			sub.fn = fn
+			_ = in.Message(t.Context(), slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi"})
+			if len(got.got) != 0 {
+				t.Errorf("notices %+v; want none", got.got)
+			}
+		})
+	}
+	for _, d := range []session.Disposition{session.Expired, session.BindingGone} {
+		in, sub := newIntakeNotifying(t, nil)
+		sub.fn = func(session.Inbound) (session.Result, error) { return session.Result{Disposition: d}, nil }
+		if err := in.Message(t.Context(), slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi"}); err != nil {
+			t.Errorf("%s with no notice func: %v; want it quiet", d, err)
+		}
 	}
 }

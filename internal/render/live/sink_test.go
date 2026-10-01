@@ -42,7 +42,7 @@ func TestNoticeOnlyQueuesAndEscapesItsDetail(t *testing.T) {
 	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Poster: noCalls{t}}))
 	thread := thread
 	thread.ThreadTS = e.root
-	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun} {
+	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun} {
 		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, Detail: "<!channel> boom"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
@@ -183,4 +183,26 @@ func TestTurnWithoutFinalFreesItsGoroutine(t *testing.T) {
 	handle(text("a", "partial, more"))
 	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	endTurn()
+}
+
+// The wording of the two notices for a thread courier cannot continue is courier's own and fixed:
+// what the person wrote is nowhere in it.
+func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Poster: noCalls{t}}))
+	thread := thread
+	thread.ThreadTS = e.root
+	for kind, want := range map[session.NoticeKind]string{
+		session.NoticeExpired:     "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one.",
+		session.NoticeBindingGone: "This thread's agent is no longer set up, so I can't pass your messages on.",
+	} {
+		n := session.Notice{ID: "m1/" + string(kind), Kind: kind, MessageTS: "5.5"}
+		sink.Notice(t.Context(), thread, n)
+		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
+		var content slack.Content
+		_ = json.Unmarshal([]byte(row.Payload), &content)
+		if err != nil || content.Text != want {
+			t.Errorf("%s: text %q, %v; want %q", kind, content.Text, err, want)
+		}
+	}
 }

@@ -116,6 +116,9 @@ const (
 	// NoticeBindingGone says the thread's Binding is no longer configured, so its turns cannot be
 	// sent.
 	NoticeBindingGone NoticeKind = "binding_gone"
+	// NoticeExpired says the thread's session is past its threadTTL, so a reply in it cannot be
+	// continued: a new mention starts a conversation (spec 8.2).
+	NoticeExpired NoticeKind = "expired"
 	// NoticeAnswerRejected says the agent rejected an answer and its task was cancelled (R17).
 	NoticeAnswerRejected NoticeKind = "answer_rejected"
 	// NoticeAnswerDropped says an answer arrived after its task had ended, and was not sent.
