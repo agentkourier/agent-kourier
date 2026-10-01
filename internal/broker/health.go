@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -65,22 +66,38 @@ func StoreOpen(s interface {
 // endpoints can be served while the Secret caches sync, and an empty set is never ready either.
 type Readiness struct{ checks atomic.Pointer[[]Check] }
 
-// Set replaces the checks. It is safe to call while /readyz is served.
-func (r *Readiness) Set(checks ...Check) { r.checks.Store(&checks) }
+// Set replaces the checks, keeping its own copy of the slice. It is safe to call while /readyz is
+// served.
+func (r *Readiness) Set(checks ...Check) {
+	own := slices.Clone(checks)
+	r.checks.Store(&own)
+}
+
+// current returns the checks, or nil while none is set. A nil Readiness has none: it is starting.
+func (r *Readiness) current() []Check {
+	if r == nil {
+		return nil
+	}
+	if p := r.checks.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
 
 // NewHandler serves /healthz (the process is alive), /readyz (every check of r holds, else 503
-// naming those that do not; Slack is not one of them) and /metrics.
+// naming those that do not; Slack is not one of them) and /metrics. A nil r is a Readiness that is
+// still starting.
 func NewHandler(m *Metrics, r *Readiness) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, req *http.Request) {
-		checks := r.checks.Load()
-		if checks == nil || len(*checks) == 0 {
+		checks := r.current()
+		if len(checks) == 0 {
 			http.Error(w, "not ready: starting", http.StatusServiceUnavailable)
 			return
 		}
 		var failing []string
-		for _, c := range *checks {
+		for _, c := range checks {
 			if err := c.Fn(req.Context()); err != nil {
 				failing = append(failing, c.Name+": "+err.Error())
 			}

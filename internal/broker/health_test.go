@@ -212,6 +212,7 @@ func TestServeCutsARequestThatOutlastsTheShutdownWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	inFlight, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(release) }) // so a server that never cuts the request cannot hang the test
 	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(inFlight); <-release })
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -230,8 +231,32 @@ func TestServeCutsARequestThatOutlastsTheShutdownWait(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("serve = %v; want the shutdown's deadline", err)
 	}
-	if err := <-got; err == nil {
-		t.Error("the request in flight completed; want its connection cut")
+	select {
+	case err := <-got:
+		if err == nil {
+			t.Error("the request in flight completed; want its connection cut")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request in flight was not cut")
 	}
-	close(release)
+}
+
+// Set keeps its own copy of the checks, so a caller that reuses its slice cannot change what /readyz runs.
+func TestReadinessSetKeepsItsOwnCopy(t *testing.T) {
+	var r Readiness
+	checks := []Check{{Name: "a", Fn: func(context.Context) error { return nil }}}
+	r.Set(checks...)
+	checks[0].Fn = func(context.Context) error { return errors.New("changed after Set") }
+
+	if code, body := get(t, NewHandler(mustMetrics(t, nil), &r), "/readyz"); code != http.StatusOK {
+		t.Errorf("/readyz = %d %q; the check Set was given must be the one that runs", code, body)
+	}
+}
+
+// A handler built with no Readiness is starting, not a panic and not ready.
+func TestNilReadinessIsStarting(t *testing.T) {
+	code, body := get(t, NewHandler(mustMetrics(t, nil), nil), "/readyz")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "starting") {
+		t.Errorf("/readyz with no Readiness = %d %q, want 503 starting", code, body)
+	}
 }
