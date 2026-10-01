@@ -96,7 +96,7 @@ func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
 		bots := BotMessages(th)
 		return len(bots) == 2 && finished(bots[0]) && strings.Contains(bots[0].Text, "Released.") && strings.Contains(bots[1].Text, "Holding on gate "+second)
 	})
-	if bots := BotMessages(th); !strings.Contains(bots[0].Text, "Holding on gate "+first) || bots[1].TS <= r.TS {
+	if bots := BotMessages(th); !strings.Contains(bots[0].Text, "Holding on gate "+first) || CompareTS(bots[1].TS, r.TS) <= 0 {
 		t.Errorf("replies %q and %q; want the first task's text, then the second's, which began after the reply it answers (%s)", bots[0].Text, bots[1].Text, r.TS)
 	}
 	if err := s.stub.Release(s.ctx, second); err != nil {

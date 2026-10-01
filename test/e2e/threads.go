@@ -1,9 +1,12 @@
 package e2e
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	chatslack "github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -71,19 +74,81 @@ func OutboxID(m fakeslack.MessageView) string {
 	return id
 }
 
-// ChoicesState is the state of a checkboxes element with the options valued so selected, for
-// Slack.Submit. A prompt's options are valued by the index of the choice.
-func ChoicesState(values ...string) map[string]any {
+// AnswerState is the state of an input element of the type typ holding values, for Slack.Submit: the types a
+// prompt's questions are rendered as. The options of a choice are valued by the index of the choice. It refuses
+// a type it does not know, and a count of values the type cannot take.
+func AnswerState(typ string, values ...string) (map[string]any, error) {
 	options := make([]map[string]string, len(values))
 	for i, v := range values {
 		options[i] = map[string]string{"value": v}
 	}
-	return map[string]any{"type": "checkboxes", "selected_options": options}
+	switch typ {
+	case "checkboxes", "multi_static_select":
+		return map[string]any{"type": typ, "selected_options": options}, nil
+	case "radio_buttons", "static_select":
+		if len(values) != 1 {
+			return nil, fmt.Errorf("e2e: a %s takes one value, not %d", typ, len(values))
+		}
+		return map[string]any{"type": typ, "selected_option": options[0]}, nil
+	case "plain_text_input":
+		if len(values) != 1 {
+			return nil, fmt.Errorf("e2e: a %s takes one value, not %d", typ, len(values))
+		}
+		return map[string]any{"type": typ, "value": values[0]}, nil
+	}
+	return nil, fmt.Errorf("e2e: no answer state for an element of type %q", typ)
 }
 
-// TextState is the state of a plain-text input holding text, for Slack.Submit.
-func TextState(text string) map[string]any {
-	return map[string]any{"type": "plain_text_input", "value": text}
+// ElementType is the type of the element with the action_id in blocks, as a prompt rendered it, or "" if
+// there is none. A scenario answers with the type the prompt has, and does not assume it.
+func ElementType(blocks json.RawMessage, actionID string) string {
+	var v any
+	if json.Unmarshal(blocks, &v) != nil {
+		return ""
+	}
+	var found string
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			if t["action_id"] == actionID {
+				found, _ = t["type"].(string)
+			}
+			for _, x := range t {
+				walk(x)
+			}
+		case []any:
+			for _, x := range t {
+				walk(x)
+			}
+		}
+	}
+	walk(v)
+	return found
+}
+
+// CompareTS orders two Slack message ts values, which are seconds and microseconds: as numbers, not as
+// strings, in which "9.000001" is after "10.000000". It returns -1, 0 or 1. A value that is not a ts is
+// compared as a string.
+func CompareTS(a, b string) int {
+	sa, ma, oka := splitTS(a)
+	sb, mb, okb := splitTS(b)
+	if !oka || !okb {
+		return strings.Compare(a, b)
+	}
+	if c := cmp.Compare(sa, sb); c != 0 {
+		return c
+	}
+	return cmp.Compare(ma, mb)
+}
+
+// splitTS is the seconds and the microseconds of a ts.
+func splitTS(ts string) (sec, micro int64, ok bool) {
+	whole, frac, _ := strings.Cut(ts, ".")
+	frac = (frac + "000000")[:6]
+	sec, err1 := strconv.ParseInt(whole, 10, 64)
+	micro, err2 := strconv.ParseInt(frac, 10, 64)
+	return sec, micro, err1 == nil && err2 == nil
 }
 
 // Consistently checks cond now and then every pollInterval for d, and fails the first time it is false or

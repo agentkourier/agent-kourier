@@ -48,6 +48,15 @@ func TestS3_AnAskUserPromptTakesACompleteAnswerAndRefusesAnIncompleteOne(t *test
 	m := s.mention(ChannelS3, user, "two questions "+s.stub.Gate("S3"))
 	th := s.thread(ChannelS3, m.TS, "the prompt", func(th []fakeslack.MessageView) bool { _, ok := promptOf(th); return ok })
 	prompt, _ := promptOf(th)
+	// The answers are in the types the prompt's elements have, which the prompt says.
+	choices, err := AnswerState(ElementType(prompt.Blocks, "a0"), "0", "1") // both choices of the multiple-choice question
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := AnswerState(ElementType(prompt.Blocks, "a1"), "blue")
+	if err != nil {
+		t.Fatal(err)
+	}
 	press := func(values fakeslack.StateValues) {
 		t.Helper()
 		id, err := s.slack.Submit(s.ctx, user, prompt.TS, submitAction, values)
@@ -60,8 +69,8 @@ func TestS3_AnAskUserPromptTakesACompleteAnswerAndRefusesAnIncompleteOne(t *test
 	}
 
 	// Incomplete: question 1 is answered, question 2 is not.
-	press(fakeslack.StateValues{"q0": {"a0": ChoicesState("0", "1")}})
-	err := Wait(s.ctx, stepTimeout, "the incomplete answer to be refused by an ephemeral", func(ctx context.Context) (bool, error) {
+	press(fakeslack.StateValues{"q0": {"a0": choices}})
+	err = Wait(s.ctx, stepTimeout, "the incomplete answer to be refused by an ephemeral", func(ctx context.Context) (bool, error) {
 		es, err := s.slack.Ephemerals(ctx, ChannelS3)
 		for _, e := range es {
 			if e.Recipient == user && e.ThreadTS == m.TS && strings.Contains(e.Text, "answer question 2") {
@@ -94,7 +103,7 @@ func TestS3_AnAskUserPromptTakesACompleteAnswerAndRefusesAnIncompleteOne(t *test
 	}
 
 	// Complete.
-	press(fakeslack.StateValues{"q0": {"a0": ChoicesState("0", "1")}, "q1": {"a1": TextState("blue")}})
+	press(fakeslack.StateValues{"q0": {"a0": choices}, "q1": {"a1": text}})
 	th = s.thread(ChannelS3, m.TS, "the prompt to be replaced and the agent to go on", func(th []fakeslack.MessageView) bool {
 		var replaced, continued bool
 		for _, b := range BotMessages(th) {

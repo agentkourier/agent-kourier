@@ -68,10 +68,59 @@ func TestOutboxIDReadsTheMetadataTag(t *testing.T) {
 }
 
 func TestAnswerStatesAreWhatTheFakeTakes(t *testing.T) {
-	got, _ := json.Marshal(fakeslack.StateValues{"q0": {"a0": ChoicesState("0", "1")}, "q1": {"a1": TextState("blue")}})
-	want := `{"q0":{"a0":{"selected_options":[{"value":"0"},{"value":"1"}],"type":"checkboxes"}},"q1":{"a1":{"type":"plain_text_input","value":"blue"}}}`
-	if string(got) != want {
-		t.Errorf("states = %s; want %s", got, want)
+	for _, tc := range []struct {
+		typ    string
+		values []string
+		want   string
+	}{
+		{"checkboxes", []string{"0", "1"}, `{"selected_options":[{"value":"0"},{"value":"1"}],"type":"checkboxes"}`},
+		{"multi_static_select", []string{"2"}, `{"selected_options":[{"value":"2"}],"type":"multi_static_select"}`},
+		{"radio_buttons", []string{"1"}, `{"selected_option":{"value":"1"},"type":"radio_buttons"}`},
+		{"static_select", []string{"0"}, `{"selected_option":{"value":"0"},"type":"static_select"}`},
+		{"plain_text_input", []string{"blue"}, `{"type":"plain_text_input","value":"blue"}`},
+	} {
+		got, err := AnswerState(tc.typ, tc.values...)
+		if err != nil {
+			t.Errorf("AnswerState(%s) = %v", tc.typ, err)
+			continue
+		}
+		if b, _ := json.Marshal(got); string(b) != tc.want {
+			t.Errorf("AnswerState(%s, %v) = %s; want %s", tc.typ, tc.values, b, tc.want)
+		}
+	}
+	for _, bad := range []struct {
+		typ    string
+		values []string
+	}{{"datepicker", []string{"x"}}, {"plain_text_input", nil}, {"radio_buttons", []string{"0", "1"}}} {
+		if _, err := AnswerState(bad.typ, bad.values...); err == nil {
+			t.Errorf("AnswerState(%s, %v) = nil; want an error: it is not an answer the element takes", bad.typ, bad.values)
+		}
+	}
+}
+
+func TestElementTypeReadsTheTypeOfAnActionsElement(t *testing.T) {
+	blocks := json.RawMessage(`[{"type":"input","block_id":"q0","element":{"type":"radio_buttons","action_id":"a0"}},
+		{"type":"input","block_id":"q1","element":{"type":"plain_text_input","action_id":"a1"}}]`)
+	if got := ElementType(blocks, "a0"); got != "radio_buttons" {
+		t.Errorf("ElementType(a0) = %q; want radio_buttons", got)
+	}
+	if got := ElementType(blocks, "a1"); got != "plain_text_input" {
+		t.Errorf("ElementType(a1) = %q; want plain_text_input", got)
+	}
+	if got := ElementType(blocks, "a9"); got != "" || ElementType(nil, "a0") != "" {
+		t.Errorf("ElementType of an element that is not there = %q; want none", got)
+	}
+}
+
+// ts values are seconds and microseconds, which are numbers: as strings "9.000001" is after "10.000000".
+func TestCompareTSOrdersAsNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{{"9.000001", "10.000000", -1}, {"10.000000", "9.999999", 1}, {"5.000100", "5.000100", 0}, {"5.000009", "5.000010", -1}, {"5", "5.000001", -1}} {
+		if got := CompareTS(tc.a, tc.b); got != tc.want {
+			t.Errorf("CompareTS(%s, %s) = %d; want %d", tc.a, tc.b, got, tc.want)
+		}
 	}
 }
 
