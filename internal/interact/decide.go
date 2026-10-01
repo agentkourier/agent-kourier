@@ -58,6 +58,11 @@ type PressDecision struct {
 // textClosedBefore tells the thread that an answer reached a task that was no longer waiting for it.
 const textClosedBefore = "An answer arrived after the question was closed, so it was not sent."
 
+// PromptReplacer takes the controls off the prompt of an interaction that has ended: *Replacer.
+type PromptReplacer interface {
+	Replace(ctx context.Context, id string) error
+}
+
 // DecideConfig configures a Decider. Everything but Logger and OnDecision is required.
 type DecideConfig struct {
 	Store      store.Interactions
@@ -68,6 +73,8 @@ type DecideConfig struct {
 	Session  Session
 	Sessions SessionReader
 	Outbox   Enqueuer
+	// Replacer, if set, takes the controls off the prompt once the answer has been sent.
+	Replacer PromptReplacer
 	Now      func() time.Time // time.Now if nil
 	Logger   *slog.Logger     // slog.Default() if nil
 	// OnDecision, if set, is called once for each press decided, with its result: "answered" (it
@@ -156,7 +163,23 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
 	case gone:
 		return nil
 	}
-	return d.send(ctx, pd, msg, v == again)
+	if err := d.send(ctx, pd, msg, v == again); err != nil {
+		return err
+	}
+	d.replacePrompt(ctx, row.ID)
+	return nil
+}
+
+// replacePrompt takes the controls off the prompt. The decision is done and the answer sent, so a failed
+// edit is logged and left to the repair, and never fails the decision: deciding it again would send the
+// answer again. It does Slack I/O, and a press is decided on the worker, not on Slack's acknowledgement.
+func (d *Decider) replacePrompt(ctx context.Context, id string) {
+	if d.cfg.Replacer == nil {
+		return
+	}
+	if err := d.cfg.Replacer.Replace(ctx, id); err != nil {
+		d.cfg.Logger.WarnContext(ctx, "interact: the prompt of an answered interaction keeps its controls until it is repaired", "interaction", id, "err", err)
+	}
 }
 
 // take reads the interaction and records the decision if the press can win. The caller holds d.mu.

@@ -79,6 +79,11 @@ type Interactions interface {
 	// ListDueInteractions returns pending interactions whose deadline is at or
 	// before now, oldest deadline first, for the timeout sweep.
 	ListDueInteractions(ctx context.Context, now time.Time) ([]Interaction, error)
+	// ListDecidedInteractions returns the interactions decided at or after since (answered, timed
+	// out or cancelled), oldest decision first, for repairing the prompts that may still show
+	// controls. since is required (ErrInvalid otherwise). No index serves it: it reads the table,
+	// which is small, and is run at start and now and then, not for each interaction.
+	ListDecidedInteractions(ctx context.Context, since time.Time) ([]Interaction, error)
 	// SubmitInteraction records the first complete answer: an atomic
 	// transition from pending to answered, valid while now is before the
 	// deadline. answer, decider and now are required. Errors: ErrNotFound if

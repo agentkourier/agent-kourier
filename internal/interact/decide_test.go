@@ -39,11 +39,13 @@ var (
 type orderedStore struct {
 	*sqlite.Store
 	log          *callLog
-	beforeSubmit func() // runs between the decider's read and its write, as another process or the sweep would
+	all          *callLog // every step of the decision, for its order
+	beforeSubmit func()   // runs between the decider's read and its write, as another process or the sweep would
 }
 
 func (s *orderedStore) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
 	s.log.add("submit")
+	s.all.add("submit")
 	if s.beforeSubmit != nil {
 		s.beforeSubmit()
 	}
@@ -54,6 +56,7 @@ func (s *orderedStore) SubmitInteraction(ctx context.Context, id string, answer 
 type orderedAudit struct {
 	*audits
 	log *callLog
+	all *callLog
 	// gate, if set, holds the first Decision inside until it is closed, after entered is closed.
 	gate, entered chan struct{}
 	first         atomic.Bool
@@ -61,6 +64,7 @@ type orderedAudit struct {
 
 func (a *orderedAudit) Decision(ctx context.Context, actor audit.Actor, d audit.Decision) error {
 	a.log.add("audit:" + string(d.Result))
+	a.all.add("audit:" + string(d.Result))
 	if a.gate != nil && a.first.CompareAndSwap(false, true) {
 		close(a.entered)
 		<-a.gate
@@ -94,9 +98,11 @@ type answerSess struct {
 	got  []*a2a.Message
 	keys []store.ConversationKey
 	errs []error
+	log  *callLog
 }
 
 func (s *answerSess) Answer(_ context.Context, k store.ConversationKey, m *a2a.Message) error {
+	s.log.add("send")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.got, s.keys = append(s.got, m), append(s.keys, k)
@@ -137,13 +143,37 @@ func (e *enqueued) list() []outbox.Post {
 	return append([]outbox.Post(nil), e.got...)
 }
 
+// promptReplacer records the prompts the decider has replaced; err fails them.
+type promptReplacer struct {
+	mu  sync.Mutex
+	ids []string
+	err error
+	log *callLog
+}
+
+func (p *promptReplacer) Replace(_ context.Context, id string) error {
+	p.log.add("replace")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ids = append(p.ids, id)
+	return p.err
+}
+
+func (p *promptReplacer) replaced() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.ids...)
+}
+
 type decideRig struct {
 	st    *orderedStore
 	aud   *orderedAudit
 	eph   *ephemerals
 	calls *callLog
+	flow  *callLog // calls with the send and the replacement too
 	logs  *logBuf
 	sess  *answerSess
+	rep   *promptReplacer
 	out   *enqueued
 	d     *interact.Decider
 	mu    sync.Mutex
@@ -157,11 +187,12 @@ func newDecideRig(t *testing.T) *decideRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	r := &decideRig{calls: &callLog{}, logs: &logBuf{}, eph: &ephemerals{}, sess: &answerSess{}, out: &enqueued{}}
-	r.st = &orderedStore{Store: st, log: r.calls}
-	r.aud = &orderedAudit{audits: &audits{}, log: r.calls}
+	r := &decideRig{calls: &callLog{}, flow: &callLog{}, logs: &logBuf{}, eph: &ephemerals{}, sess: &answerSess{}, out: &enqueued{}, rep: &promptReplacer{}}
+	r.sess.log, r.rep.log = r.flow, r.flow
+	r.st = &orderedStore{Store: st, log: r.calls, all: r.flow}
+	r.aud = &orderedAudit{audits: &audits{}, log: r.calls, all: r.flow}
 	r.d, err = interact.NewDecider(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
 	})
 	if err != nil {
@@ -370,7 +401,7 @@ func TestTheSameUserAgainIsARetryNotALoss(t *testing.T) {
 	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.aud.got) != 1 || len(r.eph.list()) != 0 || !slices.Equal(r.hooked(), []string{"answered"}) || len(r.calls.list()) != 2 {
+	if len(r.aud.got) != 1 || len(r.eph.list()) != 0 || !slices.Equal(r.hooked(), []string{"answered"}) || !slices.Equal(r.flow.list(), []string{"audit:answered", "submit", "send", "replace", "send", "replace"}) {
 		t.Errorf("audits %d, ephemerals %q, hooks %q, calls %q; want the first decision alone", len(r.aud.got), r.eph.list(), r.hooked(), r.calls.list())
 	}
 }
@@ -637,5 +668,36 @@ func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
 	}
 	if got := r.out.list(); len(got) != 0 {
 		t.Errorf("notices %+v; want none while it cannot be known that the task has ended", got)
+	}
+}
+
+// TestTheWinnersPromptIsReplacedOnceTheAnswerIsSent: the controls come off after the answer is on its way,
+// and only for the press that won.
+func TestTheWinnersPromptIsReplacedOnceTheAnswerIsSent(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if got, want := r.flow.list(), []string{"audit:answered", "submit", "send", "replace"}; !slices.Equal(got, want) {
+		t.Errorf("calls %q; want the prompt replaced after the answer is sent: %q", got, want)
+	}
+	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")) // lost
+	_ = r.d.Decide(t.Context(), r.press(t, "UCAROL3", deadline, "req-1"))             // late
+	_ = r.d.Decide(t.Context(), r.press(t, "UDAVE44", d0.Add(time.Minute), "wrong"))  // refused
+	if got := r.rep.replaced(); !slices.Equal(got, []string{"ix-1"}) {
+		t.Errorf("replaced %q; want the prompt once, for the winner", got)
+	}
+}
+
+// TestAPromptThatCannotBeReplacedDoesNotUndoTheDecision: the answer is on its way, so a failed edit is
+// logged for the repair and does not fail the decision (a retry of it would send the answer again).
+func TestAPromptThatCannotBeReplacedDoesNotUndoTheDecision(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.rep.err = errBoom
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		t.Fatalf("Decide = %v; want the decision done", err)
+	}
+	if out := r.logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "ix-1") || len(r.sess.answers()) != 1 {
+		t.Errorf("log = %q, sends %d; want a warning naming ix-1, and the answer sent once", out, len(r.sess.answers()))
 	}
 }

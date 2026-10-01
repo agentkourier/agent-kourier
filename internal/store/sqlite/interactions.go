@@ -84,3 +84,28 @@ func (s *Store) ListDueInteractions(ctx context.Context, now time.Time) ([]store
 	}
 	return out, nil
 }
+
+// ListDecidedInteractions implements store.Interactions.
+func (s *Store) ListDecidedInteractions(ctx context.Context, since time.Time) ([]store.Interaction, error) {
+	if since.IsZero() {
+		return nil, fmt.Errorf("list decided interactions: since is required: %w", store.ErrInvalid)
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT `+interactionCols+` FROM interactions
+		WHERE state IN ('answered', 'timed_out', 'cancelled') AND decided_at >= ? ORDER BY decided_at, id`, ts(since))
+	if err != nil {
+		return nil, fmt.Errorf("list decided interactions: %w", err)
+	}
+	defer func() { _ = rows.Close() }() // rows.Err below reports read failures
+	var out []store.Interaction
+	for rows.Next() {
+		i, err := scanInteraction(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan interaction row: %w", err)
+		}
+		out = append(out, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list decided interactions: %w", err)
+	}
+	return out, nil
+}
