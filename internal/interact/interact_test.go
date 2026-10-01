@@ -240,8 +240,8 @@ func TestAReusedRequestIDIsNotTheSamePause(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "A different question?"}}})
-	if err := r.paused(t, other); !errors.Is(err, dialect.ErrUnusablePause) || len(r.slack.posted) != 1 {
-		t.Errorf("Paused = %v with %d posts; want ErrUnusablePause and the first prompt alone", err, len(r.slack.posted))
+	if err := r.paused(t, other); err != nil || len(r.slack.posted) != 1 || len(r.sess.cancels) != 1 {
+		t.Errorf("Paused = %v with %d posts and %d cancels; want it refused as unusable (cancelled), and the first prompt alone", err, len(r.slack.posted), len(r.sess.cancels))
 	}
 }
 

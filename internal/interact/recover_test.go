@@ -3,7 +3,6 @@ package interact_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -99,7 +98,7 @@ func TestAnAnswerIsNeverSentToADifferentQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "Delete the database?", "choices": []string{"a", "b"}}}})
-	if err := r.paused(t, other); !errors.Is(err, dialect.ErrUnusablePause) || len(r.sess.answers) != 0 {
-		t.Errorf("Paused = %v after %d answers sent; want ErrUnusablePause and no answer", err, len(r.sess.answers))
+	if err := r.paused(t, other); err != nil || len(r.sess.answers) != 0 || len(r.sess.cancels) != 1 {
+		t.Errorf("Paused = %v after %d answers sent and %d cancels; want no answer, and the task cancelled as unusable", err, len(r.sess.answers), len(r.sess.cancels))
 	}
 }
