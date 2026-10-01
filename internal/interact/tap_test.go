@@ -94,7 +94,11 @@ func newTap(t *testing.T, mod func(*interact.TapConfig)) *tapRig {
 	if r.tap, err = interact.NewTap(cfg); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.tap.Close(context.WithoutCancel(t.Context())) })
+	t.Cleanup(func() { // bounded: a Close that waits for ever would hold the whole run to go test's timeout
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		_ = r.tap.Close(ctx)
+	})
 	return r
 }
 
@@ -332,3 +336,32 @@ func TestNoticesGoToTheSinkItWraps(t *testing.T) {
 type lookupErr struct{ err error }
 
 func (l lookupErr) Binding(string) (interact.Binding, error) { return interact.Binding{}, l.err }
+
+// gatedLookup holds every Binding lookup until its gate is closed.
+type gatedLookup struct{ gate chan struct{} }
+
+func (l gatedLookup) Binding(string) (interact.Binding, error) {
+	<-l.gate
+	return interact.Binding{Timeout: 3 * time.Minute}, nil
+}
+
+// TestTheBindingIsReadOffTheStreamGoroutine: the lookup, which may log, is the hand-off's to make and not the
+// handler's, which runs on the agent's stream goroutine and must return at once.
+func TestTheBindingIsReadOffTheStreamGoroutine(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	r := newTap(t, func(c *interact.TapConfig) { c.Lookup = gatedLookup{gate} })
+	t.Cleanup(release) // before the tap is closed
+	task := pausedTask("task-1", "msg-1", d0)
+	h := r.tap.Turn(t.Context(), tapRef)
+	returned := make(chan struct{})
+	go func() { h(agent.FinalEvent{Task: &task}); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler waited for the Binding lookup")
+	}
+	release()
+	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+}

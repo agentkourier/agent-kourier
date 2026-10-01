@@ -130,12 +130,13 @@ func (t *Tap) handOff(ref session.TurnRef, task a2a.Task) {
 	}
 	t.flying[id] = struct{}{}
 	t.wg.Add(1)
-	go t.run(id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task}, t.deadline(ref.Binding, task))
+	go t.run(id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task})
 }
 
 // deadline is when the pause can no longer be answered: as the interaction's own, the task's time plus
 // the Binding's timeout. A Binding that cannot be read still gets the hand-off, which then says why it fails,
-// and the default timeout.
+// and the default timeout. It reads the Binding, so run calls it, and the stream goroutine that handed the
+// pause off, which holds t.mu, does not.
 func (t *Tap) deadline(binding string, task a2a.Task) time.Time {
 	timeout := v1alpha1.DefaultInteractionTimeout
 	if b, err := t.cfg.Lookup.Binding(binding); err != nil || b.Timeout <= 0 {
@@ -146,9 +147,10 @@ func (t *Tap) deadline(binding string, task a2a.Task) time.Time {
 	return pausedAt(task, t.cfg.Now()).Add(timeout)
 }
 
-func (t *Tap) run(id string, p Pause, deadline time.Time) {
+func (t *Tap) run(id string, p Pause) {
 	defer t.wg.Done()
 	defer func() { t.mu.Lock(); delete(t.flying, id); t.mu.Unlock() }()
+	deadline := t.deadline(p.Binding, p.Task)
 	for tries := 1; ; tries++ {
 		err := t.cfg.Handler.Paused(t.ctx, p)
 		switch {
