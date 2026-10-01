@@ -26,7 +26,7 @@ var (
 )
 
 // spyStore counts touches and fails a named call ("touch", "upsert", "enqueue", "set" for
-// SetSessionTask or "mark" for MarkReplyDelivered), once or every time, over a real SQLite store.
+// SetSessionTask, "get" for GetSession or "mark" for MarkReplyDelivered), once or every time, over a real SQLite store.
 type spyStore struct {
 	Store
 	mu      sync.Mutex
@@ -45,6 +45,9 @@ func (s *spyStore) GetSession(ctx context.Context, k Key, ttl time.Duration, now
 	s.reads++
 	n := s.reads
 	s.mu.Unlock()
+	if err := s.failOnce("get"); err != nil {
+		return store.Session{}, err
+	}
 	switch {
 	case s.gate != nil && n == 1:
 		select {

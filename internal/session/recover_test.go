@@ -96,6 +96,28 @@ func TestRecoverDropsATaskThatEndedWhileItWasLookedAt(t *testing.T) {
 	}
 }
 
+// The re-read is a check, not a gate: if it cannot be made, the task is followed, as before. The
+// agent knows whether the task still runs, and a task nobody follows is worse than one rendered twice.
+func TestRecoverFollowsATaskWhenTheRecheckFails(t *testing.T) {
+	f, sink := restarted(t)
+	var once sync.Once
+	f.st.mu.Lock()
+	f.st.onNext = func() {
+		once.Do(func() { // after recovery's own reads, before the runner's
+			f.st.mu.Lock()
+			f.st.fail["get"] = errors.New("database is locked")
+			f.st.mu.Unlock()
+		})
+	}
+	f.st.mu.Unlock()
+	f.recover(t)
+	waitFinal(t, sink)
+	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	if _, _, fo := f.agent.counts(); fo != 1 {
+		t.Errorf("%d follows; want the task followed once", fo)
+	}
+}
+
 // A task that ended while courier was down has its final output rendered, once, and is cleared.
 func TestRecoverRendersAFinishedTaskOnce(t *testing.T) {
 	f, sink := restarted(t)
