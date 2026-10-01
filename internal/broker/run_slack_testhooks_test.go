@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -33,6 +35,7 @@ import (
 type turns struct {
 	mu      sync.Mutex
 	texts   []string
+	outputs []v1alpha1.OutputMode // the mode each turn was started with
 	notices []session.NoticeKind
 	seen    chan struct{}
 }
@@ -44,7 +47,10 @@ func (s *turns) noticed(kind session.NoticeKind) bool {
 	return slices.Contains(s.notices, kind)
 }
 
-func (s *turns) Turn(context.Context, session.TurnRef) agent.Handler {
+func (s *turns) Turn(_ context.Context, ref session.TurnRef) agent.Handler {
+	s.mu.Lock()
+	s.outputs = append(s.outputs, ref.Output)
+	s.mu.Unlock()
 	return func(e agent.Event) {
 		if te, ok := e.(agent.TextEvent); ok {
 			s.mu.Lock()
@@ -151,6 +157,37 @@ func TestRunCountsAnAuditWriteThatFailed(t *testing.T) {
 	w.mention(t, r)
 
 	r.waitMetric(`courier_audit_write_failures_total{kind="agent_call"} 1`)
+}
+
+// The output mode of the Binding's spec is what the sink is told of a turn, from the config file to the
+// TurnRef: live Bindings stream, and final ones post once when the turn ends (live.Sink).
+func TestRunTellsTheSinkTheBindingsOutputMode(t *testing.T) {
+	for _, mode := range []v1alpha1.OutputMode{v1alpha1.OutputFinal, v1alpha1.OutputLive} {
+		t.Run(string(mode), func(t *testing.T) {
+			w := newSlackWorld(t, "xoxb-fake-bot")
+			file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), "output: live ") {
+				t.Fatal("the fixture's binding.yaml has no `output: live` to change")
+			}
+			set := strings.Replace(string(raw), "output: live ", "output: "+string(mode)+" ", 1)
+			if err := os.WriteFile(file, []byte(set), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r := start(t, w.cfg)
+			w.mention(t, r)
+			<-w.sink.seen
+
+			w.sink.mu.Lock()
+			defer w.sink.mu.Unlock()
+			if len(w.sink.outputs) != 1 || w.sink.outputs[0] != mode {
+				t.Errorf("the sink was started with turns of mode %v, want [%s]", w.sink.outputs, mode)
+			}
+		})
+	}
 }
 
 // With no sink of its own, Run renders turns itself, through the Slack client and its own outbox: the

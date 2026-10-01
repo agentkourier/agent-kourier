@@ -24,6 +24,24 @@ func interactions(t *testing.T, f *fixture, in v1alpha1.Interactions) {
 	f.snaps.p.Store(snap)
 }
 
+// The Binding's chat output mode reaches the session, which tells the sink of each turn: dropped here,
+// every Binding streams, whatever its spec says (S5). Every field of session.Backend is set from the spec.
+func TestBackendCarriesTheBindingsOutputMode(t *testing.T) {
+	f := newFixture(t)
+	for _, mode := range []v1alpha1.OutputMode{v1alpha1.OutputFinal, v1alpha1.OutputLive} {
+		snap := snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+		rb, _ := snap.Binding("sre", "oncall")
+		rb.Binding.Spec.Chat.Output = mode
+		f.snaps.p.Store(snap)
+
+		be, err := f.b.Backend("sre/oncall")
+
+		if err != nil || be.Output != mode {
+			t.Errorf("Backend.Output = %q, %v; want %q from spec.chat.output", be.Output, err, mode)
+		}
+	}
+}
+
 func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	f := newFixture(t)
 	// Each flag on its own, so that a swap of the two is seen.

@@ -123,6 +123,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Attribute: k.attribute,
 		Rejected:  src.Rejected,
 		Identity:  src.Identity(),
+		Output:    rb.Binding.Spec.Chat.Output,
 	}, nil
 }
 
