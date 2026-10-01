@@ -57,6 +57,11 @@ func TestOutboxIDReadsTheMetadataTag(t *testing.T) {
 	if got := OutboxID(other); got != "" {
 		t.Errorf("OutboxID of a tag that is not a string = %q; want none", got)
 	}
+	foreign := view("UFAKEBOT", "B1", "w")
+	foreign.Metadata = &fakeslack.Metadata{EventType: "someone_elses", EventPayload: map[string]any{"outbox_id": "ob-2"}}
+	if got := OutboxID(foreign); got != "" {
+		t.Errorf("OutboxID of another app's tag = %q; want none: only courier's own tag names an outbox row", got)
+	}
 	if got := OutboxID(view("U1", "", "z")); got != "" {
 		t.Errorf("OutboxID of a message with no metadata = %q; want none", got)
 	}
