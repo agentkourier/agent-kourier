@@ -14,11 +14,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
@@ -83,11 +87,62 @@ func (e *ephemerals) list() []string {
 	return append([]string(nil), e.got...)
 }
 
+// answerSess is the session manager that takes the answers. err is returned by the next Answers, one each.
+type answerSess struct {
+	mu   sync.Mutex
+	got  []*a2a.Message
+	keys []store.ConversationKey
+	errs []error
+}
+
+func (s *answerSess) Answer(_ context.Context, k store.ConversationKey, m *a2a.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got, s.keys = append(s.got, m), append(s.keys, k)
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return err
+	}
+	return nil
+}
+
+func (s *answerSess) Cancel(context.Context, store.ConversationKey, a2a.TaskID, string) error {
+	return nil
+}
+
+func (s *answerSess) answers() []*a2a.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*a2a.Message(nil), s.got...)
+}
+
+// enqueued records the posts the decider enqueues.
+type enqueued struct {
+	mu  sync.Mutex
+	got []outbox.Post
+}
+
+func (e *enqueued) Enqueue(_ context.Context, p outbox.Post) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.got = append(e.got, p)
+	return outbox.ID(p.Source, p.Role), nil
+}
+
+func (e *enqueued) list() []outbox.Post {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]outbox.Post(nil), e.got...)
+}
+
 type decideRig struct {
 	st    *orderedStore
 	aud   *orderedAudit
 	eph   *ephemerals
 	calls *callLog
+	sess  *answerSess
+	out   *enqueued
 	d     *interact.Decider
 	mu    sync.Mutex
 	hooks []string
@@ -100,11 +155,11 @@ func newDecideRig(t *testing.T) *decideRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	r := &decideRig{calls: &callLog{}, eph: &ephemerals{}}
+	r := &decideRig{calls: &callLog{}, eph: &ephemerals{}, sess: &answerSess{}, out: &enqueued{}}
 	r.st = &orderedStore{Store: st, log: r.calls}
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls}
 	r.d, err = interact.NewDecider(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
 	})
 	if err != nil {
@@ -280,6 +335,9 @@ func TestTwoPressesAtOnceGiveOneAnswer(t *testing.T) {
 	for _, d := range r.aud.got {
 		results[d.Result]++
 	}
+	if got := len(r.sess.answers()); got != 1 {
+		t.Errorf("%d answers sent; want exactly one", got)
+	}
 	if row.State != store.InteractionAnswered || results[audit.DecisionAnswered] != 1 || results[audit.DecisionSuperseded] != 1 || len(r.aud.got) != 2 {
 		t.Errorf("state %v, audits %v; want one answered row, one answered audit and one superseded", row.State, results)
 	}
@@ -336,7 +394,76 @@ func TestAnEphemeralThatFailsDoesNotFailTheDecision(t *testing.T) {
 
 func TestNewDeciderNeedsItsParts(t *testing.T) {
 	if _, err := interact.NewDecider(interact.DecideConfig{}); err == nil {
-		t.Error("NewDecider accepted no Store, Auditor or Ephemerals")
+		t.Error("NewDecider accepted no Store, Auditor, Ephemerals, Session or Outbox")
+	}
+}
+
+// TestTheWinnersAnswerIsSentOnce: to the paused task of the thread, with the interaction's message ID, so
+// that sending it again is the same message; and only the winner's, however many press.
+func TestTheWinnersAnswerIsSentOnce(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")) // lost
+	_ = r.d.Decide(t.Context(), r.press(t, "UCAROL3", deadline, "req-1"))             // late
+	_ = r.d.Decide(t.Context(), r.press(t, "UDAVE44", d0.Add(time.Minute), "wrong"))  // refused
+	got := r.sess.answers()
+	if len(got) != 1 || got[0].ID != "ix-1/answer" || got[0].TaskID != "task-1" || r.sess.keys[0] != key || got[0].Metadata[kagentv1.HITLExtension] == nil {
+		t.Fatalf("answers sent %+v; want the winner's alone, for task-1 in the thread, under the interaction's message ID", got)
+	}
+	if len(r.out.list()) != 0 {
+		t.Errorf("notices %+v; want none for an answer that was sent", r.out.list())
+	}
+}
+
+// TestAnAnswerForATaskThatMovedOnIsToldInTheThread: the question was closed before the answer arrived.
+// It is one notice, with an ID from the interaction, however often the press is decided again.
+func TestAnAnswerForATaskThatMovedOnIsToldInTheThread(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.sess.errs = []error{session.ErrNotPaused}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		t.Fatalf("Decide = %v; want the press done: the task is not paused, and no retry would change that", err)
+	}
+	posts := r.out.list()
+	if len(posts) != 1 || posts[0].Source != "ix-1/answer" || posts[0].Role != store.OutboxNotice || posts[0].Channel != key.Channel || posts[0].ThreadTS != key.ThreadTS || posts[0].Content.Text == "" {
+		t.Errorf("notices %+v; want one, in the thread, from the interaction", posts)
+	}
+	if r.row(t).State != store.InteractionAnswered {
+		t.Error("the interaction is no longer answered")
+	}
+}
+
+// TestASendThatFailsIsRetriedWithoutAnotherDecision: the answer was recorded and the send failed. The press
+// is decided again by the same person, who is not told they lost, and the send is made, with no second
+// audit row and no second count.
+func TestASendThatFailsIsRetriedWithoutAnotherDecision(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.sess.errs = []error{errBoom}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
+		t.Fatalf("Decide = %v; want the send's error, for the press to be tried again", err)
+	}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.sess.answers(); len(got) != 2 || got[0].ID != got[1].ID {
+		t.Errorf("sends %d; want the failed one and its retry, as the same message", len(got))
+	}
+	if len(r.aud.got) != 1 || len(r.eph.list()) != 0 || !slices.Equal(r.hooked(), []string{"answered"}) || len(r.out.list()) != 0 {
+		t.Errorf("audits %d, ephemerals %q, hooks %q, notices %d; want the decision once and nothing said", len(r.aud.got), r.eph.list(), r.hooked(), len(r.out.list()))
+	}
+}
+
+// TestARetriedSendForATaskThatMovedOnSaysNothing: after a crash it cannot be told whether the answer got
+// through before, so no notice claims that it did not.
+func TestARetriedSendForATaskThatMovedOnSaysNothing(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.sess.errs = []error{errBoom, session.ErrNotPaused}
+	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 0 {
+		t.Errorf("Decide = %v with %d notices; want it done, and silent", err, len(r.out.list()))
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -53,12 +55,18 @@ type PressDecision struct {
 	Binding     Binding
 }
 
-// DecideConfig configures a Decider. Store, Auditor and Ephemerals are required.
+// textClosedBefore tells the thread that an answer reached a task that was no longer waiting for it.
+const textClosedBefore = "An answer arrived after the question was closed, so it was not sent."
+
+// DecideConfig configures a Decider. Everything but Logger and OnDecision is required.
 type DecideConfig struct {
 	Store      store.Interactions
 	Auditor    Auditor
 	Ephemerals Ephemeral
-	Logger     *slog.Logger // slog.Default() if nil
+	// Session takes the answers, and Outbox the notice for one that arrives too late.
+	Session Session
+	Outbox  Enqueuer
+	Logger  *slog.Logger // slog.Default() if nil
 	// OnDecision, if set, is called once for each press decided, with its result: "answered" (it
 	// won), "superseded" (another decision came first), "late" (made at or after the deadline) or
 	// "invalid" (the dialect refused the answer). It is for a metric.
@@ -75,8 +83,8 @@ type Decider struct {
 
 // NewDecider returns a Decider over cfg.
 func NewDecider(cfg DecideConfig) (*Decider, error) {
-	if cfg.Store == nil || cfg.Auditor == nil || cfg.Ephemerals == nil {
-		return nil, errors.New("interact: Store, Auditor and Ephemerals are required")
+	if cfg.Store == nil || cfg.Auditor == nil || cfg.Ephemerals == nil || cfg.Session == nil || cfg.Outbox == nil {
+		return nil, errors.New("interact: Store, Auditor, Ephemerals, Session and Outbox are required")
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -96,11 +104,13 @@ const (
 )
 
 // Decide takes the decision, in this order: build the message that answers, audit the decision, record
-// it, send it (WP-33d2b). Building comes first because it is validation and not an action: an answer the
+// it, send it. Building comes first because it is validation and not an action: an answer the
 // dialect refuses is told to the person, and nothing is recorded, so no interaction is left answered
 // with an answer that can never be sent. The audit comes before the decision takes effect, and a failed
 // audit write stops it (spec 8.6 step 7): the error is returned, and the press, which stays recorded, is
-// decided again. It returns nil when the press is decided for good, whichever way it came out.
+// decided again. It returns nil when the press is decided for good, whichever way it came out. A send
+// that fails is an error too: the answer is recorded, so the press, decided again, is the same person's
+// retry, which sends it again without a second decision.
 //
 // The audit is at least once, and written before the decision takes effect, so it can be ahead of what
 // happened. If the sweep, or another process, decides in the window between the read and the write, the
@@ -128,6 +138,7 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
 	switch v {
 	case won:
 		d.count("answered")
+	case again: // a retry: the decision was taken and counted before
 	case late:
 		d.tell(ctx, row, pd.User, textLate)
 		d.count("late")
@@ -139,7 +150,7 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
 	case gone:
 		return nil
 	}
-	return d.send(ctx, pd, msg)
+	return d.send(ctx, pd, msg, v == again)
 }
 
 // take reads the interaction and records the decision if the press can win. The caller holds d.mu.
@@ -201,8 +212,30 @@ func (d *Decider) settle(ctx context.Context, pd PressDecision, cur store.Intera
 	return lost, cur, nil
 }
 
-// send is where the answer reaches the agent (WP-33d2b).
-func (d *Decider) send(context.Context, PressDecision, a2a.Message) error { return nil }
+// send gives the answer to the session, which streams what follows to the thread. A task that is not
+// paused any more cannot take it: the thread is told, once, since the notice's ID comes from the
+// interaction. A retry says nothing, because after a crash it cannot be known whether the answer got
+// through before. Any other failure is returned, for the press to be decided again.
+func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, retry bool) error {
+	row := pd.Interaction
+	switch err := d.cfg.Session.Answer(ctx, row.Key, &msg); {
+	case err == nil:
+		return nil
+	case errors.Is(err, session.ErrNotPaused):
+		d.cfg.Logger.InfoContext(ctx, "interact: an answer found its task no longer paused", "interaction", row.ID, "task", row.TaskID, "retry", retry)
+		if retry {
+			return nil
+		}
+		_, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
+			ThreadTS: row.Key.ThreadTS, Content: slack.Content{Text: textClosedBefore}})
+		if err != nil {
+			return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("interact: send the answer to %s: %w", row.ID, err)
+	}
+}
 
 // lostText says why a press did not decide the question.
 func lostText(cur store.Interaction) string {
