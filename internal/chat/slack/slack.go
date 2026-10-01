@@ -7,8 +7,9 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
+	"net/http"
+	"sync"
 	"time"
 
 	slackgo "github.com/slack-go/slack"
@@ -25,12 +26,27 @@ type Config struct {
 	// APIURL is the Web API base URL with a trailing slash; Slack's by default. A test sets the fake's.
 	APIURL string
 	Logger *slog.Logger // slog.Default() if nil
+	// HTTPClient makes the Web API calls; slack-go's default if nil.
+	HTTPClient *http.Client
+	// Now is the clock of the user cache; time.Now if nil.
+	Now func() time.Time
+	// UserTTL is how long a resolved user is kept (default 1 hour), and UserCacheSize how many
+	// users are (default 1000).
+	UserTTL       time.Duration
+	UserCacheSize int
 }
 
 // Client is courier's connection to one Slack workspace. It is safe for concurrent use.
 type Client struct {
-	api *slackgo.Client
-	log *slog.Logger
+	api      *slackgo.Client
+	log      *slog.Logger
+	bot, app secret.Value // kept as Values: they are revealed only to scrub them from an error
+	now      func() time.Time
+	ttl      time.Duration
+	max      int
+
+	mu    sync.Mutex
+	users map[string]cachedUser // guarded by mu
 }
 
 // New returns a Client over cfg. It makes no request: a missing or wrong token fails Run.
@@ -39,7 +55,17 @@ func New(cfg Config) *Client {
 	if cfg.APIURL != "" {
 		opts = append(opts, slackgo.OptionAPIURL(cfg.APIURL))
 	}
-	return &Client{api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default())}
+	if cfg.HTTPClient != nil {
+		opts = append(opts, slackgo.OptionHTTPClient(cfg.HTTPClient))
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	return &Client{
+		api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default()), bot: cfg.BotToken, app: cfg.AppToken,
+		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), max: cmp.Or(cfg.UserCacheSize, 1000),
+		users: map[string]cachedUser{},
+	}
 }
 
 // Run connects over Socket Mode and gives sink each message that may be a turn, one at a
@@ -54,7 +80,7 @@ func New(cfg Config) *Client {
 func (c *Client) Run(ctx context.Context, sink Sink) error {
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
-		return fmt.Errorf("slack auth.test: %w", err)
+		return c.scrub(ctx, "auth.test", err)
 	}
 	if auth.UserID == "" { // without it courier cannot tell its own posts that arrive with no bot_id
 		return errors.New("slack auth.test: no bot user ID")
@@ -67,7 +93,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
 			c.handle(ctx, smc, auth.UserID, sink, ev)
 		case err := <-done:
-			return fmt.Errorf("slack socket mode: %w", err)
+			return c.scrub(ctx, "socket mode", err)
 		}
 	}
 }
