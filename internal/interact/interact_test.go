@@ -90,6 +90,7 @@ type rig struct {
 	st    *refStore
 	slack *poster
 	asked []interact.Prompt // what the renderer was asked for
+	sess  *sess
 }
 
 func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
@@ -99,7 +100,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	r := &rig{st: &refStore{Store: st}, slack: &poster{posted: map[string]string{}}}
+	r := &rig{st: &refStore{Store: st}, slack: &poster{posted: map[string]string{}}, sess: &sess{}}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ob := (outbox.New(outbox.Config{Store: st, Poster: r.slack, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet}))
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: timeout}
@@ -110,7 +111,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 		r.asked = append(r.asked, p)
 		return slack.Content{Text: "prompt " + p.ID}, nil
 	})
-	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Prompts: prompts, Outbox: ob, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
+	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Prompts: prompts, Outbox: ob, Session: r.sess, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
 		t.Fatal(err)
 	}
 	return r

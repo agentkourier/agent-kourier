@@ -21,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -56,12 +57,13 @@ type Sender interface {
 	Send(ctx context.Context, p outbox.Post) (string, error)
 }
 
-// Config configures an Intake. Store, Lookup, Prompts and Outbox are required.
+// Config configures an Intake. Store, Lookup, Prompts, Outbox and Session are required.
 type Config struct {
 	Store   store.Interactions
 	Lookup  Lookup
 	Prompts PromptRenderer
 	Outbox  Sender
+	Session Session
 	Now     func() time.Time // time.Now if nil
 	Logger  *slog.Logger     // slog.Default() if nil
 }
@@ -71,11 +73,14 @@ type Intake struct{ cfg Config }
 
 // New returns an Intake over cfg.
 func New(cfg Config) (*Intake, error) {
-	if cfg.Store == nil || cfg.Lookup == nil || cfg.Prompts == nil || cfg.Outbox == nil {
-		return nil, errors.New("interact: Store, Lookup, Prompts and Outbox are required")
+	if cfg.Store == nil || cfg.Lookup == nil || cfg.Prompts == nil || cfg.Outbox == nil || cfg.Session == nil {
+		return nil, errors.New("interact: Store, Lookup, Prompts, Outbox and Session are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
 	}
 	return &Intake{cfg}, nil
 }
@@ -129,8 +134,18 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	if err != nil {
 		return err
 	}
-	if row.State == store.InteractionPending && row.MessageRef == "" {
-		return i.post(ctx, p, row, *in)
+	switch row.State {
+	case store.InteractionPending:
+		if row.MessageRef == "" {
+			return i.post(ctx, p, row, *in)
+		}
+	case store.InteractionAnswered: // the pause is back, so the answer did not arrive
+		return i.resend(ctx, p, b, row, *in)
+	case store.InteractionTimedOut: // the cancel may not have been made
+		err := i.cfg.Session.Cancel(ctx, p.Key, a2a.TaskID(row.TaskID), "the interaction timed out")
+		if err != nil && !errors.Is(err, session.ErrNotPaused) {
+			return fmt.Errorf("interact: cancel the task of %s again: %w", row.ID, err)
+		}
 	}
 	return nil
 }
