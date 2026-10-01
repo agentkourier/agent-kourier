@@ -242,8 +242,12 @@ func TestADeadlineOfTheCallersDoesNotCountAsALookupTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &poster{onFind: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
-	ob, hooks, _ := abandoning(t, st, p, nil)
+	var clock atomic.Int64
+	ob, hooks, _ := abandoning(t, st, p, func(c *outbox.Config) {
+		c.Now = func() time.Time { return t0.Add(time.Duration(clock.Load())) }
+	})
 	for range 6 { // the caller's deadline ends the lookup, well before the call timeout does
+		clock.Add(int64(time.Hour)) // past any retry delay
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 		_ = ob.Reconcile(ctx)
 		cancel()
