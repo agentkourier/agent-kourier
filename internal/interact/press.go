@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -57,6 +60,7 @@ type PressConfig struct {
 	Authorizer Authorizer
 	Ephemerals Ephemeral
 	Decider    PressDecider
+	Auditor    Auditor
 	Now        func() time.Time // time.Now if nil
 	Logger     *slog.Logger     // slog.Default() if nil
 	// Limits bounds the presses waiting (default 200 in all, 10 for one person).
@@ -78,8 +82,8 @@ type Pipeline struct{ cfg PressConfig }
 
 // NewPipeline returns a Pipeline over cfg.
 func NewPipeline(cfg PressConfig) (*Pipeline, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Authorizer == nil || cfg.Ephemerals == nil || cfg.Decider == nil {
-		return nil, errors.New("interact: Store, Sessions, Lookup, Authorizer, Ephemerals and Decider are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Authorizer == nil || cfg.Ephemerals == nil || cfg.Decider == nil || cfg.Auditor == nil {
+		return nil, errors.New("interact: Store, Sessions, Lookup, Authorizer, Ephemerals, Decider and Auditor are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -133,8 +137,11 @@ const (
 // for another message than the prompt's, is dropped), see that it is still open (anyone else's press on
 // an answered or closed one is told who answered, or that it is closed), check that the person is a
 // member and not a bot, read their answer, and hand a complete one to the decider. The press is deleted
-// only when it is finished: after the decider returns nil, or after a refusal that is final. A failure
-// to check, or to decide, is an error and leaves the press for another try.
+// only when it is finished: after the decider returns nil, or after a refusal that is final. A person
+// refused as not a member, or a bot, or for an incomplete answer, is audited first (denied, or incomplete
+// with the answer's shape and no values); a press on a question that is already decided is not, since only
+// a press that races into the decider is a decision lost. A failure to check, to audit or to decide is an
+// error and leaves the press for another try.
 func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, error) {
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
@@ -162,19 +169,35 @@ func (p *Pipeline) open(row store.Interaction, user string) bool {
 	return row.State == store.InteractionPending || (row.State == store.InteractionAnswered && row.Decider == user)
 }
 
-// authorized checks who pressed, reads the answer and decides it.
+// authorized checks who pressed, reads the answer and decides it. A person refused as not a member, or a
+// bot, or whose answer is incomplete or unreadable, is a decision of its own and is audited, before the
+// person is told, and a failed audit write keeps the press for another try (spec 8.6 step 7). A check that
+// itself fails is no decision, and is only told.
 func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.Interaction) (Result, error) {
+	name, b, err := p.binding(ctx, row)
+	if err != nil {
+		return Retry, err
+	} else if b == nil {
+		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+	}
+	refuse := func(result audit.DecisionResult, answered *dialect.Answer, text string) (Result, error) {
+		actor := audit.Actor{User: press.User, Binding: name, Identity: b.Identity}
+		d := audit.Decision{InteractionID: row.ID, TaskID: a2a.TaskID(row.TaskID), Result: result, At: press.PressedAt, Answer: answered}
+		if err := p.cfg.Auditor.Decision(ctx, actor, d); err != nil {
+			return Retry, fmt.Errorf("interact: audit the refusal of a press of %s: %w", row.ID, err)
+		}
+		return p.finish(ctx, press, row.Key.ThreadTS, text)
+	}
 	switch member, err := p.cfg.Authorizer.IsChannelMember(ctx, row.Key.Channel, press.User); {
 	case err != nil:
 		return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
 	case !member:
-		return p.finish(ctx, press, row.Key.ThreadTS, textNotMember)
+		return refuse(audit.DecisionDenied, nil, textNotMember)
 	}
 	if bot, err := p.cfg.Authorizer.IsBot(ctx, press.User); err != nil {
 		return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
 	} else if bot {
-		p.cfg.Logger.InfoContext(ctx, "interact: a bot pressed a prompt's button", "interaction", row.ID)
-		return p.finish(ctx, press, "", "")
+		return refuse(audit.DecisionDenied, nil, "")
 	}
 	var in dialect.Interaction
 	var inputs map[string]map[string]slack.Input
@@ -190,13 +213,8 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	if err != nil {
 		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
 	} else if len(problems) > 0 {
-		return p.finish(ctx, press, row.Key.ThreadTS, incompleteText(problems))
-	}
-	name, b, err := p.binding(ctx, row)
-	if err != nil {
-		return Retry, err
-	} else if b == nil {
-		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+		shape := &dialect.Answer{Answers: make([][]string, len(in.Questions)-len(problems))} // how many were answered, never what
+		return refuse(audit.DecisionIncomplete, shape, incompleteText(problems))
 	}
 	pd := PressDecision{Interaction: row, In: in, Answer: answer, User: press.User, PressedAt: press.PressedAt, BindingName: name, Binding: *b}
 	if err := p.cfg.Decider.Decide(ctx, pd); err != nil {

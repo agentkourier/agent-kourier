@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -56,7 +57,7 @@ func newPressRig(t *testing.T) *pressRig {
 	}
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
 	var err error
-	r.pl, err = interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d,
+	r.pl, err = interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.got = append(r.got, p) }})
 	if err != nil {
@@ -183,8 +184,8 @@ func TestAPressOnADecidedQuestionIsToldWhoDecided(t *testing.T) {
 			if _, err := r.process(t, r.submit(t, "UBOB22", 0)); err != nil || r.waiting(t) != 0 {
 				t.Fatalf("Process = %v with %d presses left", err, r.waiting(t))
 			}
-			if got := r.eph.list(); len(got) != 1 || got[0] != tc.want || r.az.asked != 0 || len(r.sess.answers()) != 0 {
-				t.Errorf("told %q after %d authorization checks and %d sends; want %q, and nothing else", got, r.az.asked, len(r.sess.answers()), tc.want)
+			if got := r.eph.list(); len(got) != 1 || got[0] != tc.want || r.az.asked != 0 || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
+				t.Errorf("told %q after %d authorization checks, %d sends and %d audit rows; want %q, and nothing else: a press that lost is no decision to audit", got, r.az.asked, len(r.sess.answers()), len(r.aud.got), tc.want)
 			}
 		})
 	}
@@ -205,14 +206,15 @@ func TestTheWinnerPressingAgainSendsAgain(t *testing.T) {
 
 func TestOnlyMembersWhoAreNotBotsAreDecided(t *testing.T) {
 	for name, tc := range map[string]struct {
-		mod  func(*authz)
-		user string
-		want string // what the person is told; empty: nothing
+		mod    func(*authz)
+		user   string
+		want   string // what the person is told; empty: nothing
+		denied int    // audit rows: a refusal of a person is a decision, a check that failed is not
 	}{
-		"not a member":              {func(*authz) {}, "UOUTSIDE", "UOUTSIDE: Only members of this channel can answer this question."},
-		"membership cannot be read": {func(a *authz) { a.memberErr = errBoom }, "UALICE1", "UALICE1: Couldn't verify that you can answer this question. Please try again."},
-		"bot status cannot be read": {func(a *authz) { a.botErr = errBoom }, "UALICE1", "UALICE1: Couldn't verify that you can answer this question. Please try again."},
-		"a bot":                     {func(a *authz) { a.bots = map[string]bool{"UALICE1": true} }, "UALICE1", ""},
+		"not a member":              {func(*authz) {}, "UOUTSIDE", "UOUTSIDE: Only members of this channel can answer this question.", 1},
+		"membership cannot be read": {func(a *authz) { a.memberErr = errBoom }, "UALICE1", "UALICE1: Couldn't verify that you can answer this question. Please try again.", 0},
+		"bot status cannot be read": {func(a *authz) { a.botErr = errBoom }, "UALICE1", "UALICE1: Couldn't verify that you can answer this question. Please try again.", 0},
+		"a bot":                     {func(a *authz) { a.bots = map[string]bool{"UALICE1": true} }, "UALICE1", "", 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newPressRig(t)
@@ -222,8 +224,11 @@ func TestOnlyMembersWhoAreNotBotsAreDecided(t *testing.T) {
 				t.Fatalf("Process = %v, %v", res, err)
 			}
 			got := strings.Join(r.eph.list(), "|")
-			if got != tc.want || r.row(t).State != store.InteractionPending || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 || r.waiting(t) != 0 {
-				t.Errorf("told %q, state %s, %d sends, %d audit rows; want %q, the question still open, nothing sent or audited, the press done", got, r.row(t).State, len(r.sess.answers()), len(r.aud.got), tc.want)
+			if got != tc.want || r.row(t).State != store.InteractionPending || len(r.sess.answers()) != 0 || len(r.aud.got) != tc.denied || r.waiting(t) != 0 {
+				t.Errorf("told %q, state %s, %d sends, %d audit rows; want %q, the question still open, nothing sent, %d rows, the press done", got, r.row(t).State, len(r.sess.answers()), len(r.aud.got), tc.want, tc.denied)
+			}
+			if tc.denied == 1 && (r.aud.got[0].Result != audit.DecisionDenied || r.aud.act[0] != (audit.Actor{User: tc.user, Binding: "ns/b", Identity: "secret:ns/tok"}) || !r.aud.got[0].At.Equal(r.now)) {
+				t.Errorf("audit row %+v by %+v; want a denied decision by the person, at the press's time, under the Binding", r.aud.got[0], r.aud.act[0])
 			}
 		})
 	}
@@ -237,8 +242,8 @@ func TestAnIncompleteAnswerIsToldAndNeverUpdatesThePrompt(t *testing.T) {
 	if _, err := r.process(t, r.submit(t, "UALICE1", -1)); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.eph.list(); len(got) != 1 || got[0] != "UALICE1: Please answer question 1, then press Submit again." || r.row(t).State != store.InteractionPending || r.waiting(t) != 0 || len(r.aud.got) != 0 {
-		t.Errorf("told %q, state %s, %d presses waiting; want the question number told, the question open, the press done", got, r.row(t).State, r.waiting(t))
+	if got := r.eph.list(); len(got) != 1 || got[0] != "UALICE1: Please answer question 1, then press Submit again." || r.row(t).State != store.InteractionPending || r.waiting(t) != 0 || len(r.aud.got) != 1 || r.aud.got[0].Result != audit.DecisionIncomplete || r.aud.got[0].Answer == nil || len(r.aud.got[0].Answer.Answers) != 0 {
+		t.Errorf("told %q, state %s, %d presses waiting, audit %+v; want the question number told, the question open, the press done, an incomplete decision with its shape and no values", got, r.row(t).State, r.waiting(t), r.aud.got)
 	}
 	if _, err := r.process(t, r.submit(t, "UALICE1", 7)); err != nil || !strings.Contains(r.eph.list()[1], "Question 1 could not be read") {
 		t.Errorf("an index that is not a choice: told %q, %v; want it called unreadable, by number", r.eph.list(), err)
@@ -301,5 +306,28 @@ func TestAFailedDecisionLeavesThePressToBeDecidedAgain(t *testing.T) {
 	}
 	if res, err := r.pl.Process(t.Context(), presses[0]); err != nil || res != interact.Done || r.waiting(t) != 0 || len(r.sess.answers()) != 2 || len(r.aud.got) != 1 {
 		t.Errorf("Process again = %v, %v, %d waiting, %d sends, %d audit rows; want it done, the answer sent again, one decision audited", res, err, r.waiting(t), len(r.sess.answers()), len(r.aud.got))
+	}
+}
+
+// TestARefusalIsAuditedBeforeThePersonIsToldAndNotWithoutIt: the audit comes first, and a failed write
+// returns Retry and keeps the press, so the person is told only once the refusal is on record.
+func TestARefusalIsAuditedBeforeThePersonIsToldAndNotWithoutIt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		user  string
+		input int
+	}{"not a member": {"UOUTSIDE", 0}, "incomplete": {"UALICE1", -1}} {
+		t.Run(name, func(t *testing.T) {
+			r := newPressRig(t)
+			r.open(t)
+			r.aud.err = errBoom
+			if res, err := r.process(t, r.submit(t, tc.user, tc.input)); !errors.Is(err, errBoom) || res != interact.Retry || r.waiting(t) != 1 || len(r.eph.list()) != 0 {
+				t.Fatalf("Process with a failing audit = %v, %v, %d waiting, told %q; want Retry, the error, the press kept and no one told", res, err, r.waiting(t), r.eph.list())
+			}
+			r.aud.err = nil
+			presses, _ := r.st.ListPresses(t.Context())
+			if res, err := r.pl.Process(t.Context(), presses[0]); err != nil || res != interact.Done || len(r.eph.list()) != 1 || len(r.aud.got) != 2 {
+				t.Errorf("Process again = %v, %v, told %q, %d audit attempts; want it done and told once", res, err, r.eph.list(), len(r.aud.got))
+			}
+		})
 	}
 }
