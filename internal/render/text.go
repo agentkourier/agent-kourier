@@ -113,7 +113,7 @@ func ToolLine(name string, args map[string]any, flavour Flavour) string {
 }
 
 // toolSummary is the arguments, already redacted one by one, as "name=json, ...", redacted again as
-// a whole for what only shows there. It is cut to maxRedactBytes at a word first: each argument was
+// a whole for what only shows there. It is cut to redact.MaxBytes at a word first: each argument was
 // bounded, but a call may have any number of them, and the line shows a few hundred characters.
 func toolSummary(shown map[string]any) string {
 	keys := make([]string, 0, len(shown))

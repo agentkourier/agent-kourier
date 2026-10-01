@@ -150,14 +150,14 @@ func Text(s string) string {
 		return r
 	}, s)
 	s = Bound(s)
-	s = urlUserinfo.ReplaceAllString(s, "${1}"+Redacted+"@")
-	s = urlSpaced.ReplaceAllString(s, "${1}"+Redacted+"@")
-	s = plainUserinfo.ReplaceAllString(s, Redacted+"@")
+	s = urlUserinfo.ReplaceAllString(s, "${1}"+redacted+"@")
+	s = urlSpaced.ReplaceAllString(s, "${1}"+redacted+"@")
+	s = plainUserinfo.ReplaceAllString(s, redacted+"@")
 	s = Secrets(s)
 	s = pemKey.ReplaceAllString(s, redacted)
 	s = redactNamed(s, namedPair, true)
 	s = redactNamed(s, secretFlag, false)
-	s = userFlag.ReplaceAllString(s, "${1}"+Redacted)
+	s = userFlag.ReplaceAllString(s, "${1}"+redacted)
 	return bareRun.ReplaceAllStringFunc(s, func(run string) string {
 		if len(run) == 40 && strings.Trim(run, "0123456789abcdefABCDEF") != "" { // not a SHA-1
 			return redacted
