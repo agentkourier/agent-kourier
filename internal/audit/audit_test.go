@@ -349,3 +349,88 @@ func TestWriteSurvivesCancelledContext(t *testing.T) {
 		t.Errorf("row = %+v", got)
 	}
 }
+
+// freeShapes are the shapes of a secret in free text that only the full rules know: the ones of the
+// display redaction (32b2), at the audit boundary. Each says what must not be stored and a
+// neighbour that must stay.
+var freeShapes = []struct{ name, in, secret, visible string }{
+	{"flag with =", "psql --password=SECRETVAL -h VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"environment assignment", "PGPASSWORD=SECRETVAL psql -h VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"connection string", "host=VISIBLE user=app password=SECRETVAL dbname=x", "SECRETVAL", "VISIBLE"},
+	{"JSON", `{"password":"SECRETVAL","user":"VISIBLE"}`, "SECRETVAL", "VISIBLE"},
+	{"hash rocket", "{'password' => 'SECRETVAL', 'user' => 'VISIBLE'}", "SECRETVAL", "VISIBLE"},
+	{"authorization with a scheme", "curl -H 'Authorization: Token SECRETVAL' VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"cookie pairs", "Cookie: sid=SECRETVAL; csrf=SECRETTWO", "SECRETTWO", "Cookie"},
+	{"PEM private key", "VISIBLE -----BEGIN RSA PRIVATE KEY----- MIIEowIBAAKCAQEASECRETVAL -----END RSA PRIVATE KEY-----", "SECRETVAL", "VISIBLE"},
+	{"URL userinfo", "https://adm:SECRETVAL@host/VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a space in a URL password", "VISIBLE@x https://adm:pa SECRETVAL@host/x", "SECRETVAL", "VISIBLE@x"},
+	{"schemeless user and password", "root:SECRETVAL@10.0.0.1:5432/VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"AWS secret key by shape", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYSECRETVAL1 VISIBLE", "SECRETVAL1", "VISIBLE"},
+	{"pair after a newline", "VISIBLE: 1\nkey: SECRETVAL", "SECRETVAL", "VISIBLE"},
+	{"zero-width in a pair name", "VISIBLE pass\u200bword=SECRETVAL", "SECRETVAL", "VISIBLE"},
+	{"secret flag then its value", "tool --token SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"curl -u", "curl -u admin:SECRETVAL https://VISIBLE", "SECRETVAL", "admin"},
+	{"a quote that never closes", `VISIBLE password="SECRETVAL and more`, "SECRETVAL", "VISIBLE"},
+	{"a planted marker", "VISIBLE password=[redacted]SECRETVAL", "SECRETVAL", "VISIBLE"},
+}
+
+// Every free-text field takes the full rules: an unusable pause's reason, the error a failed write
+// returns, and the line the failure is logged as.
+func TestFreeTextTakesTheFullRules(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range freeShapes {
+		w, s := newWriter(t)
+		if err := w.UnusablePause(ctx, who, "task1", "ctx1", errors.New(tc.in)); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := only(t, s).Outcome; strings.Contains(got, tc.secret) || !strings.Contains(got, tc.visible) {
+			t.Errorf("%s: stored outcome %q; want %q gone and %q kept", tc.name, got, tc.secret, tc.visible)
+		}
+		var logs bytes.Buffer
+		failed := New(failing{err: errors.New("disk full " + tc.in)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		err := failed.Event(ctx, who, SourceAlert, "evt-1", EventAccepted)
+		if err == nil || strings.Contains(err.Error(), tc.secret) || strings.Contains(logs.String(), tc.secret) {
+			t.Errorf("%s: returned error %v, log %q; want %q in neither", tc.name, err, logs.String(), tc.secret)
+		}
+	}
+}
+
+// An identifier is not free text: the identity of a Binding, "secret:namespace/name", is a reference
+// to a Secret and stays readable, as do the identifiers the rules would otherwise take for a
+// secret's name.
+func TestIdentifiersAreNotReadAsFreeText(t *testing.T) {
+	w, s := newWriter(t)
+	a := Actor{User: "U1", Email: "u1@example.com", Identity: "secret:ns/token", Binding: "ns/key-service"}
+	if err := w.Event(context.Background(), a, SourceAlert, "evt-token=1", EventAccepted); err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, s)
+	if got.Identity != "secret:ns/token" || got.Binding != "ns/key-service" || got.Subject != "evt-token=1" {
+		t.Errorf("row = %+v; want the identity, binding and subject kept as written", got)
+	}
+}
+
+// FuzzFreeTextNeverStoresAValue: whatever follows a secret name in a reason is not stored.
+func FuzzFreeTextNeverStoresAValue(f *testing.F) {
+	for _, s := range []string{"hunter2hunter2", "Zq9\nxx", "a b", "x=y", "\u200b"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, v string) {
+		var b strings.Builder
+		for _, r := range v {
+			if r < 0x80 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		secret := "Zx7" + b.String() + "Qq9"
+		for _, in := range []string{"password=" + secret, "--token " + secret, `{"api_key":"` + secret + `"}`, "https://u:" + secret + "@host/", "PGPASSWORD=" + secret + " psql"} {
+			w, s := newWriter(t)
+			if err := w.UnusablePause(context.Background(), who, "task1", "ctx1", errors.New(in)); err != nil {
+				t.Fatal(err)
+			}
+			if got := only(t, s).Outcome; strings.Contains(got, secret) {
+				t.Errorf("reason %q stored as %q; want %q gone", in, got, secret)
+			}
+		}
+	})
+}

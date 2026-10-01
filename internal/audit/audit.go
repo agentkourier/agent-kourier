@@ -2,11 +2,12 @@
 //
 // The router, the session manager and the interaction flow call it, so no caller builds a
 // store.AuditEntry by hand. It takes identifiers and typed outcomes, never payloads. Every
-// string that reaches a row (identifiers, and an unusable pause's reason, which is fixed
-// dialect text, spec 8.4 step 1) is cleaned, run through redact.Secrets and capped.
-// This repeats the store's own redaction (every field but Email, after WP-23c) on purpose:
-// only this package also deletes invisible characters and unifies spaces first. Returned
-// errors and the failure log are cleaned the same way.
+// string that reaches a row is cleaned, redacted and capped: an identifier through redact.Secrets
+// (the shapes of a token), and free text (an outcome, an unusable pause's reason, an error) through
+// redact.Text too, which also takes the value of a "--password=x", a connection string, a key block
+// or a URL's credentials. This repeats the store's own redaction (every field but Email, after
+// WP-23c) on purpose: only this package also deletes invisible characters and unifies spaces first.
+// Returned errors and the failure log are cleaned the same way.
 //
 // Failure policy (spec 8.6 step 7). No write is dropped silently: each failure is logged
 // (without the entry), counted through Options.OnFailure, and returned. The caller then
@@ -252,7 +253,7 @@ func (w *Writer) UnusablePause(ctx context.Context, a Actor, taskID a2a.TaskID, 
 	if cause == nil {
 		return fail(store.ErrInvalid, "audit unusable pause: a cause is required")
 	}
-	return w.pause(ctx, a, taskID, contextID, "unusable_pause: "+clean(cause.Error(), maxReason))
+	return w.pause(ctx, a, taskID, contextID, "unusable_pause: "+cleanFree(cause.Error(), maxReason))
 }
 
 // UnusablePauseCancel records the cancel of an unusable pause: ok when cancelErr is nil,
@@ -277,11 +278,11 @@ func (w *Writer) pause(ctx context.Context, a Actor, taskID a2a.TaskID, contextI
 // append cleans a's fields and writes the entry, detached from ctx's cancellation.
 func (w *Writer) append(ctx context.Context, kind store.AuditKind, a Actor, at time.Time, subject, outcome string) error {
 	e := store.AuditEntry{At: at, Kind: kind, User: clean(a.User, maxField), Email: clean(a.Email, maxField),
-		Identity: clean(a.Identity, maxField), Binding: clean(a.Binding, maxField), Subject: subject, Outcome: clean(outcome, store.MaxAuditOutcome)}
+		Identity: clean(a.Identity, maxField), Binding: clean(a.Binding, maxField), Subject: subject, Outcome: cleanFree(outcome, store.MaxAuditOutcome)}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.opts.Timeout)
 	defer cancel()
 	if err := w.log.AppendAudit(wctx, e); err != nil {
-		w.opts.Logger.ErrorContext(ctx, "audit write failed", "kind", kind, "error", clean(err.Error(), maxReason))
+		w.opts.Logger.ErrorContext(ctx, "audit write failed", "kind", kind, "error", cleanFree(err.Error(), maxReason))
 		if w.opts.OnFailure != nil {
 			w.opts.OnFailure(kind)
 		}
@@ -307,7 +308,7 @@ func fail(cause error, format string, args ...any) error {
 	for i, a := range args {
 		args[i] = clean(fmt.Sprint(a), maxField)
 	}
-	return &cleanError{msg: clean(fmt.Sprintf(format, args...)+": "+cause.Error(), maxError), cause: cause}
+	return &cleanError{msg: cleanFree(fmt.Sprintf(format, args...)+": "+cause.Error(), maxError), cause: cause}
 }
 
 // errorTags names the typed causes in err, never its text.
@@ -366,14 +367,27 @@ func orElse[T ~string](have, fallback T) T {
 // defence in depth, and the store holds without it.
 var gluedBearer = regexp.MustCompile(`(?i)bearer(?::\s*\S+|[A-Za-z0-9]\S{7,})`)
 
-// clean makes s safe for a row: it deletes format characters, turns control characters and
-// every Unicode space into an ASCII space, redacts secrets, and caps s at limit bytes,
-// ending in "..." when it cut. The order matters. Format characters are deleted and spaces
-// unified first, as defence in depth: the redact package's Secrets handles Unicode gaps on its
-// own since WP-23c, and the redaction does not depend on this step. Redaction runs before the
-// cut, so a token cannot be cut short of its pattern.
+// clean makes s safe for an identifier field: it deletes format characters, turns control
+// characters and every Unicode space into an ASCII space, redacts the shapes of a token
+// (redact.Secrets), and caps s at limit bytes, ending in "..." when it cut. The order matters.
+// Format characters are deleted and spaces unified first, as defence in depth: redact.Secrets
+// handles Unicode gaps on its own, and the redaction does not depend on this step. Redaction runs
+// before the cut, so a token cannot be cut short of its pattern.
 func clean(s string, limit int) string {
-	s = strings.Map(func(r rune) rune {
+	return capped(gluedBearer.ReplaceAllString(redact.Secrets(unify(s)), "[redacted]"), limit)
+}
+
+// cleanFree is clean for free text: an outcome, an error, a reason an agent's dialect gave. It
+// redacts with every rule of redact.Text, which also takes the value of a "--password=x", a
+// connection string, a key block or a URL's credentials. Identifiers do not take it: it would read
+// the identity "secret:ns/name" as a secret named "secret".
+func cleanFree(s string, limit int) string {
+	return capped(gluedBearer.ReplaceAllString(redact.Text(unify(s)), "[redacted]"), limit)
+}
+
+// unify deletes format characters and turns control characters and every Unicode space into a space.
+func unify(s string) string {
+	return strings.Map(func(r rune) rune {
 		switch {
 		case unicode.Is(unicode.Cf, r):
 			return -1
@@ -382,7 +396,10 @@ func clean(s string, limit int) string {
 		}
 		return r
 	}, s)
-	s = gluedBearer.ReplaceAllString(redact.Secrets(s), "[redacted]")
+}
+
+// capped cuts s to limit bytes at a character boundary, ending in "..." when it cut.
+func capped(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
