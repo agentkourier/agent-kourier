@@ -434,3 +434,41 @@ func FuzzFreeTextNeverStoresAValue(f *testing.F) {
 		}
 	})
 }
+
+// An outcome is tags and identifiers, and an identifier is the agent's own: a duplicate run's
+// holders are listed as they are, whatever they look like. A 36-character base62 ID, glued by "ids="
+// into a run the AWS rule knows by shape, a 40-character ID that is no hex, and one with "token=" in
+// it are all task IDs a generic A2A backend may choose.
+func TestDuplicateRunKeepsTheHolderIDsAsTheyAre(t *testing.T) {
+	holders := []a2a.TaskID{a2a.TaskID(strings.Repeat("aB3dE5", 6)), a2a.TaskID(strings.Repeat("Zq9x", 10)), "job-token=abc", "last"}
+	w, s := newWriter(t)
+	if err := w.AgentCall(context.Background(), who, Call{Op: OpFindTask, ContextID: "c1", Holders: holders}); err != nil {
+		t.Fatal(err)
+	}
+	want := "find_task: duplicate_run holders=4 ids=" + strings.Join([]string{string(holders[0]), string(holders[1]), string(holders[2]), "last"}, ",")
+	if got := only(t, s).Outcome; got != want {
+		t.Errorf("outcome = %q; want %q, every holder named", got, want)
+	}
+}
+
+// Redaction runs before the cap, so a secret that straddles it is gone whole, not shown in part: the
+// reason is cut at 120 bytes, and a key that starts at byte 100 or a value that starts there does not
+// leave its first 20 characters.
+func TestASecretAcrossTheReasonCapIsNotShownInPart(t *testing.T) {
+	const key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYSECRETVAL1"
+	for name, reason := range map[string]string{
+		"an AWS-shaped key": strings.Repeat("x ", 50) + key + " tail",
+		"a password pair":   strings.Repeat("x ", 50) + "password=" + key + " tail",
+		"a flag then value": strings.Repeat("x ", 50) + "--token " + key + " tail",
+		"URL userinfo":      strings.Repeat("x ", 48) + "https://adm:" + key + "@host/ tail",
+	} {
+		w, s := newWriter(t)
+		if err := w.UnusablePause(context.Background(), who, "task1", "ctx1", errors.New(reason)); err != nil {
+			t.Fatal(err)
+		}
+		got := only(t, s).Outcome
+		if strings.Contains(got, key[:10]) || strings.Contains(got, "SECRETVAL") {
+			t.Errorf("%s: stored %q; want the key gone whole", name, got)
+		}
+	}
+}
