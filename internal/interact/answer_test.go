@@ -201,3 +201,13 @@ func TestExtractAnswerRefusesWhatIsNotAnAskUserPause(t *testing.T) {
 		}
 	}
 }
+
+// TestAControlOfAKindNotKnownReadsAsUnanswered: a kind added to render later must not be read as answered
+// before extract learns it.
+func TestAControlOfAKindNotKnownReadsAsUnanswered(t *testing.T) {
+	q := dialect.Question{Text: "Which?", Choices: []string{"a", "b"}}
+	c := render.Control{Kind: render.ControlKind(99), Element: "plain_text_input"}
+	if vals, why, ok := extract(q, c, slack.Input{Type: "plain_text_input", Values: []string{"a"}}); ok || why != Unanswered || vals != nil {
+		t.Errorf("extract = %v, %v, %v; want it unanswered", vals, why, ok)
+	}
+}

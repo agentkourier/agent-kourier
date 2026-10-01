@@ -1,6 +1,3 @@
-// Package interact turns an agent's pause into a question in the thread (spec 8.4). The intake
-// records a pause as an interaction and posts its prompt through the outbox, and when the same pause
-// comes again after a crash it finishes what the crash left undone.
 package interact
 
 import (
@@ -108,6 +105,8 @@ func extract(q dialect.Question, c render.Control, input slack.Input) (vals []st
 			}
 			out = append(out, q.Choices[n])
 		}
+	default: // a kind this code does not know yet is not an answer
+		return nil, Unanswered, false
 	}
 	out = dedupe(out)
 	if len(out) > 1 && !q.Multiple {
