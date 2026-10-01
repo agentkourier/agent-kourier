@@ -28,6 +28,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // Slack's limits, in characters. UNCONFIRMED(WP-04): the 12000 of a markdown block or a stream
@@ -40,7 +41,7 @@ const (
 
 	// Truncated ends text that was cut at a limit. v1 truncates; it does not continue in a
 	// further message. It holds nothing that needs escaping, in any style.
-	Truncated = "… (truncated)"
+	Truncated = redact.Truncated
 
 	maxToolName = 64  // units of a tool name in a status line
 	maxToolArgs = 160 // units of the argument summary in a status line
@@ -99,7 +100,7 @@ func Body(events []agent.TextEvent, limit int, flavour Flavour) string {
 
 // ToolLine returns the status line for a tool call: the tool's name and a summary of its
 // arguments, sorted by key, as "Calling name(key=value, ...)". Secrets are taken out first, before
-// anything is shown or cut (redactArgs and redactSummary): values by the name they sit under, in
+// anything is shown or cut (redactArgs and redact.Text): values by the name they sit under, in
 // maps and in "name=value" text, URL credentials, private keys, tokens and AWS keys by shape.
 // Then name and summary are each made inert, on one line, and capped, so the line is short
 // whatever the agent sent.
@@ -124,7 +125,7 @@ func toolSummary(shown map[string]any) string {
 	for i, k := range keys {
 		parts[i] = k + "=" + jsonValue(shown[k])
 	}
-	return redactSummary(boundWords(strings.Join(parts, ", ")))
+	return redact.Text(strings.Join(parts, ", "))
 }
 
 // jsonValue is v as compact JSON, with "<", ">" and "&" left as they are for render to escape.
