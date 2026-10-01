@@ -17,8 +17,8 @@ var ErrTimeout = errors.New("e2e: timed out")
 // timeout. It never sleeps a fixed time: it ends when the condition holds. An error from cond does
 // not end the wait (a restarting service refuses connections for a while); the last one is wrapped
 // in the timeout error (not one from a poll the deadline cut off), so a broken dependency is not
-// mistaken for a quiet one. (true, err) is not
-// success. A cancelled ctx ends the wait with ctx's error, not ErrTimeout.
+// mistaken for a quiet one. (true, err) is not success. A cancelled ctx ends the wait with ctx's
+// error, not ErrTimeout.
 func Wait(ctx context.Context, timeout time.Duration, desc string, cond func(context.Context) (bool, error)) error {
 	wctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

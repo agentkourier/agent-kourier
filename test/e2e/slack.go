@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -17,14 +18,6 @@ type Slack struct{ c *client }
 
 // NewSlack returns a client for the fake Slack at baseURL.
 func NewSlack(baseURL string) *Slack { return &Slack{newClient(baseURL)} }
-
-// Message is a message as the control surface shows it: Slack's shape, plus the streaming state
-// and the chunks of a chat.startStream message, which Slack's wire format leaves out.
-type Message struct {
-	fakeslack.Message
-	Streaming bool              `json:"streaming"`
-	Chunks    []json.RawMessage `json:"chunks"`
-}
 
 // Mention posts text as user in channel. It must mention the bot, and a client must be connected
 // over Socket Mode (else 409), because the fake delivers the events. The UserMessage lists the
@@ -43,9 +36,21 @@ func (s *Slack) DM(ctx context.Context, user, text string) (fakeslack.UserMessag
 	return s.say(ctx, "dm", map[string]string{"user": user, "text": text})
 }
 
+// say makes one of the three posts. If the fake stored the message but could not deliver its events
+// (no client connected any more), the error body carries the stored message, and say returns it
+// with the error, so a caller that retries need not post it twice.
 func (s *Slack) say(ctx context.Context, action string, in map[string]string) (fakeslack.UserMessage, error) {
 	var out fakeslack.UserMessage
 	err := s.c.do(ctx, http.MethodPost, "/_control/"+action, in, &out)
+	var se *StatusError
+	if errors.As(err, &se) {
+		var partial struct {
+			Message fakeslack.UserMessage `json:"message"`
+		}
+		if json.Unmarshal([]byte(se.Body), &partial) == nil {
+			out = partial.Message
+		}
+	}
 	return out, err
 }
 
@@ -89,24 +94,24 @@ func (s *Slack) Connections(ctx context.Context) (int, error) {
 }
 
 // Messages returns everything stored in channel, in order.
-func (s *Slack) Messages(ctx context.Context, channel string) ([]Message, error) {
+func (s *Slack) Messages(ctx context.Context, channel string) ([]fakeslack.MessageView, error) {
 	return s.read(ctx, "/_control/messages?"+url.Values{"channel": {channel}}.Encode())
 }
 
 // Thread returns the thread rooted at ts in channel, root first; an unknown thread is a 404.
-func (s *Slack) Thread(ctx context.Context, channel, ts string) ([]Message, error) {
+func (s *Slack) Thread(ctx context.Context, channel, ts string) ([]fakeslack.MessageView, error) {
 	return s.read(ctx, "/_control/thread?"+url.Values{"channel": {channel}, "ts": {ts}}.Encode())
 }
 
-func (s *Slack) read(ctx context.Context, path string) ([]Message, error) {
-	var msgs []Message
+func (s *Slack) read(ctx context.Context, path string) ([]fakeslack.MessageView, error) {
+	var msgs []fakeslack.MessageView
 	err := s.c.do(ctx, http.MethodGet, path, nil, &msgs)
 	return msgs, err
 }
 
-// Acked reports at once whether courier has acked the envelope, and the ack's payload. An
+// acked reports at once whether courier has acked the envelope, and the ack's payload. An
 // unknown envelope is a 404.
-func (s *Slack) Acked(ctx context.Context, envelopeID string) (bool, json.RawMessage, error) {
+func (s *Slack) acked(ctx context.Context, envelopeID string) (bool, json.RawMessage, error) {
 	var out struct {
 		Acked   bool            `json:"acked"`
 		Payload json.RawMessage `json:"payload"`
@@ -116,11 +121,11 @@ func (s *Slack) Acked(ctx context.Context, envelopeID string) (bool, json.RawMes
 }
 
 // AckWait waits up to timeout for courier to ack the envelope and returns the ack's payload. It
-// polls Acked rather than holding a request open.
+// polls acked rather than holding a request open.
 func (s *Slack) AckWait(ctx context.Context, timeout time.Duration, envelopeID string) (json.RawMessage, error) {
 	var payload json.RawMessage
 	err := Wait(ctx, timeout, "envelope "+envelopeID+" to be acked", func(ctx context.Context) (bool, error) {
-		acked, p, err := s.Acked(ctx, envelopeID)
+		acked, p, err := s.acked(ctx, envelopeID)
 		payload = p
 		return acked, err
 	})

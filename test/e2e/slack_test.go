@@ -41,10 +41,15 @@ func (f fixture) connect(t *testing.T, ack bool) {
 	done := make(chan struct{})
 	go func() { defer close(done); _ = smc.RunContext(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
-	go func() {
-		for ev := range smc.Events {
-			if ack && ev.Request != nil {
-				_ = smc.Ack(*ev.Request)
+	go func() { // slack-go never closes Events, so this ends with the test's context
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-smc.Events:
+				if ack && ev.Request != nil {
+					_ = smc.Ack(*ev.Request)
+				}
 			}
 		}
 	}()
@@ -184,7 +189,7 @@ func TestSlackErrorsSurface(t *testing.T) {
 	if _, err := NewSlack(down.URL).Connections(ctx); status(err) != http.StatusInternalServerError {
 		t.Errorf("Connections of a failing fake = %v, want a 500", err)
 	}
-	if _, _, err := f.sl.Acked(ctx, "env-nope"); status(err) != http.StatusNotFound {
+	if _, _, err := f.sl.acked(ctx, "env-nope"); status(err) != http.StatusNotFound {
 		t.Errorf("Acked of an unknown envelope = %v, want a 404", err)
 	}
 	if _, err := f.sl.AckWait(ctx, 100*time.Millisecond, "env-nope"); !errors.Is(err, ErrTimeout) || status(err) != http.StatusNotFound {
@@ -199,10 +204,25 @@ func TestSlackAckWaitTimesOutOnAnEnvelopeNobodyAcks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if acked, _, err := f.sl.Acked(ctx, mention.Envelopes[0]); err != nil || acked {
+	if acked, _, err := f.sl.acked(ctx, mention.Envelopes[0]); err != nil || acked {
 		t.Fatalf("Acked = %v, %v, want false", acked, err)
 	}
 	if _, err := f.sl.AckWait(ctx, 100*time.Millisecond, mention.Envelopes[0]); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("AckWait = %v, want ErrTimeout", err)
+	}
+}
+
+func TestSlackFailedDeliveryStillReturnsTheStoredMessage(t *testing.T) {
+	// A control call whose events could not be delivered has already stored the message, and the
+	// fake says so in the error body, so a caller that retries does not post it twice.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"no client","message":{"channel":"C1","ts":"1.2","envelopes":["e1"]}}`))
+	}))
+	defer srv.Close()
+	got, err := NewSlack(srv.URL).Mention(t.Context(), "C1", "U1", fakeMention)
+	var se *StatusError
+	if !errors.As(err, &se) || got.TS != "1.2" || got.Channel != "C1" || len(got.Envelopes) != 1 {
+		t.Fatalf("Mention = %+v, %v; want the 409 and the stored message", got, err)
 	}
 }

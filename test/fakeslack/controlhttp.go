@@ -54,18 +54,20 @@ type (
 	}
 )
 
-// messageView is a Message as the control surface shows it: the Slack shape
+// MessageView is a Message as the control surface shows it: the Slack shape
 // plus the streaming state and chunks that the Slack wire format leaves out.
-type messageView struct {
+// Read Streaming and Chunks on the view itself: they shadow Message's own
+// fields of the same names, which JSON skips and so stay zero when decoded.
+type MessageView struct {
 	Message
 	Streaming bool              `json:"streaming"`
 	Chunks    []json.RawMessage `json:"chunks,omitempty"`
 }
 
-func views(msgs []Message) []messageView {
-	out := make([]messageView, len(msgs))
+func views(msgs []Message) []MessageView {
+	out := make([]MessageView, len(msgs))
 	for i, m := range msgs {
-		out[i] = messageView{m, m.Streaming, m.Chunks}
+		out[i] = MessageView{m, m.Streaming, m.Chunks}
 	}
 	return out
 }
