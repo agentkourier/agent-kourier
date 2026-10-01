@@ -26,3 +26,20 @@ func PermanentCode(err error) string {
 	}
 	return ""
 }
+
+// FatalAuthCode returns the Slack error code in err if it says that the tokens will never work: a
+// rejected, revoked or missing token, or a deactivated account. Running again cannot cure it, so the
+// process exits and says why, where any other error from Run is retried with a backoff. It is not
+// PermanentCode, which is about one post. It reads the code scrub keeps, through any wrapping, and
+// is "" for an error that is not Slack's own, whatever its text says.
+func FatalAuthCode(err error) string {
+	var resp slackgo.SlackErrorResponse
+	if !errors.As(err, &resp) {
+		return ""
+	}
+	switch resp.Err {
+	case "invalid_auth", "token_revoked", "account_inactive", "not_authed":
+		return resp.Err
+	}
+	return ""
+}
