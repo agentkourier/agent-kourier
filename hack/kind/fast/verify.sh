@@ -34,8 +34,8 @@ assert_context fast
 assert_never_published
 
 echo "== courier: ready"
-# The testhooks image starts without a renderer and interactions (WP-35h), and reaches ready. A courier that
-# does not is shown with its own log, which holds no token or Secret value, and its pod's events.
+# The testhooks image starts, and reaches ready. A courier that does not is shown with its own log, which
+# holds no token or Secret value, and its pod's events.
 courier_fail() {
   echo "FAIL: $1" >&2
   "${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o wide >&2 || true

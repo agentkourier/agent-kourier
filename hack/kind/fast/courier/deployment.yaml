@@ -8,8 +8,8 @@
 # cmd/courier takes no arguments and is configured by the environment below (its package comment lists
 # every variable). COURIER_LISTEN is the address of /healthz, /readyz and /metrics, and the container's
 # named port and all three probes are on it. The Slack tokens are not in the environment: the resolver
-# reads the Secrets through the API, which the Role in rbac.yaml allows. Only the testhooks build, which this
-# tier runs, starts without a renderer and interactions (WP-35h), so a failure to become ready names them.
+# reads the Secrets through the API, which the Role in rbac.yaml allows. This tier runs the testhooks build,
+# which differs from the production one only by its test hooks (internal/testhooks).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
