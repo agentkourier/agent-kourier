@@ -16,7 +16,6 @@ package render
 import (
 	"bytes"
 	"encoding/json"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -24,7 +23,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
-	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // Slack's limits, in characters. UNCONFIRMED(WP-04): the 12000 of a markdown block or a stream
@@ -94,19 +92,12 @@ func Body(events []agent.TextEvent, limit int, flavour Flavour) string {
 	return render(strings.Join(parts, "\n\n"), limit, flavour == FlavourMarkdown, true)
 }
 
-// secretKey matches the names of arguments whose values are never shown (spec 8.4).
-var secretKey = regexp.MustCompile(`(?i)pass|secret|token|key|auth|credential|cookie`)
-
-// urlUserinfo matches the credentials in "scheme://user:pass@host": everything up to the last "@"
-// of the word, so an "@" or a "/" in the password does not end it early. A path with an "@" in it
-// is redacted too, which loses a little and leaks nothing.
-var urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s"]*@`)
-
 // ToolLine returns the status line for a tool call: the tool's name and a summary of its
 // arguments, sorted by key, as "Calling name(key=value, ...)". Secrets are taken out first, before
-// anything is shown or cut: the value of an argument whose name matches secretKey, at any depth,
-// the credentials in a URL, and anything store.RedactSecrets knows for a token. Then name and
-// summary are each made inert, on one line, and capped, so the line is short whatever the agent sent.
+// anything is shown or cut (redactArgs and redactSummary): values by the name they sit under, in
+// maps and in "name=value" text, URL credentials, private keys, tokens and AWS keys by shape.
+// Then name and summary are each made inert, on one line, and capped, so the line is short
+// whatever the agent sent.
 // flavour is the text it will sit in: for FlavourMarkdown, "[text](url)" in a name or an argument
 // is escaped too, and does not become a link.
 func ToolLine(name string, args map[string]any, flavour Flavour) string {
@@ -120,33 +111,9 @@ func ToolLine(name string, args map[string]any, flavour Flavour) string {
 	for i, k := range keys {
 		parts[i] = k + "=" + jsonValue(shown[k])
 	}
-	summary := store.RedactSecrets(urlUserinfo.ReplaceAllString(strings.Join(parts, ", "), "${1}[redacted]@"))
+	summary := redactSummary(strings.Join(parts, ", "))
 	md := flavour == FlavourMarkdown
 	return "Calling " + render(name, maxToolName, md, false) + "(" + render(summary, maxToolArgs, md, false) + ")"
-}
-
-// redactArgs returns v with the value of every map key that matches secretKey replaced, in nested
-// maps and lists too.
-func redactArgs(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, x := range t {
-			if secretKey.MatchString(k) {
-				out[k] = "[redacted]"
-			} else {
-				out[k] = redactArgs(x)
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, x := range t {
-			out[i] = redactArgs(x)
-		}
-		return out
-	}
-	return v
 }
 
 // jsonValue is v as compact JSON, with "<", ">" and "&" left as they are for render to escape.
