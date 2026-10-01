@@ -112,6 +112,20 @@ func TestResolveSpecExample(t *testing.T) {
 	}
 }
 
+// Courier builds only the kagent-v1 dialect. A Binding on any other must not resolve, or every
+// mention in its channel would fail silently when the snapshot is served.
+func TestResolveRejectsABindingOnAnUnbuiltDialect(t *testing.T) {
+	set := specSet(t)
+	set.AgentBackends[0].Spec.Dialect = v1alpha1.DialectA2A
+	const why = `: spec.agent.backendRef: AgentBackend courier-system/kagent-pilot uses the "a2a" dialect, and only "kagent-v1" is built`
+	wantProblems(t, set, specSecrets(), "Binding sre/chat-only"+why, "Binding sre/sre-alerts"+why)
+
+	set = specSet(t) // the dialect that is built still resolves
+	if _, err := Resolve(context.Background(), set, specSecrets()); err != nil {
+		t.Errorf("a kagent-v1 Binding failed to resolve: %v", err)
+	}
+}
+
 func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 	set := specSet(t)
 	set.Bindings = slices.DeleteFunc(set.Bindings, func(b v1alpha1.Binding) bool { return b.Name != "sre-alerts" })

@@ -27,6 +27,9 @@ type ReloaderConfig struct {
 	SecretsInterval time.Duration
 	// Logger receives reload problems. It defaults to slog.Default().
 	Logger *slog.Logger
+	// OnError is called with the error of each failed reload that Status.Errors counts, for a
+	// metric. It runs on the reloading goroutine, so it must not block.
+	OnError func(error)
 }
 
 // Status describes the health of a Reloader.
@@ -48,6 +51,7 @@ type Reloader struct {
 	poll         time.Duration
 	secretsEvery time.Duration
 	log          *slog.Logger
+	onError      func(error)
 
 	snap   atomic.Pointer[Snapshot]
 	status atomic.Pointer[Status]
@@ -71,6 +75,7 @@ func NewReloader(cfg ReloaderConfig) *Reloader {
 		poll:         cmp.Or(cfg.PollInterval, 10*time.Second),
 		secretsEvery: cmp.Or(cfg.SecretsInterval, time.Minute),
 		log:          cmp.Or(cfg.Logger, slog.Default()),
+		onError:      cfg.OnError,
 	}
 	r.status.Store(&Status{})
 	return r
@@ -140,6 +145,9 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		r.snap.Store(snap)
 	}
 	r.status.Store(&st)
+	if err != nil && r.onError != nil { // after the status, so a hook that reads Status sees Stale
+		r.onError(err)
+	}
 	return err
 }
 

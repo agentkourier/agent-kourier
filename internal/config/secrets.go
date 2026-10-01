@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -26,6 +27,30 @@ const (
 	keyAppToken      = "appToken"
 	keySigningSecret = "signingSecret"
 )
+
+// SecretNamespaces returns the sorted namespaces whose Secrets set refers to, which are the ones
+// a SecretResolver must be given (D29: a Secret lives in the namespace of the object that names
+// it). It follows the references checkSecrets reads: every ChatConnection's credentials, an
+// AgentBackend's header Secrets, and a Binding's token and webhook token.
+func (s *Set) SecretNamespaces() []string {
+	seen := map[string]bool{}
+	for i := range s.AgentBackends {
+		for _, h := range s.AgentBackends[i].Spec.Headers {
+			if h.ValueSecretRef != nil {
+				seen[s.AgentBackends[i].Namespace] = true
+			}
+		}
+	}
+	for i := range s.ChatConnections {
+		seen[s.ChatConnections[i].Namespace] = true
+	}
+	for i := range s.Bindings {
+		if b := &s.Bindings[i]; b.Spec.Identity.TokenSecretRef != nil || b.Spec.Alerts != nil {
+			seen[b.Namespace] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
 
 // checkSecrets checks every Secret that an object of set refers to. Each lives in the
 // referring object's namespace (D29).

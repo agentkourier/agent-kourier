@@ -68,7 +68,7 @@ func newIntake(t *testing.T) (*slack.Intake, *submitter) {
 	}
 	allow := []string{"sre", "payments"}
 	snap, err := config.Resolve(t.Context(), &config.Set{
-		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{AllowedNamespaces: allow}}},
+		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
 		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
 		Bindings:        []v1alpha1.Binding{bind("sre", "sre-alerts", "C1"), bind("payments", "pay", "G1")},
 	}, allKeys{})

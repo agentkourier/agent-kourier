@@ -303,9 +303,14 @@ func TestRejectedIsWiredAndAuditedOnce(t *testing.T) {
 	}
 }
 
+// Resolve no longer lets such a Binding into a snapshot, so this is a second line of defence, and
+// the test makes the situation by editing the backend of a resolved snapshot.
 func TestOnlyKagentV1IsBuilt(t *testing.T) {
 	f := newFixture(t)
-	f.snaps.p.Store(snapshot(t, f.url, v1alpha1.DialectA2A, time.Hour))
+	snap := snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+	rb, _ := snap.Binding("sre", "oncall")
+	rb.Backend.Spec.Dialect = v1alpha1.DialectA2A
+	f.snaps.p.Store(snap)
 	_, err := f.b.Backend("sre/oncall")
 	if err == nil || errors.Is(err, session.ErrUnknownBinding) || !strings.Contains(err.Error(), `"a2a"`) {
 		t.Errorf("Backend of an a2a Binding = %v, want an error naming the dialect that is not the sentinel", err)

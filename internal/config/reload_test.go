@@ -105,6 +105,27 @@ func TestReloaderKeepsLastGoodSnapshot(t *testing.T) {
 	}
 }
 
+// OnError counts each failed reload once, as Status.Errors does, and is not told of one that was
+// only cut short.
+func TestReloaderCallsOnErrorForEachCountedFailure(t *testing.T) {
+	dir := specDir(t)
+	path := filepath.Join(dir, "binding.yaml")
+	var seen []error
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.DiscardHandler), OnError: func(err error) { seen = append(seen, err) }})
+	mustReload(t, r, true)
+
+	writeFile(t, path, "kind: [")
+	if err := r.reload(context.Background(), false); err == nil || len(seen) != 1 || !errors.Is(seen[0], err) {
+		t.Fatalf("after a bad edit: err %v, hook saw %v; want that one error", err, seen)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = r.reload(ctx, true)
+	if len(seen) != 1 {
+		t.Errorf("an interrupted reload reached the hook: %v", seen)
+	}
+}
+
 func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 	secrets := &countingSecrets{fakeSecrets: specSecrets()}
 	r := newTestReloader(specDir(t), secrets)

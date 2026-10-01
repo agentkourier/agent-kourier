@@ -3,8 +3,11 @@ package config
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
@@ -92,5 +95,28 @@ func TestResolveStopsWhenCanceled(t *testing.T) {
 	got := flatten(err)
 	if !errors.Is(err, context.Canceled) || len(got) != 2 || !strings.HasSuffix(got[1].Error(), "AgentBackend courier-system/nope not found") || secrets.reads != 1 {
 		t.Errorf("Resolve error = %v after %d reads; want context.Canceled once, then the reference problem, after 1 read", err, secrets.reads)
+	}
+}
+
+// Only an object that refers to a Secret needs its namespace watched: every ChatConnection does,
+// a backend does for a header Secret, a Binding for its token or its webhook token.
+func TestSecretNamespaces(t *testing.T) {
+	ref := &v1alpha1.SecretKeyRef{Name: "s"}
+	meta := func(ns string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: "x"} }
+	set := &Set{
+		AgentBackends: []v1alpha1.AgentBackend{
+			{ObjectMeta: meta("be-secret"), Spec: v1alpha1.AgentBackendSpec{Headers: []v1alpha1.Header{{Name: "A", ValueSecretRef: ref}}}},
+			{ObjectMeta: meta("be-plain"), Spec: v1alpha1.AgentBackendSpec{Headers: []v1alpha1.Header{{Name: "A", Value: "v"}}}},
+		},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("conn")}},
+		Bindings: []v1alpha1.Binding{
+			{ObjectMeta: meta("b-token"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{TokenSecretRef: ref}}},
+			{ObjectMeta: meta("b-alerts"), Spec: v1alpha1.BindingSpec{Alerts: &v1alpha1.Alerts{TokenSecretRef: *ref}}},
+			{ObjectMeta: meta("b-none"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{UserID: "u"}}},
+			{ObjectMeta: meta("conn")}, // a namespace named twice is listed once
+		},
+	}
+	if got, want := set.SecretNamespaces(), []string{"b-alerts", "b-token", "be-secret", "conn"}; !slices.Equal(got, want) {
+		t.Errorf("SecretNamespaces = %v, want %v", got, want)
 	}
 }

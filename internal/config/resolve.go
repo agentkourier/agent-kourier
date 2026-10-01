@@ -18,6 +18,10 @@ type ResolvedBinding struct {
 	Connection *v1alpha1.ChatConnection
 }
 
+// builtDialect is the one agent dialect courier has an implementation of. A Binding on another
+// does not resolve, so that no served snapshot holds a Binding that cannot run a turn.
+const builtDialect = v1alpha1.DialectKagentV1
+
 // channelKey identifies a chat channel on one connection.
 type channelKey struct {
 	connection identity
@@ -150,6 +154,11 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 	backend, err := find(r.backends, "AgentBackend", from, b.Spec.Agent.BackendRef,
 		func(be *v1alpha1.AgentBackend) []string { return be.Spec.AllowedNamespaces })
 	r.fail(from, "spec.agent.backendRef", err)
+	if backend != nil && backend.Spec.Dialect != builtDialect {
+		r.fail(from, "spec.agent.backendRef", fmt.Errorf("%s uses the %q dialect, and only %q is built",
+			identity{"AgentBackend", backend.Namespace, backend.Name}, backend.Spec.Dialect, builtDialect))
+		backend = nil
+	}
 	conn, err := find(r.conns, "ChatConnection", from, b.Spec.Chat.ConnectionRef,
 		func(c *v1alpha1.ChatConnection) []string { return c.Spec.AllowedNamespaces })
 	r.fail(from, "spec.chat.connectionRef", err)
