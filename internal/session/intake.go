@@ -58,7 +58,8 @@ type Result struct {
 // readAll is a threadTTL no session outlives: the real one is the session's Binding's.
 const readAll = 100 * 365 * 24 * time.Hour
 
-// Submit is the durable intake of a turn, called from the queue handler. It decides who owns
+// Submit is the durable intake of a turn, called by the chat adapter before it acknowledges
+// the event (spec 6.1), and by the alert path. It decides who owns
 // the thread, writes the session row for a new one, and queues the turn (idempotently, by
 // MessageID), all before it wakes the runner, so a crash loses nothing and the redelivered
 // event repeats what is left. It does not wait for the agent. An expired session is

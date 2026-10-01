@@ -3,6 +3,7 @@ package slack_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -65,7 +66,7 @@ func newFake(t *testing.T, opts ...fakeslack.Option) *fakeslack.Server {
 	return fake
 }
 
-func config(fake *fakeslack.Server) slack.Config {
+func clientConfig(fake *fakeslack.Server) slack.Config {
 	return slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: fake.URL() + "/",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
@@ -81,19 +82,26 @@ func run(t *testing.T, c *slack.Client, sk slack.Sink) (cancel context.CancelFun
 	return cancel, wait
 }
 
-// setup runs a Client against a fake Slack, once it is connected. At the end of the test
-// Run must return because its context was cancelled.
+// setup is start with a recording sink.
 func setup(t *testing.T) (*fakeslack.Server, *sink) {
 	t.Helper()
-	fake, sk := newFake(t), &sink{}
-	cancel, wait := run(t, slack.New(config(fake)), sk)
+	sk := &sink{}
+	return start(t, sk), sk
+}
+
+// start runs a Client against a fake Slack, once it is connected. At the end of the test
+// Run must return because its context was cancelled.
+func start(t *testing.T, sk slack.Sink) *fakeslack.Server {
+	t.Helper()
+	fake := newFake(t)
+	cancel, wait := run(t, slack.New(clientConfig(fake)), sk)
 	waitConnected(t, fake)
 	t.Cleanup(func() {
 		if cancel(); !errors.Is(wait(), context.Canceled) {
 			t.Errorf("Run after cancel = %v; want context.Canceled", wait())
 		}
 	})
-	return fake, sk
+	return fake
 }
 
 func waitConnected(t *testing.T, fake *fakeslack.Server) {
@@ -115,7 +123,7 @@ func message(extra map[string]any) map[string]any {
 // send delivers an Events API event to the client and returns its envelope ID.
 func send(t *testing.T, fake *fakeslack.Server, event map[string]any) string {
 	t.Helper()
-	id, err := fake.SendEnvelope("events_api", map[string]any{"type": "event_callback", "team_id": "TFAKE", "event_id": "Ev1", "event": event})
+	id, err := fake.SendEnvelope("events_api", map[string]any{"type": "event_callback", "team_id": "TFAKE", "event_id": fmt.Sprint("Ev", event["type"], event["event_ts"]), "event": event})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +258,7 @@ func TestRunEnds(t *testing.T) {
 		"app token": func(c *slack.Config) { c.AppToken = secret.New(canary) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			cfg := config(newFake(t))
+			cfg := clientConfig(newFake(t))
 			tok(&cfg)
 			_, wait := run(t, slack.New(cfg), &sink{})
 			if err := wait(); err == nil || !strings.Contains(err.Error(), "invalid_auth") || strings.Contains(err.Error(), canary) {
@@ -265,7 +273,7 @@ func TestRunEnds(t *testing.T) {
 func TestRunFailsClosedWithoutABotUserID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // so that a Run that does not refuse fails the test, not hangs it
 	defer cancel()
-	c := slack.New(config(newFake(t, fakeslack.WithBot("", "BFAKEBOT", "AFAKEAPP"))))
+	c := slack.New(clientConfig(newFake(t, fakeslack.WithBot("", "BFAKEBOT", "AFAKEAPP"))))
 	if err := c.Run(ctx, &sink{}); err == nil || !strings.Contains(err.Error(), "no bot user ID") {
 		t.Fatalf("Run = %v; want it to refuse a bot with no user ID", err)
 	}
