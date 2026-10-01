@@ -1,8 +1,10 @@
 package k8ssecrets
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strconv"
@@ -13,8 +15,10 @@ import (
 
 	"go.uber.org/goleak"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -373,5 +377,89 @@ func TestStopUnblocksStart(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start still blocked after Stop")
+	}
+}
+
+// denied is what the API server answers a ServiceAccount that has no Role in the namespace.
+func denied() error {
+	return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("RBAC: no list"))
+}
+
+// logBuffer is a log destination that the informers' goroutines and the test share.
+type logBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// A denied list never syncs, so waiting out the timeout would only hide the reason: Start fails
+// as soon as the API server says forbidden, and the error names the namespace and the cause.
+func TestStartFailsFastAndNamesAForbiddenList(t *testing.T) {
+	client := fake.NewClientset()
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denied() })
+	r := New(client, []string{"sre"})
+	t.Cleanup(r.Stop)
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+
+	begin := time.Now()
+	err := r.Start(ctx)
+
+	if !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), "forbidden") || !strings.Contains(err.Error(), `["sre"]`) {
+		t.Errorf("Start = %v, want an error naming namespace sre and wrapping the forbidden cause", err)
+	}
+	if took := time.Since(begin); took > 2*time.Second {
+		t.Errorf("Start took %s, want it to fail at the first denial, well before its 4s timeout", took)
+	}
+}
+
+// A transient failure is not worth giving up on: Start waits out its timeout, and the error
+// still names the cause.
+func TestStartNamesATransientCauseAtTheTimeout(t *testing.T) {
+	client := fake.NewClientset()
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection refused")
+	})
+	r := New(client, []string{"sre"})
+	t.Cleanup(r.Stop)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := r.Start(ctx); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("Start = %v, want the deadline and the cause", err)
+	}
+}
+
+// A watch that is denied leaves a cache that never updates. Whether the denial arrives before
+// Start has seen the first list sync is a race, so either outcome must name the cause: Start
+// fails with it, or it succeeds and the cause is in the log.
+func TestDeniedWatchIsReported(t *testing.T) {
+	client := fake.NewClientset(secret("sre", "creds"))
+	client.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) { return true, nil, denied() })
+	logs := &logBuffer{}
+	r := New(client, []string{"sre"}, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	t.Cleanup(r.Stop)
+	if err := r.Start(t.Context()); err != nil && !apierrors.IsForbidden(err) {
+		t.Fatalf("Start = %v, want success or the forbidden cause", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "forbidden") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no forbidden watch in the log: %q", logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(logs.String(), "sre") || strings.Contains(logs.String(), canary) {
+		t.Errorf("log %q should name namespace sre and hold no Secret value", logs.String())
 	}
 }

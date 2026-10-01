@@ -44,8 +44,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -87,13 +89,31 @@ type Resolver struct {
 	// Start cannot silently freeze the caches.
 	ctx        context.Context
 	cancel     context.CancelFunc
+	log        *slog.Logger
 	namespaces map[string]watched
+
+	mu     sync.Mutex
+	causes map[string]error // the latest list or watch failure of each namespace
+	denied chan struct{}    // closed at the first forbidden or unauthorized answer
+	once   sync.Once
 }
+
+// Option configures a Resolver.
+type Option func(*Resolver)
+
+// WithLogger sets where a failed list or watch is reported. The default is slog.Default().
+func WithLogger(l *slog.Logger) Option { return func(r *Resolver) { r.log = l } }
 
 // New returns a Resolver that watches Secrets in namespaces through client. It does nothing
 // until Start.
-func New(client kubernetes.Interface, namespaces []string) *Resolver {
-	r := &Resolver{namespaces: make(map[string]watched, len(namespaces))}
+func New(client kubernetes.Interface, namespaces []string, opts ...Option) *Resolver {
+	r := &Resolver{
+		log: slog.Default(), namespaces: make(map[string]watched, len(namespaces)),
+		causes: map[string]error{}, denied: make(chan struct{}),
+	}
+	for _, o := range opts {
+		o(r)
+	}
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	for _, ns := range namespaces {
 		if _, ok := r.namespaces[ns]; ok {
@@ -101,9 +121,24 @@ func New(client kubernetes.Interface, namespaces []string) *Resolver {
 		}
 		f := informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithNamespace(ns), informers.WithTransform(trim))
 		secrets := f.Core().V1().Secrets()
+		// The handler replaces client-go's, which logs through klog. The only error is an
+		// informer that has started, and this one has not.
+		_ = secrets.Informer().SetWatchErrorHandler(func(_ *cache.Reflector, err error) { r.failed(ns, err) })
 		r.namespaces[ns] = watched{factory: f, lister: secrets.Lister(), synced: secrets.Informer().HasSynced}
 	}
 	return r
+}
+
+// failed records why a namespace's list or watch failed and reports it. A forbidden or
+// unauthorized answer will not pass by waiting, so it also ends Start's wait.
+func (r *Resolver) failed(namespace string, err error) {
+	r.mu.Lock()
+	r.causes[namespace] = err
+	r.mu.Unlock()
+	r.log.Warn("secret informer cannot list or watch", "namespace", namespace, "error", err)
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		r.once.Do(func() { close(r.denied) })
+	}
 }
 
 // Start runs the informers and waits until every cache has synced, so the first Keys call
@@ -117,6 +152,13 @@ func (r *Resolver) Start(ctx context.Context) error {
 	wait, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.ctx, cancel)() //nolint:contextcheck // r.ctx is the informers' lifetime, deliberately not derived from Start's ctx
+	go func() {
+		select {
+		case <-r.denied:
+			cancel()
+		case <-wait.Done():
+		}
+	}()
 	var unsynced []string
 	for ns, w := range r.namespaces {
 		if !cache.WaitForCacheSync(wait.Done(), w.synced) {
@@ -125,9 +167,26 @@ func (r *Resolver) Start(ctx context.Context) error {
 	}
 	if len(unsynced) > 0 {
 		slices.Sort(unsynced)
-		return fmt.Errorf("secret caches not synced for namespaces %q: %w", unsynced, wait.Err())
+		err := wait.Err()
+		if causes := r.causesOf(unsynced); len(causes) > 0 {
+			err = fmt.Errorf("%w: %w", err, errors.Join(causes...))
+		}
+		return fmt.Errorf("secret caches not synced for namespaces %q: %w", unsynced, err)
 	}
 	return nil
+}
+
+// causesOf returns the latest failure of each of namespaces that has one, each naming its namespace.
+func (r *Resolver) causesOf(namespaces []string) []error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []error
+	for _, ns := range namespaces {
+		if err := r.causes[ns]; err != nil {
+			out = append(out, fmt.Errorf("namespace %s: %w", ns, err))
+		}
+	}
+	return out
 }
 
 // Stop ends the informers and waits for their goroutines to exit. Keys returns ErrStopped
