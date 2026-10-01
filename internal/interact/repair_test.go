@@ -14,6 +14,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -180,6 +181,40 @@ func TestARateLimitEndsThePass(t *testing.T) {
 	r.advance(31 * time.Second)
 	if err := r.r.Repair(t.Context()); err != nil || len(r.up.list()) != 6 {
 		t.Errorf("after the wait: Repair = %v, %d edits; want the five prompts edited, the first of them again", err, len(r.up.list())-1)
+	}
+}
+
+// updateFunc is an Updater that is a function.
+type updateFunc func(ctx context.Context, channel, ts string, c slack.Content) error
+
+func (f updateFunc) Update(ctx context.Context, channel, ts string, c slack.Content) error {
+	return f(ctx, channel, ts, c)
+}
+
+// TestARateLimitIsWaitedOutFromWhenItArrives: a pass of slow edits can last minutes, so Slack's Retry-After
+// is counted from the moment the rate limit comes back and not from the start of the pass. Counted from
+// the start, it may be spent already, and the next tick would edit inside Slack's window.
+func TestARateLimitIsWaitedOutFromWhenItArrives(t *testing.T) {
+	var r *repairRig
+	var attempts atomic.Int32
+	r = newRepairRig(t, func(c *interact.ReplacerConfig) {
+		c.Updater = updateFunc(func(context.Context, string, string, slack.Content) error {
+			attempts.Add(1)
+			r.advance(40 * time.Second) // the edit takes 40 seconds to be refused
+			return fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 30 * time.Second})
+		})
+	})
+	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
+	_ = r.r.Repair(t.Context()) // refused at 40 seconds into the pass: Slack asks for nothing before 70
+	r.advance(10 * time.Second) // 50: past the wait counted from the start of the pass (30), inside Slack's
+	_ = r.r.Repair(t.Context())
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("%d attempts; want the second pass to wait out the 30 seconds from the refusal, which came at 40", got)
+	}
+	r.advance(21 * time.Second) // 71
+	_ = r.r.Repair(t.Context())
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("%d attempts; want one more once the wait from the refusal is over", got)
 	}
 }
 

@@ -189,7 +189,7 @@ func (r *Replacer) Repair(ctx context.Context) error {
 		case err == nil:
 		case errors.As(err, &limited):
 			r.mu.Lock()
-			r.waitUntil = now.Add(max(limited.RetryAfter, time.Second))
+			r.waitUntil = r.cfg.Now().Add(max(limited.RetryAfter, time.Second)) // from when it arrived: the pass may have been long
 			r.mu.Unlock()
 			return errors.Join(errs...)
 		default:
