@@ -107,15 +107,12 @@ func New(cfg Config) *Outbox {
 // by a failed post or a crash, is looked up first and posted only if Slack has no such message.
 // A new row is posted at once. If the lookup fails nothing is posted, and the error is returned.
 func (o *Outbox) Send(ctx context.Context, p Post) (string, error) {
-	if p.Content.Text == "" && len(p.Content.Blocks) == 0 {
-		return "", fmt.Errorf("send %s: no text or blocks: %w", ID(p.Source, p.Role), store.ErrInvalid)
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
 	row, err := o.row(p)
 	if err != nil {
 		return "", err
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	created, err := o.cfg.Store.CreateOutbox(ctx, row)
 	if err != nil {
 		return "", err
@@ -127,24 +124,24 @@ func (o *Outbox) Send(ctx context.Context, p Post) (string, error) {
 	return ts, err
 }
 
-// row returns the outbox row for p, with the message as its payload. A post with no content has no
-// payload, which marks a stream: Reconcile and Run never deliver it.
+// row returns the outbox row for p, with the message as its payload. A post with no text and no
+// blocks is ErrInvalid: such a row would never be delivered, and would hold its ID for good.
 func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
 	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Channel: p.Channel, ThreadTS: p.ThreadTS, CreatedAt: o.cfg.Now()}
-	if p.Content.Text != "" || len(p.Content.Blocks) > 0 {
-		payload, err := json.Marshal(p.Content)
-		if err != nil {
-			return store.OutboxEntry{}, fmt.Errorf("outbox row %s: %w", row.ID, err)
-		}
-		row.Payload = string(payload)
+	if p.Content.Text == "" && len(p.Content.Blocks) == 0 {
+		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: no text or blocks: %w", row.ID, store.ErrInvalid)
 	}
+	payload, err := json.Marshal(p.Content)
+	if err != nil {
+		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w", row.ID, err)
+	}
+	row.Payload = string(payload)
 	return row, nil
 }
 
 // Enqueue writes the row for p and returns its ID, and does nothing else: no Slack call, so it is
 // safe where Slack waits for an answer, such as the session's Notice. Run delivers the row. The
-// same ID enqueued twice is one row and one post. A post with no content is a stream, which the
-// renderer records itself and Run leaves alone.
+// same ID enqueued twice is one row and one post. A post with no text and no blocks is ErrInvalid.
 func (o *Outbox) Enqueue(ctx context.Context, p Post) (string, error) {
 	row, err := o.row(p)
 	if err != nil {
@@ -199,7 +196,7 @@ func (o *Outbox) settle(id string, err error) {
 
 // Reconcile delivers every row that has a payload and no ref, oldest first, looking each up
 // before it posts: it is for startup, after a crash may have left posts unrecorded, and is one
-// pass of Run. A row with no payload is a stream, whose renderer records the ref itself, and is
+// pass of Run. A row with no payload is not one of Send's or Enqueue's (they refuse empty content): it is a stream's, whose renderer records the ref itself, and is
 // left alone, as is a row still waiting out its retry delay. It goes on past a row it cannot
 // reconcile, and returns every such error joined.
 func (o *Outbox) Reconcile(ctx context.Context) error {

@@ -90,13 +90,14 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 	if _, err := st.CreateOutbox(t.Context(), left); err != nil {
 		t.Fatal(err)
 	}
-	stream := outbox.Post{Source: "s1", Role: store.OutboxReply, Channel: "C1"} // no content: a stream, never delivered
+	// A stream's row has no payload, and the renderer records its ref itself; Run must leave it alone.
+	stream := store.OutboxEntry{ID: "s1/reply", EventID: "s1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0}
 	p := &poster{found: map[string]string{"left/notice": "55.5"}}
 	o := outbox.New(drainConfig(st, p))
 	start(t, o) // nothing is enqueued yet, so only the drain at start can deliver the row a crash left
 	eventually(t, "the drain at start", func() bool { return ref(st, "left/notice") == "55.5" })
 
-	if _, err := o.Enqueue(t.Context(), stream); err != nil {
+	if _, err := st.CreateOutbox(t.Context(), stream); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 { // one row, however many times it is enqueued
@@ -192,4 +193,43 @@ func TestAFailingRowBacksOff(t *testing.T) {
 	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "ev1/reply") || strings.Contains(out, "hello ev1") {
 		t.Errorf("log = %q; want a warning naming the row and not its text", out)
 	}
+}
+
+// TestEnqueueRefusesEmptyContent: a notice whose text came out empty must fail where it is
+// enqueued, not become a row that is never delivered and holds its ID.
+func TestEnqueueRefusesEmptyContent(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	o := outbox.New(drainConfig(st, &poster{}))
+	if id, err := o.Enqueue(t.Context(), outbox.Post{Source: "n1", Role: store.OutboxNotice, Channel: "C1"}); !errors.Is(err, store.ErrInvalid) || id != "" {
+		t.Fatalf("Enqueue with no content = %q, %v; want ErrInvalid", id, err)
+	}
+	if rows, _ := st.ListUnposted(t.Context()); len(rows) != 0 {
+		t.Fatalf("an empty post left %d rows", len(rows))
+	}
+}
+
+// TestASignalDuringADrainIsNotLost holds a drain inside a post and enqueues another row: the drain
+// that follows must take it, though the ticker is an hour away.
+func TestASignalDuringADrainIsNotLost(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	inPost, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	p := &poster{onPost: func(context.Context) error {
+		if !first.Swap(true) { // only the first post waits
+			close(inPost)
+			<-release
+		}
+		return nil
+	}}
+	o := outbox.New(drainConfig(st, p))
+	if _, err := o.Enqueue(t.Context(), reply("ev1")); err != nil {
+		t.Fatal(err)
+	}
+	start(t, o)
+	<-inPost // the drain is inside its post
+	if _, err := o.Enqueue(t.Context(), reply("ev2")); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	eventually(t, "the row enqueued during the drain", func() bool { return ref(st, "ev2/reply") != "" })
 }
