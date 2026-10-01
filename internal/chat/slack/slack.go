@@ -37,6 +37,8 @@ type Config struct {
 	// UserTimeout bounds one users.info call (default 5 seconds): the caller's context may have
 	// no deadline, and an http.Client has none either.
 	UserTimeout time.Duration
+	// PageLimit is how many messages Find asks for per page (default 200). A test sets it small.
+	PageLimit int
 }
 
 // Client is courier's connection to one Slack workspace. It is safe for concurrent use.
@@ -48,6 +50,7 @@ type Client struct {
 	ttl      time.Duration
 	timeout  time.Duration
 	max      int
+	pageSize int
 
 	mu    sync.Mutex
 	users map[string]cachedUser // guarded by mu
@@ -68,7 +71,7 @@ func New(cfg Config) *Client {
 	return &Client{
 		api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default()), bot: cfg.BotToken, app: cfg.AppToken,
 		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), timeout: cmp.Or(cfg.UserTimeout, 5*time.Second), max: cmp.Or(cfg.UserCacheSize, 1000),
-		users: map[string]cachedUser{},
+		users: map[string]cachedUser{}, pageSize: cmp.Or(cfg.PageLimit, 200),
 	}
 }
 
