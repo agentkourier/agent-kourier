@@ -37,6 +37,10 @@ type Presses interface {
 	RecordPress(ctx context.Context, p Press, limits PressLimits) (int64, error)
 	// ListPresses returns the presses waiting, oldest Seq first.
 	ListPresses(ctx context.Context) ([]Press, error)
+	// PendingPresses reports whether a press of the interaction is waiting that was made at or
+	// before before: one a decision at that time would have had to take into account. The timeout
+	// sweep asks it before it times an interaction out. InteractionID and before are required.
+	PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error)
 	// DeletePress removes the press with seq, once it is processed. A press that is already gone is
 	// not an error: a crash may repeat the call.
 	DeletePress(ctx context.Context, seq int64) error

@@ -30,7 +30,11 @@ type Store struct {
 }
 
 // Open opens (creating if needed) the database at path in WAL mode with
-// foreign keys on and a busy timeout, and applies pending migrations.
+// foreign keys on, a busy timeout and secure_delete, and applies pending migrations.
+//
+// secure_delete overwrites deleted content in the database file, so that what a deleted press
+// held, or an agent's text, does not linger in a free page. The write-ahead log may still hold
+// the old pages until a checkpoint copies them over and the log is reused.
 func Open(ctx context.Context, path string) (*Store, error) {
 	s := &Store{}
 	var err error
@@ -49,7 +53,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 
 func openPool(ctx context.Context, path string, conns int, pragma string) (*sql.DB, error) {
-	q := url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(1)", pragma}}
+	q := url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(1)", "secure_delete(1)", pragma}}
 	u := url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {

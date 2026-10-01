@@ -86,3 +86,17 @@ func (s *Store) PurgePresses(ctx context.Context, now time.Time, grace time.Dura
 	}
 	return int(n), nil
 }
+
+// PendingPresses implements store.Presses.
+func (s *Store) PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error) {
+	if interactionID == "" || before.IsZero() {
+		return false, fmt.Errorf("pending presses: an interaction and a time are required: %w", store.ErrInvalid)
+	}
+	var found bool
+	err := s.read.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM interaction_presses WHERE interaction_id = ? AND pressed_at <= ?)`,
+		interactionID, ts(before)).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("pending presses of %s: %w", interactionID, err)
+	}
+	return found, nil
+}

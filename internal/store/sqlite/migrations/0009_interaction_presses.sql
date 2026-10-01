@@ -11,3 +11,4 @@ CREATE TABLE interaction_presses (
     pressed_at     INTEGER NOT NULL
 );
 CREATE INDEX interaction_presses_user ON interaction_presses (user_id);
+CREATE INDEX interaction_presses_interaction ON interaction_presses (interaction_id, pressed_at);

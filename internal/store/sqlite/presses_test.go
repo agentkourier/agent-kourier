@@ -2,9 +2,14 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -169,5 +174,108 @@ func TestPurgePresses(t *testing.T) {
 	}
 	if _, err := s.PurgePresses(ctx, time.Time{}, grace); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("no time: %v; want ErrInvalid", err)
+	}
+}
+
+// A press with no inputs is recorded, and comes back with none.
+func TestRecordPressWithNilInputs(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	p := press("ix", "U1", t0)
+	p.Inputs = nil
+	if _, err := s.RecordPress(ctx, p, roomy); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ListPresses(ctx); err != nil || len(got) != 1 || len(got[0].Inputs) != 0 {
+		t.Errorf("presses = %+v, %v; want one with no inputs", got, err)
+	}
+}
+
+// The limits hold when many presses arrive together: counting and inserting are one step, so exactly
+// the limit succeeds and the rest are refused, for one person and for everyone.
+func TestRecordPressLimitsHoldUnderConcurrency(t *testing.T) {
+	for name, tc := range map[string]struct {
+		limits store.PressLimits
+		user   func(i int) string
+	}{
+		"one user":   {store.PressLimits{Total: 1000, PerUser: 10}, func(int) string { return "U1" }},
+		"many users": {store.PressLimits{Total: 10, PerUser: 10}, func(i int) string { return fmt.Sprintf("U%d", i) }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openTemp(t)
+			var wg sync.WaitGroup
+			var ok, refused atomic.Int32
+			for i := range 50 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					switch _, err := s.RecordPress(ctx, press("ix", tc.user(i), t0), tc.limits); {
+					case err == nil:
+						ok.Add(1)
+					case errors.Is(err, store.ErrLimit):
+						refused.Add(1)
+					default:
+						t.Errorf("RecordPress: %v", err)
+					}
+				}()
+			}
+			wg.Wait()
+			if got, _ := s.ListPresses(ctx); ok.Load() != 10 || refused.Load() != 40 || len(got) != 10 {
+				t.Errorf("%d recorded, %d refused, %d stored; want exactly 10, 40 and 10", ok.Load(), refused.Load(), len(got))
+			}
+		})
+	}
+}
+
+// PendingPresses says whether a press of the interaction made at or before a time is waiting.
+func TestPendingPresses(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	seq, _ := s.RecordPress(ctx, press("ix-1", "U1", t0.Add(time.Minute)), roomy)
+	_, _ = s.RecordPress(ctx, press("ix-2", "U2", t0), roomy)
+	for _, tc := range []struct {
+		id     string
+		before time.Time
+		want   bool
+	}{
+		{"ix-1", t0.Add(time.Minute), true},                    // the boundary is inclusive
+		{"ix-1", t0.Add(time.Minute - time.Nanosecond), false}, // a nanosecond before the press
+		{"ix-1", t0.Add(time.Hour), true},
+		{"ix-2", t0.Add(time.Minute), true},
+		{"ix-3", t0.Add(time.Hour), false}, // no press of that interaction
+	} {
+		if got, err := s.PendingPresses(ctx, tc.id, tc.before); err != nil || got != tc.want {
+			t.Errorf("PendingPresses(%s, %v) = %v, %v; want %v", tc.id, tc.before, got, err, tc.want)
+		}
+	}
+	if err := s.DeletePress(ctx, seq); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.PendingPresses(ctx, "ix-1", t0.Add(time.Hour)); got {
+		t.Error("a processed press is still pending")
+	}
+	if _, err := s.PendingPresses(ctx, "", t0); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("no interaction: %v; want ErrInvalid", err)
+	}
+	if _, err := s.PendingPresses(ctx, "ix-1", time.Time{}); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("no time: %v; want ErrInvalid", err)
+	}
+}
+
+// Deleted content is overwritten: secure_delete is on for every connection, and the lookup the
+// sweep makes by interaction has its index.
+func TestSecureDeleteAndThePendingIndex(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	for name, db := range map[string]*sql.DB{"write": s.write, "read": s.read} {
+		var on int
+		if err := db.QueryRowContext(ctx, `PRAGMA secure_delete`).Scan(&on); err != nil || on != 1 {
+			t.Errorf("%s pool: secure_delete = %d, %v; want 1", name, on, err)
+		}
+	}
+	var plan string
+	if err := s.read.QueryRowContext(ctx, `EXPLAIN QUERY PLAN SELECT 1 FROM interaction_presses WHERE interaction_id = ? AND pressed_at <= ?`, "x", 0).Scan(new(int), new(int), new(int), &plan); err != nil || !strings.Contains(plan, "interaction_presses_interaction") {
+		t.Errorf("query plan = %q, %v; want it to use interaction_presses_interaction", plan, err)
 	}
 }
