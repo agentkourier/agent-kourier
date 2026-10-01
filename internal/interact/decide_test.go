@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -141,6 +141,7 @@ type decideRig struct {
 	aud   *orderedAudit
 	eph   *ephemerals
 	calls *callLog
+	logs  *logBuf
 	sess  *answerSess
 	out   *enqueued
 	d     *interact.Decider
@@ -155,17 +156,25 @@ func newDecideRig(t *testing.T) *decideRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	r := &decideRig{calls: &callLog{}, eph: &ephemerals{}, sess: &answerSess{}, out: &enqueued{}}
+	r := &decideRig{calls: &callLog{}, logs: &logBuf{}, eph: &ephemerals{}, sess: &answerSess{}, out: &enqueued{}}
 	r.st = &orderedStore{Store: st, log: r.calls}
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls}
 	r.d, err = interact.NewDecider(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// task records which task the thread's session is on now: "" once it has ended.
+func (r *decideRig) task(t *testing.T, id string) {
+	t.Helper()
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "ctx-1", TaskID: id, Binding: "ns/b", LastActivity: d0}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (r *decideRig) hooked() []string {
@@ -421,6 +430,7 @@ func TestTheWinnersAnswerIsSentOnce(t *testing.T) {
 func TestAnAnswerForATaskThatMovedOnIsToldInTheThread(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
+	r.task(t, "task-2") // the thread has moved on to another task
 	r.sess.errs = []error{session.ErrNotPaused}
 	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatalf("Decide = %v; want the press done: the task is not paused, and no retry would change that", err)
@@ -547,9 +557,58 @@ func TestADecisionTakenBetweenTheReadAndTheWrite(t *testing.T) {
 			if got, want := r.calls.list(), []string{"audit:answered", "submit", "audit:superseded"}; !slices.Equal(got, want) {
 				t.Errorf("calls %q; want %q", got, want)
 			}
-			if got := r.eph.list(); len(got) != 1 || got[0] != "UALICE1: "+tc.wantTold || !slices.Equal(r.hooked(), []string{"superseded"}) {
-				t.Errorf("ephemerals %q, hooks %q; want it told %q and counted superseded", got, r.hooked(), tc.wantTold)
+			if got := r.eph.list(); len(got) != 1 || got[0] != "UALICE1: "+tc.wantTold || !slices.Equal(r.hooked(), []string{"superseded"}) || len(r.sess.answers()) != 0 {
+				t.Errorf("ephemerals %q, hooks %q, sends %d; want it told %q, counted superseded, and not sent", got, r.hooked(), len(r.sess.answers()), tc.wantTold)
 			}
 		})
+	}
+}
+
+// TestASessionThatHasEndedTheTaskGetsTheNotice: no task is recorded for the thread, or another one is.
+func TestASessionThatHasEndedTheTaskGetsTheNotice(t *testing.T) {
+	for name, task := range map[string]string{"no task": "", "another task": "task-9", "no session": "absent"} {
+		r := newDecideRig(t)
+		r.pending(t)
+		if task != "absent" {
+			r.task(t, task)
+		}
+		r.sess.errs = []error{session.ErrNotPaused}
+		if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 1 {
+			t.Errorf("%s: Decide = %v with %d notices; want it done, and the thread told", name, err, len(r.out.list()))
+		}
+	}
+}
+
+// TestAnAnswerBeforeTheTaskIsParkedAgainIsRetriedAndNotDenied: right after a restart the session still
+// records the task but has not parked on it, so the answer is refused as not paused. The thread is not
+// told it was not sent: the press is decided again, and the recovery resends the recorded answer.
+func TestAnAnswerBeforeTheTaskIsParkedAgainIsRetriedAndNotDenied(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.task(t, "task-1") // still the thread's task
+	r.sess.errs = []error{session.ErrNotPaused, session.ErrNotPaused}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err == nil {
+		t.Fatal("Decide = nil; want a retryable error, since the task may yet be parked")
+	}
+	if len(r.out.list()) != 0 {
+		t.Fatalf("notices %+v; want none while the task may yet be parked", r.out.list())
+	}
+	// Decided again as a retry, and still refused: it cannot be known, so it stays silent.
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 0 {
+		t.Errorf("the retry = %v with %d notices; want it done, and silent", err, len(r.out.list()))
+	}
+}
+
+// TestAnAnswerTheSessionCallsInvalidIsFinal: no retry would change it, so it is logged at Error and the
+// press is done; returning it would decide the press again for ever.
+func TestAnAnswerTheSessionCallsInvalidIsFinal(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	r.sess.errs = []error{fmt.Errorf("answer: a message with an ID and a task is required: %w", store.ErrInvalid)}
+	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		t.Fatalf("Decide = %v; want it done", err)
+	}
+	if out := r.logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "ix-1") {
+		t.Errorf("log = %q; want an error naming ix-1", out)
 	}
 }

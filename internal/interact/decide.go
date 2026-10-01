@@ -63,10 +63,13 @@ type DecideConfig struct {
 	Store      store.Interactions
 	Auditor    Auditor
 	Ephemerals Ephemeral
-	// Session takes the answers, and Outbox the notice for one that arrives too late.
-	Session Session
-	Outbox  Enqueuer
-	Logger  *slog.Logger // slog.Default() if nil
+	// Session takes the answers, and Outbox the notice for one that arrives too late. Sessions is read
+	// to tell a task that has ended from one the session has not parked on yet.
+	Session  Session
+	Sessions SessionReader
+	Outbox   Enqueuer
+	Now      func() time.Time // time.Now if nil
+	Logger   *slog.Logger     // slog.Default() if nil
 	// OnDecision, if set, is called once for each press decided, with its result: "answered" (it
 	// won), "superseded" (another decision came first), "late" (made at or after the deadline) or
 	// "invalid" (the dialect refused the answer). It is for a metric.
@@ -83,8 +86,11 @@ type Decider struct {
 
 // NewDecider returns a Decider over cfg.
 func NewDecider(cfg DecideConfig) (*Decider, error) {
-	if cfg.Store == nil || cfg.Auditor == nil || cfg.Ephemerals == nil || cfg.Session == nil || cfg.Outbox == nil {
-		return nil, errors.New("interact: Store, Auditor, Ephemerals, Session and Outbox are required")
+	if cfg.Store == nil || cfg.Auditor == nil || cfg.Ephemerals == nil || cfg.Session == nil || cfg.Sessions == nil || cfg.Outbox == nil {
+		return nil, errors.New("interact: Store, Auditor, Ephemerals, Session, Sessions and Outbox are required")
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -212,29 +218,46 @@ func (d *Decider) settle(ctx context.Context, pd PressDecision, cur store.Intera
 	return lost, cur, nil
 }
 
-// send gives the answer to the session, which streams what follows to the thread. A task that is not
-// paused any more cannot take it: the thread is told, once, since the notice's ID comes from the
-// interaction. A retry says nothing, because after a crash it cannot be known whether the answer got
-// through before. Any other failure is returned, for the press to be decided again.
+// send gives the answer to the session, which streams what follows to the thread.
+//
+// A task that is not paused cannot take it. If the thread's session no longer records the task, it has
+// ended or moved on: the thread is told, once, since the notice's ID comes from the interaction. If it
+// still records it, the session may only not have parked on it yet (right after a restart, before the
+// recovery has re-emitted the pause), and the answer is likely to be resent from its record then: a
+// retryable error is returned, so the press is decided again, and the notice is not posted, since it
+// would say the answer was not sent. A retry that is refused again says nothing either: it cannot be
+// known whether the answer got through before a crash.
+//
+// store.ErrInvalid is final: no retry would change it, so it is logged and the press is done. Any other
+// failure is returned, for the press to be decided again.
 func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, retry bool) error {
 	row := pd.Interaction
-	switch err := d.cfg.Session.Answer(ctx, row.Key, &msg); {
+	err := d.cfg.Session.Answer(ctx, row.Key, &msg)
+	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, session.ErrNotPaused):
-		d.cfg.Logger.InfoContext(ctx, "interact: an answer found its task no longer paused", "interaction", row.ID, "task", row.TaskID, "retry", retry)
-		if retry {
-			return nil
-		}
-		_, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
-			ThreadTS: row.Key.ThreadTS, Content: slack.Content{Text: textClosedBefore}})
-		if err != nil {
-			return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
-		}
+	case errors.Is(err, store.ErrInvalid):
+		d.cfg.Logger.ErrorContext(ctx, "interact: the session refused an answer for good, and it was not sent", "interaction", row.ID, "err", err)
 		return nil
-	default:
+	case !errors.Is(err, session.ErrNotPaused):
 		return fmt.Errorf("interact: send the answer to %s: %w", row.ID, err)
 	}
+	d.cfg.Logger.InfoContext(ctx, "interact: an answer found its task not paused", "interaction", row.ID, "task", row.TaskID, "retry", retry)
+	if retry {
+		return nil
+	}
+	sess, serr := d.cfg.Sessions.GetSession(ctx, row.Key, readAll, d.cfg.Now())
+	switch {
+	case serr == nil && sess.TaskID == row.TaskID:
+		return fmt.Errorf("interact: the session is not paused on %s yet: %w", row.TaskID, err)
+	case serr != nil && !errors.Is(serr, store.ErrNotFound):
+		return fmt.Errorf("interact: read the session of %s: %w", row.ID, serr)
+	}
+	if _, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
+		ThreadTS: row.Key.ThreadTS, Content: slack.Content{Text: textClosedBefore}}); err != nil {
+		return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
+	}
+	return nil
 }
 
 // lostText says why a press did not decide the question.
