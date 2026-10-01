@@ -59,10 +59,12 @@ func (s *stepTrace) got() string {
 // slowStop is a Slack that takes its time to stop, and notes when it has.
 type slowStop struct {
 	idleSlack
-	stopped atomic.Int64 // the UnixNano at which Run returned
+	started sync.WaitGroup // Done once Run has begun, which is when startup is over
+	stopped atomic.Int64   // the UnixNano at which Run returned
 }
 
 func (s *slowStop) Run(ctx context.Context, _ slack.Sink) error {
+	s.started.Done()
 	<-ctx.Done()
 	time.Sleep(150 * time.Millisecond)
 	s.stopped.Store(time.Now().UnixNano())
@@ -73,6 +75,7 @@ func (s *slowStop) Run(ctx context.Context, _ slack.Sink) error {
 // manager is closed, and every step runs in the agreed order.
 func TestRunStopsTheSlackRunAndWaitsForItBeforeTheManager(t *testing.T) {
 	slow := &slowStop{}
+	slow.started.Add(1)
 	var managerAt atomic.Int64
 	trace := &stepTrace{hook: func(step string) {
 		if step == "manager" {
@@ -84,6 +87,7 @@ func TestRunStopsTheSlackRunAndWaitsForItBeforeTheManager(t *testing.T) {
 	c.shutdownTrace = trace.record
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
+	slow.started.Wait() // readiness comes before the Slack run does: stop only a Run that has finished starting
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -175,7 +179,8 @@ func TestRunRecoversTheSessionsAnEarlierRunLeft(t *testing.T) {
 func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 	c := startConfig(t)
 	posted := make(chan string, 4)
-	c.newSlack = func(slack.Config) slackAPI { return &recordingSlack{posted: posted} }
+	rec := &recordingSlack{posted: posted, started: make(chan struct{})}
+	c.newSlack = func(slack.Config) slackAPI { return rec }
 	trace := &stepTrace{hook: func(step string) {
 		if step != "drain" {
 			return
@@ -194,6 +199,7 @@ func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 	c.shutdownTrace = trace.record
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
+	<-rec.started // readiness comes before the Slack run does: stop only a Run that has finished starting
 
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -213,7 +219,15 @@ func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 // recordingSlack is an idle Slack that records the text of each post it takes.
 type recordingSlack struct {
 	idleSlack
-	posted chan string
+	posted  chan string
+	started chan struct{} // closed when Run begins
+	once    sync.Once
+}
+
+func (s *recordingSlack) Run(ctx context.Context, _ slack.Sink) error {
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (s *recordingSlack) Post(_ context.Context, _, _ string, c slack.Content, _ string) (string, error) {
