@@ -25,12 +25,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// ErrDisallowed is returned for a pause the Binding does not allow, or that Phase 5 would render.
+// ErrDisallowed is returned for a tool approval, which is not handled yet (WP-33c2b).
 var ErrDisallowed = errors.New("interact: the Binding does not allow that kind of pause")
 
 // Binding is what the intake needs of a thread's Binding: which pauses it allows, and how long one waits.
 type Binding struct {
 	Dialect                dialect.Dialect
+	Identity               string // the Binding's service identity, for the audit rows
 	AskUser, ToolApprovals bool
 	Timeout                time.Duration
 }
@@ -52,20 +53,25 @@ type PromptRenderer interface {
 	Prompt(p Prompt) (slack.Content, error)
 }
 
-// Sender is *outbox.Outbox.
+// Sender is *outbox.Outbox: Send posts at once, Enqueue only writes the row for the drain to post.
 type Sender interface {
 	Send(ctx context.Context, p outbox.Post) (string, error)
+	Enqueue(ctx context.Context, p outbox.Post) (string, error)
 }
 
-// Config configures an Intake. Store, Lookup, Prompts, Outbox and Session are required.
+// Config configures an Intake. Store, Lookup, Prompts, Outbox, Session and Audit are required.
 type Config struct {
 	Store   store.Interactions
 	Lookup  Lookup
 	Prompts PromptRenderer
 	Outbox  Sender
 	Session Session
-	Now     func() time.Time // time.Now if nil
-	Logger  *slog.Logger     // slog.Default() if nil
+	Audit   Auditor
+	// OnApprovalOutcome is called once for each pause a Binding's policy turned away, for the
+	// approval-outcome metric (WP-35f2). The outcomes are a closed set. Optional.
+	OnApprovalOutcome func(binding string, outcome Outcome)
+	Now               func() time.Time // time.Now if nil
+	Logger            *slog.Logger     // slog.Default() if nil
 }
 
 // Intake records pauses as interactions and posts their prompts. It is safe for concurrent use.
@@ -73,8 +79,8 @@ type Intake struct{ cfg Config }
 
 // New returns an Intake over cfg.
 func New(cfg Config) (*Intake, error) {
-	if cfg.Store == nil || cfg.Lookup == nil || cfg.Prompts == nil || cfg.Outbox == nil || cfg.Session == nil {
-		return nil, errors.New("interact: Store, Lookup, Prompts, Outbox and Session are required")
+	if cfg.Store == nil || cfg.Lookup == nil || cfg.Prompts == nil || cfg.Outbox == nil || cfg.Session == nil || cfg.Audit == nil {
+		return nil, errors.New("interact: Store, Lookup, Prompts, Outbox, Session and Audit are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -120,15 +126,17 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	in, err := b.Dialect.ParseInteraction(p.Task)
 	switch {
 	case errors.Is(err, dialect.ErrUnusablePause):
-		return err // WP-33c2 reports it in the thread, audits it and cancels the task
+		return i.refuseUnusable(ctx, p, b, err)
 	case err != nil:
 		return fmt.Errorf("interact: parse the pause of task %s: %w", p.Task.ID, err)
 	case in == nil:
 		return nil // nothing structured to answer: the thread's own replies carry on
 	}
-	// A tool approval is not posted even where allowed: Phase 5 renders it. WP-33c2 handles both.
-	if in.Kind == dialect.ToolApproval || !b.AskUser {
+	switch {
+	case in.Kind == dialect.ToolApproval: // not posted even where allowed: Phase 5 renders it (WP-33c2b denies it)
 		return ErrDisallowed
+	case !b.AskUser:
+		return i.refuseAskUser(ctx, p, b, *in)
 	}
 	row, err := i.record(ctx, p, b, *in)
 	if err != nil {

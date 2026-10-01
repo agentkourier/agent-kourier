@@ -12,6 +12,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
@@ -91,6 +92,8 @@ type rig struct {
 	slack *poster
 	asked []interact.Prompt // what the renderer was asked for
 	sess  *sess
+	audit *auditor
+	hook  []interact.Outcome // what OnApprovalOutcome was told
 }
 
 func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
@@ -101,6 +104,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	r := &rig{st: &refStore{Store: st}, slack: &poster{posted: map[string]string{}}, sess: &sess{}}
+	r.audit = &auditor{Writer: audit.New(st, audit.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ob := (outbox.New(outbox.Config{Store: st, Poster: r.slack, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: quiet}))
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: timeout}
@@ -111,7 +115,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 		r.asked = append(r.asked, p)
 		return slack.Content{Text: "prompt " + p.ID}, nil
 	})
-	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Prompts: prompts, Outbox: ob, Session: r.sess, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
+	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Prompts: prompts, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -201,7 +205,8 @@ func TestInteractionIDIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestPausesThatAreNotPrompts: they come back as errors for WP-33c2, and nothing is posted.
+// TestPausesThatAreNotPrompts: no prompt is rendered or posted for them. A tool approval comes back
+// as ErrDisallowed until WP-33c2b.
 func TestPausesThatAreNotPrompts(t *testing.T) {
 	approval := pausedOn(map[string]any{"type": "tool_approval_request", "id": "r", "tools": []map[string]any{{"id": "t1", "name": "x"}}})
 	for name, tc := range map[string]struct {
@@ -209,9 +214,9 @@ func TestPausesThatAreNotPrompts(t *testing.T) {
 		mod  func(*interact.Binding)
 		want error
 	}{
-		"an unusable pause":         {pausedOn(map[string]any{"type": "nonsense"}), nil, dialect.ErrUnusablePause},
+		"an unusable pause":         {pausedOn(map[string]any{"type": "nonsense"}), nil, nil},
 		"a tool approval":           {approval, nil, interact.ErrDisallowed},
-		"ask-user on askUser false": {askUser("req-1"), func(b *interact.Binding) { b.AskUser = false }, interact.ErrDisallowed},
+		"ask-user on askUser false": {askUser("req-1"), func(b *interact.Binding) { b.AskUser = false }, nil},
 		"a task that is not paused": {a2a.Task{ID: "task-9", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
