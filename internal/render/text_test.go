@@ -234,7 +234,7 @@ func TestToolLineInMarkdownLeavesNoLink(t *testing.T) {
 
 // TestEveryKeyAlternativeRedacts has one key for each of secretKey's alternatives.
 func TestEveryKeyAlternativeRedacts(t *testing.T) {
-	for _, key := range []string{"passwd", "client_secret", "access_token", "api_key", "Authorization", "my_credentials", "session_cookie"} {
+	for _, key := range []string{"passwd", "x_secret", "x_token", "api_key", "Authorization", "my_credentials", "session_cookie"} {
 		got := ToolLine("run", map[string]any{key: "VALUE-NOT-TO-SHOW"}, FlavourText)
 		if strings.Contains(got, "VALUE-NOT-TO-SHOW") || !strings.Contains(got, "[redacted]") {
 			t.Errorf("an argument named %q: %q; want its value redacted", key, got)
