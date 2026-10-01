@@ -67,8 +67,12 @@ const releasePath = "/_control/release/"
 func withControl(stub *stubagent.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gate, ok := strings.CutPrefix(r.URL.Path, releasePath)
-		if !ok || gate == "" || strings.Contains(gate, "/") || r.Method != http.MethodPost {
+		if !ok || r.Method != http.MethodPost {
 			stub.ServeHTTP(w, r)
+			return
+		}
+		if !stubagent.ValidGate(gate) {
+			http.Error(w, "a gate name is letters, digits, _ and -", http.StatusBadRequest)
 			return
 		}
 		stub.Release(gate)

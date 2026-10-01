@@ -82,6 +82,29 @@ func TestReplyWithHistoryShowsAReplayThatRanTwice(t *testing.T) {
 	}
 }
 
+// A task that paused and was answered holds more than one message, so what the next turn sees
+// must be the task's opening prompt, not its last message.
+func TestReplyWithHistoryCountsTurnsNotMessages(t *testing.T) {
+	_, agent, c := newAgent(t)
+	var priors [][]string
+	agent.ReplyWithHistory(func(prior []string, prompt string) []stubagent.Step {
+		priors = append(priors, prior)
+		if prompt == "ask" {
+			return []stubagent.Step{dbAsk(nil)}
+		}
+		return []stubagent.Step{stubagent.Text("ok")}
+	})
+	c = withHITL(c)
+	_, taskID, ctxID, request := paused(t, c)
+	c.send(reply("m2", "PostgreSQL", ctxID, taskID, answers(request["id"].(string), []string{"PostgreSQL"})))
+	c.send(msg("m3", "next", ctxID))
+
+	// The answer resumes the task through the pause's script, so the agent saw two turns.
+	if want := [][]string{nil, {"ask"}}; !reflect.DeepEqual(priors, want) {
+		t.Errorf("earlier messages seen per turn = %q, want %q", priors, want)
+	}
+}
+
 func TestScenarioAskEchoesWhatItReceived(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -155,6 +178,16 @@ func TestScenarioGatedAgentHoldsUntilReleased(t *testing.T) {
 	evs := st.all()
 	if got, want := taskText(last(evs)), "Holding on gate run-1. Released."; got != want {
 		t.Errorf("final text %q, want %q", got, want)
+	}
+}
+
+func TestValidGate(t *testing.T) {
+	for name, want := range map[string]bool{
+		"g1": true, "Run_1-a": true, "": false, "a b": false, "a/b": false, "a:b": false, "é": false, "a\n": false,
+	} {
+		if got := stubagent.ValidGate(name); got != want {
+			t.Errorf("ValidGate(%q) = %t, want %t", name, got, want)
+		}
 	}
 }
 

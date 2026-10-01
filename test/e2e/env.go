@@ -15,8 +15,9 @@ type Env struct {
 	CourierURL string
 }
 
-// NewEnv reads E2E_SLACK_URL, E2E_SINK_URL, E2E_STUB_URL, E2E_ALERTMANAGER_URL and E2E_COURIER_URL through
-// getenv (os.Getenv in a runner); an unset or empty variable takes its default.
+// NewEnv reads E2E_SLACK_URL, E2E_SINK_URL, E2E_STUB_URL, E2E_ALERTMANAGER_URL and
+// E2E_COURIER_URL through getenv (os.Getenv in a runner); an unset or empty variable takes its
+// default.
 func NewEnv(getenv func(string) string) Env {
 	get := func(key, def string) string {
 		if v := getenv(key); v != "" {

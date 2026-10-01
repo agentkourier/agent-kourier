@@ -7,8 +7,18 @@ import (
 	"strings"
 )
 
-// gatePattern finds the gate a prompt names, "gate:" then letters, digits, "_" or "-".
-var gatePattern = regexp.MustCompile(`gate:([\w-]+)`)
+// gateName is what a gate name may be: ASCII letters, digits, "_" and "-". The prompt that names
+// a gate, the endpoint that releases it and the e2e helper that makes names all use it.
+const gateName = `[\w-]+`
+
+var (
+	gatePattern   = regexp.MustCompile(`gate:(` + gateName + `)`) // finds the gate a prompt names
+	validGatePatt = regexp.MustCompile(`^` + gateName + `$`)
+)
+
+// ValidGate reports whether name can name a gate. Gates stay open for the life of the server, so
+// a name is used once: a reused name is already released.
+func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 
 // ScenarioAgents registers the agents that only the Phase 1 E2E scenarios need, in the namespace
 // kagent, beside SpikeAgents:

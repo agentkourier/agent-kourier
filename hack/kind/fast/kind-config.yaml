@@ -1,5 +1,6 @@
 # kind config for the fast E2E tier: one node, and no extraPortMappings, so no pod port is
-# published on the host (the fake Slack's /_control/ has no authentication).
+# published on the host (the fake Slack's /_control/ and the stub agent's /_control/release/ have
+# no authentication).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: courier-fast
