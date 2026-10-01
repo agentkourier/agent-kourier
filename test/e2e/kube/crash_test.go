@@ -77,11 +77,13 @@ func TestWaitCrash_SeesACrashThatIsStillTheState(t *testing.T) {
 	if err != nil || got.ExitCode != 137 {
 		t.Fatalf("WaitCrash = %+v, %v; want exit 137", got, err)
 	}
-	clean := fake.NewClientset(courierPod(1, &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}, nil))
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := newPodsPolling(clean).WaitCrash(ctx, "courier", courierSel, "courier", 0); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a clean exit: %v; want it not to count as a crash", err)
+	exited := &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}
+	for name, pod := range map[string]*corev1.Pod{"in its last state": courierPod(1, exited, nil), "as its state": courierPod(0, nil, exited)} {
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		if _, err := newPodsPolling(fake.NewClientset(pod)).WaitCrash(ctx, "courier", courierSel, "courier", 0); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("a clean exit %s: %v; want it not to count as a crash", name, err)
+		}
+		cancel()
 	}
 }
 
