@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"sync"
 	"testing"
@@ -73,7 +75,8 @@ func newIntake(t *testing.T) (*slack.Intake, *submitter) {
 	sub := &submitter{}
 	return slack.NewIntake(slack.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
-		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub}), sub
+		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), sub
 }
 
 // TestTriggers checks spec 8.2's table: what each message is submitted as, if at all.

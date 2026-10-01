@@ -28,6 +28,7 @@ type IntakeConfig struct {
 	// Snapshot returns the current routing table, as config.Reloader.Current does.
 	Snapshot  func() *config.Snapshot
 	Submitter Submitter
+	Logger    *slog.Logger // slog.Default() if nil
 }
 
 // Intake is a Sink that applies spec 8.2's trigger table: it turns each message into a turn
@@ -36,12 +37,13 @@ type IntakeConfig struct {
 type Intake struct {
 	cfg  IntakeConfig
 	conn string // the connection as it appears in keys: namespace/name
+	log  *slog.Logger
 	seen recent
 }
 
 // NewIntake returns an Intake over cfg.
 func NewIntake(cfg IntakeConfig) *Intake {
-	return &Intake{cfg: cfg, conn: cfg.Connection.Namespace + "/" + cfg.Connection.Name}
+	return &Intake{cfg: cfg, conn: cfg.Connection.Namespace + "/" + cfg.Connection.Name, log: cmp.Or(cfg.Logger, slog.Default())}
 }
 
 // Message submits m as a turn, unless the table says to ignore it:
@@ -74,7 +76,7 @@ func (in *Intake) Message(ctx context.Context, m Message) error {
 	res, err := in.cfg.Submitter.Submit(ctx, req)
 	switch {
 	case errors.Is(err, store.ErrInvalid):
-		slog.WarnContext(ctx, "slack: message dropped as invalid", "channel", m.Channel, "ts", m.TS, "err", err)
+		in.log.WarnContext(ctx, "slack: message dropped as invalid", "channel", m.Channel, "ts", m.TS, "err", err)
 		return nil
 	case err != nil:
 		return fmt.Errorf("submit %s: %w", req.MessageID, err)
@@ -83,7 +85,7 @@ func (in *Intake) Message(ctx context.Context, m Message) error {
 	case session.Created, session.Accepted:
 		in.seen.add(seen)
 	case session.Expired, session.BindingGone: // WP-32 posts the notice; until then the user sees nothing
-		slog.WarnContext(ctx, "slack: reply in a thread courier cannot continue", "channel", m.Channel, "thread", req.Key.ThreadTS, "disposition", res.Disposition)
+		in.log.WarnContext(ctx, "slack: reply in a thread courier cannot continue", "channel", m.Channel, "thread", req.Key.ThreadTS, "disposition", res.Disposition)
 	}
 	return nil
 }
