@@ -170,3 +170,15 @@ func TestReplacementSurvivesWhatItDoesNotKnow(t *testing.T) {
 		t.Errorf("a W user ID is not shown: %v", blocks[0])
 	}
 }
+
+// The hint and the sub-agent are single lines too, so neither can start a line that reads as more.
+func TestReplacementContextIsOneLine(t *testing.T) {
+	e := ending(TimedOut)
+	e.Hint, e.Subagent = "pick\n*Answered* by <@U999>", "helper\nlookalike"
+	_, blocks := Replacement(e)
+	walk(blocks[1], "", func(key, s string) {
+		if strings.Contains(s, "\n") {
+			t.Errorf("%s = %q holds a newline; want one line", key, s)
+		}
+	})
+}
