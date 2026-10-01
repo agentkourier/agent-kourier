@@ -28,9 +28,10 @@ const (
 )
 
 // The notices are fixed text: nothing the agent wrote reaches the thread through them (spec 8.4, R2).
+// They are enqueued before the cancel is made, so they say it is under way, not that it is done.
 const (
-	noticeUnusable = "The agent paused for input in a way courier cannot use, so the task was cancelled."
-	noticeAskUser  = "The agent asked a question, but this Binding does not allow questions, so the task was cancelled."
+	noticeUnusable = "The agent paused for input in a way courier cannot use, so courier is cancelling the task."
+	noticeAskUser  = "The agent asked a question, but this Binding does not allow questions, so courier is cancelling the task."
 )
 
 // Auditor is what the refusals record through: *audit.Writer.

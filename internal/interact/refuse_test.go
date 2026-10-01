@@ -66,6 +66,9 @@ func (r *rig) notices(t *testing.T) []string {
 		if strings.Contains(row.Payload, "IGNORE") || strings.Contains(row.Payload, "nonsense") {
 			t.Errorf("notice %s holds agent text: %s", row.ID, row.Payload)
 		}
+		if strings.Contains(row.Payload, "was cancelled") || strings.Contains(row.Payload, "was denied") {
+			t.Errorf("notice %s claims the work is done, but it is enqueued before it: %s", row.ID, row.Payload)
+		}
 		out = append(out, row.Payload)
 	}
 	return out
