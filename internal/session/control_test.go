@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -640,4 +641,39 @@ func TestStopWhenTheTaskCannotBeCancelledAndIsNotOver(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A turn that ends leaving its task recorded tells the thread before the runner has finished
+// with it. A Stop that arrives in that moment must not take the runner for still driving the
+// task: it would cancel the task and leave the record, and the turns held behind it, for good.
+// The runner stops driving the task before it says so.
+func TestStopWhileTheRunnerIsTellingTheThreadItGaveUp(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	f, _ := wedgedFixture(t, func(f *fixture) {
+		f.agent.cancelErr = func(n int) error {
+			if n == 1 {
+				return fmt.Errorf("send: %w", agent.ErrForbidden) // the runner's own cancel of the wedged task
+			}
+			return nil
+		}
+		f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+			if f.taskID() != "" {
+				return nil, nil, errors.New("agent unreachable") // the held turn waits, and the runner lives
+			}
+			return nil, nil, nil
+		}
+		f.m.cfg.Sink.(*fakeSink).onNotice = func(n Notice) { // the runner is saying the cancel was refused, and is held here
+			if n.Kind == NoticeFailed && !first.Swap(true) {
+				close(entered)
+				<-release
+			}
+		}
+	}, "1")
+	<-entered
+	did, err := f.m.Stop(t.Context(), key, "t1", "U9")
+	if recorded := f.taskID(); err != nil || !did || recorded != "" {
+		t.Errorf("Stop = %v, %v; task %q; want it stopped and the record cleared, whatever the runner is doing", did, err, recorded)
+	}
+	close(release)
 }

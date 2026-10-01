@@ -129,16 +129,20 @@ func turn(h agent.Handler, n int, state a2a.TaskState) error {
 
 // fakeSink records every event and notice, and announces each FinalEvent on finals.
 type fakeSink struct {
-	mu      sync.Mutex
-	events  []agent.Event
-	notices []Notice
-	refs    []TurnRef
-	taken   int // FinalEvents finalTask has returned
-	finals  chan struct{}
-	onFinal func(*a2a.Task) // runs inside the handler, before finals is signalled
+	mu       sync.Mutex
+	events   []agent.Event
+	notices  []Notice
+	refs     []TurnRef
+	taken    int // FinalEvents finalTask has returned
+	finals   chan struct{}
+	onFinal  func(*a2a.Task) // runs inside the handler, before finals is signalled
+	onNotice func(Notice)    // runs inside Notice, before it is recorded
 }
 
 func (s *fakeSink) Notice(_ context.Context, _ Key, n Notice) {
+	if s.onNotice != nil {
+		s.onNotice(n)
+	}
 	s.mu.Lock()
 	s.notices = append(s.notices, n)
 	s.mu.Unlock()

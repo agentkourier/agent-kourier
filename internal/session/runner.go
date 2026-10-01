@@ -573,7 +573,8 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 		return m.gone(t)
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		m.rejected(t, err)
-		t.c.follow = nil // the task stays recorded, for reconciliation
+		t.c.follow = nil  // the task stays recorded, for reconciliation
+		m.drives(t.c, "") // no longer driven, before the thread is told
 		m.notice(t, NoticeFailed, "the agent's front door refused the Binding's credentials")
 		return ended, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
 	case errors.As(err, &sl):
@@ -774,6 +775,7 @@ func (m *Manager) duplicates(t *tstate, holders []a2a.TaskID) {
 // queue goes on. If marking the turn delivered fails, the turn stays queued and the next attempt
 // is a real second call, with its own audit row: bounded, and never silent.
 func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
+	m.drives(t.c, "") // it stops driving before it says so: a Stop that answers the notice must not find it driving
 	t.c.settle()
 	m.mu.Lock()
 	delete(m.attempted, t.key) // it will not be sent again
