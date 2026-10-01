@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by up-full.sh, up-fast.sh, fast/verify.sh and down.sh (sourced, not executed).
+# Shared by up-full.sh, up-fast.sh, e2e-run.sh, fast/verify.sh and down.sh (sourced, not executed).
 
 # The kind node image and the base of the images the tiers build (mockllm; the fast tier's test
 # doubles, through a build argument). Used by the scripts that source this file.
@@ -43,15 +43,20 @@ cluster_exists() {
   kind get clusters | grep -qx "${CLUSTER}"
 }
 
-# assert_context: die unless the kubeconfig context in CTX, which the fast tier's scripts pass to
-# every kubectl and helm call, is the local courier-fast kind cluster. The name is checked
-# literally and the API server must be on loopback, which no remote cluster is.
+# assert_context TIER: die unless the kubeconfig context in CTX, which the scripts pass to every
+# kubectl and helm call, is the local kind cluster of that tier: kind-courier-fast or
+# kind-courier-full, checked literally against the kubeconfig. The API server must be on loopback,
+# which no remote cluster is.
 assert_context() {
-  local name server
+  local tier=$1 name server
+  case "${tier}" in
+    fast | full) ;;
+    *) die "assert_context: unknown tier '${tier}' (want fast or full)" ;;
+  esac
   name=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.contexts[0].name}' 2>/dev/null) || name=
   server=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || server=
-  [ "${CTX}" = kind-courier-fast ] && [ "${name}" = kind-courier-fast ] ||
-    die "context '${name:-?}' is not kind-courier-fast; refusing to run kubectl or helm"
+  [ "${CTX}" = "kind-courier-${tier}" ] && [ "${name}" = "kind-courier-${tier}" ] ||
+    die "context '${name:-?}' is not kind-courier-${tier}; refusing to run kubectl or helm"
   case "${server}" in
     https://127.0.0.1:* | https://localhost:*) ;;
     *) die "context ${CTX} points at a non-local API server; refusing to run kubectl or helm" ;;

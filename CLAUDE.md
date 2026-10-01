@@ -37,7 +37,8 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 
 - `make fmt lint test build tidy`: `test` runs `go test -race ./...`; `build` writes `bin/courier`.
 - `make e2e-fast-up` / `e2e-full-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
-  `e2e-full-down` and `e2e-down` (both) tear them down. `e2e-fast` / `e2e-full` are stubs until WP-14.
+  `e2e-full-down` and `e2e-down` (both) tear them down. `e2e-fast` runs the E2E tests in the fast tier
+  as an in-cluster Job (`hack/kind/e2e-run.sh`); `e2e-full` is a stub until WP-14e.
 - Add tools with `go get -tool <module>/cmd/<tool>@<version>`.
 
 ## Work-package workflow

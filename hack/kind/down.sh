@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Remove what up-full.sh and up-fast.sh created: the courier-full and courier-fast kind clusters
-# and the images they built (mockllm, the fast tier's test doubles). Nothing else is touched.
+# and the images they built (mockllm, the fast tier's test doubles, the E2E runner). Nothing else is touched.
 # Usage: down.sh [full|fast]; with no argument both tiers go, and one that is not up is skipped.
 # One full tier per Docker host: worktrees share the fixed cluster names, so this deletes a
 # cluster even when another checkout made it (and says so).
@@ -29,9 +29,11 @@ for tier in "${tiers[@]}"; do
   else
     echo "kind cluster ${CLUSTER} does not exist"
   fi
-  repo=courier-e2e/mockllm
-  [ "${tier}" = fast ] && repo=courier-e2e/fast-doubles
-  for image in $(docker image ls -q "${repo}" | sort -u); do
-    docker image rm "${image}" >/dev/null 2>&1 || true
+  tier_repo=courier-e2e/mockllm
+  [ "${tier}" = fast ] && tier_repo=courier-e2e/fast-doubles
+  for repo in "${tier_repo}" courier-e2e/runner; do
+    for image in $(docker image ls -q "${repo}" | sort -u); do
+      docker image rm "${image}" >/dev/null 2>&1 || true
+    done
   done
 done

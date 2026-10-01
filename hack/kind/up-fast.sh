@@ -56,10 +56,10 @@ if cluster_exists; then
   echo "reusing the cluster created earlier (from $(owner_checkout))"
 else
   kind create cluster --name "${CLUSTER}" --config "${FAST}/kind-config.yaml" --image "${NODE_IMAGE}"
-  assert_context
+  assert_context fast
   "${K[@]}" annotate nodes -l "${OWNER_LABEL}" "${CHECKOUT_KEY}=${ROOT}" >/dev/null
 fi
-assert_context
+assert_context fast
 
 step "prometheus-operator ${OPERATOR_CHART_VERSION}"
 "${H[@]}" upgrade --install prometheus-operator "${OPERATOR_OCI}" --version "${OPERATOR_CHART_VERSION}" \

@@ -11,8 +11,8 @@ help: ## Show this help
 fmt: ## Format code (gofmt and goimports rules from .golangci.yml)
 	$(LINT) fmt ./...
 
-lint: ## Run golangci-lint
-	$(LINT) run ./...
+lint: ## Run golangci-lint (also over the e2e-tagged tests)
+	$(LINT) run --build-tags e2e ./...
 
 test: ## Run unit tests with the race detector
 	go test -race ./...
@@ -29,8 +29,8 @@ stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and wit
 e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink)
 	hack/kind/up-fast.sh
 
-e2e-fast: ## Run the fast E2E tier (stub)
-	@echo "not implemented yet (see WP-14)"
+e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
+	hack/kind/e2e-run.sh fast
 
 e2e-fast-down: ## Tear down the fast E2E tier only
 	hack/kind/down.sh fast

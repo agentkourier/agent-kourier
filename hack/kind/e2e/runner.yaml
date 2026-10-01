@@ -1,0 +1,50 @@
+# The E2E runner: the test binary as a Job in namespace e2e, so it reaches the test doubles by their
+# ClusterIP Service names and nothing is published to the host (the fake Slack's /_control/ has no
+# authentication). Its service account may list and delete pods in e2e only, to restart a double.
+# The pod must never carry the label app.kubernetes.io/name=courier: the full tier's NetworkPolicy
+# admits that label to the kagent front door.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-runner
+  namespace: e2e
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner
+  namespace: e2e
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner
+  namespace: e2e
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-runner}
+subjects: [{kind: ServiceAccount, name: e2e-runner, namespace: e2e}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e2e-runner
+  namespace: e2e
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: {app: e2e-runner}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: e2e-runner
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: e2e
+          image: courier-e2e/runner:dev
+          imagePullPolicy: Never
+          args: ["-test.v", "-test.run=^TestSmoke$", "-test.timeout=5m"]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

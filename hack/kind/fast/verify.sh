@@ -24,7 +24,7 @@ for tool in kubectl docker jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 # Safe to run on its own: nothing below runs against any other context.
-assert_context
+assert_context fast
 assert() { d=$1; shift; if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; exit 1; fi; } # DESCRIPTION COMMAND...
 is_empty() { [ -z "$1" ]; }
 not_empty() { [ -n "$1" ]; }

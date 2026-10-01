@@ -32,11 +32,13 @@ func newFixture(t *testing.T) fixture {
 	return fixture{NewSlack(fake.URL()), fake, bot}
 }
 
-// connect runs a Socket Mode client, as courier does, and waits until the fake counts it. It acks
-// every envelope if ack is set.
-func (f fixture) connect(t *testing.T, ack bool) {
+func (f fixture) connect(t *testing.T, ack bool) { t.Helper(); connectSocket(t, f.bot, f.sl, ack) }
+
+// connectSocket runs a Socket Mode client for bot, as courier does, and waits until the fake counts
+// a connection. It acks every envelope if ack is set. It stops with the test.
+func connectSocket(t *testing.T, bot *slack.Client, sl *Slack, ack bool) {
 	t.Helper()
-	smc := socketmode.New(f.bot)
+	smc := socketmode.New(bot)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = smc.RunContext(ctx) }()
@@ -54,8 +56,8 @@ func (f fixture) connect(t *testing.T, ack bool) {
 		}
 	}()
 	err := Wait(ctx, 5*time.Second, "a Socket Mode client", func(ctx context.Context) (bool, error) {
-		n, err := f.sl.Connections(ctx)
-		return n == 1, err
+		n, err := sl.Connections(ctx)
+		return n >= 1, err
 	})
 	if err != nil {
 		t.Fatal(err)
