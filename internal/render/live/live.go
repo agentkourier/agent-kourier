@@ -29,14 +29,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// NoOutput is what a message says when its turn ended with nothing to show, so that a tool status
-// line is not left standing as if the agent were still at work.
-const NoOutput = "(no output)"
-
-// fallbackLimit is the length of a message's plain text, which Slack shows where it cannot show
-// the blocks, such as in a notification.
-const fallbackLimit = 1000
-
 // Sender posts through the outbox: *outbox.Outbox.
 type Sender interface {
 	Send(ctx context.Context, p outbox.Post) (string, error)
@@ -240,9 +232,10 @@ func (u *Run) run(ctx context.Context) {
 }
 
 // placeholder is the message of a turn that ended with nothing to show.
+// It is there so that a tool status line is not left standing as if the agent were still at work.
 func placeholder() slack.Content {
-	blocks, _ := json.Marshal([]map[string]any{{"type": "markdown", "text": NoOutput}})
-	return slack.Content{Text: NoOutput, Blocks: blocks}
+	blocks, _ := json.Marshal([]map[string]any{render.NoOutputBlock()})
+	return slack.Content{Text: render.NoOutput, Blocks: blocks}
 }
 
 // flush settles a turn whose context ended after its final event: the task is over, nothing will
@@ -301,20 +294,12 @@ func (u *Run) snapshot() (c slack.Content, final, ok bool) {
 	}
 	tool, final := u.tool, u.final
 	u.mu.Unlock()
-	c.Text = render.Body(events, fallbackLimit, render.FlavourText)
-	var blocks []map[string]any
-	if body := render.Body(events, render.MaxBlock, render.FlavourMarkdown); body != "" {
-		blocks = append(blocks, map[string]any{"type": "markdown", "text": body})
-	}
+	var shown *agent.ToolCallEvent
 	if tool != nil && !final {
-		// The line sits in a mrkdwn context block, where "[text](url)" is no link and entities are
-		// what render's text flavour escapes; it must not go inside the markdown block.
-		line := render.ToolLine(tool.Name, tool.Args, render.FlavourText)
-		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": line}}})
-		if c.Text == "" {
-			c.Text = line
-		}
+		shown = tool
 	}
+	text, blocks := render.Message(events, shown)
+	c.Text = text
 	if len(blocks) == 0 {
 		return c, final, false
 	}

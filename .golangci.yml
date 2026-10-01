@@ -11,6 +11,7 @@ linters:
     - depguard      # test fakes must not leak into production code
     - errcheck
     - errorlint     # enforce %w and errors.Is/As over ==/type assertions
+    - forbidigo     # agent-written text goes into Slack only through render's builders
     - gocritic
     - gosec
     - govet
@@ -31,6 +32,12 @@ linters:
           deny:
             - pkg: github.com/agentkourier/agent-kourier/test/
               desc: packages under test/ (fakes, stubs, e2e helpers) are for tests; import them only from _test.go files and under test/
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^render\.(Text|Markdown|Body|ToolLine)$
+          pkg: ^github\.com/agentkourier/agent-kourier/internal/render$
+          msg: render's flavoured functions pair text with an escaping that must match the part it goes in; use a builder (MarkdownBlock, MarkdownText, Message, NoticeText) instead
     nolintlint:
       require-explanation: true
       require-specific: true
@@ -41,6 +48,9 @@ linters:
         - shadow          # noisy on the idiomatic `if err := ...` pattern
   exclusions:
     rules:
+      - path: ^internal/render/[^/]+\.go$
+        linters:
+          - forbidigo  # the builders live here, and call them
       - path: _test\.go
         linters:
           - gosec  # test fixtures use fake credentials and loose file modes

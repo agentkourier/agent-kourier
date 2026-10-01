@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -55,7 +56,7 @@ func TestFinalWithNothingToShowEndsTheRun(t *testing.T) {
 	eventually(t, "the first post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
-	if m := e.reply(); m.Text != live.NoOutput || strings.Contains(string(m.Blocks), "Calling") {
+	if m := e.reply(); m.Text != render.NoOutput || strings.Contains(string(m.Blocks), "Calling") {
 		t.Fatalf("message %+v; want the placeholder, with no tool line", m)
 	}
 	// With nothing posted, the run just ends.
