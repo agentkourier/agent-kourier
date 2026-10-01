@@ -28,62 +28,64 @@ const (
 	keySigningSecret = "signingSecret"
 )
 
-// SecretNamespaces returns the sorted namespaces whose Secrets set refers to, which are the ones
-// a SecretResolver must be given (D29: a Secret lives in the namespace of the object that names
-// it). It follows the references checkSecrets reads: every ChatConnection's credentials, an
-// AgentBackend's header Secrets, and a Binding's token and webhook token.
-func (s *Set) SecretNamespaces() []string {
-	seen := map[string]bool{}
+// secretRef is one Secret that an object of a Set refers to, and what it must hold.
+type secretRef struct {
+	from identity // the object that names it; the Secret is in its namespace (D29)
+	path string   // the field that names it
+	name string
+	keys []string // the keys the Secret must have
+}
+
+// secretRefs lists every Secret that set refers to: each ChatConnection's credentials, an
+// AgentBackend's header Secrets, and a Binding's token and webhook token. Resolve checks them, and
+// SecretNamespaces reads the namespaces off them, so the two cannot drift apart. An empty key
+// means the default, for a Set that has not been through Default.
+func (s *Set) secretRefs() []secretRef {
+	var refs []secretRef
+	keyRef := func(from identity, path string, ref *v1alpha1.SecretKeyRef) {
+		if ref != nil {
+			refs = append(refs, secretRef{from, path, ref.Name, []string{cmp.Or(ref.Key, v1alpha1.DefaultSecretKey)}})
+		}
+	}
 	for i := range s.AgentBackends {
-		for _, h := range s.AgentBackends[i].Spec.Headers {
-			if h.ValueSecretRef != nil {
-				seen[s.AgentBackends[i].Namespace] = true
-			}
+		be := &s.AgentBackends[i]
+		for j, h := range be.Spec.Headers {
+			keyRef(identity{"AgentBackend", be.Namespace, be.Name}, fmt.Sprintf("spec.headers[%d].valueSecretRef", j), h.ValueSecretRef)
 		}
 	}
 	for i := range s.ChatConnections {
-		seen[s.ChatConnections[i].Namespace] = true
-	}
-	for i := range s.Bindings {
-		if b := &s.Bindings[i]; b.Spec.Identity.TokenSecretRef != nil || b.Spec.Alerts != nil {
-			seen[b.Namespace] = true
-		}
-	}
-	return slices.Sorted(maps.Keys(seen))
-}
-
-// checkSecrets checks every Secret that an object of set refers to. Each lives in the
-// referring object's namespace (D29).
-func (r *resolver) checkSecrets(ctx context.Context, set *Set) {
-	for i := range set.AgentBackends {
-		be := &set.AgentBackends[i]
-		for j, h := range be.Spec.Headers {
-			r.checkKeyRef(ctx, identity{"AgentBackend", be.Namespace, be.Name}, fmt.Sprintf("spec.headers[%d].valueSecretRef", j), h.ValueSecretRef)
-		}
-	}
-	for i := range set.ChatConnections {
-		c := &set.ChatConnections[i]
+		c := &s.ChatConnections[i]
 		keys := []string{keyBotToken, keyAppToken}
 		if c.Spec.Mode == v1alpha1.ModeHTTP {
 			keys[1] = keySigningSecret
 		}
-		r.checkSecret(ctx, identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, keys...)
+		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, keys})
 	}
-	for i := range set.Bindings {
-		b := &set.Bindings[i]
+	for i := range s.Bindings {
+		b := &s.Bindings[i]
 		from := identity{"Binding", b.Namespace, b.Name}
-		r.checkKeyRef(ctx, from, "spec.identity.tokenSecretRef", b.Spec.Identity.TokenSecretRef)
+		keyRef(from, "spec.identity.tokenSecretRef", b.Spec.Identity.TokenSecretRef)
 		if a := b.Spec.Alerts; a != nil {
-			r.checkKeyRef(ctx, from, "spec.alerts.tokenSecretRef", &a.TokenSecretRef)
+			keyRef(from, "spec.alerts.tokenSecretRef", &a.TokenSecretRef)
 		}
 	}
+	return refs
 }
 
-// checkKeyRef checks a single-value reference, which may be unset. An empty key means the
-// default, for a Set that has not been through Default.
-func (r *resolver) checkKeyRef(ctx context.Context, from identity, path string, ref *v1alpha1.SecretKeyRef) {
-	if ref != nil {
-		r.checkSecret(ctx, from, path, ref.Name, cmp.Or(ref.Key, v1alpha1.DefaultSecretKey))
+// SecretNamespaces returns the sorted namespaces whose Secrets set refers to, which are the ones
+// a SecretResolver must be given.
+func (s *Set) SecretNamespaces() []string {
+	seen := map[string]bool{}
+	for _, ref := range s.secretRefs() {
+		seen[ref.from.namespace] = true
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// checkSecrets checks every Secret that an object of set refers to.
+func (r *resolver) checkSecrets(ctx context.Context, set *Set) {
+	for _, ref := range set.secretRefs() {
+		r.checkSecret(ctx, ref.from, ref.path, ref.name, ref.keys...)
 	}
 }
 
