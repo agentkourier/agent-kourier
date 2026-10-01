@@ -106,9 +106,10 @@ func TestWaitCrash_AnswersForTheCrashOfARolloutsNewPod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The new pod is running, then crashes once, after the old one's last termination was at 100.
+	// The new pod is running, then crashes once, in the same second as the old one's last termination:
+	// Kubernetes times are in seconds, and that second is not the baseline's to ignore in another pod.
 	cs2 := fake.NewClientset(courierPod("new", 0, nil, nil))
-	got, err := expect(t, cs2, since, replace(cs2, courierPod("new", 1, killed(60), nil)))
+	got, err := expect(t, cs2, since, replace(cs2, courierPod("new", 1, killed(100), nil)))
 	if err != nil || got.ExitCode != 137 || got.Restarts != 1 {
 		t.Fatalf("WaitCrash = %+v, %v; want the new pod's first crash, though its count is below the old pod's", got, err)
 	}
