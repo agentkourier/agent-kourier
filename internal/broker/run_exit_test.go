@@ -42,6 +42,7 @@ func TestRunDoesNotReturnWhileTheSlackRunIsStillStopping(t *testing.T) {
 
 	select {
 	case err := <-r.done:
+		r.done <- err // for start's cleanup, which waits for it
 		t.Fatalf("Run returned (%v) while the Slack run was still held", err)
 	case <-time.After(300 * time.Millisecond):
 	}
