@@ -175,6 +175,9 @@ func TestRetentionAbandonsOldUnpostedText(t *testing.T) {
 	if posts, finds := p.counts(); posts != 1 || finds != 1 || ref(st, "young") == "" {
 		t.Errorf("posts = %d, finds = %d; want only the young row looked up and posted", posts, finds)
 	}
+	if strings.Contains(logs.String(), "<nil>") {
+		t.Errorf("log = %q; an expired row has no cause to show", logs.String())
+	}
 	if got := hooks.list(); len(got) != 1 || got[0] != "old "+outbox.AbandonExpired || warnings(logs) != 1 {
 		t.Errorf("OnAbandon calls = %q, warnings = %d; want one of each", got, warnings(logs))
 	}

@@ -355,7 +355,11 @@ func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason stri
 
 // reportAbandon logs one warning, never the text, and calls OnAbandon.
 func (o *Outbox) reportAbandon(ctx context.Context, id, reason string, cause error) {
-	o.cfg.Logger.WarnContext(ctx, "outbox: a post was abandoned and will not be retried", "outbox_id", id, "reason", reason, "err", cause)
+	attrs := []any{"outbox_id", id, "reason", reason}
+	if cause != nil { // an expired row has none
+		attrs = append(attrs, "err", cause)
+	}
+	o.cfg.Logger.WarnContext(ctx, "outbox: a post was abandoned and will not be retried", attrs...)
 	if o.cfg.OnAbandon != nil {
 		o.cfg.OnAbandon(id, reason)
 	}
