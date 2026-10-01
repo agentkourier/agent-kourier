@@ -22,6 +22,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // Poster is the Slack side of the outbox, which *slack.Client satisfies.
@@ -256,6 +257,7 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 	if err != nil {
 		return "", fmt.Errorf("deliver %s: post: %w", id, err)
 	}
+	testhooks.AfterPost() // a no-op unless this is a test image, where it can crash the process here
 	return o.record(ctx, id, ts)
 }
 
