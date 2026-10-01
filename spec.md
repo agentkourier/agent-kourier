@@ -520,7 +520,9 @@ no longer exists, courier says so in the thread, clears the stored context, and 
 message in the thread starts a fresh context. Courier treats `TaskNotFound` for a recorded
 task, or a first response whose `contextId` differs from the stored one, as the session no
 longer existing (UNCONFIRMED: kagent's signal for a lost session is not measured). After
-`threadTTL`, a reply gets the same notice.
+`threadTTL` the thread is expired for good: every later reply in it gets a fixed notice
+saying the conversation has expired and that a new mention in the channel starts a new
+one. The mention's two events (app_mention and message) give one notice.
 
 **Reply while a task is running.** kagent allows one active task per session and
 rejects a new message while one runs, with JSON-RPC `-32004` "resource conflict" (inside
