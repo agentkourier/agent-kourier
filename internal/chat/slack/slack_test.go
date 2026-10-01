@@ -29,11 +29,31 @@ const (
 	botMark  = "<@UFAKEBOT>"
 )
 
-// sink records the messages it is given. fn, if set, decides what Message returns.
+// sink records the messages and interactions it is given. fn and ifn, if set, decide what
+// Message and Interaction return.
 type sink struct {
-	mu  sync.Mutex
-	got []slack.Message
-	fn  func(slack.Message) error
+	mu   sync.Mutex
+	got  []slack.Message
+	fn   func(slack.Message) error
+	ints []slack.Interaction
+	ifn  func(slack.Interaction) error
+}
+
+func (s *sink) Interaction(_ context.Context, i slack.Interaction) error {
+	s.mu.Lock()
+	s.ints = append(s.ints, i)
+	fn := s.ifn
+	s.mu.Unlock()
+	if fn != nil {
+		return fn(i)
+	}
+	return nil
+}
+
+func (s *sink) interactions() []slack.Interaction {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.ints)
 }
 
 func (s *sink) Message(_ context.Context, m slack.Message) error {

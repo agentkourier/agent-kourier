@@ -222,3 +222,22 @@ func TestNoLoop(t *testing.T) {
 		t.Fatalf("submitted turns %v; want the mention and the reply, not courier's own post %s", ids, answer)
 	}
 }
+
+// TestIntakePassesInteractionsOn: a press goes to the configured handler, and the handler's
+// error is the Intake's, so the event is left unacknowledged.
+func TestIntakePassesInteractionsOn(t *testing.T) {
+	var got []slack.Interaction
+	fail := errors.New("busy")
+	in := slack.NewIntake(slack.IntakeConfig{Interactions: func(_ context.Context, i slack.Interaction) error {
+		got = append(got, i)
+		return fail
+	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	press := slack.Interaction{User: "U1", Channel: "C1", MessageTS: "5.5", ActionID: "submit"}
+	if err := in.Interaction(t.Context(), press); !errors.Is(err, fail) || len(got) != 1 || got[0].ActionID != "submit" {
+		t.Fatalf("Interaction = %v, handler saw %+v; want its error, and the press", err, got)
+	}
+	// With no handler the press is dropped, and acknowledged.
+	if err := slack.NewIntake(slack.IntakeConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Interaction(t.Context(), press); err != nil {
+		t.Fatalf("Interaction with no handler = %v; want nil", err)
+	}
+}

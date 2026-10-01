@@ -28,7 +28,10 @@ type IntakeConfig struct {
 	// Snapshot returns the current routing table, as config.Reloader.Current does.
 	Snapshot  func() *config.Snapshot
 	Submitter Submitter
-	Logger    *slog.Logger // slog.Default() if nil
+	// Interactions takes the presses of buttons. Nil drops them, acknowledged, until the
+	// renderer that posts buttons is wired in (WP-33).
+	Interactions func(ctx context.Context, i Interaction) error
+	Logger       *slog.Logger // slog.Default() if nil
 }
 
 // Intake is a Sink that applies spec 8.2's trigger table: it turns each message into a turn
@@ -88,6 +91,15 @@ func (in *Intake) Message(ctx context.Context, m Message) error {
 		in.log.WarnContext(ctx, "slack: reply in a thread courier cannot continue", "channel", m.Channel, "thread", req.Key.ThreadTS, "disposition", res.Disposition)
 	}
 	return nil
+}
+
+// Interaction passes a button press to IntakeConfig.Interactions, and returns its error.
+func (in *Intake) Interaction(ctx context.Context, i Interaction) error {
+	if in.cfg.Interactions == nil {
+		in.log.WarnContext(ctx, "slack: button press dropped; no handler yet", "channel", i.Channel, "ts", i.MessageTS)
+		return nil
+	}
+	return in.cfg.Interactions(ctx, i)
 }
 
 // binding returns the namespace/name of the Binding that owns channel on this connection.

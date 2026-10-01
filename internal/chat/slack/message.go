@@ -19,8 +19,11 @@ type Message struct {
 	Mentioned   bool // the message mentions the bot; always true for an app_mention
 }
 
-// Sink receives the messages Run decodes.
+// Sink receives what Run decodes: messages, and presses of buttons on messages.
 type Sink interface {
+	// Interaction takes i, with the same rule as Message: an error leaves the event
+	// unacknowledged, and Slack sends it again.
+	Interaction(ctx context.Context, i Interaction) error
 	// Message takes m. An error means it was not taken: Slack sends the event again. A
 	// mention arrives twice (app_mention and message), with the same Channel and TS.
 	Message(ctx context.Context, m Message) error

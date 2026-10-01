@@ -72,13 +72,13 @@ func New(cfg Config) *Client {
 	}
 }
 
-// Run connects over Socket Mode and gives sink each message that may be a turn, one at a
-// time and in order, until ctx ends (the error wraps ctx's) or the connection fails for
+// Run connects over Socket Mode and gives sink each message that may be a turn and each
+// button press, one at a time and in order, until ctx ends (the error wraps ctx's) or the connection fails for
 // good, as with a rejected token. slack-go reconnects by itself otherwise.
 //
-// An events_api envelope is acknowledged only after the sink returns nil, so a turn the
-// sink could not take is sent again by Slack; events that are not turns are acknowledged
-// as soon as they are decoded. Other envelope kinds (interactions) are not handled here.
+// An events_api or interactive envelope is acknowledged only after the sink returns nil, so
+// one the sink could not take is sent again by Slack; those that are neither a turn nor a
+// press are acknowledged as soon as they are decoded. Other envelope kinds (slash commands) are not handled here.
 // Run calls the sink itself, between reads of the connection, so a slow sink delays the
 // acknowledgements: Slack expects each within 3 seconds, and sends the event again if late.
 func (c *Client) Run(ctx context.Context, sink Sink) error {
@@ -102,19 +102,35 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	}
 }
 
-// handle gives sink the message of an events_api event, then acknowledges the event.
+// handle gives sink the message of an events_api event, or the press of an interactive one,
+// then acknowledges the event.
 func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser string, sink Sink, ev socketmode.Event) {
-	if ev.Type != socketmode.EventTypeEventsAPI || ev.Request == nil {
+	if ev.Request == nil {
 		return
 	}
-	if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
-		if m, ok := decode(botUser, outer.InnerEvent.Data); ok {
-			if err := sink.Message(ctx, m); err != nil {
-				c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
-					"channel", m.Channel, "ts", m.TS, "err", err)
-				return
+	switch ev.Type {
+	case socketmode.EventTypeEventsAPI:
+		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
+			if m, ok := decode(botUser, outer.InnerEvent.Data); ok {
+				if err := sink.Message(ctx, m); err != nil {
+					c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
+						"channel", m.Channel, "ts", m.TS, "err", err)
+					return
+				}
 			}
 		}
+	case socketmode.EventTypeInteractive:
+		if cb, ok := ev.Data.(slackgo.InteractionCallback); ok {
+			if i, ok := decodeInteraction(botUser, cb); ok {
+				if err := sink.Interaction(ctx, i); err != nil {
+					c.log.WarnContext(ctx, "slack: interaction not taken; left unacknowledged for Slack to send again",
+						"channel", i.Channel, "ts", i.MessageTS, "err", err)
+					return
+				}
+			}
+		}
+	default:
+		return
 	}
 	// Bounded: slack-go queues the ack for a writer that is gone after a disconnect, and a full queue would block here.
 	ackCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
