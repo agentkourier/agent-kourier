@@ -22,10 +22,22 @@ func (c *Client) Update(ctx context.Context, channel, ts string, content Content
 	if err != nil {
 		return fmt.Errorf("slack update: %w", err)
 	}
+	opts = append(opts, inertOptions()...)
 	if _, _, _, err := c.api.UpdateMessageContext(ctx, channel, ts, append(opts, slackgo.MsgOptionText(content.Text, false))...); err != nil {
 		return c.scrub("chat.update", err)
 	}
 	return nil
+}
+
+// inertOptions returns the options every post, update and stream of courier carries, so that
+// agent-written text stays text (spec 8.4): no parse, which would turn @here and @channel into
+// broadcasts, no link_names, and no unfurling, which makes Slack's servers fetch a URL the agent
+// wrote with no one clicking it. A method that sends a message must include them.
+//
+// UNCONFIRMED(WP-04): that chat.startStream, chat.appendStream and chat.stopStream accept the
+// unfurl options (the fake ignores any parameter it does not read).
+func inertOptions() []slackgo.MsgOption {
+	return []slackgo.MsgOption{slackgo.MsgOptionParse(false), slackgo.MsgOptionDisableLinkUnfurl(), slackgo.MsgOptionDisableMediaUnfurl()}
 }
 
 // blockOptions returns the option that sets raw, Block Kit blocks as JSON, or none for no blocks.

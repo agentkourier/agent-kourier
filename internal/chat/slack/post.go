@@ -45,6 +45,7 @@ func (c *Client) Post(ctx context.Context, channel, threadTS string, content Con
 		return "", fmt.Errorf("slack post: %w", err)
 	}
 	opts = append(opts, slackgo.MsgOptionText(content.Text, false), tag)
+	opts = append(opts, inertOptions()...)
 	if threadTS != "" {
 		opts = append(opts, slackgo.MsgOptionTS(threadTS))
 	}

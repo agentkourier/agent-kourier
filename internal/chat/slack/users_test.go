@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,10 +29,11 @@ var _ session.Users = (*slack.Client)(nil)
 // counter is an http.RoundTripper that counts requests by path. It answers each one with err,
 // if set, else with the status, if set (with statusText, or the usual, the body and a
 // Retry-After of 7 s), else by hanging until the request's context ends, if hang is set;
-// otherwise it passes it on.
+// otherwise it passes it on. It keeps the form of each request, by path.
 type counter struct {
 	mu               sync.Mutex
 	n                map[string]int
+	forms            map[string][]url.Values
 	err              error
 	status           int
 	statusText, body string
@@ -41,6 +43,16 @@ type counter struct {
 func (c *counter) RoundTrip(r *http.Request) (*http.Response, error) {
 	c.mu.Lock()
 	c.n[r.URL.Path]++
+	if r.Body != nil && r.Method == http.MethodPost {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(strings.NewReader(string(raw)))
+		if form, err := url.ParseQuery(string(raw)); err == nil {
+			if c.forms == nil {
+				c.forms = map[string][]url.Values{}
+			}
+			c.forms[r.URL.Path] = append(c.forms[r.URL.Path], form)
+		}
+	}
 	err, status, hang, text, body := c.err, c.status, c.hang, c.statusText, c.body
 	c.mu.Unlock()
 	switch {
@@ -53,6 +65,13 @@ func (c *counter) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, r.Context().Err()
 	}
 	return http.DefaultTransport.RoundTrip(r)
+}
+
+// sent returns the forms of the requests to path.
+func (c *counter) sent(path string) []url.Values {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.forms[path])
 }
 
 func (c *counter) count(path string) int {

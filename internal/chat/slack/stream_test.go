@@ -148,3 +148,40 @@ func TestStreamErrorsNameNoToken(t *testing.T) {
 		}
 	}
 }
+
+// TestRequestsAreInert: agent-written text must not become a live broadcast or a link Slack's
+// servers fetch (spec 8.4). Every post, update and stream request turns off unfurling, leaves
+// link_names unset, and does not ask for parse=full.
+// UNCONFIRMED(WP-04): that the streaming methods accept, or at least ignore, the unfurl options.
+func TestRequestsAreInert(t *testing.T) {
+	c, _, calls, root := updateClient(t)
+	ctx := t.Context()
+	if _, err := c.Post(ctx, "C1", root, slack.Content{Text: "@here https://evil.example/?d=x"}, "ob-1"); err != nil {
+		t.Fatal(err)
+	}
+	ts, err := c.StartStream(ctx, "C1", root, "U1", "@here")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AppendStream(ctx, "C1", ts, "https://evil.example/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.StopStream(ctx, "C1", ts, "", nil, "ob-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(ctx, "C1", ts, slack.Content{Text: "@channel"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/chat.postMessage", "/chat.startStream", "/chat.appendStream", "/chat.stopStream", "/chat.update"} {
+		forms := calls.sent(path)
+		if len(forms) == 0 {
+			t.Errorf("no %s request was made", path)
+		}
+		for _, f := range forms {
+			if f.Get("unfurl_links") != "false" || f.Get("unfurl_media") != "false" || f.Has("link_names") || f.Get("parse") == "full" {
+				t.Errorf("%s sent unfurl_links=%q unfurl_media=%q link_names=%q parse=%q; want both unfurls false, no link_names, no parse=full",
+					path, f.Get("unfurl_links"), f.Get("unfurl_media"), f.Get("link_names"), f.Get("parse"))
+			}
+		}
+	}
+}

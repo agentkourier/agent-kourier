@@ -43,7 +43,7 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 	if err != nil {
 		return "", err
 	}
-	opts := []slackgo.MsgOption{slackgo.MsgOptionTS(threadTS), slackgo.MsgOptionRecipientUserID(recipientUser), slackgo.MsgOptionRecipientTeamID(team)}
+	opts := append(inertOptions(), slackgo.MsgOptionTS(threadTS), slackgo.MsgOptionRecipientUserID(recipientUser), slackgo.MsgOptionRecipientTeamID(team))
 	if markdown != "" {
 		opts = append(opts, slackgo.MsgOptionMarkdownText(markdown))
 	}
@@ -56,7 +56,7 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 
 // AppendStream adds markdown to the end of the streaming message ts. The error holds no token.
 func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string) error {
-	if _, _, err := c.api.AppendStreamContext(ctx, channel, ts, slackgo.MsgOptionMarkdownText(markdown)); err != nil {
+	if _, _, err := c.api.AppendStreamContext(ctx, channel, ts, append(inertOptions(), slackgo.MsgOptionMarkdownText(markdown))...); err != nil {
 		return c.scrub("chat.appendStream", err)
 	}
 	return nil
@@ -82,6 +82,7 @@ func (c *Client) StopStream(ctx context.Context, channel, ts, markdown string, b
 		return fmt.Errorf("slack stop stream: %w", err)
 	}
 	opts = append(opts, tag)
+	opts = append(opts, inertOptions()...)
 	if markdown != "" {
 		opts = append(opts, slackgo.MsgOptionMarkdownText(markdown))
 	}
