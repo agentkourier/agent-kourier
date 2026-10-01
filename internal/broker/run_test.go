@@ -331,16 +331,3 @@ func TestRunRoutesKlogToItsLoggerFirst(t *testing.T) {
 		t.Errorf("klog output did not reach the broker's logger: %q", out.String())
 	}
 }
-
-func TestCleanupsRunInReverseOrderAndAllOfThem(t *testing.T) {
-	var order []string
-	var s cleanups
-	for _, n := range []string{"first", "second", "third"} {
-		s.add(func() { order = append(order, n) })
-	}
-	s.run()
-	s.run() // a second run finds nothing left
-	if got := strings.Join(order, ","); got != "third,second,first" {
-		t.Errorf("cleanups ran as %s, want last registered first", got)
-	}
-}

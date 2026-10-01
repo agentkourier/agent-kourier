@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sync/atomic"
-	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -17,23 +16,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
-
-// cleanups are the things Run must undo, run last registered first. That order is only what holds
-// until WP-35f2c, which owns the shutdown order (intake, manager, outbox drain, pool, resolver, store)
-// and replaces this stack with it: nothing may depend on the order here.
-type cleanups struct{ fns []func() }
-
-// add registers fn to run when run is called.
-func (c *cleanups) add(fn func()) { c.fns = append(c.fns, fn) }
-
-// run calls every registered function, last first, and forgets them, so a second run does nothing.
-func (c *cleanups) run() {
-	for len(c.fns) > 0 {
-		fn := c.fns[len(c.fns)-1]
-		c.fns = c.fns[:len(c.fns)-1]
-		fn()
-	}
-}
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
 // (ctx ended, even while it was still starting), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
@@ -65,10 +47,15 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			return err
 		}
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	var undo cleanups
-	defer undo.run()
+	// runCtx is the broker's own: a signal ends ctx, and the shutdown then stops the parts in order, one
+	// step at a time, where a context derived from ctx would stop them all at once. Until startup has
+	// finished, though, a signal does cancel it, so that a slow Bootstrap can be interrupted.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stopStartupWatch := context.AfterFunc(ctx, cancel)
+	defer stopStartupWatch()
 	defer cancel()
+	sd := newShutdown(log)
+	defer sd.run(ctx)
 
 	// replaced in 35f2b4 for the hooks; the stale gauge already reads the Config once Bootstrap has made it.
 	var current atomic.Pointer[Config]
@@ -78,10 +65,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return fmt.Errorf("metrics: %w", err)
 	}
 	ready := &Readiness{}
-	served := make(chan error, 1)
+	served, servedDone := make(chan error, 1), make(chan struct{})
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
-	go func() { served <- Serve(serveCtx, cfg.Listener, NewHandler(metrics, ready)) }()
-	undo.add(func() { stopServing(); <-served }) // registered first, so it is the last to go: /healthz stays up
+	go func() { served <- Serve(serveCtx, cfg.Listener, NewHandler(metrics, ready)); close(servedDone) }()
+	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
 
 	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
 		Dir: cfg.ConfigDir, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
@@ -90,7 +77,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
 	current.Store(boot)
-	undo.add(func() { cancel(); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
+	sd.add(stepResolver, func(context.Context) { cancel(); boot.Reloader.Wait(); boot.Stop() }) // the Reloader stops before the resolver
 
 	conn, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
 	if err != nil {
@@ -102,7 +89,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	undo.add(func() {
+	sd.add(stepStore, func(context.Context) {
 		if err := st.Close(); err != nil {
 			log.Warn("closing the store", "error", err)
 		}
@@ -113,7 +100,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	auditor := audit.New(auditLog, audit.Options{Logger: log, OnFailure: metrics.AuditFailure})
 	bindings := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
-	undo.add(bindings.Close)
+	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
 	log.InfoContext(ctx, "ready")
@@ -123,7 +110,6 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// The Slack client gets a transport of its own, so that its idle connections can be closed at
 	// shutdown and no goroutine outlives Run.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	undo.add(transport.CloseIdleConnections)
 	sc := slackConfig(conn, log)
 	sc.HTTPClient = &http.Client{Transport: transport}
 	var sl slackAPI
@@ -140,16 +126,20 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	outboxCtx, stopOutbox := context.WithCancel(runCtx)
 	outboxDone := make(chan struct{})
 	go func() { defer close(outboxDone); _ = ob.Run(outboxCtx) }()
-	undo.add(func() { stopOutbox(); <-outboxDone })
+	sd.add(stepDrain, func(c context.Context) { // stop the drain loop, then post what is pending one last time
+		stopOutbox()
+		waitFor(c, outboxDone)
+		if err := ob.Reconcile(c); err != nil && c.Err() == nil {
+			log.Warn("outbox: the final drain did not finish", "error", err)
+		}
+	})
 
 	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: sl, Sink: cfg.Sink, Logger: log, Audit: auditor})
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}
-	undo.add(func() {
-		closeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer done()
-		if err := mgr.Close(closeCtx); err != nil {
+	sd.add(stepManager, func(c context.Context) {
+		if err := mgr.Close(c); err != nil {
 			log.Warn("closing the session manager", "error", err)
 		}
 	})
@@ -160,10 +150,15 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	intake := slack.NewIntake(slack.IntakeConfig{
 		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: cfg.Interactions, Logger: log,
 	})
-	slackDone := make(chan error, 1)
-	go func() { slackDone <- RunSlack(slackCtx, sl, intake, RunPolicy{Logger: log}) }()
-	undo.add(func() { stopSlack(); <-slackDone }) // the intake stops before the manager it feeds
+	slackDone, slackStopped := make(chan error, 1), make(chan struct{})
+	go func() { slackDone <- RunSlack(slackCtx, sl, intake, RunPolicy{Logger: log}); close(slackStopped) }()
+	sd.add(stepIntake, func(c context.Context) { // the intake stops before the manager it feeds
+		stopSlack()
+		waitFor(c, slackStopped)
+		transport.CloseIdleConnections()
+	})
 
+	stopStartupWatch() // from here a signal ends ctx only, and the shutdown stops the parts in order
 	select {
 	case <-ctx.Done():
 		return nil
