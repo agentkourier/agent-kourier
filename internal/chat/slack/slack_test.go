@@ -263,8 +263,10 @@ func TestRunEnds(t *testing.T) {
 // TestRunFailsClosedWithoutABotUserID: with no user ID from auth.test, courier could not
 // recognise its own posts that arrive with no bot_id, so it must not run.
 func TestRunFailsClosedWithoutABotUserID(t *testing.T) {
-	_, wait := run(t, slack.New(config(newFake(t, fakeslack.WithBot("", "BFAKEBOT", "AFAKEAPP")))), &sink{})
-	if err := wait(); err == nil || !strings.Contains(err.Error(), "no bot user ID") {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // so that a Run that does not refuse fails the test, not hangs it
+	defer cancel()
+	c := slack.New(config(newFake(t, fakeslack.WithBot("", "BFAKEBOT", "AFAKEAPP"))))
+	if err := c.Run(ctx, &sink{}); err == nil || !strings.Contains(err.Error(), "no bot user ID") {
 		t.Fatalf("Run = %v; want it to refuse a bot with no user ID", err)
 	}
 }
