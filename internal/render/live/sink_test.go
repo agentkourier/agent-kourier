@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 var thread = session.Key{Connection: "ns/conn", Channel: "C1"}
@@ -52,9 +53,65 @@ func TestNoticeOnlyQueuesAndEscapesItsDetail(t *testing.T) {
 			t.Errorf("%s: row %+v, %v; want a queued row in the thread with the detail escaped", kind, row, err)
 		}
 	}
-	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued})
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"})
 	if _, err := e.store.GetOutbox(t.Context(), outbox.ID("m/queued", "notice")); err == nil {
-		t.Error("the queued notice became a message; it is a reaction (WP-32f)")
+		t.Error("the queued notice became a message; it is a reaction")
+	}
+}
+
+// TestQueuedNoticeEnqueuesAReactionAndSendsNothing: the notice names the message, so the row is a
+// reaction on it, in the thread's channel, under the notice's ID; the same notice twice is one row;
+// and no call is made to Slack, which is waiting for the acknowledgement this runs inside.
+func TestQueuedNoticeEnqueuesAReactionAndSendsNothing(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Poster: noCalls{t}, Reactor: noReactions{t}}))
+	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeQueued, MessageTS: "1.5"}
+	for range 2 {
+		sink.Notice(t.Context(), thread, n)
+	}
+	id := n.ID + "/reaction"
+	row, err := e.store.GetOutbox(t.Context(), id)
+	if err != nil || row.Role != store.OutboxReaction || row.Channel != "C1" || row.MessageRef != "" || !strings.Contains(row.Payload, `"ts":"1.5"`) || !strings.Contains(row.Payload, `"name":"hourglass_flowing_sand"`) {
+		t.Fatalf("row %+v, %v; want an unmade reaction on 1.5 in C1", row, err)
+	}
+	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 1 {
+		t.Fatalf("%d rows for one notice raised twice; want 1", len(rows))
+	}
+}
+
+// noReactions is a Reactor that fails the test on any call.
+type noReactions struct{ t *testing.T }
+
+func (r noReactions) React(context.Context, string, string, string) error {
+	r.t.Error("a Slack reaction was made")
+	return nil
+}
+
+// TestQueuedReactionIsMadeOnTheMessage runs the row to Slack: the reply that waits is marked.
+func TestQueuedReactionIsMadeOnTheMessage(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, e.ob)
+	key := thread
+	key.ThreadTS = e.root
+	n := session.Notice{ID: "slack:ns/conn:C1:" + e.root + "/queued", Kind: session.NoticeQueued, MessageTS: e.root}
+	sink.Notice(t.Context(), key, n)
+	if err := e.ob.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile = %v", err)
+	}
+	if got := e.fake.Reactions("C1", e.root); len(got) != 1 || got[0].Name != "hourglass_flowing_sand" {
+		t.Fatalf("Reactions = %+v; want the hourglass on the message", got)
+	}
+}
+
+// TestQueuedNoticeWithoutAMessageIsLogged: a notice that names no message cannot be a reaction, and
+// is not silently lost.
+func TestQueuedNoticeWithoutAMessageIsLogged(t *testing.T) {
+	e := setup(t)
+	logs := &strings.Builder{}
+	sink := live.NewSink(e.live, e.ob, slog.New(slog.NewTextHandler(logs, nil)))
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued})
+	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 0 || !strings.Contains(logs.String(), "reaction was not queued") {
+		t.Fatalf("%d rows, log %q; want none, and the failure logged", len(rows), logs.String())
 	}
 }
 
@@ -63,7 +120,7 @@ func TestNoticeOfAnUnknownKindIsLogged(t *testing.T) {
 	logs := &strings.Builder{}
 	sink := live.NewSink(e.live, e.ob, slog.New(slog.NewTextHandler(logs, nil)))
 	sink.Notice(t.Context(), thread, session.Notice{ID: "m/odd", Kind: "never_heard_of_it"})
-	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued})
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"})
 	if got := logs.String(); !strings.Contains(got, "never_heard_of_it") || strings.Contains(got, "queued") {
 		t.Fatalf("log %q; want the unknown kind named, and the queued one, a reaction, left out", got)
 	}

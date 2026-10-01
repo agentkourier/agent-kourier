@@ -16,7 +16,11 @@ import (
 // Enqueuer writes an outbox row and sends nothing: *outbox.Outbox.
 type Enqueuer interface {
 	Enqueue(ctx context.Context, p outbox.Post) (string, error)
+	EnqueueReaction(ctx context.Context, r outbox.Reaction) (string, error)
 }
+
+// queuedReaction is the emoji that marks a reply waiting for the active task (spec 8.2).
+const queuedReaction = "hourglass_flowing_sand"
 
 // Sink is the session manager's Sink. A turn's events go to a Run, whose handler never blocks, so
 // the stream reader is never held up by Slack. A notice is only written to the outbox, which posts
@@ -51,13 +55,18 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 
 // Notice queues the notice in the thread. Its row is named after the notice's own ID, so the same
 // notice, raised twice, is one row and one post. A reply that waits for the active task (the
-// queued notice) is shown by a reaction, not a message, which is not built yet (WP-32f).
+// queued notice) is shown by a reaction on its message, not a message: that is a row too, and is
+// made later, off the acknowledgement path.
 func (s *Sink) Notice(ctx context.Context, key session.Key, n session.Notice) {
-	text, ok := noticeText(n.Kind)
-	if !ok {
-		if n.Kind != session.NoticeQueued { // that one is a reaction (WP-32f); any other is a kind nobody wrote wording for
-			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
+	if n.Kind == session.NoticeQueued {
+		if _, err := s.queue.EnqueueReaction(ctx, outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageTS, Name: queuedReaction}); err != nil {
+			s.log.WarnContext(ctx, "live: a reaction was not queued", "kind", n.Kind, "channel", key.Channel, "err", err)
 		}
+		return
+	}
+	text, ok := noticeText(n.Kind)
+	if !ok { // a kind nobody wrote wording for
+		s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
 		return
 	}
 	post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, ThreadTS: key.ThreadTS, Content: slack.Content{Text: render.NoticeText(text, n.Detail)}}

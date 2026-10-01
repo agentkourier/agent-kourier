@@ -245,7 +245,7 @@ func setup(t *testing.T) *env {
 	}
 	t.Cleanup(func() { _ = e.store.Close() })
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Logger: quiet})
+	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Reactor: client, Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
 	e.cfg = live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
 	e.live = live.New(e.cfg)
