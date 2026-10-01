@@ -28,8 +28,13 @@ func TestReactionsAddIsKeptOnTheMessage(t *testing.T) {
 	if again := fake.Reactions("C1", root); !reflect.DeepEqual(again, want) {
 		t.Fatalf("Reactions after a change to a copy = %+v; want %+v", again, want)
 	}
-	if got := fake.Messages("C1")[0].Reactions; len(got) != 2 {
-		t.Fatalf("the message holds %+v; want both reactions", got)
+	msgs := fake.Messages("C1")
+	if len(msgs[0].Reactions) != 2 {
+		t.Fatalf("the message holds %+v; want both reactions", msgs[0].Reactions)
+	}
+	msgs[0].Reactions[1].Users[0] = "changed" // a copy of the message too
+	if again := fake.Reactions("C1", root); !reflect.DeepEqual(again, want) {
+		t.Fatalf("Reactions after a change to a copy of the message = %+v; want %+v", again, want)
 	}
 	if n := len(fake.Reactions("C1", "1.1")); n != 0 {
 		t.Fatalf("Reactions of an unknown message = %d; want none", n)
