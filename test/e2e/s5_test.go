@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +14,8 @@ import (
 
 // TestS5_AReplyPostedBeforeACrashIsNotPostedAgain: courier is killed between posting a reply and
 // recording that it did (the testhooks fault, exit 137), and after it restarts the thread holds that one
-// message, found again by the tag it carries, not a second.
+// message, found again by the tag it carries, not a second. That the restart is done with the unfinished
+// turn is shown by a positive signal, a second message of the thread being answered after it.
 //
 // Arming a fault is a rollout, and the fault stays armed across the container's own restarts, so the
 // scenario disarms at once, with another rollout, once it has seen the crash; and a failed scenario
@@ -33,16 +33,20 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 			t.Errorf("disarm at the end: %v", err)
 		}
 	})
-	base, err := s.pods.Baseline(s.ctx, kube.CourierNamespace, courierPods, courierContainer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := arm(s.ctx, testhooks.CrashAfterPost); err != nil {
 		t.Fatal(err)
 	}
 	s.connected()
+	// The baseline is of the pod the arming rollout left, taken after it: a baseline from before would let
+	// the old pod's own shutdown, which may end in 137 after its grace period, answer for a crash that
+	// never happened.
+	base, err := s.pods.Baseline(s.ctx, kube.CourierNamespace, courierPods, courierContainer)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	m := s.mention(ChannelS5, "US5", "answer once "+s.stub.Gate("S5"))
+	tok := s.stub.Gate("S5")
+	m := s.mention(ChannelS5, "US5", "answer once "+tok)
 	crashCtx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
 	crash, err := s.pods.WaitCrash(crashCtx, kube.CourierNamespace, courierPods, courierContainer, base)
@@ -57,16 +61,34 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 	}
 	s.connected()
 
-	// The reply was posted before the crash, and is there.
-	s.thread(ChannelS5, m.TS, "the reply that was posted before the crash", func(th []fakeslack.MessageView) bool {
-		return len(BotMessages(th)) >= 1
-	})
-	// And after the restart courier finds it by its tag, and does not post it again. That nothing more
-	// comes is a thing to watch for: courier says nothing when it finds the message.
-	err = Consistently(s.ctx, 10*time.Second, "the thread keeps exactly one message of the bot, with the outbox tag", func(ctx context.Context) (bool, error) {
-		th, err := s.slack.Thread(ctx, ChannelS5, m.TS)
+	// What shows that the restarted courier is done with the turn it found unfinished: a second message in
+	// the thread is answered only after it, because a reply waits for the thread's active task. So when
+	// that answer is there, a duplicate of the first reply, if the restart made one, is there too.
+	again := s.reply(ChannelS5, m.TS, "US5", "and again "+tok)
+	th := s.thread(ChannelS5, m.TS, "the answer to the second message", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
-		return len(bots) == 1 && OutboxID(bots[0]) != "" && strings.TrimSpace(bots[0].Text) != "", err
+		return len(bots) >= 2 && CompareTS(bots[len(bots)-1].TS, again.TS) > 0
+	})
+	checkOnce := func(th []fakeslack.MessageView) (bool, string) {
+		var before, after []fakeslack.MessageView
+		for _, b := range BotMessages(th) {
+			if CompareTS(b.TS, again.TS) < 0 {
+				before = append(before, b)
+			} else {
+				after = append(after, b)
+			}
+		}
+		ok := len(before) == 1 && len(after) == 1 && OutboxID(before[0]) != "" && OutboxID(after[0]) != "" && OutboxID(before[0]) != OutboxID(after[0])
+		return ok, describe(th)
+	}
+	if ok, got := checkOnce(th); !ok {
+		t.Fatalf("want one tagged message of the bot before the second message and one after, each its own: the first reply is not posted twice\nthe thread: %s", got)
+	}
+	// And nothing more comes after that.
+	err = Consistently(s.ctx, 3*time.Second, "the thread keeps its two tagged messages of the bot", func(ctx context.Context) (bool, error) {
+		th, err := s.slack.Thread(ctx, ChannelS5, m.TS)
+		ok, _ := checkOnce(th)
+		return ok, err
 	})
 	if err != nil {
 		t.Errorf("%v\nthe thread: %s", err, s.describeNow(m.TS))
