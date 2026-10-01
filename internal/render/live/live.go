@@ -5,9 +5,13 @@
 // opens is what is sent. The first post goes through the outbox, so a crash cannot post it twice
 // (spec 8.6); later changes are updates, which are idempotent.
 //
-// This is the chat.update path. It never updates a message that is still streaming: it never
-// starts a stream. Text is rendered at the last step, from the raw events (package render), and
-// every send carries the Slack client's inert options.
+// Two paths write the message. For a chat thread, where Slack shows a stream to the person who
+// asked, the turn streams: startStream, throttled appendStream of what is new, stopStream with the
+// outbox tag and the final blocks, and a chat.update after the stop only if what was streamed
+// diverged from the final text (see stream.go). Otherwise, such as in an alert thread, it posts and
+// updates. Neither ever updates a message that is still streaming. Text is rendered at the last
+// step, from the raw events (package render), and every send carries the Slack client's inert
+// options.
 package live
 
 import (
@@ -15,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,10 +44,22 @@ type Updater interface {
 	Update(ctx context.Context, channel, ts string, c slack.Content) error
 }
 
-// Config configures a Renderer. Sender and Updater are required.
+// Streamer runs a streaming message: *slack.Client.
+type Streamer interface {
+	StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string) (string, error)
+	AppendStream(ctx context.Context, channel, ts, markdown string) error
+	StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error
+}
+
+// Config configures a Renderer. Sender and Updater are required; a Renderer with no Streamer
+// and Store never streams.
 type Config struct {
 	Sender  Sender
 	Updater Updater
+	// Streamer and Store are for the stream path. The store is the outbox's: the renderer creates
+	// the stream's row itself, with no payload, and records its ts the moment it has one.
+	Streamer Streamer
+	Store    store.Outbox
 	// Throttle is the least time between two writes to one message (default 2 seconds).
 	Throttle time.Duration
 	// Attempts is how many times in a row a write may fail before it is given up (default 5). A
@@ -90,8 +107,16 @@ type Turn struct {
 	// Mode is live, which updates the message as the turn runs, or final, which posts it once
 	// when the turn ends.
 	Mode v1alpha1.OutputMode
-	// Recovered says the turn was found again after a restart: its message may exist already, and
-	// is updated to the whole text.
+	// Recipient is the person who asked, to whom Slack shows a stream in a channel. Empty, as in an
+	// alert thread, takes the chat.update path.
+	Recipient string
+	// Recovered says the turn continues a message that may exist already, and is updated to the
+	// whole text. A chat turn that finds its stream's row with the ts recorded stops that stream
+	// (which it has lost the connection to) and updates the message. A row with no ts is the window
+	// of R16: an orphan stream may exist and cannot be found, so the whole text is posted as a new
+	// message, under its own row, and the orphan is left to Slack's timeout.
+	// UNCONFIRMED(WP-04): whether Slack ends an orphaned stream, and what it answers to a stop of a
+	// stream that has ended.
 	Recovered bool
 }
 
@@ -111,12 +136,22 @@ type Run struct {
 	// Below: the goroutine's alone.
 	sends int  // Sends tried
 	stale bool // the message may hold older content than the last Send was given
+
+	sent      string // what is shown, as want says
+	streaming bool   // this turn streams
+	rowMade   bool   // the stream's outbox row exists
+	recorded  bool   // and holds the stream's ts
+	stopped   bool
+	adoptStop bool // the message is a stream of an earlier run, to stop before it is updated
+	diverged  bool // the streamed text is not a prefix of the final text
+	streamTS  string
+	streamed  string // the markdown sent to the stream so far
 }
 
 // Start begins rendering a turn and returns it. Its goroutine ends once the final text is
 // written, or given up on, or when ctx ends.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
-	u := &Run{cfg: r.cfg, turn: t, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
+	u := &Run{cfg: r.cfg, turn: t, streaming: t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.cfg.Streamer != nil && r.cfg.Store != nil, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
 	go u.run(ctx)
 	return u
 }
@@ -158,13 +193,13 @@ func (u *Run) Handle(ev agent.Event) {
 // run writes the state each time its window opens, until the final text is out.
 func (u *Run) run(ctx context.Context) {
 	defer close(u.done)
-	var ts, sent string
+	var ts string
 	var next time.Time
 	fails := 0
 	for {
 		select {
 		case <-ctx.Done():
-			u.flush(ctx, &ts, sent)
+			u.flush(ctx, &ts)
 			return
 		case <-u.wake:
 		}
@@ -172,28 +207,28 @@ func (u *Run) run(ctx context.Context) {
 			if d := next.Sub(u.cfg.Now()); d > 0 {
 				select {
 				case <-ctx.Done():
-					u.flush(ctx, &ts, sent)
+					u.flush(ctx, &ts)
 					return
 				case <-u.cfg.After(d):
 				}
 			}
-			c, final, ok := u.snapshot() // after the wait, so that what is sent is the latest
-			if !ok && final {            // the turn ended with nothing to show
+			c, body, final, ok := u.snapshot() // after the wait, so that what is sent is the latest
+			if !ok && final {                  // the turn ended with nothing to show
 				if ts == "" {
 					return
 				}
-				c, ok = placeholder(), true // but a message stands: do not leave its tool line up
+				c, body, ok = placeholder(), render.NoOutput, true // but a message stands: do not leave its tool line up
 			}
 			if !ok || (u.turn.Mode == v1alpha1.OutputFinal && !final) {
 				break
 			}
-			if key := c.Text + string(c.Blocks); key == sent {
+			if u.want(c, body, final) == u.sent {
 				if final {
 					return
 				}
 				break
 			}
-			err := u.write(ctx, &ts, c)
+			err := u.write(ctx, &ts, c, body, final)
 			next = u.cfg.Now().Add(u.cfg.Throttle)
 			if err != nil {
 				var limited *slackgo.RateLimitedError
@@ -218,9 +253,8 @@ func (u *Run) run(ctx context.Context) {
 				continue
 			}
 			fails = 0
-			sent = c.Text + string(c.Blocks)
 			if u.stale {
-				u.stale, sent = false, "" // the post may be the old message: write once more
+				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
 			}
 			if final {
@@ -241,8 +275,8 @@ func placeholder() slack.Content {
 // flush settles a turn whose context ended after its final event: the task is over, nothing will
 // send the final text again, so it is written once, now, on a context that is not cancelled and is
 // bounded by FlushTimeout. A turn that is not final owes nothing, and is left.
-func (u *Run) flush(ctx context.Context, ts *string, sent string) {
-	c, final, ok := u.snapshot()
+func (u *Run) flush(ctx context.Context, ts *string) {
+	c, body, final, ok := u.snapshot()
 	if !final {
 		return
 	}
@@ -250,27 +284,51 @@ func (u *Run) flush(ctx context.Context, ts *string, sent string) {
 		if *ts == "" {
 			return
 		}
-		c = placeholder()
+		c, body = placeholder(), render.NoOutput
 	}
-	if c.Text+string(c.Blocks) == sent {
+	if u.want(c, body, final) == u.sent {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.FlushTimeout)
 	defer cancel()
-	err := u.write(ctx, ts, c)
+	err := u.write(ctx, ts, c, body, final)
 	if err == nil && u.stale { // the post may be the old message, not this text
 		u.stale = false
-		err = u.write(ctx, ts, c)
+		err = u.write(ctx, ts, c, body, final)
 	}
 	if err != nil {
 		u.cfg.Logger.ErrorContext(ctx, "live: the final text was not written at shutdown", "channel", u.turn.Channel, "err", err)
 	}
 }
 
-// write posts the message the first time, through the outbox, and updates it after.
-func (u *Run) write(ctx context.Context, ts *string, c slack.Content) error {
+// want is the key of what the state would show: the message's content, or for a stream its text
+// and whether it has ended.
+func (u *Run) want(c slack.Content, body string, final bool) string {
+	if u.streaming {
+		return body + map[bool]string{false: "", true: "\x00final"}[final]
+	}
+	return c.Text + string(c.Blocks)
+}
+
+// write posts the message the first time, through the outbox, and updates it after, or, on the
+// stream path, takes the next step of the stream.
+func (u *Run) write(ctx context.Context, ts *string, c slack.Content, body string, final bool) error {
+	if u.streaming {
+		return u.writeStream(ctx, ts, c, body, final)
+	}
 	if *ts != "" {
-		return u.cfg.Updater.Update(ctx, u.turn.Channel, *ts, c)
+		if u.adoptStop { // an earlier run's stream: end it, or Slack refuses the update
+			err := u.cfg.Streamer.StopStream(ctx, u.turn.Channel, *ts, "", nil, outbox.ID(u.turn.Source, store.OutboxReply))
+			if err != nil && !strings.Contains(err.Error(), "message_not_in_streaming_state") { // UNCONFIRMED(WP-04)
+				return err
+			}
+			u.adoptStop = false
+		}
+		err := u.cfg.Updater.Update(ctx, u.turn.Channel, *ts, c)
+		if err == nil {
+			u.sent = u.want(c, body, final)
+		}
+		return err
 	}
 	u.sends++
 	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, ThreadTS: u.turn.ThreadTS, Content: c})
@@ -279,6 +337,7 @@ func (u *Run) write(ctx context.Context, ts *string, c slack.Content) error {
 		// A Send that follows a failed one, or a recovered turn's, returns the message that is
 		// there already, or posts the payload stored first, not necessarily this content.
 		u.stale = u.sends > 1 || u.turn.Recovered
+		u.sent = u.want(c, body, final)
 	}
 	return err
 }
@@ -286,7 +345,7 @@ func (u *Run) write(ctx context.Context, ts *string, c slack.Content) error {
 // snapshot renders the state as a message: a markdown block of the text so far and, while a tool
 // call is under way, a context block with its status line. Once the turn is final the line is
 // gone. ok is false if there is nothing to show yet.
-func (u *Run) snapshot() (c slack.Content, final, ok bool) {
+func (u *Run) snapshot() (c slack.Content, body string, final, ok bool) {
 	u.mu.Lock()
 	events := make([]agent.TextEvent, 0, len(u.order))
 	for _, id := range u.order {
@@ -295,14 +354,15 @@ func (u *Run) snapshot() (c slack.Content, final, ok bool) {
 	tool, final := u.tool, u.final
 	u.mu.Unlock()
 	var shown *agent.ToolCallEvent
-	if tool != nil && !final {
+	if tool != nil && !final && !u.streaming { // no tool lines in a stream (v1): they cannot be taken back
 		shown = tool
 	}
+	body = render.MarkdownText(events)
 	text, blocks := render.Message(events, shown)
 	c.Text = text
 	if len(blocks) == 0 {
-		return c, final, false
+		return c, body, final, false
 	}
 	c.Blocks, _ = json.Marshal(blocks)
-	return c, final, true
+	return c, body, final, true
 }

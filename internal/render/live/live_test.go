@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -86,6 +89,7 @@ func (c *clock) advance(d time.Duration) {
 // the first failUpdates chat.update requests.
 type recorder struct {
 	mu          sync.Mutex
+	order       []string // the paths of the requests, in order
 	forms       map[string][]url.Values
 	failUpdates int
 	rateLimited int // the next chat.update requests answered 429, with a Retry-After of 30 s
@@ -98,6 +102,7 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	form, _ := url.ParseQuery(string(raw))
 	r.mu.Lock()
 	r.forms[req.URL.Path] = append(r.forms[req.URL.Path], form)
+	r.order = append(r.order, req.URL.Path)
 	fail := req.URL.Path == "/chat.update" && r.failUpdates > 0
 	if fail {
 		r.failUpdates--
@@ -126,6 +131,12 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
+func (r *recorder) orderOf() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.order)
+}
+
 func timeoutAfter() <-chan time.Time { return time.After(5 * time.Second) }
 
 func (r *recorder) sent(path string) []url.Values {
@@ -134,12 +145,26 @@ func (r *recorder) sent(path string) []url.Values {
 	return append([]url.Values(nil), r.forms[path]...)
 }
 
+// recordFail is the outbox store, which can be made to fail to record a message ref: a crash.
+type recordFail struct {
+	store.Outbox
+	fail atomic.Bool
+}
+
+func (s *recordFail) RecordMessageRef(ctx context.Context, id, ref string) error {
+	if s.fail.Load() {
+		return errors.New("the process died")
+	}
+	return s.Outbox.RecordMessageRef(ctx, id, ref)
+}
+
 type env struct {
 	fake  *fakeslack.Server
 	rec   *recorder
 	clk   *clock
 	store *sqlite.Store
 	ob    *outbox.Outbox
+	rf    *recordFail
 	live  *live.Renderer
 	root  string
 	logs  *bytes.Buffer
@@ -166,14 +191,21 @@ func setup(t *testing.T) *env {
 	t.Cleanup(func() { _ = e.store.Close() })
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Logger: quiet})
-	e.live = live.New(live.Config{Sender: e.ob, Updater: client, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))})
+	e.rf = &recordFail{Outbox: e.store}
+	e.live = live.New(live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))})
 	return e
 }
 
 func (e *env) start(t *testing.T, mode v1alpha1.OutputMode, recovered bool) (*live.Run, context.CancelFunc) {
+	return e.startFor(t, live.Turn{Mode: mode, Recovered: recovered})
+}
+
+// startFor starts a turn of the test's thread; turn holds the rest.
+func (e *env) startFor(t *testing.T, turn live.Turn) (*live.Run, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	return e.live.Start(ctx, live.Turn{Source: "turn-1", Channel: "C1", ThreadTS: e.root, Mode: mode, Recovered: recovered}), cancel
+	turn.Source, turn.Channel, turn.ThreadTS = "turn-1", "C1", e.root
+	return e.live.Start(ctx, turn), cancel
 }
 
 // reply is the last message in the thread.
