@@ -73,3 +73,49 @@ func TestScenarioSlowAgentStreamsItsTicks(t *testing.T) {
 		t.Errorf("scenario-slow said %q, want %d ticks", got, stubagent.ScenarioSlowTicks)
 	}
 }
+
+func TestReplyWithHistoryShowsAReplayThatRanTwice(t *testing.T) {
+	_, agent, c := newAgent(t)
+	var priors [][]string
+	agent.ReplyWithHistory(func(prior []string, _ string) []stubagent.Step {
+		priors = append(priors, prior)
+		return []stubagent.Step{stubagent.Text("ok")}
+	})
+	_, ctxID, _ := ids(last(c.send(msg("m1", "one", ""))))
+	c.send(msg("m1", "one", ctxID)) // courier's blind resend into the context, after the task ended
+	c.send(msg("m2", "two", ctxID))
+
+	if want := []string{"one", "one"}; !reflect.DeepEqual(priors[2], want) {
+		t.Errorf("earlier messages at the third turn = %q, want the replayed turn twice, %q", priors[2], want)
+	}
+}
+
+func TestScenarioAskEchoesWhatItReceived(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		answers [][]string
+		want    string
+	}{
+		{"complete", [][]string{{"PostgreSQL", "MySQL"}, {"blue"}}, `Answers: "PostgreSQL, MySQL" | "blue".`},
+		{"empty second entry", [][]string{{"PostgreSQL"}, {}}, `Answers: "PostgreSQL" | (none).`},
+		{"empty first entry", [][]string{{}, {"blue"}}, `Answers: (none) | "blue".`},
+		{"one entry", [][]string{{"PostgreSQL"}}, `Answers: "PostgreSQL".`},
+	} {
+		got := taskText(last(ask(t, scenario(t, "scenario-ask"), "anything", func(id string) obj { return answers(id, tc.answers...) })))
+		if got != tc.want {
+			t.Errorf("%s: scenario-ask said %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestScenarioAskAsksTheTwoQuestions(t *testing.T) {
+	evs := scenario(t, "scenario-ask").send(msg("m1", "anything", ""))
+	request, _ := dig(last(evs), "result", "task", "status", "message", "metadata", hitlURI).(obj)
+	want := []any{
+		obj{"question": "Which databases?", "choices": []any{"PostgreSQL", "MySQL"}, "multiple": true},
+		obj{"question": "Favorite color?", "choices": []any{}, "multiple": false},
+	}
+	if !reflect.DeepEqual(request["questions"], want) {
+		t.Errorf("questions = %v, want %v", request["questions"], want)
+	}
+}

@@ -11,11 +11,11 @@ import (
 )
 
 // scenarioAgents is the agent each Phase 1 E2E scenario drives in the cluster; the table is in
-// the stubagent package doc.
+// the stubagent package doc. S1 and S4 wait for WP-14g's gated agent; scenario-slow is checked
+// meanwhile.
 var scenarioAgents = map[string]string{
-	"S1":  "spike-slow",
 	"S2":  "scenario-memory",
-	"S3":  "spike-ask",
+	"S3":  "scenario-ask",
 	"S4":  "scenario-slow",
 	"S5":  "test-agent",
 	"S11": "spike-approve",

@@ -45,27 +45,23 @@ func (a *Agent) Reply(f func(prompt string) []Step) {
 }
 
 // ReplyWithHistory is Reply for an agent whose answer depends on its conversation: f also gets
-// the text of every user message the message's context already holds, oldest first, none for a
-// new context. A message that opens a context sees none, so an agent can tell a conversation it
-// kept from one it lost. The same rules as Reply apply to f.
+// the opening prompt of every task its context has run so far, oldest first, none for a new
+// context, so an agent can tell a conversation it kept from one it lost. A replay that carries a
+// contextId after its task ended runs again (spec 8.2), so its text appears twice: a double run
+// is visible. The same rules as Reply apply to f.
 func (a *Agent) ReplyWithHistory(f func(prior []string, prompt string) []Step) {
 	a.s.mu.Lock()
 	defer a.s.mu.Unlock()
 	a.reply = f
 }
 
-// said returns the text of the user messages of the session's tasks, oldest first. A message
-// with no text, such as a decision on a pause, is left out. The caller holds s.mu.
+// said returns the opening prompt of each task of the session, oldest first. The caller holds
+// s.mu.
 func (a *Agent) said(sess *session) []string {
 	var out []string
 	for _, t := range a.list {
-		if t.sess != sess {
-			continue
-		}
-		for _, m := range t.history {
-			if txt := promptText(m); m["role"] == "ROLE_USER" && txt != "" {
-				out = append(out, txt)
-			}
+		if t.sess == sess {
+			out = append(out, promptText(t.history[0]))
 		}
 	}
 	return out
