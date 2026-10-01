@@ -85,8 +85,15 @@ func (s *Store) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
 	return out, nil
 }
 
+// abandonTime reports whether t can be stored as a time of abandoning: a stored 0 means "not
+// abandoned", so the zero time and anything at or before the Unix epoch are refused.
+func abandonTime(t time.Time) bool { return !t.IsZero() && t.UnixNano() > 0 }
+
 // AbandonOutbox implements store.Outbox.
 func (s *Store) AbandonOutbox(ctx context.Context, id string, at time.Time) (bool, error) {
+	if !abandonTime(at) {
+		return false, fmt.Errorf("abandon outbox %q at %v: the time must be after the Unix epoch: %w", id, at, store.ErrInvalid)
+	}
 	var abandoned bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		n, err := execRows(ctx, tx, `UPDATE outbox SET abandoned_at = ?, payload = '' WHERE id = ? AND message_ref = '' AND abandoned_at = 0`, ts(at), id)
@@ -113,6 +120,9 @@ func (s *Store) AbandonOutbox(ctx context.Context, id string, at time.Time) (boo
 
 // AbandonOutboxBefore implements store.Outbox.
 func (s *Store) AbandonOutboxBefore(ctx context.Context, before, at time.Time) ([]string, error) {
+	if !abandonTime(before) || !abandonTime(at) {
+		return nil, fmt.Errorf("abandon old outbox rows (before %v, at %v): both times must be after the Unix epoch: %w", before, at, store.ErrInvalid)
+	}
 	var ids []string
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `UPDATE outbox SET abandoned_at = ?, payload = ''

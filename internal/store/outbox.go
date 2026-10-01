@@ -56,18 +56,21 @@ type Outbox interface {
 	// RecordMessageRef sets the message ref of an outbox row and clears its Payload.
 	// Recording the same ref again is a no-op; a different ref over an existing one
 	// returns ErrConflict, so recovery never repoints a message. ErrNotFound if the
-	// row does not exist.
+	// row does not exist. It also works on an abandoned row, by design: a late lookup that
+	// finds the message should adopt it.
 	RecordMessageRef(ctx context.Context, id, ref string) error
 	// GetOutbox returns the row with the given ID, or ErrNotFound.
 	GetOutbox(ctx context.Context, id string) (OutboxEntry, error)
 	// AbandonOutbox gives up on an unposted row that will never post: it records at and clears
 	// the Payload, so an agent's text is not kept for a post that will not happen. It reports
 	// whether the row was newly abandoned, and an abandoned row stays so, with its first time.
-	// ErrNotFound if the row does not exist; ErrConflict if it already has a message ref.
+	// ErrNotFound if the row does not exist; ErrConflict if it already has a message ref;
+	// ErrInvalid if at is zero or not after the Unix epoch (a stored 0 means "not abandoned").
 	AbandonOutbox(ctx context.Context, id string, at time.Time) (abandoned bool, err error)
 	// AbandonOutboxBefore abandons, as of at, every row created before the cutoff that has a
 	// Payload and no message ref and is not abandoned, and returns their IDs: the retention
-	// limit on unposted text. A row with no Payload, a stream's, is left alone.
+	// limit on unposted text. A row with no Payload, a stream's, is left alone. ErrInvalid if
+	// either time is zero or not after the Unix epoch.
 	AbandonOutboxBefore(ctx context.Context, before, at time.Time) (ids []string, err error)
 	// ListUnposted returns rows with no message ref that are not abandoned, oldest first, for
 	// recovery reconciliation.
