@@ -4,6 +4,7 @@
 package interact
 
 import (
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,76 +41,79 @@ func Controls(id string, in dialect.Interaction) ([]render.Control, error) {
 	return controls, err
 }
 
-// inputTypes are the element types each kind of control answers in: a value of any other type is
-// not read, so an answer is never one the person did not give to that control.
-var inputTypes = map[render.ControlKind][]string{
-	render.ControlText:    {"plain_text_input"},
-	render.ControlNumbers: {"plain_text_input"},
-	render.ControlChoice:  {"static_select", "radio_buttons"},
-	render.ControlChoices: {"multi_static_select", "checkboxes"},
-}
+// ErrNotAskUser is returned for an interaction that has no questions to answer: another kind of
+// pause, or none. Nothing is read from a press for it.
+var ErrNotAskUser = errors.New("interact: not an ask-user pause with questions")
 
 // ExtractAnswer reads a press's input state (slack.Interaction.Inputs) as the answer to in, through
 // the controls of its prompt. The answer is complete only if problems is empty. Option values are
 // indices into a question's Choices and are mapped back to the stored choice, never taken as text;
-// a numbers input holds 1-based positions separated by commas, semicolons or white space.
-func ExtractAnswer(in dialect.Interaction, controls []render.Control, inputs map[string]map[string]slack.Input) (answer dialect.Answer, problems []Problem) {
+// a numbers input holds 1-based positions separated by commas, semicolons or white space. A value is
+// read only from the element type its question was rendered as. It returns ErrNotAskUser, and reads
+// nothing, for an interaction that is not an ask-user pause with questions.
+func ExtractAnswer(in dialect.Interaction, controls []render.Control, inputs map[string]map[string]slack.Input) (answer dialect.Answer, problems []Problem, err error) {
+	if in.Kind != dialect.AskUser || len(in.Questions) == 0 {
+		return dialect.Answer{}, nil, ErrNotAskUser
+	}
 	answer = dialect.Answer{RequestID: in.RequestID, Answers: make([][]string, len(in.Questions))}
 	for i, q := range in.Questions {
 		kind := Unanswered
 		if len(controls) == len(in.Questions) { // a layout that does not match reads as unanswered
-			var vals []string
-			vals, kind = extract(q, controls[i], inputs[controls[i].BlockID][controls[i].ActionID])
-			answer.Answers[i] = vals
+			vals, k, ok := extract(q, controls[i], inputs[controls[i].BlockID][controls[i].ActionID])
+			if ok {
+				answer.Answers[i] = vals
+				continue
+			}
+			kind = k
 		}
-		if answer.Answers[i] == nil {
-			problems = append(problems, Problem{i, kind})
-		}
+		problems = append(problems, Problem{i, kind})
 	}
-	return answer, problems
+	return answer, problems, nil
 }
 
-// extract is one question's answer, or nil and why there is none.
-func extract(q dialect.Question, c render.Control, input slack.Input) ([]string, ProblemKind) {
-	if !slices.Contains(inputTypes[c.Kind], input.Type) {
-		return nil, Unanswered
+// extract is one question's answer, or, with ok false, why there is none.
+func extract(q dialect.Question, c render.Control, input slack.Input) (vals []string, why ProblemKind, ok bool) {
+	if input.Type != c.Element {
+		return nil, Unanswered, false
 	}
 	values := slices.DeleteFunc(slices.Clone(input.Values), func(v string) bool { return strings.TrimSpace(v) == "" })
 	if len(values) == 0 {
-		return nil, Unanswered
+		return nil, Unanswered, false
 	}
 	var out []string
 	switch c.Kind {
-	case render.ControlText:
-		if len(values) > 1 {
-			return nil, Invalid
+	case render.ControlText, render.ControlNumbers:
+		if len(values) > 1 { // a text input holds one value
+			return nil, Invalid, false
 		}
-		out = []string{strings.TrimSpace(values[0])}
-	case render.ControlChoice, render.ControlChoices:
-		for _, v := range values {
-			n, ok := position(v, 0, len(q.Choices))
-			if !ok {
-				return nil, Invalid
-			}
-			out = append(out, q.Choices[n])
+		if c.Kind == render.ControlText {
+			out = []string{strings.TrimSpace(values[0])}
+			break
 		}
-	case render.ControlNumbers:
 		for _, tok := range strings.FieldsFunc(values[0], func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' }) {
 			n, ok := position(tok, 1, len(q.Choices)+1)
 			if !ok {
-				return nil, Invalid
+				return nil, Invalid, false
 			}
 			out = append(out, q.Choices[n-1])
 		}
 		if len(out) == 0 {
-			return nil, Unanswered
+			return nil, Unanswered, false
+		}
+	case render.ControlChoice, render.ControlChoices:
+		for _, v := range values {
+			n, ok := position(v, 0, len(q.Choices))
+			if !ok {
+				return nil, Invalid, false
+			}
+			out = append(out, q.Choices[n])
 		}
 	}
 	out = dedupe(out)
 	if len(out) > 1 && !q.Multiple {
-		return nil, Invalid
+		return nil, Invalid, false
 	}
-	return out, Unanswered
+	return out, 0, true
 }
 
 // position parses s as a whole number in [lo, hi), written the one way courier writes it: no sign,
