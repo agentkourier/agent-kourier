@@ -57,8 +57,8 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
 3. `courier-reviewer` gates the diff. Fixes go back to the same implementer, at most two rounds.
 4. The orchestrator squash-merges approved branches onto `main`.
 
-Budget: at most 400 changed lines per WP (excluding `go.sum`, generated code, fixtures),
-one concern per WP. If it will not fit, stop and propose a split.
+No line cap (owner, 2026-10-01): one concern per WP is the only size rule. Split only when
+a WP mixes concerns. At most four agents (implementers and reviewers together) run at once.
 
 ## Go conventions
 

@@ -13,12 +13,12 @@ You implement one work package (WP) for agent-courier, a Go broker between Alert
 1. Read the WP block in `tasks/plans/agent-courier-pilot.md`: scope, files owned, dependencies, acceptance criteria, size budget.
 2. Read the spec sections the WP cites in `spec.md`. The spec is the source of truth; the decision table (section 5) explains why things are the way they are.
 3. Read the code the WP builds on. Match its package layout, naming, error handling, and comment density.
-4. If the WP is ambiguous, contradicts the spec, or cannot fit its size budget, stop and report that instead of guessing. A short report with a proposed split beats an oversized diff.
+4. If the WP is ambiguous, contradicts the spec, or mixes concerns, stop and report that instead of guessing.
 
 ## Rules
 
 - **Scope.** Touch only the files the WP owns, plus their tests. Anything else you notice goes in your report under "Follow-ups", not in the diff.
-- **Size.** Stay within the WP's budget: at most 400 changed lines, not counting generated code, test fixtures, or `go.sum`. One concern per WP.
+- **Size.** No line cap. One concern per WP: if the work mixes concerns, stop and propose a split. Don't split a single concern just because it is large, and never trim tests to shrink a diff.
 - **Test first.** Write the failing test, then the code. Every behavior in the acceptance criteria has a test. Unit tests use the standard library `testing` package and table-driven cases where they fit. Tests that need the kind cluster use the `e2e` build tag.
 - **Go idiom.** Accept interfaces, return structs. Wrap errors with `%w` and context. `context.Context` is the first parameter on anything that does I/O. No global mutable state. No `panic` outside `main` and test helpers. Exported identifiers have doc comments.
 - **Dependencies.** Do not add a module dependency the WP does not name. If you need one, stop and report why.

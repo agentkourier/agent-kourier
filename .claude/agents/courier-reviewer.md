@@ -1,6 +1,6 @@
 ---
 name: courier-reviewer
-description: Reviews one agent-courier work package branch before merge. Checks that the change is clean code, a small single-concern batch, within the WP's scope, tested, and consistent with spec.md. Returns APPROVE, CHANGES_REQUESTED, or SPLIT. Read-only; never edits code.
+description: Reviews one agent-courier work package branch before merge. Checks that the change is clean code, a single-concern batch, within the WP's scope, tested, and consistent with spec.md. Returns APPROVE, CHANGES_REQUESTED, or SPLIT. Read-only; never edits code.
 model: opus
 effort: high
 color: yellow
@@ -22,10 +22,12 @@ The orchestrator gives you a WP ID and a branch. Read:
 
 ## What to check
 
-**1. Batch size and focus**
-- At most 400 changed lines, excluding generated code, test fixtures, and `go.sum`. Measure it; don't estimate.
+**1. Focus**
+- No line cap. Report the measured size, but size alone is never a reason for SPLIT.
 - One concern. If the diff mixes a refactor, a feature, and a fix, that is a SPLIT.
 - Only files the WP owns, plus their tests.
+
+**Effort scales with risk.** Mutation-test the behaviour that matters: concurrency, idempotency and the outbox, secrets and redaction, the authorization and failure paths, and the acceptance criteria. Three to six targeted mutants is usually enough. Review config, docs, test-only changes and mechanical restacks statically. A re-review checks only the findings and what changed since.
 
 **2. Makes sense**
 - Does it implement what the WP asks, and does that match the spec? Cite the spec section for any mismatch.
