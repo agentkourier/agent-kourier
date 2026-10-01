@@ -71,3 +71,14 @@ func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
 		t.Errorf("failures %v; want only recent-failed kept, and still counted (it was tried again)", r.failures)
 	}
 }
+
+// TestAnEditHasHalfAMinuteByDefault: an edit is bounded without being configured.
+func TestAnEditHasHalfAMinuteByDefault(t *testing.T) {
+	r, err := NewReplacer(ReplacerConfig{Store: struct{ store.Interactions }{}, Updater: failsOn{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.cfg.EditTimeout; got != 30*time.Second {
+		t.Errorf("EditTimeout = %v; want 30s", got)
+	}
+}

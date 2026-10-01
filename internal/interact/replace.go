@@ -32,6 +32,9 @@ type ReplacerConfig struct {
 	// Horizon is how far back the repair looks for interactions that ended (default 24 hours): the
 	// prompt of an older one that was never replaced stays as it is.
 	Horizon time.Duration
+	// EditTimeout bounds each edit (default 30 seconds), so that one that never answers does not hold up
+	// the press that is being decided, or the repair, which edits one prompt at a time.
+	EditTimeout time.Duration
 	// Interval is how often Run repairs (default 10 seconds), Batch how many prompts a repair edits at
 	// most (default 10), and ListEvery how often it reads the store for interactions that ended since
 	// (default 5 minutes). Together they pace the edits to Slack, after a restart above all.
@@ -71,6 +74,9 @@ func NewReplacer(cfg ReplacerConfig) (*Replacer, error) {
 	if cfg.Horizon <= 0 {
 		cfg.Horizon = 24 * time.Hour
 	}
+	if cfg.EditTimeout <= 0 {
+		cfg.EditTimeout = 30 * time.Second
+	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 10 * time.Second
 	}
@@ -102,7 +108,9 @@ func (r *Replacer) Replace(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("interact: render the replacement of %s: %w", id, err)
 	}
-	if err := r.cfg.Updater.Update(ctx, row.Key.Channel, row.MessageRef, content); err != nil {
+	editCtx, cancel := context.WithTimeout(ctx, r.cfg.EditTimeout)
+	defer cancel()
+	if err := r.cfg.Updater.Update(editCtx, row.Key.Channel, row.MessageRef, content); err != nil {
 		return fmt.Errorf("interact: replace the prompt of %s: %w", id, err)
 	}
 	r.mu.Lock()

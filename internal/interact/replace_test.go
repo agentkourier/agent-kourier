@@ -193,6 +193,56 @@ func TestAReplacementIsTheSameEveryTime(t *testing.T) {
 	}
 }
 
+// hangs is an Updater whose edit never answers: it waits for its context to end, as a Slack call that has
+// gone quiet does, and counts how many it was given.
+type hangs struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (h *hangs) Update(ctx context.Context, _, _ string, _ slack.Content) error {
+	h.mu.Lock()
+	h.n++
+	h.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (h *hangs) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.n
+}
+
+// withinASecond runs f and fails the test if it takes longer, so that a missing timeout fails and does not hang.
+func withinASecond(t *testing.T, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); f() }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not return within a second: the edit is not bounded", what)
+	}
+}
+
+// TestAHungEditIsCutOffAndRetried: an edit that never answers ends at the edit timeout, with its error, and
+// the prompt is not counted as replaced, so that it is tried again.
+func TestAHungEditIsCutOffAndRetried(t *testing.T) {
+	h := &hangs{}
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Updater, c.EditTimeout = h, 20*time.Millisecond })
+	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
+	var err error
+	withinASecond(t, "Replace", func() { err = r.r.Replace(t.Context(), "ix-1") })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Replace = %v; want the timeout's error", err)
+	}
+	withinASecond(t, "Repair", func() { _ = r.r.Repair(t.Context()) })
+	if got := h.count(); got != 2 {
+		t.Errorf("%d edits; want the cut-off one tried again by the repair", got)
+	}
+}
+
 func TestNewReplacerNeedsItsParts(t *testing.T) {
 	if _, err := interact.NewReplacer(interact.ReplacerConfig{}); err == nil {
 		t.Error("NewReplacer accepted no Store or Updater")

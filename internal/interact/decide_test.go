@@ -701,3 +701,30 @@ func TestAPromptThatCannotBeReplacedDoesNotUndoTheDecision(t *testing.T) {
 		t.Errorf("log = %q, sends %d; want a warning naming ix-1, and the answer sent once", out, len(r.sess.answers()))
 	}
 }
+
+// TestAHungEditDoesNotHoldUpThePress: the replacement is made on the worker that decided the press, and an
+// edit that never answers must not keep it for ever. The decision stands, and is logged for the repair.
+func TestAHungEditDoesNotHoldUpThePress(t *testing.T) {
+	r := newDecideRig(t)
+	r.pending(t)
+	if err := r.st.SetInteractionMessageRef(t.Context(), "ix-1", "100.001"); err != nil {
+		t.Fatal(err)
+	}
+	h := &hangs{}
+	rp, err := interact.NewReplacer(interact.ReplacerConfig{Store: r.st, Updater: h, EditTimeout: 20 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := interact.NewDecider(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: rp, Outbox: r.out,
+		Logger: slog.New(slog.NewTextHandler(r.logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withinASecond(t, "Decide", func() { err = d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")) })
+	if err != nil || len(r.sess.answers()) != 1 || h.count() != 1 {
+		t.Errorf("Decide = %v, %d answers, %d edits; want it done, the answer sent once and the edit tried once", err, len(r.sess.answers()), h.count())
+	}
+	if out := r.logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "ix-1") {
+		t.Errorf("log = %q; want a warning naming ix-1", out)
+	}
+}

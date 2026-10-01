@@ -235,3 +235,18 @@ func TestRunRepairsAtOnceAndNotAfterTheFirstTick(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestAHungEditDoesNotHoldUpTheRepair: an edit that never answers is cut off, so the repair goes on to the
+// next prompt, and the next repair is not held behind the lock of one that is stuck.
+func TestAHungEditDoesNotHoldUpTheRepair(t *testing.T) {
+	h := &hangs{}
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Updater, c.EditTimeout = h, 20*time.Millisecond })
+	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
+	r.decided(t, "ix-2", asked, r.resolve(store.InteractionTimedOut))
+	for pass := 1; pass <= 2; pass++ {
+		withinASecond(t, "Repair", func() { _ = r.r.Repair(t.Context()) })
+		if got, want := h.count(), 2*pass; got != want {
+			t.Fatalf("after pass %d: %d edits; want %d, one for each prompt", pass, got, want)
+		}
+	}
+}
