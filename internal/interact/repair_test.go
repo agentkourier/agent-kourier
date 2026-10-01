@@ -225,11 +225,12 @@ func TestARateLimitWithNoRetryAfterStillWaitsASecond(t *testing.T) {
 	r.decided(t, "ix-1", asked, r.resolve(store.InteractionTimedOut))
 	r.up.err = fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{})
 	_ = r.r.Repair(t.Context())
-	_ = r.r.Repair(t.Context()) // the same instant
+	r.advance(999 * time.Millisecond)
+	_ = r.r.Repair(t.Context())
 	if got := len(r.up.list()); got != 1 {
-		t.Fatalf("%d attempts at the same instant; want the second pass to wait", got)
+		t.Fatalf("%d attempts just inside the second; want the second pass to wait", got)
 	}
-	r.advance(time.Second)
+	r.advance(time.Millisecond)
 	_ = r.r.Repair(t.Context())
 	if got := len(r.up.list()); got != 2 {
 		t.Errorf("%d attempts a second later; want it tried again", got)
