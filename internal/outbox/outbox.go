@@ -9,6 +9,14 @@
 // where it is, not from the event that carried it: the Expired and BindingGone notices for a mention
 // take the Slack message's (channel, ts), because a mention arrives as two events and both reach
 // Submit, and one ID makes them one row and one post.
+//
+// A post that can never succeed is abandoned, not retried for ever: Slack's permanent errors (a
+// channel that is gone or archived, courier not in it, text too long, blocks Slack refuses), a
+// message that is not valid, and a lookup that has timed out five times in a row. The row keeps its
+// place and loses its text, Config.OnAbandon is called once and one warning is logged. A row still
+// unposted after Config.Retention loses its text the same way. Send of an abandoned row returns
+// ErrAbandoned and never posts it again; a producer that wants the same words posted anew needs a
+// new source ID.
 package outbox
 
 import (
@@ -24,6 +32,19 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
+
+// ErrAbandoned is returned for a post that courier has given up on, and wraps its cause.
+var ErrAbandoned = errors.New("outbox: the post was abandoned")
+
+// The reasons OnAbandon is given besides a Slack error code.
+const (
+	AbandonInvalid       = "invalid"        // the message cannot be posted at all
+	AbandonLookupTimeout = "lookup_timeout" // looking for it timed out lookupTimeouts times in a row
+	AbandonExpired       = "expired"        // it was still unposted after Config.Retention
+)
+
+// lookupTimeouts is how many lookups of a row in a row may time out before it is abandoned.
+const lookupTimeouts = 5
 
 // Poster is the Slack side of the outbox, which *slack.Client satisfies.
 type Poster interface {
@@ -48,6 +69,13 @@ type Config struct {
 	// RetryBase is the delay before a row whose delivery failed is tried again (default 5 seconds).
 	// It doubles with each failure up to RetryMax (default 5 minutes).
 	RetryBase, RetryMax time.Duration
+	// Retention is how long a post may stay unposted before its text is dropped and it is
+	// abandoned (default 7 days).
+	Retention time.Duration
+	// OnAbandon, if set, is called once for each row that is abandoned, with its ID and the reason:
+	// a Slack error code, or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
+	// metric, and runs under the delivery lock, so it must not block.
+	OnAbandon func(id, reason string)
 }
 
 // Post is one message to deliver. Source and Role give its ID: Source is the event, turn or
@@ -76,8 +104,9 @@ type Outbox struct {
 
 // retryState is how often a row's delivery has failed in a row, and when it may be tried again.
 type retryState struct {
-	fails int
-	next  time.Time
+	fails    int
+	timeouts int // lookups in a row that timed out
+	next     time.Time
 }
 
 // New returns an Outbox over cfg.
@@ -99,6 +128,9 @@ func New(cfg Config) *Outbox {
 	}
 	if cfg.RetryMax <= 0 {
 		cfg.RetryMax = 5 * time.Minute
+	}
+	if cfg.Retention <= 0 {
+		cfg.Retention = 7 * 24 * time.Hour
 	}
 	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), retry: map[string]retryState{}}
 }
@@ -181,7 +213,7 @@ func (o *Outbox) Run(ctx context.Context) error {
 // settle records the outcome of delivering a row: a failure sets the delay before its next try, a
 // success forgets the row. The caller holds o.mu.
 func (o *Outbox) settle(id string, err error) {
-	if err == nil {
+	if err == nil || errors.Is(err, ErrAbandoned) {
 		delete(o.retry, id)
 		return
 	}
@@ -201,11 +233,22 @@ func (o *Outbox) settle(id string, err error) {
 // left alone, as is a row still waiting out its retry delay. It goes on past a row it cannot
 // reconcile, and returns every such error joined.
 func (o *Outbox) Reconcile(ctx context.Context) error {
+	var errs []error
+	now := o.cfg.Now()
+	expired, err := o.cfg.Store.AbandonOutboxBefore(ctx, now.Add(-o.cfg.Retention), now) // before any lookup of them
+	if err != nil {
+		errs = append(errs, fmt.Errorf("drop expired outbox text: %w", err))
+	}
+	o.mu.Lock()
+	for _, id := range expired {
+		delete(o.retry, id)
+		o.reportAbandon(ctx, id, AbandonExpired, nil)
+	}
+	o.mu.Unlock()
 	rows, err := o.cfg.Store.ListUnposted(ctx)
 	if err != nil {
-		return fmt.Errorf("reconcile outbox: %w", err)
+		return errors.Join(append(errs, fmt.Errorf("reconcile outbox: %w", err))...)
 	}
-	var errs []error
 	for _, r := range rows {
 		if r.Payload == "" {
 			continue
@@ -218,7 +261,9 @@ func (o *Outbox) Reconcile(ctx context.Context) error {
 		_, err := o.deliver(ctx, r.ID, true)
 		o.settle(r.ID, err)
 		o.mu.Unlock()
-		errs = append(errs, err)
+		if !errors.Is(err, ErrAbandoned) { // an abandon is reported where it happens
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -234,15 +279,22 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 	if row.MessageRef != "" {
 		return row.MessageRef, nil
 	}
+	if !row.AbandonedAt.IsZero() {
+		return "", fmt.Errorf("deliver %s: %w", id, ErrAbandoned)
+	}
 	var content slack.Content
 	if row.Payload == "" {
 		return "", fmt.Errorf("deliver %s: the row has no payload: %w", id, store.ErrInvalid)
 	}
 	if err := json.Unmarshal([]byte(row.Payload), &content); err != nil {
-		return "", fmt.Errorf("deliver %s: payload: %w", id, err)
+		return "", o.abandon(ctx, row, AbandonInvalid, fmt.Errorf("deliver %s: payload: %w", id, err))
 	}
 	if lookup {
 		ts, found, err := o.find(ctx, row)
+		timedOut := err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)
+		if o.countTimeout(id, timedOut) >= lookupTimeouts {
+			return "", o.abandon(ctx, row, AbandonLookupTimeout, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
+		}
 		if err != nil {
 			return "", fmt.Errorf("deliver %s: looking for the message before posting it: %w", id, err)
 		}
@@ -255,10 +307,58 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, e
 	defer cancel()
 	ts, err := o.cfg.Poster.Post(callCtx, row.Channel, row.ThreadTS, content, id)
 	if err != nil {
-		return "", fmt.Errorf("deliver %s: post: %w", id, err)
+		err = fmt.Errorf("deliver %s: post: %w", id, err)
+		if reason := slack.PermanentCode(err); reason != "" {
+			return "", o.abandon(ctx, row, reason, err)
+		}
+		if errors.Is(err, store.ErrInvalid) {
+			return "", o.abandon(ctx, row, AbandonInvalid, err)
+		}
+		return "", err
 	}
 	testhooks.AfterPost() // a no-op unless this is a test image, where it can crash the process here
 	return o.record(ctx, id, ts)
+}
+
+// countTimeout notes how a lookup of id ended and returns how many in a row have timed out: a
+// timeout adds one, and any other end starts the count again. The caller holds o.mu.
+func (o *Outbox) countTimeout(id string, timedOut bool) int {
+	r, ok := o.retry[id]
+	switch {
+	case timedOut:
+		r.timeouts++
+	case ok:
+		r.timeouts = 0
+	default:
+		return 0
+	}
+	o.retry[id] = r
+	return r.timeouts
+}
+
+// abandon gives up on the row, which will never post, and returns an error that wraps ErrAbandoned
+// and cause. If the store cannot record it, the row is still work and that error is returned alone.
+// The caller holds o.mu.
+func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason string, cause error) error {
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.cfg.CallTimeout)
+	defer cancel()
+	newly, err := o.cfg.Store.AbandonOutbox(wctx, row.ID, o.cfg.Now())
+	if err != nil {
+		return fmt.Errorf("abandon %s (%s): %w", row.ID, reason, err)
+	}
+	delete(o.retry, row.ID)
+	if newly {
+		o.reportAbandon(ctx, row.ID, reason, cause)
+	}
+	return fmt.Errorf("%w (%s): %w", ErrAbandoned, reason, cause)
+}
+
+// reportAbandon logs one warning, never the text, and calls OnAbandon.
+func (o *Outbox) reportAbandon(ctx context.Context, id, reason string, cause error) {
+	o.cfg.Logger.WarnContext(ctx, "outbox: a post was abandoned and will not be retried", "outbox_id", id, "reason", reason, "err", cause)
+	if o.cfg.OnAbandon != nil {
+		o.cfg.OnAbandon(id, reason)
+	}
 }
 
 // find looks for the row's message, within the call timeout.
