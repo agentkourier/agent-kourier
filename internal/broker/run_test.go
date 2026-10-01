@@ -25,9 +25,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
@@ -78,20 +75,10 @@ func (revokedSlack) Find(context.Context, string, string, string, time.Time) (st
 func TestRunEndsWithSlackAuthWhenAPostFindsTheTokenRevoked(t *testing.T) {
 	c := startConfig(t)
 	c.newSlack = func(slack.Config) slackAPI { return revokedSlack{} }
-	seed, err := sqlite.Open(t.Context(), c.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := outbox.New(outbox.Config{Store: seed, Poster: idleSlack{}}).Enqueue(t.Context(),
-		outbox.Post{Source: "ev1", Role: store.OutboxNotice, Channel: "C0123456789", Content: slack.Content{Text: "hi"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatal(err)
-	}
+	seedPost(t, c)
 	r := start(t, c)
 
-	err = r.wait()
+	err := r.wait()
 
 	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "token_revoked") {
 		t.Errorf("Run = %v, want ErrSlackAuth naming token_revoked, from the post", err)

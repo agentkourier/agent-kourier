@@ -18,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
@@ -92,6 +93,55 @@ func slackCluster(botToken string) *fake.Clientset {
 	oidc := secretOf("sre", "courier-sre-alerts-oidc", "token")
 	oidc.Data["token"] = []byte(jwt("courier@example.test"))
 	return fake.NewClientset(conn, oidc, secretOf("sre", "courier-webhook-token", "token"))
+}
+
+// rejectedWorld is a world whose Binding token the stub refuses (a malformed bearer is a 401), so
+// the first turn finds its credentials rejected.
+func rejectedWorld(t *testing.T) *slackWorld {
+	t.Helper()
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	conn := secretOf("courier-system", "slack-main", "appToken")
+	conn.Data["botToken"], conn.Data["appToken"] = []byte("xoxb-fake-bot"), []byte("xapp-fake-app")
+	oidc := secretOf("sre", "courier-sre-alerts-oidc", "token")
+	oidc.Data["token"] = []byte("not-a-jwt")
+	w.cfg.Client = fake.NewClientset(conn, oidc, secretOf("sre", "courier-webhook-token", "token"))
+	return w
+}
+
+// mention sends the mention that starts a turn, once Run is connected.
+func (w *slackWorld) mention(t *testing.T, r *running) {
+	t.Helper()
+	r.until("/readyz", http.StatusOK)
+	waitConnected(t, w.fake)
+	if _, err := w.fake.Mention("C0123456789", "U1", "<@UFAKEBOT> why is it down?"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunCountsACredentialTheAgentRejected(t *testing.T) {
+	w := rejectedWorld(t)
+	r := start(t, w.cfg)
+
+	w.mention(t, r)
+
+	r.waitMetric(`courier_credential_rejections_total{binding="sre/sre-alerts"} 1`)
+}
+
+// failingAudit is a store whose audit writes fail, which a metric must say.
+type failingAudit struct{ store.Audit }
+
+func (failingAudit) AppendAudit(context.Context, store.AuditEntry) error {
+	return errors.New("disk full")
+}
+
+func TestRunCountsAnAuditWriteThatFailed(t *testing.T) {
+	w := rejectedWorld(t) // a rejected credential is audited
+	w.cfg.auditStore = func(s store.Audit) store.Audit { return failingAudit{s} }
+	r := start(t, w.cfg)
+
+	w.mention(t, r)
+
+	r.waitMetric(`courier_audit_write_failures_total{kind="agent_call"} 1`)
 }
 
 func TestRunTakesAMentionFromSlackThroughTheSessionToTheAgent(t *testing.T) {

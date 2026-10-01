@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -24,6 +25,8 @@ type Metrics struct {
 	rejections    *prometheus.CounterVec
 	abandons      *prometheus.CounterVec
 	reloadErrors  prometheus.Counter
+	approvals     *prometheus.CounterVec
+	timeouts      prometheus.Counter
 }
 
 // NewMetrics returns the metrics. stale is read at each scrape for courier_config_stale, and
@@ -39,6 +42,10 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Outbound posts given up on, by reason."}, []string{"reason"}),
 		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_config_reload_errors_total",
 			Help: "Config reloads that failed."}),
+		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_approval_outcomes_total",
+			Help: "Pauses a Binding's policy turned away, by Binding and outcome."}, []string{"binding", "outcome"}),
+		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_interaction_timeouts_total",
+			Help: "Interactions that timed out unanswered."}),
 	}
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "courier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
@@ -48,7 +55,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -71,6 +78,23 @@ func (m *Metrics) CredentialRejected(binding string) { m.rejections.WithLabelVal
 
 // ReloadError counts a failed config reload: BootstrapOptions.OnReloadError.
 func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
+
+// ApprovalOutcome counts a pause a Binding's policy turned away: interact.Config.OnApprovalOutcome.
+// An outcome outside the closed set is one series, "other".
+// TODO(33d2): OnDecision, which counts an interaction decided by a person, joins these once it lands.
+func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
+	label := string(outcome)
+	switch outcome {
+	case interact.OutcomeAskUserCancelled, interact.OutcomeAutoDenied:
+	default:
+		label = otherLabel
+	}
+	m.approvals.WithLabelValues(binding, label).Inc()
+}
+
+// InteractionTimeout counts an interaction that timed out: interact's SweepConfig.OnTimeout. The ID is
+// not a label.
+func (m *Metrics) InteractionTimeout(string) { m.timeouts.Inc() }
 
 // OutboxAbandoned counts an abandoned post: outbox.Config.OnAbandon. The row's ID is not a label.
 func (m *Metrics) OutboxAbandoned(_, reason string) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
@@ -41,6 +42,11 @@ type RunConfig struct {
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
+	// reloadPoll is how often the config directory is checked, and auditStore wraps the store that
+	// audit rows are written to: seams for this package's tests, so that a reload can be seen
+	// without waiting 10 s and an audit write can be made to fail.
+	reloadPoll time.Duration
+	auditStore func(store.Audit) store.Audit
 
 	testOptions // NoRenderer and NoInteractions in a testhooks build; nothing otherwise
 }

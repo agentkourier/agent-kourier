@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
@@ -82,7 +83,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	go func() { served <- Serve(serveCtx, cfg.Listener, NewHandler(metrics, ready)) }()
 	undo.add(func() { stopServing(); <-served }) // registered first, so it is the last to go: /healthz stays up
 
-	boot, err := Bootstrap(runCtx, client, BootstrapOptions{Dir: cfg.ConfigDir, SyncTimeout: cfg.SyncTimeout, Logger: log})
+	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
+		Dir: cfg.ConfigDir, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
@@ -104,8 +107,12 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			log.Warn("closing the store", "error", err)
 		}
 	})
-	auditor := audit.New(st, audit.Options{Logger: log})
-	bindings := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{})
+	var auditLog store.Audit = st
+	if cfg.auditStore != nil {
+		auditLog = cfg.auditStore(st)
+	}
+	auditor := audit.New(auditLog, audit.Options{Logger: log, OnFailure: metrics.AuditFailure})
+	bindings := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
 	undo.add(bindings.Close)
 
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
@@ -126,7 +133,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		sl = slack.New(sc)
 	}
 	slackCtx, report, stopSlack := WithAuthFailure(runCtx)
-	ob := outbox.New(outbox.Config{Store: st, Poster: WatchPosts(sl, report), Logger: log})
+	ob := outbox.New(outbox.Config{Store: st, Poster: WatchPosts(sl, report), Logger: log, OnAbandon: metrics.OutboxAbandoned})
 	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
 		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
 	}
