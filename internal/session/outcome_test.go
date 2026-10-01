@@ -338,11 +338,7 @@ func TestWedgedTaskIsCancelledAfterMaxWorkingAge(t *testing.T) {
 			}
 			f.agent.get = tc.get(f)
 			f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
-			for _, ts := range []string{"1", "2"} {
-				if _, err := f.submit(inbound(ts)); err != nil {
-					t.Fatal(err)
-				}
-			}
+			f.submitTurns("1", "2")
 			waitFinal(t, sink) // turn 2, after turn 1's task was cancelled
 			f.agent.mu.Lock()
 			cancels := slices.Clone(f.agent.cancels)
@@ -560,6 +556,24 @@ func waitFinal(t *testing.T, s *fakeSink) {
 	}
 }
 
+// submitTurns queues the turns while the first Send is held back. The tests that call it jump the
+// fake clock past the thread's TTL once the first turn is in flight, and a turn submitted after
+// the jump is refused as Expired, without an error and without ever being sent: every turn is
+// queued first, and the first Send goes on once the last is.
+func (f *fixture) submitTurns(turns ...string) {
+	f.t.Helper()
+	f.agent.mu.Lock()
+	f.agent.hold = make(chan struct{})
+	hold := f.agent.hold
+	f.agent.mu.Unlock()
+	defer close(hold) // also when a Fatal leaves the loop: the runner must not wait for ever
+	for _, ts := range turns {
+		if res, err := f.submit(inbound(ts)); err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
+			f.t.Fatalf("submit %s = %+v, %v; want it taken", ts, res, err)
+		}
+	}
+}
+
 // wedgedFixture is a conversation whose turn 1 lost its stream and whose task t1 has run for
 // two hours since it was named, so that the next look at it cancels it (R17).
 func wedgedFixture(t *testing.T, setup func(*fixture), turns ...string) (*fixture, *fakeSink) {
@@ -578,11 +592,7 @@ func wedgedFixture(t *testing.T, setup func(*fixture), turns ...string) (*fixtur
 	f.agent.get = working(t0.Add(-2 * time.Hour))
 	f.agent.follow = func(a2a.TaskID, agent.Handler) error { return errors.New("follow must not run") }
 	setup(f) // before any turn: the runner reads what it sets
-	for _, ts := range turns {
-		if _, err := f.submit(inbound(ts)); err != nil {
-			t.Fatal(err)
-		}
-	}
+	f.submitTurns(turns...)
 	return f, sink
 }
 

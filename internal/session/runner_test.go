@@ -29,6 +29,7 @@ type fakeAgent struct {
 	active, maxActive int // Sends running now, and at most
 	sent              chan string
 	script            func(ctx context.Context, n int, h agent.Handler) error
+	hold              chan struct{} // if set, the first Send waits for it to close, before it runs script
 	// find and follow answer FindTask and Follow; finds and follows record their calls.
 	find      func(contextID, messageID string) (*a2a.Task, []a2a.TaskID, error)
 	follow    func(id a2a.TaskID, h agent.Handler) error
@@ -107,9 +108,17 @@ func (a *fakeAgent) Send(ctx context.Context, msg *a2a.Message, h agent.Handler)
 	a.seq = append(a.seq, "send")
 	a.active++
 	a.maxActive = max(a.maxActive, a.active)
+	hold := a.hold
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); a.active--; a.mu.Unlock() }()
 	a.sent <- msg.ID
+	if n == 0 && hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return a.script(ctx, n, h)
 }
 
