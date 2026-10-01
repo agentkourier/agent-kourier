@@ -37,12 +37,19 @@ type Config struct {
 	Reloader *config.Reloader
 	// Secrets is the resolver the Reloader checks against, and the identity package reads through.
 	Secrets *k8ssecrets.Resolver
+	// namespaces are the ones Secrets watches, for its readiness check.
+	namespaces []string
 }
 
 // Stale reports whether the latest reload failed, so the current snapshot lags the config on
 // disk. A reload that adds a Secret namespace fails this way until the process restarts with
 // the RBAC for it: the resolver is not rebuilt in place.
 func (c *Config) Stale() bool { return c.Reloader.Status().Stale }
+
+// Checks are the readiness conditions that Config holds: the first load and the synced caches.
+func (c *Config) Checks() []Check {
+	return []Check{ConfigLoaded(c.Reloader), SecretsSynced(c.Secrets, c.namespaces)}
+}
 
 // Stop stops the Secret informers. The reloader stops with the context given to Bootstrap, so
 // shut down in this order: cancel that context, wait for the reloader (Reloader.Wait), then Stop.
@@ -63,7 +70,8 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	secrets := k8ssecrets.New(client, set.SecretNamespaces(), k8ssecrets.WithLogger(log))
+	namespaces := set.SecretNamespaces()
+	secrets := k8ssecrets.New(client, namespaces, k8ssecrets.WithLogger(log))
 	syncCtx, cancel := context.WithTimeout(ctx, cmp.Or(opts.SyncTimeout, defaultSyncTimeout))
 	defer cancel()
 	if err := secrets.Start(syncCtx); err != nil {
@@ -78,5 +86,5 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 		secrets.Stop()
 		return nil, err
 	}
-	return &Config{Reloader: rl, Secrets: secrets}, nil
+	return &Config{Reloader: rl, Secrets: secrets, namespaces: namespaces}, nil
 }

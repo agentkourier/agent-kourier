@@ -1,0 +1,237 @@
+package broker
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+func get(t *testing.T, h http.Handler, path string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+	return rec.Code, rec.Body.String()
+}
+
+// stubs are the three things readiness reads, each flipped by the test.
+type stubs struct{ loaded, synced, open atomic.Bool }
+
+func (s *stubs) Status() config.Status {
+	if s.loaded.Load() {
+		return config.Status{LastSuccess: time.Unix(1, 0)}
+	}
+	return config.Status{}
+}
+
+func (s *stubs) Keys(context.Context, string, string) ([]string, error) {
+	if s.synced.Load() {
+		return nil, config.ErrSecretNotFound // a cache that has synced and lacks the name
+	}
+	return nil, k8ssecrets.ErrNotSynced
+}
+
+func (s *stubs) GetEvent(context.Context, string) (store.Event, error) {
+	if s.open.Load() {
+		return store.Event{}, store.ErrNotFound
+	}
+	return store.Event{}, errors.New("sql: database is closed")
+}
+
+func (s *stubs) readiness() *Readiness {
+	var r Readiness
+	r.Set(ConfigLoaded(s), SecretsSynced(s, []string{"sre"}), StoreOpen(s))
+	return &r
+}
+
+// /healthz says the process is alive, whatever else is true. /readyz is true when, and only
+// when, the first config has loaded, the Secret caches have synced and the store answers; it
+// names each condition that does not hold. Slack is not one of them.
+func TestReadyzFlipsExactlyWhenItsThreeConditionsHold(t *testing.T) {
+	var s stubs
+	h := NewHandler(mustMetrics(t, nil), s.readiness())
+	if code, _ := get(t, h, "/healthz"); code != http.StatusOK {
+		t.Errorf("/healthz = %d before anything is ready; want 200", code)
+	}
+	for mask := range 8 {
+		s.loaded.Store(mask&1 != 0)
+		s.synced.Store(mask&2 != 0)
+		s.open.Store(mask&4 != 0)
+		code, body := get(t, h, "/readyz")
+		wantCode := http.StatusServiceUnavailable
+		if mask == 7 {
+			wantCode = http.StatusOK
+		}
+		if code != wantCode {
+			t.Errorf("loaded=%t synced=%t open=%t: /readyz = %d, %q; want %d", mask&1 != 0, mask&2 != 0, mask&4 != 0, code, body, wantCode)
+		}
+		for i, name := range []string{"config", "secrets", "store"} {
+			if got := strings.Contains(body, name); got != (mask>>i&1 == 0) {
+				t.Errorf("mask %03b: body %q names %s: %t; want it named exactly when it does not hold", mask, body, name, got)
+			}
+		}
+	}
+}
+
+// The secrets check reads a real resolver: unstarted and stopped are not ready, started is.
+func TestSecretsSyncedFollowsTheResolver(t *testing.T) {
+	r := k8ssecrets.New(cluster(), []string{"sre"})
+	check := SecretsSynced(r, []string{"sre"})
+	if err := check.Fn(t.Context()); err == nil {
+		t.Error("an unstarted resolver is ready; want not")
+	}
+	if err := r.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := check.Fn(t.Context()); err != nil {
+		t.Errorf("a synced resolver is not ready: %v", err)
+	}
+	r.Stop()
+	if err := check.Fn(t.Context()); err == nil {
+		t.Error("a stopped resolver is ready; want not")
+	}
+}
+
+// A bootstrapped Config is ready, and says so through the checks it provides.
+func TestBootstrappedConfigIsReady(t *testing.T) {
+	c, err := Bootstrap(t.Context(), cluster(), options(configDir(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+	for _, check := range c.Checks() {
+		if err := check.Fn(t.Context()); err != nil {
+			t.Errorf("%s: %v", check.Name, err)
+		}
+	}
+}
+
+func TestMetricsEndpointServesTheRegistry(t *testing.T) {
+	m := mustMetrics(t, func() bool { return true })
+	m.CredentialRejected("sre/sre-alerts")
+	code, body := get(t, NewHandler(m, &Readiness{}), "/metrics")
+	if code != http.StatusOK || !strings.Contains(body, `courier_credential_rejections_total{binding="sre/sre-alerts"} 1`) || !strings.Contains(body, "courier_config_stale 1") {
+		t.Errorf("/metrics = %d\n%s", code, body)
+	}
+}
+
+func TestServerShutsDownGracefullyAndHasTimeouts(t *testing.T) {
+	srv := newHTTPServer(http.NotFoundHandler())
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Errorf("timeouts %v %v %v %v; want all set", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
+	}
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s stubs
+	s.loaded.Store(true)
+	s.synced.Store(true)
+	s.open.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, ln, NewHandler(mustMetrics(t, nil), s.readiness())) }()
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 5 * time.Second}
+	if code := status(t, client, ln, "/readyz"); code != http.StatusOK {
+		t.Errorf("/readyz = %d; want 200", code)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve = %v; want nil after a graceful shutdown", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after its context ended")
+	}
+	if req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String()+"/healthz", nil); req != nil {
+		if resp, err := client.Do(req); err == nil {
+			_ = resp.Body.Close()
+			t.Error("the listener still answers after shutdown")
+		}
+	}
+}
+
+func status(t *testing.T, c *http.Client, ln net.Listener, path string) int {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String()+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+// Before anything is set, and with an empty set, /readyz is not ready, while /healthz and /metrics
+// are served: the process can say it is alive during the Secret sync without saying it is ready.
+func TestReadyzFailsClosedUntilChecksAreSet(t *testing.T) {
+	var r Readiness
+	h := NewHandler(mustMetrics(t, nil), &r)
+	for _, tc := range []struct {
+		name  string
+		setup func()
+	}{{"before Set", func() {}}, {"an empty set", func() { r.Set() }}} {
+		name := tc.name
+		tc.setup()
+		if code, body := get(t, h, "/readyz"); code != http.StatusServiceUnavailable || !strings.Contains(body, "starting") {
+			t.Errorf("/readyz %s = %d %q; want 503 starting", name, code, body)
+		}
+		if code, _ := get(t, h, "/healthz"); code != http.StatusOK {
+			t.Errorf("/healthz %s = %d; want 200", name, code)
+		}
+	}
+	var s stubs
+	s.loaded.Store(true)
+	s.synced.Store(true)
+	s.open.Store(true)
+	r.Set(ConfigLoaded(&s), SecretsSynced(&s, []string{"sre"}), StoreOpen(&s))
+	if code, _ := get(t, h, "/readyz"); code != http.StatusOK {
+		t.Errorf("/readyz after Set = %d; want 200", code)
+	}
+}
+
+// A request that outlasts the shutdown wait is cut, not left running: Serve closes the server.
+func TestServeCutsARequestThatOutlastsTheShutdownWait(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFlight, release := make(chan struct{}), make(chan struct{})
+	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(inFlight); <-release })
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, ln, h, 50*time.Millisecond) }()
+	got := make(chan error, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String(), nil)
+		resp, err := (&http.Client{Transport: &http.Transport{DisableKeepAlives: true}}).Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		got <- err
+	}()
+	<-inFlight
+	cancel()
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("serve = %v; want the shutdown's deadline", err)
+	}
+	if err := <-got; err == nil {
+		t.Error("the request in flight completed; want its connection cut")
+	}
+	close(release)
+}
