@@ -14,7 +14,9 @@ var secretShapes = []struct {
 	visible string // must still appear
 }{
 	{"camel-case key", map[string]any{"dbApiKey": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
-	{"acronym then word", map[string]any{"APIKey": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
+	{"acronym then word", map[string]any{"DBAuth": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
+	{"lower then upper", map[string]any{"myKey": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
+	{"word then digit", map[string]any{"key2": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
 	{"snake-case key", map[string]any{"db_password": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
 	{"kebab-case key", map[string]any{"x-api-key": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
 	{"one word ending in a secret word", map[string]any{"PGPASSWORD": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
@@ -63,7 +65,7 @@ func TestWhatIsNoSecretIsShown(t *testing.T) {
 func TestSecretWords(t *testing.T) {
 	for name, want := range map[string]bool{
 		"password": true, "Password": true, "db_password": true, "dbPassword": true, "DB_PASSWORD": true, "PGPASSWORD": true,
-		"api-key": true, "apiKey": true, "APIKey": true, "x-auth-token": true, "Authorization": true, "AWS_SECRET_ACCESS_KEY": true,
+		"api-key": true, "apiKey": true, "APIKey": true, "DBAuth": true, "myKey": true, "key2": true, "2key": true, "x-auth-token": true, "Authorization": true, "AWS_SECRET_ACCESS_KEY": true,
 		"session_id": true, "jwt": true, "signature": true, "dsn": true, "bearer": true, "pwd": true, "credentials": true,
 		"monkey": false, "author": false, "keyboard": false, "max_tokens": false, "passed": false, "bypass": false, "name": false, "": false,
 	} {
