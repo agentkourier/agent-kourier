@@ -1,6 +1,7 @@
 package slack_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -40,7 +41,7 @@ func TestStreamLifecycle(t *testing.T) {
 	if err := c.AppendStream(t.Context(), "C1", ts, "lo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Update(t.Context(), "C1", ts, "x", nil); err == nil || !strings.Contains(err.Error(), "cant_update_message") {
+	if err := c.Update(t.Context(), "C1", ts, slack.Content{Text: "x"}); err == nil || !strings.Contains(err.Error(), "cant_update_message") {
 		t.Fatalf("Update of a message still streaming = %v; want cant_update_message", err)
 	}
 	blocks := []byte(`[{"type":"section","text":{"type":"mrkdwn","text":"Hello!"}}]`)
@@ -51,12 +52,42 @@ func TestStreamLifecycle(t *testing.T) {
 	if m.Text != "Hello!" || m.Streaming || len(m.Blocks) == 0 || m.Metadata == nil || m.Metadata.EventType != "courier_message" || m.Metadata.EventPayload["outbox_id"] != "ob-1" {
 		t.Fatalf("after StopStream: %+v; want the whole text, blocks, and the outbox metadata", m)
 	}
-	// Once stopped the message can be edited.
-	if err := c.Update(t.Context(), "C1", ts, "final", blocks); err != nil {
+	// Once stopped the message can be edited: new text and blocks replace the old, and empty
+	// blocks clear them.
+	second := json.RawMessage(`[{"type":"section","text":{"type":"mrkdwn","text":"second blocks"}}]`)
+	if err := c.Update(t.Context(), "C1", ts, slack.Content{Text: "final", Blocks: second}); err != nil {
 		t.Fatal(err)
 	}
-	if m := reply(); m.Text != "final" || m.Edited == nil {
-		t.Fatalf("after Update: %+v; want the new text, edited", m)
+	if m := reply(); m.Text != "final" || m.Edited == nil || !strings.Contains(string(m.Blocks), "second blocks") || strings.Contains(string(m.Blocks), "Hello!") {
+		t.Fatalf("after Update: %+v; want the new text, edited, and the new blocks", m)
+	}
+	if err := c.Update(t.Context(), "C1", ts, slack.Content{Text: "plain", Blocks: json.RawMessage(`[]`)}); err != nil {
+		t.Fatal(err)
+	}
+	if m := reply(); m.Text != "plain" || len(m.Blocks) != 0 {
+		t.Fatalf("after Update with []: %+v; want the blocks cleared", m)
+	}
+}
+
+func TestStopStreamNeedsAnOutboxID(t *testing.T) {
+	c, _, calls, root := updateClient(t)
+	ts, err := c.StartStream(t.Context(), "C1", root, "U1", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.StopStream(t.Context(), "C1", ts, "", nil, ""); err == nil || !strings.Contains(err.Error(), "an outbox ID is required") {
+		t.Fatalf("StopStream with no outbox ID = %v; want it refused, as Post does", err)
+	}
+	if n := calls.count("/chat.stopStream"); n != 0 {
+		t.Fatalf("%d chat.stopStream calls for a refused stop; want none", n)
+	}
+}
+
+func TestTeamIDNeedsATeam(t *testing.T) {
+	c, _, calls, _ := updateClient(t)
+	calls.status, calls.body = http.StatusOK, `{"ok":true,"user_id":"UFAKEBOT"}` // auth.test with no team_id
+	if id, err := c.TeamID(t.Context()); err == nil || !strings.Contains(err.Error(), "no team ID") {
+		t.Fatalf("TeamID = %q, %v; want an error for an answer with no team", id, err)
 	}
 }
 
@@ -102,7 +133,7 @@ func TestStreamErrorsNameNoToken(t *testing.T) {
 	cold, warm := client(false), client(true)
 	for name, call := range map[string]func() error{
 		"TeamID":       func() error { _, err := cold.TeamID(ctx); return err },
-		"Update":       func() error { return warm.Update(ctx, "C1", "1.1", "x", nil) },
+		"Update":       func() error { return warm.Update(ctx, "C1", "1.1", slack.Content{Text: "x"}) },
 		"StartStream":  func() error { _, err := warm.StartStream(ctx, "C1", "1.1", "U1", "x"); return err },
 		"AppendStream": func() error { return warm.AppendStream(ctx, "C1", "1.1", "x") },
 		"StopStream":   func() error { return warm.StopStream(ctx, "C1", "1.1", "x", nil, "ob") },

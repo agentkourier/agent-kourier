@@ -19,6 +19,15 @@ type Content struct {
 	Blocks json.RawMessage `json:"blocks,omitempty"`
 }
 
+// outboxTag returns the option that tags a message with metadata naming outboxID. An empty ID
+// is refused: the tag is what Find looks for.
+func outboxTag(outboxID string) (slackgo.MsgOption, error) {
+	if outboxID == "" {
+		return nil, errors.New("an outbox ID is required to tag the message")
+	}
+	return slackgo.MsgOptionMetadata(slackgo.SlackMetadata{EventType: MetadataEventType, EventPayload: map[string]any{"outbox_id": outboxID}}), nil
+}
+
 // Post posts c to channel, in the thread threadTS if set, tagged with metadata that names
 // outboxID, and returns the message's ts. The tag is what Find looks for, so outboxID is required.
 // A failure does not say whether the message was posted: the caller finds it before posting again.
@@ -27,20 +36,15 @@ type Content struct {
 // UNCONFIRMED(WP-04): that Slack accepts event_type courier_message with a string value in
 // event_payload, and that chat.postMessage returns the ts of a message that carries metadata.
 func (c *Client) Post(ctx context.Context, channel, threadTS string, content Content, outboxID string) (string, error) {
-	if outboxID == "" {
-		return "", errors.New("slack post: an outbox ID is required to tag the message")
+	tag, err := outboxTag(outboxID)
+	if err != nil {
+		return "", fmt.Errorf("slack post: %w", err)
 	}
-	opts := []slackgo.MsgOption{
-		slackgo.MsgOptionText(content.Text, false),
-		slackgo.MsgOptionMetadata(slackgo.SlackMetadata{EventType: MetadataEventType, EventPayload: map[string]any{"outbox_id": outboxID}}),
+	opts, err := blockOptions(content.Blocks)
+	if err != nil {
+		return "", fmt.Errorf("slack post: %w", err)
 	}
-	if len(content.Blocks) > 0 {
-		var blocks slackgo.Blocks
-		if err := json.Unmarshal(content.Blocks, &blocks); err != nil {
-			return "", fmt.Errorf("slack post: blocks: %w", err)
-		}
-		opts = append(opts, slackgo.MsgOptionBlocks(blocks.BlockSet...))
-	}
+	opts = append(opts, slackgo.MsgOptionText(content.Text, false), tag)
 	if threadTS != "" {
 		opts = append(opts, slackgo.MsgOptionTS(threadTS))
 	}

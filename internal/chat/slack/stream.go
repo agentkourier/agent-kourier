@@ -63,17 +63,25 @@ func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string)
 }
 
 // StopStream adds the last markdown, if any, and ends the streaming message ts, setting its
-// blocks if not empty, and tagging it with metadata that names outboxID: a message found by that
-// tag is one courier posted (spec 8.6). The error holds no token.
+// blocks if not empty (`[]` clears them), and tagging it with metadata that names outboxID: a
+// message found by that tag is one courier posted (spec 8.6). Like Post, it refuses an empty
+// outboxID. The error holds no token.
+//
+// It takes markdown and blocks, not a Content: a stream's text is appended as markdown_text, and
+// has no separate plain text.
 //
 // UNCONFIRMED(WP-04): that chat.stopStream accepts blocks and metadata, which chat.startStream
 // and chat.appendStream do not.
 func (c *Client) StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error {
+	tag, err := outboxTag(outboxID)
+	if err != nil {
+		return fmt.Errorf("slack stop stream: %w", err)
+	}
 	opts, err := blockOptions(blocks)
 	if err != nil {
 		return fmt.Errorf("slack stop stream: %w", err)
 	}
-	opts = append(opts, slackgo.MsgOptionMetadata(slackgo.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": outboxID}}))
+	opts = append(opts, tag)
 	if markdown != "" {
 		opts = append(opts, slackgo.MsgOptionMarkdownText(markdown))
 	}
