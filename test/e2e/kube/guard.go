@@ -4,7 +4,8 @@
 // rest.InClusterConfig and nothing else (no kubeconfig loader, so a developer's current context
 // is unreachable), and construction refuses unless the service account's namespace is e2e.
 //
-// The runner must never carry the label [CourierLabel]. The full-tier NetworkPolicy
+// The runner must never carry the label app.kubernetes.io/name=courier (UNCONFIRMED(WP-35):
+// courier's real label and namespace). The full-tier NetworkPolicy
 // (hack/kind/full/networkpolicy.yaml) admits any pod with that label in courier's namespace to
 // the kagent front door, so a runner wearing it would be trusted as courier.
 //
@@ -27,12 +28,6 @@ const (
 	Namespace = "e2e"
 	// DefaultNamespaceFile is where Kubernetes mounts the service account's namespace.
 	DefaultNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-	// CourierLabel selects courier's pods. UNCONFIRMED(WP-35): courier's Deployment does not
-	// exist yet. The runner must never carry it (see the package comment).
-	CourierLabel = "app.kubernetes.io/name=courier"
-	// CourierNamespace is where courier runs. UNCONFIRMED(WP-35): "courier" is what the
-	// full-tier NetworkPolicy assumes; the spec examples use courier-system.
-	CourierNamespace = "courier"
 )
 
 // ErrNotInCluster is returned, wrapped, when there is no in-cluster service account to use.
@@ -42,9 +37,9 @@ var ErrNotInCluster = errors.New("kube: not running in a cluster")
 var ErrWrongNamespace = errors.New("kube: service-account namespace is not " + Namespace)
 
 // NewInCluster builds a [Pods] from rest.InClusterConfig, after checking that the service
-// account's namespace, read from namespaceFile (normally [DefaultNamespaceFile]), is [Namespace].
-func NewInCluster(namespaceFile string) (*Pods, error) {
-	return newInCluster(rest.InClusterConfig, namespaceFile)
+// account's namespace, read from [DefaultNamespaceFile], is [Namespace].
+func NewInCluster() (*Pods, error) {
+	return newInCluster(rest.InClusterConfig, DefaultNamespaceFile)
 }
 
 func newInCluster(inClusterConfig func() (*rest.Config, error), namespaceFile string) (*Pods, error) {
@@ -66,5 +61,5 @@ func newInCluster(inClusterConfig func() (*rest.Config, error), namespaceFile st
 	if err != nil {
 		return nil, fmt.Errorf("kube: build clientset: %w", err)
 	}
-	return NewPods(client), nil
+	return newPods(client), nil
 }

@@ -28,15 +28,15 @@ func sink(name, uid string, ready bool) *corev1.Pod {
 	}
 }
 
-// newPods returns Pods polling every millisecond, and a channel that gets a value per List call.
-func newPods(objs ...runtime.Object) (*Pods, *fake.Clientset, <-chan struct{}) {
+// fakePods returns Pods polling every millisecond, and a channel that gets a value per List call.
+func fakePods(objs ...runtime.Object) (*Pods, *fake.Clientset, <-chan struct{}) {
 	cs := fake.NewClientset(objs...)
 	listed := make(chan struct{}, 1024)
 	cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
 		listed <- struct{}{}
 		return false, nil, nil
 	})
-	p := NewPods(cs)
+	p := newPods(cs)
 	p.poll = time.Millisecond
 	return p, cs, listed
 }
@@ -46,7 +46,7 @@ func TestList_FiltersByNamespaceAndSelector(t *testing.T) {
 	elsewhere.Namespace = "courier"
 	other := sink("other", "u2", true)
 	other.Labels = map[string]string{"app": "stubagent"}
-	p, _, _ := newPods(sink("sink-a", "u1", true), other, elsewhere)
+	p, _, _ := fakePods(sink("sink-a", "u1", true), other, elsewhere)
 
 	got, err := p.List(t.Context(), Namespace, sinkSel)
 	if err != nil || len(got) != 1 || got[0].Name != "sink-a" {
@@ -55,7 +55,7 @@ func TestList_FiltersByNamespaceAndSelector(t *testing.T) {
 }
 
 func TestKill_DeletesWithGraceZero(t *testing.T) {
-	p, cs, _ := newPods(sink("sink-a", "u1", true))
+	p, cs, _ := fakePods(sink("sink-a", "u1", true))
 	var grace *int64
 	cs.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		grace = a.(k8stesting.DeleteActionImpl).DeleteOptions.GracePeriodSeconds
@@ -70,21 +70,60 @@ func TestKill_DeletesWithGraceZero(t *testing.T) {
 }
 
 func TestWaitReady(t *testing.T) {
-	ready, _, _ := newPods(sink("sink-a", "u1", true))
-	if err := ready.WaitReady(t.Context(), Namespace, sinkSel); err != nil {
-		t.Fatal(err)
+	errBoom := errors.New("boom")
+	terminating := sink("sink-gone", "u3", true) // Ready=True, but being deleted
+	now := metav1.Now()
+	terminating.DeletionTimestamp = &now
+
+	tests := []struct {
+		name      string
+		pods      []runtime.Object
+		listErr   error         // the API server's answer to every list
+		timeout   time.Duration // the context's deadline
+		cancelled bool          // cancel the context before the call
+		wantErr   error         // matched with errors.Is; nil means success
+		wantMsg   string        // must appear in the error
+	}{
+		{name: "ready", pods: []runtime.Object{sink("sink-a", "u1", true)}, timeout: time.Minute},
+		{name: "not ready", pods: []runtime.Object{sink("sink-b", "u2", false)}, timeout: 30 * time.Millisecond,
+			wantErr: context.DeadlineExceeded, wantMsg: "not Ready: sink-b"},
+		{name: "zero pods is not ready", timeout: 30 * time.Millisecond,
+			wantErr: context.DeadlineExceeded, wantMsg: "no pods match"},
+		{name: "terminating is not ready", pods: []runtime.Object{terminating}, timeout: 30 * time.Millisecond,
+			wantErr: context.DeadlineExceeded, wantMsg: "not Ready: sink-gone"},
+		{name: "list error returns at once", listErr: errBoom, timeout: time.Minute, wantErr: errBoom},
+		{name: "success wins over a spent context", pods: []runtime.Object{sink("sink-a", "u1", true)},
+			timeout: time.Minute, cancelled: true},
 	}
-	stuck, _, _ := newPods(sink("sink-b", "u2", false))
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
-	defer cancel()
-	err := stuck.WaitReady(ctx, Namespace, sinkSel)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded", err)
-	}
-	for _, want := range []string{"e2e", sinkSel, "not Ready: sink-b"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err %q does not mention %q", err, want)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, cs, _ := fakePods(tc.pods...)
+			if tc.listErr != nil {
+				cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, tc.listErr
+				})
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), tc.timeout)
+			defer cancel()
+			if tc.cancelled {
+				cancel()
+			}
+			err := p.WaitReady(ctx, Namespace, sinkSel)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want it to wrap %v", err, tc.wantErr)
+			}
+			for _, want := range []string{"e2e", sinkSel, tc.wantMsg} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err %q does not mention %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -92,11 +131,15 @@ func TestWaitReady(t *testing.T) {
 // Ready (a graceful shutdown's grace window) until a replacement with a new UID exists, and the
 // replacement is not Ready at first. Restart must return neither of them early.
 func TestRestart_WaitsForANewReadyUID(t *testing.T) {
-	p, cs, listed := newPods(sink("sink-old", "uid-old", true))
+	p, cs, listed := fakePods(sink("sink-old", "uid-old", true))
 	deleted := make(chan struct{})
 	cs.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if g := a.(k8stesting.DeleteActionImpl).DeleteOptions.GracePeriodSeconds; g != nil {
-			t.Errorf("Restart must delete gracefully, got grace %d", *g)
+		opts := a.(k8stesting.DeleteActionImpl).DeleteOptions
+		if opts.GracePeriodSeconds != nil {
+			t.Errorf("Restart must delete gracefully, got grace %d", *opts.GracePeriodSeconds)
+		}
+		if opts.Preconditions == nil || opts.Preconditions.UID == nil || *opts.Preconditions.UID != "uid-old" {
+			t.Errorf("Restart must delete only the pod it listed, got preconditions %v", opts.Preconditions)
 		}
 		close(deleted)
 		return true, nil, nil // handled: the old pod lingers, still Ready
@@ -140,8 +183,15 @@ func TestRestart_WaitsForANewReadyUID(t *testing.T) {
 }
 
 func TestRestart_RefusesAmbiguousSelection(t *testing.T) {
-	p, _, _ := newPods(sink("a", "u1", true), sink("b", "u2", true))
-	if _, err := p.Restart(t.Context(), Namespace, sinkSel); err == nil || !strings.Contains(err.Error(), "2 pods match") {
-		t.Fatalf("err = %v, want one saying 2 pods match", err)
+	for want, objs := range map[string][]runtime.Object{
+		"0 pods match": nil,
+		"2 pods match": {sink("a", "u1", true), sink("b", "u2", true)},
+	} {
+		t.Run(want, func(t *testing.T) {
+			p, _, _ := fakePods(objs...)
+			if _, err := p.Restart(t.Context(), Namespace, sinkSel); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want one containing %q", err, want)
+			}
+		})
 	}
 }

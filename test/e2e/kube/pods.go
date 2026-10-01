@@ -12,14 +12,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Pods controls pods through the Kubernetes API. Build one with [NewInCluster].
+// Pods controls pods through the Kubernetes API. [NewInCluster] is the only way to build one
+// outside this package's tests, so the in-cluster guard cannot be skipped.
 type Pods struct {
 	client kubernetes.Interface
 	poll   time.Duration // how often the wait helpers re-list
 }
 
-// NewPods wraps a client with no in-cluster guard, for tests with a fake; the runner uses [NewInCluster].
-func NewPods(client kubernetes.Interface) *Pods {
+func newPods(client kubernetes.Interface) *Pods {
 	return &Pods{client: client, poll: 500 * time.Millisecond}
 }
 
@@ -27,17 +27,19 @@ func NewPods(client kubernetes.Interface) *Pods {
 func (p *Pods) List(ctx context.Context, namespace, selector string) ([]corev1.Pod, error) {
 	list, err := p.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return nil, fmt.Errorf("kube: list pods %s in %s: %w", selector, namespace, err)
+		return nil, fmt.Errorf("list pods %s in %s: %w", selector, namespace, err)
 	}
 	return list.Items, nil
 }
 
-// Kill deletes a pod with a zero grace period, which is a crash: no SIGTERM handling, no drain.
+// Kill force-deletes a pod: grace period 0, so the API object disappears at once. The kubelet
+// may still send SIGTERM with a short grace, so this is not a crash. Real crash injection
+// belongs to WP-35's fault hook.
 func (p *Pods) Kill(ctx context.Context, namespace, name string) error {
 	grace := int64(0)
 	err := p.client.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: &grace})
 	if err != nil {
-		return fmt.Errorf("kube: kill pod %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("kill pod %s/%s: %w", namespace, name, err)
 	}
 	return nil
 }
@@ -45,18 +47,23 @@ func (p *Pods) Kill(ctx context.Context, namespace, name string) error {
 // Restart deletes the one pod matching selector gracefully, then waits for a pod with a different
 // UID to be Ready and returns it. The old pod never satisfies the wait, even Ready and still
 // shutting down. It fails if the selector matches zero or several pods.
+//
+// Use it on the test doubles, never on courier: deleting a pod bypasses the Deployment's
+// strategy: Recreate, so two courier pods could share the SQLite volume.
 func (p *Pods) Restart(ctx context.Context, namespace, selector string) (*corev1.Pod, error) {
 	pods, err := p.List(ctx, namespace, selector)
 	if err != nil {
 		return nil, err
 	}
 	if len(pods) != 1 {
-		return nil, fmt.Errorf("kube: restart %s in %s: %d pods match, want exactly 1", selector, namespace, len(pods))
+		return nil, fmt.Errorf("restart %s in %s: %d pods match, want exactly 1", selector, namespace, len(pods))
 	}
 	old := pods[0]
-	err = p.client.CoreV1().Pods(namespace).Delete(ctx, old.Name, metav1.DeleteOptions{})
+	err = p.client.CoreV1().Pods(namespace).Delete(ctx, old.Name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &old.UID},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("kube: restart pod %s/%s: %w", namespace, old.Name, err)
+		return nil, fmt.Errorf("restart pod %s/%s: %w", namespace, old.Name, err)
 	}
 	var replacement *corev1.Pod
 	err = p.wait(ctx, namespace, selector, func(pods []corev1.Pod) string {
@@ -69,14 +76,13 @@ func (p *Pods) Restart(ctx context.Context, namespace, selector string) (*corev1
 		return fmt.Sprintf("no Ready replacement for %s (UID %s)", old.Name, old.UID)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("kube: restart %s in %s: %w", selector, namespace, err)
+		return nil, fmt.Errorf("restart %s in %s: %w", selector, namespace, err)
 	}
 	return replacement, nil
 }
 
-// WaitReady blocks until at least one pod matches selector and every matching pod is Ready (a terminating
-// pod is not), or
-// until ctx ends. The error then says what it last saw.
+// WaitReady blocks until at least one pod matches selector and every matching pod is Ready (a
+// terminating pod is not), or until ctx ends. The error then says what it last saw.
 func (p *Pods) WaitReady(ctx context.Context, namespace, selector string) error {
 	err := p.wait(ctx, namespace, selector, func(pods []corev1.Pod) string {
 		var notReady []string
@@ -94,7 +100,7 @@ func (p *Pods) WaitReady(ctx context.Context, namespace, selector string) error 
 		return ""
 	})
 	if err != nil {
-		return fmt.Errorf("kube: wait ready %s in %s: %w", selector, namespace, err)
+		return fmt.Errorf("wait ready %s in %s: %w", selector, namespace, err)
 	}
 	return nil
 }
@@ -112,7 +118,7 @@ func (p *Pods) wait(ctx context.Context, namespace, selector string, check func(
 		reason = check(pods)
 		return reason == "", nil
 	})
-	if ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%s: %w", reason, err)
 	}
 	return err

@@ -48,7 +48,7 @@ func TestNewInCluster_Guard(t *testing.T) {
 // to rest.InClusterConfig. Clearing the service env makes that fail wherever the tests run.
 func TestNewInCluster_RefusesOutsideCluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
-	if _, err := NewInCluster(nsFile(t, "e2e")); !errors.Is(err, ErrNotInCluster) {
+	if _, err := NewInCluster(); !errors.Is(err, ErrNotInCluster) {
 		t.Fatalf("err = %v, want ErrNotInCluster", err)
 	}
 }
