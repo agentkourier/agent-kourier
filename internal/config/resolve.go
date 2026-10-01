@@ -93,12 +93,12 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 		conns:    index("ChatConnection", set.ChatConnections),
 		bindings: index("Binding", set.Bindings),
 		snap: &Snapshot{
-			conns:     index("ChatConnection", set.ChatConnections),
 			bindings:  map[identity]ResolvedBinding{},
 			byChannel: map[channelKey]ResolvedBinding{},
 			byPath:    map[string]ResolvedBinding{},
 		},
 	}
+	r.snap.conns = r.conns
 	for i := range set.Bindings {
 		r.binding(&set.Bindings[i])
 	}
