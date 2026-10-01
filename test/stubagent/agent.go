@@ -19,7 +19,7 @@ type Agent struct {
 
 	// Guarded by s.mu.
 	turns    [][]Step
-	reply    func(prompt string) []Step
+	reply    func(prior []string, prompt string) []Step
 	sessions map[string]*session
 	tasks    map[string]*task
 	list     []*task          // the tasks in the order they began
@@ -41,12 +41,39 @@ func (a *Agent) Next(steps ...Step) {
 func (a *Agent) Reply(f func(prompt string) []Step) {
 	a.s.mu.Lock()
 	defer a.s.mu.Unlock()
+	a.reply = func(_ []string, prompt string) []Step { return f(prompt) }
+}
+
+// ReplyWithHistory is Reply for an agent whose answer depends on its conversation: f also gets
+// the text of every user message the message's context already holds, oldest first, none for a
+// new context. A message that opens a context sees none, so an agent can tell a conversation it
+// kept from one it lost. The same rules as Reply apply to f.
+func (a *Agent) ReplyWithHistory(f func(prior []string, prompt string) []Step) {
+	a.s.mu.Lock()
+	defer a.s.mu.Unlock()
 	a.reply = f
+}
+
+// said returns the text of the user messages of the session's tasks, oldest first. A message
+// with no text, such as a decision on a pause, is left out. The caller holds s.mu.
+func (a *Agent) said(sess *session) []string {
+	var out []string
+	for _, t := range a.list {
+		if t.sess != sess {
+			continue
+		}
+		for _, m := range t.history {
+			if txt := promptText(m); m["role"] == "ROLE_USER" && txt != "" {
+				out = append(out, txt)
+			}
+		}
+	}
+	return out
 }
 
 // pick takes the next turn: a queued one, else the Reply function, which the caller runs
 // outside the lock. The caller holds s.mu.
-func (a *Agent) pick() (steps []Step, reply func(string) []Step, ok bool) {
+func (a *Agent) pick() (steps []Step, reply func([]string, string) []Step, ok bool) {
 	if len(a.turns) > 0 {
 		steps = a.turns[0]
 		a.turns = a.turns[1:]
@@ -229,7 +256,8 @@ func (a *Agent) admit(m obj, owner string, ext bool) (*stream, *rpcError) {
 		if reply == nil {
 			return a.start(id, m, d.sess, turn, ext), nil
 		}
-		s.unlocked(func() { steps = reply(promptText(m)) })
+		prior := a.said(d.sess)
+		s.unlocked(func() { steps = reply(prior, promptText(m)) })
 	}
 	first := d.reply
 	if d = a.check(id, m, owner); d.st != nil || d.err != nil {

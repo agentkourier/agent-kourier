@@ -9,7 +9,7 @@
 // RequestApproval, for example agent.Next(stubagent.Text("tick 1 ", "tick 2 ")). The tests of
 // this package compare what the stub sends with the fixtures, event by event.
 //
-// Reply, and the then of Ask and RequestApproval, run outside the server's lock and may call
+// Reply, ReplyWithHistory, and the then of Ask and RequestApproval, run outside the server's lock and may call
 // the Server. They may then run for a message that is rejected after they return, because
 // another send got in first.
 //
@@ -33,8 +33,8 @@
 // was made, whatever the reader's header (see pause.message). The envelope errors (-32600,
 // -32601, -32602, -32700) follow a2a-go v2.6.0, not kagent, which vendors a2a-go v2.5.0.
 //
-// Command test/stubagent/cmd/stubagent serves the agents of SpikeAgents so that the WP-02
-// spike can run against the stub.
+// Command test/stubagent/cmd/stubagent serves the agents of SpikeAgents, so that the WP-02
+// spike can run against the stub, and of ScenarioAgents, which the E2E scenarios drive.
 package stubagent
 
 import (

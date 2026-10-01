@@ -9,6 +9,9 @@
 // place of -token skips that case. Never point the spike's -out at test/fixtures/kagent.
 // `make stub-oracle` does all of this and checks the result. The server stops on SIGINT or
 // SIGTERM.
+//
+// It also serves the agents of ScenarioAgents, for the E2E scenarios; the stubagent package doc
+// of ScenarioAgents maps each scenario to its agent.
 package main
 
 import (
@@ -26,9 +29,13 @@ import (
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
+// defaultTick is the pause between the chunks of a turn when -tick is not given, and so the tick
+// the fast tier's Deployment runs at.
+const defaultTick = 300 * time.Millisecond
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18083", "address to listen on; the spike's default -base is this")
-	tick := flag.Duration("tick", 300*time.Millisecond, "pause between the text chunks of a turn; the spike's slow agent needs it long enough to act between chunks")
+	tick := flag.Duration("tick", defaultTick, "pause between the text chunks of a turn; the spike's slow agent needs it long enough to act between chunks")
 	requireAuth := flag.Bool("require-auth", false, "answer 401 to a request with no bearer token, as kagent in OIDC mode does; the spike's -no-auth mode then fails")
 	flag.Parse()
 	if err := run(*addr, *tick, *requireAuth); err != nil {
@@ -37,14 +44,21 @@ func main() {
 	}
 }
 
-func run(addr string, tick time.Duration, requireAuth bool) error {
+// newStub returns the server with every agent the command serves.
+func newStub(tick time.Duration, requireAuth bool) *stubagent.Server {
 	opts := []stubagent.Option{stubagent.WithTick(tick)}
 	if requireAuth {
 		opts = append(opts, stubagent.WithRequiredAuth())
 	}
 	stub := stubagent.NewHandler(opts...)
-	defer stub.Close()
 	stubagent.SpikeAgents(stub)
+	stubagent.ScenarioAgents(stub)
+	return stub
+}
+
+func run(addr string, tick time.Duration, requireAuth bool) error {
+	stub := newStub(tick, requireAuth)
+	defer stub.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
