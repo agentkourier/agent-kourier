@@ -39,6 +39,11 @@ type ObjectRef struct {
 	Name string `json:"name"`
 }
 
+// NamespacedName returns the "namespace/name" by which courier names a resource in a conversation
+// key, a message ID, an audit row or a log line. A reference with an empty namespace takes
+// the referrer's first.
+func NamespacedName(namespace, name string) string { return namespace + "/" + name }
+
 // DefaultSecretKey is the Secret key a SecretKeyRef reads when Key is empty (spec section 7).
 const DefaultSecretKey = "token"
 

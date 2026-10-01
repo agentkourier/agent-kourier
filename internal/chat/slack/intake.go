@@ -46,7 +46,7 @@ type Intake struct {
 
 // NewIntake returns an Intake over cfg.
 func NewIntake(cfg IntakeConfig) *Intake {
-	return &Intake{cfg: cfg, conn: cfg.Connection.Namespace + "/" + cfg.Connection.Name, log: cmp.Or(cfg.Logger, slog.Default())}
+	return &Intake{cfg: cfg, conn: v1alpha1.NamespacedName(cfg.Connection.Namespace, cfg.Connection.Name), log: cmp.Or(cfg.Logger, slog.Default())}
 }
 
 // Message submits m as a turn, unless the table says to ignore it:
@@ -112,7 +112,7 @@ func (in *Intake) binding(channel string) (name string, ok bool) {
 	if !ok {
 		return "", false
 	}
-	return rb.Binding.Namespace + "/" + rb.Binding.Name, true
+	return v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name), true
 }
 
 // recentMax bounds each generation of recent.

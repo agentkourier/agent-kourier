@@ -109,3 +109,9 @@ func TestChatConnectionCredentialsHaveNoKey(t *testing.T) {
 		t.Fatal("strict decode accepted credentialsSecretRef.key, want an unknown-field error")
 	}
 }
+
+func TestNamespacedName(t *testing.T) {
+	if got := NamespacedName("sre", "sre-alerts"); got != "sre/sre-alerts" {
+		t.Errorf("NamespacedName = %q; want sre/sre-alerts", got)
+	}
+}

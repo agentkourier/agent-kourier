@@ -51,14 +51,14 @@ func New(b *v1alpha1.Binding, backend *v1alpha1.AgentBackend, r SecretReader, au
 		return nil, errors.New("identity: New needs an Auditor")
 	}
 	s := &Source{
-		binding: b.Namespace + "/" + b.Name, spec: b, backend: backend, reader: r,
+		binding: v1alpha1.NamespacedName(b.Namespace, b.Name), spec: b, backend: backend, reader: r,
 		token: opts.Token, audit: aud, onRejected: opts.OnRejected,
 	}
 	// The identity is the token's owner, which only the token knows. Name the Secret that
 	// holds it, or, when no token is sent, the userId that is.
 	s.identity = b.Spec.Identity.UserID
 	if ref := b.Spec.Identity.TokenSecretRef; ref != nil {
-		s.identity = "secret:" + b.Namespace + "/" + ref.Name
+		s.identity = "secret:" + v1alpha1.NamespacedName(b.Namespace, ref.Name)
 		if s.token == nil {
 			s.token = NewStaticToken(r, b.Namespace, *ref)
 		}
