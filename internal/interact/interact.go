@@ -139,7 +139,9 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 		return i.refuseAskUser(ctx, p, b, *in)
 	}
 	row, err := i.record(ctx, p, b, *in)
-	if err != nil {
+	if errors.Is(err, dialect.ErrUnusablePause) { // a second question under a seen ID
+		return i.refuseUnusable(ctx, p, b, err)
+	} else if err != nil {
 		return err
 	}
 	switch row.State {

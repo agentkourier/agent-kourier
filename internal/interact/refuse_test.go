@@ -136,3 +136,17 @@ func TestAuditFailureNeverBlocksTheCancel(t *testing.T) {
 		t.Errorf("Paused = %v after %d cancels; want the audit error, and the cancel made", err, len(r.sess.cancels))
 	}
 }
+
+// TestAReusedRequestIDIsRefusedAsUnusable: a second question under a seen request ID (UNCONFIRMED(WP-02))
+// is told to the thread and cancelled, like any pause courier cannot take.
+func TestAReusedRequestIDIsRefusedAsUnusable(t *testing.T) {
+	r := newRig(t, nil)
+	if err := r.paused(t, askUser("req-1")); err != nil {
+		t.Fatal(err)
+	}
+	other := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "A different question?"}}})
+	if err := r.paused(t, other); err != nil || len(r.sess.cancels) != 1 || len(r.notices(t)) != 1 || len(r.auditRows(t)) != 2 {
+		t.Errorf("Paused = %v, %d cancels, %d notices, %d audit rows; want the task cancelled, the thread told, and the pause and its cancel audited",
+			err, len(r.sess.cancels), len(r.notices(t)), len(r.auditRows(t)))
+	}
+}
