@@ -74,6 +74,10 @@ func (s Source) String() string { return "identity.Source{" + s.binding + "}" }
 // GoString is String, so %#v is safe.
 func (s Source) GoString() string { return s.String() }
 
+// Identity names the service identity for audit rows: "secret:namespace/name" of the token
+// Secret, or the userId of a Binding without one. It never holds the token.
+func (s *Source) Identity() string { return s.identity }
+
 // TokenRequired reports whether the Binding has a token, so that credentials without one
 // must fail rather than fall back to the userId.
 func (s *Source) TokenRequired() bool { return s.token != nil }

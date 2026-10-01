@@ -527,3 +527,12 @@ func plain(c dialect.Credentials) string {
 	}
 	return fmt.Sprintf("token %q userID %q headers %q", c.Token.Reveal(), c.UserID, h)
 }
+
+func TestIdentityNamesTheTokenSecretOrTheUserID(t *testing.T) {
+	if got := newFixture(t, v1alpha1.Identity{TokenSecretRef: tokenRef(), UserID: "svc"}).source().Identity(); got != "secret:sre/creds" {
+		t.Errorf("Identity with a token = %q, want the Secret", got)
+	}
+	if got := newFixture(t, v1alpha1.Identity{UserID: "svc"}).source().Identity(); got != "svc" {
+		t.Errorf("Identity with a userId only = %q, want it", got)
+	}
+}
