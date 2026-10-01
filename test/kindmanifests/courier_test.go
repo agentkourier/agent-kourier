@@ -1,6 +1,7 @@
-// Package courier_test checks the fast tier's courier manifests and config in this directory, so a
-// mistake in them fails `make test` and not the next `make e2e-fast-up`.
-package courier_test
+// Package kindmanifests_test checks the manifests and config that the kind tiers apply, which live under
+// hack/kind, so a mistake in them fails `make test` and not the next `make e2e-fast-up`. It reads them
+// by relative path, as test/e2e/kube's runner_role_test.go does for the runner's Role.
+package kindmanifests_test
 
 import (
 	"bytes"
@@ -30,10 +31,13 @@ func (s secrets) Keys(_ context.Context, namespace, name string) ([]string, erro
 	return nil, fmt.Errorf("%s/%s: %w", namespace, name, config.ErrSecretNotFound)
 }
 
+// courierDir is the fast tier's courier manifests and config.
+const courierDir = "../../hack/kind/fast/courier/"
+
 var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "courier/courier-agent-token": {"token"}}
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
-	set, err := config.Load(t.Context(), "config")
+	set, err := config.Load(t.Context(), courierDir+"config")
 	if err != nil || len(set.Bindings) != 1 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
 		t.Fatalf("Load = %+v, %v; want one of each", set, err)
 	}
@@ -96,7 +100,7 @@ func load(t *testing.T, file, kind string, into any) {
 
 func TestDeployment(t *testing.T) {
 	var d appsv1.Deployment
-	load(t, "deployment.yaml", "Deployment", &d)
+	load(t, courierDir+"deployment.yaml", "Deployment", &d)
 	spec, pod := d.Spec, d.Spec.Template.Spec
 	if d.Namespace != "courier" || d.Name != "courier" || *spec.Replicas != 1 || spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
 		t.Errorf("Deployment %s/%s, %d replicas, strategy %s; want courier/courier, one, Recreate: two pods must never share the SQLite volume", d.Namespace, d.Name, *spec.Replicas, spec.Strategy.Type)
@@ -151,9 +155,9 @@ func TestRBAC(t *testing.T) {
 	var sa corev1.ServiceAccount
 	var role rbacv1.Role
 	var rb rbacv1.RoleBinding
-	load(t, "rbac.yaml", "ServiceAccount", &sa)
-	load(t, "rbac.yaml", "Role", &role)
-	load(t, "rbac.yaml", "RoleBinding", &rb)
+	load(t, courierDir+"rbac.yaml", "ServiceAccount", &sa)
+	load(t, courierDir+"rbac.yaml", "Role", &role)
+	load(t, courierDir+"rbac.yaml", "RoleBinding", &rb)
 	if sa.AutomountServiceAccountToken == nil || !*sa.AutomountServiceAccountToken {
 		t.Error("the ServiceAccount must automount its token: courier reads Secrets through the API")
 	}
@@ -162,7 +166,7 @@ func TestRBAC(t *testing.T) {
 		t.Errorf("Role %+v bound by %+v; want list and watch, never get, on Secrets in courier alone, bound to the ServiceAccount", role, rb)
 	}
 	var pvc corev1.PersistentVolumeClaim
-	load(t, "pvc.yaml", "PersistentVolumeClaim", &pvc)
+	load(t, courierDir+"pvc.yaml", "PersistentVolumeClaim", &pvc)
 	if pvc.Namespace != "courier" || pvc.Name != "courier-data" || *pvc.Spec.StorageClassName != "standard" {
 		t.Errorf("PVC %s/%s on %v; want courier/courier-data on kind's local-path class, standard", pvc.Namespace, pvc.Name, pvc.Spec.StorageClassName)
 	}
