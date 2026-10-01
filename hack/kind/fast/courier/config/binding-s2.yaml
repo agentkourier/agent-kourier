@@ -1,0 +1,18 @@
+# S2: a conversation that survives a courier restart; the agent's reply proves it saw the earlier turns.
+# A channel of its own on the fake Slack, so scenarios never share a thread; the identity token is the same
+# Secret as fast-chat's. The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s2, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: stub}
+    namespace: kagent
+    name: scenario-memory
+  identity:
+    userId: courier-fast
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: CS2
+    output: live

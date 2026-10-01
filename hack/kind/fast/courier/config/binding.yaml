@@ -1,6 +1,6 @@
 # Channel C1 on the fake Slack, answered by the stub agent's test-agent. Its identity token is the Secret
 # courier-agent-token, key token: an unsigned JWT that up-fast.sh makes, which is all the stub asks for.
-# The scenario Bindings (one channel each, for the stub's scenario agents) come with WP-36.
+# The scenario Bindings (one channel each, for the stub's scenario agents) are binding-s*.yaml.
 apiVersion: agentcourier.dev/v1alpha1
 kind: Binding
 metadata: {name: fast-chat, namespace: courier}

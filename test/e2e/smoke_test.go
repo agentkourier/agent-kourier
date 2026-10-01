@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/slack-go/slack"
-
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 	"github.com/agentkourier/agent-kourier/test/sink"
 )
@@ -32,8 +30,8 @@ func TestMain(m *testing.M) {
 }
 
 // TestSmoke proves the framework reaches every double from inside the cluster: an alert goes
-// through Alertmanager's routing to the sink, a fake Slack user posts to a connected client and
-// reads the thread back, and the sink pod restarts through the pod-control helpers.
+// through Alertmanager's routing to the sink, a fake Slack user mentions courier, which acks it, and
+// the thread reads back, and the sink pod restarts through the pod-control helpers.
 func TestSmoke(t *testing.T) {
 	env, ctx := NewEnv(os.Getenv), t.Context()
 	snk := NewSink(env.SinkURL)
@@ -47,27 +45,42 @@ func TestSmoke(t *testing.T) {
 		t.Fatalf("the alert never reached the sink through Alertmanager: %v", err)
 	}
 
-	sl := NewSlack(env.SlackURL)
-	bot := slack.New("xoxb-fake-test-token", slack.OptionAPIURL(env.SlackURL+"/"), slack.OptionAppLevelToken("xapp-fake-test-token"))
-	connectSocket(t, bot, true)
-	mention, err := sl.Mention(ctx, "C1", "USMOKE", "<@UFAKEBOT> smoke "+name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range mention.Envelopes {
-		if _, err := sl.AckWait(ctx, 10*time.Second, id); err != nil {
-			t.Fatalf("the client never acked the mention's event: %v", err)
-		}
-	}
-	thread, err := sl.Thread(ctx, mention.Channel, mention.TS)
-	if err != nil || len(thread) != 1 || !strings.Contains(thread[0].Text, name) {
-		t.Fatalf("Thread = %+v, %v; want the mention read back", thread, err)
-	}
-
 	pods, err := kube.NewInCluster()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A fake Slack user mentions courier, which is connected to the fake as it would be to Slack: the
+	// test opens no Socket Mode client of its own, because the fake sends envelopes to the newest
+	// connection and a second one would take them from courier. The full tier has no courier until
+	// WP-35i, so there the part is skipped, and said to be.
+	sl := NewSlack(env.SlackURL)
+	if deployed, err := pods.List(ctx, "courier", "app.kubernetes.io/name=courier"); err != nil {
+		t.Fatal(err)
+	} else if len(deployed) == 0 {
+		t.Log("no courier pod in this tier: the mention is not driven")
+	} else {
+		err := Wait(ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
+			n, err := sl.Connections(ctx)
+			return n > 0, err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mention, err := sl.Mention(ctx, ChannelSmoke, "USMOKE", "<@UFAKEBOT> smoke "+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range mention.Envelopes {
+			if _, err := sl.AckWait(ctx, 15*time.Second, id); err != nil {
+				t.Fatalf("courier never acked the mention's event: %v", err)
+			}
+		}
+		thread, err := sl.Thread(ctx, mention.Channel, mention.TS)
+		if err != nil || len(thread) == 0 || !strings.Contains(thread[0].Text, name) {
+			t.Fatalf("Thread = %+v, %v; want the mention read back first", thread, err)
+		}
+	}
+
 	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // a stuck replacement fails here, with its reason
 	defer cancel()
 	if _, err := pods.Restart(restartCtx, kube.Namespace, "app=sink"); err != nil {

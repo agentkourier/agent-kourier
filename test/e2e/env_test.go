@@ -9,11 +9,12 @@ func TestNewEnv(t *testing.T) {
 		env  map[string]string
 		want Env
 	}{
-		{"defaults are the fast tier's Services, and courier has none until WP-35", nil, Env{
+		{"defaults are the fast tier's Services", nil, Env{
 			SlackURL:        "http://fakeslack.e2e.svc.cluster.local:8080",
 			SinkURL:         "http://sink.e2e.svc.cluster.local:8080",
 			StubURL:         "http://stubagent.e2e.svc.cluster.local:8080",
 			AlertmanagerURL: "http://alertmanager.monitoring.svc.cluster.local:9093",
+			CourierURL:      "http://courier.courier.svc.cluster.local:8080",
 		}},
 		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", CourierURL: "http://c"}},
 	} {

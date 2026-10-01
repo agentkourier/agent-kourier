@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/test/e2e"
 )
 
 // secrets is what up-fast.sh creates in namespace courier (never committed): the keys, not the values.
@@ -39,8 +40,8 @@ var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "cou
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), courierDir+"config")
-	if err != nil || len(set.Bindings) != 1 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want one of each", set, err)
+	if err != nil || len(set.Bindings) != 7 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of six scenarios, and one connection and backend", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -193,5 +194,75 @@ func TestRBAC(t *testing.T) {
 	load(t, courierDir+"pvc.yaml", "PersistentVolumeClaim", &pvc)
 	if pvc.Namespace != "courier" || pvc.Name != "courier-data" || *pvc.Spec.StorageClassName != "standard" {
 		t.Errorf("PVC %s/%s on %v; want courier/courier-data on kind's local-path class, standard", pvc.Namespace, pvc.Name, pvc.Spec.StorageClassName)
+	}
+}
+
+// TestScenarioBindings: each scenario has a channel of its own, bound to the stub agent it drives, with
+// the interactions it needs: askUser for S3 (the agent asks), and neither for S11, whose tool approval
+// courier must deny (Phase 1 has no write-capable agent). test/e2e names the channels.
+func TestScenarioBindings(t *testing.T) {
+	set, err := config.Load(t.Context(), courierDir+"config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tc := range []struct {
+		scenario, channel, agent string
+		askUser                  bool
+	}{
+		{"smoke", e2e.ChannelSmoke, "test-agent", false},
+		{"S1", e2e.ChannelS1, "scenario-gated", false},
+		{"S2", e2e.ChannelS2, "scenario-memory", false},
+		{"S3", e2e.ChannelS3, "scenario-ask", true},
+		{"S4", e2e.ChannelS4, "scenario-gated", false},
+		{"S5", e2e.ChannelS5, "test-agent", false},
+		{"S11", e2e.ChannelS11, "spike-approve", false},
+	} {
+		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
+		if !ok {
+			t.Errorf("%s: channel %s resolves to no Binding", tc.scenario, tc.channel)
+			continue
+		}
+		spec := rb.Binding.Spec
+		if spec.Agent.Name != tc.agent || spec.Agent.Namespace != "kagent" || spec.Interactions.AskUser != tc.askUser || spec.Interactions.ToolApprovals {
+			t.Errorf("%s: channel %s is bound to %s/%s with askUser %t and toolApprovals %t; want %s, askUser %t and toolApprovals off", tc.scenario, tc.channel,
+				spec.Agent.Namespace, spec.Agent.Name, spec.Interactions.AskUser, spec.Interactions.ToolApprovals, tc.agent, tc.askUser)
+		}
+		if seen[tc.channel] {
+			t.Errorf("%s: channel %s is another scenario's too; scenarios must not share a thread", tc.scenario, tc.channel)
+		}
+		seen[tc.channel] = true
+	}
+}
+
+// TestService: the E2E runner reaches courier's health and metrics port, and nothing else of it, through
+// a ClusterIP Service in the fast tier. The Alertmanager receiver has no Service until WP-47, so the
+// Service has the one port, the one the probes use, and nothing publishes it.
+func TestService(t *testing.T) {
+	var svc corev1.Service
+	var d appsv1.Deployment
+	load(t, courierDir+"service.yaml", "Service", &svc)
+	load(t, courierDir+"deployment.yaml", "Deployment", &d)
+	c := d.Spec.Template.Spec.Containers[0]
+	if svc.Namespace != "courier" || svc.Name != "courier" || svc.Spec.Type != corev1.ServiceTypeClusterIP || len(svc.Spec.ExternalIPs) != 0 || svc.Spec.LoadBalancerIP != "" {
+		t.Errorf("Service %s/%s of type %q with external IPs %v; want courier/courier, ClusterIP, nothing published", svc.Namespace, svc.Name, svc.Spec.Type, svc.Spec.ExternalIPs)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Name != "http" || svc.Spec.Ports[0].Port != 8080 || svc.Spec.Ports[0].NodePort != 0 ||
+		svc.Spec.Ports[0].TargetPort.String() != "http" {
+		t.Errorf("Service ports %+v; want the one port, http 8080 to the pod's http", svc.Spec.Ports)
+	}
+	if len(svc.Spec.Selector) != 1 || svc.Spec.Selector["app.kubernetes.io/name"] != "courier" || d.Spec.Template.Labels["app.kubernetes.io/name"] != "courier" {
+		t.Errorf("Service selector %v; want it to select courier's pod alone", svc.Spec.Selector)
+	}
+	probes := map[string]bool{c.StartupProbe.HTTPGet.Port.String(): true, c.LivenessProbe.HTTPGet.Port.String(): true, c.ReadinessProbe.HTTPGet.Port.String(): true}
+	if len(probes) != 1 || !probes[svc.Spec.Ports[0].TargetPort.String()] {
+		t.Errorf("probes use ports %v but the Service targets %s; want the health port, and only it", probes, svc.Spec.Ports[0].TargetPort.String())
+	}
+	if len(c.Ports) != 1 || c.Ports[0].Name != "http" {
+		t.Errorf("container ports %+v; want only http: a receiver port added here must not reach the Service until WP-47", c.Ports)
 	}
 }
