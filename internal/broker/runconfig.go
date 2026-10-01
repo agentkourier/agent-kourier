@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,10 +30,8 @@ type RunConfig struct {
 	KlogVerbosity int
 	Logger        *slog.Logger // slog.Default() if nil
 
-	// Interactions takes the presses of buttons. It is required: until the interactions exist (WP-35h9)
-	// only a testhooks build may go without, by NoInteractions, which the default build does not have.
-	// The renderer is not here: Run builds it, from its own outbox and Slack client.
-	Interactions func(ctx context.Context, i slack.Interaction) error
+	// The renderer and the interactions are not here: Run builds them, from its own store, outbox and
+	// Slack client, so that no config can run a broker without them.
 
 	// newSlack builds the Slack client from its config; nil means slack.New. It is a seam for this
 	// package's tests, which run Run offline with a client that does not call Slack. It is
@@ -50,8 +47,9 @@ type RunConfig struct {
 	auditStore func(store.Audit) store.Audit
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
-
-	testOptions // NoInteractions in a testhooks build; nothing otherwise
+	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
+	// against the Slack intake opening.
+	startTrace func(step string)
 }
 
 // validate says whether c can run. A missing field is an error wrapping ErrWiring, which is a usage
@@ -60,7 +58,6 @@ func (c RunConfig) validate() error {
 	var missing []string
 	for name, ok := range map[string]bool{
 		"ConfigDir": c.ConfigDir != "", "DBPath": c.DBPath != "", "Listener": c.Listener != nil,
-		"Interactions": c.Interactions != nil || c.allowsNoInteractions(),
 	} {
 		if !ok {
 			missing = append(missing, name)
@@ -79,11 +76,6 @@ func (c RunConfig) logger() *slog.Logger {
 	}
 	return slog.Default()
 }
-
-// logTestOptions logs, once and loudly, what a testhooks build is running without. Run calls it as
-// its first act, not validate, which may be called any number of times. In the default build there is
-// nothing to say.
-func (c RunConfig) logTestOptions() { c.warnTestOptions(c.logger()) }
 
 // InClusterClient returns a Kubernetes client for the API server of the cluster courier runs in,
 // from its pod's ServiceAccount, and nothing else: there is no kubeconfig path, because a kubeconfig

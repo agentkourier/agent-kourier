@@ -357,7 +357,7 @@ func TestRunPassesAnRBACDenialThroughAsAccessDenied(t *testing.T) {
 
 func TestRunRefusesAnIncompleteConfigBeforeStartingAnything(t *testing.T) {
 	c := startConfig(t)
-	c.Interactions = nil
+	c.ConfigDir = ""
 	r := start(t, c)
 
 	if err := r.wait(); !errors.Is(err, ErrWiring) {

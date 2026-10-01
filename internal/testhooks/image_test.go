@@ -59,7 +59,7 @@ func TestImageHasNeitherHook(t *testing.T) {
 	}
 }
 
-// imageTraces is traces plus the two warnings a testhooks build logs about what it runs without.
+// imageTraces is traces plus the warning a testhooks build logs at start.
 func imageTraces(t *testing.T, bin string) map[string]bool {
 	t.Helper()
 	found := traces(t, bin)
@@ -67,8 +67,7 @@ func imageTraces(t *testing.T, bin string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, w := range []string{"testhooks build: this binary", "testhooks build: running with no interactions"} {
-		found["the warning "+w] = bytes.Contains(raw, []byte(w))
-	}
+	const warning = "testhooks build: this binary"
+	found["the warning "+warning] = bytes.Contains(raw, []byte(warning))
 	return found
 }

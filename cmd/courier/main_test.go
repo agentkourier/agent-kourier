@@ -97,10 +97,9 @@ func TestEnvConfigRefusesWhatItCannotRead(t *testing.T) {
 	}
 }
 
-// Started with a good environment but no cluster and no interactions, courier exits 2 and says exactly
-// what is missing. The default build has no interactions until WP-35h9, so it says that, and only the
-// test image, which runs without them, gets as far as saying it needs a cluster.
-func TestStartSaysWhatIsMissing(t *testing.T) {
+// Started with a good environment but no cluster, courier exits 2 and says that it runs only in one:
+// there is no kubeconfig to fall back on, and in either build.
+func TestStartSaysItRunsOnlyInACluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
 	var stdout, stderr bytes.Buffer
@@ -110,13 +109,7 @@ func TestStartSaysWhatIsMissing(t *testing.T) {
 	if code != exitUsage {
 		t.Errorf("exit code = %d, want %d (stderr %q)", code, exitUsage, stderr.String())
 	}
-	want := []string{"interactions", "WP-35h9"}
-	if testHooksBuild {
-		want = []string{"only in a cluster"}
-	}
-	for _, w := range want {
-		if !strings.Contains(stderr.String(), w) {
-			t.Errorf("stderr %q should mention %q", stderr.String(), w)
-		}
+	if !strings.Contains(stderr.String(), "only in a cluster") {
+		t.Errorf("stderr %q should say courier runs only in a cluster", stderr.String())
 	}
 }

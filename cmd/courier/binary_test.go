@@ -11,13 +11,12 @@ import (
 
 // hookTraces are what only a testhooks build of courier may contain besides the crash function (which
 // is checked as a symbol): the names of the environment variables that arm it and move the Slack URL,
-// and the warnings that say the binary is a test one and what it runs without. A default build that
-// holds one can be told to crash itself, or to send tokens elsewhere, in production.
+// and the warning that says the binary is a test one. A default build that holds one can be told to
+// crash itself, or to send tokens elsewhere, in production.
 var hookTraces = []string{
 	"COURIER_FAULT",
 	"COURIER_SLACK_API_URL",
 	"testhooks build: this binary",
-	"testhooks build: running with no interactions",
 }
 
 // buildCourier compiles ./cmd/courier with GOFLAGS cleared and GOENV off, as the Dockerfile does, so that

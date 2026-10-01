@@ -1,16 +1,14 @@
 package broker
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 
 	"k8s.io/client-go/rest"
-
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 )
 
 // valid returns a RunConfig that passes validate: every required field set.
@@ -21,10 +19,19 @@ func valid(t *testing.T) RunConfig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return RunConfig{
-		ConfigDir: "/etc/courier", DBPath: "/data/courier.db", Listener: ln,
-		Interactions: func(context.Context, slack.Interaction) error { return nil },
-		Logger:       slog.New(slog.DiscardHandler),
+	return RunConfig{ConfigDir: "/etc/courier", DBPath: "/data/courier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
+}
+
+// No build can start without the renderer or the interactions, or with different ones, and none can
+// point Slack's API somewhere else, which would send the bot token there: the fields are not in RunConfig,
+// so no code, and no config, can set them. (The Slack URL comes from testhooks.SlackAPIURL, which is ""
+// in a production build.)
+func TestRunConfigHasNoWayToLeaveOutOrSwapTheRendererTheInteractionsOrTheSlackURL(t *testing.T) {
+	typ := reflect.TypeOf(RunConfig{})
+	for _, name := range []string{"Sink", "NoRenderer", "Interactions", "NoInteractions", "SlackAPIURL", "APIURL"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Errorf("RunConfig has a %s field", name)
+		}
 	}
 }
 
@@ -39,10 +46,9 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 		mutate func(*RunConfig)
 		names  string
 	}{
-		"no interactions": {func(c *RunConfig) { c.Interactions = nil }, "Interactions"},
-		"no config dir":   {func(c *RunConfig) { c.ConfigDir = "" }, "ConfigDir"},
-		"no database":     {func(c *RunConfig) { c.DBPath = "" }, "DBPath"},
-		"no listener":     {func(c *RunConfig) { c.Listener = nil }, "Listener"},
+		"no config dir": {func(c *RunConfig) { c.ConfigDir = "" }, "ConfigDir"},
+		"no database":   {func(c *RunConfig) { c.DBPath = "" }, "DBPath"},
+		"no listener":   {func(c *RunConfig) { c.Listener = nil }, "Listener"},
 	} {
 		c := valid(t)
 		tc.mutate(&c)

@@ -190,6 +190,72 @@ func TestRunTellsTheSinkTheBindingsOutputMode(t *testing.T) {
 	}
 }
 
+// askWorld is a world whose agent asks one free-text question, and carries on with the answer.
+func askWorld(t *testing.T) *slackWorld {
+	t.Helper()
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil // the live renderer, whose prompts and answers reach the fake
+	w.stub.Agent("kagent", "k8s-agent").Reply(func(string) []stubagent.Step {
+		return []stubagent.Step{stubagent.Ask([]stubagent.Question{{Question: "Which environment?"}}, func(r stubagent.Response) []stubagent.Step {
+			return []stubagent.Step{stubagent.Text("deploying to " + r.Answers[0][0])}
+		})}
+	})
+	w.fake.AddUser(fakeslack.User{ID: "U1", Name: "ada"})
+	w.fake.SetMembers("C0123456789", "U1")
+	return w
+}
+
+// waitFor returns the first message of the channel that holds what the test is looking for, or fails.
+func (w *slackWorld) waitFor(t *testing.T, what string, found func(fakeslack.Message) bool) fakeslack.Message {
+	t.Helper()
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		for _, m := range w.fake.Messages("C0123456789") {
+			if m.BotID != "" && found(m) {
+				return m
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no message with %s appeared: %+v", what, w.fake.Messages("C0123456789"))
+		}
+	}
+}
+
+// A pause goes from the agent's stream through the tap to the intake, which posts its prompt, and the
+// press of its Submit button goes through the handler, the pipeline and the worker to the decider, which
+// sends the answer on: the agent continues with it, and the decision is counted. Run builds every part.
+func TestRunTakesAPauseToAPromptAndAPressToTheAgent(t *testing.T) {
+	w := askWorld(t)
+	r := start(t, w.cfg)
+	w.mention(t, r)
+
+	prompt := w.waitFor(t, "a prompt", func(m fakeslack.Message) bool { return strings.Contains(string(m.Blocks), `"submit"`) })
+	answer := fakeslack.StateValues{"q0": {"a0": {"type": "plain_text_input", "value": "prod"}}}
+	if _, err := w.fake.Submit("U1", prompt.TS, "submit", answer); err != nil {
+		t.Fatal(err)
+	}
+
+	w.waitFor(t, "the agent's continuation", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "deploying to prod") })
+	r.waitMetric(`courier_interaction_decisions_total{result="answered"} 1`)
+}
+
+// A Binding that does not allow questions has the pause refused, through the intake's session, which is
+// bound to the manager once that is built: the thread is told, and the task is cancelled.
+func TestRunRefusesAQuestionOnABindingThatAllowsNone(t *testing.T) {
+	w := askWorld(t)
+	file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), "askUser: true", "askUser: false", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, w.cfg)
+	w.mention(t, r)
+
+	w.waitFor(t, "the refusal", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "does not allow questions") })
+}
+
 // With no sink of its own, Run renders turns itself, through the Slack client and its own outbox: the
 // agent's answer ends up in the thread.
 func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
@@ -199,16 +265,7 @@ func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
 
 	w.mention(t, r)
 
-	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		for _, m := range w.fake.Messages("C0123456789") {
-			if m.BotID != "" && strings.Contains(m.Text, "the answer") && !m.Streaming {
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the agent's answer never appeared in the channel: %+v", w.fake.Messages("C0123456789"))
-		}
-	}
+	w.waitFor(t, "the agent's answer", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "the answer") && !m.Streaming })
 }
 
 // A thread that has expired is told so by the notice the intake raises, which Run connects to the same

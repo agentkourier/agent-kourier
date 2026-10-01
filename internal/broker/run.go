@@ -30,7 +30,6 @@ import (
 // and then readiness: /readyz says 503 "starting" until the last of those is done. The connection
 // comes before the store, so a config that v1 cannot serve leaves no database behind.
 func Run(ctx context.Context, cfg RunConfig) (err error) {
-	cfg.logTestOptions()
 	if err := cfg.validate(); err != nil {
 		return err
 	}
@@ -146,37 +145,57 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// Slack client; a notice is only queued on the outbox, off Slack's acknowledgement path.
-	var sink renderSink = live.NewSink(live.New(live.Config{Sender: ob, Updater: sl, Streamer: sl, Store: st, Logger: log}), ob, log)
+	renderer := live.New(live.Config{Sender: ob, Updater: sl, Streamer: sl, Store: st, Logger: log})
+	var sink renderSink = live.NewSink(renderer, ob, log)
 	if cfg.sink != nil {
 		sink = cfg.sink
 	}
-	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: sl, Sink: sink, Logger: log, Audit: auditor})
+	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
+	// intake answers through the manager, so its session is bound once the manager is built (D2).
+	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
+	// them, and the manager, which they feed.
+	var stops stopList
+	sd.add(stepInteractions, stops.run)
+	parts := interactionDeps{st: st, ob: ob, sl: sl, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	tap, late, err := parts.newTap(sink)
+	if err != nil {
+		return err
+	}
+	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: sl, Sink: tap, Logger: log, Audit: auditor})
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}
+	late.bind(mgr)
 	sd.add(stepManager, func(c context.Context) {
 		if err := mgr.Close(c); err != nil {
 			log.Warn("closing the session manager", "error", err)
+		}
+		// The renders that were writing a final text when their turns ended are waited for here, after the
+		// turns, and before the drain that stops the outbox they post through.
+		if err := renderer.Wait(c); err != nil {
+			log.Warn("waiting for the renders of the last turns", "error", err)
 		}
 	})
 	if err := mgr.Recover(runCtx); err != nil {
 		return fmt.Errorf("recover sessions: %w", err)
 	}
+	parts.traced("recover-sessions")
+	interactions, err := parts.start(runCtx, mgr, tap, &stops)
+	if err != nil {
+		return err
+	}
 
 	intake := slack.NewIntake(slack.IntakeConfig{
-		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: cfg.Interactions, Logger: log,
+		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: interactions, Logger: log,
 		Notice: sink.QueueNotice,
 	})
 	slackDone, slackStopped := make(chan error, 1), make(chan struct{})
+	parts.traced("open-intake")
 	go func() { slackDone <- RunSlack(slackCtx, sl, intake, RunPolicy{Logger: log}); close(slackStopped) }()
-	sd.add(stepIntake, func(c context.Context) { // the intake stops before the manager it feeds
+	sd.add(stepIntake, func(c context.Context) { // the intake stops before the interactions and the manager it feeds
 		stopSlack()
 		waitFor(c, slackStopped)
 	})
-	// What the interactions start (35h2, 35h8, 35h9) adds its stop here, and it runs between the intake,
-	// which feeds it, and the manager, which it feeds.
-	var stops stopList
-	sd.add(stepInteractions, stops.run)
 
 	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal between
 	// ready.Set and this line still cancels everything at once: that window is accepted, because it is

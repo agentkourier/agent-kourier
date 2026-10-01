@@ -126,23 +126,17 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	cfg := broker.RunConfig{
 		ConfigDir: env.configDir, DBPath: env.dbPath, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log,
 	}
-	applyTestHooks(&cfg, log)
+	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return fail(stderr, broker.Run(ctx, cfg))
 }
 
-// fail reports err on stderr, with what to do about it where that is known, and returns its exit code.
+// fail reports err on stderr and returns its exit code.
 func fail(stderr io.Writer, err error) int {
 	code := exitCode(err)
-	if err == nil {
-		return code
-	}
-	_, _ = fmt.Fprintln(stderr, "courier:", err)
-	// The hint keys on the broker's message text; WP-35h9 builds the interactions and deletes it.
-	if code == exitUsage && strings.Contains(err.Error(), "Interactions") {
-		_, _ = fmt.Fprintln(stderr, "courier: this build has no interactions yet (WP-35h9), so it cannot serve; "+
-			"only the testhooks test image runs without them")
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "courier:", err)
 	}
 	return code
 }

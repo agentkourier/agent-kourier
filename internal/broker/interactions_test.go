@@ -1,0 +1,216 @@
+package broker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+)
+
+// pressed is a presser that answers with the error the test sets.
+type pressed struct{ err error }
+
+func (p pressed) Press(context.Context, slack.Interaction) error { return p.err }
+
+// The handler of buttons tells the three outcomes of a press apart: a button of someone else's is dropped
+// without a word, a press refused for the limit is acknowledged and logged, and a failure is returned, so
+// that Slack delivers the press again.
+func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *testing.T) {
+	boom := errors.New("the store is down")
+	for _, tc := range []struct {
+		name    string
+		err     error
+		want    error
+		wantLog string
+	}{
+		{"a press recorded", nil, nil, ""},
+		{"another handler's button", interact.ErrNotInteraction, nil, ""},
+		{"too many presses waiting", fmt.Errorf("interact: record a press: %w", store.ErrLimit), nil, "too many presses"},
+		{"any other failure", boom, boom, ""},
+	} {
+		out := &logBuffer{}
+		h := interactionsHandler(pressed{tc.err}, slog.New(slog.NewTextHandler(out, nil)))
+
+		err := h(t.Context(), slack.Interaction{Channel: "C1", Value: "x"})
+
+		if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+			t.Errorf("%s: handler = %v, want %v", tc.name, err, tc.want)
+		}
+		if (tc.wantLog == "") != (out.String() == "") || !strings.Contains(out.String(), tc.wantLog) {
+			t.Errorf("%s: logged %q, want a line with %q (or nothing)", tc.name, out.String(), tc.wantLog)
+		}
+	}
+}
+
+// Before the manager exists the interactions' session answers that it is not ready, and calls nothing.
+func TestLateSessionIsNotReadyUntilItIsBound(t *testing.T) {
+	var late lateSession
+	if err := late.Answer(t.Context(), store.ConversationKey{}, &a2a.Message{}); !errors.Is(err, errSessionNotReady) {
+		t.Errorf("Answer before bind = %v, want errSessionNotReady", err)
+	}
+	if err := late.Cancel(t.Context(), store.ConversationKey{}, "task-1", "why"); !errors.Is(err, errSessionNotReady) {
+		t.Errorf("Cancel before bind = %v, want errSessionNotReady", err)
+	}
+}
+
+// stepNotes records the steps of startup in the order they were told, with a mutex because the Slack
+// run, which is one of them, tells it from its own goroutine.
+type stepNotes struct {
+	mu    sync.Mutex
+	steps []string
+}
+
+func (n *stepNotes) note(step string) {
+	n.mu.Lock()
+	n.steps = append(n.steps, step)
+	n.mu.Unlock()
+}
+
+func (n *stepNotes) got() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return strings.Join(n.steps, ",")
+}
+
+// noting is an idle Slack that says when its connection opens, which is when the intake does.
+type noting struct {
+	idleSlack
+	notes *stepNotes
+}
+
+func (s noting) Run(ctx context.Context, _ slack.Sink) error {
+	s.notes.note("slack-run")
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// The order of startup is the contract: the sessions recover, then the presses an earlier run left, and
+// only then does the Slack intake open, so that a press listed before it finished is not announced after.
+// The sweeper starts after the sessions have recovered, and so does everything in "start-interactions".
+func TestRunRecoversSessionsThenPressesAndOpensTheIntakeLast(t *testing.T) {
+	notes := &stepNotes{}
+	c := startConfig(t)
+	c.newSlack = func(slack.Config) slackAPI { return noting{notes: notes} }
+	c.startTrace = notes.note
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	for deadline := time.Now().Add(10 * time.Second); !strings.HasSuffix(notes.got(), "slack-run"); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the Slack run never began: %s", notes.got())
+		}
+	}
+
+	if want := "recover-sessions,recover-presses,start-interactions,open-intake,slack-run"; notes.got() != want {
+		t.Errorf("startup went %s, want %s", notes.got(), want)
+	}
+}
+
+// ephemerals is an idle Slack that keeps what it was asked to show a person alone.
+type ephemerals struct {
+	idleSlack
+	mu    sync.Mutex
+	texts []string
+}
+
+func (s *ephemerals) PostEphemeral(_ context.Context, _, _, _ string, c slack.Content) error {
+	s.mu.Lock()
+	s.texts = append(s.texts, c.Text)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *ephemerals) told(text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.texts, text)
+}
+
+// A press that an earlier run recorded and did not finish is found at startup and worked on: here it is
+// for a question that is gone, so its person is told so and the press is deleted. That takes the
+// worker, the pipeline and the recovery, all built by Run.
+func TestRunProcessesThePressesAnEarlierRunLeft(t *testing.T) {
+	c := startConfig(t)
+	eph := &ephemerals{}
+	c.newSlack = func(slack.Config) slackAPI { return eph }
+	seed, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	press := store.Press{InteractionID: "ix-gone", User: "U1", Channel: "C0123456789", MessageTS: "1.1", Inputs: []byte("{}"), PressedAt: time.Now()}
+	if _, err := seed.RecordPress(t.Context(), press, store.PressLimits{Total: 10, PerUser: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+
+	for deadline := time.Now().Add(10 * time.Second); !eph.told("This question is no longer available."); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the press was never worked on: the person was not told the question is gone")
+		}
+	}
+}
+
+// loopsAlive names the loops of the interactions that are running now, from the goroutines' stacks.
+func loopsAlive() []string {
+	buf := make([]byte, 1<<22)
+	stacks := string(buf[:runtime.Stack(buf, true)])
+	var alive []string
+	for _, loop := range []string{"Worker", "Sweeper", "Replacer", "Retention", "Backstop"} {
+		if strings.Contains(stacks, "interact.(*"+loop+").Run") {
+			alive = append(alive, loop)
+		}
+	}
+	return alive
+}
+
+// What the interactions started stops in its own step, between the intake and the manager: all of the loops
+// are running when the shutdown begins, and none is by the time the manager begins to close.
+func TestRunStopsTheInteractionsLoopsBetweenTheIntakeAndTheManager(t *testing.T) {
+	var atIntake, atManager []string
+	trace := &stepTrace{hook: func(step string) {
+		switch step {
+		case "intake":
+			atIntake = loopsAlive()
+		case "manager":
+			atManager = loopsAlive()
+		}
+	}}
+	c := startConfig(t)
+	c.shutdownTrace = trace.record
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	for deadline := time.Now().Add(10 * time.Second); len(loopsAlive()) < 5; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the loops did not all start: %v", loopsAlive())
+		}
+	}
+
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(atIntake) != 5 {
+		t.Errorf("%v of the 5 loops were running when the shutdown began (the control: the scan finds them)", atIntake)
+	}
+	if len(atManager) != 0 {
+		t.Errorf("%v were still running when the manager began to close, after the interactions' step", atManager)
+	}
+}
