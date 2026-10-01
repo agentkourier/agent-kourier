@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -392,5 +393,30 @@ func TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson(t *testing.T) {
 	}
 	if err := press("UOTHER"); !errors.Is(err, store.ErrLimit) {
 		t.Errorf("the 1001st press = %v; want store.ErrLimit", err)
+	}
+}
+
+// TestGivingUpTellsThePersonToPressAgainAndDeletesThePress: a press the worker cannot get through is not
+// kept for ever, and pressing again is the way on: an answer already recorded is sent again, one that is
+// not is decided.
+func TestGivingUpTellsThePersonToPressAgainAndDeletesThePress(t *testing.T) {
+	r := newPressRig(t)
+	r.open(t)
+	gone := r.submit(t, "UBOB22", 0)
+	gone.Value = "ix-nosuch"
+	for _, i := range []slack.Interaction{r.submit(t, "UALICE1", 0), gone} {
+		if err := r.pl.Press(t.Context(), i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	presses, _ := r.st.ListPresses(t.Context())
+	for _, p := range presses {
+		if err := r.pl.GiveUp(t.Context(), p); err != nil {
+			t.Fatalf("GiveUp = %v", err)
+		}
+	}
+	want := []string{"UALICE1: Couldn't process your answer. Please press Submit again.", "UBOB22: Couldn't process your answer. Please press Submit again."}
+	if got := r.eph.list(); !slices.Equal(got, want) || r.waiting(t) != 0 || r.row(t).State != store.InteractionPending || len(r.sess.answers()) != 0 {
+		t.Errorf("told %q, %d presses waiting; want both told to press again, both presses deleted, nothing decided or sent", got, r.waiting(t))
 	}
 }

@@ -237,6 +237,22 @@ func (p *Pipeline) unverified(ctx context.Context, press store.Press, row store.
 	return p.finish(ctx, press, row.Key.ThreadTS, textUnverified)
 }
 
+// textGaveUp is told to a person whose press the worker gave up on. Pressing again is the way on: an
+// answer already recorded is sent again, and one that is not is decided.
+const textGaveUp = "Couldn't process your answer. Please press Submit again."
+
+// GiveUp ends a press that could not be processed in time: the person is told to press again, and the
+// press is deleted, so that the timeout sweep, which leaves an interaction with a press waiting, can go on
+// with it. Telling is best-effort. An error means the press is still recorded.
+func (p *Pipeline) GiveUp(ctx context.Context, press store.Press) error {
+	thread := ""
+	if row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID); err == nil {
+		thread = row.Key.ThreadTS
+	}
+	_, err := p.finish(ctx, press, thread, textGaveUp)
+	return err
+}
+
 // binding is the Binding of the interaction's thread, or nil if the thread or its Binding is gone.
 func (p *Pipeline) binding(ctx context.Context, row store.Interaction) (string, *Binding, error) {
 	s, err := p.cfg.Sessions.GetSession(ctx, row.Key, readAll, p.cfg.Now())
