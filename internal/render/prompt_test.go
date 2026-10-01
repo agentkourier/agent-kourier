@@ -76,6 +76,9 @@ func TestPromptBlocksControlsAndValues(t *testing.T) {
 		if b["type"] != "input" || b["dispatch_action"] != false || el["type"] != want.typ || controls[i].Kind != want.kind {
 			t.Errorf("question %d: %v, control %+v; want an input block, dispatch_action off, a %s", i, b, controls[i], want.typ)
 		}
+		if controls[i].Element != want.typ {
+			t.Errorf("question %d: control element %q; want the rendered type %q", i, controls[i].Element, want.typ)
+		}
 		if b["block_id"] != controls[i].BlockID || el["action_id"] != controls[i].ActionID {
 			t.Errorf("question %d: ids %v %v; want the control's %+v", i, b["block_id"], el["action_id"], controls[i])
 		}

@@ -56,6 +56,9 @@ const (
 type Control struct {
 	BlockID, ActionID string
 	Kind              ControlKind
+	// Element is the type of the input element the question was rendered as, such as "radio_buttons":
+	// the one type its answer may arrive in.
+	Element string
 }
 
 // PromptBlocks is the message of an ask-user pause: a header from the agent's hint, one input
@@ -87,7 +90,7 @@ func PromptBlocks(id, hint string, questions []dialect.Question) (blocks []map[s
 
 // questionBlocks is the blocks of question i, and its control.
 func questionBlocks(i int, q dialect.Question) ([]map[string]any, Control) {
-	c := Control{BlockID: "q" + strconv.Itoa(i), ActionID: "a" + strconv.Itoa(i)}
+	c := Control{BlockID: "q" + strconv.Itoa(i), ActionID: "a" + strconv.Itoa(i), Element: "plain_text_input"}
 	label := cmp.Or(strings.TrimSpace(oneLine(q.Text, maxLabel)), "Question "+strconv.Itoa(i+1))
 	if len(q.Choices) == 0 {
 		return layout(c, label, textInput("")), c
@@ -113,6 +116,7 @@ func questionBlocks(i int, q dialect.Question) ([]map[string]any, Control) {
 	case len(options) > maxInlineOptions:
 		kind = "static_select"
 	}
+	c.Element = kind
 	element := map[string]any{"type": kind, "options": options}
 	if strings.HasSuffix(kind, "select") {
 		element["placeholder"] = plainText("Select")
