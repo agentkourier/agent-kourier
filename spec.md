@@ -579,8 +579,14 @@ Binding was declared to point at a read-only agent.
    - **Nested:** rendered as its inner kind, labelled with the sub-agent that raised it.
    - All agent-originated text is untrusted (R2): escaped (`&`, `<`, `>`), stripped of
      control and format characters, rendered as `plain_text` where Slack allows, and
-     truncated to Slack's limits. Tool arguments go in an escaped code block. A choice
+     truncated to Slack's limits. Tool arguments go in an escaped code block, with
+     secret-looking values redacted (by key name and by token shape) before display. A choice
      list over Slack's select limit falls back visibly; no choice is ever dropped.
+   - Every courier post, update and stream is sent with `parse` unset (or `none`), no
+     `link_names`, and `unfurl_links=false` and `unfurl_media=false`. Escaping alone does not
+     stop `@here` under `link_names`, and an unfurl makes Slack fetch an agent-written URL
+     with no click, a zero-click way to leak data (R2). Text is rendered once, at the last
+     step, never twice and never unescaped (WP-32b review).
 3. On submit, courier verifies the request came from Slack, confirms the user is a
    channel member and not a bot, and checks the answer is complete. An incomplete
    answer is rejected in Slack; nothing is sent to the backend.
