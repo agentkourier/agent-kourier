@@ -2,6 +2,7 @@ package interact_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -193,6 +194,31 @@ func TestRepairIsPacedByTheBatch(t *testing.T) {
 		if got := len(r.up.list()); got != want {
 			t.Fatalf("after a pass %d edits; want %d", got, want)
 		}
+	}
+}
+
+// TestARowWithNoPromptTakesNoBatchSlot: an interaction whose prompt was never posted has nothing to edit,
+// so it is left out of the list the repair works through, and those ahead of the prompts that can be
+// edited do not use up the batch.
+func TestARowWithNoPromptTakesNoBatchSlot(t *testing.T) {
+	r := newRepairRig(t, func(c *interact.ReplacerConfig) { c.Batch = 2 })
+	req, _ := json.Marshal(asked)
+	for i := range 3 { // listed first: the same decision time, and the lesser IDs
+		row := store.Interaction{ID: fmt.Sprintf("a-%d", i), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: d0, Deadline: deadline}
+		if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.resolve(store.InteractionTimedOut)(row.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.decided(t, "b-0", asked, r.resolve(store.InteractionTimedOut))
+	r.decided(t, "b-1", asked, r.resolve(store.InteractionTimedOut))
+	if err := r.r.Repair(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(r.up.list()); got != 2 {
+		t.Errorf("%d edits in a pass of two; want both prompts that were posted edited", got)
 	}
 }
 
