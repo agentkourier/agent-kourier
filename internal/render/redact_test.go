@@ -55,6 +55,18 @@ var secretShapes = []struct {
 	{"a user without a password", map[string]any{"cmd": "sudo -u postgres psql VISIBLE"}, "", "postgres"},
 	{"hash rocket", map[string]any{"cfg": "{'password' => 'SECRETVAL', 'user' => 'VISIBLE'}"}, "SECRETVAL", "VISIBLE"},
 	{"a quote that never closes", map[string]any{"cmd": `VISIBLE password="SECRETVAL and more`}, "SECRETVAL", "VISIBLE"},
+	{"an escaped quote inside a doubly encoded value", map[string]any{"body": `{\"password\":\"abc\\\"SECRETVAL\",\"user\":\"VISIBLE\"}`}, "SECRETVAL", "VISIBLE"},
+	// The agent cannot stop redaction by writing the marker itself.
+	{"a planted marker", map[string]any{"cmd": "VISIBLE password=[redacted]SECRETVAL"}, "SECRETVAL", "VISIBLE"},
+	{"a planted marker in quotes", map[string]any{"cmd": `VISIBLE password="[redacted]SECRETVAL"`}, "SECRETVAL", "VISIBLE"},
+	// A secret name inside the value of another pair is part of that value.
+	{"a secret pair inside a secret value", map[string]any{"cmd": "VISIBLE password=token=SECRETVAL"}, "SECRETVAL", "VISIBLE"},
+	{"a user pair inside a secret value", map[string]any{"cmd": "VISIBLE password=user=SECRETVAL"}, "SECRETVAL", "VISIBLE"},
+	// The other forms of the user flag.
+	{"--user=", map[string]any{"cmd": "curl --user=admin:SECRETVAL https://VISIBLE"}, "SECRETVAL", "admin"},
+	{"--proxy-user=", map[string]any{"cmd": "curl --proxy-user=admin:SECRETVAL https://VISIBLE"}, "SECRETVAL", "admin"},
+	{"--proxy-user with a space", map[string]any{"cmd": "curl --proxy-user admin:SECRETVAL https://VISIBLE"}, "SECRETVAL", "admin"},
+	{"-u attached", map[string]any{"cmd": "curl -uadmin:SECRETVAL https://VISIBLE"}, "SECRETVAL", "admin"},
 	// Header pairs as arrays, and two more names.
 	{"header pairs as arrays", map[string]any{"h": []any{[]any{"X-Api-Key", "SECRETVAL"}, []any{"Accept", "VISIBLE"}}}, "SECRETVAL", "VISIBLE"},
 	{"sessionid", map[string]any{"sessionid": "SECRETVAL", "ok": "VISIBLE"}, "SECRETVAL", "VISIBLE"},
@@ -172,4 +184,16 @@ func FuzzSecretValueNeverShown(f *testing.F) {
 			}
 		}
 	})
+}
+
+// The summary is cut to maxRedactBytes at a word before it is redacted, whatever the number and size
+// of the arguments: every leaf was bounded, but together they were not.
+func TestTheJoinedSummaryIsBounded(t *testing.T) {
+	args := map[string]any{}
+	for i := range 100 {
+		args[strings.Repeat("k", i+1)] = strings.Repeat("word ", 800)
+	}
+	if got := toolSummary(redactArgs(args).(map[string]any)); len(got) > maxRedactBytes+len(Truncated) {
+		t.Errorf("a summary of 100 arguments kept %d bytes; want at most %d", len(got), maxRedactBytes+len(Truncated))
+	}
 }

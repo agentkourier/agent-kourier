@@ -174,7 +174,8 @@ var (
 	// Group 1 is the flag's name.
 	secretFlag = regexp.MustCompile(`(?i)(?:^|[ \t\n])--?([a-z][a-z0-9_.\-]*)[ \t]+`)
 	// userFlag is a flag that takes "user:password": curl's -u and --user.
-	userFlag = regexp.MustCompile(`(?i)((?:^|[ \t\n])(?:-u|--user|--proxy-user)[ \t]+[^\s:]*:)\S+`)
+	// The value follows after white space or "=", or, for -u, directly: "-uadmin:pw".
+	userFlag = regexp.MustCompile(`(?i)((?:^|[ \t\n])(?:-u[ \t]*|--user[ \t=]+|--proxy-user[ \t=]+)[^\s:]*:)\S+`)
 	// schemeWord is an authorization scheme before a value: "Token abc".
 	schemeWord = regexp.MustCompile(`(?i)^(?:bearer|basic|token|digest)[ \t]+`)
 	// nextPair is a cookie-style continuation: "; name=value".
@@ -229,6 +230,13 @@ func redactNamed(s string, re *regexp.Regexp, cookies bool) string {
 	return out.String()
 }
 
+// endsValue reports whether a value could end at i: at the end of the text or before a delimiter. The
+// marker of a value taken out is accepted only so, so an agent cannot stop redaction by writing it:
+// "password=[redacted]hunter2" is all value.
+func endsValue(s string, i int) bool {
+	return i >= len(s) || strings.ContainsRune(" \t\n\f\r\"',;}]\\", rune(s[i]))
+}
+
 // valueEnd returns where the value that starts at i ends: after a scheme word if there is one, a
 // quoted string (JSON's, the same with the quotes escaped, or single-quoted), or a run up to white
 // space. A quote that never closes takes the rest of the text, so that a secret is not left out of
@@ -238,17 +246,22 @@ func valueEnd(s string, i int) int {
 		i += loc[1]
 	}
 	switch {
-	case strings.HasPrefix(s[i:], redacted): // taken out already, by the pass over the string itself
-		return i + len(redacted)
-	case strings.HasPrefix(s[i:], `\"`):
+	case strings.HasPrefix(s[i:], redacted) && endsValue(s, i+len(redacted)):
+		return i + len(redacted) // taken out already, by the pass over the string itself
+	case strings.HasPrefix(s[i:], `\"`): // JSON inside a JSON string: its quote is a backslash and a quote
 		for j := i + 2; j < len(s); j++ {
-			if s[j] == '"' {
-				return j + 1
-			}
-			if s[j] == '\\' {
-				if j++; j < len(s) && s[j] == '"' {
-					return j + 1
+			switch {
+			case s[j] == '\\': // a run of backslashes: one before a quote closes, more escape it
+				k := j
+				for k < len(s) && s[k] == '\\' {
+					k++
 				}
+				if k < len(s) && s[k] == '"' && k-j == 1 {
+					return k + 1
+				}
+				j = k // past the run, and the quote it escapes
+			case s[j] == '"':
+				return j + 1
 			}
 		}
 		return len(s)

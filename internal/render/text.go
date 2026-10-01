@@ -106,7 +106,15 @@ func Body(events []agent.TextEvent, limit int, flavour Flavour) string {
 // flavour is the text it will sit in: for FlavourMarkdown, "[text](url)" in a name or an argument
 // is escaped too, and does not become a link.
 func ToolLine(name string, args map[string]any, flavour Flavour) string {
-	shown := redactArgs(args).(map[string]any)
+	summary := toolSummary(redactArgs(args).(map[string]any))
+	md := flavour == FlavourMarkdown
+	return "Calling " + render(name, maxToolName, md, false) + "(" + render(summary, maxToolArgs, md, false) + ")"
+}
+
+// toolSummary is the arguments, already redacted one by one, as "name=json, ...", redacted again as
+// a whole for what only shows there. It is cut to maxRedactBytes at a word first: each argument was
+// bounded, but a call may have any number of them, and the line shows a few hundred characters.
+func toolSummary(shown map[string]any) string {
 	keys := make([]string, 0, len(shown))
 	for k := range shown {
 		keys = append(keys, k)
@@ -116,9 +124,7 @@ func ToolLine(name string, args map[string]any, flavour Flavour) string {
 	for i, k := range keys {
 		parts[i] = k + "=" + jsonValue(shown[k])
 	}
-	summary := redactSummary(strings.Join(parts, ", "))
-	md := flavour == FlavourMarkdown
-	return "Calling " + render(name, maxToolName, md, false) + "(" + render(summary, maxToolArgs, md, false) + ")"
+	return redactSummary(boundWords(strings.Join(parts, ", ")))
 }
 
 // jsonValue is v as compact JSON, with "<", ">" and "&" left as they are for render to escape.
