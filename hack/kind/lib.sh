@@ -85,3 +85,46 @@ owner_checkout() {
     -o "jsonpath={.items[0].metadata.annotations.${CHECKOUT_KEY//./\\.}}" 2>/dev/null) || path=
   echo "${path:-unknown}"
 }
+
+# The test doubles (spec 12.1) are installed the same way in both tiers by up-fast.sh and up-full.sh,
+# from one set of manifests in fast/. These functions expect the sourcing script to have set HERE
+# (this directory), ROOT, CLUSTER, and K and H (kubectl and helm, each naming the tier's context).
+OPERATOR_OCI=oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
+OPERATOR_CHART_VERSION=91.8.2
+DOUBLES_IMAGE=courier-e2e/fast-doubles:dev
+
+# install_operator: prometheus-operator, and nothing else of kube-prometheus-stack, in monitoring.
+install_operator() {
+  "${H[@]}" upgrade --install prometheus-operator "${OPERATOR_OCI}" --version "${OPERATOR_CHART_VERSION}" \
+    --namespace monitoring --create-namespace -f "${HERE}/fast/operator-values.yaml" --wait --timeout 4m >/dev/null
+}
+
+# build_doubles_image: cross-compile the doubles on the host for the Docker daemon's architecture,
+# copy them into the pinned distroless image (fast/Dockerfile; no Go image to pull) and load it into
+# the tier's cluster. BUILD is the scratch directory; the caller's EXIT trap removes it.
+build_doubles_image() {
+  local goarch double
+  case "$(docker info --format '{{.Architecture}}')" in
+    aarch64 | arm64) goarch=arm64 ;;
+    x86_64 | amd64) goarch=amd64 ;;
+    *) die "unsupported Docker architecture" ;;
+  esac
+  BUILD=$(mktemp -d)
+  for double in fakeslack stubagent sink; do
+    GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
+  done
+  docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
+  kind load docker-image "${DOUBLES_IMAGE}" --name "${CLUSTER}"
+}
+
+# apply_doubles: the fake Slack, stub agent and sink in namespace e2e, and Alertmanager (with its
+# route to the sink) in monitoring; needs install_operator first. None is published: the fake
+# Slack's /_control/ has no authentication.
+apply_doubles() {
+  "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
+  # Restart so a rebuilt image (same tag) is picked up.
+  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/sink >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/sink --timeout=180s
+  "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
+  "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/courier --timeout=180s
+}

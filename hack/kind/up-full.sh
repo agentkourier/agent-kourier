@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Bring up the full E2E tier from nothing: kind, Agent Substrate (gVisor), kagent 1.0 alpha in
 # OIDC mode behind Dex, mockllm as the model, two test agents, courier's verifying front door,
-# and the NetworkPolicies that make that door the only way in.
+# the NetworkPolicies that make that door the only way in, and the fast tier's test doubles (fake
+# Slack, sink, and Alertmanager under prometheus-operator; spec 12.1) so `make e2e-full` can run
+# the same E2E tests. Their manifests and install steps are shared with up-fast.sh through lib.sh.
 # Safe to re-run. Findings and workarounds: docs/spikes/wp01-kind-full.md.
 # One full tier per Docker host: the cluster name is fixed, so parallel worktrees share it.
 set -eEuo pipefail
@@ -36,6 +38,8 @@ on_error() {
   echo "error: step '${STEP}' failed (line $1). Recover with: hack/kind/down.sh full && make e2e-full-up" >&2
 }
 trap 'on_error $LINENO' ERR
+BUILD=
+trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"' EXIT
 
 for tool in docker kind kubectl helm curl openssl jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
@@ -78,6 +82,7 @@ else
   kind create cluster --name "${CLUSTER}" --config "${FULL}/kind-config.yaml" --image "${NODE_IMAGE}"
   "${K[@]}" annotate nodes -l "${OWNER_LABEL}" "${CHECKOUT_KEY}=${ROOT}" >/dev/null
 fi
+assert_context full
 # gVisor's loopback pod-to-pod path needs proxy ARP on the node (Substrate's create-kind-cluster.sh).
 for node in $(kind get nodes --name "${CLUSTER}"); do
   docker exec "${node}" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null
@@ -161,6 +166,12 @@ step "test agents, front door, NetworkPolicy"
 "${K[@]}" -n kagent rollout restart deploy/slowllm deploy/kagent-frontdoor >/dev/null
 "${K[@]}" -n kagent rollout status deploy/slowllm deploy/kagent-frontdoor --timeout=180s
 "${K[@]}" -n kagent wait --for=condition=Ready agent/test-agent agent/slow-agent --timeout=300s
+
+step "test doubles: prometheus-operator ${OPERATOR_CHART_VERSION}, fake Slack, sink, Alertmanager"
+# In namespaces e2e and monitoring, outside every policy above, and never labelled as courier.
+install_operator
+build_doubles_image
+apply_doubles
 
 step "verify"
 "${FULL}/verify.sh"

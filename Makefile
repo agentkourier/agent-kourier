@@ -35,11 +35,11 @@ e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
 e2e-fast-down: ## Tear down the fast E2E tier only
 	hack/kind/down.sh fast
 
-e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm)
+e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm, and the fast tier's doubles)
 	hack/kind/up-full.sh
 
-e2e-full: ## Run the full E2E tier (stub)
-	@echo "not implemented yet (see WP-14)"
+e2e-full: ## Run the E2E tests in the full tier, as a Job (the tier must be up)
+	hack/kind/e2e-run.sh full
 
 e2e-full-down: ## Tear down the full E2E tier only
 	hack/kind/down.sh full

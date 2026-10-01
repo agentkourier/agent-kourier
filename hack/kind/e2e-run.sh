@@ -4,8 +4,8 @@
 # e2e (hack/kind/e2e/runner.yaml). The tests then reach the test doubles by their ClusterIP Service
 # names, and nothing is published to the host: the fake Slack's /_control/ has no authentication.
 # The Job's logs are printed, the Job is deleted, and the exit status is the test result.
-# Usage: e2e-run.sh fast|full. The tier must be up (make e2e-fast-up); the full tier gets its fake
-# Slack, sink and Alertmanager in WP-14e.
+# Usage: e2e-run.sh fast|full. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
+# have the same doubles in namespaces e2e and monitoring, so the same tests run in both.
 #
 # Every kubectl call names --context kind-courier-<tier> and every kind call names
 # --name courier-<tier>; assert_context aborts unless the context is that local kind cluster.

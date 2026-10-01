@@ -11,16 +11,13 @@
 # kind cluster.
 #
 # The operator's CRDs are installed by helm on first install only; helm never upgrades them. To
-# change OPERATOR_CHART_VERSION, run `hack/kind/down.sh fast` first.
+# change OPERATOR_CHART_VERSION (in lib.sh), run `hack/kind/down.sh fast` first.
 #
 # Courier's image (COURIER_IMAGE, default courier:dev) is loaded if Docker has it. The courier
 # binary is not a broker until WP-35, which adds the Dockerfile; until then the step says so and
 # skips.
 set -eEuo pipefail
 
-OPERATOR_OCI=oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
-OPERATOR_CHART_VERSION=91.8.2
-DOUBLES_IMAGE=courier-e2e/fast-doubles:dev
 COURIER_IMAGE=${COURIER_IMAGE:-courier:dev}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -62,31 +59,13 @@ fi
 assert_context fast
 
 step "prometheus-operator ${OPERATOR_CHART_VERSION}"
-"${H[@]}" upgrade --install prometheus-operator "${OPERATOR_OCI}" --version "${OPERATOR_CHART_VERSION}" \
-  --namespace monitoring --create-namespace -f "${FAST}/operator-values.yaml" --wait --timeout 4m >/dev/null
+install_operator
 
 step "test doubles image"
-# Built on the host for the Docker daemon's architecture, then copied into the pinned
-# distroless image (fast/Dockerfile): no Go image to pull.
-case "$(docker info --format '{{.Architecture}}')" in
-  aarch64 | arm64) goarch=arm64 ;;
-  x86_64 | amd64) goarch=amd64 ;;
-  *) die "unsupported Docker architecture" ;;
-esac
-BUILD=$(mktemp -d)
-for double in fakeslack stubagent sink; do
-  GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
-done
-docker build -q -f "${FAST}/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
-kind load docker-image "${DOUBLES_IMAGE}" --name "${CLUSTER}"
+build_doubles_image
 
 step "fake Slack, stub agent, sink, Alertmanager"
-"${K[@]}" apply -f "${FAST}/doubles.yaml" >/dev/null
-# Restart so a rebuilt image (same tag) is picked up.
-"${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/sink >/dev/null
-"${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/sink --timeout=180s
-"${K[@]}" apply -f "${FAST}/alertmanager.yaml" >/dev/null
-"${K[@]}" -n monitoring wait --for=condition=Available alertmanager/courier --timeout=180s
+apply_doubles
 
 step "courier image ${COURIER_IMAGE}"
 if docker image inspect "${COURIER_IMAGE}" >/dev/null 2>&1; then
