@@ -252,3 +252,18 @@ func TestADeadlineOfTheCallersDoesNotCountAsALookupTimeout(t *testing.T) {
 		t.Fatalf("row = %+v, hooks %q; want it untouched", row, hooks.list())
 	}
 }
+
+// lateAbandon is a store whose row was abandoned, by someone else, a moment before this call.
+type lateAbandon struct{ store.Outbox }
+
+func (lateAbandon) AbandonOutbox(context.Context, string, time.Time) (bool, error) { return false, nil }
+
+// TestAnAbandonSomeoneElseMadeIsNotReportedAgain: only the call that abandons a row reports it.
+func TestAnAbandonSomeoneElseMadeIsNotReportedAgain(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	p := &poster{onPost: func(context.Context) error { return slackErr("is_archived") }}
+	ob, hooks, logs := abandoning(t, lateAbandon{st}, p, nil)
+	if _, err := ob.Send(t.Context(), reply("ev1")); !errors.Is(err, outbox.ErrAbandoned) || len(hooks.list()) != 0 || warnings(logs) != 0 {
+		t.Fatalf("Send = %v, hooks %q, warnings %d; want ErrAbandoned and no second report", err, hooks.list(), warnings(logs))
+	}
+}
