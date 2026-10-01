@@ -20,7 +20,7 @@ type Submitter interface {
 	Submit(ctx context.Context, in session.Inbound) (session.Result, error)
 }
 
-// IntakeConfig configures an Intake. Every field is required.
+// IntakeConfig configures an Intake. Every field but Logger is required.
 type IntakeConfig struct {
 	// Connection is the ChatConnection this adapter serves, with a namespace and a name. It
 	// scopes every conversation key and messageId.

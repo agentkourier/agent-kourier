@@ -22,6 +22,9 @@ import (
 
 const conn = "courier-system/slack-main"
 
+// The session manager is what Submit goes to.
+var _ slack.Submitter = (*session.Manager)(nil)
+
 // submitter records what the session manager is asked to submit. fn, if set, decides the
 // answer; by default a turn is Accepted.
 type submitter struct {
