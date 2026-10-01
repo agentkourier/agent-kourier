@@ -35,10 +35,17 @@ func (p *Pods) SetFault(ctx context.Context, namespace, deployment, container, f
 	if err != nil {
 		return fmt.Errorf("set fault: %w", err)
 	}
+	return p.patchAndWait(ctx, namespace, deployment, patch, "set fault on")
+}
+
+// patchAndWait strategic-merge-patches the Deployment and waits for the rollout the patch asks for
+// to finish: the controller has seen the new generation and every replica is new and ready. what
+// begins the error of a patch that fails.
+func (p *Pods) patchAndWait(ctx context.Context, namespace, deployment string, patch []byte, what string) error {
 	client := p.client.AppsV1().Deployments(namespace)
 	patched, err := client.Patch(ctx, deployment, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
-		return fmt.Errorf("set fault on deployment %s/%s: %w", namespace, deployment, err)
+		return fmt.Errorf("%s deployment %s/%s: %w", what, namespace, deployment, err)
 	}
 	reason := "not yet read"
 	err = wait.PollUntilContextCancel(ctx, p.poll, true, func(ctx context.Context) (bool, error) {

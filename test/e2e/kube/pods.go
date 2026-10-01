@@ -18,6 +18,7 @@ import (
 type Pods struct {
 	client kubernetes.Interface
 	poll   time.Duration // how often the wait helpers re-list
+	now    func() time.Time
 }
 
 // ErrDeleteRefused is returned, wrapped, for a pod delete outside namespace [Namespace]. Courier's
@@ -26,7 +27,7 @@ type Pods struct {
 var ErrDeleteRefused = errors.New("kube: refusing to delete pods outside " + Namespace)
 
 func newPods(client kubernetes.Interface) *Pods {
-	return &Pods{client: client, poll: 500 * time.Millisecond}
+	return &Pods{client: client, poll: 500 * time.Millisecond, now: time.Now}
 }
 
 // List returns the pods in namespace matching the label selector.
