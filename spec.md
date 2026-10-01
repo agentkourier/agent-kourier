@@ -640,7 +640,10 @@ this with an outbox:
 3. On recovery, an outbox row with no recorded message ref is reconciled first: courier
    reads recent channel or thread history with metadata included and adopts a matching
    message instead of posting again.
-4. Edits (`chat.update`) are naturally idempotent and need no reconciliation.
+4. Edits (`chat.update`) are naturally idempotent and need no reconciliation. Reactions
+   (role `reaction`, e.g. the queued marker of 8.2) also go through the outbox for
+   durability but need no reconciliation: `reactions.add` on a message that already has
+   the reaction answers `already_reacted`, which counts as delivered.
 5. Interaction prompts (8.4) are posts too, so they go through the outbox with role
    `reply` and the interaction ID as the source ID. Outbox IDs derive from source and
    role, so they cannot collide with agent replies.
