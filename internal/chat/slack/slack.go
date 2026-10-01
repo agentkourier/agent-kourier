@@ -37,8 +37,12 @@ type Config struct {
 	// UserTimeout bounds one users.info call (default 5 seconds): the caller's context may have
 	// no deadline, and an http.Client has none either.
 	UserTimeout time.Duration
-	// PageLimit is how many messages Find asks for per page (default 200). A test sets it small.
+	// PageLimit is how many messages Find asks for per page (default 200), and how many members
+	// IsChannelMember does (default 1000, Slack's largest). A test sets it small.
 	PageLimit int
+	// AuthzTimeout bounds each IsChannelMember and each IsBot call (default 2 seconds). A caller off
+	// Slack's 3 second acknowledgement path may allow more.
+	AuthzTimeout time.Duration
 }
 
 // Client is courier's connection to one Slack workspace. It is safe for concurrent use.
@@ -51,6 +55,9 @@ type Client struct {
 	timeout  time.Duration
 	max      int
 	pageSize int
+	// membersPage and authz are IsChannelMember's page size and the bound of it and IsBot.
+	membersPage int
+	authz       time.Duration
 
 	mu    sync.Mutex
 	users map[string]cachedUser // guarded by mu
@@ -73,6 +80,7 @@ func New(cfg Config) *Client {
 		api: slackgo.New(cfg.BotToken.Reveal(), opts...), log: cmp.Or(cfg.Logger, slog.Default()), bot: cfg.BotToken, app: cfg.AppToken,
 		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), timeout: cmp.Or(cfg.UserTimeout, 5*time.Second), max: cmp.Or(cfg.UserCacheSize, 1000),
 		users: map[string]cachedUser{}, pageSize: cmp.Or(cfg.PageLimit, 200),
+		membersPage: cmp.Or(cfg.PageLimit, membersPage), authz: cmp.Or(cfg.AuthzTimeout, authzTimeout),
 	}
 }
 
