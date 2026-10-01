@@ -110,3 +110,26 @@ func TestMigration0007KeepsExistingRows(t *testing.T) {
 		t.Fatalf("posted row after 0007 = %+v, %v", got, err)
 	}
 }
+
+// TestMigration0010KeepsExistingRowsAndTakesTheReactionRole opens a database migrated to 0009 with
+// outbox rows in it: 0010 replaces the role triggers over existing rows, which must read back, and
+// the reaction role, which 0009's triggers refused, is accepted from then on.
+func TestMigration0010KeepsExistingRowsAndTakesTheReactionRole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "courier.db")
+	databaseAt(t, path, 9)
+	s := openAt(t, path) // applies 0010
+	ctx := context.Background()
+	if got, err := s.GetOutbox(ctx, "unposted"); err != nil || got.Role != store.OutboxRoot || got.MessageRef != "" {
+		t.Fatalf("unposted row after 0010 = %+v, %v", got, err)
+	}
+	if got, err := s.GetOutbox(ctx, "posted"); err != nil || got.Role != store.OutboxReply || got.MessageRef != "5.5" || got.ThreadTS != "1.1" {
+		t.Fatalf("posted row after 0010 = %+v, %v", got, err)
+	}
+	e := store.OutboxEntry{ID: "r/reaction", EventID: "r", Role: store.OutboxReaction, Channel: "C1", CreatedAt: t0, Payload: `{"ts":"1.5","name":"hourglass"}`}
+	if created, err := s.CreateOutbox(ctx, e); err != nil || !created {
+		t.Fatalf("CreateOutbox with the reaction role = %v, %v; want it created", created, err)
+	}
+	if l, err := s.ListUnposted(ctx); err != nil || len(l) != 2 {
+		t.Fatalf("ListUnposted = %+v, %v; want the old unposted row and the reaction", l, err)
+	}
+}

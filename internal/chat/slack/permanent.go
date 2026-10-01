@@ -28,21 +28,26 @@ func PermanentCode(err error) string {
 }
 
 // ReactionPermanentCode returns the Slack error code in err if it says that the same reaction will
-// never be made, and "" otherwise: a message, a name or a channel that is not there, courier not in
-// the channel, or no item given. It is not PermanentCode, which is for posts; the two sets differ
+// never be made, and "" otherwise: a message, a name or a channel that is not there or is archived,
+// courier not in the channel, no item or a bad ts given, a thread that is locked, a message that
+// takes no reactions, or a limit on reactions or emoji reached (which a retry does not lift). It is
+// not PermanentCode, which is for posts; the two sets differ
 // (a reaction has no text to be too long). A rate limit, a server error or a timeout may pass on
 // another try. It reads the code scrub keeps, through any wrapping, so it is "" for an error whose
 // text merely mentions a code.
 //
 // UNCONFIRMED(WP-04): that these are the codes Slack answers with, in particular for a message that
-// was deleted and for a channel courier was removed from, and that no other is permanent.
+// was deleted and for a channel courier was removed from, that thread_locked, not_reactable,
+// too_many_reactions, too_many_emoji and bad_timestamp are Slack's codes and none passes on a
+// retry, and that no other is permanent.
 func ReactionPermanentCode(err error) string {
 	var resp slackgo.SlackErrorResponse
 	if !errors.As(err, &resp) {
 		return ""
 	}
 	switch resp.Err {
-	case "message_not_found", "invalid_name", "no_item_specified", "not_in_channel", "channel_not_found":
+	case "message_not_found", "invalid_name", "no_item_specified", "not_in_channel", "channel_not_found",
+		"is_archived", "thread_locked", "not_reactable", "too_many_reactions", "too_many_emoji", "bad_timestamp":
 		return resp.Err
 	}
 	return ""

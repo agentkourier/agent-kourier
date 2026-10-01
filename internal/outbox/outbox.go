@@ -82,7 +82,7 @@ type Config struct {
 	Reactor Reactor
 	Now     func() time.Time // time.Now if nil
 	Logger  *slog.Logger     // slog.Default() if nil
-	// CallTimeout bounds each Post and Find (default 30 seconds), because the delivery lock is
+	// CallTimeout bounds each Post, Find and React (default 30 seconds), because the delivery lock is
 	// held across them and an unbounded Slack call would hold it for good.
 	CallTimeout time.Duration
 	// Interval is how often Run drains with no signal (default 30 seconds).

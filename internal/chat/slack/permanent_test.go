@@ -65,7 +65,7 @@ func TestPostBadBlocksAreInvalid(t *testing.T) {
 }
 
 // TestReactionPermanentCode: a reaction can never be made if the message, the name or the channel is
-// wrong; a rate limit or an outage may pass, and the posts' own codes are not its set.
+// wrong, or the message cannot take one (a locked thread, a limit reached); a rate limit or an outage may pass, and the posts' own codes are not its set.
 func TestReactionPermanentCode(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
@@ -76,6 +76,12 @@ func TestReactionPermanentCode(t *testing.T) {
 		{slackgo.SlackErrorResponse{Err: "no_item_specified"}, "no_item_specified"},
 		{slackgo.SlackErrorResponse{Err: "not_in_channel"}, "not_in_channel"},
 		{slackgo.SlackErrorResponse{Err: "channel_not_found"}, "channel_not_found"},
+		{slackgo.SlackErrorResponse{Err: "is_archived"}, "is_archived"},
+		{slackgo.SlackErrorResponse{Err: "thread_locked"}, "thread_locked"},
+		{slackgo.SlackErrorResponse{Err: "not_reactable"}, "not_reactable"},
+		{slackgo.SlackErrorResponse{Err: "too_many_reactions"}, "too_many_reactions"},
+		{slackgo.SlackErrorResponse{Err: "too_many_emoji"}, "too_many_emoji"},
+		{slackgo.SlackErrorResponse{Err: "bad_timestamp"}, "bad_timestamp"},
 		{fmt.Errorf("deliver: %w", slackgo.SlackErrorResponse{Err: "message_not_found"}), "message_not_found"},
 		{slackgo.SlackErrorResponse{Err: "ratelimited"}, ""},
 		{slackgo.SlackErrorResponse{Err: "invalid_auth"}, ""},
