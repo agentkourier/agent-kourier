@@ -106,28 +106,29 @@ func TestPressesOfOneInteractionRunOneAtATimeInOrder(t *testing.T) {
 
 func TestInteractionsRunInParallelUpToTheBound(t *testing.T) {
 	var running, most atomic.Int32
-	release := make(chan struct{}, 4)
+	release := make(chan struct{}, 32)
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) {
 		raise(&most, running.Add(1))
 		<-release
 		running.Add(-1)
 		return interact.Done, nil
 	}}
-	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers = 2 })
-	for seq := int64(1); seq <= 4; seq++ {
+	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers = 8 })
+	t.Cleanup(func() { close(release) }) // before the worker is stopped, so that a failure here does not hang
+	for seq := int64(1); seq <= 32; seq++ {
 		w.Submit(pr(seq, fmt.Sprintf("ix-%d", seq)))
 	}
-	waitFor(t, "two running", func() bool { return running.Load() == 2 })
+	waitFor(t, "eight running", func() bool { return running.Load() == 8 })
 	time.Sleep(20 * time.Millisecond) // a worker beyond the bound would have started by now
-	if running.Load() != 2 {
-		t.Fatalf("%d running with two workers", running.Load())
+	if running.Load() != 8 {
+		t.Fatalf("%d running with eight workers", running.Load())
 	}
-	for range 4 {
+	for range 32 {
 		release <- struct{}{}
 	}
-	waitFor(t, "all four", func() bool { return len(f.processed()) == 4 && running.Load() == 0 })
-	if most.Load() != 2 {
-		t.Errorf("most at once %d; want 2: the bound, reached", most.Load())
+	waitFor(t, "all 32", func() bool { return len(f.processed()) == 32 && running.Load() == 0 })
+	if most.Load() != 8 {
+		t.Errorf("most at once %d; want 8: the bound, reached", most.Load())
 	}
 }
 
@@ -135,10 +136,12 @@ func TestAPressSubmittedAgainWhileItIsInFlightRunsOnce(t *testing.T) {
 	gate := make(chan struct{})
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { <-gate; return interact.Done, nil }}
 	w, _, _ := startWorker(t, f, nil)
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(gate) }) })
 	w.Submit(pr(1, "ix-1"))
 	waitFor(t, "the press", func() bool { return len(f.processed()) == 1 })
 	w.Submit(pr(1, "ix-1")) // recovery and the sink can both announce a press
-	close(gate)
+	once.Do(func() { close(gate) })
 	w.Submit(pr(2, "ix-1")) // a later press of the same interaction is another press
 	waitFor(t, "the second press", func() bool { return f.processed()[2] == 1 })
 	if got := f.processed(); got[1] != 1 {
