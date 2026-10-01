@@ -51,14 +51,14 @@ func TestFindReadsEveryPage(t *testing.T) {
 }
 
 // TestFindWindow checks that the lookup starts five minutes before since, to allow for clock
-// skew, and no earlier.
+// skew, and no earlier. A message stamped exactly then is inside: the window is inclusive.
 func TestFindWindow(t *testing.T) {
 	posted := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	_, c := newPoster(t, fakeslack.WithClock(func() time.Time { return posted }))
 	if _, err := c.Post(t.Context(), "C1", "", slack.Content{Text: "hi"}, "a"); err != nil {
 		t.Fatal(err)
 	}
-	for since, want := range map[time.Duration]bool{4 * time.Minute: true, 6 * time.Minute: false} {
+	for since, want := range map[time.Duration]bool{4 * time.Minute: true, 5 * time.Minute: true, 6 * time.Minute: false} {
 		if _, found, err := c.Find(t.Context(), "C1", "", "a", posted.Add(since)); err != nil || found != want {
 			t.Errorf("Find with since %v after the post = %v, %v; want found = %v", since, found, err, want)
 		}
@@ -78,15 +78,22 @@ func tagged(user, id, ts string) map[string]any {
 		"metadata": map[string]any{"event_type": slack.MetadataEventType, "event_payload": map[string]any{"outbox_id": id}}}
 }
 
-// stubHistory serves pages of conversations.history by cursor, and auth.test for a bot UBOT.
+// otherType is tagged, with an event_type that is not courier's.
+func otherType(user, id, ts string) map[string]any {
+	m := tagged(user, id, ts)
+	m["metadata"].(map[string]any)["event_type"] = "another_app_message"
+	return m
+}
+
+// stubHistory serves pages of conversations.history by cursor, and auth.test for the bot user bot.
 // It returns a Client over it and a function giving the cursors asked for, in order.
-func stubHistory(t *testing.T, pages map[string]pg) (*slack.Client, func() []string) {
+func stubHistory(t *testing.T, pages map[string]pg, bot string) (*slack.Client, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
-		body := map[string]any{"ok": true, "user_id": "UBOT"}
+		body := map[string]any{"ok": true, "user_id": bot}
 		if strings.HasSuffix(r.URL.Path, "/conversations.history") {
 			if r.Form.Get("include_all_metadata") != "1" {
 				t.Errorf("include_all_metadata = %q; metadata is hidden without it", r.Form.Get("include_all_metadata"))
@@ -123,11 +130,12 @@ func TestFindWalksToTheEnd(t *testing.T) {
 	}{
 		{"match on the last page, forgery first", "t", pages, "1.4", true, "", []string{"", "c1", "c2"}},
 		{"no match reads to the end", "q", pages, "", false, "", []string{"", "c1", "c2"}},
+		{"right ID, another event type", "t", map[string]pg{"": {msgs: []map[string]any{otherType("UBOT", "t", "1.1")}}}, "", false, "", []string{""}},
 		{"more pages promised, no cursor", "t", map[string]pg{"": {hasMore: true}}, "", false, "no next cursor", []string{""}},
 		{"a cursor repeated", "t", map[string]pg{"": {next: "c1", hasMore: true}, "c1": {next: "c1", hasMore: true}}, "", false, "repeats", []string{"", "c1"}},
 	}
 	for _, tt := range tests {
-		c, asked := stubHistory(t, tt.pages)
+		c, asked := stubHistory(t, tt.pages, "UBOT")
 		ts, found, err := c.Find(t.Context(), "C1", "", tt.id, time.Now())
 		if ts != tt.ts || found != tt.found || (err == nil) != (tt.wantErr == "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 			t.Errorf("%s: Find = %q, %v, %v; want %q, %v, error %q", tt.name, ts, found, err, tt.ts, tt.found, tt.wantErr)
@@ -135,5 +143,14 @@ func TestFindWalksToTheEnd(t *testing.T) {
 		if got := asked(); !slices.Equal(got, tt.asked) {
 			t.Errorf("%s: asked for cursors %q; want %q", tt.name, got, tt.asked)
 		}
+	}
+}
+
+// TestFindRefusesABotWithNoUserID: with no user ID from auth.test, a message with no user would
+// match, and anyone could forge one. Find must fail, not return it.
+func TestFindRefusesABotWithNoUserID(t *testing.T) {
+	c, _ := stubHistory(t, map[string]pg{"": {msgs: []map[string]any{tagged("", "t", "1.1")}}}, "")
+	if ts, found, err := c.Find(t.Context(), "C1", "", "t", time.Now()); err == nil || found || ts != "" {
+		t.Fatalf("Find = %q, %v, %v; want an error and no message", ts, found, err)
 	}
 }
