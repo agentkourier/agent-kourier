@@ -25,7 +25,9 @@ var errSessionNotReady = errors.New("broker: the session manager is not built ye
 // lateSession is the session the interactions use, bound to the manager once that exists (D2): the manager
 // is built with the tap as its sink, the tap hands pauses to the intake, and the intake answers through the
 // manager, so one of them has to be made before the one it points at.
-type lateSession struct{ m atomic.Pointer[session.Manager] }
+type lateSession struct {
+	m atomic.Pointer[session.Manager]
+}
 
 var _ interact.Session = (*lateSession)(nil)
 
