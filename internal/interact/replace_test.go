@@ -50,7 +50,10 @@ type replaceRig struct {
 	r  *interact.Replacer
 }
 
-func newReplaceRig(t *testing.T) *replaceRig {
+func newReplaceRig(t *testing.T) *replaceRig { return newReplaceRigWith(t, nil) }
+
+// newReplaceRigWith is newReplaceRig with the Replacer's configuration changed by mod.
+func newReplaceRigWith(t *testing.T, mod func(*interact.ReplacerConfig)) *replaceRig {
 	t.Helper()
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
@@ -58,7 +61,11 @@ func newReplaceRig(t *testing.T) *replaceRig {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	rig := &replaceRig{st: st, up: &edits{}}
-	rig.r, err = interact.NewReplacer(interact.ReplacerConfig{Store: st, Updater: rig.up, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	cfg := interact.ReplacerConfig{Store: st, Updater: rig.up, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if mod != nil {
+		mod(&cfg)
+	}
+	rig.r, err = interact.NewReplacer(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
