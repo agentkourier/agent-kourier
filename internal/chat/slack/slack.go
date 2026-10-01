@@ -77,8 +77,9 @@ func New(cfg Config) *Client {
 // good, as with a rejected token. slack-go reconnects by itself otherwise.
 //
 // An events_api or interactive envelope is acknowledged only after the sink returns nil, so
-// one the sink could not take is sent again by Slack; those that are neither a turn nor a
-// press are acknowledged as soon as they are decoded. Other envelope kinds (slash commands) are not handled here.
+// a message the sink could not take is sent again by Slack; a press probably is not
+// (UNCONFIRMED(WP-04)), and its failure is only shown to the person. Envelopes that are neither
+// a turn nor a press are acknowledged as soon as they are decoded. Other envelope kinds (slash commands) are not handled here.
 // Run calls the sink itself, between reads of the connection, so a slow sink delays the
 // acknowledgements: Slack expects each within 3 seconds, and sends the event again if late.
 func (c *Client) Run(ctx context.Context, sink Sink) error {
@@ -123,7 +124,7 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser str
 		if cb, ok := ev.Data.(slackgo.InteractionCallback); ok {
 			if i, ok := decodeInteraction(botUser, cb); ok {
 				if err := sink.Interaction(ctx, i); err != nil {
-					c.log.WarnContext(ctx, "slack: interaction not taken; left unacknowledged for Slack to send again",
+					c.log.WarnContext(ctx, "slack: interaction not taken; left unacknowledged",
 						"channel", i.Channel, "ts", i.MessageTS, "err", err)
 					return
 				}

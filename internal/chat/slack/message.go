@@ -21,8 +21,9 @@ type Message struct {
 
 // Sink receives what Run decodes: messages, and presses of buttons on messages.
 type Sink interface {
-	// Interaction takes i, with the same rule as Message: an error leaves the event
-	// unacknowledged, and Slack sends it again.
+	// Interaction takes i. An error leaves the event unacknowledged, as for Message, which is
+	// the person's only sign that the press failed. UNCONFIRMED(WP-04): Slack probably does not
+	// send an interactive payload again, so nothing may rely on a failed press being redelivered.
 	Interaction(ctx context.Context, i Interaction) error
 	// Message takes m. An error means it was not taken: Slack sends the event again. A
 	// mention arrives twice (app_mention and message), with the same Channel and TS.
