@@ -173,10 +173,15 @@ const (
 
 // setMessageRef is a compare-and-set of message_ref on table. The UPDATE and
 // the read that tells a missing row from a conflict share one transaction, so
-// the answer reflects the state the UPDATE saw.
+// the answer reflects the state the UPDATE saw. An outbox row's payload is
+// cleared in the same UPDATE: once the message exists, its text lives in Slack.
 func (s *Store) setMessageRef(ctx context.Context, table refTable, id, ref string) error {
+	set := "message_ref = ?"
+	if table == outboxRefs {
+		set += ", payload = ''"
+	}
 	return s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `UPDATE `+string(table)+` SET message_ref = ? WHERE id = ? AND message_ref IN ('', ?)`, ref, id, ref)
+		n, err := execRows(ctx, tx, `UPDATE `+string(table)+` SET `+set+` WHERE id = ? AND message_ref IN ('', ?)`, ref, id, ref)
 		if err != nil || n > 0 {
 			return err
 		}

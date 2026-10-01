@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -12,9 +14,9 @@ func (s *Store) CreateOutbox(ctx context.Context, o store.OutboxEntry) (bool, er
 	if o.ID == "" || o.EventID == "" || o.Channel == "" || o.CreatedAt.IsZero() || !o.Role.Valid() {
 		return false, fmt.Errorf("create outbox %q: ID, EventID, a valid Role, Channel and CreatedAt are required: %w", o.ID, store.ErrInvalid)
 	}
-	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
-		VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-		o.ID, o.EventID, o.Role, o.Channel, o.ThreadTS, ts(o.CreatedAt))
+	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at, payload)
+		VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		o.ID, o.EventID, o.Role, o.Channel, o.ThreadTS, ts(o.CreatedAt), o.Payload)
 	if err != nil {
 		return false, fmt.Errorf("create outbox %q: %w", o.ID, err)
 	}
@@ -32,22 +34,45 @@ func (s *Store) RecordMessageRef(ctx context.Context, id, ref string) error {
 	return nil
 }
 
+// outboxColumns are the columns scanOutbox reads.
+const outboxColumns = `id, event_id, role, channel, thread_ts, created_at, message_ref, payload`
+
+// scanOutbox reads one row selected with outboxColumns.
+func scanOutbox(r interface{ Scan(...any) error }) (store.OutboxEntry, error) {
+	var o store.OutboxEntry
+	var created int64
+	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.ThreadTS, &created, &o.MessageRef, &o.Payload); err != nil {
+		return store.OutboxEntry{}, err
+	}
+	o.CreatedAt = fromTS(created)
+	return o, nil
+}
+
+// GetOutbox implements store.Outbox.
+func (s *Store) GetOutbox(ctx context.Context, id string) (store.OutboxEntry, error) {
+	o, err := scanOutbox(s.read.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.OutboxEntry{}, fmt.Errorf("get outbox %q: %w", id, store.ErrNotFound)
+	}
+	if err != nil {
+		return store.OutboxEntry{}, fmt.Errorf("get outbox %q: %w", id, err)
+	}
+	return o, nil
+}
+
 // ListUnposted implements store.Outbox.
 func (s *Store) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id, event_id, role, channel, thread_ts, created_at
-		FROM outbox WHERE message_ref = '' ORDER BY created_at, id`)
+	rows, err := s.read.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE message_ref = '' ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list unposted outbox: %w", err)
 	}
 	defer func() { _ = rows.Close() }() // rows.Err below reports read failures
 	var out []store.OutboxEntry
 	for rows.Next() {
-		var o store.OutboxEntry
-		var created int64
-		if err := rows.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.ThreadTS, &created); err != nil {
+		o, err := scanOutbox(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan outbox row: %w", err)
 		}
-		o.CreatedAt = fromTS(created)
 		out = append(out, o)
 	}
 	if err := rows.Err(); err != nil {
