@@ -370,6 +370,35 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 	}
 }
 
+// TestAValidMentionIsTheOnlyConstructBesideHostileWords: the corpus is sent as the words of a Mention of a valid
+// user, and what the platform shows beside the mention must not act, nor may the user be mentioned twice. The
+// way a renderer that builds one text of the mention and the words fails is the "words beside" leak: the
+// adapter passed the suite once, since its harmless words never held a "<!here>" next to a live mention.
+func TestAValidMentionIsTheOnlyConstructBesideHostileWords(t *testing.T) {
+	for name, tc := range map[string]struct {
+		dialect dialectKind
+		leaks   leaks
+		kind    Kind
+	}{
+		"Slack: the words put on the wire as they are":      {slackPlainText, leaks{mentions: true, wordsBesideMention: true}, KindBroadcast},
+		"CommonMark: the words put on the wire as they are": {commonMark, leaks{mentions: true, wordsBesideMention: true}, KindBroadcast},
+		"Slack: the user shown twice":                       {slackPlainText, leaks{mentions: true, twoMentions: true}, KindMention},
+		"CommonMark: the user shown twice":                  {commonMark, leaks{mentions: true, twoMentions: true}, KindMention},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			found := false
+			for _, v := range CheckWith(t.Context(), newMarkup(tc.dialect, tc.leaks).subject(), Options{Short: true}) {
+				// A violation of the corpus in the place of a Mention's words, and not of the plain Mention check.
+				found = found || (v.Where == chat.WhereContext && v.Case != "valid mention" && strings.Contains(v.Detail, "became a "+string(tc.kind)))
+			}
+			if !found {
+				t.Errorf("no violation for hostile words beside a valid mention that became a %s", tc.kind)
+			}
+		})
+	}
+}
+
 // Each method is checked with every variant of the text, not one: a renderer that handles a field that starts
 // with "<" differently in Update, or in the final message of a stream, is caught for exactly that method.
 func TestAGapInOneMethodIsFoundByThatMethodAlone(t *testing.T) {
