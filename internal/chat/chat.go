@@ -92,7 +92,7 @@ func (w Where) Rich() bool { return w == WhereBody || w == WhereStream }
 // Line says whether text in w is one line.
 func (w Where) Line() bool {
 	switch w {
-	case WhereHeader, WhereContext, WhereToolName, WhereToolArg, WhereButton, WhereHint, WhereSubagent, WhereQuestion, WhereChoice, WhereUser:
+	case WhereHeader, WhereContext, WhereToolName, WhereToolArg, WhereButton, WhereHint, WhereSubagent, WhereQuestion, WhereChoice, WhereAnswer, WhereUser:
 		return true
 	}
 	return false

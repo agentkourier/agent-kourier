@@ -66,8 +66,10 @@ type Ending struct {
 	At time.Time
 	// Prompt is what was asked.
 	Prompt Prompt
-	// Answers is, for Answered, what each question was answered with, in order: the text of a free
-	// text answer, or the text of each chosen option.
+	// Answers is, for Answered, what to show of each question's answer, in order, each on one line: the
+	// text of each chosen option, and for a free-text answer a fixed word of courier's, never what the person
+	// typed, which may be a secret and which the channel would keep (the owner's rule). An adapter shows what
+	// it is given.
 	Answers [][]string
 }
 

@@ -20,7 +20,7 @@ internal/dialect        agent-dialect adapters (kagent, generic a2a)
 internal/identity       Binding token source and credentials for the agent pool
 internal/secret         redacting Secret value type
 internal/chat           chat-neutral model and ChatPlatform (chattest: conformance suite, fake platform)
-internal/chat/slack     Slack adapter
+internal/chat/slack     Slack adapter (Block Kit, Socket Mode)
 internal/alert/alertmanager   Alertmanager receiver
 internal/store          SQLite (later Postgres) persistence
 internal/outbox         durable outbound posting

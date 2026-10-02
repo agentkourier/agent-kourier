@@ -1,0 +1,395 @@
+package slack
+
+import (
+	"cmp"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/chat"
+)
+
+// This file is the Block Kit layout of the neutral model: what a Message, a Prompt and an Ending look like
+// in Slack, and every rule of Slack's that decides it (which control a question gets, the numbered list a
+// choice that is too long falls back to, the 50 blocks of a message). The neutral model says what is
+// shown; this says how Slack shows it.
+
+// Slack's limits, in UTF-16 units. UNCONFIRMED(WP-04): documented, not measured.
+const (
+	maxBlocks        = 50    // blocks in a message
+	maxHeader        = 150   // a header block's text
+	maxLabel         = 2000  // an input block's label
+	maxSection       = 3000  // a section block's text
+	maxContext       = 2000  // a context block's text element
+	maxOption        = 75    // an option's text, and a button's
+	maxInlineOptions = 10    // options a radio-button group or a set of checkboxes holds
+	maxSelectOptions = 100   // options a select holds
+	maxListLine      = 200   // one choice in the numbered list a prompt falls back to, with its number
+	maxMarkdown      = 12000 // a markdown block's text, and across all of a message's
+	maxValue         = 2000  // a button's value
+	maxToolName      = 150   // a tool's name in a status line
+	maxToolArgs      = 140   // the arguments in a status line, which with its words is at most 300
+	maxSubagentLine  = 100   // the line that names a sub-agent, with its words
+	maxAnswerLine    = 600   // a question and its answer in an ending
+	maxQuestionInEnd = 100   // a question's text in the ending's summary of it
+	maxActions       = 25    // elements in an actions block
+	maxFields        = 10    // fields in a section block
+	defaultHeader    = "The agent needs your input"
+	noText           = "(empty message)"
+)
+
+// caps is what Slack shows. The limits are those of the place's carrier, which is the whole field: the tool
+// name and its arguments are shown in one status line, so both have its limit; a choice is shown on a
+// numbered line, and an answer on the line of its question.
+var caps = chat.Caps{
+	Streams: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection,
+	Limits: map[chat.Where]int{
+		chat.WhereFallback: maxSection, chat.WhereHeader: maxHeader, chat.WhereBody: maxMarkdown, chat.WhereStream: maxMarkdown,
+		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300,
+		chat.WhereButton: maxOption, chat.WhereHint: maxHeader, chat.WhereSubagent: maxSubagentLine, chat.WhereQuestion: maxLabel,
+		chat.WhereChoice: maxListLine, chat.WhereAnswer: maxAnswerLine,
+	},
+}
+
+func plainObject(s string) map[string]any  { return map[string]any{"type": "plain_text", "text": s} }
+func mrkdwnObject(s string) map[string]any { return map[string]any{"type": "mrkdwn", "text": s} }
+
+func section(s string) map[string]any {
+	return map[string]any{"type": "section", "text": plainObject(s)}
+}
+
+func contextLine(s string) map[string]any {
+	return map[string]any{"type": "context", "elements": []map[string]any{plainObject(s)}}
+}
+
+// content is the blocks as the JSON a Content holds, with the text beside them.
+func content(fallback string, blocks []map[string]any) (Content, error) {
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		return Content{}, fmt.Errorf("slack: encode the blocks: %w", err)
+	}
+	return Content{Text: fallback, Blocks: raw}, nil
+}
+
+// renderOutgoing is o as a Slack message.
+func renderOutgoing(o chat.Outgoing) (Content, error) {
+	if err := o.Validate(); err != nil {
+		return Content{}, err
+	}
+	switch {
+	case o.Message != nil:
+		return renderMessage(*o.Message)
+	case o.Prompt != nil:
+		return renderPrompt(*o.Prompt)
+	}
+	return renderEnding(*o.Ending)
+}
+
+// renderMessage is m as a Slack message: its parts as blocks, in order, and its fallback as the top-level
+// text, which Slack shows where it cannot show the blocks (a notification). A message that is only a fallback
+// has the fallback as a block too, so that what it says is shown as plain text and not as mrkdwn.
+func renderMessage(m chat.Message) (Content, error) {
+	if err := m.Validate(); err != nil {
+		return Content{}, err
+	}
+	var blocks []map[string]any
+	var first string // the first text a part has, to stand for a message with no fallback of its own
+	note := func(s string) {
+		if first == "" {
+			first = s
+		}
+	}
+	for _, p := range m.Parts {
+		switch p := p.(type) {
+		case chat.Header:
+			if t := text(p.Text, maxHeader, true); t != "" {
+				blocks = append(blocks, map[string]any{"type": "header", "text": plainObject(t)})
+				note(p.Text)
+			}
+		case chat.Body:
+			if t := markdown(p.Markdown, maxMarkdown); t != "" {
+				blocks = append(blocks, map[string]any{"type": "markdown", "text": t})
+				note(p.Markdown)
+			}
+		case chat.Context:
+			if t := text(p.Text, maxContext, true); t != "" {
+				blocks = append(blocks, contextLine(t))
+				note(p.Text)
+			}
+		case chat.Note:
+			if t := text(p.Text, maxSection, false); t != "" {
+				blocks = append(blocks, section(t))
+				note(p.Text)
+			}
+		case chat.ToolLine:
+			blocks = append(blocks, contextLine(toolLine(p)))
+		case chat.Buttons:
+			if b := buttons(p); b != nil {
+				blocks = append(blocks, b)
+			}
+		}
+	}
+	said := notBlank(chat.Clean(m.Fallback, false), chat.Clean(first, false))
+	if len(blocks) == 0 { // the fallback is the message, and is shown as plain text
+		said = cmp.Or(said, noText)
+		blocks = append(blocks, section(text(notBlank(said, noText), maxSection, false)))
+	}
+	fallback := text(said, caps.Limit(chat.WhereFallback), false)
+	if len(blocks) > maxBlocks {
+		return Content{}, fmt.Errorf("%w: %d blocks", chat.ErrTooLarge, len(blocks))
+	}
+	return content(fallback, blocks)
+}
+
+// notBlank is a if it says something, else b.
+func notBlank(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
+// toolLine is the status line of a tool call, on one line: "Calling name(key=value, ...)", with the arguments
+// in key order. The caller has redacted them already.
+func toolLine(t chat.ToolLine) string {
+	keys := make([]string, 0, len(t.Args))
+	for k := range t.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, len(keys))
+	for i, k := range keys {
+		pairs[i] = k + "=" + t.Args[k]
+	}
+	return "Calling " + text(t.Name, maxToolName, true) + "(" + text(strings.Join(pairs, ", "), maxToolArgs, true) + ")"
+}
+
+// buttons is an actions block of p's buttons, or nil if there are none. A label cut to nothing reads
+// "(blank)": a button with no label is refused.
+func buttons(p chat.Buttons) map[string]any {
+	var els []map[string]any
+	for _, b := range p.Buttons {
+		if len(els) == maxActions {
+			break
+		}
+		el := map[string]any{"type": "button", "action_id": b.ID, "value": b.Value, "text": plainObject(cmp.Or(text(b.Label, maxOption, true), "(blank)"))}
+		if b.Primary {
+			el["style"] = "primary"
+		}
+		els = append(els, el)
+	}
+	if len(els) == 0 {
+		return nil
+	}
+	return map[string]any{"type": "actions", "elements": els}
+}
+
+// The block and action IDs of a prompt, which a press names: question i is in the block "q<i>", and its control's
+// action ID starts with a letter that says what control it is, so that an answer is read only as the
+// control it was asked in.
+const (
+	submitBlockID  = "submit"
+	submitActionID = "submit"
+
+	controlText     = 't' // a free-text input
+	controlNumbers  = 'n' // a free-text input beside a numbered list, for choices that cannot be options
+	controlRadio    = 'r'
+	controlCheck    = 'c'
+	controlSelect   = 's'
+	controlMultiSel = 'm'
+)
+
+// controlElement is the Block Kit type of each control.
+var controlElement = map[byte]string{
+	controlText: "plain_text_input", controlNumbers: "plain_text_input", controlRadio: "radio_buttons",
+	controlCheck: "checkboxes", controlSelect: "static_select", controlMultiSel: "multi_static_select",
+}
+
+func questionBlock(i int) string { return "q" + strconv.Itoa(i) }
+
+func actionID(i int, control byte) string { return string(rune(control)) + strconv.Itoa(i) }
+
+// renderPrompt is p as a Slack message: a header, a control for each question, and a Submit button valued
+// with the prompt's ID. A prompt that does not fit in 50 blocks is chat.ErrTooLarge; the sub-agent's line and
+// the deadline's are left out of one that has no room for them, rather than refusing it.
+func renderPrompt(p chat.Prompt) (Content, error) {
+	if err := p.Validate(); err != nil {
+		return Content{}, err
+	}
+	if n := chat.Units(p.ID); n > maxValue {
+		return Content{}, fmt.Errorf("%w: the prompt ID is %d units; a button's value holds at most %d", chat.ErrInvalid, n, maxValue)
+	}
+	blocks := []map[string]any{{"type": "header", "text": plainObject(cmp.Or(text(p.Hint, maxHeader, true), defaultHeader))}}
+	for i, q := range p.Questions {
+		blocks = append(blocks, questionBlocks(i, q)...)
+	}
+	submit := map[string]any{"type": "actions", "block_id": submitBlockID, "elements": []map[string]any{
+		{"type": "button", "action_id": submitActionID, "value": p.ID, "style": "primary", "text": plainObject("Submit")}}}
+	blocks = append(blocks, submit)
+	if len(blocks) > maxBlocks {
+		return Content{}, fmt.Errorf("%w: %d blocks", chat.ErrTooLarge, len(blocks))
+	}
+	fallback := "The agent needs your input."
+	if p.Subagent != "" && len(blocks) < maxBlocks { // under the header
+		blocks = append(blocks[:1:1], append([]map[string]any{contextLine(subagentLine(p.Subagent))}, blocks[1:]...)...)
+	}
+	if !p.Deadline.IsZero() {
+		fallback += " Answer by " + utc(p.Deadline) + "."
+		if len(blocks) < maxBlocks { // above the Submit button, which stays last
+			hint := map[string]any{"type": "context", "elements": []map[string]any{mrkdwnObject("Answer by " + dateToken(p.Deadline))}}
+			blocks = append(blocks[:len(blocks)-1:len(blocks)-1], hint, blocks[len(blocks)-1])
+		}
+	}
+	return content(fallback, blocks)
+}
+
+func subagentLine(name string) string {
+	return within("Raised by sub-agent ", name, "", maxSubagentLine, true)
+}
+
+func utc(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+
+// dateToken is a time as Slack shows it in the reader's zone, with UTC as the fallback after the bar. It is
+// built here, from a time, and never from text.
+func dateToken(t time.Time) string {
+	return fmt.Sprintf("<!date^%d^{date_short_pretty} at {time}|%s>", t.Unix(), utc(t))
+}
+
+// questionBlocks is the blocks of question i: an input for free text, one control for choices that fit as
+// options, and for those that do not (more than 100, or one blank or too long for an option) a numbered list
+// of every choice with an input for the numbers.
+func questionBlocks(i int, q chat.Question) []map[string]any {
+	label := cmp.Or(text(q.Text, maxLabel, true), "Question "+strconv.Itoa(i+1))
+	input := func(control byte, label string, element map[string]any) map[string]any {
+		element["type"] = controlElement[control]
+		element["action_id"] = actionID(i, control)
+		return map[string]any{"type": "input", "block_id": questionBlock(i), "dispatch_action": false, "optional": false,
+			"label": plainObject(label), "element": element}
+	}
+	if len(q.Choices) == 0 {
+		return []map[string]any{input(controlText, label, map[string]any{})}
+	}
+	opts, ok := options(q.Choices)
+	if !ok {
+		ask, example := "Your answer: the number", "For example: 2"
+		if q.Multiple {
+			ask, example = "Your answer: the number or numbers, separated by commas", "For example: 2 or 1, 3"
+		}
+		blocks := numberedList(label, q.Choices)
+		return append(blocks, input(controlNumbers, ask, map[string]any{"placeholder": plainObject(example)}))
+	}
+	control := byte(controlRadio)
+	switch {
+	case q.Multiple && len(opts) > maxInlineOptions:
+		control = controlMultiSel
+	case q.Multiple:
+		control = controlCheck
+	case len(opts) > maxInlineOptions:
+		control = controlSelect
+	}
+	el := map[string]any{"options": opts}
+	if control == controlSelect || control == controlMultiSel {
+		el["placeholder"] = plainObject("Select")
+	}
+	return []map[string]any{input(control, label, el)}
+}
+
+// options are the choices as options valued by index, or ok false if they cannot be.
+func options(choices []string) (opts []map[string]any, ok bool) {
+	if len(choices) > maxSelectOptions {
+		return nil, false
+	}
+	for i, c := range choices {
+		cleaned := chat.Clean(c, true)
+		escaped := text(cleaned, 1<<30, true)
+		if cleaned == "" || chat.Units(escaped) > maxOption {
+			return nil, false
+		}
+		opts = append(opts, map[string]any{"text": plainObject(escaped), "value": strconv.Itoa(i)})
+	}
+	return opts, true
+}
+
+// numberedList is the question on a line of its own and then its choices, numbered, each in a field of its own,
+// cut visibly if it is long. Every choice is in it.
+func numberedList(label string, choices []string) []map[string]any {
+	lines := make([]string, len(choices))
+	for n, c := range choices {
+		lines[n] = within(strconv.Itoa(n+1)+". ", cmp.Or(chat.Clean(c, true), "(blank)"), "", maxListLine, true)
+	}
+	return append([]map[string]any{section(label)}, fieldSections(lines)...)
+}
+
+// fieldSections is lines, which are escaped already and not empty, as the fields of sections, ten to a
+// section. Each line is a field of its own, so that nothing a line says can run into the next.
+func fieldSections(lines []string) []map[string]any {
+	var out []map[string]any
+	for len(lines) > 0 {
+		n := min(len(lines), maxFields)
+		fields := make([]map[string]any, n)
+		for i, l := range lines[:n] {
+			fields[i] = plainObject(l)
+		}
+		out = append(out, map[string]any{"type": "section", "fields": fields})
+		lines = lines[n:]
+	}
+	return out
+}
+
+// userID is the shape of a Slack user ID, which is the only thing shown to a person as a mention.
+var userID = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
+
+// renderEnding is e as a Slack message: how it ended, who by and when, what was asked, and for an answered
+// prompt a line for each question and its answer. No input or button is left. The only mrkdwn in it is the
+// status line, which is built from a verified user ID, a time and a fixed word.
+func renderEnding(e chat.Ending) (Content, error) {
+	verb := map[chat.Outcome]string{chat.Answered: "Answered", chat.TimedOut: "Timed out", chat.Cancelled: "Cancelled"}[e.Outcome]
+	status := "*" + verb + "*"
+	if e.By != "" {
+		who := "someone"
+		if userID.MatchString(e.By) {
+			who = "<@" + e.By + ">"
+		}
+		status += " by " + who
+	}
+	if !e.At.IsZero() {
+		status += " " + dateToken(e.At)
+	}
+	blocks := []map[string]any{{"type": "section", "text": mrkdwnObject(status)}}
+	if e.Prompt.Subagent != "" {
+		blocks = append(blocks, contextLine(subagentLine(e.Prompt.Subagent)))
+	}
+	if hint := text(e.Prompt.Hint, maxHeader, true); hint != "" {
+		blocks = append(blocks, contextLine(hint))
+	}
+	if e.Outcome == chat.Answered {
+		blocks = append(blocks, answerSections(e.Prompt.Questions, e.Answers)...)
+	}
+	if len(blocks) > maxBlocks {
+		blocks = blocks[:maxBlocks]
+	}
+	return content(verb, blocks)
+}
+
+// answerSections is a field for each question and its answer, ten to a section. Each is one line: nothing a
+// question or a choice says can start a line of its own.
+func answerSections(qs []chat.Question, answers [][]string) []map[string]any {
+	lines := make([]string, len(qs))
+	for i, q := range qs {
+		var given []string
+		if i < len(answers) {
+			given = answers[i]
+		}
+		question := cmp.Or(text(q.Text, maxQuestionInEnd, true), "Question "+strconv.Itoa(i+1))
+		answer := "(no answer)"
+		if len(given) > 0 {
+			answer = cmp.Or(text(strings.Join(given, ", "), maxAnswerLine-chat.Units(question)-2, true), answer)
+		}
+		lines[i] = question + ": " + answer
+	}
+	return fieldSections(lines)
+}

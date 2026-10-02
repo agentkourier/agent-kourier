@@ -5,10 +5,13 @@
 package chattest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -38,8 +41,37 @@ type Subject struct {
 	// no escape stops it. The link goes nowhere but where the text says, and the request is inert (no
 	// unfurl).
 	AllowAutolink bool
+	// Target is where the checks post, and the zero Target a default. A platform that needs the thread to
+	// exist (Slack does) gives one that does.
+	Target chat.Target
+	// Concessions are the constructs the platform acts on in a place that no escape stops, each with the
+	// reason. They are narrower than StyleInLiteral and AllowAutolink, which excuse a kind in every place, and
+	// an adapter lists every one it needs: a reviewer reads this list, and a concession without a reason is a
+	// setup error.
+	Concessions []Concession
 	// TooLarge, if set, is a prompt too large for the platform: Fits must refuse it with chat.ErrTooLarge.
 	TooLarge *chat.Prompt
+}
+
+// Concession is a construct of the kinds Kinds that the platform acts on in the text of the place Where
+// whatever the adapter does, and why. It excuses those kinds in that place and nothing else.
+type Concession struct {
+	Where chat.Where
+	Kinds []Kind
+	// Why says what the platform does, and why it is harmless there. It is required.
+	Why string
+}
+
+// StyleKinds are the cosmetic kinds, for a Concession of style.
+func StyleKinds() []Kind { return []Kind{KindEmphasis, KindCode, KindHeading, KindQuote, KindList} }
+
+func (c *checker) conceded(w chat.Where, k Kind) bool {
+	for _, cc := range c.s.Concessions {
+		if cc.Where == w && slices.Contains(cc.Kinds, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // Rule names what a violation broke.
@@ -98,12 +130,62 @@ func Check(ctx context.Context, s Subject) []Violation { return CheckWith(ctx, s
 
 // CheckWith is Check with options.
 func CheckWith(ctx context.Context, s Subject, opts Options) []Violation {
+	return checkShard(ctx, s, opts, placements(), true)
+}
+
+// ConformanceSharded is Conformance for an adapter whose checks are slow, such as one that is tested over HTTP
+// against a fake of its platform: it runs the places in parallel, each group on a Subject of its own, which
+// newSubject makes. Every group is checked as Conformance checks, and the contract once.
+func ConformanceSharded(t *testing.T, shards int, newSubject func(t *testing.T) Subject) {
+	t.Helper()
+	all := placements()
+	results := make([][]Violation, shards)
+	subjects := make([]Subject, shards) // made one at a time, before any runs, as a test's setup is
+	for i := range subjects {
+		subjects[i] = newSubject(t)
+	}
+	var wg sync.WaitGroup
+	for i := range shards {
+		var mine []placement
+		for j := i; j < len(all); j += shards {
+			mine = append(mine, all[j])
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = checkShard(t.Context(), subjects[i], Options{Short: testing.Short()}, mine, i == 0)
+		}()
+	}
+	wg.Wait()
+	n := 0
+	for _, vs := range results {
+		for _, v := range vs {
+			if n++; n > 40 {
+				continue
+			}
+			t.Error(v)
+		}
+	}
+	if n > 40 {
+		t.Errorf("... and %d more", n-40)
+	}
+}
+
+// checkShard runs the checks of some places, and the contract if asked.
+func checkShard(ctx context.Context, s Subject, opts Options, places []placement, contract bool) []Violation {
 	if s.Platform == nil || s.Sent == nil || s.Inert == nil {
 		return []Violation{{Rule: RuleSetup, Case: "subject", Detail: "Platform, Sent and Inert are all required"}}
 	}
-	c := &checker{ctx: ctx, s: s, caps: s.Platform.Capabilities(), opts: opts}
-	c.contract()
-	for _, p := range placements() {
+	for _, cc := range s.Concessions {
+		if cc.Why == "" || len(cc.Kinds) == 0 {
+			return []Violation{{Rule: RuleSetup, Where: cc.Where, Case: "concession", Detail: "a concession needs kinds and a reason"}}
+		}
+	}
+	c := &checker{ctx: ctx, s: s, caps: s.Platform.Capabilities(), opts: opts, target: cmp.Or(s.Target, defaultTarget)}
+	if contract {
+		c.contract()
+	}
+	for _, p := range places {
 		for _, cs := range Corpus {
 			for _, text := range c.variants(cs.Text) {
 				c.run(p, cs.Name, text) // by every method and every variant: no two are assumed to share a renderer
@@ -118,14 +200,15 @@ func CheckWith(ctx context.Context, s Subject, opts Options) []Violation {
 // of what the platform received that came from it can be told from the pieces the adapter wrote.
 const canary = "zq7kx3"
 
-var target = chat.Target{Conn: "conformance/chat", Channel: "C0CONFORM", Thread: "1.1"}
+var defaultTarget = chat.Target{Conn: "conformance/chat", Channel: "C0CONFORM", Thread: "1.1"}
 
 type checker struct {
-	ctx   context.Context
-	s     Subject
-	caps  chat.Caps
-	opts  Options
-	found []Violation
+	target chat.Target
+	ctx    context.Context
+	s      Subject
+	caps   chat.Caps
+	opts   Options
+	found  []Violation
 }
 
 func (c *checker) add(rule Rule, w chat.Where, method, cs, format string, args ...any) {
@@ -150,7 +233,7 @@ func (c *checker) contract() {
 			c.add(RuleContract, w, "Capabilities", "limits", "the limit is %d, which cannot hold even the truncation marker", n)
 		}
 	}
-	if _, err := p.Post(c.ctx, target, chat.Outgoing{}, "tag"); !errors.Is(err, chat.ErrInvalid) {
+	if _, err := p.Post(c.ctx, c.target, chat.Outgoing{}, "tag"); !errors.Is(err, chat.ErrInvalid) {
 		c.add(RuleContract, 0, "Post", "malformed", "a zero Outgoing gave %v, want an error wrapping chat.ErrInvalid", err)
 	}
 	small := chat.Prompt{ID: "ix-conformance", Questions: []chat.Question{{Text: "q"}}}
@@ -170,7 +253,7 @@ func (c *checker) contract() {
 		}
 	}
 	if !c.caps.Streams {
-		if _, err := p.Stream(c.ctx, target, "U1", "x"); !errors.Is(err, chat.ErrNoStreams) {
+		if _, err := p.Stream(c.ctx, c.target, "U1", "x"); !errors.Is(err, chat.ErrNoStreams) {
 			c.add(RuleContract, chat.WhereStream, "Stream", "no streams", "a platform with Streams false gave %v, want chat.ErrNoStreams", err)
 		}
 	}
@@ -259,10 +342,10 @@ func (c *checker) run(p placement, name, text string) {
 		prep func() error // before the text is sent: not checked
 		do   func() error
 	}{
-		{name: "Post", do: func() error { _, err := c.s.Platform.Post(c.ctx, target, p.build(text).out, "tag-1"); return err }},
+		{name: "Post", do: func() error { _, err := c.s.Platform.Post(c.ctx, c.target, p.build(text).out, "tag-1"); return err }},
 		{name: "Update",
 			prep: func() (err error) {
-				ref, err = c.s.Platform.Post(c.ctx, target, chat.Say(chat.Message{Fallback: "seed"}), "tag-seed")
+				ref, err = c.s.Platform.Post(c.ctx, c.target, chat.Say(chat.Message{Fallback: "seed"}), "tag-seed")
 				return err
 			},
 			do: func() error { return c.s.Platform.Update(c.ctx, ref, p.build(text).out) }},
@@ -273,7 +356,7 @@ func (c *checker) run(p placement, name, text string) {
 				name string
 				prep func() error
 				do   func() error
-			}{name: "Ephemeral", do: func() error { return c.s.Platform.Ephemeral(c.ctx, target, "U1", *m) }})
+			}{name: "Ephemeral", do: func() error { return c.s.Platform.Ephemeral(c.ctx, c.target, "U1", *m) }})
 		}
 		if c.caps.Streams { // a stream ends with a message of its own, which is rendered apart from Post's
 			var st chat.Stream
@@ -282,7 +365,7 @@ func (c *checker) run(p placement, name, text string) {
 				prep func() error
 				do   func() error
 			}{name: "Stop",
-				prep: func() (err error) { st, err = c.s.Platform.Stream(c.ctx, target, "U1", "start"); return err },
+				prep: func() (err error) { st, err = c.s.Platform.Stream(c.ctx, c.target, "U1", "start"); return err },
 				do:   func() error { return st.Stop(c.ctx, *m, "tag-stop") }})
 		}
 	}
@@ -311,9 +394,9 @@ func (c *checker) stream(p placement, name, text string) {
 		_ = c.s.Inert()
 		c.verify(p, method, name, text, f())
 	}
-	do("Stream", func() error { _, err := c.s.Platform.Stream(c.ctx, target, "U1", text); return err })
+	do("Stream", func() error { _, err := c.s.Platform.Stream(c.ctx, c.target, "U1", text); return err })
 	open := func() (chat.Stream, bool) {
-		st, err := c.s.Platform.Stream(c.ctx, target, "U1", "start")
+		st, err := c.s.Platform.Stream(c.ctx, c.target, "U1", "start")
 		if err != nil {
 			c.add(RuleRejected, p.where, "Stream", name, "a stream of plain text was refused: %v", err)
 		}
@@ -396,6 +479,7 @@ func (c *checker) checkActive(p placement, method, name string, s Shown) {
 	for _, a := range s.Active {
 		switch {
 		case a.Kind == KindAutolink && c.s.AllowAutolink:
+		case c.conceded(p.where, a.Kind):
 		case a.Kind.Style() && (p.where.Rich() || c.s.StyleInLiteral):
 		default:
 			c.add(RuleActive, p.where, method, name, "text became a %s: %q", a.Kind, a.Text)

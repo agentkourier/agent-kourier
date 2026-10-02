@@ -403,6 +403,48 @@ func TestStyleAndAutolinkConcessionsExcuseOnlyThemselves(t *testing.T) {
 	}
 }
 
+// A per-place concession excuses its kinds in its place and nowhere else, and needs a reason.
+func TestAConcessionExcusesItsKindsInItsPlaceOnly(t *testing.T) {
+	t.Parallel()
+	s := newMarkup(commonMark, leaks{noEscape: true}).subject()
+	s.AllowAutolink = true
+	s.Concessions = []Concession{{Where: chat.WhereNote, Kinds: StyleKinds(), Why: "a test"}}
+	noteStyle, headerStyle := false, false
+	for _, v := range Check(t.Context(), s) {
+		if v.Rule != RuleActive || !strings.Contains(v.Detail, "became a emphasis") {
+			continue
+		}
+		noteStyle = noteStyle || v.Where == chat.WhereNote
+		headerStyle = headerStyle || v.Where == chat.WhereHeader
+	}
+	if noteStyle {
+		t.Error("style in a note was a violation despite the concession")
+	}
+	if !headerStyle {
+		t.Error("a concession for the note excused style in the header")
+	}
+	s.Concessions = []Concession{{Where: chat.WhereNote, Kinds: StyleKinds()}}
+	if vs := Check(t.Context(), s); len(vs) != 1 || vs[0].Rule != RuleSetup {
+		t.Errorf("a concession with no reason gave %d violations, want one setup violation", len(vs))
+	}
+}
+
+// A target that the Subject names is where the checks post.
+func TestTheChecksPostWhereTheSubjectSays(t *testing.T) {
+	t.Parallel()
+	f := NewFake()
+	s := f.Subject()
+	s.Target = chat.Target{Conn: "ns/conn", Channel: "C9", Thread: "9.9"}
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	for _, m := range f.Messages() {
+		if m.Ref.Channel != "C9" || m.Ref.Conn != "ns/conn" {
+			t.Fatalf("a check posted in %+v, want only in the Subject's target", m.Ref)
+		}
+	}
+}
+
 // Style in the one rich place is not a violation, and a mention in it is.
 func TestTheRichPlaceMayBeStyledButNotNotify(t *testing.T) {
 	t.Parallel()
