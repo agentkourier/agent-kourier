@@ -119,11 +119,14 @@ func TestMigration0010KeepsExistingRowsAndTakesTheReactionRole(t *testing.T) {
 	databaseAt(t, path, 9)
 	s := openAt(t, path) // applies 0010
 	ctx := context.Background()
-	if got, err := s.GetOutbox(ctx, "unposted"); err != nil || got.Role != store.OutboxRoot || got.MessageRef != "" {
-		t.Fatalf("unposted row after 0010 = %+v, %v", got, err)
-	}
-	if got, err := s.GetOutbox(ctx, "posted"); err != nil || got.Role != store.OutboxReply || got.MessageRef != "5.5" || got.ThreadTS != "1.1" {
-		t.Fatalf("posted row after 0010 = %+v, %v", got, err)
+	// The whole rows, as databaseAt wrote them: a migration that rewrote any column would show here.
+	for _, want := range []store.OutboxEntry{
+		{ID: "unposted", EventID: "e", Role: store.OutboxRoot, Channel: "C1", CreatedAt: fromTS(1)},
+		{ID: "posted", EventID: "e", Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", CreatedAt: fromTS(2), MessageRef: "5.5"},
+	} {
+		if got, err := s.GetOutbox(ctx, want.ID); err != nil || got != want {
+			t.Fatalf("%s row after 0010 = %+v, %v; want %+v", want.ID, got, err, want)
+		}
 	}
 	e := store.OutboxEntry{ID: "r/reaction", EventID: "r", Role: store.OutboxReaction, Channel: "C1", CreatedAt: t0, Payload: `{"ts":"1.5","name":"hourglass"}`}
 	if created, err := s.CreateOutbox(ctx, e); err != nil || !created {

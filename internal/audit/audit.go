@@ -170,6 +170,11 @@ func (w *Writer) Event(ctx context.Context, a Actor, src Source, eventID string,
 	default:
 		return fail(store.ErrInvalid, "audit event %q: unknown outcome %q", eventID, outcome)
 	}
+	switch src {
+	case SourceAlert, SourceSlack:
+	default: // the outcome column is tags and identifiers, so a source is one of ours or nothing
+		return fail(store.ErrInvalid, "audit event %q: unknown source %q", eventID, src)
+	}
 	if a.Binding == "" {
 		return fail(store.ErrInvalid, "audit event %q: a Binding is required", eventID)
 	}

@@ -1,9 +1,11 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -87,10 +89,29 @@ func TestMigration0011TakesExistingAnswersAsDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := openAt(t, path) // applies 0011
-	for id, want := range map[string]time.Time{"answered": fromTS(2000), "pending": {}, "timedout": {}} {
-		got, err := s.GetInteraction(t.Context(), id)
-		if err != nil || !got.DeliveredAt.Equal(want) {
-			t.Errorf("%s after 0011: delivered at %v, %v; want %v", id, got.DeliveredAt, err, want)
+	// The whole rows, as they were inserted, with the delivery mark alone new: only an answered one has it.
+	key := store.ConversationKey{Connection: "slack", Channel: "C1"}
+	for _, want := range []store.Interaction{
+		{ID: "answered", Key: withThread(key, "1.1"), TaskID: "t1", Kind: store.InteractionAskUser, State: store.InteractionAnswered, CreatedAt: fromTS(1000), Deadline: fromTS(5000),
+			Answer: []byte("{}"), Decider: "U1", DecidedAt: fromTS(2000), DeliveredAt: fromTS(2000)},
+		{ID: "pending", Key: withThread(key, "1.2"), TaskID: "t2", Kind: store.InteractionAskUser, State: store.InteractionPending, CreatedAt: fromTS(1000), Deadline: fromTS(5000)},
+		{ID: "timedout", Key: withThread(key, "1.3"), TaskID: "t3", Kind: store.InteractionAskUser, State: store.InteractionTimedOut, CreatedAt: fromTS(1000), Deadline: fromTS(1500), DecidedAt: fromTS(1500)},
+	} {
+		got, err := s.GetInteraction(t.Context(), want.ID)
+		if err != nil {
+			t.Fatalf("%s after 0011: %v", want.ID, err)
+		}
+		if !bytes.Equal(got.Request, want.Request) || !bytes.Equal(got.Answer, want.Answer) {
+			t.Errorf("%s after 0011: request %q, answer %q; want %q, %q", want.ID, got.Request, got.Answer, want.Request, want.Answer)
+		}
+		got.Request, got.Answer, want.Request, want.Answer = nil, nil, nil, nil // the slices were compared above
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s after 0011 = %+v; want %+v", want.ID, got, want)
 		}
 	}
+}
+
+func withThread(k store.ConversationKey, ts string) store.ConversationKey {
+	k.ThreadTS = ts
+	return k
 }

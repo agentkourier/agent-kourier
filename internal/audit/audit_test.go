@@ -82,6 +82,13 @@ func TestEvent(t *testing.T) {
 	if err := w.Event(ctx, who, SourceAlert, "evt-1", "bogus"); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("Event with an unknown outcome = %v, want ErrInvalid", err)
 	}
+	// The outcome column is tags and identifiers by construction: a source that is not one of ours, or that
+	// carries the outcome's own separator, is refused and not stored as an outcome of its own making.
+	for _, src := range []Source{"", "bogus", "alert: accepted\nslack_message", Source(strings.Repeat("a", 5000))} {
+		if err := w.Event(ctx, who, src, "evt-1", EventAccepted); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("Event with the source %.20q = %v, want ErrInvalid", src, err)
+		}
+	}
 	if got := rows(t, s); len(got) != 0 {
 		t.Errorf("invalid events left rows: %+v", got)
 	}
@@ -309,6 +316,7 @@ func TestReturnedErrorsAreCleanAndStillUnwrap(t *testing.T) {
 		for name, err := range map[string]error{
 			"event outcome":   w.Event(ctx, who, SourceAlert, leaky, "bogus"),
 			"event binding":   w.Event(ctx, Actor{}, SourceAlert, leaky, EventAccepted),
+			"event source":    w.Event(ctx, who, Source(leaky), "evt-1", EventAccepted),
 			"pause subject":   w.UnusablePause(ctx, who, "", "", errors.New(leaky)),
 			"pause cause nil": w.UnusablePause(ctx, who, "t1", "", nil),
 			"call op":         w.AgentCall(ctx, who, Call{Op: Op(leaky), TaskID: "t1"}),
