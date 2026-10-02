@@ -290,6 +290,13 @@ func (f *FakePlatform) Stream(_ context.Context, t chat.Target, to, markdown str
 
 func (s *fakeStream) Ref() chat.Ref { return s.ref }
 
+// StreamAt implements chat.Platform.
+func (f *FakePlatform) StreamAt(r chat.Ref) chat.Stream { return &fakeStream{f, r} }
+
+func errNotStreaming() error {
+	return fmt.Errorf("%w: %w", chat.ErrNotStreaming, &FakeError{Verdict: chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "not_streaming"}, Msg: "the message is not streaming"})
+}
+
 func (s *fakeStream) Append(_ context.Context, markdown string) error {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
@@ -298,14 +305,14 @@ func (s *fakeStream) Append(_ context.Context, markdown string) error {
 	}
 	m := s.f.find(s.ref)
 	if m == nil || !m.Streaming {
-		return &FakeError{Verdict: chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "not_streaming"}, Msg: "the message is not streaming"}
+		return errNotStreaming()
 	}
 	m.Streamed += markdown
 	s.f.sent = append(s.f.sent, s.f.showMarkdown(markdown))
 	return nil
 }
 
-func (s *fakeStream) Stop(_ context.Context, final chat.Message, tag string) error {
+func (s *fakeStream) Stop(_ context.Context, markdown string, final chat.Message, tag string) error {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
 	if err := s.f.fail("Stop"); err != nil {
@@ -313,7 +320,11 @@ func (s *fakeStream) Stop(_ context.Context, final chat.Message, tag string) err
 	}
 	m := s.f.find(s.ref)
 	if m == nil || !m.Streaming {
-		return &FakeError{Verdict: chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "not_streaming"}, Msg: "the message is not streaming"}
+		return errNotStreaming()
+	}
+	if markdown != "" {
+		m.Streamed += markdown
+		s.f.sent = append(s.f.sent, s.f.showMarkdown(markdown))
 	}
 	m.Streaming, m.Out, m.Tag = false, chat.Say(final), tag
 	s.f.sent = append(s.f.sent, s.f.show(m.Out)...)

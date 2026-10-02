@@ -366,7 +366,7 @@ func (c *checker) run(p placement, name, text string) {
 				do   func() error
 			}{name: "Stop",
 				prep: func() (err error) { st, err = c.s.Platform.Stream(c.ctx, c.target, "U1", "start"); return err },
-				do:   func() error { return st.Stop(c.ctx, *m, "tag-stop") }})
+				do:   func() error { return st.Stop(c.ctx, "", *m, "tag-stop") }})
 		}
 	}
 	for _, m := range methods {
@@ -407,7 +407,18 @@ func (c *checker) stream(p placement, name, text string) {
 	}
 	if st, ok := open(); ok {
 		do("Stop", func() error {
-			return st.Stop(c.ctx, chat.Message{Fallback: "done", Parts: []chat.Part{chat.Body{Markdown: text}}}, "tag-2")
+			return st.Stop(c.ctx, "", chat.Message{Fallback: "done", Parts: []chat.Part{chat.Body{Markdown: text}}}, "tag-2")
+		})
+	}
+	if st, ok := open(); ok { // the last of the text comes with the stop
+		do("Stop (last markdown)", func() error {
+			return st.Stop(c.ctx, text, chat.Message{Fallback: "done", Parts: []chat.Part{chat.Body{Markdown: "done"}}}, "tag-3")
+		})
+	}
+	if st, ok := open(); ok { // a stream of another run, found again by its Ref
+		at := c.s.Platform.StreamAt(st.Ref())
+		do("StreamAt Stop", func() error {
+			return at.Stop(c.ctx, text, chat.Message{Fallback: "done", Parts: []chat.Part{chat.Body{Markdown: "done"}}}, "tag-4")
 		})
 	}
 }

@@ -49,15 +49,46 @@ func TestAStreamGrowsAndStopsWithItsBlocksAndTag(t *testing.T) {
 	if !m.Streaming || st.Ref().ID != m.TS || st.Ref().Thread != w.target.Thread {
 		t.Fatalf("message = %+v, ref %+v; want a streaming message, and its Ref", m, st.Ref())
 	}
-	if err := st.Stop(t.Context(), chat.Message{Fallback: "Hello", Parts: []chat.Part{chat.Body{Markdown: "Hello"}}}, "outbox-9"); err != nil {
+	if err := st.Stop(t.Context(), "", chat.Message{Fallback: "Hello", Parts: []chat.Part{chat.Body{Markdown: "Hello"}}}, "outbox-9"); err != nil {
 		t.Fatal(err)
 	}
 	m, blocks := w.last(t)
 	if m.Streaming || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-9" || blocks[0]["text"] != "Hello" {
 		t.Errorf("message = %+v blocks %v; want it stopped, tagged, with the final markdown block", m, blocks)
 	}
-	if err := st.Stop(t.Context(), chat.Message{}, "outbox-9"); !errors.Is(err, chat.ErrInvalid) {
-		t.Errorf("Stop with an empty message = %v, want ErrInvalid", err)
+	if err := st.Stop(t.Context(), "", chat.Message{}, "outbox-9"); !errors.Is(err, chat.ErrNotStreaming) {
+		t.Errorf("a second Stop = %v, want ErrNotStreaming", err)
+	}
+	if err := st.Append(t.Context(), "more"); !errors.Is(err, chat.ErrNotStreaming) {
+		t.Errorf("an Append after the stop = %v, want ErrNotStreaming", err)
+	}
+}
+
+// Stop takes the last of the text with it, as one call; a zero final sends no blocks and leaves the message as it
+// was streamed; and a stream that another run started is stopped by its Ref, and a message that was never a stream
+// says so.
+func TestAStreamStopsWithItsLastTextAndAStreamOfAnotherRunByItsRef(t *testing.T) {
+	w := newWorld(t)
+	st, err := w.p.Stream(t.Context(), w.target, "U1", "Hel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := w.p.StreamAt(st.Ref())
+
+	if err := other.Stop(t.Context(), "lo", chat.Message{}, "outbox-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	m, blocks := w.last(t)
+	if m.Streaming || m.Text != "Hello" || len(blocks) != 0 || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-1" {
+		t.Errorf("message = %+v blocks %v; want it stopped with the last text, no blocks, and the tag", m, blocks)
+	}
+	posted, err := w.p.Post(t.Context(), w.target, chat.Say(chat.Message{Fallback: "x"}), "outbox-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.p.StreamAt(posted).Stop(t.Context(), "", chat.Message{}, "outbox-2"); !errors.Is(err, chat.ErrNotStreaming) {
+		t.Errorf("Stop of a message that was never a stream = %v, want ErrNotStreaming", err)
 	}
 }
 

@@ -78,7 +78,7 @@ func TestStreamGrowsThenStopsAsAMessageWithItsTag(t *testing.T) {
 	if m := f.Messages()[0]; m.Streamed != "Hello" || !m.Streaming || m.Recipient != "U1" {
 		t.Errorf("message = %+v, want a stream holding Hello, shown to U1", m)
 	}
-	if err := st.Stop(ctx, chat.Message{Fallback: "Hello", Parts: []chat.Part{chat.Body{Markdown: "Hello"}}}, "outbox-9"); err != nil {
+	if err := st.Stop(ctx, "", chat.Message{Fallback: "Hello", Parts: []chat.Part{chat.Body{Markdown: "Hello"}}}, "outbox-9"); err != nil {
 		t.Fatal(err)
 	}
 	m := f.Messages()[0]

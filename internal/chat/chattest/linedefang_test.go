@@ -98,9 +98,10 @@ func (s *lineDefangStream) Append(ctx context.Context, md string) error {
 	return err
 }
 
-func (s *lineDefangStream) Stop(ctx context.Context, f chat.Message, tag string) error {
-	err := s.Stream.Stop(ctx, f, tag)
+func (s *lineDefangStream) Stop(ctx context.Context, md string, f chat.Message, tag string) error {
+	err := s.Stream.Stop(ctx, md, f, tag)
 	if err == nil {
+		s.a.rec([]Field{{md, chat.WhereStream}})
 		s.a.rec(MessageFields(f))
 	}
 	return err

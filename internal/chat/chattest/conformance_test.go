@@ -224,12 +224,20 @@ func (s *markupStream) Append(ctx context.Context, md string) error {
 	return err
 }
 
-func (s *markupStream) Stop(ctx context.Context, final chat.Message, tag string) error {
-	err := s.Stream.Stop(ctx, final, tag)
+func (s *markupStream) Stop(ctx context.Context, markdown string, final chat.Message, tag string) error {
+	err := s.Stream.Stop(ctx, markdown, final, tag)
 	if err == nil {
-		s.m.record("Stop", MessageFields(final))
+		fields := MessageFields(final)
+		if markdown != "" {
+			fields = append([]Field{{markdown, chat.WhereStream}}, fields...)
+		}
+		s.m.record("Stop", fields)
 	}
 	return err
+}
+
+func (m *markupPlatform) StreamAt(r chat.Ref) chat.Stream {
+	return &markupStream{Stream: m.FakePlatform.StreamAt(r), m: m}
 }
 
 func (m *markupPlatform) Fits(p chat.Prompt) error {
@@ -321,22 +329,26 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 func TestAGapInOneMethodIsFoundByThatMethodAlone(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		d      dialectKind
-		leaks  leaks
-		method string
+		d       dialectKind
+		leaks   leaks
+		methods []string
 	}{
-		{commonMark, leaks{updateGap: true}, "Update"},
-		{slackPlainText, leaks{updateGap: true}, "Update"},
-		{commonMark, leaks{stopGap: true}, "Stop"},
+		{commonMark, leaks{updateGap: true}, []string{"Update"}},
+		{slackPlainText, leaks{updateGap: true}, []string{"Update"}},
+		{commonMark, leaks{stopGap: true}, []string{"Stop", "Stop (last markdown)", "StreamAt Stop"}},
 	} {
 		vs := Check(t.Context(), newMarkup(tc.d, tc.leaks).subject())
-		methods, broadcast := map[string]bool{}, false
+		found, broadcast := map[string]bool{}, false
 		for _, v := range vs {
-			methods[v.Method] = true
+			found[v.Method] = true
 			broadcast = broadcast || (v.Rule == RuleActive && strings.Contains(v.Detail, "became a broadcast"))
 		}
-		if len(methods) != 1 || !methods[tc.method] || !broadcast {
-			t.Errorf("a gap in %s was found by %v (a live broadcast seen: %t), want %s alone, and the broadcast", tc.method, methods, broadcast, tc.method)
+		only := len(found) == len(tc.methods)
+		for _, m := range tc.methods {
+			only = only && found[m]
+		}
+		if !only || !broadcast {
+			t.Errorf("a gap in %v was found by %v (a live broadcast seen: %t), want those alone, and the broadcast", tc.methods, found, broadcast)
 		}
 	}
 }

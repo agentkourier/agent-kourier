@@ -36,15 +36,19 @@ type Stream interface {
 	Ref() Ref
 	// Append adds markdown to the message.
 	Append(ctx context.Context, markdown string) error
-	// Stop ends the stream with the final message, tagged with tag as Post tags a message, so that Find
-	// can tell a message that was made from one that was not.
-	Stop(ctx context.Context, final Message, tag string) error
+	// Stop adds the last markdown, if there is any, and ends the stream with the final message, tagged with tag
+	// as Post tags a message, so that Find can tell a message that was made from one that was not. Both are
+	// one call: the last of the text and the end of the stream come together.
+	Stop(ctx context.Context, markdown string, final Message, tag string) error
 }
 
 // Errors an adapter returns for what a platform cannot or will not do.
 var (
 	// ErrNoStreams is returned by Stream on a platform without streams (Caps.Streams false).
 	ErrNoStreams = errors.New("chat: the platform has no streaming messages")
+	// ErrNotStreaming is wrapped by the error of an Append or a Stop of a message that is not streaming: it ended,
+	// or it never was a stream. The caller that is finishing a stream it did not start tolerates it.
+	ErrNotStreaming = errors.New("chat: the message is not streaming")
 	// ErrTooLarge is returned by Fits for a prompt that does not fit in one message even in its
 	// plainest form. No retry mends it, and the caller reports the pause as unusable.
 	ErrTooLarge = errors.New("chat: the prompt does not fit in one message")
@@ -73,6 +77,9 @@ type Platform interface {
 	// Stream starts a streaming message in t shown to the user to, beginning with markdown. It returns
 	// ErrNoStreams on a platform without them.
 	Stream(ctx context.Context, t Target, to, markdown string) (Stream, error)
+	// StreamAt is the stream that is the message at r, which another run started and a recovery has the Ref of: it
+	// makes no call, and its Append and Stop say ErrNotStreaming if the message is not streaming.
+	StreamAt(r Ref) Stream
 	// Ephemeral shows m to user alone, in t. Nothing keeps it.
 	Ephemeral(ctx context.Context, t Target, user string, m Message) error
 	// React puts the reaction name on the message at r. A reaction that is there already is success.

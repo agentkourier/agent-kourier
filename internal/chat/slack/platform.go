@@ -3,13 +3,19 @@ package slack
 import (
 	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	slackgo "github.com/slack-go/slack"
+
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
 // PlatformName is the name Refs of Slack messages carry: the first part of chat.MessageID, which is how
@@ -20,14 +26,36 @@ const PlatformName = "slack"
 // every text neutralised for Slack (escape.go). It is the adapter of one ChatConnection. It is safe for
 // concurrent use.
 type Platform struct {
-	c    *Client
+	c    API
 	conn string
 }
+
+// API is what the Platform asks of the Slack client: *Client, or a double of it.
+type API interface {
+	Run(ctx context.Context, sink Sink) error
+	Post(ctx context.Context, channel, threadTS string, c Content, outboxID string) (string, error)
+	Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error)
+	Update(ctx context.Context, channel, ts string, c Content) error
+	StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string) (string, error)
+	AppendStream(ctx context.Context, channel, ts, markdown string) error
+	StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error
+	PostEphemeral(ctx context.Context, channel, threadTS, user string, c Content) error
+	React(ctx context.Context, channel, ts, name string) error
+	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
+	IsBot(ctx context.Context, user string) (bool, error)
+	ResolveUser(ctx context.Context, id string) (dialect.User, error)
+}
+
+var _ API = (*Client)(nil)
+
+// Render is o as a Slack message, for the outbox until it stores the neutral model and delivers it through the
+// Platform (WP-37 S5).
+func Render(o chat.Outgoing) (Content, error) { return renderOutgoing(o) }
 
 var _ chat.Platform = (*Platform)(nil)
 
 // NewPlatform returns the adapter of the ChatConnection conn ("namespace/name"), which c is the client of.
-func NewPlatform(c *Client, conn string) *Platform { return &Platform{c: c, conn: conn} }
+func NewPlatform(c API, conn string) *Platform { return &Platform{c: c, conn: conn} }
 
 func (p *Platform) ref(channel, thread, ts string) chat.Ref {
 	return chat.Ref{Platform: PlatformName, Conn: p.conn, Channel: channel, Thread: thread, ID: ts}
@@ -105,17 +133,37 @@ type stream struct {
 func (s *stream) Ref() chat.Ref { return s.ref }
 
 func (s *stream) Append(ctx context.Context, md string) error {
-	return s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown))
+	return notStreaming(s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown)))
 }
 
-// Stop ends the stream with final's blocks, tagged with tag. What was streamed stays as the message's text:
-// final's own fallback is not sent, since a stream has no separate text.
-func (s *stream) Stop(ctx context.Context, final chat.Message, tag string) error {
-	c, err := renderMessage(final)
-	if err != nil {
-		return err
+// Stop adds the last markdown, if any, and ends the stream with final's blocks, tagged with tag, in one call. What
+// was streamed stays as the message's text: final's own fallback is not sent, since a stream has no separate
+// text. A zero final sends no blocks, and leaves the message as it was streamed.
+func (s *stream) Stop(ctx context.Context, md string, final chat.Message, tag string) error {
+	var blocks json.RawMessage
+	if final.Fallback != "" || len(final.Parts) > 0 {
+		c, err := renderMessage(final)
+		if err != nil {
+			return err
+		}
+		blocks = c.Blocks
 	}
-	return s.p.c.StopStream(ctx, s.ref.Channel, s.ref.ID, "", c.Blocks, tag)
+	return notStreaming(s.p.c.StopStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown), blocks, tag))
+}
+
+// StreamAt is the stream that is the message at r.
+func (p *Platform) StreamAt(r chat.Ref) chat.Stream { return &stream{p: p, ref: r} }
+
+// notStreaming marks the error of a message that is not streaming, which Slack says by the code of its response:
+// it ended, or it never was a stream (an update-path message's ts). Matched by the code, never by text.
+// UNCONFIRMED(WP-04): the code real Slack gives for a ts that was never a stream. The fake gives
+// message_not_in_streaming_state for both cases, so that is all that is tolerated.
+func notStreaming(err error) error {
+	var resp slackgo.SlackErrorResponse
+	if errors.As(err, &resp) && resp.Err == "message_not_in_streaming_state" {
+		return fmt.Errorf("%w: %w", chat.ErrNotStreaming, err)
+	}
+	return err
 }
 
 // Ephemeral shows m to user alone.
