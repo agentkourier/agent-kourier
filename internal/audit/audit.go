@@ -63,7 +63,7 @@ type Source string
 // Event sources.
 const (
 	SourceAlert Source = "alert"
-	SourceSlack Source = "slack_message"
+	SourceChat  Source = "slack_message" // a chat message; the stored value keeps the name of the platform it began on
 )
 
 // EventOutcome is what the router did with an inbound event.
@@ -171,7 +171,7 @@ func (w *Writer) Event(ctx context.Context, a Actor, src Source, eventID string,
 		return fail(store.ErrInvalid, "audit event %q: unknown outcome %q", eventID, outcome)
 	}
 	switch src {
-	case SourceAlert, SourceSlack:
+	case SourceAlert, SourceChat:
 	default: // the outcome column is tags and identifiers, so a source is one of ours or nothing
 		return fail(store.ErrInvalid, "audit event %q: unknown source %q", eventID, src)
 	}

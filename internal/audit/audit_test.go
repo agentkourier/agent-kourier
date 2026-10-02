@@ -62,7 +62,7 @@ func TestEvent(t *testing.T) {
 	}{
 		{SourceAlert, EventAccepted, "alert: accepted"},
 		{SourceAlert, EventRateLimited, "alert: rate_limited"},
-		{SourceSlack, EventDenied, "slack_message: denied"},
+		{SourceChat, EventDenied, "slack_message: denied"},
 	} {
 		w, s := newWriter(t)
 		if err := w.Event(ctx, who, c.src, "evt-1", c.outcome); err != nil {
@@ -245,7 +245,7 @@ func TestNoSecretsInStoredRows(t *testing.T) {
 	for _, canary := range append([]string{strings.Join(fakes, " ")}, bearerVariants...) {
 		w, s := newWriter(t)
 		leaky := Actor{User: canary, Email: canary, Identity: canary, Binding: canary}
-		_ = w.Event(ctx, leaky, SourceSlack, canary, EventAccepted)
+		_ = w.Event(ctx, leaky, SourceChat, canary, EventAccepted)
 		_ = w.AgentCall(ctx, leaky, Call{Op: OpSend, TaskID: a2a.TaskID(canary), ContextID: canary, MessageID: canary,
 			Err: errors.Join(agent.ErrNotSent, errors.New("Authorization: canary-plain-header-value")), Holders: []a2a.TaskID{a2a.TaskID(canary), "b"}})
 		_ = w.Decision(ctx, leaky, Decision{InteractionID: canary, TaskID: a2a.TaskID(canary), Result: DecisionAnswered,
