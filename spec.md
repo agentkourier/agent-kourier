@@ -186,6 +186,7 @@ upstream webhook trigger stays compatible with courier.
 | D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Courier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). NetworkPolicies restrict the controller port to that front door and kagent's own components, and fence each relay to the controller (the kagent UI) to its own verifying proxy (the chart's oauth2-proxy), which must not accept the Binding's audience. The front door strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity` from every request, because kagent lets them select the acting user or session (WP-03, WP-01d; implemented and proven in the full tier by WP-01d). The cluster's CNI must enforce NetworkPolicy. (v0.3, corrected after WP-01, WP-01b, WP-03, WP-01d and their reviews) |
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 | D34 | Binding token source | For the pilot, a Binding's bearer token is read from `identity.tokenSecretRef` on every call (cached from a watch, never stored elsewhere), and rotated outside courier before it expires (Dex: 24 h). A rejected credential (`ErrCredentialsRejected`, HTTP 401/403 at the front door) fails the turn, re-reads the Secret, is audited and raises a metric; courier never falls back to `userId`. Minting with the client-credentials grant plugs in behind the same `TokenSource` interface once H-02 picks a provider that supports it (Q9). Secret values are held in a type whose every formatting path redacts. Secrets courier reads are type `Opaque`; the watch keeps values for Opaque Secrets only (key names for every other type), in the namespaces courier is granted. After the pilot, narrow to one watch per referenced Secret (a `metadata.name` field selector plus RBAC `resourceNames`). (Resolves Q10, after WP-03; narrowed by the WP-21e1 review.) |
+| D35 | Chat-neutral model | Slack sits behind one platform-neutral seam, `chat.Platform` (6.2), so a second chat platform is one adapter and no change to session, interact, render, outbox or store. The model carries literal text with no markup field; each adapter neutralises markup for its platform and passes a shared hostile-text conformance suite before it ships. The outbox stores the versioned neutral message and the adapter renders it at delivery; a payload of the earlier, Slack-shaped form is abandoned as invalid with a log line, not migrated. Abandon metrics use neutral reasons (channel_gone, too_long, invalid_content, other), with the platform's own code in the log. The Slack message ID string is unchanged (`slack:<connection>:<channel>:<ts>`), and the store's columns keep their names. (Owner-approved 2026-10-02; WP-37.) |
 
 ## 6. Architecture
 
@@ -239,14 +240,30 @@ type AlertAdapter interface {  // Alertmanager; selected by Binding.spec.alerts.
     Parse(*http.Request) ([]AlertEvent, error)
 }
 
-// Run delivers messages AND interaction callbacks (button clicks, select choices)
-// to the sink. Render covers both plain messages and interactive prompts.
-type ChatPlatform interface {  // Slack
-    Run(ctx context.Context, sink EventSink) error
-    Post(ctx context.Context, target Target, msg Message) (MessageRef, error)
-    Update(ctx context.Context, ref MessageRef, msg Message) error
-    RenderInteraction(ctx context.Context, target Target, in Interaction) (MessageRef, error)
-    ResolveUser(ctx context.Context, platformUserID string) (User, error)
+// chat.Platform is the one seam between courier and a chat platform (Slack in v1; package
+// internal/chat, the adapter in internal/chat/slack, selected by ChatConnection.spec.platform).
+// Run delivers what people write (Inbound) and press (Interaction, already decoded into
+// question-indexed answers) to the sink, and nothing else in courier names a platform. What
+// courier says goes out as an Outgoing: a Message (header, body, context, tool line, note,
+// mention, buttons), a Prompt (questions, each free text or choices) or an Ending (a
+// prompt's replacement). The adapter lays it out and renders it at delivery. The outbox
+// stores the same Outgoing, versioned, so a restart needs no knowledge of Block Kit.
+type ChatPlatform interface {  // Slack; the Go name is chat.Platform
+    Run(ctx context.Context, sink Sink) error // Sink: Message(Inbound), Interaction(Interaction)
+    Post(ctx context.Context, t Target, o Outgoing, tag string) (Ref, error)
+    Find(ctx context.Context, t Target, tag string, since time.Time) (ref Ref, found bool, err error)
+    Update(ctx context.Context, r Ref, o Outgoing) error
+    Stream(ctx context.Context, t Target, to, markdown string) (Stream, error) // ErrNoStreams if none
+    StreamAt(r Ref) Stream                 // a stream another run started, found again by its Ref
+    Ephemeral(ctx context.Context, t Target, user string, m Message) error
+    React(ctx context.Context, r Ref, name string) error
+    IsMember(ctx context.Context, channel, user string) (bool, error) // fails closed
+    IsBot(ctx context.Context, user string) (bool, error)             // fails closed
+    ResolveUser(ctx context.Context, id string) (User, error)
+    RefAt(channel, thread, id string) Ref  // a Ref from the parts a caller recorded
+    Fits(p Prompt) error                   // pure; ErrTooLarge if one message cannot hold it
+    Classify(op Op, err error) Verdict     // Transient, Permanent (with a neutral Reason) or FatalAuth
+    Capabilities() Caps                    // streams, edits, ephemerals, inline inputs, text limits
 }
 
 // Interaction is a pause the agent needs a human to answer. Its kind is ToolApproval
@@ -276,6 +293,22 @@ type Store interface { /* sessions, queue, dedup, interactions, audit */ }
 `Credentials` holds the Binding identity (token or user ID) and the AgentBackend's static
 headers with Secret values resolved. It never formats or marshals its values. The caller
 applies `Authenticate` last, on a clone of each outgoing request.
+
+**The chat-neutral contract (D35; spec 8.4, R2).** The model carries literal text only: a
+header, context line, note, button label, hint, question, choice, answer, tool name or argument
+holds characters, never markup, and the one rich field, `Body.Markdown`, is untrusted
+CommonMark in which an adapter may allow emphasis, code and lists and must not allow a mention,
+broadcast, link, image, HTML or date. There is no field for a platform's own markup, so no
+caller can bypass an adapter's escaping. Each adapter neutralises markup for its platform,
+removes hidden characters, cuts every field at the platform's limit with a marker, keeps
+requests inert, and shows a user as a mention only for an ID of its platform's own shape. A
+hostile-text corpus runs against every adapter (`chattest.Conformance`) in every place text can
+go and by every method that sends; an adapter ships only if it passes. Courier's own code keeps
+what no platform differs on: redaction, truncation policy, and the fixed words of notices. The
+trigger table of 8.2 is the neutral `chat.Intake`, which a platform's `Run` feeds. The broker
+builds the adapter named by `ChatConnection.spec.platform`; a platform with no adapter is a
+wiring error, and a lint rule keeps the router, session, interact, outbox, render, store and
+config packages from importing the Slack adapter or its client library.
 
 ### 6.3 Backends
 
@@ -804,7 +837,10 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 - A courier outage causes no missed alert notification.
 - No duplicate agent runs for one alert group during a firing period.
 - No lost events across a courier restart.
-- Adding a chat platform or alert source requires implementing one interface and
+- Adding a chat platform requires implementing `chat.Platform` in its own package,
+  passing `chattest.Conformance`, and adding it to the broker's platform factory. It
+  touches no router, session, interact, outbox, render, store or config code, which a
+  lint rule enforces. Adding an alert source requires implementing one interface and
   touches no router, session, or store code.
 - Moving to a new kagent API revision changes the dialect package only.
 

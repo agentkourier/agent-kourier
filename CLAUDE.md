@@ -19,14 +19,14 @@ internal/agent          A2A client: streaming, reconnect, typed outcomes, client
 internal/dialect        agent-dialect adapters (kagent, generic a2a)
 internal/identity       Binding token source and credentials for the agent pool
 internal/secret         redacting Secret value type
-internal/chat           chat-neutral model and ChatPlatform (chattest: conformance suite, fake platform)
-internal/chat/slack     Slack adapter (Block Kit, Socket Mode)
+internal/chat           chat-neutral model, chat.Platform and the trigger table (chattest: conformance suite, fake platform)
+internal/chat/slack     Slack adapter (Block Kit, Socket Mode); the only code, with the broker, that may import Slack or slack-go
 internal/alert/alertmanager   Alertmanager receiver
 internal/store          SQLite (later Postgres) persistence
-internal/outbox         durable outbound posting
+internal/outbox         durable outbound posting (the versioned neutral message)
 internal/render         agent output to neutral messages
 internal/audit          audit log
-internal/broker         composition: Bindings, lifecycle, health, shutdown order
+internal/broker         composition: Bindings, chat platform factory, lifecycle, health, shutdown order
 internal/interact       interactions: pause intake, button presses, timeout sweep
 internal/redact         shared secret redaction for display and audit text
 test/{fakeslack,stubagent,e2e,fixtures}
@@ -69,6 +69,7 @@ a WP mixes concerns. At most four agents (implementers and reviewers together) r
 - No global mutable state (the ldflags-set `version` is the sole exception). No `panic`
   outside `main` and test helpers. Exported identifiers have doc comments.
 - No new module dependency unless the WP names it.
+- The core (chat, config, interact, outbox, render, session, store) never imports `internal/chat/slack` or slack-go: depguard enforces it, and only the adapter and the broker may.
 - Never log, print, or commit tokens or Secret contents; test tokens are fake constants.
 
 ## Commits
