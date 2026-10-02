@@ -231,7 +231,7 @@ func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 	}
 	v := chat.Verdict{Class: chat.Transient}
 	if limited := new(*slackgo.RateLimitedError); errors.As(err, limited) {
-		v.RetryAfter = (*limited).RetryAfter
+		v.RetryAfter = max((*limited).RetryAfter, time.Second) // one that names no wait is still one
 	}
 	return v
 }

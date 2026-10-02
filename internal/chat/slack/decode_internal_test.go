@@ -94,6 +94,7 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 		{"an inactive account", chat.OpOther, slackError("account_inactive"), chat.Verdict{Class: chat.FatalAuth, Code: "account_inactive"}},
 		{"a rate limit passes", chat.OpPost, slackError("ratelimited"), chat.Verdict{Class: chat.Transient}},
 		{"a rate limit says how long to wait", chat.OpPost, fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 7 * time.Second}), chat.Verdict{Class: chat.Transient, RetryAfter: 7 * time.Second}},
+		{"a rate limit that names no wait is one second", chat.OpPost, fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{}), chat.Verdict{Class: chat.Transient, RetryAfter: time.Second}},
 		{"a server error passes", chat.OpPost, slackError("internal_error"), chat.Verdict{Class: chat.Transient}},
 		{"a post's permanent code is not a reaction's", chat.OpReact, slackError("msg_too_long"), chat.Verdict{Class: chat.Transient}},
 		{"a reaction's permanent code is not a post's", chat.OpPost, slackError("thread_locked"), chat.Verdict{Class: chat.Transient}},
