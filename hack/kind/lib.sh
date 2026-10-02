@@ -199,3 +199,54 @@ assert_testhooks_image() {
   [ "$(docker image inspect --format "{{index .Config.Labels \"${TESTHOOKS_LABEL}\"}}" "$1" 2>/dev/null)" = true ] ||
     die "$1 is not a testhooks image (no ${TESTHOOKS_LABEL}=true label); refusing to load it into a tier"
 }
+
+# load_courier_image: build the testhooks image, check its label, and load it into the tier's cluster. The tiers
+# run the testhooks build, which only can be pointed at the fake Slack. Nothing here pushes either image.
+load_courier_image() {
+  build_courier_image testhooks
+  assert_testhooks_image "${TESTHOOKS_IMAGE}"
+  kind load docker-image "${TESTHOOKS_IMAGE}" --name "${CLUSTER}"
+}
+
+# deploy_courier AGENTBACKEND: courier's namespace, fake Slack Secret, config and manifests, which both tiers
+# share (fast/courier), and a rollout restart so a rebuilt image or a changed ConfigMap is picked up. The config
+# is the fast tier's Bindings and ChatConnection, with AGENTBACKEND, a file, in place of the fast tier's
+# AgentBackend: the Bindings name it `agents` in both tiers. The Secrets are fake constants made here and never
+# committed, and the agent token (Secret courier-agent-token) is the caller's to make: it differs by tier.
+# Needs HERE, K.
+deploy_courier() {
+  local config
+  config=$(mktemp -d)
+  cp "${HERE}"/fast/courier/config/*.yaml "${config}"
+  cp "$1" "${config}/agentbackend.yaml"
+  "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
+    --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n courier create configmap courier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  rm -rf "${config}"
+  "${K[@]}" apply -f "${HERE}/fast/courier" >/dev/null
+  "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
+}
+
+# The curl image the scripts' probe pods run, pinned; the same as the verify scripts'.
+CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+
+# refresh_dex_token: mint the Binding identity's ID token from Dex and store it in the Secret
+# courier-agent-token, key token, in namespace courier. Dex has no client_credentials grant (H-02), so the
+# identity is a static user that signs in with the password grant, and its token lives 24 hours: run this before
+# each use of the full tier whose last refresh is not recent (up-full.sh and e2e-run.sh do). The token is made
+# inside the cluster by a throwaway pod, where Dex is, and goes from there to the Secret through pipes: it is
+# never printed, put on a command line or written to a file. Courier reads the Secret on every request, so a
+# refreshed token is sent from the next call. The client and the user are the fake ones of full/dex.yaml.
+# Needs K.
+refresh_dex_token() {
+  local pod=dex-token-${RANDOM} tok
+  "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  tok=$("${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \
+      -d username=binding-test@example.test -d password=password -d "scope=openid email" \
+      http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/\1/p"') || tok=
+  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity (is Dex up? did the pod run?)"
+  printf %s "${tok}" | "${K[@]}" -n courier create secret generic courier-agent-token --from-file=token=/dev/stdin \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+}

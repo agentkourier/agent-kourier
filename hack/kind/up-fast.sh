@@ -15,7 +15,8 @@
 #
 # Courier's testhooks image (courier-e2e/courier-testhooks:dev, built from the repo's Dockerfile) is
 # built and loaded into the cluster, after a check that it carries its label, and run by the Deployment in
-# hack/kind/fast/courier. The tier is up only when courier is ready and connected to the fake Slack.
+# hack/kind/fast/courier, which the full tier uses too (lib.sh's deploy_courier). The tier is up only when
+# courier is ready and connected to the fake Slack.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -66,28 +67,19 @@ step "fake Slack, stub agent, sink, Alertmanager"
 apply_doubles
 
 step "courier image ${TESTHOOKS_IMAGE}"
-# The tier runs the testhooks build, which only it can point at the fake Slack. The label check keeps a
-# production image out of the tier; nothing here pushes either image.
-build_courier_image testhooks
-assert_testhooks_image "${TESTHOOKS_IMAGE}"
-kind load docker-image "${TESTHOOKS_IMAGE}" --name "${CLUSTER}"
+load_courier_image
 
 step "courier: namespace, config, Secrets, Deployment"
 # Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
 # here and never committed: the Slack tokens carry the prefixes the fake Slack checks, and the agent token
 # is an unsigned JWT with an email claim, which is all the stub agent (-require-auth) asks of a bearer.
-apply() { "${K[@]}" apply -f - >/dev/null; }
-"${K[@]}" create namespace courier --dry-run=client -o yaml | apply
+"${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
-"${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
-  --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | apply
 "${K[@]}" -n courier create secret generic courier-agent-token \
-  --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"courier-fast@example.test"}')." --dry-run=client -o yaml | apply
-"${K[@]}" -n courier create configmap courier-config --from-file="${FAST}/courier/config" --dry-run=client -o yaml | apply
-"${K[@]}" apply -f "${FAST}/courier" >/dev/null
-# Restart so a rebuilt image (same tag) or a changed ConfigMap is picked up. verify.sh waits for the rollout
-# and shows courier's log if it does not become ready.
-"${K[@]}" -n courier rollout restart deploy/courier >/dev/null
+  --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"courier-fast@example.test"}')." --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+# The rollout restart in deploy_courier picks up a rebuilt image (same tag) or a changed ConfigMap; verify.sh
+# waits for the rollout and shows courier's log if it does not become ready.
+deploy_courier "${FAST}/courier/config/agentbackend.yaml"
 
 step "verify"
 "${FAST}/verify.sh"

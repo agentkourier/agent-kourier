@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -292,5 +293,51 @@ func TestRunnerJobGetsItsTier(t *testing.T) {
 	}
 	if tier != "@TIER@" || !strings.Contains(string(script), `sed "s/@TIER@/${tier}/" "${HERE}/e2e/runner.yaml"`) {
 		t.Errorf("E2E_TIER = %q in the Job; want the placeholder @TIER@, and e2e-run.sh to substitute the tier it runs", tier)
+	}
+}
+
+// TestFullTierConfig: the full tier's courier config is the fast tier's, with the AgentBackend of kagent's front
+// door in place of the stub's (lib.sh's deploy_courier assembles it the same way). Courier reaches kagent only
+// through the door, on 4180, and never the controller, which does not verify tokens (spec D32, R4); and the
+// Bindings, which are the fast tier's, find the backend by the name they share.
+func TestFullTierConfig(t *testing.T) {
+	dir := t.TempDir()
+	files, err := filepath.Glob(courierDir + "config/*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no fast-tier config: %v", err)
+	}
+	for _, f := range append(files, "../../hack/kind/full/courier/agentbackend.yaml") { // the last wins, as in deploy_courier
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(f)
+		if strings.HasSuffix(f, "full/courier/agentbackend.yaml") {
+			name = "agentbackend.yaml"
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := config.Load(t.Context(), dir)
+	if err != nil || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %+v, %v; want one AgentBackend", set, err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range []string{e2e.ChannelSmoke, e2e.ChannelS1, e2e.ChannelS2, e2e.ChannelS3, e2e.ChannelS4, e2e.ChannelS5, e2e.ChannelS11} {
+		rb, ok := snap.BindingForChannel("courier", "slack-fast", channel)
+		if !ok {
+			t.Errorf("channel %s resolves to no Binding in the full tier", channel)
+			continue
+		}
+		if got := rb.Backend.Spec.URL; got != "http://kagent-frontdoor.kagent.svc.cluster.local:4180" || rb.Backend.Spec.Dialect != "kagent-v1" {
+			t.Errorf("channel %s goes to %s (%s); want kagent's front door on 4180, never the controller on 8083", channel, got, rb.Backend.Spec.Dialect)
+		}
+		if rb.Binding.Spec.Agent.Namespace != "kagent" {
+			t.Errorf("channel %s names agent namespace %q; the full tier's agents are in kagent", channel, rb.Binding.Spec.Agent.Namespace)
+		}
 	}
 }

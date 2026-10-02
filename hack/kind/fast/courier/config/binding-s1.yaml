@@ -6,7 +6,7 @@ kind: Binding
 metadata: {name: fast-s1, namespace: courier}
 spec:
   agent:
-    backendRef: {namespace: courier, name: stub}
+    backendRef: {namespace: courier, name: agents}
     namespace: kagent
     name: scenario-gated
   identity:
