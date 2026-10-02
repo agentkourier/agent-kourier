@@ -33,6 +33,7 @@ func TestClean(t *testing.T) {
 		{"control characters go, tab and newline stay", "a\x00b\x07c\x1b[31m\x7fd\te\nf", false, "abc[31md\te\nf"},
 		{"every line break is a newline", "a\r\nb\rc\u0085d\u2028e\u2029f", false, "a\nb\nc\nd\ne\nf"},
 		{"invisible tag characters go", "x\U000E0041\U000E007Fy", false, "xy"},
+		{"blank fillers go: Hangul filler and braille blank", "a\u3164\u2800b", false, "ab"},
 		{"private use and invalid UTF-8 go", "ab\xffc", false, "abc"},
 		{"a line is one line", "  a\n\n b\t c \r\n", true, "a b c"},
 		{"nothing left", "\u200b\u200c\n", true, ""},

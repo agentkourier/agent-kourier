@@ -11,9 +11,9 @@ const Truncated = "… (truncated)"
 
 // Clean returns s without the characters a reader cannot see and a platform may act on: control
 // characters, and format characters (zero-width, joiners, bidirectional overrides and isolates, the soft
-// hyphen, the invisible tag characters), private-use and surrogate code points and invalid UTF-8. Every
-// kind of line break (CR, CRLF, NEL, the Unicode line and paragraph separators) becomes "\n". They are
-// deleted before an adapter escapes anything, so none can split "<!channel>" apart, or reorder what the
+// hyphen, the invisible tag characters), private-use and surrogate code points, the two blank fillers (Hangul
+// U+3164 and Braille U+2800) and invalid UTF-8. Every kind of line break (CR, CRLF, NEL, the Unicode line and
+// paragraph separators) becomes "\n". They are deleted before an adapter escapes anything, so none can split "<!channel>" apart, or reorder what the
 // reader sees. A zero-width-joined emoji falls apart into its parts, which is the price of deleting them
 // all.
 //
@@ -37,6 +37,8 @@ func Clean(s string, line bool) string {
 			b.WriteByte('\n')
 		case r == '\t':
 			b.WriteByte('\t')
+		case r == '\u3164' || r == '\u2800': // blank fillers: shown as nothing, in no category of the above
+			continue
 		case unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs):
 			continue
 		default:
