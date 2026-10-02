@@ -1,0 +1,175 @@
+# The seeded faults of the sandbox tier: five things wrong in namespace shop for the sandbox-sre agent to find,
+# and one app that is fine, for contrast. Each is a Deployment of a pinned busybox (or the python image the full tier already
+# has), small enough that all six together ask the kind node for less than 300 MiB. The labels say nothing about
+# which fault is which: the agent has to read the pod states, the events and the logs, which is what it is for.
+#
+#   checkout     crash loop: exits 1 a moment after it logs why (a dependency that is not there)
+#   catalog      bad image tag: ImagePullBackOff (the one image here that is not pinned by digest: the tag is the fault)
+#   recommender  OOM kill: allocates until the kernel kills it at its 48 MiB limit
+#   inventory    its Service selects pods that do not exist, so the Service has no endpoints (its pods are fine)
+#   search       failing readiness probe: running, never Ready
+#   frontend     healthy
+#
+# test/kindmanifests pins this list. Applied by up.sh, removed by down.sh (which deletes the namespace).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+  labels: {app.kubernetes.io/part-of: shop}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: checkout, namespace: shop, labels: {app: checkout, app.kubernetes.io/part-of: shop}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: checkout}}
+  template:
+    metadata: {labels: {app: checkout, app.kubernetes.io/part-of: shop}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: checkout
+          image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+          command:
+            - sh
+            - -c
+            - |
+              echo "checkout 2.4.1 starting"
+              echo "FATAL: cannot resolve payments-db.shop.svc.cluster.local: no such host; refusing to start" >&2
+              sleep 2
+              exit 1
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: checkout, namespace: shop, labels: {app: checkout, app.kubernetes.io/part-of: shop}}
+spec:
+  selector: {app: checkout}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: catalog, namespace: shop, labels: {app: catalog, app.kubernetes.io/part-of: shop}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: catalog}}
+  template:
+    metadata: {labels: {app: catalog, app.kubernetes.io/part-of: shop}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: catalog
+          image: busybox:1.37.99 # no such tag, which is the fault: the one image of this tier that is not pinned by digest
+          command: [sh, -c, "echo catalog up; sleep 3600"]
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: recommender, namespace: shop, labels: {app: recommender, app.kubernetes.io/part-of: shop}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: recommender}}
+  template:
+    metadata: {labels: {app: recommender, app.kubernetes.io/part-of: shop}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: recommender
+          image: python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f
+          command:
+            - python
+            - -u
+            - -c
+            - |
+              print("recommender 0.9.0: loading the model into memory", flush=True)
+              model = []
+              while True:
+                  model.append(bytearray(8 * 1024 * 1024))
+          resources: {requests: {cpu: 5m, memory: 16Mi}, limits: {memory: 48Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: inventory, namespace: shop, labels: {app: inventory, app.kubernetes.io/part-of: shop}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: inventory}}
+  template:
+    metadata: {labels: {app: inventory, app.kubernetes.io/part-of: shop}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: inventory
+          image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+          command: [sh, -c, 'echo "{\"items\": 42}" > /www/index.html && echo "inventory ready on :8080" && exec httpd -f -v -p 8080 -h /www']
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 5}
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: www, mountPath: /www}]
+      volumes: [{name: www, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: inventory, namespace: shop, labels: {app: inventory, app.kubernetes.io/part-of: shop}}
+spec:
+  selector: {app: inventory-api} # the pods are labelled app=inventory, so this selects nothing
+  ports: [{port: 80, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: search, namespace: shop, labels: {app: search, app.kubernetes.io/part-of: shop}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: search}}
+  template:
+    metadata: {labels: {app: search, app.kubernetes.io/part-of: shop}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: search
+          image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+          command: [sh, -c, 'echo "search 1.8.0 listening on :8080" > /www/index.html && echo "search ready on :8080" && exec httpd -f -v -p 8080 -h /www']
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /ready, port: http}, periodSeconds: 5, failureThreshold: 3} # the server has no /ready: it answers 404
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: www, mountPath: /www}]
+      volumes: [{name: www, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: search, namespace: shop, labels: {app: search, app.kubernetes.io/part-of: shop}}
+spec:
+  selector: {app: search}
+  ports: [{port: 80, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: frontend, namespace: shop, labels: {app: frontend, app.kubernetes.io/part-of: shop}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: frontend}}
+  template:
+    metadata: {labels: {app: frontend, app.kubernetes.io/part-of: shop}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: frontend
+          image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+          command: [sh, -c, 'echo "<h1>shop</h1>" > /www/index.html && echo "frontend ready on :8080" && exec httpd -f -v -p 8080 -h /www']
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 5}
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {memory: 32Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: www, mountPath: /www}]
+      volumes: [{name: www, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: frontend, namespace: shop, labels: {app: frontend, app.kubernetes.io/part-of: shop}}
+spec:
+  selector: {app: frontend}
+  ports: [{port: 80, targetPort: http}]

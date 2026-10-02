@@ -1,0 +1,12 @@
+# The sandbox agent's model when MODEL_PROVIDER is anthropic. up.sh replaces __MODEL_NAME__ with MODEL_NAME (checked
+# against ^[A-Za-z0-9][A-Za-z0-9._:-]*$ first) and nothing else. The key is the Secret sandbox-model, key apiKey,
+# which up.sh makes from MODEL_API_KEY; it is never in this file.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: sandbox-model, namespace: kagent}
+spec:
+  provider: Anthropic
+  model: __MODEL_NAME__
+  apiKeySecret: sandbox-model
+  apiKeySecretKey: apiKey
+  anthropic: {}

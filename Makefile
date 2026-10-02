@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test build tidy image image-testhooks image-check stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down
+.PHONY: help fmt lint test build tidy image image-testhooks image-check stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down sandbox-up sandbox-down
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -57,3 +57,9 @@ e2e-full-down: ## Tear down the full E2E tier only
 
 e2e-down: ## Tear down both E2E tiers
 	hack/kind/down.sh
+
+sandbox-up: ## Dogfood tier on the full tier: courier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
+	hack/kind/sandbox/up.sh
+
+sandbox-down: ## Remove the sandbox and put the full tier's own courier back, so that e2e-full works again
+	hack/kind/sandbox/down.sh

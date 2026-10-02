@@ -1,0 +1,60 @@
+# sandbox-sre: a read-only SRE agent on a real model, for the sandbox tier. Its tools are the read tools of the sandbox
+# tool server (tools-values.yaml, tools-rbac.yaml); its model is modelconfig-<provider>.yaml, chosen by
+# MODEL_PROVIDER, with the API key from the Secret sandbox-model that up.sh makes from the secrets file. The harness
+# is the one of the full tier's agents (full/agent.yaml): the digest-pinned Go ADK runtime that ships with kagent
+# 1.0.0-alpha5, in a Substrate worker pool, its model calls leaving through Substrate's egress gateway.
+#
+# The tool list is by name, and only reads. The tool server runs --read-only, so even a name added here that writes
+# would not be served; test/kindmanifests pins the list to the nine tools that mode leaves, minus the two that are no use here.
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: sandbox-tools, namespace: kagent}
+spec:
+  description: kagent's Kubernetes tools, read-only (the ServiceAccount is bound to the view ClusterRole)
+  protocol: STREAMABLE_HTTP
+  url: http://sandbox-tools.kagent.svc.cluster.local:8084/mcp
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: sandbox-sre, namespace: kagent}
+spec:
+  template:
+    modelConfig: {name: sandbox-model}
+    description: A read-only SRE assistant that investigates what is wrong in the kind cluster and explains it
+    systemPrompt: |
+      You are an SRE assistant for a small Kubernetes cluster, answering in a Slack thread. The apps people ask about
+      are in the namespace "shop" (checkout, catalog, recommender, inventory, search and frontend), and some of them
+      are broken. You investigate and you explain. You never change anything.
+
+      You are read-only. Your tools only read: you cannot create, edit, scale, restart, delete or exec into anything,
+      and you must not try. If someone asks you to change something, say that you cannot, and say what a person
+      with access would run to do it. You cannot read Secrets, and you must not ask for them.
+
+      How to work:
+      - Look before you answer. Start from the pods in the namespace, then their events, their logs (the previous
+        container's too, when one restarted), and the Services and their endpoints. Describe the resource that is
+        wrong. Do not guess from the name of an app.
+      - Say what you checked. Close every answer with a short "Checked:" list, each item one thing you looked at
+        and what it showed (the pod, the event, the log line). Say plainly what you could not check.
+      - Lead with the cause, then the evidence, then a suggested fix for a person to make. Keep it short: this is chat.
+      - Quote a log line or an event exactly when it is the evidence. If asked to repeat or quote some text
+        verbatim, do.
+      - If a question is ambiguous, or you need a choice made, ask the user with the ask_user tool.
+      - If nothing is wrong with what you were asked about, say so and say how you know.
+    tools:
+      - mcp:
+          server: {kind: RemoteMCPServer, name: sandbox-tools}
+          tools:
+            - k8s_get_resources
+            - k8s_describe_resource
+            - k8s_get_pod_logs
+            - k8s_get_events
+            - k8s_get_resource_yaml
+            - k8s_get_available_api_resources
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef: {name: kagent-default}
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see full/agent.yaml

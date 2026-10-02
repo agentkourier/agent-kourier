@@ -1,0 +1,71 @@
+# Keeps the Binding's Dex ID token fresh for a session of any length. The token (the Secret courier-agent-token) lasts 24 hours
+# and courier reads it from the Secret on every request, so a CronJob that mints a new one every six hours means that no
+# call is ever made on an expired one, and nobody has to run a loop in a terminal that may sleep. It is the same
+# exchange as lib.sh's refresh_dex_token (the password grant of the fake client and user in full/dex.yaml), from inside the
+# cluster, where Dex is: it asks Dex and PATCHes the Secret through the API server with its own ServiceAccount, whose Role
+# allows `patch` on that one Secret and nothing else. The token passes from one command to the next through pipes: it is
+# never printed, never in a file, never on an argument list of anything but this pod's curl (the SA token, which only
+# patches that Secret, is). Nothing the Job prints holds it: curl's -f drops an error body, and a successful PATCH's reply, which
+# is the Secret, goes to /dev/null. up.sh also makes a token itself before it starts courier, so the first six hours need no Job.
+# The pod does not carry the label app.kubernetes.io/name=courier, which the front door's NetworkPolicy trusts.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: courier-token-refresh, namespace: courier}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: courier-token-refresh, namespace: courier}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [courier-agent-token]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: courier-token-refresh, namespace: courier}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: courier-token-refresh}
+subjects: [{kind: ServiceAccount, name: courier-token-refresh, namespace: courier}]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: courier-token-refresh, namespace: courier}
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600 # a run missed while the laptop slept still happens when it wakes, within the hour
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          serviceAccountName: courier-token-refresh
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          containers:
+            - name: refresh
+              image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  tok=$(curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \
+                    -d username=binding-test@example.test -d password=password -d "scope=openid email" \
+                    http://dex.dex.svc.cluster.local:5556/dex/token | sed -n 's/.*"id_token":"\([^"]*\)".*/\1/p')
+                  case "${tok}" in
+                    [A-Za-z0-9_-]*.[A-Za-z0-9_-]*.[A-Za-z0-9_-]*) ;;
+                    *) echo "Dex gave no ID token" >&2; exit 1 ;;
+                  esac
+                  printf '{"data":{"token":"%s"}}' "$(printf %s "${tok}" | base64 | tr -d '\n')" |
+                    curl -sf -m 20 -o /dev/null -X PATCH --data-binary @- \
+                      --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                      -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                      -H 'Content-Type: application/merge-patch+json' \
+                      https://kubernetes.default.svc/api/v1/namespaces/courier/secrets/courier-agent-token
+                  echo "refreshed the Binding's Dex token"
+              resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {memory: 64Mi}}
+              securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
