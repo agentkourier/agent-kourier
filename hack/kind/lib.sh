@@ -287,15 +287,21 @@ refresh_dex_token() {
 }
 
 # deploy_scenario_agents: the full tier's Phase 1 scenario agents (full/scenarios): the scenario model and the MCP
-# tool server, whose code is kept in ConfigMaps made from the files there, and the kagent Agents that use them.
-# Restarts the two servers so changed code is picked up, and waits for them and for the agents. Needs HERE, K.
+# tool server, whose code is kept in ConfigMaps made from the files there (servers.yaml), and the kagent Agents that
+# use them (scenarios.yaml), made after the servers answer. Restarts the two servers so changed code is picked up, and
+# waits for them, for kagent to have accepted the tool server, and for the agents. Needs HERE, K.
 deploy_scenario_agents() {
   local dir=${HERE}/full/scenarios
   "${K[@]}" -n kagent create configmap scenariollm --from-file=scenariollm.py="${dir}/scenariollm.py" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n kagent create configmap scenariomcp --from-file=scenariomcp.py="${dir}/scenariomcp.py" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  "${K[@]}" apply -f "${dir}/scenarios.yaml" >/dev/null
+  # The servers first, and the agents only once the tool server answers and kagent has discovered its tool: an agent
+  # made beside a server that is still starting, or about to be restarted, can have its golden actor (the snapshot of
+  # its template) crash on a tool server that is not there (GoldenActorCrashed), and then it never becomes Ready.
+  "${K[@]}" apply -f "${dir}/servers.yaml" >/dev/null
   "${K[@]}" -n kagent rollout restart deploy/scenariollm deploy/scenariomcp >/dev/null
   "${K[@]}" -n kagent rollout status deploy/scenariollm deploy/scenariomcp --timeout=180s
+  "${K[@]}" -n kagent wait --for=condition=Accepted remotemcpserver/scenariomcp --timeout=180s
+  "${K[@]}" apply -f "${dir}/scenarios.yaml" >/dev/null
   "${K[@]}" -n kagent wait --for=condition=Ready agent/scenario-gated agent/scenario-memory agent/scenario-ask agent/spike-approve --timeout=300s
 }
 

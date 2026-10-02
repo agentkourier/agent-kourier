@@ -3,57 +3,8 @@
 # model is the scenario model (scenariollm.py), which plays the agent its ModelConfig header names; S5 and the
 # smoke test use test-agent on mockllm (agent.yaml). The one tool, add_numbers (scenariomcp.py), is the S11
 # agent's, and needs approval before it runs. The two servers' code comes from ConfigMaps that up-full.sh makes
-# from the files in scenarios/. Test only: no authentication, never published.
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: scenariollm, namespace: kagent}
-spec:
-  selector: {matchLabels: {app: scenariollm}}
-  template:
-    metadata: {labels: {app: scenariollm}}
-    spec:
-      containers:
-        - name: scenariollm
-          image: python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f
-          command: ["python", "/app/scenariollm.py", "8080"]
-          ports: [{containerPort: 8080}]
-          volumeMounts: [{name: app, mountPath: /app}]
-      volumes: [{name: app, configMap: {name: scenariollm}}]
----
-apiVersion: v1
-kind: Service
-metadata: {name: scenariollm, namespace: kagent}
-spec: {selector: {app: scenariollm}, ports: [{port: 8080}]}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: scenariomcp, namespace: kagent}
-spec:
-  selector: {matchLabels: {app: scenariomcp}}
-  template:
-    metadata: {labels: {app: scenariomcp}}
-    spec:
-      containers:
-        - name: scenariomcp
-          image: python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f
-          command: ["python", "/app/scenariomcp.py", "8082"]
-          ports: [{containerPort: 8082}]
-          volumeMounts: [{name: app, mountPath: /app}]
-      volumes: [{name: app, configMap: {name: scenariomcp}}]
----
-apiVersion: v1
-kind: Service
-metadata: {name: scenariomcp, namespace: kagent}
-spec: {selector: {app: scenariomcp}, ports: [{port: 8082}]}
----
-apiVersion: api.kagent.dev/v1alpha3
-kind: RemoteMCPServer
-metadata: {name: scenariomcp, namespace: kagent}
-spec:
-  description: One-tool MCP server for the S11 agent
-  protocol: STREAMABLE_HTTP
-  url: http://scenariomcp.kagent.svc.cluster.local:8082/mcp
----
+# from the files in scenarios/ (the servers and the tool server's RemoteMCPServer are servers.yaml, applied first, and the
+# agents are made only once the tool server answers). Test only: no authentication, never published.
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
 metadata: {name: scenario-gated, namespace: kagent}
