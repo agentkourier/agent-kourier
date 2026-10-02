@@ -12,25 +12,25 @@ import (
 type Prompt struct {
 	// ID names the interaction. It is courier's own, and comes back as Interaction.PromptID when the
 	// prompt is answered.
-	ID string
+	ID string `json:"id"`
 	// Hint is the agent's one-line title for the question, or "".
-	Hint string
+	Hint string `json:"hint,omitempty"`
 	// Questions is what is asked, in order.
-	Questions []Question
+	Questions []Question `json:"questions"`
 	// Deadline is when the question closes, or the zero time if it does not.
-	Deadline time.Time
+	Deadline time.Time `json:"deadline,omitzero"`
 	// Subagent names the sub-agent that raised a nested pause, or "".
-	Subagent string
+	Subagent string `json:"subagent,omitempty"`
 }
 
 // Question is one question of a Prompt. With no Choices it is free text.
 type Question struct {
-	Text string
+	Text string `json:"text"`
 	// Choices are the options, in order. An answer to a choice question is the index of each option the
 	// person picked, as a decimal string, never the option's text.
-	Choices []string
+	Choices []string `json:"choices,omitempty"`
 	// Multiple lets more than one choice be picked.
-	Multiple bool
+	Multiple bool `json:"multiple,omitempty"`
 }
 
 // Validate says whether the prompt can be asked.
@@ -57,20 +57,20 @@ const (
 // Ending is what replaces a prompt once it has ended: who decided and when, and a summary of the answer,
 // with no controls left.
 type Ending struct {
-	Outcome Outcome
+	Outcome Outcome `json:"outcome"`
 	// By is the user who decided (Answered) or stopped it (Cancelled), as courier verified it, or "". It
 	// is a user ID and not text: the adapter shows it as a mention only if the platform's own ID has
 	// that shape, and otherwise as "someone".
-	By string
+	By string `json:"by,omitempty"`
 	// At is when it ended, or the zero time if that is not known.
-	At time.Time
+	At time.Time `json:"at,omitzero"`
 	// Prompt is what was asked.
-	Prompt Prompt
+	Prompt Prompt `json:"prompt"`
 	// Answers is, for Answered, what to show of each question's answer, in order, each on one line: the
 	// text of each chosen option, and for a free-text answer a fixed word of courier's, never what the person
 	// typed, which may be a secret and which the channel would keep (the owner's rule). An adapter shows what
 	// it is given.
-	Answers [][]string
+	Answers [][]string `json:"answers,omitempty"`
 }
 
 // Validate says whether the ending can be shown.

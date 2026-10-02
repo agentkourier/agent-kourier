@@ -122,8 +122,10 @@ type Buttons struct{ Buttons []Button }
 // Button is one button: Label is literal text on one line, and ID and Value are courier's own, never text
 // the agent wrote.
 type Button struct {
-	ID, Label, Value string
-	Primary          bool
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Value   string `json:"value"`
+	Primary bool   `json:"primary,omitempty"`
 }
 
 func (Header) part()   {}
