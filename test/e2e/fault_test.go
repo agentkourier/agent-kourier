@@ -59,17 +59,13 @@ func TestFaultArmsAndDisarmsOnTheRealDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, err := CourierExpected(env.Tier)
-	if err != nil {
+	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
-	}
-	if !expected {
-		t.Skip("TODO(WP-35i): courier is not deployed in the full tier yet")
 	}
 	if list, err := pods.List(ctx, kube.CourierNamespace, courierPods); err != nil {
 		t.Fatal(err)
 	} else if len(list) == 0 {
-		t.Fatal("the fast tier has no courier pod: its Deployment is missing or was rejected")
+		t.Fatal("the tier has no courier pod: its Deployment is missing or was rejected")
 	}
 	// A failure part way must not leave courier armed for the tests after it.
 	t.Cleanup(func() {

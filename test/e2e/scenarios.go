@@ -3,7 +3,7 @@ package e2e
 // The channels the Phase 1 scenarios drive: each is bound, in the fast tier's courier config
 // (hack/kind/fast/courier/config/binding-s*.yaml), to the stub agent its scenario needs, so that
 // scenarios never share a thread. test/kindmanifests pins the pairing, so a change on either side fails
-// `make test`. The full tier gets its own with WP-35i.
+// `make test`. The full tier's config is the same, with the AgentBackend of its front door.
 const (
 	// ChannelSmoke is the Binding for the stub's test-agent that the smoke test uses. S5 has its own, below.
 	ChannelSmoke = "C1"

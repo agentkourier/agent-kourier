@@ -38,18 +38,13 @@ type scenario struct {
 	pods    *kube.Pods
 }
 
-// newScenario returns what a scenario needs, once courier is ready and connected to the fake. The fast tier
-// has courier, and a scenario fails there if it is not up; the full tier gets it with WP-35i, and the
-// scenario is skipped until then.
+// newScenario returns what a scenario needs, once courier is ready and connected to the fake. Both tiers
+// have courier, and a scenario fails if it is not up.
 func newScenario(t *testing.T) *scenario {
 	t.Helper()
 	env := NewEnv(os.Getenv)
-	expected, err := CourierExpected(env.Tier)
-	if err != nil {
+	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
-	}
-	if !expected {
-		t.Skip("TODO(WP-35i): the full tier has no courier yet")
 	}
 	pods, err := kube.NewInCluster()
 	if err != nil {

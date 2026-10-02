@@ -2,15 +2,15 @@ package e2e
 
 import "testing"
 
-func TestCourierExpected(t *testing.T) {
-	for tier, want := range map[string]bool{"fast": true, "full": false} {
-		if got, err := CourierExpected(tier); err != nil || got != want {
-			t.Errorf("CourierExpected(%q) = %t, %v; want %t", tier, got, err, want)
+func TestCheckTier(t *testing.T) {
+	for _, tier := range []string{"fast", "full"} {
+		if err := CheckTier(tier); err != nil {
+			t.Errorf("CheckTier(%q) = %v; want nil", tier, err)
 		}
 	}
 	for _, tier := range []string{"", "Fast", "fast ", "prod", "none"} {
-		if _, err := CourierExpected(tier); err == nil {
-			t.Errorf("CourierExpected(%q) succeeded; want an error: a tier is never guessed", tier)
+		if err := CheckTier(tier); err == nil {
+			t.Errorf("CheckTier(%q) succeeded; want an error: a tier is never guessed", tier)
 		}
 	}
 }

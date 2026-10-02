@@ -51,44 +51,38 @@ func TestSmoke(t *testing.T) {
 	}
 	// A fake Slack user mentions courier, which is connected to the fake as it would be to Slack: the
 	// test opens no Socket Mode client of its own, because the fake sends envelopes to the newest
-	// connection and a second one would take them from courier. The fast tier has courier, and a missing
-	// or rejected Deployment is a failure here, not a reason to skip. The full tier gets courier with
-	// WP-35i, so there the part is skipped, and said to be.
+	// connection and a second one would take them from courier. Both tiers have courier, and a missing or
+	// rejected Deployment is a failure here, not a reason to skip.
 	sl := NewSlack(env.SlackURL)
-	expected, err := CourierExpected(env.Tier)
+	if err := CheckTier(env.Tier); err != nil {
+		t.Fatal(err)
+	}
+	deployed, err := pods.List(ctx, kube.CourierNamespace, "app.kubernetes.io/name=courier")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !expected {
-		t.Log("TODO(WP-35i): the full tier has no courier yet, so the mention is not driven")
-	} else {
-		deployed, err := pods.List(ctx, kube.CourierNamespace, "app.kubernetes.io/name=courier")
-		if err != nil {
-			t.Fatal(err)
+	if len(deployed) == 0 {
+		t.Fatal("the tier has no courier pod: its Deployment is missing or was rejected")
+	}
+	err = Wait(ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
+		n, err := sl.Connections(ctx)
+		return n > 0, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mention, err := sl.Mention(ctx, ChannelSmoke, "USMOKE", "<@UFAKEBOT> smoke "+name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range mention.Envelopes {
+		if _, err := sl.AckWait(ctx, 15*time.Second, id); err != nil {
+			t.Fatalf("courier never acked the mention's event: %v", err)
 		}
-		if len(deployed) == 0 {
-			t.Fatal("the fast tier has no courier pod: its Deployment is missing or was rejected")
-		}
-		err = Wait(ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
-			n, err := sl.Connections(ctx)
-			return n > 0, err
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		mention, err := sl.Mention(ctx, ChannelSmoke, "USMOKE", "<@UFAKEBOT> smoke "+name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, id := range mention.Envelopes {
-			if _, err := sl.AckWait(ctx, 15*time.Second, id); err != nil {
-				t.Fatalf("courier never acked the mention's event: %v", err)
-			}
-		}
-		thread, err := sl.Thread(ctx, mention.Channel, mention.TS)
-		if err != nil || len(thread) == 0 || !strings.Contains(thread[0].Text, name) {
-			t.Fatalf("Thread = %+v, %v; want the mention read back first", thread, err)
-		}
+	}
+	thread, err := sl.Thread(ctx, mention.Channel, mention.TS)
+	if err != nil || len(thread) == 0 || !strings.Contains(thread[0].Text, name) {
+		t.Fatalf("Thread = %+v, %v; want the mention read back first", thread, err)
 	}
 
 	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // a stuck replacement fails here, with its reason
