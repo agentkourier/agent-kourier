@@ -3,6 +3,7 @@ package render
 import (
 	"strings"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
@@ -20,17 +21,17 @@ const redacted = redact.Redacted
 func redactArgs(v any) any {
 	switch t := v.(type) {
 	case string:
-		return redact.Text(clean(t, true))
+		return redact.Text(chat.Clean(t, false))
 	case map[string]any:
 		pair := false
 		for k, x := range t {
-			if s, ok := x.(string); ok && (strings.EqualFold(k, "name") || strings.EqualFold(k, "key")) && redact.SecretName(clean(s, false)) {
+			if s, ok := x.(string); ok && (strings.EqualFold(k, "name") || strings.EqualFold(k, "key")) && redact.SecretName(chat.Clean(s, true)) {
 				pair = true
 			}
 		}
 		out := make(map[string]any, len(t))
 		for k, x := range t {
-			k = redact.Bound(clean(k, false))
+			k = redact.Bound(chat.Clean(k, true))
 			if redact.SecretName(k) || (pair && strings.EqualFold(k, "value")) {
 				out[k] = redacted
 			} else {
@@ -39,7 +40,7 @@ func redactArgs(v any) any {
 		}
 		return out
 	case []any:
-		if name, ok := firstString(t); ok && len(t) == 2 && redact.SecretName(clean(name, false)) {
+		if name, ok := firstString(t); ok && len(t) == 2 && redact.SecretName(chat.Clean(name, true)) {
 			return []any{redactArgs(name), redacted}
 		}
 		out := make([]any, len(t))

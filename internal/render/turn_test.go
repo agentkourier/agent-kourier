@@ -39,10 +39,10 @@ func TestToolIsOneLineOfLiteralText(t *testing.T) {
 
 func TestToolCapsNameAndArguments(t *testing.T) {
 	line := Tool(strings.Repeat("n", 500), map[string]any{"q": strings.Repeat("v", 5000)})
-	if utf16Len(line.Name) > maxToolName || utf16Len(line.Summary) > maxToolArgs {
-		t.Errorf("name is %d units and summary %d, want at most %d and %d", utf16Len(line.Name), utf16Len(line.Summary), maxToolName, maxToolArgs)
+	if chat.Units(line.Name) > maxToolName || chat.Units(line.Summary) > maxToolArgs {
+		t.Errorf("name is %d units and summary %d, want at most %d and %d", chat.Units(line.Name), chat.Units(line.Summary), maxToolName, maxToolArgs)
 	}
-	if !strings.Contains(line.Name, Truncated) || !strings.Contains(line.Summary, Truncated) {
+	if !strings.Contains(line.Name, chat.Truncated) || !strings.Contains(line.Summary, chat.Truncated) {
 		t.Errorf("%+v should mark both the name and the arguments as truncated", line)
 	}
 }
@@ -125,7 +125,7 @@ func TestBodyKeepsArtifactsInOrderOfFirstAppearance(t *testing.T) {
 	if got, want := Body(events, 40000), "first, grown\n\n<!channel> second"; got != want {
 		t.Errorf("Body = %q, want %q: literal, in order of first appearance", got, want)
 	}
-	if got := Body(events, 20); utf16Len(got) > 20 || !strings.HasSuffix(got, Truncated) {
+	if got := Body(events, 20); chat.Units(got) > 20 || !strings.HasSuffix(got, chat.Truncated) {
 		t.Errorf("Body capped at 20 = %q, want at most 20 units ending in the marker", got)
 	}
 	if got := Body(nil, 40000); got != "" {
@@ -175,16 +175,16 @@ func TestTurnCutsTheBodyAtTheCapsAndTheFallbackAtMaxFallback(t *testing.T) {
 	long := []agent.TextEvent{{ArtifactID: "a", Text: strings.Repeat("x", 3000)}}
 	m, _ := Turn(long, nil, caps(2000))
 	body := m.Parts[0].(chat.Body).Markdown
-	if utf16Len(body) != 2000 || !strings.HasSuffix(body, Truncated) {
-		t.Errorf("body is %d units; want exactly the cap of 2000, marked truncated", utf16Len(body))
+	if chat.Units(body) != 2000 || !strings.HasSuffix(body, chat.Truncated) {
+		t.Errorf("body is %d units; want exactly the cap of 2000, marked truncated", chat.Units(body))
 	}
-	if utf16Len(m.Fallback) != MaxFallback || !strings.HasSuffix(m.Fallback, Truncated) {
-		t.Errorf("fallback is %d units; want %d, marked truncated", utf16Len(m.Fallback), MaxFallback)
+	if chat.Units(m.Fallback) != MaxFallback || !strings.HasSuffix(m.Fallback, chat.Truncated) {
+		t.Errorf("fallback is %d units; want %d, marked truncated", chat.Units(m.Fallback), MaxFallback)
 	}
 	// A place that has its own limit uses it.
 	small := chat.Caps{MaxText: 40000, Limits: map[chat.Where]int{chat.WhereBody: 100}}
-	if m, _ := Turn(long, nil, small); utf16Len(m.Parts[0].(chat.Body).Markdown) != 100 {
-		t.Errorf("body of %d units; want the body limit of 100", utf16Len(m.Parts[0].(chat.Body).Markdown))
+	if m, _ := Turn(long, nil, small); chat.Units(m.Parts[0].(chat.Body).Markdown) != 100 {
+		t.Errorf("body of %d units; want the body limit of 100", chat.Units(m.Parts[0].(chat.Body).Markdown))
 	}
 }
 
@@ -202,29 +202,29 @@ func TestNoticeKeepsItsDetailLiteralOnOneLineAndCapped(t *testing.T) {
 	if got := Notice("Stopped.", ""); got.Fallback != "Stopped." {
 		t.Errorf("Notice with no detail = %q", got.Fallback)
 	}
-	if got := Notice("x", strings.Repeat("d", 500)); utf16Len(got.Fallback) > 2+maxNoticeDetail || !strings.HasSuffix(got.Fallback, Truncated) {
-		t.Errorf("a long detail gives %d units; want it capped and marked", utf16Len(got.Fallback))
+	if got := Notice("x", strings.Repeat("d", 500)); chat.Units(got.Fallback) > 2+maxNoticeDetail || !strings.HasSuffix(got.Fallback, chat.Truncated) {
+		t.Errorf("a long detail gives %d units; want it capped and marked", chat.Units(got.Fallback))
 	}
 }
 
 // FuzzTurnIsBoundedAndClean: whatever the agent sends, a status line is one line, is short, and holds no
 // hidden character; a body is cut to its limit and holds none either.
 func FuzzTurnIsBoundedAndClean(f *testing.F) {
-	for _, tc := range hostile {
-		f.Add(tc.in, uint8(200))
+	for _, seed := range []string{hostileText, "<!channel>\n[x](y)", "a\u200b\u3164\u2800b\xff", "\r\n\u2028 x \t y", strings.Repeat("\u00e9", 300)} {
+		f.Add(seed, uint8(200))
 	}
 	f.Fuzz(func(t *testing.T, s string, l uint8) {
 		limit := int(l)
 		line := Tool(s, map[string]any{s: s})
 		assertNoHidden(t, "name", line.Name, false)
 		assertNoHidden(t, "summary", line.Summary, false)
-		if utf16Len(line.Name) > maxToolName || utf16Len(line.Summary) > maxToolArgs {
+		if chat.Units(line.Name) > maxToolName || chat.Units(line.Summary) > maxToolArgs {
 			t.Errorf("%+v is over the caps", line)
 		}
 		body := Body([]agent.TextEvent{{ArtifactID: "a", Text: s}, {ArtifactID: "b", Text: s}}, limit)
 		assertNoHidden(t, "body", body, true)
-		if utf16Len(body) > limit {
-			t.Errorf("body %q is %d units; limit %d", body, utf16Len(body), limit)
+		if chat.Units(body) > limit {
+			t.Errorf("body %q is %d units; limit %d", body, chat.Units(body), limit)
 		}
 	})
 }

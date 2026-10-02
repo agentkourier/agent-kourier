@@ -11,7 +11,6 @@ linters:
     - depguard      # test fakes must not leak into production code
     - errcheck
     - errorlint     # enforce %w and errors.Is/As over ==/type assertions
-    - forbidigo     # text reaches the wire only through chat.Platform or slack.Render, so render.Text and render.Markdown stay out of new code
     - gocritic
     - gosec
     - govet
@@ -39,12 +38,6 @@ linters:
               desc: render builds neutral messages and never names a platform; text reaches the wire only through chat.Platform (or slack.Render, for the outbox until it stores the neutral payload), so literal render output cannot be put straight into a Slack Content
             - pkg: github.com/slack-go/slack
               desc: render builds neutral messages and never names a platform; text reaches the wire only through chat.Platform
-    forbidigo:
-      analyze-types: true
-      forbid:
-        - pattern: ^render\.(Text|Markdown)$
-          pkg: ^github\.com/agentkourier/agent-kourier/internal/render$
-          msg: render.Text and render.Markdown are Slack-flavoured escaping, kept for the interaction prompts until they are ported (WP-37 S4); a message is built with Turn, Notice or Nothing and left literal, for the platform to make inert
     nolintlint:
       require-explanation: true
       require-specific: true
@@ -55,9 +48,6 @@ linters:
         - shadow          # noisy on the idiomatic `if err := ...` pattern
   exclusions:
     rules:
-      - path: ^internal/render/[^/]+\.go$
-        linters:
-          - forbidigo  # the builders live here, and call them
       - path: _test\.go
         linters:
           - gosec  # test fixtures use fake credentials and loose file modes

@@ -3,6 +3,8 @@ package render
 import (
 	"strings"
 	"testing"
+
+	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
 // secretShapes has one case per shape of secret the display redaction knows. Each says what must
@@ -116,8 +118,8 @@ func TestSecretWords(t *testing.T) {
 func TestLeavesAreBoundedAtAWordBeforeRedaction(t *testing.T) {
 	leaf := func(v any) string { return redactArgs(map[string]any{"x": v}).(map[string]any)["x"].(string) }
 
-	if got := leaf(strings.Repeat("a=", 512<<10)); len(got) > maxRedactBytes+len(Truncated) {
-		t.Errorf("a 1 MB value kept %d bytes; want at most %d", len(got), maxRedactBytes+len(Truncated))
+	if got := leaf(strings.Repeat("a=", 512<<10)); len(got) > maxRedactBytes+len(chat.Truncated) {
+		t.Errorf("a 1 MB value kept %d bytes; want at most %d", len(got), maxRedactBytes+len(chat.Truncated))
 	}
 	if got := leaf("short value"); got != "short value" {
 		t.Errorf("a short value became %q", got)
@@ -134,7 +136,7 @@ func TestLeavesAreBoundedAtAWordBeforeRedaction(t *testing.T) {
 	// Keys are bounded too.
 	huge := redactArgs(map[string]any{strings.Repeat("k", 2*maxRedactBytes): "v"}).(map[string]any)
 	for k := range huge {
-		if len(k) > maxRedactBytes+len(Truncated) {
+		if len(k) > maxRedactBytes+len(chat.Truncated) {
 			t.Errorf("a key of %d bytes was kept", len(k))
 		}
 	}
@@ -193,7 +195,7 @@ func TestTheJoinedSummaryIsBounded(t *testing.T) {
 	for i := range 100 {
 		args[strings.Repeat("k", i+1)] = strings.Repeat("word ", 800)
 	}
-	if got := toolSummary(redactArgs(args).(map[string]any)); len(got) > maxRedactBytes+len(Truncated) {
-		t.Errorf("a summary of 100 arguments kept %d bytes; want at most %d", len(got), maxRedactBytes+len(Truncated))
+	if got := toolSummary(redactArgs(args).(map[string]any)); len(got) > maxRedactBytes+len(chat.Truncated) {
+		t.Errorf("a summary of 100 arguments kept %d bytes; want at most %d", len(got), maxRedactBytes+len(chat.Truncated))
 	}
 }

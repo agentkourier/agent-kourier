@@ -1,3 +1,14 @@
+// Package render turns agent output into messages in the chat-neutral model (package chat): the text of a turn,
+// the status line of a tool call, a notice. Everything it takes in is attacker-influenced (spec 8.4, R2), so what
+// it keeps is what no platform differs on: secrets are redacted out of a tool's arguments (redact.go), what is shown
+// is bounded, and the words courier writes are fixed. The text it returns is literal. It does nothing for a
+// platform's markup: each adapter (internal/chat/slack) makes text inert for its platform, cleans it and cuts it to
+// its limits, and must pass chattest.Conformance to show it does. They are pure: no platform, no I/O.
+//
+// Threat model of the redaction in tool lines: it stops accidental exposure, a credential in an argument that an
+// honest agent passed to a tool. It does not stop a determined agent. Letters that only look like Latin ones (a
+// Cyrillic "a" in "password") are not matched, and the agent can write a secret into its own reply, which is body
+// text and is never redacted.
 package render
 
 import (
