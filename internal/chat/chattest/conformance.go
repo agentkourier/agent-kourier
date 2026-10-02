@@ -134,7 +134,7 @@ func Check(ctx context.Context, s Subject) []Violation { return CheckWith(ctx, s
 
 // CheckWith is Check with options.
 func CheckWith(ctx context.Context, s Subject, opts Options) []Violation {
-	return checkShard(ctx, s, opts, placements(), true)
+	return checkShard(ctx, s, opts, placements(s.MentionUser), true)
 }
 
 // ConformanceSharded is Conformance for an adapter whose checks are slow, such as one that is tested over HTTP
@@ -142,12 +142,12 @@ func CheckWith(ctx context.Context, s Subject, opts Options) []Violation {
 // newSubject makes. Every group is checked as Conformance checks, and the contract once.
 func ConformanceSharded(t *testing.T, shards int, newSubject func(t *testing.T) Subject) {
 	t.Helper()
-	all := placements()
 	results := make([][]Violation, shards)
 	subjects := make([]Subject, shards) // made one at a time, before any runs, as a test's setup is
 	for i := range subjects {
 		subjects[i] = newSubject(t)
 	}
+	all := placements(subjects[0].MentionUser)
 	var wg sync.WaitGroup
 	for i := range shards {
 		var mine []placement
@@ -358,6 +358,9 @@ type placement struct {
 	name     string
 	build    func(text string) call
 	optional bool // the adapter may show nothing of it (an Ending.By that is no user ID is "someone")
+	// mention says the message has a mention of Subject.MentionUser beside the text, which is allowed exactly
+	// once, and that nothing else it shows may act.
+	mention bool
 }
 
 func msg(parts ...chat.Part) call {
@@ -377,42 +380,52 @@ func ending(mod func(*chat.Ending)) call {
 	return call{out: chat.End(e)}
 }
 
-func placements() []placement {
-	return []placement{
-		{chat.WhereFallback, "fallback", func(s string) call { return call{out: chat.Say(chat.Message{Fallback: s})} }, false},
-		{chat.WhereHeader, "header", func(s string) call { return msg(chat.Header{Text: s}) }, false},
-		{chat.WhereBody, "body", func(s string) call { return msg(chat.Body{Markdown: s}) }, false},
-		{chat.WhereContext, "context", func(s string) call { return msg(chat.Context{Text: s}) }, false},
-		{chat.WhereNote, "note", func(s string) call { return msg(chat.Note{Text: s}) }, false},
-		{chat.WhereToolName, "tool name", func(s string) call { return msg(chat.ToolLine{Name: s}) }, false},
-		{chat.WhereToolArg, "tool summary", func(s string) call { return msg(chat.ToolLine{Name: "tool", Summary: s}) }, false},
+func placements(mentionUser string) []placement {
+	out := []placement{
+		{chat.WhereFallback, "fallback", func(s string) call { return call{out: chat.Say(chat.Message{Fallback: s})} }, false, false},
+		{chat.WhereHeader, "header", func(s string) call { return msg(chat.Header{Text: s}) }, false, false},
+		{chat.WhereBody, "body", func(s string) call { return msg(chat.Body{Markdown: s}) }, false, false},
+		{chat.WhereContext, "context", func(s string) call { return msg(chat.Context{Text: s}) }, false, false},
+		{chat.WhereNote, "note", func(s string) call { return msg(chat.Note{Text: s}) }, false, false},
+		{chat.WhereToolName, "tool name", func(s string) call { return msg(chat.ToolLine{Name: s}) }, false, false},
+		{chat.WhereToolArg, "tool summary", func(s string) call { return msg(chat.ToolLine{Name: "tool", Summary: s}) }, false, false},
 		{chat.WhereButton, "button label", func(s string) call {
 			return msg(chat.Buttons{Buttons: []chat.Button{{ID: "go", Label: s, Value: "ix-conformance"}}})
-		}, false},
-		{chat.WhereHint, "prompt hint", func(s string) call { return prompt(func(p *chat.Prompt) { p.Hint = s }) }, false},
-		{chat.WhereSubagent, "prompt sub-agent", func(s string) call { return prompt(func(p *chat.Prompt) { p.Subagent = s }) }, false},
+		}, false, false},
+		{chat.WhereHint, "prompt hint", func(s string) call { return prompt(func(p *chat.Prompt) { p.Hint = s }) }, false, false},
+		{chat.WhereSubagent, "prompt sub-agent", func(s string) call { return prompt(func(p *chat.Prompt) { p.Subagent = s }) }, false, false},
 		{chat.WhereQuestion, "question", func(s string) call {
 			return prompt(func(p *chat.Prompt) { p.Questions = []chat.Question{{Text: s}} })
-		}, false},
+		}, false, false},
 		{chat.WhereChoice, "choice", func(s string) call {
 			return prompt(func(p *chat.Prompt) { p.Questions = []chat.Question{{Text: "which", Choices: []string{s, "other"}}} })
-		}, false},
+		}, false, false},
 		{chat.WhereChoice, "choice, multiple", func(s string) call {
 			return prompt(func(p *chat.Prompt) {
 				p.Questions = []chat.Question{{Text: "which", Choices: []string{s, "other"}, Multiple: true}}
 			})
-		}, false},
-		{chat.WhereHint, "ending hint", func(s string) call { return ending(func(e *chat.Ending) { e.Prompt.Hint = s }) }, false},
-		{chat.WhereSubagent, "ending sub-agent", func(s string) call { return ending(func(e *chat.Ending) { e.Prompt.Subagent = s }) }, false},
+		}, false, false},
+		{chat.WhereHint, "ending hint", func(s string) call { return ending(func(e *chat.Ending) { e.Prompt.Hint = s }) }, false, false},
+		{chat.WhereSubagent, "ending sub-agent", func(s string) call { return ending(func(e *chat.Ending) { e.Prompt.Subagent = s }) }, false, false},
 		{chat.WhereQuestion, "ending question", func(s string) call {
 			return ending(func(e *chat.Ending) { e.Prompt.Questions = []chat.Question{{Text: s}} })
-		}, false},
-		{chat.WhereAnswer, "ending answer", func(s string) call { return ending(func(e *chat.Ending) { e.Answers = [][]string{{s}} }) }, false},
-		{chat.WhereUser, "ending decider", func(s string) call { return ending(func(e *chat.Ending) { e.By = s }) }, true},
-		{chat.WhereUser, "mention user", func(s string) call { return msg(chat.Mention{User: s, Text: "answered first"}) }, true},
-		{chat.WhereContext, "mention text", func(s string) call { return msg(chat.Mention{User: "someone", Text: s}) }, false},
-		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false},
+		}, false, false},
+		{chat.WhereAnswer, "ending answer", func(s string) call { return ending(func(e *chat.Ending) { e.Answers = [][]string{{s}} }) }, false, false},
+		{chat.WhereUser, "ending decider", func(s string) call { return ending(func(e *chat.Ending) { e.By = s }) }, true, false},
+		{chat.WhereUser, "mention user", func(s string) call { return msg(chat.Mention{User: s, Text: "answered first"}) }, true, false},
+		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false, false},
 	}
+	// The words of a Mention, beside a user the platform shows as a mention, and beside one it does not: the words
+	// of the first must stay text next to a live mention, which is where a renderer that builds one text of the
+	// two lets them act.
+	words := func(user string) func(string) call {
+		return func(s string) call { return msg(chat.Mention{User: user, Text: s}) }
+	}
+	if mentionUser != "" {
+		out = append(out, placement{chat.WhereContext, "mention text", words(mentionUser), false, true})
+		return append(out, placement{chat.WhereContext, "mention text, invalid user", words("someone"), false, false})
+	}
+	return append(out, placement{chat.WhereContext, "mention text", words("someone"), false, false})
 }
 
 // run sends text in the place p, by every method that takes it, and checks what the platform received.
@@ -541,8 +554,13 @@ func (c *checker) verify(p placement, method, name, text string, callErr error) 
 	limit := c.caps.Limit(p.where)
 	want := chat.Clean(text, p.where.Line())
 	faithful := false
+	if p.mention {
+		c.checkMention(p, method, name, shown)
+	}
 	for _, s := range carriers {
-		c.checkActive(p, method, name, s)
+		if !p.mention { // a message with a mention is checked as a whole above
+			c.checkActive(p, method, name, s)
+		}
 		if r, ok := invisibleIn(s.Displayed); ok {
 			c.add(RuleInvisible, p.where, method, name, "%U is shown in %q", r, s.Displayed)
 		}
@@ -581,13 +599,37 @@ func displayed(ss []Shown) []string {
 // checkActive fails every construct the place does not allow in text that came from outside.
 func (c *checker) checkActive(p placement, method, name string, s Shown) {
 	for _, a := range s.Active {
-		switch {
-		case a.Kind == KindAutolink && c.s.AllowAutolink:
-		case c.conceded(p.where, a.Kind):
-		case a.Kind.Style() && (p.where.Rich() || c.s.StyleInLiteral):
-		default:
-			c.add(RuleActive, p.where, method, name, "text became a %s: %q", a.Kind, a.Text)
+		c.checkConstruct(p, method, name, a)
+	}
+}
+
+// checkConstruct fails one construct unless the place allows it.
+func (c *checker) checkConstruct(p placement, method, name string, a Active) {
+	switch {
+	case a.Kind == KindAutolink && c.s.AllowAutolink:
+	case c.conceded(p.where, a.Kind):
+	case a.Kind.Style() && (p.where.Rich() || c.s.StyleInLiteral):
+	default:
+		c.add(RuleActive, p.where, method, name, "text became a %s: %q", a.Kind, a.Text)
+	}
+}
+
+// checkMention checks all of what the platform showed for a Mention of Subject.MentionUser with hostile words:
+// exactly one construct acts as the mention of that user, wherever in the message it is, and nothing else acts,
+// so that the words, which sit beside a live mention, are no more able to notify than they are anywhere else.
+func (c *checker) checkMention(p placement, method, name string, shown []Shown) {
+	mentions := 0
+	for _, s := range shown {
+		for _, a := range s.Active {
+			if a.Kind == KindMention && strings.Contains(a.Text, c.s.MentionUser) && mentions == 0 {
+				mentions++
+				continue
+			}
+			c.checkConstruct(p, method, name, a)
 		}
+	}
+	if mentions != 1 {
+		c.add(RuleActive, p.where, method, name, "the valid user became a mention %d times beside these words, want exactly one", mentions)
 	}
 }
 

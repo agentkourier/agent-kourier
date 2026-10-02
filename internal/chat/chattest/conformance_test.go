@@ -58,6 +58,9 @@ type leaks struct {
 	rawUser     bool // the user of a Mention or an Ending is put on the wire as it is
 	twoMentions bool // a valid user is shown as two mentions
 	looseID     bool // the shape of an ID is looked for anywhere in the text, and what holds it is taken for one
+	// wordsBesideMention puts the words of a Mention on the wire as they are, in the same text as the mention of a
+	// valid user, so that what the words hold acts: "answered <!here>" broadcasts.
+	wordsBesideMention bool
 }
 
 // markupPlatform is a platform whose wire format is text with markup: an adapter of it has to escape, which
@@ -189,8 +192,14 @@ func (m *markupPlatform) record(mode string, fields []Field) {
 	m.mode = mode
 	defer func() { m.mode = "" }()
 	m.Subject().Sent() // the fake keeps what it shows, which this platform reads for itself: let it go
-	for _, f := range fields {
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
 		if m.leaks.dropping && f.Where == m.leaks.drop {
+			continue
+		}
+		if m.leaks.wordsBesideMention && f.Where == chat.WhereUser && validUser.MatchString(f.Text) && i+1 < len(fields) && fields[i+1].Where == chat.WhereContext {
+			m.sent = append(m.sent, m.read("<@"+f.Text+"> "+chat.Clean(fields[i+1].Text, true))) // the Mention's user and its words
+			i++
 			continue
 		}
 		m.sent = append(m.sent, m.read(m.encode(f.Text, f.Where)))
@@ -338,6 +347,9 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"Slack: an ID is looked for anywhere in the text", slackPlainText, leaks{mentions: true, looseID: true}, RuleActive, KindMention},
 		{"CommonMark: an ID is looked for anywhere in the text", commonMark, leaks{mentions: true, looseID: true}, RuleActive, KindMention},
 		{"Slack: a valid user shown as two mentions", slackPlainText, leaks{mentions: true, twoMentions: true}, RuleActive, KindMention},
+		{"CommonMark: a valid user shown as two mentions", commonMark, leaks{mentions: true, twoMentions: true}, RuleActive, KindMention},
+		{"Slack: the words beside a valid mention put on the wire as they are", slackPlainText, leaks{mentions: true, wordsBesideMention: true}, RuleActive, KindBroadcast},
+		{"CommonMark: the words beside a valid mention put on the wire as they are", commonMark, leaks{mentions: true, wordsBesideMention: true}, RuleActive, KindBroadcast},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
