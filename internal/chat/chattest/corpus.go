@@ -61,6 +61,7 @@ var links = []Case{
 	{"markdown link, javascript", "[x](javascript:alert(1))"},
 	{"markdown image", "![tracker](https://evil.test/pixel.png)"},
 	{"markdown reference link", "[x][1]\n\n[1]: https://evil.test"},
+	{"markdown reference link, destination on the next line", "[x][1]\n\n[1]:\n  https://evil.test"},
 	{"bare URL", "https://evil.test/login"},
 	{"bare www", "www.evil.test"},
 	{"URL in a sentence", "see https://evil.test/login now"},

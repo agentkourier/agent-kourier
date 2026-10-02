@@ -50,6 +50,7 @@ type leaks struct {
 	refLinks          bool // entities and backslashes, except "[", "]" and ":": a CommonMark reference link survives
 	updateGap         bool // the Update path leaves a field that starts with "<" as it is
 	stopGap           bool // the Stop path does not escape
+	emphasised        bool // the rich places hold the raw text inside emphasis: a reader once saw nothing there
 }
 
 // markupPlatform is a platform whose wire format is text with markup: an adapter of it has to escape, which
@@ -114,6 +115,8 @@ func (m *markupPlatform) encode(s string, w chat.Where) string {
 	}
 	l := m.leaks
 	switch {
+	case l.emphasised && w.Rich():
+		return "*" + s + "*"
 	case l.noEscape, l.stopGap && m.mode == "Stop":
 		return s
 	case l.updateGap && m.mode == "Update" && strings.HasPrefix(s, "<"):
@@ -291,6 +294,8 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"Slack: a backslash before < and & only", slackPlainText, leaks{backslashLt: true}, RuleActive, KindMention},
 		{"Slack: a CommonMark-minded escaper", slackPlainText, leaks{backslashMarkdown: true}, RuleActive, KindLink},
 		{"CommonMark: a reference link survives", commonMark, leaks{refLinks: true}, RuleActive, KindLink},
+		{"Slack: raw text inside emphasis in the rich places", slackPlainText, leaks{emphasised: true}, RuleActive, KindMention},
+		{"CommonMark: raw text inside emphasis in the rich places", commonMark, leaks{emphasised: true}, RuleActive, KindBroadcast},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -354,7 +359,7 @@ func TestNoEscapingIsCaughtForEveryKindOfDangerousText(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"channel", "here", "everyone", "user group", "date", "channel link", "user", "user with a name",
-		"autolink", "link with a label", "markdown link", "markdown image", "markdown reference link", "bare URL", "script", "bold tag"} {
+		"autolink", "link with a label", "markdown link", "markdown image", "markdown reference link", "markdown reference link, destination on the next line", "bare URL", "script", "bold tag"} {
 		if !found[name] {
 			t.Errorf("the corpus case %q was not caught as an active construct when nothing is escaped", name)
 		}

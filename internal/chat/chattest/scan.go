@@ -63,10 +63,12 @@ type dialect struct {
 	links   bool // [text](url), ![alt](url), and links by reference
 	markers bool // a line that starts with # or a list marker (a quote always is a marker)
 	numeric bool // &#60; &#x3C; &quot; and &apos; are characters
+
+	codeTokens bool // a token inside a code span is reported: it is not known to be left alone
 }
 
 var (
-	slackDialect      = dialect{}
+	slackDialect      = dialect{codeTokens: true}
 	commonMarkDialect = dialect{escapes: true, links: true, markers: true, numeric: true}
 )
 
@@ -102,13 +104,19 @@ var slackEntities = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&")
 func ScanCommonMark(wire string) Shown { return scan(wire, commonMarkDialect) }
 
 func scan(wire string, d dialect) Shown {
-	var out strings.Builder
-	var active []Active
 	var defs map[string]bool
 	if d.links {
 		defs = definitions(wire)
 	}
-	atLineStart := true
+	return scanText(wire, d, defs, true)
+}
+
+// scanText reads wire, which may be a part of the whole text: defs are the link reference definitions of the
+// whole, and atLineStart is whether wire starts a line. What is inside an emphasis span is read with the
+// constructs of the whole text, and what it holds is active as if it stood alone.
+func scanText(wire string, d dialect, defs map[string]bool, atLineStart bool) Shown {
+	var out strings.Builder
+	var active []Active
 	for i := 0; i < len(wire); {
 		if atLineStart {
 			if n, kind := lineMarker(wire[i:], d); n > 0 {
@@ -136,7 +144,7 @@ func scan(wire string, d dialect) Shown {
 		case r == '<':
 			i += token(wire[i:], &out, &active)
 		case r == '`':
-			i += code(wire[i:], &out, &active)
+			i += code(wire[i:], d, &out, &active)
 		case d.links && r == '!' && strings.HasPrefix(wire[i:], "!["):
 			if text, url, n, ok := link(wire[i+1:]); ok {
 				active = append(active, Active{KindImage, "![" + text + "](" + url + ")"})
@@ -162,7 +170,9 @@ func scan(wire string, d dialect) Shown {
 		case r == '*' || r == '_' || r == '~':
 			if n, inner := emphasis(wire, i); n > 0 {
 				active = append(active, Active{KindEmphasis, wire[i : i+n]})
-				out.WriteString(scan(inner, d).Displayed)
+				in := scanText(inner, d, defs, false)
+				active = append(active, in.Active...) // emphasis hides nothing: what is inside it acts
+				out.WriteString(in.Displayed)
 				i += n
 			} else {
 				out.WriteRune(r)
@@ -189,7 +199,7 @@ var (
 	email             = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+`)
 	headingMarker     = regexp.MustCompile(`^#{1,6}(?: |$)`)
 	listMarker        = regexp.MustCompile(`^(?:[-*+]|\d{1,9}[.)])(?: |$)`)
-	definitionLine    = regexp.MustCompile(`^ {0,3}\[([^\]\n]+)\]:[ \t]*\S[^\n]*`)
+	definitionLine    = regexp.MustCompile(`(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:\n[ \t]*)?\S[^\n]*`)
 	numericEntity     = regexp.MustCompile(`^&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));`)
 	referenceLabelEnd = regexp.MustCompile(`^\[([^\]\n]*)\](?:\[([^\]\n]*)\])?`)
 )
@@ -207,7 +217,7 @@ func wordStart(s string, i int) bool {
 }
 
 // lineMarker returns the length of what the line at the start of s starts with, and its kind: a quote; in
-// CommonMark a heading, a list marker, or a link reference definition (the whole line).
+// CommonMark a heading, a list marker, or a link reference definition (the whole of it).
 func lineMarker(s string, d dialect) (int, Kind) {
 	j := 0
 	for j < len(s) && s[j] == ' ' && j < 3 {
@@ -217,8 +227,8 @@ func lineMarker(s string, d dialect) (int, Kind) {
 	switch {
 	case strings.HasPrefix(rest, "> ") || rest == ">":
 		return j + 1, KindQuote
-	case d.links && definitionLine.MatchString(s):
-		return len(definitionLine.FindString(s)), KindLink
+	case d.links && definitionAt(s) > 0:
+		return definitionAt(s), KindLink
 	case d.markers && headingMarker.MatchString(rest):
 		return j + strings.IndexByte(rest+" ", ' '), KindHeading
 	case d.markers && listMarker.MatchString(rest):
@@ -227,14 +237,20 @@ func lineMarker(s string, d dialect) (int, Kind) {
 	return 0, ""
 }
 
-// definitions returns the labels of the link reference definitions in wire, lower-cased: a line of
-// "[label]: destination" that starts at the beginning of a line.
+// definitionAt is the length of the link reference definition that starts s, or 0: "[label]: destination", whose
+// destination may stand on the next line.
+func definitionAt(s string) int {
+	if loc := definitionLine.FindStringIndex(s); loc != nil && loc[0] == 0 {
+		return loc[1]
+	}
+	return 0
+}
+
+// definitions returns the labels of the link reference definitions in wire, lower-cased.
 func definitions(wire string) map[string]bool {
 	defs := map[string]bool{}
-	for _, line := range strings.Split(wire, "\n") {
-		if m := definitionLine.FindStringSubmatch(line); m != nil {
-			defs[strings.ToLower(strings.TrimSpace(m[1]))] = true
-		}
+	for _, m := range definitionLine.FindAllStringSubmatch(wire, -1) {
+		defs[strings.ToLower(strings.TrimSpace(m[1]))] = true
 	}
 	return defs
 }
@@ -319,8 +335,10 @@ func token(s string, out *strings.Builder, active *[]Active) int {
 	return end + 1
 }
 
-// code reads a code span or a fenced block at the start of s, and shows its text as it is.
-func code(s string, out *strings.Builder, active *[]Active) int {
+// code reads a code span or a fenced block at the start of s, and shows its text as it is. In Slack's mrkdwn
+// a token in it is reported too: that Slack leaves "<@U1>" in a code span alone is not known
+// (UNCONFIRMED(WP-04)), and an adapter must not rely on it. CommonMark's code is literal.
+func code(s string, d dialect, out *strings.Builder, active *[]Active) int {
 	ticks := 1
 	for ticks < len(s) && s[ticks] == '`' {
 		ticks++
@@ -332,6 +350,13 @@ func code(s string, out *strings.Builder, active *[]Active) int {
 		return ticks
 	}
 	*active = append(*active, Active{KindCode, s[:ticks+end+ticks]})
+	if d.codeTokens {
+		for _, a := range scan(s[ticks:ticks+end], d).Active {
+			if !a.Kind.Style() {
+				*active = append(*active, a)
+			}
+		}
+	}
 	out.WriteString(s[ticks : ticks+end])
 	return ticks + end + ticks
 }
