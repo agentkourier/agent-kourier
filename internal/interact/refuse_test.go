@@ -11,8 +11,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/interact"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -144,12 +144,12 @@ func TestAuditFailureNeverBlocksTheCancel(t *testing.T) {
 	}
 }
 
-// A prompt that does not fit in one message (render.ErrPromptTooLarge, which no retry mends) is no
+// A prompt that does not fit in one message (chat.ErrTooLarge, which no retry mends) is no
 // different to the thread from a pause courier cannot take: it is told, the task is cancelled, and both
 // are audited, once. The interaction is closed with the task, so that the sweep has no prompt to replace.
 func TestAPromptThatIsTooLargeIsRefusedAsUnusable(t *testing.T) {
 	r := newRig(t, nil)
-	r.promptErr = fmt.Errorf("render the prompt: %w", render.ErrPromptTooLarge)
+	r.promptErr = fmt.Errorf("the prompt does not fit: %w", chat.ErrTooLarge)
 	task := askUser("req-1")
 
 	err := r.paused(t, task)

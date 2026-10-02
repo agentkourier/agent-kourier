@@ -14,9 +14,9 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -281,7 +281,7 @@ func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, r
 		return fmt.Errorf("interact: read the session of %s: %w", row.ID, serr)
 	}
 	if _, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
-		ThreadTS: row.Key.ThreadTS, Content: slack.Content{Text: textClosedBefore}}); err != nil {
+		ThreadTS: row.Key.ThreadTS, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
 		return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
 	}
 	return nil

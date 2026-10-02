@@ -105,7 +105,7 @@ func TestADenialReachesTheAgent(t *testing.T) {
 		t.Fatalf("the stub did not pause: %v, %v", paused, err)
 	}
 	r, got := newRig(t, nil), &answerer{ag: ag}
-	in, err := interact.New(interact.Config{Store: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(0), Timeout: time.Minute}}, Prompts: promptFn(nil),
+	in, err := interact.New(interact.Config{Store: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(0), Timeout: time.Minute}}, Platform: fitter{r},
 		Outbox: r.outbox, Session: got, Audit: r.audit})
 	if err != nil {
 		t.Fatal(err)

@@ -9,19 +9,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
-// failsOn is an Updater that fails for the messages in bad and succeeds for the rest.
+// failsOn is an Editor that fails for the messages in bad and succeeds for the rest.
 type failsOn map[string]bool
 
-func (f failsOn) Update(_ context.Context, _, ts string, _ slack.Content) error {
-	if f[ts] {
+func (f failsOn) Update(_ context.Context, r chat.Ref, _ chat.Outgoing) error {
+	if f[r.ID] {
 		return errors.New("slack chat.update: message_not_found")
 	}
 	return nil
+}
+
+// Classify says what the Slack adapter says, which is what the Replacer is run with.
+func (failsOn) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/c").Classify(op, err)
 }
 
 // TestWhatLeftTheHorizonIsForgotten: the repair keeps what it has replaced, and what has failed, only while

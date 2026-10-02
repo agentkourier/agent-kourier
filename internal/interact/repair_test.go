@@ -14,6 +14,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -184,11 +185,13 @@ func TestARateLimitEndsThePass(t *testing.T) {
 	}
 }
 
-// updateFunc is an Updater that is a function.
-type updateFunc func(ctx context.Context, channel, ts string, c slack.Content) error
+// updateFunc is an Editor whose edit is a function.
+type updateFunc func(ctx context.Context) error
 
-func (f updateFunc) Update(ctx context.Context, channel, ts string, c slack.Content) error {
-	return f(ctx, channel, ts, c)
+func (f updateFunc) Update(ctx context.Context, _ chat.Ref, _ chat.Outgoing) error { return f(ctx) }
+
+func (updateFunc) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/c").Classify(op, err)
 }
 
 // TestARateLimitIsWaitedOutFromWhenItArrives: a pass of slow edits can last minutes, so Slack's Retry-After
@@ -198,7 +201,7 @@ func TestARateLimitIsWaitedOutFromWhenItArrives(t *testing.T) {
 	var r *repairRig
 	var attempts atomic.Int32
 	r = newRepairRig(t, func(c *interact.ReplacerConfig) {
-		c.Updater = updateFunc(func(context.Context, string, string, slack.Content) error {
+		c.Updater = updateFunc(func(context.Context) error {
 			attempts.Add(1)
 			r.advance(40 * time.Second) // the edit takes 40 seconds to be refused
 			return fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 30 * time.Second})

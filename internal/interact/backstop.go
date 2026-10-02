@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -128,7 +129,7 @@ func (b *Backstop) check(ctx context.Context, row store.Interaction, now time.Ti
 		return fmt.Errorf("interact: read the session of %s: %w", row.ID, err)
 	}
 	if _, err := b.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
-		ThreadTS: row.Key.ThreadTS, Content: slack.Content{Text: textClosedBefore}}); err != nil {
+		ThreadTS: row.Key.ThreadTS, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
 		return fmt.Errorf("interact: tell the thread that the answer to %s never arrived: %w", row.ID, err)
 	}
 	b.mu.Lock()

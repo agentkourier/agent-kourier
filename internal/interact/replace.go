@@ -11,11 +11,8 @@ import (
 	"sync"
 	"time"
 
-	slackgo "github.com/slack-go/slack"
-
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -23,10 +20,16 @@ import (
 // that one whose message is gone is not tried for ever.
 const maxEditFailures = 10
 
+// Editor edits a message and says what an error of an edit means: chat.Platform.
+type Editor interface {
+	Updater
+	Classify(op chat.Op, err error) chat.Verdict
+}
+
 // ReplacerConfig configures a Replacer. Store and Updater are required.
 type ReplacerConfig struct {
 	Store   store.Interactions
-	Updater Updater
+	Updater Editor
 	Now     func() time.Time // time.Now if nil
 	Logger  *slog.Logger     // slog.Default() if nil
 	// Horizon is how far back the repair looks for interactions that ended (default 24 hours): the
@@ -104,13 +107,13 @@ func (r *Replacer) Replace(ctx context.Context, id string) error {
 	case row.State == store.InteractionPending || row.MessageRef == "":
 		return nil
 	}
-	content, err := ReplacementContent(row)
+	out, err := ReplacementOutgoing(row)
 	if err != nil {
 		return fmt.Errorf("interact: render the replacement of %s: %w", id, err)
 	}
 	editCtx, cancel := context.WithTimeout(ctx, r.cfg.EditTimeout)
 	defer cancel()
-	if err := r.cfg.Updater.Update(editCtx, row.Key.Channel, row.MessageRef, content); err != nil {
+	if err := r.cfg.Updater.Update(editCtx, messageAt(row), out); err != nil {
 		return fmt.Errorf("interact: replace the prompt of %s: %w", id, err)
 	}
 	r.mu.Lock()
@@ -184,18 +187,17 @@ func (r *Replacer) Repair(ctx context.Context) error {
 		}
 		tried++
 		err := r.Replace(ctx, id)
-		var limited *slackgo.RateLimitedError
-		switch {
-		case err == nil:
-		case errors.As(err, &limited):
+		if err == nil {
+			continue
+		}
+		if retry := r.cfg.Updater.Classify(chat.OpPost, err).RetryAfter; retry > 0 { // the platform said when to come back
 			r.mu.Lock()
-			r.waitUntil = r.cfg.Now().Add(max(limited.RetryAfter, time.Second)) // from when it arrived: the pass may have been long
+			r.waitUntil = r.cfg.Now().Add(max(retry, time.Second)) // from when it arrived: the pass may have been long
 			r.mu.Unlock()
 			return errors.Join(errs...)
-		default:
-			errs = append(errs, err)
-			r.fail(ctx, id, err)
 		}
+		errs = append(errs, err)
+		r.fail(ctx, id, err)
 	}
 	return errors.Join(errs...)
 }
@@ -217,42 +219,34 @@ func (r *Replacer) fail(ctx context.Context, id string, err error) {
 	}
 }
 
-// ReplacementContent is the message that takes the place of the prompt of a decided interaction. It is
+// ReplacementOutgoing is the ending that takes the place of the prompt of a decided interaction. It is
 // built from the row alone: the outcome from its state, who from its decider and when from its decision
 // time, and the questions, hint and sub-agent from its stored request. An answer is shown only as its
-// chosen choices, and never as free text (the owner's decision); that is render's rule, and the answer
-// is not otherwise used here.
-func ReplacementContent(row store.Interaction) (slack.Content, error) {
-	e := render.Ending{By: row.Decider, At: row.DecidedAt}
+// chosen choices, and never as free text (the owner's decision): endingOf says only that a free-text
+// question was answered.
+func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
+	var outcome chat.Outcome
 	switch row.State {
 	case store.InteractionAnswered:
-		e.Outcome = render.Answered
+		outcome = chat.Answered
 	case store.InteractionTimedOut:
-		e.Outcome = render.TimedOut
+		outcome = chat.TimedOut
 	case store.InteractionCancelled:
-		e.Outcome = render.Cancelled
+		outcome = chat.Cancelled
 	default:
-		return slack.Content{}, fmt.Errorf("an interaction that is %q has no replacement", row.State)
+		return chat.Outgoing{}, fmt.Errorf("an interaction that is %q has no replacement", row.State)
 	}
 	var in dialect.Interaction
 	if err := json.Unmarshal(row.Request, &in); err != nil {
-		return slack.Content{}, fmt.Errorf("the stored request: %w", err)
+		return chat.Outgoing{}, fmt.Errorf("the stored request: %w", err)
 	}
-	e.Hint, e.Questions = in.Hint, in.Questions
-	if in.Nested != nil {
-		e.Subagent = in.Nested.Subagent
-	}
-	if e.Outcome == render.Answered {
+	var answers [][]string
+	if outcome == chat.Answered {
 		var a dialect.Answer
 		if err := json.Unmarshal(row.Answer, &a); err != nil {
-			return slack.Content{}, fmt.Errorf("the stored answer: %w", err)
+			return chat.Outgoing{}, fmt.Errorf("the stored answer: %w", err)
 		}
-		e.Answers = a.Answers
+		answers = a.Answers
 	}
-	text, blocks := render.Replacement(e)
-	raw, err := json.Marshal(blocks)
-	if err != nil {
-		return slack.Content{}, err
-	}
-	return slack.Content{Text: text, Blocks: raw}, nil
+	return chat.End(endingOf(outcome, row.Decider, row.DecidedAt, in, answers)), nil
 }

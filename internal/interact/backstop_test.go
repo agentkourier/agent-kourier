@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -129,7 +130,8 @@ func TestAnEndedTaskWithAnUndeliveredAnswerGetsOneNotice(t *testing.T) {
 	if !ok || row.Role != store.OutboxNotice || row.Channel != key.Channel || row.ThreadTS != "ix-1" {
 		t.Fatalf("notice = %+v, %v; want one in the thread of the interaction", row, ok)
 	}
-	if want, _ := json.Marshal(slack.Content{Text: closedBeforeText}); row.Payload != string(want) {
+	rendered, err := slack.Render(chat.Say(chat.Message{Fallback: closedBeforeText}))
+	if want, _ := json.Marshal(rendered); err != nil || row.Payload != string(want) {
 		t.Fatalf("notice payload = %s; want the same neutral wording as the decider's", row.Payload)
 	}
 	// Looked at again, the process asks for it no more; and by a process that has just started, it asks

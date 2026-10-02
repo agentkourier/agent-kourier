@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -31,11 +33,21 @@ type edit struct {
 	content     slack.Content
 }
 
-func (e *edits) Update(_ context.Context, channel, ts string, c slack.Content) error {
+// Update keeps the edit as Slack would be sent it: the ending the Replacer made, rendered by the adapter.
+func (e *edits) Update(_ context.Context, r chat.Ref, o chat.Outgoing) error {
+	c, err := slack.Render(o)
+	if err != nil {
+		return fmt.Errorf("the edit is not a message Slack can be sent: %w", err)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.got = append(e.got, edit{channel, ts, c})
+	e.got = append(e.got, edit{r.Channel, r.ID, c})
 	return e.err
+}
+
+// Classify says what the Slack adapter says, which is what the Replacer is run with.
+func (*edits) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/c").Classify(op, err)
 }
 
 func (e *edits) list() []edit {
@@ -193,14 +205,18 @@ func TestAReplacementIsTheSameEveryTime(t *testing.T) {
 	}
 }
 
-// hangs is an Updater whose edit never answers: it waits for its context to end, as a Slack call that has
+// hangs is an Editor whose edit never answers: it waits for its context to end, as a Slack call that has
 // gone quiet does, and counts how many it was given.
 type hangs struct {
 	mu sync.Mutex
 	n  int
 }
 
-func (h *hangs) Update(ctx context.Context, _, _ string, _ slack.Content) error {
+func (*hangs) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/c").Classify(op, err)
+}
+
+func (h *hangs) Update(ctx context.Context, _ chat.Ref, _ chat.Outgoing) error {
 	h.mu.Lock()
 	h.n++
 	h.mu.Unlock()

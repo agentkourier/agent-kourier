@@ -11,9 +11,10 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -72,7 +73,7 @@ func (i *Intake) refuseUnusable(ctx context.Context, p Pause, b Binding, cause e
 
 // refuseTooLarge turns away a pause whose prompt does not fit in one message, which no retry mends: it
 // is refused as unusable, and the interaction, which has no prompt and never will, is closed with the
-// task, so that the sweep has no prompt to replace. cause wraps render.ErrPromptTooLarge.
+// task, so that the sweep has no prompt to replace. cause wraps chat.ErrTooLarge.
 func (i *Intake) refuseTooLarge(ctx context.Context, p Pause, b Binding, row store.Interaction, cause error) error {
 	if err := i.refuseUnusable(ctx, p, b, fmt.Errorf("%w: %w", dialect.ErrUnusablePause, cause)); err != nil {
 		return err
@@ -105,7 +106,7 @@ func (i *Intake) refuseAskUser(ctx context.Context, p Pause, b Binding, in diale
 // cancel enqueues the notice, whose outbox ID comes from id, and cancels the task. handled is true
 // when the task was already not paused: the refusal was made before, and there is nothing more to do.
 func (i *Intake) cancel(ctx context.Context, p Pause, reason, notice, id string) (handled bool, err error) {
-	post := outbox.Post{Source: id, Role: store.OutboxNotice, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Content: slack.Content{Text: notice}}
+	post := outbox.Post{Source: id, Role: store.OutboxNotice, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Out: chat.Say(render.Notice(notice, ""))}
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return false, fmt.Errorf("enqueue the notice: %w", err)
 	}
@@ -169,7 +170,7 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 	if row.State != store.InteractionAnswered {
 		return nil
 	}
-	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Content: slack.Content{Text: noticeDenied}}
+	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Out: chat.Say(render.Notice(noticeDenied, ""))}
 	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
 		return fmt.Errorf("interact: enqueue the notice of %s: %w", row.ID, err)
 	}

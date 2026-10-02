@@ -481,7 +481,7 @@ func TestAnAnswerForATaskThatMovedOnIsToldInTheThread(t *testing.T) {
 		t.Fatalf("Decide = %v; want the press done: the task is not paused, and no retry would change that", err)
 	}
 	posts := r.out.list()
-	if len(posts) != 1 || posts[0].Source != "ix-1/answer" || posts[0].Role != store.OutboxNotice || posts[0].Channel != key.Channel || posts[0].ThreadTS != key.ThreadTS || posts[0].Content.Text != closedBeforeText {
+	if len(posts) != 1 || posts[0].Source != "ix-1/answer" || posts[0].Role != store.OutboxNotice || posts[0].Channel != key.Channel || posts[0].ThreadTS != key.ThreadTS || posts[0].Out.Message == nil || posts[0].Out.Message.Fallback != closedBeforeText {
 		t.Errorf("notices %+v; want one, in the thread, from the interaction", posts)
 	}
 	if r.row(t).State != store.InteractionAnswered {

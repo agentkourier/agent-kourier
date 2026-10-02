@@ -12,16 +12,17 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// Updater edits a message: *slack.Client.
+// Updater edits a message: chat.Platform.
 type Updater interface {
-	Update(ctx context.Context, channel, ts string, content slack.Content) error
+	Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error
 }
 
 // Enqueuer writes a post for the outbox to deliver: *outbox.Outbox.
@@ -41,19 +42,6 @@ type PressQueue interface {
 	PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error)
 }
 
-// Replacement is what a prompt that timed out is replaced with (WP-33b2 renders it).
-type Replacement struct {
-	ID          string
-	Interaction dialect.Interaction // zero if the stored request could not be read
-	Deadline    time.Time
-}
-
-// ReplacementRenderer renders the message that takes the place of a prompt that timed out, with
-// its controls gone. What the agent wrote in the interaction is untrusted, and it is to escape it.
-type ReplacementRenderer interface {
-	TimedOut(r Replacement) (slack.Content, error)
-}
-
 // timedOutNotice is the fixed text of the notice in the thread. It names no agent text, and does not
 // say that the task was cancelled, which it may not have been: it had moved on, or the cancel failed.
 const timedOutNotice = "No one answered this question in time, so it was closed."
@@ -70,13 +58,12 @@ const readAll = 100 * 365 * 24 * time.Hour
 // SweepConfig configures a Sweeper. Everything but Now, Logger, Interval, Batch, Grace and
 // OnTimeout is required.
 type SweepConfig struct {
-	Store        store.Interactions
-	Sessions     SessionReader
-	Session      Session
-	Updater      Updater
-	Outbox       Enqueuer
-	Auditor      Auditor
-	Replacements ReplacementRenderer
+	Store    store.Interactions
+	Sessions SessionReader
+	Session  Session
+	Updater  Updater
+	Outbox   Enqueuer
+	Auditor  Auditor
 	// Presses is asked before an interaction is timed out: one with a press recorded by its
 	// deadline and not yet decided is left, because deciding a press can take longer than the
 	// grace, and cancelling the task under it would drop an answer that came in time.
@@ -110,8 +97,8 @@ type Sweeper struct {
 
 // NewSweeper returns a Sweeper over cfg.
 func NewSweeper(cfg SweepConfig) (*Sweeper, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Session == nil || cfg.Updater == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Replacements == nil || cfg.Presses == nil {
-		return nil, errors.New("interact: Store, Sessions, Session, Updater, Outbox, Auditor, Replacements and Presses are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Session == nil || cfg.Updater == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Presses == nil {
+		return nil, errors.New("interact: Store, Sessions, Session, Updater, Outbox, Auditor and Presses are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -238,21 +225,17 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if row.MessageRef == "" {
 		return nil
 	}
-	r := Replacement{ID: row.ID, Deadline: row.Deadline}
-	if err := json.Unmarshal(row.Request, &r.Interaction); err != nil {
+	var in dialect.Interaction // zero if the stored request cannot be read: the ending still says that it timed out
+	if err := json.Unmarshal(row.Request, &in); err != nil {
 		s.cfg.Logger.WarnContext(ctx, "interact: the stored request cannot be read", "interaction", row.ID)
 	}
-	content, err := s.cfg.Replacements.TimedOut(r)
-	if err != nil {
-		return fmt.Errorf("render: %w", err)
-	}
-	return s.cfg.Updater.Update(ctx, row.Key.Channel, row.MessageRef, content)
+	return s.cfg.Updater.Update(ctx, messageAt(row), chat.End(endingOf(chat.TimedOut, "", row.Deadline, in, nil)))
 }
 
 // notify enqueues the notice. Its ID comes from the interaction, so the same one is never posted twice.
 func (s *Sweeper) notify(ctx context.Context, row store.Interaction) error {
 	_, err := s.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: row.Key.Channel,
-		ThreadTS: row.Key.ThreadTS, Content: slack.Content{Text: timedOutNotice}})
+		ThreadTS: row.Key.ThreadTS, Out: chat.Say(render.Notice(timedOutNotice, ""))})
 	return err
 }
 

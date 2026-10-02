@@ -56,7 +56,7 @@ type interactionDeps struct {
 	st       *sqlite.Store
 	ob       *outbox.Outbox
 	sl       slackAPI
-	platform *slack.Platform // the adapter of sl: who may answer, and what a person is told, go through it
+	platform *slack.Platform // the adapter of sl: prompts, edits, who may answer, and what a person is told go through it
 	auditor  *audit.Writer
 	bindings *Bindings
 	metrics  *Metrics
@@ -85,7 +85,7 @@ func (d interactionDeps) recovered(step string, fn func() error) error {
 func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession, error) {
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
-		Store: d.st, Lookup: d.bindings, Prompts: interact.Renderer{}, Outbox: d.ob, Session: late, Audit: d.auditor,
+		Store: d.st, Lookup: d.bindings, Platform: d.platform, Outbox: d.ob, Session: late, Audit: d.auditor,
 		OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession
 // after it, before the Slack intake opens, so that a press listed just before it finishes is not announced
 // after.
 func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *interact.Tap, stops *stopList) (func(context.Context, slack.Interaction) error, error) {
-	replacer, err := interact.NewReplacer(interact.ReplacerConfig{Store: d.st, Updater: d.sl, Logger: d.log})
+	replacer, err := interact.NewReplacer(interact.ReplacerConfig{Store: d.st, Updater: d.platform, Logger: d.log})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the replacer: %w", err)
 	}
@@ -127,8 +127,8 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		return nil, fmt.Errorf("interactions: the worker: %w", err)
 	}
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
-		Store: d.st, Sessions: d.st, Session: mgr, Updater: d.sl, Outbox: d.ob, Auditor: d.auditor,
-		Replacements: interact.Renderer{}, Presses: d.st, OnTimeout: d.metrics.InteractionTimeout, Logger: d.log,
+		Store: d.st, Sessions: d.st, Session: mgr, Updater: d.platform, Outbox: d.ob, Auditor: d.auditor,
+		Presses: d.st, OnTimeout: d.metrics.InteractionTimeout, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the sweeper: %w", err)

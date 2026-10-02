@@ -18,10 +18,9 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -42,16 +41,10 @@ type Lookup interface {
 	Binding(name string) (Binding, error)
 }
 
-// Prompt is what a renderer turns into the message that asks. ID is what a press carries back.
-type Prompt struct {
-	ID          string
-	Interaction dialect.Interaction
-	Deadline    time.Time
-}
-
-// PromptRenderer renders a prompt (WP-33b1); what the agent wrote is untrusted, and the renderer's to escape.
-type PromptRenderer interface {
-	Prompt(p Prompt) (slack.Content, error)
+// Fitter says whether a prompt can be shown in one message: chat.Platform. It is pure, and is asked before a
+// prompt is posted, so that a pause that cannot be shown is refused as unusable, which no retry mends.
+type Fitter interface {
+	Fits(p chat.Prompt) error
 }
 
 // Sender is *outbox.Outbox: Send posts at once, Enqueue only writes the row for the drain to post.
@@ -60,14 +53,14 @@ type Sender interface {
 	Enqueue(ctx context.Context, p outbox.Post) (string, error)
 }
 
-// Config configures an Intake. Store, Lookup, Prompts, Outbox, Session and Audit are required.
+// Config configures an Intake. Store, Lookup, Platform, Outbox, Session and Audit are required.
 type Config struct {
-	Store   store.Interactions
-	Lookup  Lookup
-	Prompts PromptRenderer
-	Outbox  Sender
-	Session Session
-	Audit   Auditor
+	Store    store.Interactions
+	Lookup   Lookup
+	Platform Fitter
+	Outbox   Sender
+	Session  Session
+	Audit    Auditor
 	// OnApprovalOutcome is called once for each pause a Binding's policy turned away, for the
 	// approval-outcome metric (WP-35f2). The outcomes are a closed set. Optional.
 	OnApprovalOutcome func(binding string, outcome Outcome)
@@ -80,8 +73,8 @@ type Intake struct{ cfg Config }
 
 // New returns an Intake over cfg.
 func New(cfg Config) (*Intake, error) {
-	if cfg.Store == nil || cfg.Lookup == nil || cfg.Prompts == nil || cfg.Outbox == nil || cfg.Session == nil || cfg.Audit == nil {
-		return nil, errors.New("interact: Store, Lookup, Prompts, Outbox, Session and Audit are required")
+	if cfg.Store == nil || cfg.Lookup == nil || cfg.Platform == nil || cfg.Outbox == nil || cfg.Session == nil || cfg.Audit == nil {
+		return nil, errors.New("interact: Store, Lookup, Platform, Outbox, Session and Audit are required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -151,7 +144,7 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	case store.InteractionPending:
 		if row.MessageRef == "" {
 			err := i.post(ctx, p, row, *in)
-			if errors.Is(err, render.ErrPromptTooLarge) {
+			if errors.Is(err, chat.ErrTooLarge) {
 				return i.refuseTooLarge(ctx, p, b, row, err)
 			}
 			return err
@@ -250,13 +243,17 @@ func keyOf(in dialect.Interaction) pauseKey {
 	return k
 }
 
-// post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5).
+// post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5). A prompt
+// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, before anything is sent.
 func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in dialect.Interaction) error {
-	content, err := i.cfg.Prompts.Prompt(Prompt{ID: row.ID, Interaction: in, Deadline: row.Deadline})
+	prompt, err := promptOf(row.ID, in, row.Deadline)
 	if err != nil {
-		return fmt.Errorf("interact: render the prompt of %s: %w", row.ID, err)
+		return fmt.Errorf("interact: make the prompt of %s: %w", row.ID, err)
 	}
-	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Content: content})
+	if err := i.cfg.Platform.Fits(prompt); err != nil {
+		return fmt.Errorf("interact: the prompt of %s: %w", row.ID, err)
+	}
+	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Out: chat.Ask(prompt)})
 	if err != nil {
 		return fmt.Errorf("interact: post the prompt of %s: %w", row.ID, err)
 	}

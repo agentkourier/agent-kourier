@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
@@ -43,17 +45,22 @@ func askUser(id string) a2a.Task {
 // poster is the outbox's Slack, keeping posts by outbox ID. fault fails the next post "before" it
 // happens, or reports an error "after" it did, as a crash would.
 type poster struct {
-	posted map[string]string
-	fault  string
+	posted   map[string]string
+	contents map[string]slack.Content // what each post held, by outbox ID
+	fault    string
 }
 
-func (p *poster) Post(_ context.Context, _, _ string, _ slack.Content, id string) (string, error) {
+func (p *poster) Post(_ context.Context, _, _ string, c slack.Content, id string) (string, error) {
 	f := p.fault
 	p.fault = ""
 	if f == "before" {
 		return "", errBoom
 	}
 	p.posted[id] = fmt.Sprintf("100.%03d", len(p.posted)+1)
+	if p.contents == nil {
+		p.contents = map[string]slack.Content{}
+	}
+	p.contents[id] = c
 	if f == "after" {
 		return "", errBoom
 	}
@@ -91,20 +98,24 @@ type lookup struct{ b interact.Binding }
 
 func (l lookup) Binding(string) (interact.Binding, error) { return l.b, nil }
 
-type promptFn func(interact.Prompt) (slack.Content, error)
+// fitter is the platform that is asked whether a prompt fits: it keeps what it is asked, and says what promptErr says.
+type fitter struct{ r *rig }
 
-func (f promptFn) Prompt(p interact.Prompt) (slack.Content, error) { return f(p) }
+func (f fitter) Fits(p chat.Prompt) error {
+	f.r.asked = append(f.r.asked, p)
+	return f.r.promptErr
+}
 
 type rig struct {
 	in     *interact.Intake
 	st     *refStore
 	slack  *poster
-	asked  []interact.Prompt // what the renderer was asked for
+	asked  []chat.Prompt // what the platform was asked to fit
 	sess   *sess
 	audit  *auditor
 	outbox *outbox.Outbox
 	hook   []interact.Outcome // what OnApprovalOutcome was told
-	// promptErr, if set, is what the renderer returns instead of a prompt.
+	// promptErr, if set, is what the platform answers to Fits.
 	promptErr error
 }
 
@@ -124,14 +135,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	if mod != nil {
 		mod(&b)
 	}
-	prompts := promptFn(func(p interact.Prompt) (slack.Content, error) {
-		r.asked = append(r.asked, p)
-		if r.promptErr != nil {
-			return slack.Content{}, r.promptErr
-		}
-		return slack.Content{Text: "prompt " + p.ID}, nil
-	})
-	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Prompts: prompts, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
+	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -168,8 +172,13 @@ func TestPausedRecordsOnePendingInteractionAndPostsOnePrompt(t *testing.T) {
 	if ts := r.slack.posted[outbox.ID(row.ID, store.OutboxReply)]; len(r.slack.posted) != 1 || ts == "" || row.MessageRef != ts {
 		t.Errorf("posts %v, ref %q; want one post, outbox ID from the interaction, recorded as the ref", r.slack.posted, row.MessageRef)
 	}
-	if len(r.asked) != 1 || r.asked[0].ID != row.ID || r.asked[0].Interaction.RequestID != "req-1" || !r.asked[0].Deadline.Equal(row.Deadline) {
-		t.Errorf("the renderer was asked %+v; want the ID, the pause and the deadline", r.asked)
+	if len(r.asked) != 1 || r.asked[0].ID != row.ID || len(r.asked[0].Questions) != 1 || r.asked[0].Questions[0].Text != "Which?" || !r.asked[0].Deadline.Equal(row.Deadline) {
+		t.Errorf("the platform was asked to fit %+v; want the ID, the question and the deadline", r.asked)
+	}
+	// What is posted is the prompt in the neutral model, which the outbox renders for Slack: the question, and
+	// the button that a press carries the interaction's ID back on.
+	if posted := string(r.slack.contents[outbox.ID(row.ID, store.OutboxReply)].Blocks); !strings.Contains(posted, "Which?") || !strings.Contains(posted, "Submit") || !strings.Contains(posted, row.ID) {
+		t.Errorf("posted blocks %s; want the rendered prompt: its question, its Submit button, valued with the interaction ID", posted)
 	}
 	// Seen again an hour later (the rig's clock), as a reconciliation re-emits it: the prompt is not
 	// rendered or sent again, and the deadline is the one from the pause time.

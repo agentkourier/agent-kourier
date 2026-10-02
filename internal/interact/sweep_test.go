@@ -18,7 +18,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -97,17 +97,22 @@ func (s *sweepSess) cancelled() []a2a.TaskID {
 
 // updates records the prompt replacements; err fails the next ones.
 type updates struct {
-	mu  sync.Mutex
-	got []string // "channel ts text"
-	err error
-	log *callLog
+	mu   sync.Mutex
+	got  []string // "channel ts outcome"
+	ends []chat.Ending
+	err  error
+	log  *callLog
 }
 
-func (u *updates) Update(_ context.Context, channel, ts string, c slack.Content) error {
+func (u *updates) Update(_ context.Context, r chat.Ref, o chat.Outgoing) error {
 	u.log.add("edit")
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.got = append(u.got, channel+" "+ts+" "+c.Text)
+	if o.Ending == nil {
+		return fmt.Errorf("the edit is not an ending: %+v", o)
+	}
+	u.got = append(u.got, r.Channel+" "+r.ID+" "+string(o.Ending.Outcome))
+	u.ends = append(u.ends, *o.Ending)
 	return u.err
 }
 
@@ -116,10 +121,6 @@ func (u *updates) list() []string {
 	defer u.mu.Unlock()
 	return append([]string(nil), u.got...)
 }
-
-type replacementFn func(interact.Replacement) (slack.Content, error)
-
-func (f replacementFn) TimedOut(r interact.Replacement) (slack.Content, error) { return f(r) }
 
 // audits records the decisions written.
 type audits struct {
@@ -214,9 +215,6 @@ func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *inter
 	t.Helper()
 	cfg := interact.SweepConfig{
 		Store: r.st, Sessions: r.st, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press,
-		Replacements: replacementFn(func(p interact.Replacement) (slack.Content, error) {
-			return slack.Content{Text: "timed out " + p.ID}, nil
-		}),
 		Now:       func() time.Time { return *r.clock },
 		Logger:    slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnTimeout: func(id string) { r.mu.Lock(); r.hooks = append(r.hooks, id); r.mu.Unlock() },
@@ -306,7 +304,7 @@ func TestSweepTimesOutADueInteractionOnce(t *testing.T) {
 	if got := r.sess.cancelled(); len(got) != 1 || got[0] != "task-1" {
 		t.Errorf("cancelled %v; want only task-1, once", got)
 	}
-	if got := r.upd.list(); len(got) != 1 || got[0] != "C1 100.001 timed out ix-1" {
+	if got := r.upd.list(); len(got) != 1 || got[0] != "C1 100.001 timed_out" {
 		t.Errorf("updates %q; want the prompt replaced once", got)
 	}
 	rows := r.notices(t)
@@ -481,6 +479,36 @@ func TestAPromptThatWasNeverPostedHasNothingToEdit(t *testing.T) {
 	}
 	if err := r.sweeper(t, nil).Sweep(t.Context()); err != nil || len(r.upd.list()) != 0 || r.state(t, "ix-1") != store.InteractionTimedOut {
 		t.Fatalf("Sweep = %v, %d updates, state %v; want no edit and a timeout", err, len(r.upd.list()), r.state(t, "ix-1"))
+	}
+}
+
+// TestTheTimedOutPromptIsReplacedByAnEndingAtItsDeadline: the edit is the prompt's ending in the neutral
+// model, dated at the deadline, with no one named and no answer, and with the question as asked; and a
+// request that cannot be read still has one.
+func TestTheTimedOutPromptIsReplacedByAnEndingAtItsDeadline(t *testing.T) {
+	r := newSweepRig(t)
+	r.pending(t, "ix-1", "task-1", t0.Add(timeout))
+	if _, err := r.st.CreateInteraction(t.Context(), store.Interaction{ID: "ix-bad", Key: key, TaskID: "task-2", Kind: store.InteractionAskUser, Request: []byte(`not json`), CreatedAt: t0, Deadline: t0.Add(timeout)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.SetInteractionMessageRef(t.Context(), "ix-bad", "100.002"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.sweeper(t, nil).Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ends := r.upd.ends
+	if len(ends) != 2 {
+		t.Fatalf("%d edits; want both prompts replaced", len(ends))
+	}
+	for _, e := range ends {
+		if e.Outcome != chat.TimedOut || e.By != "" || !e.At.Equal(t0.Add(timeout)) || e.Answers != nil {
+			t.Errorf("ending %+v; want timed out at the deadline, with no one named and no answer", e)
+		}
+	}
+	asked := ends[slices.Index(r.upd.got, "C1 100.001 timed_out")] // the order of the two is the store's
+	if len(asked.Prompt.Questions) != 1 || asked.Prompt.Questions[0].Text != "Which?" {
+		t.Errorf("ending %+v; want the question as asked", asked.Prompt)
 	}
 }
 
