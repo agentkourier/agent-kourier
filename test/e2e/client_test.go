@@ -43,3 +43,20 @@ func TestClientReportsATransportFailure(t *testing.T) {
 		t.Fatalf("do = %v, want a transport error", err)
 	}
 }
+
+// TestClientDoesNotReadAnAnswerItIgnores: a call that wants no answer succeeds whatever the body is, so a
+// double that says more than the limit allows is not a failure of a call that never looked.
+func TestClientDoesNotReadAnAnswerItIgnores(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, maxBody+10))
+	}))
+	defer srv.Close()
+	c := newClient(srv.URL)
+	if err := c.do(t.Context(), http.MethodGet, "/", nil, nil); err != nil {
+		t.Fatalf("do with no answer wanted = %v; want success", err)
+	}
+	var out any
+	if err := c.do(t.Context(), http.MethodGet, "/", nil, &out); !errors.Is(err, errTooLarge) {
+		t.Fatalf("do wanting the answer = %v; want errTooLarge", err)
+	}
+}
