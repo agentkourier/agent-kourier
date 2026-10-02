@@ -217,13 +217,13 @@ load_courier_image() {
 deploy_courier() {
   local config
   config=$(mktemp -d)
+  trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
   cp "${HERE}"/fast/courier/config/*.yaml "${config}"
   cp "$1" "${config}/agentbackend.yaml"
   "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n courier create configmap courier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  rm -rf "${config}"
   "${K[@]}" apply -f "${HERE}/fast/courier" >/dev/null
   "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
 }
@@ -231,27 +231,40 @@ deploy_courier() {
 # The curl image the scripts' probe pods run, pinned; the same as the verify scripts'.
 CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
 
+# delete_courier_pod NAME: delete a throwaway pod of namespace courier, if there is one. Needs K.
+delete_courier_pod() { "${K[@]}" -n courier delete pod "$1" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
+
+# dex_token_from: the token in what refresh_dex_token's pod printed, on stdin. The pod prints it as one line,
+# TOKEN:<jwt>:END, and the token is the first line that is exactly that. kubectl, when it cannot attach to the pod
+# under load, falls back to streaming the pod's logs, and can print them twice or cut a copy short and glue it to
+# the next: a line that is not wholly good is no token, and nothing is printed for it, so the caller tries again and
+# never stores a mangled one.
+dex_token_from() {
+  sed -n 's/^TOKEN:\([A-Za-z0-9_-]\{1,\}\.[A-Za-z0-9_-]\{1,\}\.[A-Za-z0-9_-]\{1,\}\):END$/\1/p' | head -n 1
+}
+
 # refresh_dex_token: mint the Binding identity's ID token from Dex and store it in the Secret
 # courier-agent-token, key token, in namespace courier. Dex has no client_credentials grant (H-02), so the
 # identity is a static user that signs in with the password grant, and its token lives 24 hours: run this before
 # each use of the full tier whose last refresh is not recent (up-full.sh and e2e-run.sh do). The token is made
 # inside the cluster by a throwaway pod, where Dex is, and goes from there to the Secret through pipes: it is
-# never printed, put on a command line or written to a file. Courier reads the Secret on every request, so a
-# refreshed token is sent from the next call. The client and the user are the fake ones of full/dex.yaml.
-# Needs K.
+# never printed, put on a command line or written to a file. The pod is deleted when this returns, whatever
+# happened, since its logs hold the token. Courier reads the Secret on every request, so a refreshed token is sent
+# from the next call. The client and the user are the fake ones of full/dex.yaml. Needs K.
 refresh_dex_token() {
-  local pod=dex-token-${RANDOM} tok
+  local pod tok attempt
   "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  # The pod prints the token response's id_token and nothing else of it, but kubectl, when it cannot attach under load,
-  # falls back to streaming the pod's logs and can print the output twice. Whatever surrounds it, the token is the
-  # first thing in the output that has the shape of a JWT (three dot-separated base64url parts), and anything else
-  # is no token.
-  tok=$("${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
-    curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \
-      -d username=binding-test@example.test -d password=password -d "scope=openid email" \
-      http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/\1/p"' 2>/dev/null |
-    grep -Eo '[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' | head -n 1) || tok=
-  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity (is Dex up? did the pod run?)"
+  for attempt in 1 2 3; do
+    pod=dex-token-${RANDOM}
+    trap 'delete_courier_pod "${pod}"; trap - RETURN' RETURN # a return from here, an error included, still deletes it
+    tok=$("${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+      curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \
+        -d username=binding-test@example.test -d password=password -d "scope=openid email" \
+        http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/TOKEN:\1:END/p"' 2>/dev/null | dex_token_from) || tok=
+    delete_courier_pod "${pod}"
+    [ -z "${tok}" ] || break
+  done
+  [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity after three tries (is Dex up? did the pod run?)"
   printf %s "${tok}" | "${K[@]}" -n courier create secret generic courier-agent-token --from-file=token=/dev/stdin \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 }
