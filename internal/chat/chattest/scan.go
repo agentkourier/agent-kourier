@@ -168,7 +168,7 @@ func scanText(wire string, d dialect, defs map[string]bool, atLineStart bool) Sh
 				i += size
 			}
 		case r == '*' || r == '_' || r == '~':
-			if n, inner := emphasis(wire, i); n > 0 {
+			if n, inner := emphasis(wire, i, d, defs); n > 0 {
 				active = append(active, Active{KindEmphasis, wire[i : i+n]})
 				in := scanText(inner, d, defs, false)
 				active = append(active, in.Active...) // emphasis hides nothing: what is inside it acts
@@ -195,13 +195,14 @@ func scanText(wire string, d dialect, defs map[string]bool, atLineStart bool) Sh
 }
 
 var (
-	autolink          = regexp.MustCompile(`^(?:https?://|www\.)[^\s<>]+`)
+	autolink          = regexp.MustCompile(`(?i)^(?:(?:https?|ftp)://|www\.)[^\s<>]+`)
 	email             = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+`)
 	headingMarker     = regexp.MustCompile(`^#{1,6}(?: |$)`)
 	listMarker        = regexp.MustCompile(`^(?:[-*+]|\d{1,9}[.)])(?: |$)`)
 	definitionLine    = regexp.MustCompile(`(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:\n[ \t]*)?\S[^\n]*`)
 	numericEntity     = regexp.MustCompile(`^&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));`)
-	referenceLabelEnd = regexp.MustCompile(`^\[([^\]\n]*)\](?:\[([^\]\n]*)\])?`)
+	referenceLabelEnd = regexp.MustCompile(`^\[([^\]]*)\](?:\[([^\]]*)\])?`)
+	blankLine         = regexp.MustCompile(`\n[ \t]*\n`)
 )
 
 func isPunct(b byte) bool {
@@ -246,11 +247,15 @@ func definitionAt(s string) int {
 	return 0
 }
 
-// definitions returns the labels of the link reference definitions in wire, lower-cased.
+// label is a link label as CommonMark matches it: white space of any kind and length is one space, and case
+// does not count.
+func label(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// definitions returns the labels of the link reference definitions in wire.
 func definitions(wire string) map[string]bool {
 	defs := map[string]bool{}
 	for _, m := range definitionLine.FindAllStringSubmatch(wire, -1) {
-		defs[strings.ToLower(strings.TrimSpace(m[1]))] = true
+		defs[label(m[1])] = true
 	}
 	return defs
 }
@@ -259,14 +264,14 @@ func definitions(wire string) map[string]bool {
 // the label is one a definition gives. It returns the text and how much of s it used.
 func reference(s string, defs map[string]bool) (text string, n int, ok bool) {
 	m := referenceLabelEnd.FindStringSubmatch(s)
-	if m == nil {
+	if m == nil || blankLine.MatchString(m[0]) { // a line may end inside a label, but a blank line ends it
 		return "", 0, false
 	}
-	label := strings.ToLower(strings.TrimSpace(m[2]))
-	if label == "" { // "[text][]" and "[label]" use the text as the label
-		label = strings.ToLower(strings.TrimSpace(m[1]))
+	want := label(m[2])
+	if want == "" { // "[text][]" and "[label]" use the text as the label
+		want = label(m[1])
 	}
-	if !defs[label] {
+	if !defs[want] {
 		return "", 0, false
 	}
 	return m[1], len(m[0]), true
@@ -361,10 +366,11 @@ func code(s string, d dialect, out *strings.Builder, active *[]Active) int {
 	return ticks + end + ticks
 }
 
-// link reads "[text](url)" at the start of s.
+// link reads "[text](url)" at the start of s. The text may run over lines, as in CommonMark, but a blank
+// line ends it.
 func link(s string) (text, url string, n int, ok bool) {
 	mid := strings.Index(s, "](")
-	if !strings.HasPrefix(s, "[") || mid < 0 || strings.ContainsAny(s[1:mid], "[\n") {
+	if !strings.HasPrefix(s, "[") || mid < 0 || strings.Contains(s[1:mid], "[") || blankLine.MatchString(s[1:mid]) {
 		return "", "", 0, false
 	}
 	end := strings.IndexByte(s[mid:], ')')
@@ -376,24 +382,35 @@ func link(s string) (text, url string, n int, ok bool) {
 
 // emphasis reads a pair of the delimiter at s[i] (one or two of it) that opens at i, and returns the length
 // of the whole span and its inner text. An opening delimiter is followed by a non-space and, for "_",
-// preceded by a non-letter; a closing one is preceded by a non-space.
-func emphasis(s string, i int) (n int, inner string) {
-	d := s[i]
+// preceded by a non-letter; a closing one is preceded by a non-space. Where the dialect has links, a link
+// binds tighter than emphasis: a delimiter inside a link's text or destination does not close the span, so
+// "_[x_](javascript:alert(1))" is a link and not an emphasis that ends inside it.
+func emphasis(s string, i int, d dialect, defs map[string]bool) (n int, inner string) {
+	delim := s[i]
 	width := 1
-	if i+1 < len(s) && s[i+1] == d {
+	if i+1 < len(s) && s[i+1] == delim {
 		width = 2
 	}
-	if i+width >= len(s) || s[i+width] == ' ' || s[i+width] == '\n' || (d == '_' && !wordStart(s, i)) {
+	if i+width >= len(s) || s[i+width] == ' ' || s[i+width] == '\n' || (delim == '_' && !wordStart(s, i)) {
 		return 0, ""
 	}
-	delim := strings.Repeat(string(d), width)
-	for j := i + width + 1; j+width <= len(s); j++ {
+	closer := strings.Repeat(string(delim), width)
+	for j := i + width; j+width <= len(s); j++ {
+		if d.links {
+			if end := linkEnd(s[j:], defs); end > 0 {
+				j += end - 1
+				continue
+			}
+		}
+		if j == i+width { // the first character cannot close the span
+			continue
+		}
 		if s[j] == '\n' {
 			return 0, ""
 		}
-		if strings.HasPrefix(s[j:], delim) && s[j-1] != ' ' && s[j-1] != '\\' {
+		if strings.HasPrefix(s[j:], closer) && s[j-1] != ' ' && s[j-1] != '\\' {
 			after := j + width
-			if d == '_' && after < len(s) {
+			if delim == '_' && after < len(s) {
 				if r, _ := utf8.DecodeRuneInString(s[after:]); unicode.IsLetter(r) || unicode.IsDigit(r) {
 					continue
 				}
@@ -402,4 +419,22 @@ func emphasis(s string, i int) (n int, inner string) {
 		}
 	}
 	return 0, ""
+}
+
+// linkEnd is how much of s a link, an image or a reference link that starts it takes, or 0.
+func linkEnd(s string, defs map[string]bool) int {
+	switch {
+	case strings.HasPrefix(s, "!["):
+		if _, _, n, ok := link(s[1:]); ok {
+			return 1 + n
+		}
+	case strings.HasPrefix(s, "["):
+		if _, _, n, ok := link(s); ok {
+			return n
+		}
+		if _, n, ok := reference(s, defs); ok {
+			return n
+		}
+	}
+	return 0
 }
