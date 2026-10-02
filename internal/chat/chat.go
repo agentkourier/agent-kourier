@@ -65,7 +65,7 @@ const (
 	WhereContext               // Context.Text
 	WhereNote                  // Note.Text
 	WhereToolName              // ToolLine.Name
-	WhereToolArg               // a value in ToolLine.Args
+	WhereToolArg               // ToolLine.Summary
 	WhereButton                // Button.Label
 	WhereHint                  // Prompt.Hint
 	WhereSubagent              // Prompt.Subagent

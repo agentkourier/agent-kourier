@@ -231,14 +231,14 @@ func TestEphemeralsAreKeptAndNeedAMessage(t *testing.T) {
 func TestFieldsListsEveryPieceOfTextWithItsPlace(t *testing.T) {
 	m := chat.Message{Fallback: "f", Parts: []chat.Part{
 		chat.Header{Text: "h"}, chat.Body{Markdown: "b"}, chat.Context{Text: "c"}, chat.Note{Text: "n"},
-		chat.ToolLine{Name: "t", Args: map[string]string{"k": "v"}},
+		chat.ToolLine{Name: "t", Summary: "k=v"},
 		chat.Buttons{Buttons: []chat.Button{{ID: "i", Label: "l", Value: "v"}}},
 	}}
 	got := map[chat.Where][]string{}
 	for _, f := range Fields(chat.Say(m)) {
 		got[f.Where] = append(got[f.Where], f.Text)
 	}
-	for w, want := range map[chat.Where]int{chat.WhereFallback: 1, chat.WhereHeader: 1, chat.WhereBody: 1, chat.WhereContext: 1, chat.WhereNote: 1, chat.WhereToolName: 1, chat.WhereToolArg: 2, chat.WhereButton: 1} {
+	for w, want := range map[chat.Where]int{chat.WhereFallback: 1, chat.WhereHeader: 1, chat.WhereBody: 1, chat.WhereContext: 1, chat.WhereNote: 1, chat.WhereToolName: 1, chat.WhereToolArg: 1, chat.WhereButton: 1} {
 		if len(got[w]) != want {
 			t.Errorf("%s: %d fields %v, want %d", w, len(got[w]), got[w], want)
 		}

@@ -47,10 +47,7 @@ func MessageFields(m chat.Message) []Field {
 			add(p.Text, chat.WhereNote)
 		case chat.ToolLine:
 			add(p.Name, chat.WhereToolName)
-			for k, v := range p.Args {
-				add(k, chat.WhereToolArg)
-				add(v, chat.WhereToolArg)
-			}
+			add(p.Summary, chat.WhereToolArg)
 		case chat.Buttons:
 			for _, b := range p.Buttons {
 				add(b.Label, chat.WhereButton)

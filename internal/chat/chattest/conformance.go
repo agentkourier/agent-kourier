@@ -301,8 +301,7 @@ func placements() []placement {
 		{chat.WhereContext, "context", func(s string) call { return msg(chat.Context{Text: s}) }, false},
 		{chat.WhereNote, "note", func(s string) call { return msg(chat.Note{Text: s}) }, false},
 		{chat.WhereToolName, "tool name", func(s string) call { return msg(chat.ToolLine{Name: s}) }, false},
-		{chat.WhereToolArg, "tool argument value", func(s string) call { return msg(chat.ToolLine{Name: "tool", Args: map[string]string{"k": s}}) }, false},
-		{chat.WhereToolArg, "tool argument name", func(s string) call { return msg(chat.ToolLine{Name: "tool", Args: map[string]string{s: "v"}}) }, false},
+		{chat.WhereToolArg, "tool summary", func(s string) call { return msg(chat.ToolLine{Name: "tool", Summary: s}) }, false},
 		{chat.WhereButton, "button label", func(s string) call {
 			return msg(chat.Buttons{Buttons: []chat.Button{{ID: "go", Label: s, Value: "ix-conformance"}}})
 		}, false},

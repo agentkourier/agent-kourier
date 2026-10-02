@@ -76,7 +76,7 @@ func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	w := newWorld(t)
 	msg := chat.Message{Fallback: "the fallback", Parts: []chat.Part{
 		chat.Header{Text: "Title"}, chat.Body{Markdown: "*body* & <@U1> [x](y)"}, chat.Context{Text: "small"}, chat.Note{Text: "a note\non two lines"},
-		chat.ToolLine{Name: "kubectl", Args: map[string]string{"b": "2", "a": "1"}},
+		chat.ToolLine{Name: "kubectl", Summary: "a=1, b=2"},
 		chat.Buttons{Buttons: []chat.Button{{ID: "go", Label: "Go", Value: "v1", Primary: true}, {ID: "no", Label: "No", Value: "v2"}}},
 	}}
 
@@ -97,7 +97,7 @@ func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	}
 	tool, _ := blocks[4]["elements"].([]any)
 	if line := tool[0].(map[string]any)["text"]; line != "Calling kubectl(a=1, b=2)" {
-		t.Errorf("tool line = %q, want the arguments in key order", line)
+		t.Errorf("tool line = %q, want the name and the summary", line)
 	}
 	btns := blocks[5]["elements"].([]any)
 	first, second := btns[0].(map[string]any), btns[1].(map[string]any)

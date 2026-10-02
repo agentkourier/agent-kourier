@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,8 +30,8 @@ const (
 	maxListLine      = 200   // one choice in the numbered list a prompt falls back to, with its number
 	maxMarkdown      = 12000 // a markdown block's text, and across all of a message's
 	maxValue         = 2000  // a button's value
-	maxToolName      = 150   // a tool's name in a status line
-	maxToolArgs      = 140   // the arguments in a status line, which with its words is at most 300
+	maxToolName      = 100   // a tool's name in a status line
+	maxToolArgs      = 190   // the arguments in a status line, which with its words is at most 300
 	maxSubagentLine  = 100   // the line that names a sub-agent, with its words
 	maxAnswerLine    = 600   // a question and its answer in an ending
 	maxQuestionInEnd = 100   // a question's text in the ending's summary of it
@@ -158,19 +157,10 @@ func notBlank(a, b string) string {
 	return b
 }
 
-// toolLine is the status line of a tool call, on one line: "Calling name(key=value, ...)", with the arguments
-// in key order. The caller has redacted them already.
+// toolLine is the status line of a tool call, on one line: "Calling name(summary)". The caller has redacted
+// the summary already.
 func toolLine(t chat.ToolLine) string {
-	keys := make([]string, 0, len(t.Args))
-	for k := range t.Args {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	pairs := make([]string, len(keys))
-	for i, k := range keys {
-		pairs[i] = k + "=" + t.Args[k]
-	}
-	return "Calling " + text(t.Name, maxToolName, true) + "(" + text(strings.Join(pairs, ", "), maxToolArgs, true) + ")"
+	return "Calling " + text(t.Name, maxToolName, true) + "(" + text(t.Summary, maxToolArgs, true) + ")"
 }
 
 // buttons is an actions block of p's buttons, or nil if there are none. A label cut to nothing reads
