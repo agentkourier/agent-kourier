@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +18,8 @@ import (
 )
 
 var (
-	// ErrSlackAuth is wrapped by the error RunSlack returns when Slack rejected the tokens for good:
+	// ErrSlackAuth is wrapped by the error RunPlatform returns when the chat platform rejected the credentials for good
+	// (Slack, in v1, which the name keeps for the exit code that cmd/courier maps it to):
 	// the process exits, with the code in the error, because no retry would help.
 	ErrSlackAuth = errors.New("slack rejected the tokens")
 	// ErrWiring is wrapped by an error that means the broker was put together wrongly, or its
@@ -32,7 +34,7 @@ type PlatformRunner interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// RunPolicy is how RunSlack paces its retries. Zero fields take their defaults.
+// RunPolicy is how RunPlatform paces its retries. Zero fields take their defaults.
 type RunPolicy struct {
 	// Base is the first pause after a failure, doubling up to Max. Defaults: 1 s and 60 s.
 	Base, Max time.Duration
@@ -105,7 +107,8 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 	}
 	c := conns[0]
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
-	if _, ok := platformKeys[c.Spec.Platform]; !ok || (c.Spec.Mode != "" && c.Spec.Mode != v1alpha1.ModeSocket) {
+	spec, ok := platformFor(c.Spec.Platform)
+	if !ok || (c.Spec.Mode != "" && !slices.Contains(spec.Modes, c.Spec.Mode)) {
 		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q in mode %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform, c.Spec.Mode)
 	}
 	read := func(key string) (secret.Value, error) {
@@ -125,7 +128,7 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 		return v, nil
 	}
 	creds := map[string]secret.Value{}
-	for _, key := range platformKeys[c.Spec.Platform] {
+	for _, key := range spec.Keys {
 		v, err := read(key)
 		if err != nil {
 			return Connection{}, err
