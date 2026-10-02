@@ -1,4 +1,6 @@
-# Deterministic OpenAI-compatible model for the full tier. The image is built locally by
+# Deterministic OpenAI-compatible model for the full tier. A prompt that none of the first two rules matches (S5's
+# mention, the smoke test's) gets the same canned answer from the last rule, so that
+# a scenario's prompt need not carry the question. The image is built locally by
 # up-full.sh (kagent-dev/mockllm publishes none) and loaded into the kind node.
 apiVersion: v1
 kind: ConfigMap
@@ -28,6 +30,16 @@ data:
                        "message": {"role": "assistant", "content": null, "tool_calls": [{
                          "id": "call_ask", "type": "function",
                          "function": {"name": "ask_user", "arguments": "{\"questions\": [{\"question\": \"Which database should we use?\", \"choices\": [\"PostgreSQL\", \"MySQL\"]}]}"}}]}}],
+          "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
+      }, {
+        "name": "any-user-message",
+        "match": {"match_type": "contains", "message": {"role": "user", "content": ""}},
+        "response": {
+          "id": "chatcmpl-courier-3", "object": "chat.completion", "created": 1677652288,
+          "model": "gpt-4.1-mini",
+          "choices": [{"index": 0, "finish_reason": "stop",
+                       "message": {"role": "assistant", "content": "The answer is 4."}}],
           "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         }
       }]
