@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	slackgo "github.com/slack-go/slack"
 
@@ -80,6 +81,7 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 		{"a revoked token on a reaction", chat.OpReact, slackError("token_revoked"), chat.Verdict{Class: chat.FatalAuth, Code: "token_revoked"}},
 		{"an inactive account", chat.OpOther, slackError("account_inactive"), chat.Verdict{Class: chat.FatalAuth, Code: "account_inactive"}},
 		{"a rate limit passes", chat.OpPost, slackError("ratelimited"), chat.Verdict{Class: chat.Transient}},
+		{"a rate limit says how long to wait", chat.OpPost, fmt.Errorf("slack chat.update: %w", &slackgo.RateLimitedError{RetryAfter: 7 * time.Second}), chat.Verdict{Class: chat.Transient, RetryAfter: 7 * time.Second}},
 		{"a server error passes", chat.OpPost, slackError("internal_error"), chat.Verdict{Class: chat.Transient}},
 		{"a post's permanent code is not a reaction's", chat.OpReact, slackError("msg_too_long"), chat.Verdict{Class: chat.Transient}},
 		{"a reaction's permanent code is not a post's", chat.OpPost, slackError("thread_locked"), chat.Verdict{Class: chat.Transient}},

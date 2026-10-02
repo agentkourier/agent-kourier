@@ -147,4 +147,7 @@ type Verdict struct {
 	// Code is the platform's own code for the error ("channel_not_found" for Slack), for a log and not a
 	// metric, or "".
 	Code string
+	// RetryAfter is, for a Transient error that is a rate limit, how long the platform asked the caller to wait; 0 if
+	// it said nothing or the error is no rate limit.
+	RetryAfter time.Duration
 }

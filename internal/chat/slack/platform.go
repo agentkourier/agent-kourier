@@ -225,7 +225,11 @@ func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 			return chat.Verdict{Class: chat.Permanent, Reason: reactionReason[code], Code: code}
 		}
 	}
-	return chat.Verdict{Class: chat.Transient}
+	v := chat.Verdict{Class: chat.Transient}
+	if limited := new(*slackgo.RateLimitedError); errors.As(err, limited) {
+		v.RetryAfter = (*limited).RetryAfter
+	}
+	return v
 }
 
 // The neutral reason of each code PermanentCode and ReactionPermanentCode give. A code not here is Other.
