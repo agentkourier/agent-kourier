@@ -19,12 +19,16 @@ It logs the shape of each request, the roles and the first words of each message
 kagent sends a model can be read from its log (the full tier's findings come from there). Test only.
 """
 import json
+import os
 import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 GATE = re.compile(r"gate:([\w-]+)")
+# How long a gate holds a reply that nobody releases: a run that fails before it releases its gate must not leave
+# a kagent task WORKING for ever. After it the reply goes on as if released.
+GATE_TIMEOUT = float(os.environ.get("GATE_TIMEOUT_SECONDS", "600"))
 gates = {}
 gates_lock = threading.Lock()
 
@@ -135,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
         if req.get("stream"):
             return self.stream(script)
         if script.hold:
-            gate(script.hold).wait()
+            gate(script.hold).wait(timeout=GATE_TIMEOUT)
         self.reply(200, json.dumps(completion(script)).encode())
 
     def stream(self, script):
@@ -160,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
             for i, part in enumerate(script.parts):
                 send({"role": "assistant", "content": part})
                 if script.hold and i == 0:
-                    gate(script.hold).wait()
+                    gate(script.hold).wait(timeout=GATE_TIMEOUT)
             send({}, "stop")
         end = b"data: [DONE]\n\n"
         self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(end), end))
