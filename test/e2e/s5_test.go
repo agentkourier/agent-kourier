@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
+
+// s5Answer is what test-agent says in both tiers: the stub's canned reply, and mockllm's, whatever it was asked.
+const s5Answer = "The answer is 4."
 
 // TestS5_AReplyPostedBeforeACrashIsNotPostedAgain: courier is killed between posting a reply and
 // recording that it did (the testhooks fault, exit 137), and after it restarts the thread holds that one
@@ -79,10 +83,14 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 			}
 		}
 		ok := len(before) == 1 && len(after) == 1 && OutboxID(before[0]) != "" && OutboxID(after[0]) != "" && OutboxID(before[0]) != OutboxID(after[0])
+		// Each is the agent's answer. A message the crash hook reaches can be any outbox post, a notice that the
+		// turn failed included, so a scenario that checked only that something was posted once would pass on a
+		// courier whose agent turn never worked.
+		ok = ok && strings.Contains(before[0].Text, s5Answer) && strings.Contains(after[0].Text, s5Answer)
 		return ok, describe(th)
 	}
 	if ok, got := checkOnce(th); !ok {
-		t.Fatalf("want one tagged message of the bot before the second message and one after, each its own: the first reply is not posted twice\nthe thread: %s", got)
+		t.Fatalf("want one tagged message of the bot before the second message and one after, each its own and each the agent's answer: the first reply is not posted twice\nthe thread: %s", got)
 	}
 	// And nothing more comes after that.
 	err = Consistently(s.ctx, 3*time.Second, "the thread keeps its two tagged messages of the bot", func(ctx context.Context) (bool, error) {
