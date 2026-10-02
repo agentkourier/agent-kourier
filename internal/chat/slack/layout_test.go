@@ -343,3 +343,55 @@ func TestAnEndingThatWasNotAnsweredShowsNoAnswersAndNamesNoOneItCannotVerify(t *
 		}
 	}
 }
+
+// mrkdwnObjects are the mrkdwn text objects anywhere in blocks.
+func mrkdwnObjects(v any) []map[string]any {
+	var out []map[string]any
+	switch v := v.(type) {
+	case []map[string]any:
+		for _, e := range v {
+			out = append(out, mrkdwnObjects(e)...)
+		}
+	case []any:
+		for _, e := range v {
+			out = append(out, mrkdwnObjects(e)...)
+		}
+	case map[string]any:
+		if v["type"] == "mrkdwn" {
+			out = append(out, v)
+		}
+		for _, e := range v {
+			out = append(out, mrkdwnObjects(e)...)
+		}
+	}
+	return out
+}
+
+// TestEveryMrkdwnObjectIsVerbatim: with verbatim false, which is Slack's default, Slack links channel names
+// and parses some mentions in a mrkdwn object, whatever the escaping did. Every mrkdwn object courier sends
+// says verbatim true, and none is sent without it. (UNCONFIRMED(WP-04): what Slack does with each value.)
+func TestEveryMrkdwnObjectIsVerbatim(t *testing.T) {
+	w := newWorld(t)
+	at := time.Date(2026, 10, 2, 15, 4, 0, 0, time.UTC)
+	p := askOf(chat.Question{Text: "q"})
+	p.Subagent, p.Deadline = "sre-agent", at
+	msg := chat.Message{Fallback: "f", Parts: []chat.Part{chat.Header{Text: "h"}, chat.Body{Markdown: "b"}, chat.Context{Text: "c"}, chat.Note{Text: "n"}, chat.ToolLine{Name: "t"}}}
+	for name, tc := range map[string]struct {
+		o    chat.Outgoing
+		want int
+	}{
+		"a message":                   {chat.Say(msg), 0},
+		"a prompt, with its deadline": {chat.Ask(p), 1},
+		"an ending":                   {chat.End(chat.Ending{Outcome: chat.Answered, By: "U0123456789", At: at, Prompt: p, Answers: [][]string{{"(answered)"}}}), 1},
+	} {
+		objs := mrkdwnObjects(w.post(t, tc.o))
+		if len(objs) < tc.want {
+			t.Errorf("%s: %d mrkdwn objects, want at least %d (the test is not looking at them)", name, len(objs), tc.want)
+		}
+		for _, o := range objs {
+			if o["verbatim"] != true {
+				t.Errorf("%s: mrkdwn object %v has no verbatim true", name, o)
+			}
+		}
+	}
+}

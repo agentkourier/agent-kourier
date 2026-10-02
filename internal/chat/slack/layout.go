@@ -55,8 +55,13 @@ var caps = chat.Caps{
 	},
 }
 
-func plainObject(s string) map[string]any  { return map[string]any{"type": "plain_text", "text": s} }
-func mrkdwnObject(s string) map[string]any { return map[string]any{"type": "mrkdwn", "text": s} }
+func plainObject(s string) map[string]any { return map[string]any{"type": "plain_text", "text": s} }
+
+// mrkdwnObject is a mrkdwn text object, verbatim: Slack's default, verbatim false, links channel names and
+// parses some mentions in it whatever the escaping did.
+func mrkdwnObject(s string) map[string]any {
+	return map[string]any{"type": "mrkdwn", "text": s, "verbatim": true}
+}
 
 func section(s string) map[string]any {
 	return map[string]any{"type": "section", "text": plainObject(s)}
