@@ -307,8 +307,8 @@ go and by every method that sends; an adapter ships only if it passes. Courier's
 what no platform differs on: redaction, truncation policy, and the fixed words of notices. The
 trigger table of 8.2 is the neutral `chat.Intake`, which a platform's `Run` feeds. The broker
 builds the adapter named by `ChatConnection.spec.platform`; a platform with no adapter is a
-wiring error, and a lint rule keeps the router, session, interact, outbox, render, store and
-config packages from importing the Slack adapter or its client library.
+wiring error, and a lint rule denies every package except the adapter, the broker and cmd (tests
+aside) the Slack adapter and its client library, so a new package is covered from its first file.
 
 ### 6.3 Backends
 
@@ -839,9 +839,9 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 - No lost events across a courier restart.
 - Adding a chat platform requires implementing `chat.Platform` in its own package,
   passing `chattest.Conformance`, and adding it to the broker's platform factory. It
-  touches no router, session, interact, outbox, render, store or config code, which a
-  lint rule enforces. Adding an alert source requires implementing one interface and
-  touches no router, session, or store code.
+  changes no package except the adapter and the broker, whose factory names it: a lint rule
+  denies every other package the Slack adapter and its client library. Adding an alert
+  source requires implementing one interface and touches no router, session, or store code.
 - Moving to a new kagent API revision changes the dialect package only.
 
 ## 14. Risks

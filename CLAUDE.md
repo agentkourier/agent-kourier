@@ -69,7 +69,7 @@ a WP mixes concerns. At most four agents (implementers and reviewers together) r
 - No global mutable state (the ldflags-set `version` is the sole exception). No `panic`
   outside `main` and test helpers. Exported identifiers have doc comments.
 - No new module dependency unless the WP names it.
-- The core (chat, config, interact, outbox, render, session, store) never imports `internal/chat/slack` or slack-go: depguard enforces it, and only the adapter and the broker may.
+- Nothing but the Slack adapter, the broker and cmd (and tests) imports `internal/chat/slack` or slack-go: depguard denies it to every other package, new ones included.
 - Never log, print, or commit tokens or Secret contents; test tokens are fake constants.
 
 ## Commits
