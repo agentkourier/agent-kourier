@@ -18,7 +18,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -76,14 +76,22 @@ func (a *orderedAudit) Decision(ctx context.Context, actor audit.Actor, d audit.
 type ephemerals struct {
 	mu  sync.Mutex
 	got []string // "user: text"
+	to  []chat.Target
 	err error
 }
 
-func (e *ephemerals) PostEphemeral(_ context.Context, _, _, user string, c slack.Content) error {
+func (e *ephemerals) Ephemeral(_ context.Context, t chat.Target, user string, m chat.Message) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.got = append(e.got, user+": "+c.Text)
+	e.got = append(e.got, user+": "+m.Fallback)
+	e.to = append(e.to, t)
 	return e.err
+}
+
+func (e *ephemerals) targets() []chat.Target {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]chat.Target(nil), e.to...)
 }
 
 func (e *ephemerals) list() []string {
@@ -345,7 +353,7 @@ func TestAPressAfterAnotherAnswerIsSuperseded(t *testing.T) {
 	if err := r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.eph.list(); len(got) != 1 || got[0] != "UBOB22: <@UALICE1> answered this question first." {
+	if got := r.eph.list(); len(got) != 1 || got[0] != "UBOB22: @UALICE1 answered this question first." {
 		t.Errorf("ephemerals %q; want U2 told that UALICE1 answered first", got)
 	}
 	if got, want := r.calls.list(), []string{"audit:answered", "submit", "audit:superseded"}; !slices.Equal(got, want) {
@@ -386,7 +394,7 @@ func TestTwoPressesAtOnceGiveOneAnswer(t *testing.T) {
 	if row.Decider == "UALICE1" {
 		loser = "UBOB22"
 	}
-	if got := r.eph.list(); len(got) != 1 || got[0] != loser+": <@"+row.Decider+"> answered this question first." {
+	if got := r.eph.list(); len(got) != 1 || got[0] != loser+": @"+row.Decider+" answered this question first." {
 		t.Errorf("ephemerals %q; want the loser %s told who won", got, loser)
 	}
 }
@@ -577,7 +585,7 @@ func TestADecisionTakenBetweenTheReadAndTheWrite(t *testing.T) {
 			if err := r.st.Store.SubmitInteraction(t.Context(), "ix-1", []byte(`{"RequestID":"req-1"}`), "UROB333", d0.Add(30*time.Second)); err != nil {
 				t.Fatal(err)
 			}
-		}, "<@UROB333> answered this question first."},
+		}, "@UROB333 answered this question first."},
 		"the sweep": {func(r *decideRig, t *testing.T) {
 			if err := r.st.ResolveInteraction(t.Context(), "ix-1", store.InteractionTimedOut, deadline); err != nil {
 				t.Fatal(err)

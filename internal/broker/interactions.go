@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -55,6 +56,7 @@ type interactionDeps struct {
 	st       *sqlite.Store
 	ob       *outbox.Outbox
 	sl       slackAPI
+	platform *slack.Platform // the adapter of sl: who may answer, and what a person is told, go through it
 	auditor  *audit.Writer
 	bindings *Bindings
 	metrics  *Metrics
@@ -107,7 +109,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		return nil, fmt.Errorf("interactions: the replacer: %w", err)
 	}
 	decider, err := interact.NewDecider(interact.DecideConfig{
-		Store: d.st, Auditor: d.auditor, Ephemerals: d.sl, Session: mgr, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
+		Store: d.st, Auditor: d.auditor, Ephemerals: d.platform, Session: mgr, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
 		OnDecision: d.metrics.InteractionDecision, Logger: d.log,
 	})
 	if err != nil {
@@ -115,7 +117,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 	}
 	var worker *interact.Worker // Notify needs the worker and the worker the pipeline: the closure breaks the cycle (D2)
 	pipeline, err := interact.NewPipeline(interact.PressConfig{
-		Store: d.st, Sessions: d.st, Lookup: d.bindings, Authorizer: d.sl, Ephemerals: d.sl, Decider: decider, Auditor: d.auditor,
+		Store: d.st, Sessions: d.st, Lookup: d.bindings, Authorizer: d.platform, Ephemerals: d.platform, Decider: decider, Auditor: d.auditor,
 		Notify: func(p store.Press) { worker.Submit(p) }, Logger: d.log,
 	})
 	if err != nil {
@@ -157,7 +159,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		}
 	})
 	d.traced("start-interactions")
-	return interactionsHandler(pipeline, d.log), nil
+	return interactionsHandler(pipeline, d.platform.Interaction, d.log), nil
 }
 
 // startLoop runs run in a goroutine of its own until its stop is called, and returns that stop: it ends
@@ -171,16 +173,17 @@ func startLoop(parent context.Context, run func(context.Context) error) func(con
 
 // presser takes the press of a button: *interact.Pipeline.
 type presser interface {
-	Press(ctx context.Context, i slack.Interaction) error
+	Press(ctx context.Context, i chat.Interaction) error
 }
 
-// interactionsHandler is what the Slack intake calls for each press of a button. A button that is not an
+// interactionsHandler is what the Slack intake calls for each press of a button, which decode turns into
+// the neutral model (the adapter's decode of the controls' state). A button that is not an
 // interaction's is someone else's, and is dropped without a word; a press refused because too many wait is
 // told to the log, and acknowledged, since Slack redelivering it would only add to them. Any other error
 // leaves the press unacknowledged, for Slack to deliver again.
-func interactionsHandler(p presser, log *slog.Logger) func(context.Context, slack.Interaction) error {
+func interactionsHandler(p presser, decode func(slack.Interaction) chat.Interaction, log *slog.Logger) func(context.Context, slack.Interaction) error {
 	return func(ctx context.Context, i slack.Interaction) error {
-		err := p.Press(ctx, i)
+		err := p.Press(ctx, decode(i))
 		switch {
 		case errors.Is(err, interact.ErrNotInteraction):
 			return nil

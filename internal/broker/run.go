@@ -146,7 +146,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer := live.New(live.Config{Sender: ob, Platform: slack.NewPlatform(sl, conn.Ref.Namespace+"/"+conn.Ref.Name), Store: st, Logger: log})
+	platform := slack.NewPlatform(sl, conn.Ref.Namespace+"/"+conn.Ref.Name)
+	renderer := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
 	var sink renderSink = live.NewSink(renderer, ob, log)
 	if cfg.sink != nil {
 		sink = cfg.sink
@@ -157,7 +158,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, sl: sl, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	parts := interactionDeps{st: st, ob: ob, sl: sl, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
 	tap, late, err := parts.newTap(sink)
 	if err != nil {
 		return err

@@ -15,6 +15,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -24,7 +25,7 @@ import (
 // pressed is a presser that answers with the error the test sets.
 type pressed struct{ err error }
 
-func (p pressed) Press(context.Context, slack.Interaction) error { return p.err }
+func (p pressed) Press(context.Context, chat.Interaction) error { return p.err }
 
 // The handler of buttons tells the three outcomes of a press apart: a button of someone else's is dropped
 // without a word, a press refused for the limit is acknowledged and logged, and a failure is returned, so
@@ -43,7 +44,7 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 		{"any other failure", boom, boom, ""},
 	} {
 		out := &logBuffer{}
-		h := interactionsHandler(pressed{tc.err}, slog.New(slog.NewTextHandler(out, nil)))
+		h := interactionsHandler(pressed{tc.err}, slack.NewPlatform(nil, "ns/conn").Interaction, slog.New(slog.NewTextHandler(out, nil)))
 
 		err := h(t.Context(), slack.Interaction{Channel: "C1", Value: "x"})
 

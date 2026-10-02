@@ -551,7 +551,7 @@ func TestPressesRecordedTwiceAreDecidedOnceInOrder(t *testing.T) {
 	}
 	c.restart(t, nil)
 	waitFor(t, "all three presses", func() bool { return c.waiting(t) == 0 })
-	want := []string{"UBOB22: <@UALICE1> answered this question first."}
+	want := []string{"UBOB22: @UALICE1 answered this question first."}
 	if got := c.eph.list(); !slices.Equal(got, want) || len(c.sess.answers()) != 2 || len(c.aud.got) != 1 || c.aud.got[0].Result != audit.DecisionAnswered {
 		t.Errorf("told %q, %d sends, audit %+v; want the repeat sent again, the other told, and the one decision audited", got, len(c.sess.answers()), c.aud.got)
 	}

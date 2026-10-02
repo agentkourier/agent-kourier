@@ -8,13 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -28,7 +29,7 @@ type authz struct {
 	asked             int
 }
 
-func (a *authz) IsChannelMember(_ context.Context, _, user string) (bool, error) {
+func (a *authz) IsMember(_ context.Context, _, user string) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.asked++
@@ -78,22 +79,19 @@ func (r *pressRig) open(t *testing.T) store.Interaction {
 	return r.row(t)
 }
 
-// submit is user's press of the Submit button with choice index idx chosen (-1: nothing chosen).
-func (r *pressRig) submit(t *testing.T, user string, idx int) slack.Interaction {
+// submit is user's press of the Submit button with choice index idx chosen (-1: nothing chosen), as the
+// platform's adapter hands it over: the answer to question 0, by the index of the choice.
+func (r *pressRig) submit(t *testing.T, user string, idx int) chat.Interaction {
 	t.Helper()
-	controls, err := interact.Controls("ix-1", question)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inputs := map[string]map[string]slack.Input{}
+	var answers []chat.Answer
 	if idx >= 0 {
-		inputs[controls[0].BlockID] = map[string]slack.Input{controls[0].ActionID: {Type: controls[0].Element, Values: []string{string(rune('0' + idx))}}}
+		answers = []chat.Answer{{Question: 0, Values: []string{strconv.Itoa(idx)}}}
 	}
-	return slack.Interaction{User: user, Channel: key.Channel, MessageTS: "100.1", ThreadTS: key.ThreadTS, ActionID: "submit", Value: "ix-1", Inputs: inputs}
+	return chat.Interaction{User: user, At: chat.Ref{Platform: "slack", Conn: key.Connection, Channel: key.Channel, Thread: key.ThreadTS, ID: "100.1"}, PromptID: "ix-1", Answers: answers}
 }
 
 // process records the press and processes it, as the worker will.
-func (r *pressRig) process(t *testing.T, i slack.Interaction) (interact.Result, error) {
+func (r *pressRig) process(t *testing.T, i chat.Interaction) (interact.Result, error) {
 	t.Helper()
 	if err := r.pl.Press(t.Context(), i); err != nil {
 		t.Fatal(err)
@@ -125,7 +123,7 @@ func TestPressRecordsAtCouriersTimeAndReturns(t *testing.T) {
 	if r.az.asked != 0 || len(r.eph.list()) != 0 || len(r.sess.answers()) != 0 {
 		t.Error("recording the press did the work of processing it, which keeps Slack waiting for its acknowledgement")
 	}
-	if err := r.pl.Press(t.Context(), slack.Interaction{User: "U1", Channel: "C1", MessageTS: "1.2", Value: "feedback-up"}); !errors.Is(err, interact.ErrNotInteraction) {
+	if err := r.pl.Press(t.Context(), chat.Interaction{User: "U1", At: chat.Ref{Channel: "C1", ID: "1.2"}, PromptID: "feedback-up"}); !errors.Is(err, interact.ErrNotInteraction) {
 		t.Errorf("a button that is not an interaction's = %v; want ErrNotInteraction", err)
 	}
 	_ = r.pl.Press(t.Context(), i)
@@ -171,7 +169,7 @@ func TestAPressOnADecidedQuestionIsToldWhoDecided(t *testing.T) {
 		state store.InteractionState
 		want  string
 	}{
-		"answered":  {store.InteractionAnswered, "UBOB22: <@UALICE1> answered this question first."},
+		"answered":  {store.InteractionAnswered, "UBOB22: @UALICE1 answered this question first."},
 		"timed out": {store.InteractionTimedOut, "UBOB22: This question has timed out."},
 		"cancelled": {store.InteractionCancelled, "UBOB22: This question is closed."},
 	} {
@@ -281,6 +279,53 @@ func TestAnIncompleteAnswerIsToldAndNeverUpdatesThePrompt(t *testing.T) {
 	}
 }
 
+// TestWhatAPersonIsToldIsToldInTheThreadOfThePrompt: an ephemeral goes to the interaction's conversation and
+// thread, through the platform; for a press whose interaction is gone only the channel of the press is known.
+func TestWhatAPersonIsToldIsToldInTheThreadOfThePrompt(t *testing.T) {
+	r := newPressRig(t)
+	r.open(t)
+	delete(r.az.members, "UBOB22") // told: not a member
+	if _, err := r.process(t, r.submit(t, "UBOB22", 0)); err != nil {
+		t.Fatal(err)
+	}
+	gone := r.submit(t, "UALICE1", 0)
+	gone.PromptID = "ix-nosuch"
+	if _, err := r.process(t, gone); err != nil {
+		t.Fatal(err)
+	}
+	want := []chat.Target{{Conn: key.Connection, Channel: key.Channel, Thread: key.ThreadTS}, {Channel: key.Channel}}
+	if got := r.eph.targets(); !slices.Equal(got, want) {
+		t.Errorf("told in %+v; want the prompt's thread, and for the gone interaction the press's channel alone", got)
+	}
+}
+
+// TestAnAnswerToAQuestionThatIsNotThereIsRefusedAsInvalid: a press whose answers name a question the prompt does
+// not have is no honest press (the adapter made the controls from this prompt), and the answer that is
+// there is not taken either. It is refused, audited as an incomplete decision with no values, and told by
+// the question's number; nothing is decided or sent. The index is bounded here, since an adapter's decode
+// does not bound it.
+func TestAnAnswerToAQuestionThatIsNotThereIsRefusedAsInvalid(t *testing.T) {
+	for name, stray := range map[string]int{"one past the last": 1, "far past": 40, "negative": -1} {
+		t.Run(name, func(t *testing.T) {
+			r := newPressRig(t)
+			r.open(t)
+			i := r.submit(t, "UALICE1", 0) // a good answer to the only question
+			i.Answers = append(i.Answers, chat.Answer{Question: stray, Values: []string{"0"}})
+			res, err := r.process(t, i)
+			want := "UALICE1: Question 1 could not be read. Please check it and press Submit again."
+			if err != nil || res != interact.Done || strings.Join(r.eph.list(), "|") != want || r.waiting(t) != 0 {
+				t.Fatalf("Process = %v, %v, told %q, %d waiting; want it done and the person told", res, err, r.eph.list(), r.waiting(t))
+			}
+			if r.row(t).State != store.InteractionPending || len(r.sess.answers()) != 0 {
+				t.Errorf("state %s, %d sends; want the question open and nothing sent", r.row(t).State, len(r.sess.answers()))
+			}
+			if len(r.aud.got) != 1 || r.aud.got[0].Result != audit.DecisionIncomplete || r.aud.got[0].Answer == nil || len(r.aud.got[0].Answer.Answers) != 0 {
+				t.Errorf("audit %+v; want one incomplete decision with the shape of no answers and no values", r.aud.got)
+			}
+		})
+	}
+}
+
 func TestAnEarlyPressIsTriedAgainForTwoMinutes(t *testing.T) {
 	r := newPressRig(t)
 	r.pending(t) // the prompt's message is not recorded yet
@@ -310,17 +355,17 @@ func TestAPressForNothingOrForAnotherMessageIsDropped(t *testing.T) {
 	r := newPressRig(t)
 	r.open(t)
 	other := r.submit(t, "UALICE1", 0)
-	other.MessageTS = "999.9" // the value is the interaction's, but the button is on another message
+	other.At.ID = "999.9" // the value is the interaction's, but the button is on another message
 	if res, err := r.process(t, other); err != nil || res != interact.Done || len(r.eph.list()) != 0 || len(r.sess.answers()) != 0 || r.waiting(t) != 0 {
 		t.Errorf("a press on another message = %v, %v, told %q; want it dropped quietly", res, err, r.eph.list())
 	}
 	elsewhere := r.submit(t, "UALICE1", 0)
-	elsewhere.Channel = "C9" // the message's ts is the prompt's, but it is in another channel
+	elsewhere.At.Channel = "C9" // the message's ts is the prompt's, but it is in another channel
 	if res, err := r.process(t, elsewhere); err != nil || res != interact.Done || len(r.eph.list()) != 0 || len(r.sess.answers()) != 0 || r.waiting(t) != 0 {
 		t.Errorf("a press in another channel = %v, %v, told %q; want it dropped quietly", res, err, r.eph.list())
 	}
 	none := r.submit(t, "UALICE1", 0)
-	none.Value = "ix-nosuch"
+	none.PromptID = "ix-nosuch"
 	if _, err := r.process(t, none); err != nil || len(r.eph.list()) != 1 || !strings.Contains(r.eph.list()[0], "no longer available") {
 		t.Errorf("a press for no interaction: told %q, %v; want it told the question is gone", r.eph.list(), err)
 	}
@@ -376,7 +421,7 @@ func TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson(t *testing.T) {
 		t.Fatal(err)
 	}
 	press := func(user string) error {
-		return pl.Press(t.Context(), slack.Interaction{User: user, Channel: "C1", MessageTS: "100.1", Value: "ix-1"})
+		return pl.Press(t.Context(), chat.Interaction{User: user, At: chat.Ref{Channel: "C1", ID: "100.1"}, PromptID: "ix-1"})
 	}
 	for i := range 10 {
 		if err := press("U0"); err != nil {
@@ -405,8 +450,8 @@ func TestGivingUpTellsThePersonToPressAgainAndDeletesThePress(t *testing.T) {
 	r := newPressRig(t)
 	r.open(t)
 	gone := r.submit(t, "UBOB22", 0)
-	gone.Value = "ix-nosuch"
-	for _, i := range []slack.Interaction{r.submit(t, "UALICE1", 0), gone} {
+	gone.PromptID = "ix-nosuch"
+	for _, i := range []chat.Interaction{r.submit(t, "UALICE1", 0), gone} {
 		if err := r.pl.Press(t.Context(), i); err != nil {
 			t.Fatal(err)
 		}

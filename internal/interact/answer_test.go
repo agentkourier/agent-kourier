@@ -4,12 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/render"
 )
 
 func many(n int) []string {
@@ -20,79 +18,78 @@ func many(n int) []string {
 	return out
 }
 
-// interaction has one question of each kind of control courier renders.
+// interaction has one question of each shape: free text, one choice, some choices, and two over many choices.
 func interaction() dialect.Interaction {
 	return dialect.Interaction{Kind: dialect.AskUser, RequestID: "r1", Hint: "h", Questions: []dialect.Question{
 		{Text: "free"}, // 0 text
-		{Text: "one", Choices: []string{"red", "green", "blue"}},         // 1 radio
-		{Text: "some", Choices: []string{"a", "b", "c"}, Multiple: true}, // 2 checkboxes
-		{Text: "pick", Choices: many(120)},                               // 3 numbers (over 100)
-		{Text: "picks", Choices: many(120), Multiple: true},              // 4 numbers, many
+		{Text: "one", Choices: []string{"red", "green", "blue"}},         // 1 one choice
+		{Text: "some", Choices: []string{"a", "b", "c"}, Multiple: true}, // 2 some choices
+		{Text: "pick", Choices: many(120)},                               // 3 one of many
+		{Text: "picks", Choices: many(120), Multiple: true},              // 4 some of many
 	}}
 }
 
-func press(t *testing.T, in dialect.Interaction, answers map[int]slack.Input) (dialect.Answer, []Problem) {
+// answers is what an adapter hands over for the answers of the questions given, in question order.
+func answers(byQuestion map[int][]string) []chat.Answer {
+	var out []chat.Answer
+	for q := range 100 {
+		if vals, ok := byQuestion[q]; ok {
+			out = append(out, chat.Answer{Question: q, Values: vals})
+		}
+	}
+	return out
+}
+
+func press(t *testing.T, in dialect.Interaction, given []chat.Answer) (dialect.Answer, []Problem) {
 	t.Helper()
-	controls, err := Controls("ix-1", in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inputs := map[string]map[string]slack.Input{}
-	for i, a := range answers {
-		inputs[controls[i].BlockID] = map[string]slack.Input{controls[i].ActionID: a}
-	}
-	answer, problems, err := ExtractAnswer(in, controls, inputs)
+	answer, problems, err := ExtractAnswer(in, given)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return answer, problems
 }
 
-func text(vals ...string) slack.Input   { return slack.Input{Type: "plain_text_input", Values: vals} }
-func radio(vals ...string) slack.Input  { return slack.Input{Type: "radio_buttons", Values: vals} }
-func checks(vals ...string) slack.Input { return slack.Input{Type: "checkboxes", Values: vals} }
-
-// The controls of a prompt are pinned: a press is read through them, so a change of layout under a
-// pending prompt must be a deliberate one. It fails closed (the answers read as unanswered).
-func TestControlsGolden(t *testing.T) {
-	controls, err := Controls("ix-1", interaction())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []render.Control{{BlockID: "q0", ActionID: "a0", Kind: render.ControlText, Element: "plain_text_input"}, {BlockID: "q1", ActionID: "a1", Kind: render.ControlChoice, Element: "radio_buttons"},
-		{BlockID: "q2", ActionID: "a2", Kind: render.ControlChoices, Element: "checkboxes"}, {BlockID: "q3", ActionID: "a3", Kind: render.ControlNumbers, Element: "plain_text_input"},
-		{BlockID: "q4", ActionID: "a4", Kind: render.ControlNumbers, Element: "plain_text_input"}}
-	if !reflect.DeepEqual(controls, want) {
-		t.Errorf("controls = %+v; want %+v", controls, want)
-	}
+// valid is an answer to every question of interaction().
+func valid() map[int][]string {
+	return map[int][]string{0: {"x"}, 1: {"0"}, 2: {"1"}, 3: {"1"}, 4: {"2"}}
 }
 
 func TestExtractAnswerMapsIndicesBackToChoices(t *testing.T) {
 	in := interaction()
-	got, problems := press(t, in, map[int]slack.Input{0: text("  because  "), 1: radio("2"), 2: checks("0", "2", "0"), 3: text("2"), 4: text("1, 3;3\t5")})
+	got, problems := press(t, in, answers(map[int][]string{0: {"  because  "}, 1: {"2"}, 2: {"0", "2", "0"}, 3: {"1"}, 4: {"0", "2", "4"}}))
 	want := [][]string{{"because"}, {"blue"}, {"a", "c"}, {in.Questions[3].Choices[1]}, {in.Questions[4].Choices[0], in.Questions[4].Choices[2], in.Questions[4].Choices[4]}}
 	if len(problems) != 0 || got.RequestID != "r1" || !reflect.DeepEqual(got.Answers, want) {
 		t.Errorf("answer = %+v, problems %v; want %v", got, problems, want)
 	}
 }
 
-// Everything that is not an answer is unanswered, whichever way Slack says nothing.
+// The last question is read, and the answers need not come in order.
+func TestExtractAnswerReadsTheLastQuestionInAnyOrder(t *testing.T) {
+	in := interaction()
+	given := []chat.Answer{{Question: 4, Values: []string{"119"}}, {Question: 0, Values: []string{"x"}}, {Question: 3, Values: []string{"0"}}, {Question: 2, Values: []string{"1"}}, {Question: 1, Values: []string{"0"}}}
+	got, problems := press(t, in, given)
+	if len(problems) != 0 || got.Answers[4][0] != "choice-119" {
+		t.Errorf("answer %v, problems %v; want every question read, the last by its index", got.Answers, problems)
+	}
+}
+
+// Everything that is not an answer is unanswered, whichever way the platform says nothing.
 func TestExtractAnswerUnanswered(t *testing.T) {
-	for name, a := range map[string]*slack.Input{
-		"a missing block": nil,
-		"null":            {Type: "plain_text_input"},
-		"an empty list":   {Type: "plain_text_input", Values: []string{}},
-		"an empty string": {Type: "plain_text_input", Values: []string{""}},
-		"white space":     {Type: "plain_text_input", Values: []string{" \t\n"}},
-		"a wrong type":    {Type: "number_input", Values: []string{"7"}},
-		"another control": {Type: "checkboxes", Values: []string{"0"}},
+	for name, a := range map[string][]string{
+		"no answer":       nil, // the key is left out below
+		"null":            nil,
+		"an empty list":   {},
+		"an empty string": {""},
+		"white space":     {" \t\n"},
+		"only blanks":     {"", " "},
 	} {
 		t.Run(name, func(t *testing.T) {
-			answers := map[int]slack.Input{1: radio("0"), 2: checks("1"), 3: text("1"), 4: text("2")}
-			if a != nil {
-				answers[0] = *a
+			byQuestion := valid()
+			delete(byQuestion, 0)
+			if name != "no answer" {
+				byQuestion[0] = a
 			}
-			got, problems := press(t, interaction(), answers)
+			got, problems := press(t, interaction(), answers(byQuestion))
 			if !reflect.DeepEqual(problems, []Problem{{0, Unanswered}}) || got.Answers[0] != nil {
 				t.Errorf("answer %v, problems %v; want question 1 unanswered and the rest read", got.Answers, problems)
 			}
@@ -103,85 +100,65 @@ func TestExtractAnswerUnanswered(t *testing.T) {
 // What no honest press holds is invalid, never read as a different answer.
 func TestExtractAnswerInvalid(t *testing.T) {
 	for name, tc := range map[string]struct {
-		q  int
-		in slack.Input
+		q    int
+		vals []string
 	}{
-		"a non-canonical index":         {1, radio("01")},
-		"a signed index":                {1, radio("+1")},
-		"a padded index":                {1, radio(" 1")},
-		"an index that is not a number": {1, radio("green")},
-		"an index out of range":         {1, radio("3")},
-		"a negative index":              {1, radio("-1")},
-		"two choices for one":           {1, radio("0", "1")},
-		"one bad index among good":      {2, checks("0", "9")},
-		"two answers for a text":        {0, text("a", "b")},
-		"a number out of range":         {3, text("121")},
-		"zero":                          {3, text("0")},
-		"a word":                        {3, text("two")},
-		"a range":                       {4, text("1-3")},
-		"a signed number":               {4, text("+2")},
-		"a padded number":               {4, text("02")},
-		"two numbers for one":           {3, text("1, 2")},
-		"two values in a numbers input": {4, text("1", "2")},
+		"a non-canonical index":         {1, []string{"01"}},
+		"a signed index":                {1, []string{"+1"}},
+		"a padded index":                {1, []string{" 1"}},
+		"an index that is not a number": {1, []string{"green"}},
+		"an index out of range":         {1, []string{"3"}},
+		"a negative index":              {1, []string{"-1"}},
+		"two choices for one":           {1, []string{"0", "1"}},
+		"one bad index among good":      {2, []string{"0", "9"}},
+		"two answers for a text":        {0, []string{"a", "b"}},
+		"an index past many choices":    {3, []string{"120"}},
+		"a word":                        {3, []string{"two"}},
+		"a range":                       {4, []string{"1-3"}},
+		"a signed number":               {4, []string{"+2"}},
+		"a padded number":               {4, []string{"02"}},
+		"a typed list in one value":     {4, []string{"1, 2"}},
+		"two for a single choice":       {3, []string{"1", "2"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			answers := map[int]slack.Input{0: text("x"), 1: radio("0"), 2: checks("1"), 3: text("1"), 4: text("2")}
-			answers[tc.q] = tc.in
-			if _, problems := press(t, interaction(), answers); !reflect.DeepEqual(problems, []Problem{{tc.q, Invalid}}) {
+			byQuestion := valid()
+			byQuestion[tc.q] = tc.vals
+			if _, problems := press(t, interaction(), answers(byQuestion)); !reflect.DeepEqual(problems, []Problem{{tc.q, Invalid}}) {
 				t.Errorf("problems = %v; want question %d invalid", problems, tc.q+1)
 			}
 		})
 	}
 }
 
-// A layout that does not match the question list reads as unanswered, never as a shifted answer.
-func TestExtractAnswerFailsClosedOnAMismatchedLayout(t *testing.T) {
+// An answer to a question the prompt does not have names no control of it: the press is refused as invalid,
+// whole, and nothing in it is read. The decode of an adapter does not bound the index, so this does.
+func TestExtractAnswerRefusesAnAnswerToAQuestionThatIsNotThere(t *testing.T) {
 	in := interaction()
-	controls, _ := Controls("ix-1", in)
-	inputs := map[string]map[string]slack.Input{"q0": {"a0": text("x")}}
-	got, problems, err := ExtractAnswer(in, controls[:2], inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(problems) != len(in.Questions) || problems[0].Kind != Unanswered || got.Answers[0] != nil {
-		t.Errorf("answer %v, problems %v; want every question unanswered", got.Answers, problems)
-	}
-}
-
-// A value is read only from the element type its question was rendered as: a radio prompt takes
-// radio_buttons, not another input that holds a choice, however well formed its value.
-func TestExtractAnswerReadsOnlyTheRenderedElementType(t *testing.T) {
-	for name, tc := range map[string]struct {
-		q  int
-		in slack.Input
-	}{
-		"checkboxes on a radio question":   {1, checks("0")},
-		"a select on a radio question":     {1, slack.Input{Type: "static_select", Values: []string{"0"}}},
-		"a multi-select on a checkbox":     {2, slack.Input{Type: "multi_static_select", Values: []string{"0"}}},
-		"radio buttons on a checkbox":      {2, radio("0")},
-		"a checkbox in a numbers input":    {3, checks("1")},
-		"a text input on a radio question": {1, text("0")},
-		"a radio value on a text question": {0, radio("0")},
-	} {
+	n := len(in.Questions)
+	for name, stray := range map[string]int{"the first one past": n, "far past": 9999, "a negative index": -1} {
 		t.Run(name, func(t *testing.T) {
-			answers := map[int]slack.Input{0: text("x"), 1: radio("0"), 2: checks("1"), 3: text("1"), 4: text("2")}
-			answers[tc.q] = tc.in
-			if _, problems := press(t, interaction(), answers); !reflect.DeepEqual(problems, []Problem{{tc.q, Unanswered}}) {
-				t.Errorf("problems = %v; want question %d unanswered", problems, tc.q+1)
+			given := append(answers(valid()), chat.Answer{Question: stray, Values: []string{"0"}})
+			got, problems := press(t, in, given)
+			if len(problems) != n {
+				t.Fatalf("problems = %v; want every question refused, since the press is not an honest one", problems)
+			}
+			for i, p := range problems {
+				if p != (Problem{i, Invalid}) {
+					t.Errorf("problem %d = %+v; want question %d invalid", i, p, i+1)
+				}
+			}
+			if got.Answers[0] != nil {
+				t.Errorf("answers %v; want none of the press read", got.Answers)
 			}
 		})
 	}
 }
 
-// More controls than questions is a layout that does not match too: every question reads as unanswered.
-func TestExtractAnswerFailsClosedOnExtraControls(t *testing.T) {
-	in := interaction()
-	controls, _ := Controls("ix-1", in)
-	inputs := map[string]map[string]slack.Input{"q0": {"a0": text("x")}, "q1": {"a1": radio("0")}}
-	extra := append(slices.Clone(controls), render.Control{BlockID: "q9", ActionID: "a9", Kind: render.ControlText, Element: "plain_text_input"})
-	got, problems, err := ExtractAnswer(in, extra, inputs)
-	if err != nil || len(problems) != len(in.Questions) || got.Answers[0] != nil || got.Answers[1] != nil {
-		t.Errorf("answer %v, problems %v, %v; want every question unanswered", got.Answers, problems, err)
+// A question that is answered twice cannot be told which is meant.
+func TestExtractAnswerRefusesAQuestionAnsweredTwice(t *testing.T) {
+	given := append(answers(valid()), chat.Answer{Question: 1, Values: []string{"2"}})
+	if _, problems := press(t, interaction(), given); !reflect.DeepEqual(problems, []Problem{{1, Invalid}}) {
+		t.Errorf("problems = %v; want question 2 invalid", problems)
 	}
 }
 
@@ -193,21 +170,10 @@ func TestExtractAnswerRefusesWhatIsNotAnAskUserPause(t *testing.T) {
 		"no questions":    func(in *dialect.Interaction) { in.Questions = nil },
 	} {
 		in := interaction()
-		controls, _ := Controls("ix-1", in)
 		mutate(&in)
-		got, problems, err := ExtractAnswer(in, controls, map[string]map[string]slack.Input{"q0": {"a0": text("x")}})
+		got, problems, err := ExtractAnswer(in, answers(valid()))
 		if !errors.Is(err, ErrNotAskUser) || len(problems) != 0 || got.Answers != nil {
 			t.Errorf("%s: answer %v, problems %v, err %v; want ErrNotAskUser and nothing read", name, got.Answers, problems, err)
 		}
-	}
-}
-
-// TestAControlOfAKindNotKnownReadsAsUnanswered: a kind added to render later must not be read as answered
-// before extract learns it.
-func TestAControlOfAKindNotKnownReadsAsUnanswered(t *testing.T) {
-	q := dialect.Question{Text: "Which?", Choices: []string{"a", "b"}}
-	c := render.Control{Kind: render.ControlKind(99), Element: "plain_text_input"}
-	if vals, why, ok := extract(q, c, slack.Input{Type: "plain_text_input", Values: []string{"a"}}); ok || why != Unanswered || vals != nil {
-		t.Errorf("extract = %v, %v, %v; want it unanswered", vals, why, ok)
 	}
 }

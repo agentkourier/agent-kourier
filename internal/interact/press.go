@@ -13,7 +13,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -34,9 +34,9 @@ const (
 	textNotMember = "Only members of this channel can answer this question."
 )
 
-// Authorizer says who may answer: *slack.Client. Both fail closed, IsBot by returning true with its error.
+// Authorizer says who may answer: a chat.Platform. Both fail closed, IsBot by returning true with its error.
 type Authorizer interface {
-	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
+	IsMember(ctx context.Context, channel, user string) (bool, error)
 	IsBot(ctx context.Context, user string) (bool, error)
 }
 
@@ -106,17 +106,17 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 // not Slack's, and is the time of the decision whenever it is made (WP-33e contract). It returns
 // ErrNotInteraction for a button that is not an interaction's, and store.ErrLimit when too many presses
 // wait.
-func (p *Pipeline) Press(ctx context.Context, i slack.Interaction) error {
-	if !strings.HasPrefix(i.Value, "ix-") {
+func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
+	if !strings.HasPrefix(i.PromptID, "ix-") {
 		return ErrNotInteraction
 	}
-	inputs, err := json.Marshal(i.Inputs)
+	answers, err := json.Marshal(i.Answers)
 	if err != nil {
 		return fmt.Errorf("interact: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: i.Value, User: i.User, Channel: i.Channel, MessageTS: i.MessageTS, Inputs: inputs, PressedAt: p.cfg.Now()}
+	press := store.Press{InteractionID: i.PromptID, User: i.User, Channel: i.At.Channel, MessageTS: i.At.ID, Inputs: answers, PressedAt: p.cfg.Now()}
 	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
-		return fmt.Errorf("interact: record a press of %s: %w", i.Value, err)
+		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
 	}
 	if p.cfg.Notify != nil {
 		p.cfg.Notify(press)
@@ -149,19 +149,19 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return p.finish(ctx, press, "", textGone)
+		return p.finish(ctx, press, nil, textGone)
 	case err != nil:
 		return Retry, fmt.Errorf("interact: read %s: %w", press.InteractionID, err)
 	case row.MessageRef == "":
 		if p.cfg.Now().Sub(press.PressedAt) < p.cfg.EarlyFor { // the prompt's post is not recorded yet
 			return Retry, nil
 		}
-		return p.finish(ctx, press, row.Key.ThreadTS, textNotReady)
+		return p.finish(ctx, press, &row, textNotReady)
 	case row.MessageRef != press.MessageTS || row.Key.Channel != press.Channel:
 		p.cfg.Logger.WarnContext(ctx, "interact: a press names an interaction that is on another message", "interaction", row.ID)
-		return p.finish(ctx, press, "", "")
+		return p.finish(ctx, press, nil, "")
 	case !p.open(row, press.User):
-		return p.finish(ctx, press, row.Key.ThreadTS, lostText(row))
+		return p.finish(ctx, press, &row, lostText(row))
 	}
 	return p.authorized(ctx, press, row)
 }
@@ -181,7 +181,7 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	if err != nil {
 		return Retry, err
 	} else if b == nil {
-		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+		return p.finish(ctx, press, &row, textGone)
 	}
 	refuse := func(result audit.DecisionResult, answered *dialect.Answer, text string) (Result, error) {
 		actor := audit.Actor{User: press.User, Binding: name, Identity: b.Identity}
@@ -189,9 +189,9 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		if err := p.cfg.Auditor.Decision(ctx, actor, d); err != nil {
 			return Retry, fmt.Errorf("interact: audit the refusal of a press of %s: %w", row.ID, err)
 		}
-		return p.finish(ctx, press, row.Key.ThreadTS, text)
+		return p.finish(ctx, press, &row, text)
 	}
-	switch member, err := p.cfg.Authorizer.IsChannelMember(ctx, row.Key.Channel, press.User); {
+	switch member, err := p.cfg.Authorizer.IsMember(ctx, row.Key.Channel, press.User); {
 	case err != nil:
 		return p.unverified(row, err)
 	case !member:
@@ -203,18 +203,14 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		return refuse(audit.DecisionDenied, nil, "")
 	}
 	var in dialect.Interaction
-	var inputs map[string]map[string]slack.Input
-	if err := errors.Join(json.Unmarshal(row.Request, &in), json.Unmarshal(press.Inputs, &inputs)); err != nil {
+	var answers []chat.Answer
+	if err := errors.Join(json.Unmarshal(row.Request, &in), json.Unmarshal(press.Inputs, &answers)); err != nil {
 		p.cfg.Logger.ErrorContext(ctx, "interact: a press or its interaction cannot be read", "interaction", row.ID, "err", err)
-		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+		return p.finish(ctx, press, &row, textGone)
 	}
-	controls, err := Controls(row.ID, in)
+	answer, problems, err := ExtractAnswer(in, answers)
 	if err != nil {
-		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
-	}
-	answer, problems, err := ExtractAnswer(in, controls, inputs)
-	if err != nil {
-		return p.finish(ctx, press, row.Key.ThreadTS, textGone)
+		return p.finish(ctx, press, &row, textGone)
 	} else if len(problems) > 0 {
 		shape := &dialect.Answer{Answers: make([][]string, len(in.Questions)-len(problems))} // how many were answered, never what
 		return refuse(audit.DecisionIncomplete, shape, incompleteText(problems))
@@ -223,7 +219,7 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	if err := p.cfg.Decider.Decide(ctx, pd); err != nil {
 		return Retry, err
 	}
-	return p.finish(ctx, press, "", "")
+	return p.finish(ctx, press, nil, "")
 }
 
 // unverified is a check of who pressed that could not be made. It is no decision, so the press is kept for
@@ -242,11 +238,11 @@ const textGaveUp = "Couldn't process your answer. Please press Submit again."
 // press is deleted, so that the timeout sweep, which leaves an interaction with a press waiting, can go on
 // with it. Telling is best-effort. An error means the press is still recorded.
 func (p *Pipeline) GiveUp(ctx context.Context, press store.Press) error {
-	thread := ""
+	var in *store.Interaction
 	if row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID); err == nil {
-		thread = row.Key.ThreadTS
+		in = &row
 	}
-	_, err := p.finish(ctx, press, thread, textGaveUp)
+	_, err := p.finish(ctx, press, in, textGaveUp)
 	return err
 }
 
@@ -266,12 +262,16 @@ func (p *Pipeline) binding(ctx context.Context, row store.Interaction) (string, 
 	return s.Binding, &b, nil
 }
 
-// finish tells the person text, if there is any, in thread (the interaction's: a prompt lives in a thread), and deletes the press. Telling is best-effort: a person
-// who is not told can press again, and a failure is only logged.
-func (p *Pipeline) finish(ctx context.Context, press store.Press, thread, text string) (Result, error) {
+// finish tells the person text, if there is any, in the thread of row (the interaction's: a prompt lives in a
+// thread; nil when it is not known), and deletes the press. Telling is best-effort: a person who is not told
+// can press again, and a failure is only logged.
+func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Interaction, text string) (Result, error) {
 	if text != "" {
-		err := p.cfg.Ephemerals.PostEphemeral(ctx, press.Channel, thread, press.User, slack.Content{Text: text})
-		if err != nil {
+		to := chat.Target{Channel: press.Channel}
+		if row != nil {
+			to.Conn, to.Thread = row.Key.Connection, row.Key.ThreadTS
+		}
+		if err := p.cfg.Ephemerals.Ephemeral(ctx, to, press.User, chat.Message{Fallback: text}); err != nil {
 			p.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
 		}
 	}

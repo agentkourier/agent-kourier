@@ -13,6 +13,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -29,12 +30,12 @@ const (
 	textFirstNone = "Someone else answered this question first."
 )
 
-// slackUserID is the shape of a Slack user ID, which only is named to a person in a mention.
+// slackUserID is the shape of a Slack user ID: only a decider that has it is named to the person who lost.
 var slackUserID = regexp.MustCompile(`^[UW][A-Z0-9]{2,}$`)
 
-// Ephemeral shows a message to one person alone: *slack.Client.
+// Ephemeral shows a message to one person alone: a chat.Platform.
 type Ephemeral interface {
-	PostEphemeral(ctx context.Context, channel, threadTS, user string, content slack.Content) error
+	Ephemeral(ctx context.Context, t chat.Target, user string, m chat.Message) error
 }
 
 // PressDecision is a press whose answer is complete: the pipeline (WP-33d1c) has found its interaction,
@@ -304,14 +305,17 @@ func lostText(cur store.Interaction) string {
 	case cur.State != store.InteractionAnswered:
 		return textClosed
 	case slackUserID.MatchString(cur.Decider):
-		return "<@" + cur.Decider + "> answered this question first."
+		// Plain text: a message's text is literal in the neutral model, so there is no mention to write here,
+		// and "<@U1>" would be shown as those characters.
+		return "@" + cur.Decider + " answered this question first."
 	}
 	return textFirstNone
 }
 
 // tell shows text to the person alone. It is told once and kept nowhere, so a failure is only logged.
 func (d *Decider) tell(ctx context.Context, row store.Interaction, user, text string) {
-	if err := d.cfg.Ephemerals.PostEphemeral(ctx, row.Key.Channel, row.Key.ThreadTS, user, slack.Content{Text: text}); err != nil {
+	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.ThreadTS}
+	if err := d.cfg.Ephemerals.Ephemeral(ctx, to, user, chat.Message{Fallback: text}); err != nil {
 		d.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
 	}
 }

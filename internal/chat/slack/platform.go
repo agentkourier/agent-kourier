@@ -80,6 +80,10 @@ func (in inbound) Message(ctx context.Context, m Message) error {
 	})
 }
 
+// Interaction is a press as the neutral model has it, decoded from the Client's. It is for the broker's
+// handler of the intake's presses, until the intake runs behind Run (WP-37 S6), which does the same.
+func (p *Platform) Interaction(i Interaction) chat.Interaction { return p.interaction(i) }
+
 func (in inbound) Interaction(ctx context.Context, i Interaction) error {
 	return in.sink.Interaction(ctx, in.p.interaction(i))
 }
