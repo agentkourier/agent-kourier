@@ -268,3 +268,16 @@ refresh_dex_token() {
   printf %s "${tok}" | "${K[@]}" -n courier create secret generic courier-agent-token --from-file=token=/dev/stdin \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 }
+
+# deploy_scenario_agents: the full tier's Phase 1 scenario agents (full/scenarios): the scenario model and the MCP
+# tool server, whose code is kept in ConfigMaps made from the files there, and the kagent Agents that use them.
+# Restarts the two servers so changed code is picked up, and waits for them and for the agents. Needs HERE, K.
+deploy_scenario_agents() {
+  local dir=${HERE}/full/scenarios
+  "${K[@]}" -n kagent create configmap scenariollm --from-file=scenariollm.py="${dir}/scenariollm.py" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n kagent create configmap scenariomcp --from-file=scenariomcp.py="${dir}/scenariomcp.py" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply -f "${dir}/scenarios.yaml" >/dev/null
+  "${K[@]}" -n kagent rollout restart deploy/scenariollm deploy/scenariomcp >/dev/null
+  "${K[@]}" -n kagent rollout status deploy/scenariollm deploy/scenariomcp --timeout=180s
+  "${K[@]}" -n kagent wait --for=condition=Ready agent/scenario-gated agent/scenario-memory agent/scenario-ask agent/spike-approve --timeout=300s
+}

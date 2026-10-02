@@ -174,6 +174,9 @@ install_operator
 build_doubles_image
 apply_doubles
 
+step "scenario agents: the scenario model, its tool server, one kagent agent per scenario"
+deploy_scenario_agents
+
 step "courier: image, the Binding's Dex token, config, Deployment"
 # Courier is the fast tier's Deployment (hack/kind/fast/courier), running the testhooks image against the fake
 # Slack in e2e, with the fast tier's Bindings and an AgentBackend for kagent's front door. Its pod carries the
