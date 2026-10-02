@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
@@ -113,6 +114,10 @@ type Post struct {
 	Role              store.OutboxRole
 	Channel, ThreadTS string // ThreadTS is empty for a message in the channel
 	Content           slack.Content
+	// Out, if it is set (V is not zero), is the message in the neutral model, and is stored as Slack's form of it
+	// instead of Content: the outbox keeps Slack's content until it stores the neutral model itself (WP-37 S5),
+	// and a caller that has gone neutral says what it says in this field.
+	Out chat.Outgoing
 }
 
 // ID returns the outbox ID of a message: deterministic, so a retry of the same event names the
@@ -203,10 +208,17 @@ func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
 	if p.Role == store.OutboxReaction {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: a reaction is not a post, use EnqueueReaction: %w", row.ID, store.ErrInvalid)
 	}
-	if p.Content.Text == "" && len(p.Content.Blocks) == 0 {
+	content := p.Content
+	if p.Out.V != 0 {
+		var err error
+		if content, err = slack.Render(p.Out); err != nil { // a message that cannot be shown cannot be delivered either: no retry mends it
+			return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w: %w", row.ID, store.ErrInvalid, err)
+		}
+	}
+	if content.Text == "" && len(content.Blocks) == 0 {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: no text or blocks: %w", row.ID, store.ErrInvalid)
 	}
-	payload, err := json.Marshal(p.Content)
+	payload, err := json.Marshal(content)
 	if err != nil {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w", row.ID, err)
 	}
