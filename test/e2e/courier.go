@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,27 +69,8 @@ func (c *Courier) Counter(ctx context.Context, name string, labels map[string]st
 
 // getText returns the body of a 2xx answer to GET path, up to limit bytes (more is an error).
 func (c *client) getText(ctx context.Context, path string, limit int64) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
-	if err != nil {
-		return "", fmt.Errorf("e2e: %w", err)
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("e2e: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return "", &StatusError{http.MethodGet, req.URL.String(), resp.StatusCode, string(msg)}
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	switch {
-	case err != nil:
-		return "", fmt.Errorf("e2e: read GET %s: %w", path, err)
-	case int64(len(b)) > limit:
-		return "", fmt.Errorf("e2e: GET %s: %w: over %d bytes", path, errTooLarge, limit)
-	}
-	return string(b), nil
+	b, err := c.exchange(ctx, http.MethodGet, path, nil, false, limit)
+	return string(b), err
 }
 
 // includes reports whether have holds every label in want.
@@ -127,19 +107,25 @@ func parseSample(line string) (name string, labels map[string]string, value floa
 	return name, labels, value, nil
 }
 
-// parseLabels reads name="value" pairs up to the closing brace, and returns them and what follows.
+// parseLabels reads name="value" pairs up to the closing brace, and returns them and what follows. The
+// pairs are separated by commas, with one allowed after the last, and a name is a label name that
+// appears once; a quoted name, which newer exposition formats allow and courier does not write, is an
+// error rather than a guess.
 func parseLabels(s string) (map[string]string, string, error) {
 	labels := map[string]string{}
+	s = strings.TrimLeft(s, " ")
+	if rest, ok := strings.CutPrefix(s, "}"); ok {
+		return labels, rest, nil
+	}
 	for {
-		s = strings.TrimLeft(s, " ")
-		if rest, ok := strings.CutPrefix(s, "}"); ok {
-			return labels, rest, nil
-		}
 		eq := strings.Index(s, `="`)
-		if eq <= 0 {
-			return nil, "", errors.New(`labels: want name="value"`)
+		if eq <= 0 || !labelName(s[:eq]) {
+			return nil, "", errors.New(`labels: want name="value", with a name of letters, digits and _`)
 		}
 		key := s[:eq]
+		if _, dup := labels[key]; dup {
+			return nil, "", fmt.Errorf("label %s: given twice", key)
+		}
 		var b strings.Builder
 		i := eq + 2
 		for ; i < len(s) && s[i] != '"'; i++ {
@@ -163,6 +149,27 @@ func parseLabels(s string) (map[string]string, string, error) {
 			return nil, "", fmt.Errorf("label %s: the value does not end", key)
 		}
 		labels[key] = b.String()
-		s = strings.TrimPrefix(strings.TrimLeft(s[i+1:], " "), ",")
+		s = strings.TrimLeft(s[i+1:], " ")
+		if rest, ok := strings.CutPrefix(s, "}"); ok {
+			return labels, rest, nil
+		}
+		rest, ok := strings.CutPrefix(s, ",")
+		if !ok {
+			return nil, "", fmt.Errorf("label %s: want a comma or the closing brace after it", key)
+		}
+		s = rest
+		if s = strings.TrimLeft(s, " "); strings.HasPrefix(s, "}") { // a comma after the last pair
+			return labels, s[1:], nil
+		}
 	}
+}
+
+// labelName reports whether s is a label name: a letter or _, then letters, digits and _.
+func labelName(s string) bool {
+	for i, r := range s {
+		if r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (i == 0 || r < '0' || r > '9') {
+			return false
+		}
+	}
+	return s != ""
 }

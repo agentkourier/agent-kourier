@@ -39,9 +39,7 @@ func TestS3_AnAskUserPromptTakesACompleteAnswerAndRefusesAnIncompleteOne(t *test
 	s := newScenario(t)
 	const user = "US3"
 	// Only a member of the channel who is not a bot may answer: courier asks Slack.
-	if err := s.slack.AddUser(s.ctx, fakeslack.User{ID: user, Name: "s3user", RealName: "S3 User"}); err != nil {
-		t.Fatal(err)
-	}
+	s.know(user)
 	if err := s.slack.SetMembers(s.ctx, ChannelS3, user); err != nil {
 		t.Fatal(err)
 	}

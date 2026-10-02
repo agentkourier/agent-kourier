@@ -87,9 +87,20 @@ func (s *scenario) acked(m fakeslack.UserMessage) {
 	}
 }
 
+// know tells the fake of user, once, so that courier's users.info for them finds one: it asks for the
+// person who wrote a message (to say who decided, and in the audit log), and a user the fake does not
+// know is a Warn in courier's log for no fault of its own.
+func (s *scenario) know(user string) {
+	s.t.Helper()
+	if err := s.slack.Know(s.ctx, user); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
 // mention posts text to courier in channel as user, and waits for it to be taken up.
 func (s *scenario) mention(channel, user, text string) fakeslack.UserMessage {
 	s.t.Helper()
+	s.know(user)
 	m, err := s.slack.Mention(s.ctx, channel, user, botMention+text)
 	if err != nil {
 		s.t.Fatal(err)
@@ -101,6 +112,7 @@ func (s *scenario) mention(channel, user, text string) fakeslack.UserMessage {
 // reply posts text in the thread at ts as user, and waits for it to be taken up.
 func (s *scenario) reply(channel, ts, user, text string) fakeslack.UserMessage {
 	s.t.Helper()
+	s.know(user)
 	m, err := s.slack.Reply(s.ctx, channel, ts, user, text)
 	if err != nil {
 		s.t.Fatal(err)

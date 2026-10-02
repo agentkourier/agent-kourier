@@ -54,34 +54,50 @@ func (c *client) do(ctx context.Context, method, path string, in, out any) error
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
-	if err != nil {
-		return fmt.Errorf("e2e: %w", err)
+	var limit int64 // an answer that is ignored is not read
+	if out != nil {
+		limit = c.limit
 	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("e2e: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return &StatusError{method, req.URL.String(), resp.StatusCode, string(msg)}
-	}
-	if out == nil {
-		return nil
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, c.limit+1))
-	switch {
-	case err != nil:
-		return fmt.Errorf("e2e: read %s %s: %w", method, path, err)
-	case int64(len(b)) > c.limit:
-		return fmt.Errorf("e2e: %s %s: %w: over %d bytes", method, path, errTooLarge, c.limit)
+	b, err := c.exchange(ctx, method, path, body, in != nil, limit)
+	if err != nil || out == nil {
+		return err
 	}
 	if err := json.Unmarshal(b, out); err != nil {
 		return fmt.Errorf("e2e: decode %s %s: %w", method, path, err)
 	}
 	return nil
+}
+
+// exchange is the one place a request is made and its answer checked, for the JSON calls and the text
+// ones: it sends body (nil for none, as JSON if asJSON is set), turns a status outside 2xx into a
+// *StatusError, and returns the answer's body, up to limit bytes (more is errTooLarge). A limit of
+// zero reads nothing, for an answer the caller ignores.
+func (c *client) exchange(ctx context.Context, method, path string, body io.Reader, asJSON bool, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("e2e: %w", err)
+	}
+	if asJSON {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("e2e: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
+		return nil, &StatusError{method, req.URL.String(), resp.StatusCode, string(msg)}
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("e2e: read %s %s: %w", method, path, err)
+	case int64(len(b)) > limit:
+		return nil, fmt.Errorf("e2e: %s %s: %w: over %d bytes", method, path, errTooLarge, limit)
+	}
+	return b, nil
 }

@@ -99,6 +99,13 @@ func TestCounterRefusesWhatItCannotRead(t *testing.T) {
 		"courier_x_total{outcome=\"denied\"} one\n", // a value that is no number
 		"courier_x_total\n",                         // no value
 		"courier_x_total{o=\"a\\q\"} 1\n",           // an escape Prometheus does not have
+		"courier_x_total{a=\"1\" b=\"2\"} 1\n",      // pairs with no comma between
+		"courier_x_total{a=\"1\",a=\"2\"} 1\n",      // a label twice, which would silently take the last
+		"courier_x_total{1a=\"1\"} 1\n",             // a name that starts with a digit
+		"courier_x_total{a-b=\"1\"} 1\n",            // a name with a character a label name has not
+		"courier_x_total{,a=\"1\"} 1\n",             // a comma with nothing before it
+		"courier_x_total{a=\"1\",,b=\"2\"} 1\n",     // a comma with nothing between
+		"courier_x_total{a=\"1\"b=\"2\"} 1\n",       // a value that runs into the next name
 		"courier_x_total 1 2 3\n",                   // more than a value and a timestamp
 	} {
 		if _, err := metricsServer(t, body).Counter(t.Context(), "courier_x_total", nil); err == nil || errors.Is(err, ErrNoSample) {
@@ -148,5 +155,22 @@ func TestWaitReadyTimesOutOnACourierThatIsNeverReady(t *testing.T) {
 	cancel()
 	if err := NewCourier(srv.URL).WaitReady(ctx, time.Minute); !errors.Is(err, context.Canceled) || errors.Is(err, ErrTimeout) {
 		t.Fatalf("WaitReady with a cancelled context = %v; want the context's error", err)
+	}
+}
+
+// TestCounterReadsTheLabelFormsPrometheusWrites: spaces and a trailing comma are fine, as are empty
+// braces and every legal name; what the strictness refuses is only what is not the format.
+func TestCounterReadsTheLabelFormsPrometheusWrites(t *testing.T) {
+	c := metricsServer(t, "courier_a_total{} 1\n"+
+		"courier_b_total{a=\"1\", b=\"2\" } 2\n"+
+		"courier_c_total{a=\"1\",} 3\n"+
+		"courier_d_total{_a9=\"x\",A_b=\"y\"} 4\n")
+	for name, want := range map[string]float64{"courier_a_total": 1, "courier_b_total": 2, "courier_c_total": 3, "courier_d_total": 4} {
+		if got, err := c.Counter(t.Context(), name, nil); err != nil || got != want {
+			t.Errorf("Counter(%s) = %v, %v; want %v", name, got, err, want)
+		}
+	}
+	if got, err := c.Counter(t.Context(), "courier_b_total", map[string]string{"b": "2"}); err != nil || got != 2 {
+		t.Errorf("Counter by the second label = %v, %v", got, err)
 	}
 }

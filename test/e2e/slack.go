@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
@@ -14,10 +16,14 @@ import (
 // Slack drives the fake Slack through its /_control/ surface, so a scenario acts as Slack users
 // and reads what courier posted. The surface has no authentication, so this client is only for
 // tests inside the cluster, and the fake is never published.
-type Slack struct{ c *client }
+type Slack struct {
+	c     *client
+	mu    sync.Mutex
+	known map[string]bool // the users Know has told the fake of
+}
 
 // NewSlack returns a client for the fake Slack at baseURL.
-func NewSlack(baseURL string) *Slack { return &Slack{newClient(baseURL)} }
+func NewSlack(baseURL string) *Slack { return &Slack{c: newClient(baseURL), known: map[string]bool{}} }
 
 // Mention posts text as user in channel. It must mention the bot, and a client must be connected
 // over Socket Mode (else 409), because the fake delivers the events. The UserMessage lists the
@@ -77,6 +83,22 @@ func (s *Slack) interact(ctx context.Context, action string, in map[string]any) 
 // AddUser registers (or replaces) a workspace user, for users.info.
 func (s *Slack) AddUser(ctx context.Context, u fakeslack.User) error {
 	return s.c.do(ctx, http.MethodPost, "/_control/users", u, nil)
+}
+
+// Know registers user with the fake, once for this client, with a name made from the ID: a user that
+// writes a message must be one the fake can answer users.info for, or courier logs a warning for the
+// lookup. A later call for the same user does nothing; AddUser is for a user with more to say.
+func (s *Slack) Know(ctx context.Context, user string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.known[user] {
+		return nil
+	}
+	if err := s.AddUser(ctx, fakeslack.User{ID: user, Name: strings.ToLower(user), RealName: "Scenario " + user}); err != nil {
+		return err
+	}
+	s.known[user] = true
+	return nil
 }
 
 // SetMembers registers channel and replaces its membership, for conversations.members.

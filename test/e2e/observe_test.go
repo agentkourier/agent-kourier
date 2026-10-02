@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,5 +94,61 @@ func TestSlackShowsEphemeralsAndReactions(t *testing.T) {
 	}
 	if _, err := f.sl.Reactions(ctx, "C1", "1.1"); statusOf(err) != http.StatusNotFound {
 		t.Fatalf("Reactions of an unknown message = %v; want a 404", err)
+	}
+}
+
+// TestKnowTellsTheFakeOfEachUserOnce: a user is registered before they write, the same user is not
+// registered again, and the fake can answer users.info for them.
+func TestKnowTellsTheFakeOfEachUserOnce(t *testing.T) {
+	fake := fakeslack.New()
+	t.Cleanup(fake.Close)
+	var adds atomic.Int32
+	counting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_control/users" {
+			adds.Add(1)
+		}
+		fake.ServeHTTP(w, r)
+	}))
+	defer counting.Close()
+	sl := NewSlack(counting.URL)
+	for _, user := range []string{"US1", "US1", "US2"} {
+		if err := sl.Know(t.Context(), user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := slack.New("xoxb-fake", slack.OptionAPIURL(counting.URL+"/"))
+	for _, id := range []string{"US1", "US2"} {
+		if u, err := api.GetUserInfo(id); err != nil || u.ID != id {
+			t.Errorf("users.info(%s) = %+v, %v; want the user Know told the fake of", id, u, err)
+		}
+	}
+	if n := adds.Load(); n != 2 { // US1 is asked twice and told once
+		t.Errorf("%d users told of; want 2, one for each user", n)
+	}
+	if err := NewSlack(counting.URL).Know(t.Context(), ""); statusOf(err) != http.StatusBadRequest {
+		t.Errorf("Know of no user = %v; want the fake's 400", err)
+	}
+}
+
+// TestKnowRemembersOnlyWhatTheFakeTook: a registration that failed is tried again by the next call.
+func TestKnowRemembersOnlyWhatTheFakeTook(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	sl := NewSlack(srv.URL)
+	if err := sl.Know(t.Context(), "US1"); statusOf(err) != http.StatusServiceUnavailable {
+		t.Fatalf("Know against a fake that is down = %v; want its 503", err)
+	}
+	if err := sl.Know(t.Context(), "US1"); err != nil || calls.Load() != 2 {
+		t.Fatalf("Know again = %v after %d calls; want the registration tried again, and done", err, calls.Load())
+	}
+	if err := sl.Know(t.Context(), "US1"); err != nil || calls.Load() != 2 {
+		t.Fatalf("Know a third time = %v after %d calls; want it remembered", err, calls.Load())
 	}
 }
