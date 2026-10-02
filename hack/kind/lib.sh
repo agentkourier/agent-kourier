@@ -145,25 +145,35 @@ not_empty() { [ -n "$1" ]; }
 # hostPort or hostNetwork. Once: no Ingress sits in namespace e2e (an Ingress can only name Services
 # in its own namespace, so that is every Ingress that could reach the doubles; the full tier's
 # charts may have their own elsewhere), and the kind node publishes only the API server, on loopback.
+# assert_app_unpublished NAMESPACE APP: the pods labelled app=APP in NAMESPACE are there (so the checks are not
+# vacuous), and every Service that selects them is ClusterIP with no nodePort, external IP or load-balancer ingress,
+# and none of them has a hostPort or hostNetwork. A Service selects the pods when every selector pair is one of a
+# pod's labels. A Service with no selector and hand-written EndpointSlices is out of scope: nothing here makes one.
+# Needs K, jq.
+assert_app_unpublished() {
+  local ns=$1 app=$2 pods published exposed
+  pods=$("${K[@]}" -n "${ns}" get pods -l "app=${app}" -o json)
+  assert "a ${app} pod exists (the checks below are not vacuous)" not_empty "$(jq -r '.items[].metadata.name' <<<"${pods}")"
+  # A Service selects the pods when every selector pair is one of a pod's labels. A Service with
+  # no selector and hand-written EndpointSlices is out of scope: nothing here makes one.
+  published=$("${K[@]}" -n "${ns}" get services -o json | jq -r --argjson pods "$(jq '[.items[].metadata.labels]' <<<"${pods}")" '
+    .items[]
+    | (.spec.selector // {}) as $sel
+    | select(($sel | length) > 0 and any($pods[]; . as $l | all(($sel | to_entries[]); $l[.key] == .value)))
+    | select(.spec.type != "ClusterIP" or any(.spec.ports[]?; .nodePort != null)
+             or ((.spec.externalIPs // []) | length > 0) or ((.status.loadBalancer.ingress // []) | length > 0))
+    | .metadata.name')
+  assert "no Service for ${app} is NodePort, LoadBalancer or has external IPs: [${published}]" is_empty "${published}"
+  assert "${app} has a ClusterIP Service" not_empty "$("${K[@]}" -n "${ns}" get service "${app}" -o jsonpath='{.spec.clusterIP}')"
+  exposed=$(jq -r '.items[] | select(.spec.hostNetwork == true or any(.spec.containers[].ports[]?; .hostPort != null)) | .metadata.name' <<<"${pods}")
+  assert "no ${app} pod uses hostPort or hostNetwork: [${exposed}]" is_empty "${exposed}"
+}
+
 assert_never_published() {
-  local app pods published ingresses exposed ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
+  local app ingresses ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
   echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication"
   for app in fakeslack stubagent; do
-    pods=$("${K[@]}" -n e2e get pods -l "app=${app}" -o json)
-    assert "a ${app} pod exists (the checks below are not vacuous)" not_empty "$(jq -r '.items[].metadata.name' <<<"${pods}")"
-    # A Service selects the pods when every selector pair is one of a pod's labels. A Service with
-    # no selector and hand-written EndpointSlices is out of scope: nothing here makes one.
-    published=$("${K[@]}" -n e2e get services -o json | jq -r --argjson pods "$(jq '[.items[].metadata.labels]' <<<"${pods}")" '
-      .items[]
-      | (.spec.selector // {}) as $sel
-      | select(($sel | length) > 0 and any($pods[]; . as $l | all(($sel | to_entries[]); $l[.key] == .value)))
-      | select(.spec.type != "ClusterIP" or any(.spec.ports[]?; .nodePort != null)
-               or ((.spec.externalIPs // []) | length > 0) or ((.status.loadBalancer.ingress // []) | length > 0))
-      | .metadata.name')
-    assert "no Service for ${app} is NodePort, LoadBalancer or has external IPs: [${published}]" is_empty "${published}"
-    assert "${app} has a ClusterIP Service" not_empty "$("${K[@]}" -n e2e get service "${app}" -o jsonpath='{.spec.clusterIP}')"
-    exposed=$(jq -r '.items[] | select(.spec.hostNetwork == true or any(.spec.containers[].ports[]?; .hostPort != null)) | .metadata.name' <<<"${pods}")
-    assert "no ${app} pod uses hostPort or hostNetwork: [${exposed}]" is_empty "${exposed}"
+    assert_app_unpublished e2e "${app}"
   done
   ingresses=$("${K[@]}" -n e2e get ingress -o name)
   assert "no Ingress in namespace e2e: [${ingresses}]" is_empty "${ingresses}"
@@ -320,7 +330,7 @@ settle_full_tier() {
     fi
     [ "${attempt}" -lt 3 ] || die "the kagent controller did not become ready"
     echo "the kagent controller is not ready (try ${attempt}); deleting its pod" >&2
-    "${K[@]}" -n kagent delete pod -l app.kubernetes.io/component=controller --wait=false >/dev/null 2>&1 || true
+    "${K[@]}" -n kagent delete pod -l app.kubernetes.io/component=controller,app.kubernetes.io/name=kagent --wait=false >/dev/null 2>&1 || true
   done
   for attempt in 1 2 3; do
     if probe_frontdoor; then

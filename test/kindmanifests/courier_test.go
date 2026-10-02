@@ -350,3 +350,68 @@ func TestFullTierConfig(t *testing.T) {
 		}
 	}
 }
+
+// TestScenarioServersAreNotPublished: the scenario model's /_control/release/ and the MCP tool server have no
+// authentication, like the fake Slack's and the stub agent's, so their Services are ClusterIP with no node port or
+// external address and their pods publish no host port (full/verify.sh proves the same against the cluster).
+func TestScenarioServersAreNotPublished(t *testing.T) {
+	const file = "../../hack/kind/full/scenarios/scenarios.yaml"
+	for _, name := range []string{"scenariollm", "scenariomcp"} {
+		var svc corev1.Service
+		var found bool
+		for _, doc := range objects(t, file) {
+			meta, _ := doc["metadata"].(map[string]any)
+			if doc["kind"] == "Service" && meta["name"] == name {
+				b, _ := json.Marshal(doc)
+				if err := json.Unmarshal(b, &svc); err != nil {
+					t.Fatal(err)
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s has no Service %s", file, name)
+		}
+		if svc.Spec.Type != "" && svc.Spec.Type != corev1.ServiceTypeClusterIP || len(svc.Spec.ExternalIPs) != 0 || svc.Spec.LoadBalancerIP != "" {
+			t.Errorf("Service %s is %q with external IPs %v; want ClusterIP and nothing published", name, svc.Spec.Type, svc.Spec.ExternalIPs)
+		}
+		for _, p := range svc.Spec.Ports {
+			if p.NodePort != 0 {
+				t.Errorf("Service %s publishes node port %d", name, p.NodePort)
+			}
+		}
+	}
+	for _, doc := range objects(t, file) {
+		if doc["kind"] != "Deployment" {
+			continue
+		}
+		b, _ := json.Marshal(doc)
+		var d appsv1.Deployment
+		if err := json.Unmarshal(b, &d); err != nil {
+			t.Fatal(err)
+		}
+		pod := d.Spec.Template.Spec
+		if pod.HostNetwork {
+			t.Errorf("Deployment %s uses the host network", d.Name)
+		}
+		for _, c := range pod.Containers {
+			for _, p := range c.Ports {
+				if p.HostPort != 0 {
+					t.Errorf("Deployment %s publishes host port %d", d.Name, p.HostPort)
+				}
+			}
+		}
+	}
+}
+
+// TestTheControllerRestartTouchesOnlyTheController: settle_full_tier deletes the kagent controller's pod by two
+// labels, its component and its name, so that no other pod of kagent that is labelled as a controller goes with it.
+func TestTheControllerRestartTouchesOnlyTheController(t *testing.T) {
+	raw, err := os.ReadFile("../../hack/kind/lib.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `delete pod -l app.kubernetes.io/component=controller,app.kubernetes.io/name=kagent `) {
+		t.Error("lib.sh's settle_full_tier does not delete the controller's pod by its component and name labels together")
+	}
+}

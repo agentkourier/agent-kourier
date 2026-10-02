@@ -148,6 +148,11 @@ probe() {
 "${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null
 
 assert_never_published
+# The full tier's own unauthenticated test surfaces: the scenario model's /_control/release/ and the MCP tool server.
+echo "== never published: the scenario model's /_control/release/ and the tool server have no authentication"
+for app in scenariollm scenariomcp; do
+  assert_app_unpublished kagent "${app}"
+done
 
 echo "== courier pod: A2A through the front door, nothing else reachable"
 probe courier app.kubernetes.io/name=courier <<'EOF'
