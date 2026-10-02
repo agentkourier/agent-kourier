@@ -299,6 +299,59 @@ func TestWhatAPersonIsToldIsToldInTheThreadOfThePrompt(t *testing.T) {
 	}
 }
 
+// loggedPipeline is the rig's pipeline with its log kept.
+func (r *pressRig) loggedPipeline(t *testing.T) (*interact.Pipeline, *logBuf) {
+	t.Helper()
+	logs := &logBuf{}
+	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
+	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+		Logger: slog.New(slog.NewTextHandler(logs, nil)), Now: func() time.Time { return r.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pl, logs
+}
+
+// TestAPressRecordedByAnOlderVersionIsToldAndLoggedAsSuchNotAsCorruption: a press recorded before an upgrade holds
+// its inputs in the old shape (Slack's state by block and action). It cannot be read as answers, and the person
+// is told the question is gone, as before; but it is a Warn that says why, so that an upgrade does not look like
+// corruption. A request that cannot be read is another matter, and stays an Error.
+func TestAPressRecordedByAnOlderVersionIsToldAndLoggedAsSuchNotAsCorruption(t *testing.T) {
+	r := newPressRig(t)
+	r.open(t)
+	pl, logs := r.loggedPipeline(t)
+	old := []byte(`{"q0":{"a0":{"Type":"plain_text_input","Values":["x"]}}}`)
+	seq, err := r.st.RecordPress(t.Context(), store.Press{InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageTS: "100.1", Inputs: old, PressedAt: r.now}, store.PressLimits{Total: 10, PerUser: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := pl.Process(t.Context(), store.Press{Seq: seq, InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageTS: "100.1", Inputs: old, PressedAt: r.now})
+	if err != nil || res != interact.Done || strings.Join(r.eph.list(), "|") != "UALICE1: This question is no longer available." || r.waiting(t) != 0 {
+		t.Fatalf("Process = %v, %v, told %q, %d waiting; want it done and the person told the question is gone", res, err, r.eph.list(), r.waiting(t))
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "older version") || strings.Contains(out, "level=ERROR") {
+		t.Errorf("log = %q; want one warning that says an older version recorded the press, and no error", out)
+	}
+}
+
+func TestARequestThatCannotBeReadIsAnError(t *testing.T) {
+	r := newPressRig(t)
+	row := store.Interaction{ID: "ix-bad", Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: []byte("{broken"), CreatedAt: d0, Deadline: deadline}
+	if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.SetInteractionMessageRef(t.Context(), "ix-bad", "100.1"); err != nil {
+		t.Fatal(err)
+	}
+	pl, logs := r.loggedPipeline(t)
+	if res, err := pl.Process(t.Context(), store.Press{InteractionID: "ix-bad", User: "UALICE1", Channel: key.Channel, MessageTS: "100.1", Inputs: []byte("null"), PressedAt: r.now}); err != nil || res != interact.Done {
+		t.Fatalf("Process = %v, %v; want it done", res, err)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "ix-bad") {
+		t.Errorf("log = %q; want an error naming ix-bad", out)
+	}
+}
+
 // TestAnAnswerToAQuestionThatIsNotThereIsRefusedAsInvalid: a press whose answers name a question the prompt does
 // not have is no honest press (the adapter made the controls from this prompt), and the answer that is
 // there is not taken either. It is refused, audited as an incomplete decision with no values, and told by

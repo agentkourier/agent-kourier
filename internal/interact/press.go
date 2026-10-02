@@ -203,9 +203,15 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		return refuse(audit.DecisionDenied, nil, "")
 	}
 	var in dialect.Interaction
+	if err := json.Unmarshal(row.Request, &in); err != nil {
+		p.cfg.Logger.ErrorContext(ctx, "interact: the request of an interaction cannot be read", "interaction", row.ID, "err", err)
+		return p.finish(ctx, press, &row, textGone)
+	}
 	var answers []chat.Answer
-	if err := errors.Join(json.Unmarshal(row.Request, &in), json.Unmarshal(press.Inputs, &answers)); err != nil {
-		p.cfg.Logger.ErrorContext(ctx, "interact: a press or its interaction cannot be read", "interaction", row.ID, "err", err)
+	if err := json.Unmarshal(press.Inputs, &answers); err != nil {
+		// What a press recorded before the answers were neutral holds: Slack's state by block and action. It is
+		// no corruption, and it passes: the person is told the question is gone.
+		p.cfg.Logger.WarnContext(ctx, "interact: a press recorded by an older version cannot be read; the person is told the question is gone", "interaction", row.ID, "err", err)
 		return p.finish(ctx, press, &row, textGone)
 	}
 	answer, problems, err := ExtractAnswer(in, answers)
