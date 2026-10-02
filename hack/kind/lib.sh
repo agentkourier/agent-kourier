@@ -242,10 +242,15 @@ CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01f
 refresh_dex_token() {
   local pod=dex-token-${RANDOM} tok
   "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  # The pod prints the token response's id_token and nothing else of it, but kubectl, when it cannot attach under load,
+  # falls back to streaming the pod's logs and can print the output twice. Whatever surrounds it, the token is the
+  # first thing in the output that has the shape of a JWT (three dot-separated base64url parts), and anything else
+  # is no token.
   tok=$("${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
     curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \
       -d username=binding-test@example.test -d password=password -d "scope=openid email" \
-      http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/\1/p"') || tok=
+      http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/\1/p"' 2>/dev/null |
+    grep -Eo '[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' | head -n 1) || tok=
   [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity (is Dex up? did the pod run?)"
   printf %s "${tok}" | "${K[@]}" -n courier create secret generic courier-agent-token --from-file=token=/dev/stdin \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
