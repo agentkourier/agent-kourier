@@ -125,7 +125,8 @@ func TestALineBasedLinkDefangerIsCaught(t *testing.T) {
 	a := &lineDefangAdapter{FakePlatform: NewFake()}
 	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
 	seen := map[string]bool{}
-	for _, v := range Check(context.Background(), s) {
+	names := []string{"markdown link, text over two lines", "markdown link, javascript, text over two lines", "markdown image, alt over two lines"}
+	for _, v := range catch(context.Background(), s, names...) {
 		seen[v.Case] = true
 	}
 	for _, name := range []string{"markdown link, text over two lines", "markdown link, javascript, text over two lines", "markdown image, alt over two lines"} {
@@ -172,7 +173,7 @@ func TestALabelOverTwoLinesIsALinkReferenceDefinition(t *testing.T) {
 	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: colonDefang}
 	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
 	seen := map[string]bool{}
-	for _, v := range Check(context.Background(), s) {
+	for _, v := range catch(context.Background(), s, "markdown reference definition, label over two lines") {
 		seen[v.Case] = true
 	}
 	if !seen["markdown reference definition, label over two lines"] {
@@ -214,7 +215,7 @@ func TestAnEscapedBracketDoesNotEndALabel(t *testing.T) {
 	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: spanDefang}
 	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
 	seen := map[string]bool{}
-	for _, v := range Check(context.Background(), s) {
+	for _, v := range catch(context.Background(), s, "markdown reference, escaped brackets in the label") {
 		seen[v.Case] = true
 	}
 	if !seen["markdown reference, escaped brackets in the label"] {
@@ -242,7 +243,7 @@ func TestAnAdapterThatFencesTextAndLeavesTokensRawIsCaught(t *testing.T) {
 	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: fenceRaw}
 	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
 	found := false
-	for _, v := range Check(context.Background(), s) {
+	for _, v := range catch(context.Background(), s) {
 		found = found || (v.Rule == RuleActive && strings.Contains(v.Detail, "mention"))
 	}
 	if !found {

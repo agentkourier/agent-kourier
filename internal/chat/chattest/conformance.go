@@ -113,6 +113,10 @@ func (v Violation) String() string {
 type Options struct {
 	// Short runs each case once, with the text alone, and not three times with a marker around it.
 	Short bool
+	// Cases, if set, are the cases to run in place of Corpus. It is for a test of the suite itself, which shows that a
+	// deliberately unsafe adapter is found and needs only the cases that its leak touches. An adapter is held to the
+	// whole Corpus, and never sets it.
+	Cases []Case
 }
 
 // Conformance fails t for every way the adapter breaks the contract of package chat. An adapter's tests
@@ -190,8 +194,12 @@ func checkShard(ctx context.Context, s Subject, opts Options, places []placement
 		c.contract()
 		c.mention()
 	}
+	cases := Corpus
+	if len(opts.Cases) > 0 {
+		cases = opts.Cases
+	}
 	for _, p := range places {
-		for _, cs := range Corpus {
+		for _, cs := range cases {
 			for _, text := range c.variants(cs.Text) {
 				c.run(p, cs.Name, text) // by every method and every variant: no two are assumed to share a renderer
 			}

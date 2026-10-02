@@ -363,7 +363,7 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := newMarkup(tc.dialect, tc.leaks).subject()
-			vs := CheckWith(t.Context(), s, Options{Short: true}) // the gaps that need a variant are in the test below
+			vs := catch(t.Context(), s) // the gaps that need a variant are in the test below
 			var rules []Rule
 			found := false
 			for _, v := range vs {
@@ -397,7 +397,7 @@ func TestAValidMentionIsTheOnlyConstructBesideHostileWords(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			found := false
-			for _, v := range CheckWith(t.Context(), newMarkup(tc.dialect, tc.leaks).subject(), Options{Short: true}) {
+			for _, v := range catch(t.Context(), newMarkup(tc.dialect, tc.leaks).subject()) {
 				// A violation of the corpus in the place of a Mention's words, and not of the plain Mention check.
 				found = found || (v.Where == chat.WhereContext && v.Case != "valid mention" && strings.Contains(v.Detail, "became a "+string(tc.kind)))
 			}
@@ -421,7 +421,9 @@ func TestAGapInOneMethodIsFoundByThatMethodAlone(t *testing.T) {
 		{slackPlainText, leaks{updateGap: true}, []string{"Update"}},
 		{commonMark, leaks{stopGap: true}, []string{"Stop", "Stop (last markdown)", "StreamAt Stop"}},
 	} {
-		vs := Check(t.Context(), newMarkup(tc.d, tc.leaks).subject())
+		// The variants of the text are the point of this test, and each costs a run, so it sends few cases: ones that
+		// start or end with a token.
+		vs := CheckWith(t.Context(), newMarkup(tc.d, tc.leaks).subject(), Options{Cases: pick("channel", "user", "autolink", "markdown link")})
 		found, broadcast := map[string]bool{}, false
 		for _, v := range vs {
 			found[v.Method] = true
@@ -440,7 +442,7 @@ func TestAGapInOneMethodIsFoundByThatMethodAlone(t *testing.T) {
 // noEscape is what the suite finds of a CommonMark platform that escapes nothing, found once for the tests
 // that read it.
 var noEscape = sync.OnceValue(func() []Violation {
-	return Check(context.Background(), newMarkup(commonMark, leaks{noEscape: true}).subject())
+	return catchEveryVariant(context.Background(), newMarkup(commonMark, leaks{noEscape: true}).subject())
 })
 
 // Dangerous constructs are found in every place where they must not appear, and each kind of dangerous
@@ -474,7 +476,7 @@ func TestStyleAndAutolinkConcessionsExcuseOnlyThemselves(t *testing.T) {
 			strictKinds = append(strictKinds, v.Detail)
 		}
 	}
-	for _, v := range Check(t.Context(), conceding) {
+	for _, v := range catch(t.Context(), conceding) {
 		if v.Rule == RuleActive {
 			concedingKinds = append(concedingKinds, v.Detail)
 		}
@@ -506,7 +508,7 @@ func TestAConcessionExcusesItsKindsInItsPlaceOnly(t *testing.T) {
 	s.AllowAutolink = true
 	s.Concessions = []Concession{{Where: chat.WhereNote, Kinds: StyleKinds(), Why: "a test"}}
 	noteStyle, headerStyle := false, false
-	for _, v := range Check(t.Context(), s) {
+	for _, v := range catch(t.Context(), s) {
 		if v.Rule != RuleActive || !strings.Contains(v.Detail, "became a emphasis") {
 			continue
 		}
