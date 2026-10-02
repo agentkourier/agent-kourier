@@ -24,7 +24,7 @@ internal/chat/slack     Slack adapter (Block Kit, Socket Mode)
 internal/alert/alertmanager   Alertmanager receiver
 internal/store          SQLite (later Postgres) persistence
 internal/outbox         durable outbound posting
-internal/render         agent output to Slack messages
+internal/render         agent output to neutral messages
 internal/audit          audit log
 internal/broker         composition: Bindings, lifecycle, health, shutdown order
 internal/interact       interactions: pause intake, button presses, timeout sweep
