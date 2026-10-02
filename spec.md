@@ -540,6 +540,13 @@ message are one turn. When `-32004` comes from a task courier did not record, co
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
 never drops the reply.
 
+**Attribution is load-bearing (WP-36h, measured on kagent).** kagent keeps courier's
+attribution at the start of the text a person wrote (`[Slack: <name> (<user id>)] ...`), and
+it replays the agent's own earlier replies to the model as role `user` messages. The
+attribution prefix is therefore the only thing that tells the model a person's message
+from its own earlier output. Courier must prefix every message a person wrote; removing or
+making the prefix optional breaks multi-turn context.
+
 ### 8.3 Streaming and long-running tasks
 
 - Courier calls `SendStreamingMessage` and edits one Slack message as text arrives.
@@ -598,6 +605,17 @@ Binding was declared to point at a read-only agent.
    when, and the controls are removed.
 6. On timeout, tool approvals are denied, questions are cancelled with `CancelTask`, and
    the thread is told.
+
+**Measured on kagent (WP-36h, Phase 1 full tier).**
+- kagent always calls the model with `stream=true` and always offers `ask_user` as a tool.
+- An `ask_user` answer reaches the model as a tool message holding a JSON list, one entry
+  per question in order: `[{"answer":["PostgreSQL","MySQL"],"question":"..."}, ...]`.
+- A denied tool approval reaches the model as an empty assistant message followed by a
+  tool message `{"error":"error tool \"<name>\" call is rejected"}`, so the model can
+  continue knowing the call was refused.
+- A paused task's final event posts no message of its own (D8, measured on kagent and the
+  stub): the prompt is the only message carrying the question.
+- Not measured: a non-streaming model call, and a nested sub-agent's ask.
 
 ### 8.5 Identity
 
