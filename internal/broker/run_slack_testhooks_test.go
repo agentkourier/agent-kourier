@@ -283,13 +283,13 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 // press of its Submit button goes through the handler, the pipeline and the worker to the decider, which
 // sends the answer on: the agent continues with it, and the decision is counted. Run builds every part.
 func TestRunTakesAPauseToAPromptAndAPressToTheAgent(t *testing.T) {
-	t.Skip("WP-37 S4a: the prompt is laid out by the Slack adapter, whose control IDs the press pipeline reads only once it is ported (S4b); S4b removes this skip")
 	w := askWorld(t)
 	r := start(t, w.cfg)
 	w.mention(t, r)
 
 	prompt := w.waitFor(t, "a prompt", func(m fakeslack.Message) bool { return strings.Contains(string(m.Blocks), `"submit"`) })
-	answer := fakeslack.StateValues{"q0": {"a0": {"type": "plain_text_input", "value": "prod"}}}
+	block, action := questionControl(t, prompt.Blocks, 0) // where the adapter put the input, not where it once did
+	answer := fakeslack.StateValues{block: {action: {"type": "plain_text_input", "value": "prod"}}}
 	if _, err := w.fake.Submit("U1", prompt.TS, "submit", answer); err != nil {
 		t.Fatal(err)
 	}

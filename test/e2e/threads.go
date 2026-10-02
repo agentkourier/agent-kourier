@@ -176,3 +176,28 @@ func Consistently(ctx context.Context, d time.Duration, desc string, cond func(c
 		}
 	}
 }
+
+// QuestionControl is where the answer to question i of a prompt goes, as the prompt's blocks say it: the input
+// block's ID, the ID of the action of its element, and the element's type. A scenario answers with what the prompt
+// has and assumes no IDs, so a change to the layout of a prompt cannot silently turn a press into one that answers
+// nothing. ok is false if the blocks hold no input for the question.
+func QuestionControl(blocks json.RawMessage, i int) (blockID, actionID, typ string, ok bool) {
+	var bs []struct {
+		Type    string `json:"type"`
+		BlockID string `json:"block_id"`
+		Element struct {
+			Type     string `json:"type"`
+			ActionID string `json:"action_id"`
+		} `json:"element"`
+	}
+	if json.Unmarshal(blocks, &bs) != nil {
+		return "", "", "", false
+	}
+	want := "q" + strconv.Itoa(i) // the adapter names the input block of question i so; it is the one ID read here
+	for _, b := range bs {
+		if b.Type == "input" && b.BlockID == want && b.Element.ActionID != "" {
+			return b.BlockID, b.Element.ActionID, b.Element.Type, true
+		}
+	}
+	return "", "", "", false
+}

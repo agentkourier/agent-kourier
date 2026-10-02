@@ -153,3 +153,20 @@ func TestConsistentlyReportsAnErrorFromTheCheck(t *testing.T) {
 		t.Errorf("Consistently on a cancelled context = %v; want its error, at once", err)
 	}
 }
+
+func TestQuestionControlReadsWhereAQuestionIsAnswered(t *testing.T) {
+	blocks := json.RawMessage(`[{"type":"header"},{"type":"input","block_id":"q0","element":{"type":"checkboxes","action_id":"c0"}},
+		{"type":"input","block_id":"q1","element":{"type":"plain_text_input","action_id":"t1"}},{"type":"actions","block_id":"submit","elements":[]}]`)
+	if b, a, typ, ok := QuestionControl(blocks, 0); !ok || b != "q0" || a != "c0" || typ != "checkboxes" {
+		t.Errorf("QuestionControl(0) = %q %q %q %v; want q0 c0 checkboxes", b, a, typ, ok)
+	}
+	if b, a, typ, ok := QuestionControl(blocks, 1); !ok || b != "q1" || a != "t1" || typ != "plain_text_input" {
+		t.Errorf("QuestionControl(1) = %q %q %q %v; want q1 t1 plain_text_input", b, a, typ, ok)
+	}
+	if _, _, _, ok := QuestionControl(blocks, 2); ok {
+		t.Error("QuestionControl found a question that is not there")
+	}
+	if _, _, _, ok := QuestionControl(json.RawMessage(`not json`), 0); ok {
+		t.Error("QuestionControl read blocks that are not JSON")
+	}
+}
