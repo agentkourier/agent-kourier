@@ -40,6 +40,7 @@ type clock struct {
 	mu     sync.Mutex
 	now    time.Time
 	timers []timer
+	gate   chan struct{} // while it is open, Now waits for it to close
 }
 
 type timer struct {
@@ -48,7 +49,17 @@ type timer struct {
 	long bool // the final text's deadline, which no test waits on
 }
 
-func (c *clock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	gate := c.gate
+	c.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
 
 func (c *clock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
@@ -186,6 +197,25 @@ func (r *recorder) orderOf() []string {
 	return slices.Clone(r.order)
 }
 
+// hold keeps the renderer from taking its first snapshot until the returned release is called: it looks at the
+// clock before every write, and the clock waits. A script that gives the renderer several events before its first
+// write, which is not throttled, uses it to be sure the write is made with all of them, whatever the scheduler does.
+func (e *env) hold() (release func()) {
+	gate := make(chan struct{})
+	e.clk.mu.Lock()
+	e.clk.gate = gate
+	e.clk.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.clk.mu.Lock()
+			e.clk.gate = nil
+			e.clk.mu.Unlock()
+			close(gate)
+		})
+	}
+}
+
 func timeoutAfter() <-chan time.Time { return time.After(5 * time.Second) }
 
 func (r *recorder) sent(path string) []url.Values {
@@ -274,9 +304,11 @@ func (e *env) startFor(t *testing.T, turn live.Turn) (*live.Run, context.CancelF
 // reply is the last message in the thread.
 func (e *env) reply() fakeslack.Message { th := e.fake.Thread("C1", e.root); return th[len(th)-1] }
 
+// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is
+// waited for before the test fails, and is long, since a loaded machine can starve the goroutine that makes it hold.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}

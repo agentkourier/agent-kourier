@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -148,27 +147,31 @@ func (e *env) record(t *testing.T) golden {
 	return g
 }
 
-// settle turns the clock and waits until the renderer has stopped writing, so that a script's steps come out in the
-// same order every time.
-func (e *env) settle(t *testing.T) {
-	t.Helper()
-	stable := 0
-	last := -1
-	for deadline := time.Now().Add(5 * time.Second); stable < 4; time.Sleep(15 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the renderer never settled")
-		}
-		if e.clk.waiting() > 0 {
-			e.clk.advance(throttle)
-			stable = 0
-			continue
-		}
-		if n := len(e.rec.orderOf()); n != last {
-			last, stable = n, 0
-		} else {
-			stable++
+// writes is how many requests the renderer has made to Slack.
+func (e *env) writes() int {
+	n := 0
+	for _, path := range e.rec.orderOf() {
+		if strings.HasPrefix(path, "/chat.") || path == "/reactions.add" {
+			n++
 		}
 	}
+	return n
+}
+
+// settle turns the clock for the renderer until it has made writes requests in all, and returns the moment it has.
+// A script's steps come out in the same order every time because each waits for what the step before it makes,
+// and never for a time to pass: the renderer's goroutine may be as slow as a loaded machine makes it, and an
+// event that reached it before it had written the step before would be written with it, which is a different
+// wire. The clock is turned only while the renderer waits for its window, and only until it has written what it
+// owes, so that a window that opens does so for the events that were handled before it.
+func (e *env) settle(t *testing.T, writes int) {
+	t.Helper()
+	eventually(t, "the renderer to make the requests of the step", func() bool {
+		if e.writes() < writes && e.clk.waiting() > 0 {
+			e.clk.advance(throttle)
+		}
+		return e.writes() >= writes
+	})
 }
 
 func checkGolden(t *testing.T, name string, got golden) {
@@ -211,9 +214,9 @@ var scripts = []struct {
 	{"plain-answer-in-an-alert-thread", func(t *testing.T, e *env) { // live mode, no recipient: post, then updates
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(text("a", "Looking into it"))
-		e.settle(t)
+		e.settle(t, 1) // the post
 		run.Handle(text("a", "Looking into it. The pod restarted twice."))
-		e.settle(t)
+		e.settle(t, 2) // the update
 		run.Handle(text("a", "Looking into it. The pod restarted twice.\n\nCause: OOM."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -221,12 +224,12 @@ var scripts = []struct {
 	{"tools-with-secrets-in-their-arguments", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(text("a", "Checking"))
-		e.settle(t)
+		e.settle(t, 1) // the post
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "kubectl_get", Args: map[string]any{"namespace": "prod", "resource": "pods", "password": "hunter2", "url": "https://user:s3cr3t@host.test/x"}})
-		e.settle(t)
+		e.settle(t, 2) // the update with the tool line
 		run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "kubectl_get"})
 		run.Handle(text("a", "Checking: three pods"))
-		e.settle(t)
+		e.settle(t, 3) // the update without it
 		run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"})
 		run.Handle(text("a", "Checking: three pods, all ready"))
 		run.Handle(agent.FinalEvent{})
@@ -235,17 +238,17 @@ var scripts = []struct {
 	{"a-tool-line-alone-and-no-output", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "slow_query", Args: map[string]any{"q": "select 1"}})
-		e.settle(t)
+		e.settle(t, 1) // the post of the tool line alone
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 	}},
 	{"a-stream-in-a-chat-thread", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 		run.Handle(text("a", "Hel"))
-		e.settle(t)
+		e.settle(t, 1) // the stream starts
 		run.Handle(text("a", "Hello wor"))
 		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"})
-		e.settle(t)
+		e.settle(t, 2) // the append
 		run.Handle(text("a", "Hello world, and more"))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -253,15 +256,14 @@ var scripts = []struct {
 	{"a-stream-whose-text-diverged", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 		run.Handle(text("a", "The answer is 41"))
-		e.settle(t)
+		e.settle(t, 1) // the stream starts
 		run.Handle(text("a", "The answer is 42"))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
 	}},
 	{"final-mode-posts-once", func(t *testing.T, e *env) {
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputFinal, Recipient: "U1"})
-		run.Handle(text("a", "Working"))
-		e.settle(t)
+		run.Handle(text("a", "Working")) // a final-mode turn writes nothing before its final: there is nothing to wait for
 		run.Handle(text("a", "Working. Done."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
@@ -273,16 +275,20 @@ var scripts = []struct {
 		e.finish(t, run)
 	}},
 	{"hostile-text-in-the-reply", func(t *testing.T, e *env) {
+		release := e.hold() // the first write is not throttled: it must not be made before the events are in
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(text("a", "<!channel> ping <@U123> [click](https://evil.test) ![x](https://evil.test/p.png) *b* `c` <b>t</b> & \u202e done"))
 		run.Handle(text("b", "second artifact: &lt;!here&gt;"))
 		run.Handle(agent.FinalEvent{})
+		release()
 		e.finish(t, run)
 	}},
 	{"long-text-is-cut-and-marked", func(t *testing.T, e *env) {
+		release := e.hold()
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(text("a", strings.Repeat("The quick brown fox jumps over the lazy dog. ", 400)))
 		run.Handle(agent.FinalEvent{})
+		release()
 		e.finish(t, run)
 	}},
 	{"notices-and-the-queued-reaction", func(t *testing.T, e *env) {
@@ -304,8 +310,7 @@ func TestTheWireIsWhatItWasBeforeThePort(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			e := setup(t)
 			s.run(t, e)
-			e.settle(t)
-			got := e.record(t)
+			got := e.record(t) // every script ends by waiting for its renderer to be done
 			checkGolden(t, s.name, got)
 		})
 	}
