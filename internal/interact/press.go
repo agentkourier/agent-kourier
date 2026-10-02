@@ -161,7 +161,7 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 		p.cfg.Logger.WarnContext(ctx, "interact: a press names an interaction that is on another message", "interaction", row.ID)
 		return p.finish(ctx, press, nil, "")
 	case !p.open(row, press.User):
-		return p.finish(ctx, press, &row, lostText(row))
+		return p.finishWith(ctx, press, &row, lostMessage(row))
 	}
 	return p.authorized(ctx, press, row)
 }
@@ -266,12 +266,17 @@ func (p *Pipeline) binding(ctx context.Context, row store.Interaction) (string, 
 // thread; nil when it is not known), and deletes the press. Telling is best-effort: a person who is not told
 // can press again, and a failure is only logged.
 func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Interaction, text string) (Result, error) {
-	if text != "" {
+	return p.finishWith(ctx, press, row, chat.Message{Fallback: text})
+}
+
+// finishWith is finish for a message that has parts, such as one that names a person.
+func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store.Interaction, m chat.Message) (Result, error) {
+	if m.Fallback != "" || len(m.Parts) > 0 {
 		to := chat.Target{Channel: press.Channel}
 		if row != nil {
 			to.Conn, to.Thread = row.Key.Connection, row.Key.ThreadTS
 		}
-		if err := p.cfg.Ephemerals.Ephemeral(ctx, to, press.User, chat.Message{Fallback: text}); err != nil {
+		if err := p.cfg.Ephemerals.Ephemeral(ctx, to, press.User, m); err != nil {
 			p.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
 		}
 	}

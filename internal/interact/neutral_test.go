@@ -140,3 +140,43 @@ func TestTheIntakeAsksTheRealPlatformWhetherAPromptFits(t *testing.T) {
 		t.Errorf("Paused of 3 questions = %v with %d posts; want the prompt posted", err, len(r.slack.posted))
 	}
 }
+
+// TestTheLoserOfARaceIsToldWhoWonAsAMention goes through the Slack adapter: the winner of an answer is named to
+// the person who pressed after in a real mention if its ID has the shape of Slack's, and as "someone" if it has
+// not, so that an ID that is no ID can never be markup.
+func TestTheLoserOfARaceIsToldWhoWonAsAMention(t *testing.T) {
+	for _, tc := range []struct{ winner, want string }{
+		{"UALICE1", "<@UALICE1>"},
+		{"<!channel>", "someone"},
+		{"UALICE1><!here>", "someone"},
+	} {
+		fake, platform, root := slackPlatform(t)
+		r := newDecideRig(t)
+		d, err := interact.NewDecider(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: platform, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.pending(t)
+		if err := r.st.SubmitInteraction(t.Context(), "ix-1", []byte(`{"RequestID":"req-1"}`), tc.winner, d0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		press := r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")
+		press.Interaction.Key.ThreadTS = root
+		if err := d.Decide(t.Context(), press); err != nil {
+			t.Fatalf("Decide = %v", err)
+		}
+		es := fake.Ephemerals("C1")
+		if len(es) != 1 || es[0].Recipient != "UBOB22" {
+			t.Fatalf("winner %q: ephemerals %+v; want one, to UBOB22", tc.winner, es)
+		}
+		var blocks []struct {
+			Elements []struct{ Type, Text string }
+		}
+		if err := json.Unmarshal(es[0].Blocks, &blocks); err != nil || len(blocks) != 1 || len(blocks[0].Elements) != 2 {
+			t.Fatalf("winner %q: blocks %s, %v; want one context line of two elements", tc.winner, es[0].Blocks, err)
+		}
+		if got := blocks[0].Elements[0].Text; got != tc.want || blocks[0].Elements[1].Text != "answered this question first." {
+			t.Errorf("winner %q: the line says %+v; want %q and the words", tc.winner, blocks[0].Elements, tc.want)
+		}
+	}
+}

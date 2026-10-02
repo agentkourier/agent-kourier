@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"sync"
 	"time"
 
@@ -28,10 +27,9 @@ const (
 	textTimedOut  = "This question has timed out."
 	textClosed    = "This question is closed."
 	textFirstNone = "Someone else answered this question first."
+	// textFirstWords follows the mention of the one who did, in the message that tells the loser.
+	textFirstWords = "answered this question first."
 )
-
-// slackUserID is the shape of a Slack user ID: only a decider that has it is named to the person who lost.
-var slackUserID = regexp.MustCompile(`^[UW][A-Z0-9]{2,}$`)
 
 // Ephemeral shows a message to one person alone: a chat.Platform.
 type Ephemeral interface {
@@ -141,7 +139,7 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
 	msg, err := AnswerMessage(pd.Binding.Dialect, row.ID, pd.In, pd.Answer, pd.User)
 	if err != nil {
 		d.cfg.Logger.InfoContext(ctx, "interact: the dialect refused an answer", "interaction", row.ID, "err", err)
-		d.tell(ctx, row, pd.User, textInvalid)
+		d.tell(ctx, row, pd.User, chat.Message{Fallback: textInvalid})
 		d.count("invalid")
 		return nil
 	}
@@ -156,11 +154,11 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
 		d.count("answered")
 	case again: // a retry: the decision was taken and counted before
 	case late:
-		d.tell(ctx, row, pd.User, textLate)
+		d.tell(ctx, row, pd.User, chat.Message{Fallback: textLate})
 		d.count("late")
 		return nil
 	case lost:
-		d.tell(ctx, row, pd.User, lostText(cur))
+		d.tell(ctx, row, pd.User, lostMessage(cur))
 		d.count("superseded")
 		return nil
 	case gone:
@@ -297,25 +295,22 @@ func (d *Decider) markDelivered(ctx context.Context, id string) {
 	}
 }
 
-// lostText says why a press did not decide the question.
-func lostText(cur store.Interaction) string {
+// lostMessage says why a press did not decide the question. When another answer did, it names who: a mention of the
+// one who decided, which the adapter makes only of an ID of its platform's shape and otherwise shows as "someone".
+func lostMessage(cur store.Interaction) chat.Message {
 	switch {
 	case cur.State == store.InteractionTimedOut:
-		return textTimedOut
+		return chat.Message{Fallback: textTimedOut}
 	case cur.State != store.InteractionAnswered:
-		return textClosed
-	case slackUserID.MatchString(cur.Decider):
-		// Plain text: a message's text is literal in the neutral model, so there is no mention to write here,
-		// and "<@U1>" would be shown as those characters.
-		return "@" + cur.Decider + " answered this question first."
+		return chat.Message{Fallback: textClosed}
 	}
-	return textFirstNone
+	return chat.Message{Fallback: textFirstNone, Parts: []chat.Part{chat.Mention{User: cur.Decider, Text: textFirstWords}}}
 }
 
-// tell shows text to the person alone. It is told once and kept nowhere, so a failure is only logged.
-func (d *Decider) tell(ctx context.Context, row store.Interaction, user, text string) {
+// tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged.
+func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, m chat.Message) {
 	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.ThreadTS}
-	if err := d.cfg.Ephemerals.Ephemeral(ctx, to, user, chat.Message{Fallback: text}); err != nil {
+	if err := d.cfg.Ephemerals.Ephemeral(ctx, to, user, m); err != nil {
 		d.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
 	}
 }

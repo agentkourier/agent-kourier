@@ -74,17 +74,29 @@ func (a *orderedAudit) Decision(ctx context.Context, actor audit.Actor, d audit.
 
 // ephemerals records what each person was told alone.
 type ephemerals struct {
-	mu  sync.Mutex
-	got []string // "user: text"
-	to  []chat.Target
-	err error
+	mu   sync.Mutex
+	got  []string // "user: text"
+	to   []chat.Target
+	msgs []chat.Message
+	err  error
+}
+
+// said is what a message says to the person: its fallback, or for one that names someone, the mention and the
+// words after it, as "@ID words".
+func said(m chat.Message) string {
+	for _, p := range m.Parts {
+		if mn, ok := p.(chat.Mention); ok {
+			return "@" + mn.User + " " + mn.Text
+		}
+	}
+	return m.Fallback
 }
 
 func (e *ephemerals) Ephemeral(_ context.Context, t chat.Target, user string, m chat.Message) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.got = append(e.got, user+": "+m.Fallback)
-	e.to = append(e.to, t)
+	e.got = append(e.got, user+": "+said(m))
+	e.to, e.msgs = append(e.to, t), append(e.msgs, m)
 	return e.err
 }
 
@@ -560,15 +572,18 @@ func TestTwoPressesAreTakenOneAtATime(t *testing.T) {
 	}
 }
 
-// TestAWinnerThatIsNoSlackIDIsNotNamed: what names the winner to the loser is a mention, so only
-// something shaped like a Slack user ID is put in one.
-func TestAWinnerThatIsNoSlackIDIsNotNamed(t *testing.T) {
+// TestTheWinnerIsOnlyEverNamedInAMentionPart: whoever the winner is, whatever its ID holds, it reaches the loser
+// as the user of a Mention and never in the text, so it is the adapter's to make a mention of it, or to show
+// "someone". The fixed fallback never holds it.
+func TestTheWinnerIsOnlyEverNamedInAMentionPart(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	_ = r.d.Decide(t.Context(), r.press(t, "<!channel>", d0.Add(time.Minute), "req-1"))
 	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1"))
-	if got := r.eph.list(); len(got) != 1 || got[0] != "UBOB22: Someone else answered this question first." {
-		t.Errorf("ephemerals %q; want the winner unnamed", got)
+	r.eph.mu.Lock()
+	defer r.eph.mu.Unlock()
+	if len(r.eph.msgs) != 1 || r.eph.msgs[0].Fallback != "Someone else answered this question first." || len(r.eph.msgs[0].Parts) != 1 || r.eph.msgs[0].Parts[0] != (chat.Mention{User: "<!channel>", Text: "answered this question first."}) {
+		t.Errorf("messages %+v; want the fixed fallback, and the winner as the user of a Mention", r.eph.msgs)
 	}
 }
 
