@@ -153,7 +153,7 @@ func (m *markupPlatform) encode(s string, w chat.Where) string {
 	}
 	switch {
 	case l.emphasised && w.Rich():
-		return "*" + s + "*"
+		return "_" + s + "_" // another mark than the "*" that the hostile text of the corpus may hold, so that it nests
 	case l.noEscape, l.stopGap && m.mode == "Stop":
 		return s
 	case l.updateGap && m.mode == "Update" && strings.HasPrefix(s, "<"):
