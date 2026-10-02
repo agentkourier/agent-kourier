@@ -102,6 +102,7 @@ func TestScanCommonMarkReadsWhatCommonMarkMakesOfTheWire(t *testing.T) {
 		{"a definition whose label runs over two lines", "[x\n]\n\n[x\n]: https://evil.test", "x\n\n\n", []Kind{KindLink, KindLink}},
 		{"a definition whose label starts and ends with a line ending", "[\nfoo\n]: https://evil.test\n\n[foo]", "\n\nfoo", []Kind{KindLink, KindLink}},
 		{"a label that holds a blank line is no definition", "[a\n\nb]: https://evil.test\n\n[a]", "[a\n\nb]: https://evil.test\n\n[a]", []Kind{KindAutolink}},
+		{"a label of white space is no definition", "[ \n ]: https://evil.test", "[ \n ]: https://evil.test", []Kind{KindAutolink}},
 		{"a definition after a label that holds a blank line is still one", "[a\n\n[b]: https://evil.test\n\n[b]", "[a\n\n\n\nb", []Kind{KindLink, KindLink}},
 		{"a definition with nothing after it is text", "[1]:\n\nhello", "[1]:\n\nhello", nil},
 		{"emphasis hides nothing: a link", "*[your bank](https://evil.test)*", "your bank", []Kind{KindEmphasis, KindLink}},
