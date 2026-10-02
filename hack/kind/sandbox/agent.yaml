@@ -5,7 +5,8 @@
 # 1.0.0-alpha5, in a Substrate worker pool, its model calls leaving through Substrate's egress gateway.
 #
 # The tool list is by name, and only reads. The tool server runs --read-only, so even a name added here that writes
-# would not be served; test/kindmanifests pins the list to the nine tools that mode leaves, minus the two that are no use here.
+# would not be served; test/kindmanifests pins the list to the nine tools that mode leaves, and the three left out are
+# no use here (k8s_generate_resource, k8s_get_cluster_configuration, k8s_wait).
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
 metadata: {name: sandbox-tools, namespace: kagent}
