@@ -1,0 +1,39 @@
+{
+  "requests": [
+    {
+      "path": "/chat.postMessage",
+      "form": {
+        "blocks": [
+          {
+            "text": "\u0026lt;!channel\u0026gt; ping \u0026lt;@U123\u0026gt; \\[click\\](https://evil.test) !\\[x\\](https://evil.test/p.png) *b* `c` \u0026lt;b\u0026gt;t\u0026lt;/b\u0026gt; \u0026amp;  done\n\nsecond artifact: \u0026amp;lt;!here\u0026amp;gt;",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "text": "\u0026lt;!channel\u0026gt; ping \u0026lt;@U123\u0026gt; [click](https://evil.test) ![x](https://evil.test/p.png) *b* `c` \u0026lt;b\u0026gt;t\u0026lt;/b\u0026gt; \u0026amp;  done\n\nsecond artifact: \u0026amp;lt;!here\u0026amp;gt;",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "\u0026lt;!channel\u0026gt; ping \u0026lt;@U123\u0026gt; [click](https://evil.test) ![x](https://evil.test/p.png) *b* `c` \u0026lt;b\u0026gt;t\u0026lt;/b\u0026gt; \u0026amp;  done\n\nsecond artifact: \u0026amp;lt;!here\u0026amp;gt;",
+      "blocks": [
+        {
+          "text": "\u0026lt;!channel\u0026gt; ping \u0026lt;@U123\u0026gt; \\[click\\](https://evil.test) !\\[x\\](https://evil.test/p.png) *b* `c` \u0026lt;b\u0026gt;t\u0026lt;/b\u0026gt; \u0026amp;  done\n\nsecond artifact: \u0026amp;lt;!here\u0026amp;gt;",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

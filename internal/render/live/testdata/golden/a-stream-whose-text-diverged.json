@@ -1,0 +1,68 @@
+{
+  "requests": [
+    {
+      "path": "/chat.startStream",
+      "form": {
+        "channel": "C1",
+        "markdown_text": "The answer is 41",
+        "parse": "none",
+        "recipient_user_id": "U1",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.stopStream",
+      "form": {
+        "blocks": [
+          {
+            "text": "The answer is 42",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "text": "The answer is 42",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "The answer is 42",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "The answer is 42",
+      "blocks": [
+        {
+          "text": "The answer is 42",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "edited": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

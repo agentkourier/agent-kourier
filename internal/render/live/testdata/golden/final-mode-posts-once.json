@@ -1,0 +1,39 @@
+{
+  "requests": [
+    {
+      "path": "/chat.postMessage",
+      "form": {
+        "blocks": [
+          {
+            "text": "Working. Done.",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "text": "Working. Done.",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "Working. Done.",
+      "blocks": [
+        {
+          "text": "Working. Done.",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

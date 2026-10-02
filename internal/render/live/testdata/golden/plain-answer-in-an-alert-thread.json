@@ -1,0 +1,74 @@
+{
+  "requests": [
+    {
+      "path": "/chat.postMessage",
+      "form": {
+        "blocks": [
+          {
+            "text": "Looking into it",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "text": "Looking into it",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "text": "Looking into it. The pod restarted twice.",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Looking into it. The pod restarted twice.",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.update",
+      "form": {
+        "blocks": [
+          {
+            "text": "Looking into it. The pod restarted twice.\n\nCause: OOM.",
+            "type": "markdown"
+          }
+        ],
+        "channel": "C1",
+        "parse": "none",
+        "text": "Looking into it. The pod restarted twice.\n\nCause: OOM.",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "Looking into it. The pod restarted twice.\n\nCause: OOM.",
+      "blocks": [
+        {
+          "text": "Looking into it. The pod restarted twice.\n\nCause: OOM.",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "edited": true,
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}
