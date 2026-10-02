@@ -375,12 +375,12 @@ func TestEveryMrkdwnObjectIsVerbatim(t *testing.T) {
 	at := time.Date(2026, 10, 2, 15, 4, 0, 0, time.UTC)
 	p := askOf(chat.Question{Text: "q"})
 	p.Subagent, p.Deadline = "sre-agent", at
-	msg := chat.Message{Fallback: "f", Parts: []chat.Part{chat.Header{Text: "h"}, chat.Body{Markdown: "b"}, chat.Context{Text: "c"}, chat.Note{Text: "n"}, chat.ToolLine{Name: "t"}}}
+	msg := chat.Message{Fallback: "f", Parts: []chat.Part{chat.Header{Text: "h"}, chat.Body{Markdown: "b"}, chat.Context{Text: "c"}, chat.Note{Text: "n"}, chat.ToolLine{Name: "t"}, chat.Mention{User: "U0123456789", Text: "said"}}}
 	for name, tc := range map[string]struct {
 		o    chat.Outgoing
 		want int
 	}{
-		"a message":                   {chat.Say(msg), 0},
+		"a message, with a mention":   {chat.Say(msg), 1},
 		"a prompt, with its deadline": {chat.Ask(p), 1},
 		"an ending":                   {chat.End(chat.Ending{Outcome: chat.Answered, By: "U0123456789", At: at, Prompt: p, Answers: [][]string{{"(answered)"}}}), 1},
 	} {
