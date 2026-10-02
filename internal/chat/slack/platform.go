@@ -48,8 +48,9 @@ type API interface {
 
 var _ API = (*Client)(nil)
 
-// Render is o as a Slack message, for the outbox until it stores the neutral model and delivers it through the
-// Platform (WP-37 S5).
+// Render is o as the Slack message that Post sends: its text and blocks. Nothing in courier delivers through it (the
+// outbox stores the neutral model and the Platform renders it at delivery); it is for a test or a tool that shows what
+// Slack would be sent.
 func Render(o chat.Outgoing) (Content, error) { return renderOutgoing(o) }
 
 var _ chat.Platform = (*Platform)(nil)
@@ -60,6 +61,9 @@ func NewPlatform(c API, conn string) *Platform { return &Platform{c: c, conn: co
 func (p *Platform) ref(channel, thread, ts string) chat.Ref {
 	return chat.Ref{Platform: PlatformName, Conn: p.conn, Channel: channel, Thread: thread, ID: ts}
 }
+
+// RefAt implements chat.Platform: the Ref of the message with the ts id in a channel and thread.
+func (p *Platform) RefAt(channel, thread, id string) chat.Ref { return p.ref(channel, thread, id) }
 
 // Run connects over Socket Mode and gives sink what people write and press, until ctx ends or the connection
 // fails for good (Client.Run).

@@ -74,6 +74,9 @@ type Platform interface {
 	Find(ctx context.Context, t Target, tag string, since time.Time) (Ref, bool, error)
 	// Update replaces the content of the message at r with o.
 	Update(ctx context.Context, r Ref, o Outgoing) error
+	// RefAt is the Ref of the message with the platform's ID id in a conversation, which a caller that recorded the ID alone
+	// (the outbox, the interactions) gets back whole, so that no caller writes a platform's fields by hand.
+	RefAt(channel, thread, id string) Ref
 	// Stream starts a streaming message in t shown to the user to, beginning with markdown. It returns
 	// ErrNoStreams on a platform without them.
 	Stream(ctx context.Context, t Target, to, markdown string) (Stream, error)

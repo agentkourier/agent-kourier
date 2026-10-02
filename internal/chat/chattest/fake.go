@@ -346,6 +346,11 @@ func (f *FakePlatform) Ephemeral(_ context.Context, t chat.Target, user string, 
 	return nil
 }
 
+// RefAt implements chat.Platform.
+func (f *FakePlatform) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
 // React implements chat.Platform. A reaction that is there already is success.
 func (f *FakePlatform) React(_ context.Context, r chat.Ref, name string) error {
 	f.mu.Lock()
