@@ -14,6 +14,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -57,15 +58,17 @@ func warnings(l *syncBuffer) int { return strings.Count(l.String(), "level=WARN"
 func TestPermanentFailuresAbandonTheRow(t *testing.T) {
 	tests := []struct {
 		err    error
-		reason string
+		reason string // what OnAbandon is told: neutral, whatever the platform's code
+		code   string // the platform's own code, which is in the log and nowhere else
 	}{
-		{slackErr("channel_not_found"), "channel_not_found"},
-		{slackErr("is_archived"), "is_archived"},
-		{slackErr("not_in_channel"), "not_in_channel"},
-		{slackErr("msg_too_long"), "msg_too_long"},
-		{slackErr("invalid_blocks"), "invalid_blocks"},
-		{slackErr("invalid_blocks_format"), "invalid_blocks_format"},
-		{fmt.Errorf("blocks: %w", store.ErrInvalid), outbox.AbandonInvalid},
+		{slackErr("channel_not_found"), "channel_gone", "channel_not_found"},
+		{slackErr("is_archived"), "channel_gone", "is_archived"},
+		{slackErr("not_in_channel"), "channel_gone", "not_in_channel"},
+		{slackErr("msg_too_long"), "too_long", "msg_too_long"},
+		{slackErr("invalid_blocks"), "invalid_content", "invalid_blocks"},
+		{slackErr("invalid_blocks_format"), "invalid_content", "invalid_blocks_format"},
+		{fmt.Errorf("blocks: %w", store.ErrInvalid), outbox.AbandonInvalid, ""},
+		{fmt.Errorf("blocks: %w", chat.ErrInvalid), outbox.AbandonInvalid, ""},
 	}
 	for _, tt := range tests {
 		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
@@ -94,6 +97,9 @@ func TestPermanentFailuresAbandonTheRow(t *testing.T) {
 		if out := logs.String(); warnings(logs) != 1 || strings.Contains(out, "hello ev1") {
 			t.Errorf("%s: log = %q; want one warning, with no text", tt.reason, out)
 		}
+		if out := logs.String(); tt.code != "" && !strings.Contains(out, "code="+tt.code) {
+			t.Errorf("%s: log = %q; want the platform's own code, %s", tt.reason, out, tt.code)
+		}
 	}
 }
 
@@ -118,7 +124,7 @@ func TestTransientFailuresNeverAbandon(t *testing.T) {
 func TestFiveLookupTimeoutsInARowAbandon(t *testing.T) {
 	const script = "TTTTNTTTTT"
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
+	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
 	var clock, pass atomic.Int64
@@ -171,8 +177,8 @@ func TestRetentionAbandonsOldUnpostedText(t *testing.T) {
 		}
 	}
 	day := 24 * time.Hour
-	add("old", 8*day, `{"text":"a"}`) // past the default seven days
-	add("young", 6*day, `{"text":"b"}`)
+	add("old", 8*day, neutral("a")) // past the default seven days
+	add("young", 6*day, neutral("b"))
 	add("stream", 8*day, "")
 	p := &poster{}
 	ob, hooks, logs := abandoning(t, st, p, nil)
@@ -256,7 +262,7 @@ func TestAnAbandonThatCannotBeRecordedIsNotReported(t *testing.T) {
 // own deadline has passed (a shutdown) must not push a row towards abandonment.
 func TestADeadlineOfTheCallersDoesNotCountAsALookupTimeout(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
+	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
 	p := &poster{onFind: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}

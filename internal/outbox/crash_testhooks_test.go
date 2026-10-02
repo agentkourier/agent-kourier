@@ -11,22 +11,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
 // loudPoster posts without a network and says so on stdout, which is how a parent test learns that
 // a child process got as far as the post.
-type loudPoster struct{}
+type loudPoster struct{ *poster }
 
-func (loudPoster) Post(_ context.Context, _, _ string, _ slack.Content, id string) (string, error) {
+func (loudPoster) Post(_ context.Context, t chat.Target, _ chat.Outgoing, id string) (chat.Ref, error) {
 	fmt.Println("posted", id)
-	return "100.001", nil
-}
-
-func (loudPoster) Find(context.Context, string, string, string, time.Time) (string, bool, error) {
-	return "", false, nil
+	return testRef(t.Channel, t.Thread, "100.001"), nil
 }
 
 // TestFaultHookChild is the child process of TestFaultHookKillsBetweenPostAndRecord, and does nothing when run on its own.
@@ -35,8 +30,8 @@ func TestFaultHookChild(t *testing.T) {
 	if path == "" {
 		t.Skip("only runs as the child of TestFaultHookKillsBetweenPostAndRecord")
 	}
-	ts, err := newOutbox(t, openStore(t, path), loudPoster{}).Send(t.Context(), reply("ev1"))
-	fmt.Println("recorded", ts, err)
+	ts, err := newOutbox(t, openStore(t, path), loudPoster{&poster{}}).Send(t.Context(), reply("ev1"))
+	fmt.Println("recorded", ts.ID, err)
 }
 
 // child runs TestFaultHookChild in a new process on the database at path, with COURIER_FAULT set to

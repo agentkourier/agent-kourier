@@ -23,6 +23,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -245,9 +246,10 @@ func setup(t *testing.T) *env {
 	}
 	t.Cleanup(func() { _ = e.store.Close() })
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Reactor: client, Logger: quiet})
+	platform := slack.NewPlatform(client, "ns/conn")
+	e.ob = outbox.New(outbox.Config{Store: e.store, Platform: platform, Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
-	e.cfg = live.Config{Sender: e.ob, Platform: slack.NewPlatform(client, "ns/conn"), Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
+	e.cfg = live.Config{Sender: e.ob, Platform: platform, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
 	e.live = live.New(e.cfg)
 	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
 		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
@@ -368,7 +370,7 @@ func TestFinalTextIsTheLastUpdateAndToolLinesAreDropped(t *testing.T) {
 
 func TestRecoveredTurnUpdatesTheMessageItPosted(t *testing.T) {
 	e := setup(t)
-	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", ThreadTS: e.root, Content: slack.Content{Text: "before the crash"}}); err != nil {
+	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", ThreadTS: e.root, Out: chat.Say(chat.Message{Fallback: "before the crash"})}); err != nil {
 		t.Fatal(err)
 	}
 	run, _ := e.start(t, v1alpha1.OutputLive, true)

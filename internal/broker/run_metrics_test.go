@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -23,8 +24,8 @@ func seedPost(t *testing.T, c RunConfig) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	post := outbox.Post{Source: "ev1", Role: store.OutboxNotice, Channel: "C0123456789", Content: slack.Content{Text: "hi"}}
-	if _, err := outbox.New(outbox.Config{Store: seed, Poster: idleSlack{}}).Enqueue(t.Context(), post); err != nil {
+	post := outbox.Post{Source: "ev1", Role: store.OutboxNotice, Channel: "C0123456789", Out: chat.Say(chat.Message{Fallback: "hi"})}
+	if _, err := outbox.New(outbox.Config{Store: seed, Platform: slack.NewPlatform(idleSlack{}, "ns/conn")}).Enqueue(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 	if err := seed.Close(); err != nil {
@@ -40,7 +41,7 @@ func seedReaction(t *testing.T, c RunConfig) {
 		t.Fatal(err)
 	}
 	react := outbox.Reaction{Source: "ev1/queued", Channel: "C0123456789", TS: "1.1", Name: "hourglass_flowing_sand"}
-	if _, err := outbox.New(outbox.Config{Store: seed, Poster: idleSlack{}}).EnqueueReaction(t.Context(), react); err != nil {
+	if _, err := outbox.New(outbox.Config{Store: seed, Platform: slack.NewPlatform(idleSlack{}, "ns/conn")}).EnqueueReaction(t.Context(), react); err != nil {
 		t.Fatal(err)
 	}
 	if err := seed.Close(); err != nil {
@@ -81,7 +82,7 @@ func TestRunCountsAnAbandonedPost(t *testing.T) {
 	seedPost(t, c)
 	r := start(t, c)
 
-	r.waitMetric(`courier_outbox_abandoned_total{reason="channel_not_found"} 1`)
+	r.waitMetric(`courier_outbox_abandoned_total{reason="channel_gone"} 1`)
 }
 
 func TestRunCountsAFailedConfigReload(t *testing.T) {

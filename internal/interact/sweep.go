@@ -23,6 +23,8 @@ import (
 // Updater edits a message: chat.Platform.
 type Updater interface {
 	Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error
+	// RefAt is the Ref of the message recorded by its ID alone, as an interaction records its prompt.
+	RefAt(channel, thread, id string) chat.Ref
 }
 
 // Enqueuer writes a post for the outbox to deliver: *outbox.Outbox.
@@ -229,7 +231,7 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if err := json.Unmarshal(row.Request, &in); err != nil {
 		s.cfg.Logger.WarnContext(ctx, "interact: the stored request cannot be read", "interaction", row.ID)
 	}
-	return s.cfg.Updater.Update(ctx, messageAt(row), chat.End(endingOf(chat.TimedOut, "", row.Deadline, in, nil)))
+	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.ThreadTS, row.MessageRef), chat.End(endingOf(chat.TimedOut, "", row.Deadline, in, nil)))
 }
 
 // notify enqueues the notice. Its ID comes from the interaction, so the same one is never posted twice.

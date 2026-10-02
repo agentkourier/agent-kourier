@@ -35,7 +35,7 @@ import (
 
 // Sender posts through the outbox: *outbox.Outbox.
 type Sender interface {
-	Send(ctx context.Context, p outbox.Post) (string, error)
+	Send(ctx context.Context, p outbox.Post) (chat.Ref, error)
 }
 
 // Config configures a Renderer. Sender and Platform are required. Store is for the stream path; a Renderer
@@ -209,7 +209,7 @@ func (u *Run) Handle(ev agent.Event) {
 // run writes the state each time its window opens, until the final text is out.
 func (u *Run) run(ctx context.Context) {
 	defer close(u.done)
-	var ts string
+	var ref chat.Ref // the message, once there is one
 	var next time.Time
 	fails := 0
 	for {
@@ -229,7 +229,7 @@ func (u *Run) run(ctx context.Context) {
 			}
 			m, body, final, ok := u.snapshot() // after the wait, so that what is sent is the latest
 			if !ok && final {                  // the turn ended with nothing to show
-				if ts == "" {
+				if ref.ID == "" {
 					return
 				}
 				m, body, ok = render.Nothing(), render.NoOutput, true // but a message stands: do not leave its tool line up
@@ -243,7 +243,7 @@ func (u *Run) run(ctx context.Context) {
 				}
 				break
 			}
-			err := u.write(ctx, &ts, m, body, final)
+			err := u.write(ctx, &ref, m, body, final)
 			next = u.cfg.Now().Add(u.cfg.Throttle)
 			if err != nil {
 				switch verdict := u.cfg.Platform.Classify(chat.OpPost, err); {
@@ -322,30 +322,23 @@ func (u *Run) want(m chat.Message, body string, final bool) string {
 	return string(key)
 }
 
-// at is the message the turn wrote, the ts being what the outbox returns until it returns a Ref (WP-37 S5). The
-// platform and the connection are the adapter's to know, and an adapter that needs them for a message it
-// did not make has to take them from its own.
-func (u *Run) at(ts string) chat.Ref {
-	return chat.Ref{Channel: u.turn.Channel, ID: ts, Thread: u.turn.ThreadTS}
-}
-
 // write posts the message the first time, through the outbox, and updates it after, or, on the
 // stream path, takes the next step of the stream.
-func (u *Run) write(ctx context.Context, ts *string, m chat.Message, body string, final bool) error {
+func (u *Run) write(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout) // see WriteTimeout
 	defer cancel()
 	if u.streaming {
-		return u.writeStream(ctx, ts, m, body, final)
+		return u.writeStream(ctx, ref, m, body, final)
 	}
-	if *ts != "" {
+	if ref.ID != "" {
 		if u.adoptStop { // an earlier run's stream: end it, or the platform refuses the update
-			err := u.cfg.Platform.StreamAt(u.at(*ts)).Stop(ctx, "", chat.Message{}, outbox.ID(u.turn.Source, store.OutboxReply))
+			err := u.cfg.Platform.StreamAt(*ref).Stop(ctx, "", chat.Message{}, outbox.ID(u.turn.Source, store.OutboxReply))
 			if err != nil && !errors.Is(err, chat.ErrNotStreaming) {
 				return err
 			}
 			u.adoptStop = false
 		}
-		err := u.cfg.Platform.Update(ctx, u.at(*ts), chat.Say(m))
+		err := u.cfg.Platform.Update(ctx, *ref, chat.Say(m))
 		if err == nil {
 			u.sent = u.want(m, body, final)
 		}
@@ -354,7 +347,7 @@ func (u *Run) write(ctx context.Context, ts *string, m chat.Message, body string
 	u.sends++
 	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, ThreadTS: u.turn.ThreadTS, Out: chat.Say(m)})
 	if err == nil {
-		*ts = got
+		*ref = got
 		// A Send that follows a failed one, or a recovered turn's, returns the message that is
 		// there already, or posts the payload stored first, not necessarily this content.
 		u.stale = u.sends > 1 || u.turn.Recovered

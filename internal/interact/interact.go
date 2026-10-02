@@ -49,7 +49,7 @@ type Fitter interface {
 
 // Sender is *outbox.Outbox: Send posts at once, Enqueue only writes the row for the drain to post.
 type Sender interface {
-	Send(ctx context.Context, p outbox.Post) (string, error)
+	Send(ctx context.Context, p outbox.Post) (chat.Ref, error)
 	Enqueue(ctx context.Context, p outbox.Post) (string, error)
 }
 
@@ -257,7 +257,7 @@ func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in di
 	if err != nil {
 		return fmt.Errorf("interact: post the prompt of %s: %w", row.ID, err)
 	}
-	if err := i.cfg.Store.SetInteractionMessageRef(ctx, row.ID, ref); err != nil {
+	if err := i.cfg.Store.SetInteractionMessageRef(ctx, row.ID, ref.ID); err != nil {
 		return fmt.Errorf("interact: record the prompt of %s: %w", row.ID, err)
 	}
 	return nil

@@ -6,9 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	slackgo "github.com/slack-go/slack"
-
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -56,7 +54,7 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 		{"audit write failure", func(m *Metrics) { m.AuditFailure(store.AuditAgentCall) }, `courier_audit_write_failures_total{kind=agent_call} 1`},
 		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `courier_credential_rejections_total{binding=sre/sre-alerts} 1`},
 		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `courier_config_reload_errors_total{} 1`},
-		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_not_found") }, `courier_outbox_abandoned_total{reason=channel_not_found} 1`},
+		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `courier_outbox_abandoned_total{reason=channel_gone} 1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := mustMetrics(t, nil)
@@ -93,7 +91,7 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 	m := mustMetrics(t, nil)
 	m.AuditFailure("not-a-kind")
 	m.AuditFailure(store.AuditEvent)
-	for _, r := range []string{"invalid", "lookup_timeout", "expired", "is_archived", "U12345 posted in C99999", "made-up"} {
+	for _, r := range []string{"invalid", "lookup_timeout", "expired", "channel_gone", "U12345 posted in C99999", "made-up"} {
 		m.OutboxAbandoned("id", r)
 	}
 	m.CredentialRejected("sre/sre-alerts")
@@ -122,24 +120,24 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 	}
 }
 
-// Every reason the outbox gives, and every code slack.PermanentCode returns, is its own label:
-// a reason added there and missing here would otherwise be counted as "other", and hide.
+// Every reason the outbox gives, and every neutral reason of a permanent error (chat.Reason), is its own label: a
+// reason added there and missing here would otherwise be counted as "other", and hide. The platform's own code is
+// not one: it is in the log, and a metric that took it would grow with the platform's vocabulary.
 func TestEveryAbandonReasonHasItsOwnLabel(t *testing.T) {
-	reasons := []string{outbox.AbandonInvalid, outbox.AbandonLookupTimeout, outbox.AbandonExpired}
-	for _, code := range []string{"channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format",
-		"ratelimited", "invalid_auth", "internal_error", "fatal_error", "too_many_attachments", "restricted_action"} {
-		if slack.PermanentCode(slackgo.SlackErrorResponse{Err: code}) != "" {
-			reasons = append(reasons, code)
-		}
-	}
-	if len(reasons) < 9 {
-		t.Fatalf("%d reasons; want the outbox's three and the six permanent codes", len(reasons))
-	}
+	reasons := []string{outbox.AbandonInvalid, outbox.AbandonLookupTimeout, outbox.AbandonExpired,
+		string(chat.ReasonChannelGone), string(chat.ReasonTooLong), string(chat.ReasonInvalidContent), string(chat.ReasonOther)}
 	for _, r := range reasons {
 		m := mustMetrics(t, nil)
 		m.OutboxAbandoned("id", r)
 		if got := samples(t, m); !slices.Contains(got, "courier_outbox_abandoned_total{reason="+r+"} 1") {
 			t.Errorf("reason %q: samples = %v; want its own label", r, got)
+		}
+	}
+	for _, code := range []string{"channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format"} {
+		m := mustMetrics(t, nil)
+		m.OutboxAbandoned("id", code)
+		if got := samples(t, m); !slices.Contains(got, "courier_outbox_abandoned_total{reason=other} 1") || strings.Contains(strings.Join(got, "\n"), code) {
+			t.Errorf("code %q: samples = %v; want it counted as other, and never as a label", code, got)
 		}
 	}
 }

@@ -25,6 +25,10 @@ func (f failsOn) Update(_ context.Context, r chat.Ref, _ chat.Outgoing) error {
 	return nil
 }
 
+func (failsOn) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
 // Classify says what the Slack adapter says, which is what the Replacer is run with.
 func (failsOn) Classify(op chat.Op, err error) chat.Verdict {
 	return slack.NewPlatform(nil, "ns/c").Classify(op, err)

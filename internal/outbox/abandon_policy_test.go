@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 func timedOutRow(t *testing.T) (ob *outbox.Outbox, st store.Outbox, clock *atomic.Int64, hooks *abandons) {
 	t.Helper()
 	st = openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
+	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
 	clock = &atomic.Int64{}
@@ -73,9 +74,9 @@ func TestLookupTimeoutsNeedAnHourAndAWorkingSlack(t *testing.T) {
 // TestAnUnreachableChannelFailsTheLookupForGood: a lookup that Slack answers with a permanent
 // code is classified like a post, not retried for the whole retention.
 func TestAnUnreachableChannelFailsTheLookupForGood(t *testing.T) {
-	for _, code := range []string{"channel_not_found", "not_in_channel"} {
+	for _, code := range []string{"channel_not_found", "not_in_channel"} { // both are channel_gone to a metric
 		st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-		if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
+		if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 			t.Fatal(err)
 		}
 		p := &poster{onFind: func(context.Context) error { return slackErr(code) }}
@@ -88,12 +89,12 @@ func TestAnUnreachableChannelFailsTheLookupForGood(t *testing.T) {
 		if posts, finds := p.counts(); posts != 0 || finds != 1 || !abandoned(t, st, "ev1/reply") {
 			t.Errorf("%s: posts = %d, finds = %d, abandoned = %v; want a single lookup and an abandoned row", code, posts, finds, abandoned(t, st, "ev1/reply"))
 		}
-		if got := hooks.list(); len(got) != 1 || got[0] != "ev1/reply "+code || warnings(logs) != 1 {
+		if got := hooks.list(); len(got) != 1 || got[0] != "ev1/reply channel_gone" || warnings(logs) != 1 || !strings.Contains(logs.String(), "code="+code) {
 			t.Errorf("%s: OnAbandon calls = %q, warnings = %d; want one of each", code, got, warnings(logs))
 		}
 	}
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
+	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
 	ob, hooks, _ := abandoning(t, st, &poster{onFind: func(context.Context) error { return slackErr("ratelimited") }}, nil)
@@ -130,7 +131,7 @@ func TestThePurgeRunsAtMostEveryFiveMinutes(t *testing.T) {
 	if err := ob.Reconcile(t.Context()); err != nil { // the first one purges
 		t.Fatal(err)
 	}
-	old := store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-8 * 24 * time.Hour), Payload: `{"text":"hi"}`}
+	old := store.OutboxEntry{ID: "old/reply", EventID: "old", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0.Add(-8 * 24 * time.Hour), Payload: neutral("hi")}
 	if _, err := st.CreateOutbox(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}

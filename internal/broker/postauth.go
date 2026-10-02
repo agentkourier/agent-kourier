@@ -6,62 +6,51 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 )
 
-// authWatch is an outbox.Poster that reports a fatal auth error of the Poster it wraps.
+// authWatch is an outbox.Platform that reports a fatal auth error of the Platform it wraps.
 type authWatch struct {
-	outbox.Poster
+	outbox.Platform
 	report func(code string)
 }
 
-// WatchPosts returns p with one addition: when a Post or a Find fails with an error that says the
-// tokens will never work (slack.FatalAuthCode), report is called with its code. The error and the
-// result are returned unchanged. The outbox treats such an error as transient, so a bot token
-// revoked while the connection is up would otherwise leave courier running and posting nothing; the
-// report is how the post side tells the run policy (see WithAuthFailure).
-func WatchPosts(p outbox.Poster, report func(code string)) outbox.Poster {
+// WatchAuth returns p with one addition: when a Post, a Find or a React fails with an error that the platform
+// classifies as a credential it rejects (chat.FatalAuth), report is called with the platform's code. The error and
+// the result are returned unchanged. The outbox treats such an error as transient, so a bot token revoked while
+// the connection is up would otherwise leave courier running and posting nothing; the report is how the post side
+// tells the run policy (see WithAuthFailure). The edits, the stream calls and the ephemerals are not watched yet
+// (hardening).
+func WatchAuth(p outbox.Platform, report func(code string)) outbox.Platform {
 	return authWatch{p, report}
 }
 
-func (w authWatch) Post(ctx context.Context, channel, threadTS string, content slack.Content, outboxID string) (string, error) {
-	ts, err := w.Poster.Post(ctx, channel, threadTS, content, outboxID)
-	w.check(err)
-	return ts, err
+func (w authWatch) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
+	ref, err := w.Platform.Post(ctx, t, o, tag)
+	w.check(chat.OpPost, err)
+	return ref, err
 }
 
-func (w authWatch) Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (string, bool, error) {
-	ts, found, err := w.Poster.Find(ctx, channel, threadTS, outboxID, since)
-	w.check(err)
-	return ts, found, err
+func (w authWatch) Find(ctx context.Context, t chat.Target, tag string, since time.Time) (chat.Ref, bool, error) {
+	ref, found, err := w.Platform.Find(ctx, t, tag, since)
+	w.check(chat.OpPost, err)
+	return ref, found, err
 }
 
-func (w authWatch) check(err error) {
-	if code := slack.FatalAuthCode(err); code != "" {
-		w.report(code)
-	}
-}
-
-// reactWatch is an outbox.Reactor that reports a fatal auth error of the Reactor it wraps.
-type reactWatch struct {
-	outbox.Reactor
-	report func(code string)
-}
-
-// WatchReacts is WatchPosts for reactions: a React that fails with an error that says the tokens will
-// never work calls report with its code, and the error is returned unchanged. The edits, the stream
-// calls and the ephemerals are not watched yet (hardening).
-func WatchReacts(r outbox.Reactor, report func(code string)) outbox.Reactor {
-	return reactWatch{r, report}
-}
-
-func (w reactWatch) React(ctx context.Context, channel, ts, name string) error {
-	err := w.Reactor.React(ctx, channel, ts, name)
-	if code := slack.FatalAuthCode(err); code != "" {
-		w.report(code)
-	}
+func (w authWatch) React(ctx context.Context, r chat.Ref, name string) error {
+	err := w.Platform.React(ctx, r, name)
+	w.check(chat.OpReact, err)
 	return err
+}
+
+func (w authWatch) check(op chat.Op, err error) {
+	if err == nil {
+		return
+	}
+	if v := w.Classify(op, err); v.Class == chat.FatalAuth {
+		w.report(v.Code)
+	}
 }
 
 // stopped is the error of a Slack run whose context has ended: the context's cause if a post

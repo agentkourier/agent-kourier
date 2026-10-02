@@ -19,8 +19,8 @@ import (
 )
 
 // drainConfig is a Config for Run: a ticker too slow to matter unless a test sets it.
-func drainConfig(st store.Outbox, p outbox.Poster) outbox.Config {
-	return outbox.Config{Store: st, Poster: p, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour}
+func drainConfig(st store.Outbox, p *poster) outbox.Config {
+	return outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Interval: time.Hour}
 }
 
 // start runs o.Run until the end of the test, which checks that Run returned the context's error.
@@ -63,7 +63,7 @@ func TestEnqueueIsOneLocalWrite(t *testing.T) {
 		defer close(done)
 		for range 5 { // far more than any signal buffer holds; the same ID, twice over
 			for _, src := range []string{"n1", "n2", "n1"} {
-				id, err := o.Enqueue(t.Context(), outbox.Post{Source: src, Role: store.OutboxNotice, Channel: "C1", Content: reply(src).Content})
+				id, err := o.Enqueue(t.Context(), outbox.Post{Source: src, Role: store.OutboxNotice, Channel: "C1", Out: reply(src).Out})
 				if err != nil || id != outbox.ID(src, store.OutboxNotice) {
 					t.Errorf("Enqueue = %q, %v", id, err)
 				}
@@ -86,7 +86,7 @@ func TestEnqueueIsOneLocalWrite(t *testing.T) {
 // Slack already has is not posted again.
 func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	left := store.OutboxEntry{ID: "left/notice", EventID: "left", Role: store.OutboxNotice, Channel: "C1", CreatedAt: t0, Payload: `{"text":"hi"}`}
+	left := store.OutboxEntry{ID: "left/notice", EventID: "left", Role: store.OutboxNotice, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}
 	if _, err := st.CreateOutbox(t.Context(), left); err != nil {
 		t.Fatal(err)
 	}

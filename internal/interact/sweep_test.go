@@ -116,6 +116,10 @@ func (u *updates) Update(_ context.Context, r chat.Ref, o chat.Outgoing) error {
 	return u.err
 }
 
+func (*updates) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
 func (u *updates) list() []string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -244,7 +248,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	t.Cleanup(func() { _ = st.Close() })
 	now := t0.Add(timeout + time.Minute) // a minute past the deadline of a pause made at t0
 	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}}}
-	r.ob = outbox.New(outbox.Config{Store: st, Poster: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
+	r.ob = outbox.New(outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	r.enq = &flakyEnqueue{Outbox: r.ob}
 	r.calls, r.logs = &callLog{}, &logBuf{}

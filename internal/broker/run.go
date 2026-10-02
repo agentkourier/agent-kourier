@@ -123,8 +123,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		sl = slack.New(sc)
 	}
 	slackCtx, report, stopSlack := WithAuthFailure(runCtx)
+	platform := slack.NewPlatform(sl, conn.Ref.Namespace+"/"+conn.Ref.Name)
 	ob := outbox.New(outbox.Config{
-		Store: st, Poster: WatchPosts(sl, report), Reactor: WatchReacts(sl, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
+		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
 	})
 	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
 		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
@@ -146,7 +147,6 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	platform := slack.NewPlatform(sl, conn.Ref.Namespace+"/"+conn.Ref.Name)
 	renderer := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
 	var sink renderSink = live.NewSink(renderer, ob, log)
 	if cfg.sink != nil {
@@ -225,13 +225,10 @@ type renderSink interface {
 	QueueNotice(ctx context.Context, key session.Key, n session.Notice) error
 }
 
-// slackAPI is what Run uses of the Slack client, which is *slack.Client: the connection, the outbox's
-// posts and reactions, the renderer's edits and streams, and the user lookups, ephemerals and
+// slackAPI is what Run uses of the Slack client, which is *slack.Client: the connection, the renderer's edits and streams, and the user lookups, ephemerals and
 // membership checks that the interactions make.
 type slackAPI interface {
 	SlackRunner
-	outbox.Poster
-	outbox.Reactor
 	slack.API
 	session.Users
 	PostEphemeral(ctx context.Context, channel, threadTS, user string, content slack.Content) error

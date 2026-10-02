@@ -17,6 +17,7 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -308,8 +309,8 @@ func TestRunPostsWhatIsPendingInAFinalDrain(t *testing.T) {
 			return
 		}
 		defer func() { _ = st.Close() }()
-		post := outbox.Post{Source: "late", Role: store.OutboxNotice, Channel: "C0123456789", Content: slack.Content{Text: "last words"}}
-		if _, err := outbox.New(outbox.Config{Store: st, Poster: idleSlack{}}).Enqueue(context.Background(), post); err != nil {
+		post := outbox.Post{Source: "late", Role: store.OutboxNotice, Channel: "C0123456789", Out: chat.Say(chat.Message{Fallback: "last words"})}
+		if _, err := outbox.New(outbox.Config{Store: st, Platform: slack.NewPlatform(idleSlack{}, "ns/conn")}).Enqueue(context.Background(), post); err != nil {
 			t.Error(err)
 		}
 	}}

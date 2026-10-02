@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
@@ -159,9 +160,9 @@ type failingSender struct {
 	calls int
 }
 
-func (s *failingSender) Send(context.Context, outbox.Post) (string, error) {
+func (s *failingSender) Send(context.Context, outbox.Post) (chat.Ref, error) {
 	s.calls++
-	return "", s.err
+	return chat.Ref{}, s.err
 }
 
 func TestPermanentErrorEndsTheRunAtOnce(t *testing.T) {

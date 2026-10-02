@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -114,12 +115,13 @@ func (m *Metrics) OutboxAbandoned(_, reason string) {
 	m.abandons.WithLabelValues(abandonLabel(reason)).Inc()
 }
 
-// abandonLabel is reason if it is one the outbox gives, or a Slack code it treats as permanent
-// (slack.PermanentCode), and "other" for anything else, so that no reason text can grow the series.
+// abandonLabel is reason if it is one the outbox gives: its own three, or a neutral reason of a permanent error
+// (chat.Reason, whatever the platform's own code, which is in the log and not here), and "other" for anything else,
+// so that no reason text can grow the series.
 func abandonLabel(reason string) string {
 	switch reason {
 	case outbox.AbandonInvalid, outbox.AbandonLookupTimeout, outbox.AbandonExpired,
-		"channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format":
+		string(chat.ReasonChannelGone), string(chat.ReasonTooLong), string(chat.ReasonInvalidContent), string(chat.ReasonOther):
 		return reason
 	}
 	return otherLabel

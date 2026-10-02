@@ -41,9 +41,10 @@ func (r *reactor) list() []string {
 
 var queuedReaction = outbox.Reaction{Source: "slack:ns/conn:C1:1.5/queued", Channel: "C1", TS: "1.5", Name: "hourglass"}
 
-func reacting(t *testing.T, st store.Outbox, p *poster, r outbox.Reactor) (*outbox.Outbox, *abandons, *syncBuffer) {
+func reacting(t *testing.T, st store.Outbox, p *poster, r reacts) (*outbox.Outbox, *abandons, *syncBuffer) {
 	t.Helper()
-	return abandoning(t, st, p, func(c *outbox.Config) { c.Reactor = r })
+	p.reactor = r
+	return abandoning(t, st, p, nil)
 }
 
 // TestReactionIsEnqueuedOnceByIDAndMadeOnce: the row is named after its source and the role, a second
@@ -100,18 +101,20 @@ func TestPermanentReactionFailuresAbandonTheRow(t *testing.T) {
 	id := queuedReaction.Source + "/reaction"
 	for _, tc := range []struct {
 		err    error
-		reason string // "" for a failure that is retried
+		reason string // "" for a failure that is retried; neutral, as OnAbandon is told it
+		code   string // the platform's own code, for the log
 	}{
-		{slackErr("message_not_found"), "message_not_found"},
-		{slackErr("invalid_name"), "invalid_name"},
-		{slackErr("no_item_specified"), "no_item_specified"},
-		{slackErr("not_in_channel"), "not_in_channel"},
-		{slackErr("channel_not_found"), "channel_not_found"},
-		{fmt.Errorf("react: %w", store.ErrInvalid), outbox.AbandonInvalid},
-		{slackErr("ratelimited"), ""},
-		{slackErr("invalid_auth"), ""},
-		{errors.New("connection reset"), ""},
-		{context.DeadlineExceeded, ""},
+		{slackErr("message_not_found"), "channel_gone", "message_not_found"},
+		{slackErr("invalid_name"), "invalid_content", "invalid_name"},
+		{slackErr("no_item_specified"), "invalid_content", "no_item_specified"},
+		{slackErr("not_in_channel"), "channel_gone", "not_in_channel"},
+		{slackErr("channel_not_found"), "channel_gone", "channel_not_found"},
+		{slackErr("thread_locked"), "other", "thread_locked"},
+		{fmt.Errorf("react: %w", store.ErrInvalid), outbox.AbandonInvalid, ""},
+		{slackErr("ratelimited"), "", ""},
+		{slackErr("invalid_auth"), "", ""},
+		{errors.New("connection reset"), "", ""},
+		{context.DeadlineExceeded, "", ""},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
 			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
@@ -133,6 +136,9 @@ func TestPermanentReactionFailuresAbandonTheRow(t *testing.T) {
 			}
 			if got := hooks.list(); len(got) != 1 || got[0] != id+" "+tc.reason || warnings(logs) != 1 {
 				t.Fatalf("abandons %q, %d warnings; want %q once", got, warnings(logs), id+" "+tc.reason)
+			}
+			if tc.code != "" && !strings.Contains(logs.String(), "code="+tc.code) {
+				t.Fatalf("log %q; want the platform's own code, %s", logs.String(), tc.code)
 			}
 			if err := o.Reconcile(t.Context()); err != nil || len(r.list()) != 1 {
 				t.Fatalf("a second Reconcile = %v after %d calls; want no more", err, len(r.list()))
@@ -190,24 +196,6 @@ func TestReactionIsRetriedAfterACrash(t *testing.T) {
 	}
 }
 
-// TestReactionWithNoReactorIsAbandonedAsInvalid: nothing could ever make it, so it is given up on
-// and logged, not kept for ever.
-func TestReactionWithNoReactorIsAbandonedAsInvalid(t *testing.T) {
-	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	o, hooks, logs := reacting(t, st, &poster{}, nil)
-	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
-		t.Fatal(err)
-	}
-	id := queuedReaction.Source + "/reaction"
-	if err := o.Reconcile(t.Context()); err != nil {
-		t.Fatalf("Reconcile = %v", err)
-	}
-	row, _ := st.GetOutbox(t.Context(), id)
-	if got := hooks.list(); row.AbandonedAt.IsZero() || len(got) != 1 || got[0] != id+" "+outbox.AbandonInvalid || warnings(logs) != 1 || !strings.Contains(logs.String(), id) {
-		t.Fatalf("row %+v, abandons %q, log %q; want it abandoned as invalid and logged", row, got, logs.String())
-	}
-}
-
 // TestEnqueueReactionRefusesWhatCannotBeMade: an empty field is ErrInvalid and leaves no row, and
 // Enqueue and Send, which carry text, refuse the reaction role.
 func TestEnqueueReactionRefusesWhatCannotBeMade(t *testing.T) {
@@ -223,7 +211,7 @@ func TestEnqueueReactionRefusesWhatCannotBeMade(t *testing.T) {
 			t.Errorf("EnqueueReaction(%+v) = %q, %v; want ErrInvalid", bad, id, err)
 		}
 	}
-	text := outbox.Post{Source: "s", Role: store.OutboxReaction, Channel: "C1", Content: reply("s").Content}
+	text := outbox.Post{Source: "s", Role: store.OutboxReaction, Channel: "C1", Out: reply("s").Out}
 	if _, err := o.Enqueue(t.Context(), text); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("Enqueue with the reaction role = %v; want ErrInvalid", err)
 	}
@@ -253,7 +241,7 @@ func TestRunMakesAnEnqueuedReaction(t *testing.T) {
 // for a retry, and the error is the timeout.
 func TestAHungReactionEndsAtCallTimeout(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	o, hooks, _ := abandoning(t, st, &poster{}, func(c *outbox.Config) { c.Reactor, c.CallTimeout = hangingReactor{}, 50*time.Millisecond })
+	o, hooks, _ := abandoning(t, st, &poster{reactor: hangingReactor{}}, func(c *outbox.Config) { c.CallTimeout = 50 * time.Millisecond })
 	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
 		t.Fatal(err)
 	}

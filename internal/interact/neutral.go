@@ -6,14 +6,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
-	"github.com/agentkourier/agent-kourier/internal/store"
 )
-
-// messageAt is the message of an interaction's prompt. The platform and the connection are the adapter's to know:
-// it reads the channel and the ID, until the outbox stores a Ref (WP-37 S5).
-func messageAt(row store.Interaction) chat.Ref {
-	return chat.Ref{Channel: row.Key.Channel, ID: row.MessageRef, Thread: row.Key.ThreadTS}
-}
 
 // answeredWord is what a free-text answer is shown as once the prompt is replaced. What the person typed may
 // be a secret, and the channel keeps what it is shown (the owner's decision), so only that there is an answer

@@ -2,6 +2,7 @@ package outbox_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -40,22 +42,28 @@ type poster struct {
 	found          map[string]string // ts of a message already in Slack, by outbox ID
 	lastSince      time.Time         // the since of the last Find
 	onPost, onFind func(ctx context.Context) error
+	reactor        reacts // makes the reactions, if the test has any
+	fitsErr        error  // what Fits says of a prompt
+	sent           []chat.Outgoing
+	tags           []string
+	targets        []chat.Target
 }
 
-func (p *poster) Post(ctx context.Context, _, _ string, _ slack.Content, _ string) (string, error) {
+func (p *poster) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
 	p.mu.Lock()
 	p.posts++
+	p.sent, p.tags, p.targets = append(p.sent, o), append(p.tags, tag), append(p.targets, t)
 	n, fn := p.posts, p.onPost
 	p.mu.Unlock()
 	if fn != nil {
 		if err := fn(ctx); err != nil {
-			return "", err
+			return chat.Ref{}, err
 		}
 	}
-	return fmt.Sprintf("100.%03d", n), nil
+	return testRef(t.Channel, t.Thread, fmt.Sprintf("100.%03d", n)), nil
 }
 
-func (p *poster) Find(ctx context.Context, _, _, id string, since time.Time) (string, bool, error) {
+func (p *poster) Find(ctx context.Context, t chat.Target, id string, since time.Time) (chat.Ref, bool, error) {
 	p.mu.Lock()
 	p.finds++
 	p.lastSince = since
@@ -63,10 +71,46 @@ func (p *poster) Find(ctx context.Context, _, _, id string, since time.Time) (st
 	p.mu.Unlock()
 	if fn != nil {
 		if err := fn(ctx); err != nil {
-			return "", false, err
+			return chat.Ref{}, false, err
 		}
 	}
-	return ts, ts != "", nil
+	return testRef(t.Channel, t.Thread, ts), ts != "", nil
+}
+
+// neutral is the stored payload of a message that says text: what Send writes for it.
+func neutral(text string) string {
+	raw, err := json.Marshal(chat.Say(chat.Message{Fallback: text}))
+	if err != nil {
+		panic(err) // a test helper
+	}
+	return string(raw)
+}
+
+// testRef is the Ref of a message of the fake platform.
+func testRef(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
+// reacts is what makes the reactions of testPlatform: *reactor.
+type reacts interface {
+	React(ctx context.Context, channel, ts, name string) error
+}
+
+// React makes a reaction through the poster's reactor, if a test gave it one.
+func (p *poster) React(ctx context.Context, r chat.Ref, name string) error {
+	if p.reactor == nil {
+		return errors.New("no reactor in this test")
+	}
+	return p.reactor.React(ctx, r.Channel, r.ID, name)
+}
+
+func (*poster) RefAt(channel, thread, id string) chat.Ref { return testRef(channel, thread, id) }
+
+func (p *poster) Fits(chat.Prompt) error { return p.fitsErr }
+
+// Classify says what the Slack adapter says, since the tests fail calls with Slack's error codes.
+func (*poster) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/conn").Classify(op, err)
 }
 
 func (p *poster) counts() (posts, finds int) {
@@ -75,14 +119,14 @@ func (p *poster) counts() (posts, finds int) {
 	return p.posts, p.finds
 }
 
-func newOutbox(t *testing.T, st store.Outbox, p outbox.Poster) *outbox.Outbox {
+func newOutbox(t *testing.T, st store.Outbox, p outbox.Platform) *outbox.Outbox {
 	t.Helper()
-	return outbox.New(outbox.Config{Store: st, Poster: p, Now: func() time.Time { return t0 },
+	return outbox.New(outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 },
 		CallTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 }
 
 func reply(source string) outbox.Post {
-	return outbox.Post{Source: source, Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", Content: slack.Content{Text: "hello " + source}}
+	return outbox.Post{Source: source, Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", Out: chat.Say(chat.Message{Fallback: "hello " + source})}
 }
 
 func TestIDDerivesFromSourceAndRole(t *testing.T) {
@@ -107,15 +151,15 @@ func TestSendWritesTheRowBeforePostingAndRecordsAfter(t *testing.T) {
 	}
 	ob := newOutbox(t, st, p)
 	ts, err := ob.Send(t.Context(), reply("ev1"))
-	if err != nil || ts != "100.001" {
-		t.Fatalf("Send = %q, %v", ts, err)
+	if err != nil || ts.ID != "100.001" {
+		t.Fatalf("Send = %+v, %v", ts, err)
 	}
-	if row, _ := st.GetOutbox(t.Context(), "ev1/reply"); row.MessageRef != ts || row.Role != store.OutboxReply || row.EventID != "ev1" || !row.CreatedAt.Equal(t0) {
+	if row, _ := st.GetOutbox(t.Context(), "ev1/reply"); row.MessageRef != ts.ID || row.Role != store.OutboxReply || row.EventID != "ev1" || !row.CreatedAt.Equal(t0) {
 		t.Fatalf("row after Send = %+v; want the ref recorded", row)
 	}
 	// A repeat returns the recorded ref and does nothing in Slack: not a post, not even a lookup.
 	if again, err := ob.Send(t.Context(), reply("ev1")); err != nil || again != ts {
-		t.Fatalf("second Send = %q, %v; want %q", again, err, ts)
+		t.Fatalf("second Send = %+v, %v; want %+v", again, err, ts)
 	}
 	if posts, finds := p.counts(); posts != 1 || finds != 0 {
 		t.Fatalf("posts = %d, finds = %d; want 1 and 0 (a new row posts blind)", posts, finds)
@@ -125,7 +169,7 @@ func TestSendWritesTheRowBeforePostingAndRecordsAfter(t *testing.T) {
 func TestSendRejectsEmptyContent(t *testing.T) {
 	ob := newOutbox(t, openStore(t, filepath.Join(t.TempDir(), "c.db")), &poster{})
 	p := reply("ev1")
-	p.Content = slack.Content{}
+	p.Out = chat.Say(chat.Message{})
 	if _, err := ob.Send(t.Context(), p); !errors.Is(err, store.ErrInvalid) {
 		t.Fatalf("Send with no content = %v; want ErrInvalid", err)
 	}
@@ -159,8 +203,8 @@ func TestSendOfAnUnpostedRowLooksFirst(t *testing.T) {
 		}
 		failing = false
 		ts, err := ob.Send(t.Context(), reply("ev1"))
-		if posts, finds := p.counts(); err != nil || posts != tt.wantPosts || finds != 1 || (tt.inSlack != "" && ts != tt.inSlack) {
-			t.Errorf("%s: retry = %q, %v; posts = %d, finds = %d; want %d posts, 1 find, and the found ts", tt.name, ts, err, posts, finds, tt.wantPosts)
+		if posts, finds := p.counts(); err != nil || posts != tt.wantPosts || finds != 1 || (tt.inSlack != "" && ts.ID != tt.inSlack) {
+			t.Errorf("%s: retry = %+v, %v; posts = %d, finds = %d; want %d posts, 1 find, and the found ts", tt.name, ts, err, posts, finds, tt.wantPosts)
 		}
 	}
 }
@@ -168,7 +212,7 @@ func TestSendOfAnUnpostedRowLooksFirst(t *testing.T) {
 func TestALookupErrorNeverPosts(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	if _, err := st.CreateOutbox(t.Context(), store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1",
-		CreatedAt: t0, Payload: `{"text":"hi"}`}); err != nil {
+		CreatedAt: t0, Payload: neutral("hi")}); err != nil {
 		t.Fatal(err)
 	}
 	boom := errors.New("history unavailable")
@@ -194,10 +238,10 @@ func TestReconcile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	row("adopted", `{"text":"a"}`, 0)
-	row("broken", `{"text":"c"}`, time.Second)
+	row("adopted", neutral("a"), 0)
+	row("broken", neutral("c"), time.Second)
 	row("stream", "", 2*time.Second) // no payload: a stream, which the renderer records itself
-	row("absent", `{"text":"b"}`, 3*time.Second)
+	row("absent", neutral("b"), 3*time.Second)
 	boom := errors.New("history unavailable")
 	p := &poster{found: map[string]string{"adopted/reply": "55.5"}}
 	ob := newOutbox(t, st, p)
@@ -257,7 +301,7 @@ func TestSlackCallsAreBounded(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	hang := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 	p := &poster{onPost: hang}
-	ob := outbox.New(outbox.Config{Store: st, Poster: p, Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
+	ob := outbox.New(outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
 	done := make(chan error, 1)
 	go func() {
 		_, err := ob.Send(t.Context(), reply("ev1")) // hangs in Post
@@ -302,6 +346,7 @@ func TestCrashAfterPost(t *testing.T) {
 	fake := fakeslack.New()
 	t.Cleanup(fake.Close)
 	client := slack.New(slack.Config{BotToken: secret.New("xoxb-fake-bot-token"), AppToken: secret.New("xapp-fake-app-token"), APIURL: fake.URL() + "/", PageLimit: 2})
+	platform := slack.NewPlatform(client, "ns/conn")
 	path := filepath.Join(t.TempDir(), "c.db")
 	st := openStore(t, path)
 	rootTS, err := client.Post(t.Context(), "C1", "", slack.Content{Text: "root"}, "root")
@@ -312,7 +357,7 @@ func TestCrashAfterPost(t *testing.T) {
 		p := reply("ev-" + thread)
 		p.ThreadTS = thread
 		before := len(fake.Messages("C1"))
-		if _, err := newOutbox(t, failingRecord{st}, client).Send(t.Context(), p); err == nil {
+		if _, err := newOutbox(t, failingRecord{st}, platform).Send(t.Context(), p); err == nil {
 			t.Fatal("Send survived the crash before recording")
 		}
 		if got := len(fake.Messages("C1")); got != before+1 {
@@ -323,7 +368,7 @@ func TestCrashAfterPost(t *testing.T) {
 			t.Fatal(err)
 		}
 		st = openStore(t, path)
-		if err := newOutbox(t, st, client).Reconcile(t.Context()); err != nil {
+		if err := newOutbox(t, st, platform).Reconcile(t.Context()); err != nil {
 			t.Fatalf("Reconcile: %v", err)
 		}
 		msgs := fake.Messages("C1")
@@ -341,8 +386,8 @@ func TestShutdownAfterAPostStillRecords(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	ob := newOutbox(t, st, &poster{onPost: func(context.Context) error { cancel(); return nil }})
 	ts, err := ob.Send(ctx, reply("ev1"))
-	if row, _ := st.GetOutbox(t.Context(), "ev1/reply"); err != nil || row.MessageRef != ts || ts == "" {
-		t.Fatalf("Send = %q, %v; row %+v; want the ref recorded", ts, err, row)
+	if row, _ := st.GetOutbox(t.Context(), "ev1/reply"); err != nil || row.MessageRef != ts.ID || ts.ID == "" {
+		t.Fatalf("Send = %+v, %v; row %+v; want the ref recorded", ts, err, row)
 	}
 }
 
@@ -352,7 +397,7 @@ func TestLookupStartsWhereTheRowWasMade(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	var clock atomic.Int64
 	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
-	ob := outbox.New(outbox.Config{Store: st, Poster: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
+	ob := outbox.New(outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
 	if _, err := ob.Send(t.Context(), reply("ev1")); err == nil {
 		t.Fatal("Send with a failing post succeeded")
 	}

@@ -190,6 +190,10 @@ type updateFunc func(ctx context.Context) error
 
 func (f updateFunc) Update(ctx context.Context, _ chat.Ref, _ chat.Outgoing) error { return f(ctx) }
 
+func (updateFunc) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
 func (updateFunc) Classify(op chat.Op, err error) chat.Verdict {
 	return slack.NewPlatform(nil, "ns/c").Classify(op, err)
 }

@@ -1,27 +1,28 @@
-// Package outbox posts to Slack once, even across a crash (spec 8.6). A post is written to the
-// store before it is sent, tagged so it can be found in Slack's history, and its message ref is
-// recorded after. A row with no ref may have been posted, so it is looked up before it is posted
-// again.
+// Package outbox posts to a chat platform once, even across a crash (spec 8.6). A post is written to the
+// store before it is sent, as a message in the neutral model (chat.Outgoing, versioned), tagged so that the
+// platform can find it again, and its message ref is recorded after. A row with no ref may have been posted, so
+// it is looked up before it is posted again. The platform renders the message at delivery, and the outbox knows
+// nothing of its markup.
 //
-// Where a caller can wait for Slack, such as the renderer's own goroutine, it uses Send and gets the
-// message's ts. Where it cannot, such as the session's Notice, which runs on Slack's acknowledgement
-// path, it uses Enqueue, a local write, and Run delivers the row. A notice's source ID must come from
-// where it is, not from the event that carried it: the Expired and BindingGone notices for a mention
-// take the Slack message's (channel, ts), because a mention arrives as two events and both reach
-// Submit, and one ID makes them one row and one post.
+// Where a caller can wait for the platform, such as the renderer's own goroutine, it uses Send and gets the
+// message's Ref. Where it cannot, such as the session's Notice, which runs on the chat platform's
+// acknowledgement path, it uses Enqueue, a local write, and Run delivers the row. A notice's source ID must come
+// from where it is, not from the event that carried it: the Expired and BindingGone notices for a mention take
+// the message's (channel, ts), because a mention arrives as two events and both reach Submit, and one ID makes
+// them one row and one post.
 //
-// A reaction (EnqueueReaction) is a row too, with the role reaction: durable and made once per ID, with
-// no lookup, since making it twice is harmless (Slack says it is there already) and a reaction has
-// no message of its own to find. Its ref is the ts of the message it was made on.
+// A reaction (EnqueueReaction) is a row too, with the role reaction: durable and made once per ID, with no lookup,
+// since making it twice is harmless (a reaction that is there already is success) and a reaction has no message of
+// its own to find. Its ref is the ID of the message it was made on.
 //
-// A post that can never succeed is abandoned, not retried for ever: Slack's permanent errors (a
-// channel that is gone or archived, courier not in it, text too long, blocks Slack refuses), a
-// message that is not valid, and a lookup that has timed out five times in a row. The row keeps its
-// place and loses its text, Config.OnAbandon is called once and one warning is logged; the reason
-// is in that warning and that call only, and the store keeps none. A row still
-// unposted after Config.Retention loses its text the same way. Send of an abandoned row returns
-// ErrAbandoned and never posts it again; a producer that wants the same words posted anew needs a
-// new source ID.
+// A post that can never succeed is abandoned, not retried for ever: what the platform says is permanent (Classify:
+// a channel that is gone, text too long, content it refuses), a message that is not valid or a stored payload that
+// is not one of this version (a legacy Slack payload, which is not migrated), and a lookup that has timed out five
+// times in a row. The row keeps its place and loses its text, Config.OnAbandon is called once with the reason, one
+// of the neutral reasons (chat.Reason) or an Abandon constant, and one warning is logged, with the platform's own
+// code; the store keeps neither. A row still unposted after Config.Retention loses its text the same way. Send of
+// an abandoned row returns ErrAbandoned and never posts it again; a producer that wants the same words posted anew
+// needs a new source ID.
 package outbox
 
 import (
@@ -34,7 +35,6 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
@@ -42,49 +42,48 @@ import (
 // ErrAbandoned is returned for a post that courier has given up on, and wraps its cause.
 var ErrAbandoned = errors.New("outbox: the post was abandoned")
 
-// The reasons OnAbandon is given besides a Slack error code.
+// The reasons OnAbandon is given besides the neutral reasons of chat.Reason.
 const (
-	AbandonInvalid       = "invalid"        // the message cannot be posted at all
-	AbandonLookupTimeout = "lookup_timeout" // looking for it keeps timing out, with Slack otherwise working
+	AbandonInvalid       = "invalid"        // the message cannot be posted at all, or the stored payload cannot be read
+	AbandonLookupTimeout = "lookup_timeout" // looking for it keeps timing out, with the platform otherwise working
 	AbandonExpired       = "expired"        // it was still unposted after Config.Retention
 )
 
 // storeWriteTimeout bounds the store writes that must outlive a cancelled context (recording a ref,
-// abandoning a row). It is not CallTimeout, which is for calls to Slack: a test that sets that to
+// abandoning a row). It is not CallTimeout, which is for calls to the platform: a test that sets that to
 // a few milliseconds must not make a local write time out under load.
 const storeWriteTimeout = 10 * time.Second
 
 // lookupTimeouts is how many lookups of a row in a row must time out, over at least
-// Config.LookupTimeoutFloor and with some other Slack call working in between, before it is
+// Config.LookupTimeoutFloor and with some other platform call working in between, before it is
 // abandoned.
 const lookupTimeouts = 5
 
-// Poster is the Slack side of the outbox, which *slack.Client satisfies.
-type Poster interface {
-	// Post posts content tagged with outboxID and returns its ts. Its error does not say whether
-	// the message was posted.
-	Post(ctx context.Context, channel, threadTS string, content slack.Content, outboxID string) (string, error)
-	// Find returns the ts of the message tagged with outboxID, posted no earlier than about since.
-	Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error)
+// Platform is what the outbox asks of the chat platform: chat.Platform, or a wrapper of it.
+type Platform interface {
+	// Post posts o tagged with tag and returns where it landed. Its error does not say whether the message
+	// was posted.
+	Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error)
+	// Find returns the message tagged with tag, posted no earlier than about since.
+	Find(ctx context.Context, t chat.Target, tag string, since time.Time) (chat.Ref, bool, error)
+	// React puts a reaction on a message. One that is there already is success.
+	React(ctx context.Context, r chat.Ref, name string) error
+	// RefAt is the Ref of the message a row recorded by its ID alone.
+	RefAt(channel, thread, id string) chat.Ref
+	// Fits says whether a prompt can be shown in one message, which is checked before it is stored.
+	Fits(p chat.Prompt) error
+	// Classify says what an error of a call means: permanent errors abandon the row.
+	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// Reactor makes reactions: *slack.Client. A reaction that is there already is success, as
-// (*slack.Client).React gives it.
-type Reactor interface {
-	React(ctx context.Context, channel, ts, name string) error
-}
-
-// Config configures an Outbox. Store and Poster are required.
+// Config configures an Outbox. Store and Platform are required.
 type Config struct {
-	Store  store.Outbox
-	Poster Poster
-	// Reactor makes the reactions of EnqueueReaction. A reaction row with none is abandoned as
-	// invalid and logged: nothing could ever make it.
-	Reactor Reactor
-	Now     func() time.Time // time.Now if nil
-	Logger  *slog.Logger     // slog.Default() if nil
+	Store    store.Outbox
+	Platform Platform
+	Now      func() time.Time // time.Now if nil
+	Logger   *slog.Logger     // slog.Default() if nil
 	// CallTimeout bounds each Post, Find and React (default 30 seconds), because the delivery lock is
-	// held across them and an unbounded Slack call would hold it for good.
+	// held across them and an unbounded call would hold it for good.
 	CallTimeout time.Duration
 	// Interval is how often Run drains with no signal (default 30 seconds).
 	Interval time.Duration
@@ -96,13 +95,13 @@ type Config struct {
 	Retention time.Duration
 	// LookupTimeoutFloor is how long the lookups of a row must have been timing out, from the first
 	// of five in a row, before it is abandoned for them (default 1 hour). The rule is for a lookup
-	// that can never finish, not for a Slack outage that hangs every request: so it also needs some
-	// other Slack call to have worked since the first timeout.
+	// that can never finish, not for an outage that hangs every request: so it also needs some
+	// other platform call to have worked since the first timeout.
 	LookupTimeoutFloor time.Duration
 	// PurgeInterval is how often Reconcile drops the text of expired rows (default 5 minutes).
 	PurgeInterval time.Duration
 	// OnAbandon, if set, is called once for each row that is abandoned, with its ID and the reason:
-	// a Slack error code, or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
+	// a neutral reason (chat.Reason) or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
 	// metric, and runs under the delivery lock, so it must not block.
 	OnAbandon func(id, reason string)
 }
@@ -113,10 +112,8 @@ type Post struct {
 	Source            string
 	Role              store.OutboxRole
 	Channel, ThreadTS string // ThreadTS is empty for a message in the channel
-	Content           slack.Content
-	// Out, if it is set (V is not zero), is the message in the neutral model, and is stored as Slack's form of it
-	// instead of Content: the outbox keeps Slack's content until it stores the neutral model itself (WP-37 S5),
-	// and a caller that has gone neutral says what it says in this field.
+	// Out is what to say, in the neutral model. It is stored as it is, so it must be valid (Validate), and a
+	// prompt must fit (Platform.Fits): one that does not is store.ErrInvalid, which no retry mends.
 	Out chat.Outgoing
 }
 
@@ -132,10 +129,10 @@ type Outbox struct {
 	// two deliveries of one row could post it twice.
 	mu    sync.Mutex
 	retry map[string]retryState // rows whose delivery failed; guarded by mu
-	// slackOK is when a call to Slack last worked, and lastPurge when the retention purge last ran.
+	// platformOK is when a call to the platform last worked, and lastPurge when the retention purge last ran.
 	// Both are guarded by mu.
-	slackOK, lastPurge time.Time
-	wake               chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
+	platformOK, lastPurge time.Time
+	wake                  chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
 }
 
 // retryState is how often a row's delivery has failed in a row, and when it may be tried again.
@@ -179,46 +176,44 @@ func New(cfg Config) *Outbox {
 	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), retry: map[string]retryState{}}
 }
 
-// Send writes the row, posts the message and records its ts, and returns the ts. A message that
-// is already recorded is returned without a call to Slack. A row that exists without a ref, left
-// by a failed post or a crash, is looked up first and posted only if Slack has no such message.
+// Send writes the row, posts the message and records its ID, and returns where it is. A message that
+// is already recorded is returned without a call to the platform. A row that exists without a ref, left
+// by a failed post or a crash, is looked up first and posted only if the platform has no such message.
 // A new row is posted at once. If the lookup fails nothing is posted, and the error is returned.
-func (o *Outbox) Send(ctx context.Context, p Post) (string, error) {
+func (o *Outbox) Send(ctx context.Context, p Post) (chat.Ref, error) {
 	row, err := o.row(p)
 	if err != nil {
-		return "", err
+		return chat.Ref{}, err
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	created, err := o.cfg.Store.CreateOutbox(ctx, row)
 	if err != nil {
-		return "", err
+		return chat.Ref{}, err
 	}
-	ts, err := o.deliver(ctx, row.ID, !created)
+	ref, err := o.deliver(ctx, row.ID, !created)
 	if err == nil {
 		o.settle(row.ID, nil) // a row Run was backing off is delivered; forget it
 	}
-	return ts, err
+	return ref, err
 }
 
-// row returns the outbox row for p, with the message as its payload. A post with no text and no
-// blocks is ErrInvalid: such a row would never be delivered, and would hold its ID for good.
+// row returns the outbox row for p, with the message as its payload. A message that is not valid, or a prompt that
+// does not fit, is ErrInvalid: such a row would never be delivered, and would hold its ID for good.
 func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
 	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Channel: p.Channel, ThreadTS: p.ThreadTS, CreatedAt: o.cfg.Now()}
 	if p.Role == store.OutboxReaction {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: a reaction is not a post, use EnqueueReaction: %w", row.ID, store.ErrInvalid)
 	}
-	content := p.Content
-	if p.Out.V != 0 {
-		var err error
-		if content, err = slack.Render(p.Out); err != nil { // a message that cannot be shown cannot be delivered either: no retry mends it
+	if err := p.Out.Validate(); err != nil { // no retry mends a message that cannot be shown
+		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w: %w", row.ID, store.ErrInvalid, err)
+	}
+	if p.Out.Prompt != nil {
+		if err := o.cfg.Platform.Fits(*p.Out.Prompt); err != nil {
 			return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w: %w", row.ID, store.ErrInvalid, err)
 		}
 	}
-	if content.Text == "" && len(content.Blocks) == 0 {
-		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: no text or blocks: %w", row.ID, store.ErrInvalid)
-	}
-	payload, err := json.Marshal(content)
+	payload, err := json.Marshal(p.Out)
 	if err != nil {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: %w", row.ID, err)
 	}
@@ -226,9 +221,9 @@ func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
 	return row, nil
 }
 
-// Enqueue writes the row for p and returns its ID, and does nothing else: no Slack call, so it is
-// safe where Slack waits for an answer, such as the session's Notice. Run delivers the row. The
-// same ID enqueued twice is one row and one post. A post with no text and no blocks is ErrInvalid.
+// Enqueue writes the row for p and returns its ID, and does nothing else: no platform call, so it is
+// safe where the platform waits for an answer, such as the session's Notice. Run delivers the row. The
+// same ID enqueued twice is one row and one post. A message that is not valid is ErrInvalid.
 func (o *Outbox) Enqueue(ctx context.Context, p Post) (string, error) {
 	row, err := o.row(p)
 	if err != nil {
@@ -262,8 +257,8 @@ type reactionPayload struct {
 	Name string `json:"name"`
 }
 
-// EnqueueReaction writes the row for r and returns its ID, and does nothing else: no Slack call, so
-// it is safe where Slack waits for an answer. Run delivers the row. The same ID enqueued twice is
+// EnqueueReaction writes the row for r and returns its ID, and does nothing else: no platform call, so
+// it is safe where the platform waits for an answer. Run delivers the row. The same ID enqueued twice is
 // one row and one reaction. An empty field is ErrInvalid.
 func (o *Outbox) EnqueueReaction(ctx context.Context, r Reaction) (string, error) {
 	id := ID(r.Source, store.OutboxReaction)
@@ -316,8 +311,8 @@ func (o *Outbox) settle(id string, err error) {
 
 // Reconcile delivers every row that has a payload and no ref, oldest first, looking each up
 // before it posts: it is for startup, after a crash may have left posts unrecorded, and is one
-// pass of Run. A row with no payload is not one of Send's or Enqueue's (they refuse empty
-// content): it is a stream's, whose renderer records the ref itself, and is left alone, as is a
+// pass of Run. A row with no payload is not one of Send's or Enqueue's (they refuse an invalid
+// message): it is a stream's, whose renderer records the ref itself, and is left alone, as is a
 // row still waiting out its retry delay. The retention purge runs in it at most every
 // PurgeInterval. It goes on past a row it cannot reconcile, and returns every such error joined.
 func (o *Outbox) Reconcile(ctx context.Context) error {
@@ -335,7 +330,7 @@ func (o *Outbox) Reconcile(ctx context.Context) error {
 		}
 		for _, id := range expired {
 			delete(o.retry, id)
-			o.reportAbandon(ctx, id, AbandonExpired, nil)
+			o.reportAbandon(ctx, id, AbandonExpired, "", nil)
 		}
 	}
 	o.mu.Unlock()
@@ -362,98 +357,135 @@ func (o *Outbox) Reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// target is where a row's message goes.
+func target(row store.OutboxEntry) chat.Target {
+	return chat.Target{Channel: row.Channel, Thread: row.ThreadTS}
+}
+
+// permanent says whether err, of a call of the kind op, is one that no retry mends, and if so why: the neutral
+// reason and the platform's own code.
+func (o *Outbox) permanent(op chat.Op, err error) (reason, code string, ok bool) {
+	v := o.cfg.Platform.Classify(op, err)
+	if v.Class != chat.Permanent {
+		return "", "", false
+	}
+	return string(orOther(v.Reason)), v.Code, true
+}
+
+// orOther is r, or chat.ReasonOther for a permanent error that gave none.
+func orOther(r chat.Reason) chat.Reason {
+	if r == chat.ReasonNone {
+		return chat.ReasonOther
+	}
+	return r
+}
+
+// decode reads the payload of a row as the message it holds. A payload that is not a message of this version is
+// an error, such as a legacy Slack payload (Text and Blocks, with no version), which is not migrated.
+func decode(payload string) (chat.Outgoing, error) {
+	var out chat.Outgoing
+	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+		return chat.Outgoing{}, err
+	}
+	if out.V != chat.OutgoingVersion {
+		return chat.Outgoing{}, fmt.Errorf("%w: the payload is of version %d, not %d: a legacy payload, which is not migrated", chat.ErrInvalid, out.V, chat.OutgoingVersion)
+	}
+	if err := out.Validate(); err != nil {
+		return chat.Outgoing{}, err
+	}
+	return out, nil
+}
+
 // deliver posts the row id unless it already has a ref, which it returns. With lookup it first
-// asks Slack for the message, and adopts it if it is there. The caller holds o.mu. The row is read
+// asks the platform for the message, and adopts it if it is there. The caller holds o.mu. The row is read
 // again here, so a delivery that finished while the caller waited for the lock is seen.
-func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (string, error) {
+func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (chat.Ref, error) {
 	row, err := o.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
-		return "", err
+		return chat.Ref{}, err
 	}
 	if row.MessageRef != "" {
-		return row.MessageRef, nil
+		return o.cfg.Platform.RefAt(row.Channel, row.ThreadTS, row.MessageRef), nil
 	}
 	if !row.AbandonedAt.IsZero() {
-		return "", fmt.Errorf("deliver %s: %w", id, ErrAbandoned)
+		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, ErrAbandoned)
 	}
 	if row.Role == store.OutboxReaction {
 		return o.react(ctx, row)
 	}
-	var content slack.Content
 	if row.Payload == "" {
-		return "", fmt.Errorf("deliver %s: the row has no payload: %w", id, store.ErrInvalid)
+		return chat.Ref{}, fmt.Errorf("deliver %s: the row has no payload: %w", id, store.ErrInvalid)
 	}
-	if err := json.Unmarshal([]byte(row.Payload), &content); err != nil {
-		return "", o.abandon(ctx, row, AbandonInvalid, fmt.Errorf("deliver %s: payload: %w", id, err))
+	out, err := decode(row.Payload)
+	if err != nil {
+		return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", fmt.Errorf("deliver %s: payload: %w", id, err))
 	}
 	if lookup {
-		ts, found, err := o.find(ctx, row)
+		ref, found, err := o.find(ctx, row)
 		if err == nil {
-			o.slackOK = o.cfg.Now()
-		} else if reason := slack.PermanentCode(err); reason != "" { // as for a post: it will not pass
-			return "", o.abandon(ctx, row, reason, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
+			o.platformOK = o.cfg.Now()
+		} else if reason, code, ok := o.permanent(chat.OpPost, err); ok { // as for a post: it will not pass
+			return chat.Ref{}, o.abandon(ctx, row, reason, code, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
 		}
 		timedOut := err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)
 		if o.lookupGivesUp(id, timedOut) {
-			return "", o.abandon(ctx, row, AbandonLookupTimeout, fmt.Errorf("deliver %s: looking for the message: %w", id, err))
+			return chat.Ref{}, o.abandon(ctx, row, AbandonLookupTimeout, "", fmt.Errorf("deliver %s: looking for the message: %w", id, err))
 		}
 		if err != nil {
-			return "", fmt.Errorf("deliver %s: looking for the message before posting it: %w", id, err)
+			return chat.Ref{}, fmt.Errorf("deliver %s: looking for the message before posting it: %w", id, err)
 		}
 		if found {
-			o.cfg.Logger.InfoContext(ctx, "outbox: adopted a message posted before a crash", "outbox_id", id, "channel", row.Channel, "ts", ts)
-			return o.record(ctx, id, ts)
+			o.cfg.Logger.InfoContext(ctx, "outbox: adopted a message posted before a crash", "outbox_id", id, "channel", row.Channel, "ts", ref.ID)
+			return o.record(ctx, id, ref)
 		}
 	}
 	callCtx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
 	defer cancel()
-	ts, err := o.cfg.Poster.Post(callCtx, row.Channel, row.ThreadTS, content, id)
+	ref, err := o.cfg.Platform.Post(callCtx, target(row), out, id)
 	if err != nil {
 		err = fmt.Errorf("deliver %s: post: %w", id, err)
-		if reason := slack.PermanentCode(err); reason != "" {
-			return "", o.abandon(ctx, row, reason, err)
+		if reason, code, ok := o.permanent(chat.OpPost, err); ok {
+			return chat.Ref{}, o.abandon(ctx, row, reason, code, err)
 		}
-		if errors.Is(err, store.ErrInvalid) {
-			return "", o.abandon(ctx, row, AbandonInvalid, err)
+		if errors.Is(err, store.ErrInvalid) || errors.Is(err, chat.ErrInvalid) {
+			return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", err)
 		}
-		return "", err
+		return chat.Ref{}, err
 	}
-	o.slackOK = o.cfg.Now()
+	o.platformOK = o.cfg.Now()
 	testhooks.AfterPost() // a no-op unless this is a test image, where it can crash the process here
-	return o.record(ctx, id, ts)
+	return o.record(ctx, id, ref)
 }
 
-// react makes the reaction of row and records the ts of its message as the ref. There is no lookup:
+// react makes the reaction of row and records the ID of its message as the ref. There is no lookup:
 // a reaction made twice is made once, and one made before a crash is simply found there. The caller
 // holds o.mu.
-func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (string, error) {
+func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, error) {
 	var p reactionPayload
 	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil || p.TS == "" || p.Name == "" {
-		return "", o.abandon(ctx, row, AbandonInvalid, fmt.Errorf("deliver %s: the reaction's payload is not usable: %w", row.ID, store.ErrInvalid))
+		return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", fmt.Errorf("deliver %s: the reaction's payload is not usable: %w", row.ID, store.ErrInvalid))
 	}
-	if o.cfg.Reactor == nil {
-		return "", o.abandon(ctx, row, AbandonInvalid, fmt.Errorf("deliver %s: no Reactor is configured: %w", row.ID, store.ErrInvalid))
-	}
+	ref := o.cfg.Platform.RefAt(row.Channel, "", p.TS)
 	callCtx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
 	defer cancel()
-	if err := o.cfg.Reactor.React(callCtx, row.Channel, p.TS, p.Name); err != nil {
+	if err := o.cfg.Platform.React(callCtx, ref, p.Name); err != nil {
 		err = fmt.Errorf("deliver %s: react: %w", row.ID, err)
-		if reason := slack.ReactionPermanentCode(err); reason != "" {
-			return "", o.abandon(ctx, row, reason, err)
+		if reason, code, ok := o.permanent(chat.OpReact, err); ok {
+			return chat.Ref{}, o.abandon(ctx, row, reason, code, err)
 		}
-		if errors.Is(err, store.ErrInvalid) {
-			return "", o.abandon(ctx, row, AbandonInvalid, err)
+		if errors.Is(err, store.ErrInvalid) || errors.Is(err, chat.ErrInvalid) {
+			return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", err)
 		}
-		return "", err
+		return chat.Ref{}, err
 	}
-	o.slackOK = o.cfg.Now()
-	return o.record(ctx, row.ID, p.TS)
+	o.platformOK = o.cfg.Now()
+	return o.record(ctx, row.ID, ref)
 }
 
 // lookupGivesUp notes how a lookup of id ended and reports whether the row should now be abandoned
 // for its lookups: a timeout adds one to the count in a row, and any other end starts it again.
-// It needs five, spread over LookupTimeoutFloor from the first, and some other Slack call that has
-// worked since that first one; otherwise it is Slack that is down, not this lookup that cannot
+// It needs five, spread over LookupTimeoutFloor from the first, and some other platform call that has
+// worked since that first one; otherwise it is the platform that is down, not this lookup that cannot
 // finish. The caller holds o.mu.
 func (o *Outbox) lookupGivesUp(id string, timedOut bool) bool {
 	r, ok := o.retry[id]
@@ -470,13 +502,13 @@ func (o *Outbox) lookupGivesUp(id string, timedOut bool) bool {
 	}
 	r.timeouts++
 	o.retry[id] = r
-	return r.timeouts >= lookupTimeouts && now.Sub(r.firstTimeout) >= o.cfg.LookupTimeoutFloor && o.slackOK.After(r.firstTimeout)
+	return r.timeouts >= lookupTimeouts && now.Sub(r.firstTimeout) >= o.cfg.LookupTimeoutFloor && o.platformOK.After(r.firstTimeout)
 }
 
 // abandon gives up on the row, which will never post, and returns an error that wraps ErrAbandoned
 // and cause. If the store cannot record it, the row is still work and that error is returned alone.
-// The caller holds o.mu.
-func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason string, cause error) error {
+// code is the platform's own code for a permanent error, for the log and nothing else. The caller holds o.mu.
+func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason, code string, cause error) error {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
 	newly, err := o.cfg.Store.AbandonOutbox(wctx, row.ID, o.cfg.Now())
@@ -485,14 +517,18 @@ func (o *Outbox) abandon(ctx context.Context, row store.OutboxEntry, reason stri
 	}
 	delete(o.retry, row.ID)
 	if newly {
-		o.reportAbandon(ctx, row.ID, reason, cause)
+		o.reportAbandon(ctx, row.ID, reason, code, cause)
 	}
 	return fmt.Errorf("%w (%s): %w", ErrAbandoned, reason, cause)
 }
 
-// reportAbandon logs one warning, never the text, and calls OnAbandon.
-func (o *Outbox) reportAbandon(ctx context.Context, id, reason string, cause error) {
+// reportAbandon logs one warning, never the text, and calls OnAbandon. The platform's code is in the log and
+// not in the call, so that a metric's labels are the closed set of reasons.
+func (o *Outbox) reportAbandon(ctx context.Context, id, reason, code string, cause error) {
 	attrs := []any{"outbox_id", id, "reason", reason}
+	if code != "" {
+		attrs = append(attrs, "code", code)
+	}
 	if cause != nil { // an expired row has none
 		attrs = append(attrs, "err", cause)
 	}
@@ -503,20 +539,20 @@ func (o *Outbox) reportAbandon(ctx context.Context, id, reason string, cause err
 }
 
 // find looks for the row's message, within the call timeout.
-func (o *Outbox) find(ctx context.Context, row store.OutboxEntry) (string, bool, error) {
+func (o *Outbox) find(ctx context.Context, row store.OutboxEntry) (chat.Ref, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
 	defer cancel()
-	return o.cfg.Poster.Find(ctx, row.Channel, row.ThreadTS, row.ID, row.CreatedAt)
+	return o.cfg.Platform.Find(ctx, target(row), row.ID, row.CreatedAt)
 }
 
-// record stores the message's ts on the row and returns it. The message is already in Slack, so it
+// record stores the message's ID on the row and returns its Ref. The message is already on the platform, so it
 // is recorded even if ctx has ended (a shutdown right after the post), within storeWriteTimeout; a
 // failure here leaves it for the next lookup to adopt.
-func (o *Outbox) record(ctx context.Context, id, ts string) (string, error) {
+func (o *Outbox) record(ctx context.Context, id string, ref chat.Ref) (chat.Ref, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
-	if err := o.cfg.Store.RecordMessageRef(ctx, id, ts); err != nil {
-		return "", fmt.Errorf("deliver %s: record the message ref: %w", id, err)
+	if err := o.cfg.Store.RecordMessageRef(ctx, id, ref.ID); err != nil {
+		return chat.Ref{}, fmt.Errorf("deliver %s: record the message ref: %w", id, err)
 	}
-	return ts, nil
+	return ref, nil
 }

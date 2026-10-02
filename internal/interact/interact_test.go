@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -42,35 +40,47 @@ func askUser(id string) a2a.Task {
 	return pausedOn(map[string]any{"type": "ask_user_request", "id": id, "questions": []map[string]any{{"question": "Which?", "choices": []string{"a", "b"}}}})
 }
 
-// poster is the outbox's Slack, keeping posts by outbox ID. fault fails the next post "before" it
+// poster is the outbox's platform, keeping posts by outbox ID. fault fails the next post "before" it
 // happens, or reports an error "after" it did, as a crash would.
 type poster struct {
 	posted   map[string]string
-	contents map[string]slack.Content // what each post held, by outbox ID
+	contents map[string]chat.Outgoing // what each post held, by outbox ID
 	fault    string
 }
 
-func (p *poster) Post(_ context.Context, _, _ string, c slack.Content, id string) (string, error) {
+func (p *poster) Post(_ context.Context, t chat.Target, c chat.Outgoing, id string) (chat.Ref, error) {
 	f := p.fault
 	p.fault = ""
 	if f == "before" {
-		return "", errBoom
+		return chat.Ref{}, errBoom
 	}
 	p.posted[id] = fmt.Sprintf("100.%03d", len(p.posted)+1)
 	if p.contents == nil {
-		p.contents = map[string]slack.Content{}
+		p.contents = map[string]chat.Outgoing{}
 	}
 	p.contents[id] = c
 	if f == "after" {
-		return "", errBoom
+		return chat.Ref{}, errBoom
 	}
-	return p.posted[id], nil
+	return p.RefAt(t.Channel, t.Thread, p.posted[id]), nil
 }
 
-func (p *poster) Find(_ context.Context, _, _, id string, _ time.Time) (string, bool, error) {
+func (p *poster) Find(_ context.Context, t chat.Target, id string, _ time.Time) (chat.Ref, bool, error) {
 	ts, ok := p.posted[id]
-	return ts, ok, nil
+	return p.RefAt(t.Channel, t.Thread, ts), ok, nil
 }
+
+func (*poster) React(context.Context, chat.Ref, string) error {
+	return errors.New("this test makes no reactions")
+}
+
+func (*poster) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
+func (*poster) Fits(chat.Prompt) error { return nil }
+
+func (*poster) Classify(chat.Op, error) chat.Verdict { return chat.Verdict{Class: chat.Transient} }
 
 // refStore fails the next SetInteractionMessageRef, as a crash would.
 type refStore struct {
@@ -129,7 +139,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	r := &rig{st: &refStore{Store: st}, slack: &poster{posted: map[string]string{}}, sess: &sess{}}
 	r.audit = &auditor{Writer: audit.New(st, audit.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ob := (outbox.New(outbox.Config{Store: st, Poster: r.slack, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second, Logger: quiet}))
+	ob := (outbox.New(outbox.Config{Store: st, Platform: r.slack, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second, Logger: quiet}))
 	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), AskUser: true, Timeout: timeout}
 	r.outbox = ob
 	if mod != nil {
@@ -177,8 +187,8 @@ func TestPausedRecordsOnePendingInteractionAndPostsOnePrompt(t *testing.T) {
 	}
 	// What is posted is the prompt in the neutral model, which the outbox renders for Slack: the question, and
 	// the button that a press carries the interaction's ID back on.
-	if posted := string(r.slack.contents[outbox.ID(row.ID, store.OutboxReply)].Blocks); !strings.Contains(posted, "Which?") || !strings.Contains(posted, "Submit") || !strings.Contains(posted, row.ID) {
-		t.Errorf("posted blocks %s; want the rendered prompt: its question, its Submit button, valued with the interaction ID", posted)
+	if posted := r.slack.contents[outbox.ID(row.ID, store.OutboxReply)]; posted.Prompt == nil || posted.Prompt.ID != row.ID || len(posted.Prompt.Questions) != 1 || posted.Prompt.Questions[0].Text != "Which?" {
+		t.Errorf("posted %+v; want the prompt in the neutral model: its ID the interaction's, and its question", posted)
 	}
 	// Seen again an hour later (the rig's clock), as a reconciliation re-emits it: the prompt is not
 	// rendered or sent again, and the deadline is the one from the pause time.

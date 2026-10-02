@@ -10,25 +10,41 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 )
 
-// poster is an outbox.Poster whose Post and Find answer with the errors the test sets.
-type poster struct{ postErr, findErr error }
+// platform is an outbox.Platform whose Post, Find and React answer with the errors the test sets, and that says
+// what the Slack adapter says of them.
+type platform struct{ postErr, findErr, reactErr error }
 
-func (p poster) Post(context.Context, string, string, slack.Content, string) (string, error) {
-	return "1.0", p.postErr
+func (p platform) Post(context.Context, chat.Target, chat.Outgoing, string) (chat.Ref, error) {
+	return chat.Ref{ID: "1.0"}, p.postErr
 }
 
-func (p poster) Find(context.Context, string, string, string, time.Time) (string, bool, error) {
-	return "2.0", true, p.findErr
+func (p platform) Find(context.Context, chat.Target, string, time.Time) (chat.Ref, bool, error) {
+	return chat.Ref{ID: "2.0"}, true, p.findErr
+}
+
+func (p platform) React(context.Context, chat.Ref, string) error { return p.reactErr }
+
+func (platform) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Channel: channel, Thread: thread, ID: id}
+}
+
+func (platform) Fits(chat.Prompt) error { return nil }
+
+func (platform) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/conn").Classify(op, err)
 }
 
 func slackErr(code string) error {
 	return fmt.Errorf("slack chat.postMessage: %w", slackgo.SlackErrorResponse{Err: code})
 }
 
-func TestWatchPostsReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
+// WatchAuth reports a credential that the platform rejects, once per call that fails with it, for a post, a lookup and
+// a reaction alike; the answer passes through untouched, and nothing else is reported.
+func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -39,24 +55,28 @@ func TestWatchPostsReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) 
 		{"inactive account", slackErr("account_inactive"), "account_inactive"},
 		{"no auth", slackErr("not_authed"), "not_authed"},
 		{"a channel that is gone", slackErr("channel_not_found"), ""}, // permanent for a post, not for the tokens
+		{"a message that is gone", slackErr("message_not_found"), ""},
 		{"a rate limit", slackErr("ratelimited"), ""},
 		{"a network error", errors.New("dial tcp: connection refused"), ""},
 		{"success", nil, ""},
 	} {
-		for _, call := range []string{"Post", "Find"} {
+		for _, call := range []string{"Post", "Find", "React"} {
 			var reported []string
-			w := WatchPosts(poster{postErr: tc.err, findErr: tc.err}, func(code string) { reported = append(reported, code) })
+			w := WatchAuth(platform{postErr: tc.err, findErr: tc.err, reactErr: tc.err}, func(code string) { reported = append(reported, code) })
 
-			var ts string
+			var ref chat.Ref
 			var err error
-			if call == "Post" {
-				ts, err = w.Post(t.Context(), "C1", "", slack.Content{}, "id")
-			} else {
-				ts, _, err = w.Find(t.Context(), "C1", "", "id", time.Time{})
+			switch call {
+			case "Post":
+				ref, err = w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")
+			case "Find":
+				ref, _, err = w.Find(t.Context(), chat.Target{Channel: "C1"}, "id", time.Time{})
+			case "React":
+				err = w.React(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
 			}
 
-			if wantTS := map[string]string{"Post": "1.0", "Find": "2.0"}[call]; ts != wantTS || !errors.Is(err, tc.err) && tc.err != nil {
-				t.Errorf("%s/%s: got %q, %v; want the poster's own answer untouched", tc.name, call, ts, err)
+			if wantID := map[string]string{"Post": "1.0", "Find": "2.0", "React": ""}[call]; ref.ID != wantID || !errors.Is(err, tc.err) && tc.err != nil || tc.err == nil && err != nil {
+				t.Errorf("%s/%s: got %+v, %v; want the platform's own answer untouched", tc.name, call, ref, err)
 			}
 			if tc.want == "" && len(reported) != 0 || tc.want != "" && (len(reported) != 1 || reported[0] != tc.want) {
 				t.Errorf("%s/%s: reported %v, want %q", tc.name, call, reported, tc.want)
@@ -78,9 +98,9 @@ func TestAPostThatFindsTheTokenRevokedEndsTheSlackRun(t *testing.T) {
 	got := make(chan error, 1)
 	go func() { got <- RunSlack(ctx, blocking{}, nil, RunPolicy{}) }()
 
-	w := WatchPosts(poster{postErr: slackErr("token_revoked")}, report)
-	if _, err := w.Post(t.Context(), "C1", "", slack.Content{}, "id"); err == nil {
-		t.Fatal("the poster's error was swallowed")
+	w := WatchAuth(platform{postErr: slackErr("token_revoked")}, report)
+	if _, err := w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id"); err == nil {
+		t.Fatal("the platform's error was swallowed")
 	}
 
 	select {
@@ -104,8 +124,8 @@ func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 	got := make(chan error, 1)
 	go func() { got <- RunSlack(ctx, blocking{}, nil, RunPolicy{}) }()
 
-	w := WatchPosts(poster{postErr: slackErr("channel_not_found")}, report)
-	_, _ = w.Post(t.Context(), "C1", "", slack.Content{}, "id")
+	w := WatchAuth(platform{postErr: slackErr("channel_not_found")}, report)
+	_, _ = w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")
 	select {
 	case err := <-got:
 		t.Fatalf("a post error that is not about the tokens ended the run: %v", err)
@@ -115,38 +135,5 @@ func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 	cancel()
 	if err := <-got; !errors.Is(err, context.Canceled) || errors.Is(err, ErrSlackAuth) {
 		t.Errorf("RunSlack after a signal = %v, want a clean stop", err)
-	}
-}
-
-// reactor is an outbox.Reactor that answers with the error the test sets.
-type reactor struct{ err error }
-
-func (r reactor) React(context.Context, string, string, string) error { return r.err }
-
-// WatchReacts is WatchPosts for the reactions (D6): a fatal auth code is reported once, the error passes
-// through untouched, and any other error, or none, reports nothing.
-func TestWatchReactsReportsOnlyFatalAuthAndPassesTheErrorThrough(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		err  error
-		want string // the code reported, "" for none
-	}{
-		{"revoked token", slackErr("token_revoked"), "token_revoked"},
-		{"invalid auth", slackErr("invalid_auth"), "invalid_auth"},
-		{"a message that is gone", slackErr("message_not_found"), ""},
-		{"a rate limit", slackErr("ratelimited"), ""},
-		{"success", nil, ""},
-	} {
-		var reported []string
-		w := WatchReacts(reactor{tc.err}, func(code string) { reported = append(reported, code) })
-
-		err := w.React(t.Context(), "C1", "1.1", "eyes")
-
-		if !errors.Is(err, tc.err) && tc.err != nil || tc.err == nil && err != nil {
-			t.Errorf("%s: React = %v, want the reactor's own error", tc.name, err)
-		}
-		if tc.want == "" && len(reported) != 0 || tc.want != "" && (len(reported) != 1 || reported[0] != tc.want) {
-			t.Errorf("%s: reported %v, want %q", tc.name, reported, tc.want)
-		}
 	}
 }

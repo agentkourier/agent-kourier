@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -27,32 +28,45 @@ func (e *env) sink(t *testing.T, q live.Enqueuer) *live.Sink {
 	return live.NewSink(e.live, q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-// noCalls is a Poster that fails the test on any call: a Notice must not reach Slack.
+// noCalls is a platform that fails the test on any call that reaches the network: a Notice must not reach Slack.
 type noCalls struct{ t *testing.T }
 
-func (p noCalls) Post(context.Context, string, string, slack.Content, string) (string, error) {
+func (p noCalls) Post(context.Context, chat.Target, chat.Outgoing, string) (chat.Ref, error) {
 	p.t.Error("a Slack post was made")
-	return "", nil
+	return chat.Ref{}, nil
 }
 
-func (p noCalls) Find(context.Context, string, string, string, time.Time) (string, bool, error) {
+func (p noCalls) Find(context.Context, chat.Target, string, time.Time) (chat.Ref, bool, error) {
 	p.t.Error("a Slack lookup was made")
-	return "", false, nil
+	return chat.Ref{}, false, nil
 }
 
-func TestNoticeOnlyQueuesAndEscapesItsDetail(t *testing.T) {
+func (p noCalls) React(context.Context, chat.Ref, string) error {
+	p.t.Error("a Slack reaction was made")
+	return nil
+}
+
+func (noCalls) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
+func (noCalls) Fits(chat.Prompt) error { return nil }
+
+func (noCalls) Classify(chat.Op, error) chat.Verdict { return chat.Verdict{Class: chat.Transient} }
+
+func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Poster: noCalls{t}}))
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.ThreadTS = e.root
 	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun} {
 		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, Detail: "<!channel> boom"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
-		var content slack.Content
-		_ = json.Unmarshal([]byte(row.Payload), &content)
-		if err != nil || row.Channel != "C1" || row.ThreadTS != e.root || !strings.HasSuffix(content.Text, " &lt;!channel&gt; boom") || strings.Contains(content.Text, "<!channel>") {
-			t.Errorf("%s: row %+v, %v; want a queued row in the thread with the detail escaped", kind, row, err)
+		var out chat.Outgoing
+		_ = json.Unmarshal([]byte(row.Payload), &out)
+		if err != nil || row.Channel != "C1" || row.ThreadTS != e.root || out.Message == nil || !strings.HasSuffix(out.Message.Fallback, " <!channel> boom") {
+			t.Errorf("%s: row %+v, %v; want a queued row in the thread with the detail as it was, for the platform to make inert", kind, row, err)
 		}
 	}
 	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"})
@@ -66,7 +80,7 @@ func TestNoticeOnlyQueuesAndEscapesItsDetail(t *testing.T) {
 // and no call is made to Slack, which is waiting for the acknowledgement this runs inside.
 func TestQueuedNoticeEnqueuesAReactionAndSendsNothing(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Poster: noCalls{t}, Reactor: noReactions{t}}))
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeQueued, MessageTS: "1.5"}
 	for range 2 {
 		sink.Notice(t.Context(), thread, n)
@@ -79,14 +93,6 @@ func TestQueuedNoticeEnqueuesAReactionAndSendsNothing(t *testing.T) {
 	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 1 {
 		t.Fatalf("%d rows for one notice raised twice; want 1", len(rows))
 	}
-}
-
-// noReactions is a Reactor that fails the test on any call.
-type noReactions struct{ t *testing.T }
-
-func (r noReactions) React(context.Context, string, string, string) error {
-	r.t.Error("a Slack reaction was made")
-	return nil
 }
 
 // TestQueuedReactionIsMadeOnTheMessage runs the row to Slack: the reply that waits is marked.
@@ -132,7 +138,7 @@ func TestNoticeOfAnUnknownKindIsLogged(t *testing.T) {
 // before, which Recovered tells the renderer to look for.
 func TestSinkPassesRecoveredOn(t *testing.T) {
 	e := setup(t)
-	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", ThreadTS: e.root, Content: slack.Content{Text: "before the crash"}}); err != nil {
+	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", ThreadTS: e.root, Out: chat.Say(chat.Message{Fallback: "before the crash"})}); err != nil {
 		t.Fatal(err)
 	}
 	key := thread
@@ -165,12 +171,12 @@ func TestTheSameNoticeIsOneRowAndOnePost(t *testing.T) {
 // blocker is a Sender that waits for release, as Slack may.
 type blocker struct{ release chan struct{} }
 
-func (b *blocker) Send(ctx context.Context, _ outbox.Post) (string, error) {
+func (b *blocker) Send(ctx context.Context, _ outbox.Post) (chat.Ref, error) {
 	select {
 	case <-b.release:
 	case <-ctx.Done():
 	}
-	return "", ctx.Err()
+	return chat.Ref{}, ctx.Err()
 }
 
 // TestTurnHandlerDoesNotWaitOnSlack: with Slack not answering, the stream reader's handler still returns.
@@ -248,7 +254,7 @@ func TestTurnWithoutFinalFreesItsGoroutine(t *testing.T) {
 // what the person wrote is nowhere in it.
 func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Poster: noCalls{t}}))
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.ThreadTS = e.root
 	for kind, want := range map[session.NoticeKind]string{
@@ -258,10 +264,10 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 		n := session.Notice{ID: "m1/" + string(kind), Kind: kind, MessageTS: "5.5"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
-		var content slack.Content
-		_ = json.Unmarshal([]byte(row.Payload), &content)
-		if err != nil || content.Text != want {
-			t.Errorf("%s: text %q, %v; want %q", kind, content.Text, err, want)
+		var out chat.Outgoing
+		_ = json.Unmarshal([]byte(row.Payload), &out)
+		if err != nil || out.Message == nil || out.Message.Fallback != want {
+			t.Errorf("%s: message %+v, %v; want %q", kind, out.Message, err, want)
 		}
 	}
 }

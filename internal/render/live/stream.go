@@ -21,7 +21,7 @@ import (
 // what is new is what follows the text already sent. If the text is no longer a prefix of the
 // state, nothing can be appended: the stream is stopped with the final message, and an Update
 // then corrects the text, never while the stream runs.
-func (u *Run) writeStream(ctx context.Context, ts *string, m chat.Message, body string, final bool) error {
+func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) error {
 	id := outbox.ID(u.turn.Source, store.OutboxReply)
 	if !u.rowMade {
 		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, ThreadTS: u.turn.ThreadTS, CreatedAt: u.cfg.Now()})
@@ -29,7 +29,7 @@ func (u *Run) writeStream(ctx context.Context, ts *string, m chat.Message, body 
 			return err
 		}
 		if !created { // an earlier attempt at this turn started a stream, or tried to
-			return u.takeOver(ctx, ts, m, body, final, id)
+			return u.takeOver(ctx, ref, m, body, final, id)
 		}
 		u.rowMade = true
 	}
@@ -83,16 +83,16 @@ func (u *Run) writeStream(ctx context.Context, ts *string, m chat.Message, body 
 // the earlier attempt is the message: it is stopped, if it still runs, and updated to the whole
 // text. With none, the earlier attempt may have started a stream that cannot be found (R16): the
 // whole text is posted as a new message, under a row of its own.
-func (u *Run) takeOver(ctx context.Context, ts *string, m chat.Message, body string, final bool, id string) error {
+func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool, id string) error {
 	row, err := u.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
 		return err
 	}
 	u.streaming = false
 	if row.MessageRef != "" {
-		*ts, u.adoptStop = row.MessageRef, true
+		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.ThreadTS, row.MessageRef), true
 	} else {
 		u.turn.Source += "/recovered"
 	}
-	return u.write(ctx, ts, m, body, final)
+	return u.write(ctx, ref, m, body, final)
 }

@@ -46,6 +46,10 @@ func (e *edits) Update(_ context.Context, r chat.Ref, o chat.Outgoing) error {
 }
 
 // Classify says what the Slack adapter says, which is what the Replacer is run with.
+func (*edits) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
+}
+
 func (*edits) Classify(op chat.Op, err error) chat.Verdict {
 	return slack.NewPlatform(nil, "ns/c").Classify(op, err)
 }
@@ -210,6 +214,10 @@ func TestAReplacementIsTheSameEveryTime(t *testing.T) {
 type hangs struct {
 	mu sync.Mutex
 	n  int
+}
+
+func (*hangs) RefAt(channel, thread, id string) chat.Ref {
+	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
 }
 
 func (*hangs) Classify(op chat.Op, err error) chat.Verdict {
