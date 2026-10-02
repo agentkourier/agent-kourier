@@ -54,10 +54,10 @@ func TestReplyBehindAnActiveTaskIsQueued(t *testing.T) {
 	sink.mu.Lock()
 	var stamps []string
 	for _, n := range sink.notices {
-		if n.Kind != NoticeQueued || n.ID != inbound(n.MessageTS).MessageID+"/queued" {
+		if n.Kind != NoticeQueued || n.ID != inbound(n.MessageRef).MessageID+"/queued" {
 			t.Errorf("notice %+v; want a queued notice named after its turn", n)
 		}
-		stamps = append(stamps, n.MessageTS)
+		stamps = append(stamps, n.MessageRef)
 	}
 	sink.mu.Unlock()
 	if !slices.Equal(stamps, []string{"2", "3", "3"}) {

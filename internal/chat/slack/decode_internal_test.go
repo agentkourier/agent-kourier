@@ -59,10 +59,10 @@ func TestAnswersAreReadByQuestionAndOnlyAsTheControlTheyWereAskedIn(t *testing.T
 	}
 }
 
-// Platform.Interaction is the decode the broker's handler of presses uses: where the message is, who pressed,
+// Platform.interaction is the decode Run hands the sink: where the message is, who pressed,
 // the button's value and the answers of the controls.
 func TestPlatformInteractionDecodesAPress(t *testing.T) {
-	got := NewPlatform(nil, "ns/conn").Interaction(Interaction{User: "U1", Channel: "C1", ThreadTS: "1.1", MessageTS: "1.2", Value: "ix-1",
+	got := NewPlatform(nil, "ns/conn").interaction(Interaction{User: "U1", Channel: "C1", ThreadTS: "1.1", MessageTS: "1.2", Value: "ix-1",
 		Inputs: map[string]map[string]Input{"q0": {"r0": in("radio_buttons", "1")}}})
 	want := chat.Interaction{User: "U1", PromptID: "ix-1", At: chat.Ref{Platform: "slack", Conn: "ns/conn", Channel: "C1", Thread: "1.1", ID: "1.2"},
 		Answers: []chat.Answer{{Question: 0, Values: []string{"1"}}}}

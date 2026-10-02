@@ -84,10 +84,6 @@ func (in inbound) Message(ctx context.Context, m Message) error {
 	})
 }
 
-// Interaction is a press as the neutral model has it, decoded from the Client's. It is for the broker's
-// handler of the intake's presses, until the intake runs behind Run (WP-37 S6), which does the same.
-func (p *Platform) Interaction(i Interaction) chat.Interaction { return p.interaction(i) }
-
 func (in inbound) Interaction(ctx context.Context, i Interaction) error {
 	return in.sink.Interaction(ctx, in.p.interaction(i))
 }
@@ -220,16 +216,16 @@ func (p *Platform) Capabilities() chat.Caps { return caps }
 // that say the same call will never work are permanent, with the reason in neutral terms and Slack's own
 // code beside it, and anything else, a rate limit, a server error or a timeout, may pass.
 func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
-	if code := FatalAuthCode(err); code != "" {
+	if code := fatalAuthCode(err); code != "" {
 		return chat.Verdict{Class: chat.FatalAuth, Code: code}
 	}
 	switch op {
 	case chat.OpPost:
-		if code := PermanentCode(err); code != "" {
+		if code := permanentCode(err); code != "" {
 			return chat.Verdict{Class: chat.Permanent, Reason: postReason[code], Code: code}
 		}
 	case chat.OpReact:
-		if code := ReactionPermanentCode(err); code != "" {
+		if code := reactionPermanentCode(err); code != "" {
 			return chat.Verdict{Class: chat.Permanent, Reason: reactionReason[code], Code: code}
 		}
 	}
@@ -240,7 +236,7 @@ func (p *Platform) Classify(op chat.Op, err error) chat.Verdict {
 	return v
 }
 
-// The neutral reason of each code PermanentCode and ReactionPermanentCode give. A code not here is Other.
+// The neutral reason of each code permanentCode and reactionPermanentCode give. A code not here is Other.
 var (
 	postReason = map[string]chat.Reason{
 		"channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone, "not_in_channel": chat.ReasonChannelGone,

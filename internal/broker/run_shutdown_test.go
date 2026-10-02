@@ -275,7 +275,7 @@ func TestRunRecoversTheSessionsAnEarlierRunLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", ThreadTS: "1.1"}
+	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", Thread: "1.1"}
 	if err := seed.UpsertSession(t.Context(), store.Session{Key: key, Binding: "sre/sre-alerts", ContextID: "ctx-1", TaskID: "task-1", LastActivity: time.Now()}); err != nil {
 		t.Fatal(err)
 	}

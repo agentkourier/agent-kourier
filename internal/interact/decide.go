@@ -279,7 +279,7 @@ func (d *Decider) send(ctx context.Context, pd PressDecision, msg a2a.Message, r
 		return fmt.Errorf("interact: read the session of %s: %w", row.ID, serr)
 	}
 	if _, err := d.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID + "/answer", Role: store.OutboxNotice, Channel: row.Key.Channel,
-		ThreadTS: row.Key.ThreadTS, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
+		Thread: row.Key.Thread, Out: chat.Say(render.Notice(textClosedBefore, ""))}); err != nil {
 		return fmt.Errorf("interact: tell the thread that the answer to %s came too late: %w", row.ID, err)
 	}
 	return nil
@@ -309,7 +309,7 @@ func lostMessage(cur store.Interaction) chat.Message {
 
 // tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged.
 func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, m chat.Message) {
-	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.ThreadTS}
+	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.Thread}
 	if err := d.cfg.Ephemerals.Ephemeral(ctx, to, user, m); err != nil {
 		d.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
 	}

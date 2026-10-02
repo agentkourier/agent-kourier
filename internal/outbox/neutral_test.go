@@ -44,7 +44,7 @@ func TestThePlatformIsHandedTheStoredMessage(t *testing.T) {
 	p := &poster{}
 	ob := newOutbox(t, st, p)
 	out := chat.Ask(chat.Prompt{ID: "ix-1", Hint: "h", Questions: []chat.Question{{Text: "q", Choices: []string{"a", "b"}}}})
-	ref, err := ob.Send(t.Context(), outbox.Post{Source: "ix-1", Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", Out: out})
+	ref, err := ob.Send(t.Context(), outbox.Post{Source: "ix-1", Role: store.OutboxReply, Channel: "C1", Thread: "1.1", Out: out})
 	if err != nil {
 		t.Fatal(err)
 	}

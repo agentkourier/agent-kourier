@@ -17,8 +17,8 @@ type Reply struct {
 	// enqueue; the caller's value and clock never affect order.
 	Sequence int64
 	UserID   string // Slack user who wrote the reply
-	// MessageTS is the Slack timestamp of the reply, for the queued reaction.
-	MessageTS  string
+	// MessageRef is the Slack timestamp of the reply, for the queued reaction.
+	MessageRef string
 	Text       string
 	EnqueuedAt time.Time
 }
@@ -30,7 +30,7 @@ type Reply struct {
 type ReplyQueue interface {
 	// EnqueueReply appends r to its session's queue, idempotently by ID, and
 	// reports whether it was newly enqueued; a delivered ID is a duplicate too.
-	// ID, the key, UserID, MessageTS and EnqueuedAt are required (ErrInvalid
+	// ID, the key, UserID, MessageRef and EnqueuedAt are required (ErrInvalid
 	// otherwise).
 	EnqueueReply(ctx context.Context, r Reply) (enqueued bool, err error)
 	// NextReply returns the oldest undelivered reply of the session, or

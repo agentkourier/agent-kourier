@@ -51,7 +51,7 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	if mode == "" {
 		mode = v1alpha1.OutputLive
 	}
-	return s.runs.Start(ctx, Turn{Source: t.MessageID, Channel: t.Key.Channel, ThreadTS: t.Key.ThreadTS, Mode: mode, Recipient: recipient, Recovered: t.Recovered}).Handle
+	return s.runs.Start(ctx, Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Recipient: recipient, Recovered: t.Recovered}).Handle
 }
 
 // Notice is QueueNotice for the session manager's Sink: it has no way to retry, so a notice that could
@@ -74,14 +74,14 @@ func (s *Sink) Notice(ctx context.Context, key session.Key, n session.Notice) {
 func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notice) error {
 	var err error
 	if n.Kind == session.NoticeQueued {
-		_, err = s.queue.EnqueueReaction(ctx, outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageTS, Name: queuedReaction})
+		_, err = s.queue.EnqueueReaction(ctx, outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageRef, Name: queuedReaction})
 	} else {
 		text, ok := noticeText(n.Kind)
 		if !ok { // a kind nobody wrote wording for
 			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
 			return nil
 		}
-		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, ThreadTS: key.ThreadTS, Out: chat.Say(render.Notice(text, n.Detail))}
+		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(render.Notice(text, n.Detail))}
 		_, err = s.queue.Enqueue(ctx, post)
 	}
 	if errors.Is(err, store.ErrInvalid) {

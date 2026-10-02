@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	key = store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: "1.1"}
+	key = store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
 	ttl = 90 * 24 * time.Hour
 )
 
@@ -34,7 +34,7 @@ func TestOutbox(t *testing.T) {
 		t.Fatalf("empty outbox lists %d rows", len(l))
 	}
 	a := store.OutboxEntry{ID: "ev1/root", EventID: "ev1", Role: "root", Channel: "C1", CreatedAt: t0}
-	b := store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: "reply", Channel: "C1", ThreadTS: "1.1", CreatedAt: t0.Add(time.Second)}
+	b := store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: "reply", Channel: "C1", Thread: "1.1", CreatedAt: t0.Add(time.Second)}
 	base := store.OutboxEntry{ID: "x", EventID: "e", Role: store.OutboxNotice, Channel: "C", CreatedAt: t0}
 	for _, mutate := range []func(*store.OutboxEntry){
 		func(o *store.OutboxEntry) { o.ID = "" }, func(o *store.OutboxEntry) { o.EventID = "" },
@@ -96,7 +96,7 @@ func TestSessions(t *testing.T) {
 	sess := store.Session{Key: key, ContextID: "ctx1", TaskID: "task1", Binding: "ns/b", LastActivity: t0}
 	noBinding, noKey := sess, sess
 	noBinding.Binding = ""
-	noKey.Key.ThreadTS = ""
+	noKey.Key.Thread = ""
 	for _, b := range []store.Session{{Key: key, Binding: "ns/b"}, noBinding, noKey} {
 		if err := s.UpsertSession(ctx, b); !errors.Is(err, store.ErrInvalid) {
 			t.Fatalf("UpsertSession(%+v) = %v; want ErrInvalid", b, err)
@@ -136,7 +136,7 @@ func TestSessions(t *testing.T) {
 	if _, err := s.GetSession(ctx, key, ttl, t0.Add(2*ttl)); err != nil {
 		t.Fatalf("GetSession after touch = %v; want live", err)
 	}
-	if err := s.TouchSession(ctx, store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: "9.9"}, t0); !errors.Is(err, store.ErrNotFound) {
+	if err := s.TouchSession(ctx, store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "9.9"}, t0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("TouchSession missing = %v; want ErrNotFound", err)
 	}
 }
@@ -189,7 +189,7 @@ func TestConcurrentWrites(t *testing.T) {
 				errs <- err
 				_, err = s.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: id, Role: store.OutboxRoot, Channel: "C1", CreatedAt: t0})
 				errs <- err
-				errs <- s.UpsertSession(ctx, store.Session{Key: store.ConversationKey{Connection: "c", Channel: "C", ThreadTS: id}, Binding: "ns/b", LastActivity: t0})
+				errs <- s.UpsertSession(ctx, store.Session{Key: store.ConversationKey{Connection: "c", Channel: "C", Thread: id}, Binding: "ns/b", LastActivity: t0})
 			}
 		})
 	}

@@ -9,7 +9,7 @@ import (
 type ConversationKey struct {
 	Connection string
 	Channel    string
-	ThreadTS   string
+	Thread     string
 }
 
 // Session maps a conversation to its agent session (spec 9, table sessions).

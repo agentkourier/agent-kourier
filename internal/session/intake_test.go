@@ -23,7 +23,7 @@ import (
 
 var (
 	t0  = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	key = Key{Connection: "slack", Channel: "C1", ThreadTS: "1700.01"}
+	key = Key{Connection: "slack", Channel: "C1", Thread: "1700.01"}
 )
 
 // spyStore counts touches and fails a named call ("touch", "upsert", "enqueue", "set" for
@@ -212,7 +212,7 @@ func newFixture(t *testing.T) *fixture {
 
 // inbound is the mention in Slack message ts that may create the session under ns/b1.
 func inbound(ts string) Inbound {
-	return Inbound{Key: key, Binding: "ns/b1", MessageID: SlackMessageID("slack", "C1", ts), MessageTS: ts, UserID: "U1", Text: "hello", Create: true}
+	return Inbound{Key: key, Binding: "ns/b1", MessageID: "slack:slack:C1:" + ts, MessageRef: ts, UserID: "U1", Text: "hello", Create: true}
 }
 
 // submit queues a turn the test expects to be taken: a Submit that answers anything but Created
@@ -274,7 +274,7 @@ func TestSubmitCreatesTheSessionBeforeWaking(t *testing.T) {
 		if err != nil || sess.Binding != "ns/b1" || sess.ContextID != "" || sess.TaskID != "" || !sess.LastActivity.Equal(t0) {
 			t.Errorf("session at wake = %+v, %v", sess, err)
 		}
-		if r, err := f.st.NextReply(t.Context(), key); err != nil || r.ID != "slack:slack:C1:1700.01" || r.UserID != SystemUser || r.Text != "hello" || r.MessageTS != "1700.01" {
+		if r, err := f.st.NextReply(t.Context(), key); err != nil || r.ID != "slack:slack:C1:1700.01" || r.UserID != SystemUser || r.Text != "hello" || r.MessageRef != "1700.01" {
 			t.Errorf("queue at wake = %+v, %v", r, err)
 		}
 	}

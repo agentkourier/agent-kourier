@@ -18,7 +18,7 @@ func TestOutboxPayload(t *testing.T) {
 	if _, err := s.GetOutbox(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetOutbox missing = %v; want ErrNotFound", err)
 	}
-	o := store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", CreatedAt: t0, Payload: `{"text":"hi"}`}
+	o := store.OutboxEntry{ID: "ev1/reply", EventID: "ev1", Role: store.OutboxReply, Channel: "C1", Thread: "1.1", CreatedAt: t0, Payload: `{"text":"hi"}`}
 	if c, err := s.CreateOutbox(ctx, o); err != nil || !c {
 		t.Fatalf("CreateOutbox = %v, %v", c, err)
 	}
@@ -106,7 +106,7 @@ func TestMigration0007KeepsExistingRows(t *testing.T) {
 	if got, err := s.GetOutbox(ctx, "unposted"); err != nil || got.Payload != "" || got.MessageRef != "" {
 		t.Fatalf("unposted row after 0007 = %+v, %v", got, err)
 	}
-	if got, err := s.GetOutbox(ctx, "posted"); err != nil || got.MessageRef != "5.5" || got.ThreadTS != "1.1" {
+	if got, err := s.GetOutbox(ctx, "posted"); err != nil || got.MessageRef != "5.5" || got.Thread != "1.1" {
 		t.Fatalf("posted row after 0007 = %+v, %v", got, err)
 	}
 }
@@ -122,7 +122,7 @@ func TestMigration0010KeepsExistingRowsAndTakesTheReactionRole(t *testing.T) {
 	// The whole rows, as databaseAt wrote them: a migration that rewrote any column would show here.
 	for _, want := range []store.OutboxEntry{
 		{ID: "unposted", EventID: "e", Role: store.OutboxRoot, Channel: "C1", CreatedAt: fromTS(1)},
-		{ID: "posted", EventID: "e", Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", CreatedAt: fromTS(2), MessageRef: "5.5"},
+		{ID: "posted", EventID: "e", Role: store.OutboxReply, Channel: "C1", Thread: "1.1", CreatedAt: fromTS(2), MessageRef: "5.5"},
 	} {
 		if got, err := s.GetOutbox(ctx, want.ID); err != nil || got != want {
 			t.Fatalf("%s row after 0010 = %+v, %v; want %+v", want.ID, got, err, want)

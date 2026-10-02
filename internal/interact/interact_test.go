@@ -25,7 +25,7 @@ import (
 
 var (
 	t0      = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	key     = store.ConversationKey{Connection: "slack/main", Channel: "C1", ThreadTS: "1.1"}
+	key     = store.ConversationKey{Connection: "slack/main", Channel: "C1", Thread: "1.1"}
 	errBoom = errors.New("boom")
 	timeout = 10 * time.Minute
 )

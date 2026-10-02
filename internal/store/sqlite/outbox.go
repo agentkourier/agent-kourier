@@ -17,7 +17,7 @@ func (s *Store) CreateOutbox(ctx context.Context, o store.OutboxEntry) (bool, er
 	}
 	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at, payload)
 		VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-		o.ID, o.EventID, o.Role, o.Channel, o.ThreadTS, ts(o.CreatedAt), o.Payload)
+		o.ID, o.EventID, o.Role, o.Channel, o.Thread, ts(o.CreatedAt), o.Payload)
 	if err != nil {
 		return false, fmt.Errorf("create outbox %q: %w", o.ID, err)
 	}
@@ -42,7 +42,7 @@ const outboxColumns = `id, event_id, role, channel, thread_ts, created_at, messa
 func scanOutbox(r interface{ Scan(...any) error }) (store.OutboxEntry, error) {
 	var o store.OutboxEntry
 	var created, abandoned int64
-	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.ThreadTS, &created, &o.MessageRef, &o.Payload, &abandoned); err != nil {
+	if err := r.Scan(&o.ID, &o.EventID, &o.Role, &o.Channel, &o.Thread, &created, &o.MessageRef, &o.Payload, &abandoned); err != nil {
 		return store.OutboxEntry{}, err
 	}
 	o.CreatedAt = fromTS(created)

@@ -17,7 +17,7 @@ const interactionCols = `id, connection, channel, thread_ts, task_id, kind, stat
 func scanInteraction(row interface{ Scan(...any) error }) (store.Interaction, error) {
 	var i store.Interaction
 	var created, deadline, decided, delivered int64
-	err := row.Scan(&i.ID, &i.Key.Connection, &i.Key.Channel, &i.Key.ThreadTS, &i.TaskID, &i.Kind, &i.State,
+	err := row.Scan(&i.ID, &i.Key.Connection, &i.Key.Channel, &i.Key.Thread, &i.TaskID, &i.Kind, &i.State,
 		&i.Request, &i.MessageRef, &created, &deadline, &i.Answer, &i.Decider, &decided, &delivered)
 	if err != nil {
 		return store.Interaction{}, err
@@ -43,7 +43,7 @@ func (s *Store) CreateInteraction(ctx context.Context, i store.Interaction) (boo
 	}
 	n, err := s.exec(ctx, `INSERT INTO interactions (id, connection, channel, thread_ts, task_id, kind, request,
 		created_at, deadline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-		i.ID, i.Key.Connection, i.Key.Channel, i.Key.ThreadTS, i.TaskID, string(i.Kind), i.Request,
+		i.ID, i.Key.Connection, i.Key.Channel, i.Key.Thread, i.TaskID, string(i.Kind), i.Request,
 		ts(i.CreatedAt), ts(i.Deadline))
 	if err != nil {
 		return false, fmt.Errorf("create interaction %q: %w", i.ID, err)

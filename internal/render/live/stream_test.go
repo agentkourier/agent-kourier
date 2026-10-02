@@ -224,7 +224,7 @@ func TestFinalModeWithARecipientPostsOnce(t *testing.T) {
 // under a row of its own, and starts no stream.
 func TestRowWithNoTsPostsAnew(t *testing.T) {
 	e := setup(t)
-	row := store.OutboxEntry{ID: outbox.ID("turn-1", "reply"), EventID: "turn-1", Role: store.OutboxReply, Channel: "C1", ThreadTS: e.root, CreatedAt: e.clk.Now()}
+	row := store.OutboxEntry{ID: outbox.ID("turn-1", "reply"), EventID: "turn-1", Role: store.OutboxReply, Channel: "C1", Thread: e.root, CreatedAt: e.clk.Now()}
 	if _, err := e.store.CreateOutbox(t.Context(), row); err != nil {
 		t.Fatal(err)
 	}

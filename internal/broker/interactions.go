@@ -11,7 +11,6 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -55,8 +54,7 @@ func (l *lateSession) Cancel(ctx context.Context, key store.ConversationKey, id 
 type interactionDeps struct {
 	st       *sqlite.Store
 	ob       *outbox.Outbox
-	sl       slackAPI
-	platform *slack.Platform // the adapter of sl: prompts, edits, who may answer, and what a person is told go through it
+	platform builtPlatform // the chat platform: prompts, edits, who may answer, and what a person is told go through it
 	auditor  *audit.Writer
 	bindings *Bindings
 	metrics  *Metrics
@@ -103,7 +101,7 @@ func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession
 // takes. mgr has recovered its sessions: the sweeper starts after that, and the presses are recovered
 // after it, before the Slack intake opens, so that a press listed just before it finishes is not announced
 // after.
-func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *interact.Tap, stops *stopList) (func(context.Context, slack.Interaction) error, error) {
+func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *interact.Tap, stops *stopList) (func(context.Context, chat.Interaction) error, error) {
 	replacer, err := interact.NewReplacer(interact.ReplacerConfig{Store: d.st, Updater: d.platform, Logger: d.log})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the replacer: %w", err)
@@ -159,7 +157,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		}
 	})
 	d.traced("start-interactions")
-	return interactionsHandler(pipeline, d.platform.Interaction, d.log), nil
+	return interactionsHandler(pipeline, d.log), nil
 }
 
 // startLoop runs run in a goroutine of its own until its stop is called, and returns that stop: it ends
@@ -176,19 +174,19 @@ type presser interface {
 	Press(ctx context.Context, i chat.Interaction) error
 }
 
-// interactionsHandler is what the Slack intake calls for each press of a button, which decode turns into
-// the neutral model (the adapter's decode of the controls' state). A button that is not an
+// interactionsHandler is what the chat intake calls for each press of a button, which the adapter has decoded
+// into the neutral model. A button that is not an
 // interaction's is someone else's, and is dropped without a word; a press refused because too many wait is
 // told to the log, and acknowledged, since Slack redelivering it would only add to them. Any other error
 // leaves the press unacknowledged, for Slack to deliver again.
-func interactionsHandler(p presser, decode func(slack.Interaction) chat.Interaction, log *slog.Logger) func(context.Context, slack.Interaction) error {
-	return func(ctx context.Context, i slack.Interaction) error {
-		err := p.Press(ctx, decode(i))
+func interactionsHandler(p presser, log *slog.Logger) func(context.Context, chat.Interaction) error {
+	return func(ctx context.Context, i chat.Interaction) error {
+		err := p.Press(ctx, i)
 		switch {
 		case errors.Is(err, interact.ErrNotInteraction):
 			return nil
 		case errors.Is(err, store.ErrLimit):
-			log.WarnContext(ctx, "interact: a press was refused, because too many presses are waiting", "channel", i.Channel, "err", err)
+			log.WarnContext(ctx, "interact: a press was refused, because too many presses are waiting", "channel", i.At.Channel, "err", err)
 			return nil
 		}
 		return err

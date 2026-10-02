@@ -114,7 +114,7 @@ func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("interact: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: i.PromptID, User: i.User, Channel: i.At.Channel, MessageTS: i.At.ID, Inputs: answers, PressedAt: p.cfg.Now()}
+	press := store.Press{InteractionID: i.PromptID, User: i.User, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: answers, PressedAt: p.cfg.Now()}
 	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
 		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
 	}
@@ -157,7 +157,7 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 			return Retry, nil
 		}
 		return p.finish(ctx, press, &row, textNotReady)
-	case row.MessageRef != press.MessageTS || row.Key.Channel != press.Channel:
+	case row.MessageRef != press.MessageRef || row.Key.Channel != press.Channel:
 		p.cfg.Logger.WarnContext(ctx, "interact: a press names an interaction that is on another message", "interaction", row.ID)
 		return p.finish(ctx, press, nil, "")
 	case !p.open(row, press.User):
@@ -280,7 +280,7 @@ func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store
 	if m.Fallback != "" || len(m.Parts) > 0 {
 		to := chat.Target{Channel: press.Channel}
 		if row != nil {
-			to.Conn, to.Thread = row.Key.Connection, row.Key.ThreadTS
+			to.Conn, to.Thread = row.Key.Connection, row.Key.Thread
 		}
 		if err := p.cfg.Ephemerals.Ephemeral(ctx, to, press.User, m); err != nil {
 			p.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)

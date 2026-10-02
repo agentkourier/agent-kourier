@@ -253,7 +253,7 @@ func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in di
 	if err := i.cfg.Platform.Fits(prompt); err != nil {
 		return fmt.Errorf("interact: the prompt of %s: %w", row.ID, err)
 	}
-	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, ThreadTS: p.Key.ThreadTS, Out: chat.Ask(prompt)})
+	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Ask(prompt)})
 	if err != nil {
 		return fmt.Errorf("interact: post the prompt of %s: %w", row.ID, err)
 	}

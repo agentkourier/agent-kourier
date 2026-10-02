@@ -44,9 +44,9 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 		{"any other failure", boom, boom, ""},
 	} {
 		out := &logBuffer{}
-		h := interactionsHandler(pressed{tc.err}, slack.NewPlatform(nil, "ns/conn").Interaction, slog.New(slog.NewTextHandler(out, nil)))
+		h := interactionsHandler(pressed{tc.err}, slog.New(slog.NewTextHandler(out, nil)))
 
-		err := h(t.Context(), slack.Interaction{Channel: "C1", Value: "x"})
+		err := h(t.Context(), chat.Interaction{At: chat.Ref{Channel: "C1"}, PromptID: "x"})
 
 		if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 			t.Errorf("%s: handler = %v, want %v", tc.name, err, tc.want)
@@ -151,7 +151,7 @@ func TestRunProcessesThePressesAnEarlierRunLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	press := store.Press{InteractionID: "ix-gone", User: "U1", Channel: "C0123456789", MessageTS: "1.1", Inputs: []byte("{}"), PressedAt: time.Now()}
+	press := store.Press{InteractionID: "ix-gone", User: "U1", Channel: "C0123456789", MessageRef: "1.1", Inputs: []byte("{}"), PressedAt: time.Now()}
 	if _, err := seed.RecordPress(t.Context(), press, store.PressLimits{Total: 10, PerUser: 10}); err != nil {
 		t.Fatal(err)
 	}

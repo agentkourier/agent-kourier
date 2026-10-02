@@ -14,7 +14,7 @@ func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, c
 	}
 	n, err := s.exec(ctx, `UPDATE sessions SET task_id = ?, context_id = CASE WHEN ? = '' THEN context_id ELSE ? END
 		WHERE connection = ? AND channel = ? AND thread_ts = ?`,
-		taskID, contextID, contextID, key.Connection, key.Channel, key.ThreadTS)
+		taskID, contextID, contextID, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("set session task %+v", key))
 }
 
@@ -24,6 +24,6 @@ func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) err
 		return fmt.Errorf("reset session %+v: the key is incomplete: %w", key, store.ErrInvalid)
 	}
 	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = ''
-		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.ThreadTS)
+		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("reset session %+v", key))
 }

@@ -88,7 +88,11 @@ func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 // blocking is a SlackRunner that holds the connection until its context ends, as a healthy one does.
 type blocking struct{}
 
-func (blocking) Run(ctx context.Context, _ slack.Sink) error { <-ctx.Done(); return ctx.Err() }
+func (blocking) Run(ctx context.Context, _ chat.Sink) error { <-ctx.Done(); return ctx.Err() }
+
+func (blocking) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/conn").Classify(op, err)
+}
 
 // A bot token revoked while the connection is up fails posts with invalid_auth, which the outbox
 // treats as transient. The report ends the run with ErrSlackAuth, so the process exits and says so.
@@ -96,7 +100,7 @@ func TestAPostThatFindsTheTokenRevokedEndsTheSlackRun(t *testing.T) {
 	ctx, report, stop := WithAuthFailure(t.Context())
 	defer stop()
 	got := make(chan error, 1)
-	go func() { got <- RunSlack(ctx, blocking{}, nil, RunPolicy{}) }()
+	go func() { got <- RunPlatform(ctx, blocking{}, nil, RunPolicy{}) }()
 
 	w := WatchAuth(platform{postErr: slackErr("token_revoked")}, report)
 	if _, err := w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id"); err == nil {
@@ -122,7 +126,7 @@ func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 	ctx, report, stop := WithAuthFailure(parent)
 	defer stop()
 	got := make(chan error, 1)
-	go func() { got <- RunSlack(ctx, blocking{}, nil, RunPolicy{}) }()
+	go func() { got <- RunPlatform(ctx, blocking{}, nil, RunPolicy{}) }()
 
 	w := WatchAuth(platform{postErr: slackErr("channel_not_found")}, report)
 	_, _ = w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")

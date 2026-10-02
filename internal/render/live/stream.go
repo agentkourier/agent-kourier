@@ -24,7 +24,7 @@ import (
 func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) error {
 	id := outbox.ID(u.turn.Source, store.OutboxReply)
 	if !u.rowMade {
-		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, ThreadTS: u.turn.ThreadTS, CreatedAt: u.cfg.Now()})
+		created, err := u.cfg.Store.CreateOutbox(ctx, store.OutboxEntry{ID: id, EventID: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, CreatedAt: u.cfg.Now()})
 		if err != nil {
 			return err
 		}
@@ -34,7 +34,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, m chat.Message, bo
 		u.rowMade = true
 	}
 	if u.stream == nil {
-		s, err := u.cfg.Platform.Stream(ctx, chat.Target{Channel: u.turn.Channel, Thread: u.turn.ThreadTS}, u.turn.Recipient, body)
+		s, err := u.cfg.Platform.Stream(ctx, chat.Target{Channel: u.turn.Channel, Thread: u.turn.Thread}, u.turn.Recipient, body)
 		if err != nil {
 			return err
 		}
@@ -90,7 +90,7 @@ func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, m chat.Message, body 
 	}
 	u.streaming = false
 	if row.MessageRef != "" {
-		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.ThreadTS, row.MessageRef), true
+		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
 	} else {
 		u.turn.Source += "/recovered"
 	}

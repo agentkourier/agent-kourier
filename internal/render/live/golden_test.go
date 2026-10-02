@@ -287,11 +287,11 @@ var scripts = []struct {
 	}},
 	{"notices-and-the-queued-reaction", func(t *testing.T, e *env) {
 		sink := e.sink(t, e.ob)
-		key := session.Key{Connection: "ns/conn", Channel: "C1", ThreadTS: e.root}
+		key := session.Key{Connection: "ns/conn", Channel: "C1", Thread: e.root}
 		for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun} {
 			sink.Notice(t.Context(), key, session.Notice{ID: "task:t1/" + string(kind), Kind: kind, Detail: "<!channel> boom *x* " + strings.Repeat("y", 300)})
 		}
-		sink.Notice(t.Context(), key, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: e.root})
+		sink.Notice(t.Context(), key, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageRef: e.root})
 		sink.Notice(t.Context(), key, session.Notice{ID: "task:t2/failed", Kind: session.NoticeFailed})
 		if err := e.ob.Reconcile(t.Context()); err != nil {
 			t.Fatal(err)

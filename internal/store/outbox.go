@@ -37,7 +37,7 @@ type OutboxEntry struct {
 	EventID   string
 	Role      OutboxRole
 	Channel   string
-	ThreadTS  string // empty for a root post
+	Thread    string // empty for a root post
 	CreatedAt time.Time
 	// MessageRef identifies the posted message; empty until recorded.
 	MessageRef string

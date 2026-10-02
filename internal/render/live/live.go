@@ -115,8 +115,8 @@ func (r *Renderer) Wait(ctx context.Context) error {
 
 // Turn is where one turn's output goes.
 type Turn struct {
-	Source            string // the turn's ID, from which the outbox row of its reply is named
-	Channel, ThreadTS string
+	Source          string // the turn's ID, from which the outbox row of its reply is named
+	Channel, Thread string
 	// Mode is live, which updates the message as the turn runs, or final, which posts it once
 	// when the turn ends.
 	Mode v1alpha1.OutputMode
@@ -345,7 +345,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, m chat.Message, body str
 		return err
 	}
 	u.sends++
-	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, ThreadTS: u.turn.ThreadTS, Out: chat.Say(m)})
+	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(m)})
 	if err == nil {
 		*ref = got
 		// A Send that follows a failed one, or a recovered turn's, returns the message that is

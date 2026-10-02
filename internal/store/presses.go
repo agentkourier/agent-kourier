@@ -14,8 +14,8 @@ type Press struct {
 	InteractionID string
 	// User is who pressed, as Slack says.
 	User string
-	// Channel and MessageTS locate the message the button is on.
-	Channel, MessageTS string
+	// Channel and MessageRef locate the message the button is on.
+	Channel, MessageRef string
 	// Inputs is the press's input state as the caller encoded it; the store does not read it. It
 	// holds what the person typed, so it is deleted as soon as the press is processed.
 	Inputs    []byte
@@ -31,7 +31,7 @@ type PressLimits struct {
 // Presses persists the presses waiting to be processed. A press that has been processed is deleted:
 // the table holds only work to do.
 type Presses interface {
-	// RecordPress stores p and returns its Seq. InteractionID, User, Channel, MessageTS and
+	// RecordPress stores p and returns its Seq. InteractionID, User, Channel, MessageRef and
 	// PressedAt are required (ErrInvalid), and both limits are positive. It returns ErrLimit if
 	// the store already holds limits.Total presses, or limits.PerUser for p.User.
 	RecordPress(ctx context.Context, p Press, limits PressLimits) (int64, error)

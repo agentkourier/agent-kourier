@@ -12,12 +12,12 @@ import (
 
 // EnqueueReply implements store.ReplyQueue.
 func (s *Store) EnqueueReply(ctx context.Context, r store.Reply) (bool, error) {
-	if r.ID == "" || !validKey(r.Key) || r.UserID == "" || r.MessageTS == "" || r.EnqueuedAt.IsZero() {
-		return false, fmt.Errorf("enqueue reply %q: ID, key, UserID, MessageTS and EnqueuedAt are required: %w", r.ID, store.ErrInvalid)
+	if r.ID == "" || !validKey(r.Key) || r.UserID == "" || r.MessageRef == "" || r.EnqueuedAt.IsZero() {
+		return false, fmt.Errorf("enqueue reply %q: ID, key, UserID, MessageRef and EnqueuedAt are required: %w", r.ID, store.ErrInvalid)
 	}
 	n, err := s.exec(ctx, `INSERT INTO reply_queue (id, connection, channel, thread_ts, user_id, message_ts, text, enqueued_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-		r.ID, r.Key.Connection, r.Key.Channel, r.Key.ThreadTS, r.UserID, r.MessageTS, r.Text, ts(r.EnqueuedAt))
+		r.ID, r.Key.Connection, r.Key.Channel, r.Key.Thread, r.UserID, r.MessageRef, r.Text, ts(r.EnqueuedAt))
 	if err != nil {
 		return false, fmt.Errorf("enqueue reply %q: %w", r.ID, err)
 	}
@@ -33,7 +33,7 @@ func (s *Store) NextReply(ctx context.Context, key store.ConversationKey) (store
 	var enqueued int64
 	err := s.read.QueryRowContext(ctx, `SELECT id, sequence, user_id, message_ts, text, enqueued_at FROM reply_queue
 		WHERE connection = ? AND channel = ? AND thread_ts = ? AND delivered_at IS NULL ORDER BY sequence LIMIT 1`,
-		key.Connection, key.Channel, key.ThreadTS).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageTS, &r.Text, &enqueued)
+		key.Connection, key.Channel, key.Thread).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Text, &enqueued)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Reply{}, fmt.Errorf("next reply %+v: %w", key, store.ErrNotFound)
 	}

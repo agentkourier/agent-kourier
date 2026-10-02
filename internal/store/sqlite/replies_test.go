@@ -12,13 +12,13 @@ import (
 )
 
 func newReply(id string, k store.ConversationKey) store.Reply {
-	return store.Reply{ID: id, Key: k, UserID: "U1", MessageTS: "1700.01", Text: "hello", EnqueuedAt: t0}
+	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Text: "hello", EnqueuedAt: t0}
 }
 
 func TestReplyQueueIsFIFOPerSession(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
-	other := store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: "2.2"}
+	other := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "2.2"}
 	if _, err := s.NextReply(ctx, key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("next on empty queue = %v; want ErrNotFound", err)
 	}
@@ -34,7 +34,7 @@ func TestReplyQueueIsFIFOPerSession(t *testing.T) {
 	}
 	for _, want := range []string{"r1", "r2", "r3"} {
 		got, err := s.NextReply(ctx, key)
-		if err != nil || got.ID != want || got.UserID != "U1" || got.Text != "hello" || got.MessageTS != "1700.01" || got.Key != key || got.Sequence == 0 {
+		if err != nil || got.ID != want || got.UserID != "U1" || got.Text != "hello" || got.MessageRef != "1700.01" || got.Key != key || got.Sequence == 0 {
 			t.Fatalf("next = %+v, %v; want %s", got, err, want)
 		}
 		if again, _ := s.NextReply(ctx, key); again.ID != want {
@@ -84,9 +84,9 @@ func TestReplyQueueValidation(t *testing.T) {
 	s := openTemp(t)
 	for name, mutate := range map[string]func(*store.Reply){
 		"empty ID":       func(r *store.Reply) { r.ID = "" },
-		"empty key part": func(r *store.Reply) { r.Key.ThreadTS = "" },
+		"empty key part": func(r *store.Reply) { r.Key.Thread = "" },
 		"empty user":     func(r *store.Reply) { r.UserID = "" },
-		"empty ts":       func(r *store.Reply) { r.MessageTS = "" },
+		"empty ts":       func(r *store.Reply) { r.MessageRef = "" },
 		"zero time":      func(r *store.Reply) { r.EnqueuedAt = time.Time{} },
 	} {
 		bad := newReply("bad", key)

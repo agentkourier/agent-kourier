@@ -231,13 +231,13 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if err := json.Unmarshal(row.Request, &in); err != nil {
 		s.cfg.Logger.WarnContext(ctx, "interact: the stored request cannot be read", "interaction", row.ID)
 	}
-	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.ThreadTS, row.MessageRef), chat.End(endingOf(chat.TimedOut, "", row.Deadline, in, nil)))
+	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(endingOf(chat.TimedOut, "", row.Deadline, in, nil)))
 }
 
 // notify enqueues the notice. Its ID comes from the interaction, so the same one is never posted twice.
 func (s *Sweeper) notify(ctx context.Context, row store.Interaction) error {
 	_, err := s.cfg.Outbox.Enqueue(ctx, outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: row.Key.Channel,
-		ThreadTS: row.Key.ThreadTS, Out: chat.Say(render.Notice(timedOutNotice, ""))})
+		Thread: row.Key.Thread, Out: chat.Say(render.Notice(timedOutNotice, ""))})
 	return err
 }
 

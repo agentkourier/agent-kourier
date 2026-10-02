@@ -256,7 +256,7 @@ func queuedBeforeTheRestart(t *testing.T, f *fixture) {
 		}
 	}
 	in := inbound("1")
-	if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: in.MessageID, Key: key, UserID: "U1", MessageTS: "1", Text: "hello", EnqueuedAt: t0}); err != nil {
+	if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: in.MessageID, Key: key, UserID: "U1", MessageRef: "1", Text: "hello", EnqueuedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
 }

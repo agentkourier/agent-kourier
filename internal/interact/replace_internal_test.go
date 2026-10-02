@@ -46,7 +46,7 @@ func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
 	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	add := func(id, ref string, decidedAt time.Time) {
 		t.Helper()
-		row := store.Interaction{ID: id, Key: store.ConversationKey{Connection: "slack/main", Channel: "C1", ThreadTS: "1.1"}, TaskID: "task-1",
+		row := store.Interaction{ID: id, Key: store.ConversationKey{Connection: "slack/main", Channel: "C1", Thread: "1.1"}, TaskID: "task-1",
 			Kind: store.InteractionAskUser, Request: []byte(`{}`), CreatedAt: base, Deadline: base.Add(time.Minute)}
 		if _, err := st.CreateInteraction(t.Context(), row); err != nil {
 			t.Fatal(err)

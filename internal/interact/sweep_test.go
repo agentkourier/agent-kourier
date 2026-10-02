@@ -312,7 +312,7 @@ func TestSweepTimesOutADueInteractionOnce(t *testing.T) {
 		t.Errorf("updates %q; want the prompt replaced once", got)
 	}
 	rows := r.notices(t)
-	if len(rows) != 1 || rows[0].ID != outbox.ID("ix-1", store.OutboxNotice) || rows[0].Role != store.OutboxNotice || rows[0].ThreadTS != "1.1" || rows[0].Payload == "" {
+	if len(rows) != 1 || rows[0].ID != outbox.ID("ix-1", store.OutboxNotice) || rows[0].Role != store.OutboxNotice || rows[0].Thread != "1.1" || rows[0].Payload == "" {
 		t.Errorf("outbox rows %+v; want one notice in the thread, from the interaction ID", rows)
 	}
 	if len(r.aud.got) != 1 || r.aud.got[0].Result != audit.DecisionTimedOut || r.aud.got[0].InteractionID != "ix-1" || r.aud.got[0].TaskID != "task-1" || r.aud.act[0].Binding != "ns/b" || r.aud.act[0].User != "" {

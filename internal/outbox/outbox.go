@@ -109,9 +109,9 @@ type Config struct {
 // Post is one message to deliver. Source and Role give its ID: Source is the event, turn or
 // interaction it belongs to, and must differ for each message of one source and role.
 type Post struct {
-	Source            string
-	Role              store.OutboxRole
-	Channel, ThreadTS string // ThreadTS is empty for a message in the channel
+	Source          string
+	Role            store.OutboxRole
+	Channel, Thread string // Thread is empty for a message in the channel
 	// Out is what to say, in the neutral model. It is stored as it is, so it must be valid (Validate), and a
 	// prompt must fit (Platform.Fits): one that does not is store.ErrInvalid, which no retry mends.
 	Out chat.Outgoing
@@ -201,7 +201,7 @@ func (o *Outbox) Send(ctx context.Context, p Post) (chat.Ref, error) {
 // row returns the outbox row for p, with the message as its payload. A message that is not valid, or a prompt that
 // does not fit, is ErrInvalid: such a row would never be delivered, and would hold its ID for good.
 func (o *Outbox) row(p Post) (store.OutboxEntry, error) {
-	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Channel: p.Channel, ThreadTS: p.ThreadTS, CreatedAt: o.cfg.Now()}
+	row := store.OutboxEntry{ID: ID(p.Source, p.Role), EventID: p.Source, Role: p.Role, Channel: p.Channel, Thread: p.Thread, CreatedAt: o.cfg.Now()}
 	if p.Role == store.OutboxReaction {
 		return store.OutboxEntry{}, fmt.Errorf("outbox post %s: a reaction is not a post, use EnqueueReaction: %w", row.ID, store.ErrInvalid)
 	}
@@ -359,7 +359,7 @@ func (o *Outbox) Reconcile(ctx context.Context) error {
 
 // target is where a row's message goes.
 func target(row store.OutboxEntry) chat.Target {
-	return chat.Target{Channel: row.Channel, Thread: row.ThreadTS}
+	return chat.Target{Channel: row.Channel, Thread: row.Thread}
 }
 
 // permanent says whether err, of a call of the kind op, is one that no retry mends, and if so why: the neutral
@@ -405,7 +405,7 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (chat.Ref,
 		return chat.Ref{}, err
 	}
 	if row.MessageRef != "" {
-		return o.cfg.Platform.RefAt(row.Channel, row.ThreadTS, row.MessageRef), nil
+		return o.cfg.Platform.RefAt(row.Channel, row.Thread, row.MessageRef), nil
 	}
 	if !row.AbandonedAt.IsZero() {
 		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, ErrAbandoned)

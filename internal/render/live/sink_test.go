@@ -58,18 +58,18 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
-	thread.ThreadTS = e.root
+	thread.Thread = e.root
 	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun} {
 		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, Detail: "<!channel> boom"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
 		var out chat.Outgoing
 		_ = json.Unmarshal([]byte(row.Payload), &out)
-		if err != nil || row.Channel != "C1" || row.ThreadTS != e.root || out.Message == nil || !strings.HasSuffix(out.Message.Fallback, " <!channel> boom") {
+		if err != nil || row.Channel != "C1" || row.Thread != e.root || out.Message == nil || !strings.HasSuffix(out.Message.Fallback, " <!channel> boom") {
 			t.Errorf("%s: row %+v, %v; want a queued row in the thread with the detail as it was, for the platform to make inert", kind, row, err)
 		}
 	}
-	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"})
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageRef: "1.5"})
 	if _, err := e.store.GetOutbox(t.Context(), outbox.ID("m/queued", "notice")); err == nil {
 		t.Error("the queued notice became a message; it is a reaction")
 	}
@@ -81,7 +81,7 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 func TestQueuedNoticeEnqueuesAReactionAndSendsNothing(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
-	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeQueued, MessageTS: "1.5"}
+	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeQueued, MessageRef: "1.5"}
 	for range 2 {
 		sink.Notice(t.Context(), thread, n)
 	}
@@ -100,8 +100,8 @@ func TestQueuedReactionIsMadeOnTheMessage(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, e.ob)
 	key := thread
-	key.ThreadTS = e.root
-	n := session.Notice{ID: "slack:ns/conn:C1:" + e.root + "/queued", Kind: session.NoticeQueued, MessageTS: e.root}
+	key.Thread = e.root
+	n := session.Notice{ID: "slack:ns/conn:C1:" + e.root + "/queued", Kind: session.NoticeQueued, MessageRef: e.root}
 	sink.Notice(t.Context(), key, n)
 	if err := e.ob.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile = %v", err)
@@ -128,7 +128,7 @@ func TestNoticeOfAnUnknownKindIsLogged(t *testing.T) {
 	logs := &strings.Builder{}
 	sink := live.NewSink(e.live, e.ob, slog.New(slog.NewTextHandler(logs, nil)))
 	sink.Notice(t.Context(), thread, session.Notice{ID: "m/odd", Kind: "never_heard_of_it"})
-	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"})
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageRef: "1.5"})
 	if got := logs.String(); !strings.Contains(got, "never_heard_of_it") || strings.Contains(got, "queued") {
 		t.Fatalf("log %q; want the unknown kind named, and the queued one, a reaction, left out", got)
 	}
@@ -138,11 +138,11 @@ func TestNoticeOfAnUnknownKindIsLogged(t *testing.T) {
 // before, which Recovered tells the renderer to look for.
 func TestSinkPassesRecoveredOn(t *testing.T) {
 	e := setup(t)
-	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", ThreadTS: e.root, Out: chat.Say(chat.Message{Fallback: "before the crash"})}); err != nil {
+	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", Thread: e.root, Out: chat.Say(chat.Message{Fallback: "before the crash"})}); err != nil {
 		t.Fatal(err)
 	}
 	key := thread
-	key.ThreadTS = e.root
+	key.Thread = e.root
 	handle := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: session.SystemUser, Recovered: true})
 	handle(text("a", "the whole answer"))
 	handle(agent.FinalEvent{})
@@ -156,7 +156,7 @@ func TestTheSameNoticeIsOneRowAndOnePost(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, e.ob)
 	thread := thread
-	thread.ThreadTS = e.root
+	thread.Thread = e.root
 	n := session.Notice{ID: "task:t1/stopped", Kind: session.NoticeStopped}
 	sink.Notice(t.Context(), thread, n)
 	sink.Notice(t.Context(), thread, n) // the mention pair, or a repeated stop
@@ -221,7 +221,7 @@ func TestModeReachesTheRenderer(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			key := thread
-			key.ThreadTS = e.root
+			key.Thread = e.root
 			handle := e.sink(t, e.ob).Turn(ctx, session.TurnRef{Key: key, MessageID: "turn-1", UserID: tc.user, Output: tc.output})
 			handle(text("a", "hello"))
 			handle(agent.FinalEvent{})
@@ -241,7 +241,7 @@ func TestTurnWithoutFinalFreesItsGoroutine(t *testing.T) {
 	e := setup(t)
 	ctx, endTurn := context.WithCancel(t.Context())
 	key := thread
-	key.ThreadTS = e.root
+	key.Thread = e.root
 	handle := e.sink(t, e.ob).Turn(ctx, session.TurnRef{Key: key, MessageID: "turn-1", UserID: session.SystemUser})
 	handle(text("a", "partial"))
 	eventually(t, "the post", func() bool { return len(e.rec.sent("/chat.postMessage")) == 1 })
@@ -256,12 +256,12 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
-	thread.ThreadTS = e.root
+	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
 		session.NoticeExpired:     "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one.",
 		session.NoticeBindingGone: "This thread's agent is no longer set up, so I can't pass your messages on.",
 	} {
-		n := session.Notice{ID: "m1/" + string(kind), Kind: kind, MessageTS: "5.5"}
+		n := session.Notice{ID: "m1/" + string(kind), Kind: kind, MessageRef: "5.5"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
 		var out chat.Outgoing
@@ -306,7 +306,7 @@ func TestQueueNoticeReturnsWhatKeepsANoticeFromBeingWritten(t *testing.T) {
 	sink := live.NewSink(e.live, &flaky{q: e.ob, err: boom, fails: 100}, slog.New(slog.NewTextHandler(logs, nil)))
 	for _, n := range []session.Notice{
 		{ID: "m/failed", Kind: session.NoticeFailed},
-		{ID: "m/queued", Kind: session.NoticeQueued, MessageTS: "1.5"},
+		{ID: "m/queued", Kind: session.NoticeQueued, MessageRef: "1.5"},
 	} {
 		if err := sink.QueueNotice(t.Context(), thread, n); !errors.Is(err, boom) {
 			t.Errorf("QueueNotice(%s) = %v; want the error of the write", n.Kind, err)
@@ -339,7 +339,7 @@ func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
 	flake := &flaky{q: e.ob, err: errors.New("disk full"), fails: 1}
 	sink := e.sink(t, flake)
 	submits := 0
-	in := slack.NewIntake(slack.IntakeConfig{
+	in := chat.NewIntake(chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "ns", Name: "conn"},
 		Snapshot:   func() *config.Snapshot { return nil },
 		Submitter: submitFunc(func(session.Inbound) (session.Result, error) {
@@ -349,7 +349,7 @@ func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
 		Notice: sink.QueueNotice,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: e.root, User: "U1", Text: "hi"}
+	m := chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/conn", Channel: "C1", ID: "5.5", Thread: e.root}, User: "U1", Text: "hi"}
 	if err := in.Message(t.Context(), m); err == nil {
 		t.Fatal("Message with a notice that failed to write = nil; the event would be acknowledged and lost")
 	}
@@ -358,7 +358,7 @@ func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
 			t.Fatalf("redelivery %d = %v", i+1, err)
 		}
 	}
-	id := outbox.ID(session.SlackMessageID("ns/conn", "C1", "5.5")+"/expired", store.OutboxNotice)
+	id := outbox.ID(chat.MessageID(chat.Ref{Platform: "slack", Conn: "ns/conn", Channel: "C1", ID: "5.5"})+"/expired", store.OutboxNotice)
 	rows, err := e.store.ListUnposted(t.Context())
 	if err != nil || len(rows) != 1 || rows[0].ID != id || submits != 2 {
 		t.Fatalf("rows %+v, %v after %d submits; want the one notice %s, written on the second delivery and not the third", rows, err, submits, id)

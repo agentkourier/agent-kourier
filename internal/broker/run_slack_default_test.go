@@ -14,7 +14,7 @@ import (
 func TestSlackConfigTakesItsAPIURLOnlyFromTestHooks(t *testing.T) {
 	t.Setenv(testhooks.SlackAPIURLEnv, "http://evil.example/")
 
-	if got := slackConfig(SlackConnection{}, nil).APIURL; got != "" {
+	if got := slackConfig(Connection{}, nil).APIURL; got != "" {
 		t.Errorf("the Slack config's APIURL = %q in the default build, want empty: Slack's own", got)
 	}
 }

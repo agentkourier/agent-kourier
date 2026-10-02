@@ -1,4 +1,4 @@
-package slack_test
+package chat_test
 
 import (
 	"context"
@@ -11,11 +11,10 @@ import (
 	"sync"
 	"testing"
 
-	slackgo "github.com/slack-go/slack"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -24,7 +23,7 @@ import (
 const conn = "courier-system/slack-main"
 
 // The session manager is what Submit goes to.
-var _ slack.Submitter = (*session.Manager)(nil)
+var _ chat.Submitter = (*session.Manager)(nil)
 
 // submitter records what the session manager is asked to submit. fn, if set, decides the
 // answer; by default a turn is Accepted.
@@ -57,12 +56,17 @@ func (allKeys) Keys(context.Context, string, string) ([]string, error) {
 	return []string{"botToken", "appToken", "token"}, nil
 }
 
+// inbound is a message of a platform named "slack" in the thread (empty for none), which is in channel at id.
+func inbound(channel, id, thread string, mentioned bool) chat.Inbound {
+	return chat.Inbound{At: chat.Ref{Platform: "slack", Conn: conn, Channel: channel, ID: id, Thread: thread}, User: "U1", Text: "hi", Mentioned: mentioned}
+}
+
 // newIntake returns an Intake for the connection, over a config that binds C1 to sre/sre-alerts
 // and the private channel G1 to payments/pay.
-func newIntake(t *testing.T) (*slack.Intake, *submitter) { return newIntakeNotifying(t, nil) }
+func newIntake(t *testing.T) (*chat.Intake, *submitter) { return newIntakeNotifying(t, nil) }
 
 // newIntakeNotifying is newIntake with the func that takes a notice for a thread courier cannot continue.
-func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*slack.Intake, *submitter) {
+func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*chat.Intake, *submitter) {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string) v1alpha1.Binding {
@@ -80,7 +84,7 @@ func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, 
 		t.Fatal(err)
 	}
 	sub := &submitter{}
-	return slack.NewIntake(slack.IntakeConfig{
+	return chat.NewIntake(chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Notice: notice,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), sub
@@ -88,34 +92,32 @@ func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, 
 
 // TestTriggers checks spec 8.2's table: what each message is submitted as, if at all.
 func TestTriggers(t *testing.T) {
-	const text = "<@UFAKEBOT> look"
 	tests := []struct {
 		name    string
-		m       slack.Message
+		m       chat.Inbound
 		submit  bool
 		create  bool
 		binding string
 		thread  string
 	}{
-		{"mention outside a thread starts one", slack.Message{Channel: "C1", TS: "5.5", Mentioned: true}, true, true, "sre/sre-alerts", "5.5"},
-		{"mention in a thread, owned or not", slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", Mentioned: true}, true, true, "sre/sre-alerts", "4.4"},
-		{"reply in a thread", slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4"}, true, false, "", "4.4"},
-		{"mention in a private channel", slack.Message{Channel: "G1", TS: "5.5", Mentioned: true}, true, true, "payments/pay", "5.5"},
-		{"mention in an unbound channel's thread", slack.Message{Channel: "C9", TS: "5.5", ThreadTS: "4.4", Mentioned: true}, true, false, "", "4.4"},
-		{"mention in an unbound channel", slack.Message{Channel: "C9", TS: "5.5", Mentioned: true}, false, false, "", ""},
-		{"message outside any thread", slack.Message{Channel: "C1", TS: "5.5"}, false, false, "", ""},
+		{"mention outside a thread starts one", inbound("C1", "5.5", "", true), true, true, "sre/sre-alerts", "5.5"},
+		{"mention in a thread, owned or not", inbound("C1", "5.5", "4.4", true), true, true, "sre/sre-alerts", "4.4"},
+		{"reply in a thread", inbound("C1", "5.5", "4.4", false), true, false, "", "4.4"},
+		{"mention in a private channel", inbound("G1", "5.5", "", true), true, true, "payments/pay", "5.5"},
+		{"mention in an unbound channel's thread", inbound("C9", "5.5", "4.4", true), true, false, "", "4.4"},
+		{"mention in an unbound channel", inbound("C9", "5.5", "", true), false, false, "", ""},
+		{"message outside any thread", inbound("C1", "5.5", "", false), false, false, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in, sub := newIntake(t)
-			tt.m.User, tt.m.Text = "U1", text
 			if err := in.Message(t.Context(), tt.m); err != nil {
 				t.Fatal(err)
 			}
 			var want []session.Inbound
 			if tt.submit {
-				want = []session.Inbound{{Key: session.Key{Connection: conn, Channel: tt.m.Channel, ThreadTS: tt.thread}, Binding: tt.binding,
-					MessageID: session.SlackMessageID(conn, tt.m.Channel, "5.5"), MessageTS: "5.5", UserID: "U1", Text: text, Create: tt.create}}
+				want = []session.Inbound{{Key: session.Key{Connection: conn, Channel: tt.m.At.Channel, Thread: tt.thread}, Binding: tt.binding,
+					MessageID: chat.MessageID(chat.Ref{Platform: "slack", Conn: conn, Channel: tt.m.At.Channel, ID: "5.5"}), MessageRef: "5.5", UserID: "U1", Text: "hi", Create: tt.create}}
 			}
 			if got := sub.submitted(); !slices.Equal(got, want) {
 				t.Fatalf("submitted\n%+v\nwant\n%+v", got, want)
@@ -124,11 +126,24 @@ func TestTriggers(t *testing.T) {
 	}
 }
 
+// The message's ID is the string the store already holds for Slack, "slack:<conn>:<channel>:<ts>", whatever
+// the connection the Ref says: the Intake's own connection scopes it.
+func TestTheMessageIDIsTheStringTheStoreAlreadyHolds(t *testing.T) {
+	in, sub := newIntake(t)
+	m := inbound("C1", "5.5", "", true)
+	m.At.Conn = "somewhere/else"
+	if err := in.Message(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	if got := sub.submitted(); len(got) != 1 || got[0].MessageID != "slack:"+conn+":C1:5.5" {
+		t.Fatalf("submitted %+v; want the message ID slack:%s:C1:5.5", got, conn)
+	}
+}
+
 // TestSubmitOutcomes delivers one message twice to see what Submit's answer does: whether
 // the message is acknowledged (a nil error) and whether it is remembered. A message is
 // remembered only once a turn is queued, so a redelivery is not submitted again; any other
-// answer leaves the next event of the message, such as the app_mention that follows a
-// message, free to try.
+// answer leaves the next event of the message free to try.
 func TestSubmitOutcomes(t *testing.T) {
 	disposition := func(d session.Disposition) (session.Result, error) { return session.Result{Disposition: d}, nil }
 	tests := []struct {
@@ -149,7 +164,7 @@ func TestSubmitOutcomes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			in, sub := newIntake(t)
 			sub.fn = func(session.Inbound) (session.Result, error) { return tt.answer() }
-			m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi", Mentioned: true}
+			m := inbound("C1", "5.5", "4.4", true)
 			if err := in.Message(t.Context(), m); (err != nil) != tt.wantErr {
 				t.Fatalf("Message = %v; want error: %v", err, tt.wantErr)
 			}
@@ -161,17 +176,15 @@ func TestSubmitOutcomes(t *testing.T) {
 	}
 }
 
-// TestDedupKey checks that the two events of one message are one submit however they
-// differ (an app_mention has no channel_type), and that the same ts in another channel is
-// another message.
+// TestDedupKey checks that the two events of one message are one submit however they differ, and that the same ID
+// in another channel is another message.
 func TestDedupKey(t *testing.T) {
 	in, sub := newIntake(t)
-	m := slack.Message{Channel: "C1", TS: "5.5", User: "U1", Text: "hi", Mentioned: true}
-	other := m
-	other.Channel = "G1"
-	withType := m
-	withType.ChannelType = "channel"
-	for _, msg := range []slack.Message{m, withType, other} {
+	m := inbound("C1", "5.5", "", true)
+	again := m
+	again.Direct = false
+	other := inbound("G1", "5.5", "", true)
+	for _, msg := range []chat.Inbound{m, again, other} {
 		if err := in.Message(t.Context(), msg); err != nil {
 			t.Fatal(err)
 		}
@@ -181,67 +194,21 @@ func TestDedupKey(t *testing.T) {
 	}
 }
 
-// TestPairCollapses sends the app_mention and the message event of one mention with
-// different event IDs and event_ts, as Slack does: both are the one turn, whose ID is built
-// from the message's ts.
-func TestPairCollapses(t *testing.T) {
-	in, sub := newIntake(t)
-	fake := start(t, in)
-	mention := message(map[string]any{"type": "app_mention", "ts": "7.7", "event_ts": "8.1", "text": botMark + " hi"})
-	msg := message(map[string]any{"ts": "7.7", "event_ts": "8.2", "text": botMark + " hi"})
-	waitAck(t, fake, send(t, fake, mention), send(t, fake, msg))
-	want := []session.Inbound{{Key: session.Key{Connection: conn, Channel: "C1", ThreadTS: "7.7"}, Binding: "sre/sre-alerts",
-		MessageID: "slack:" + conn + ":C1:7.7", MessageTS: "7.7", UserID: "U1", Text: botMark + " hi", Create: true}}
-	if got := sub.submitted(); !slices.Equal(got, want) {
-		t.Fatalf("submitted\n%+v\nwant\n%+v", got, want)
-	}
-}
-
-// TestNoLoop runs a reply cycle: a mention, courier's answer in the thread, and a user's
-// reply. Slack sends courier's own post back as an event, and it must start no turn.
-func TestNoLoop(t *testing.T) {
-	in, sub := newIntake(t)
-	fake := start(t, in)
-	root, err := fake.Mention("C1", "U1", botMark+" why?")
-	if err != nil {
-		t.Fatal(err)
-	}
-	api := slackgo.New(botToken, slackgo.OptionAPIURL(fake.URL()+"/"))
-	_, answer, err := api.PostMessage("C1", slackgo.MsgOptionText("because", false), slackgo.MsgOptionTS(root.TS))
-	if err != nil {
-		t.Fatal(err)
-	}
-	own := fake.OwnEventEnvelopes("C1", answer)
-	if len(own) != 1 {
-		t.Fatalf("the fake sent %d events for courier's post; want 1", len(own))
-	}
-	reply, _ := fake.Reply("C1", root.TS, "U2", "and then?")
-	waitAck(t, fake, slices.Concat(root.Envelopes, own, reply.Envelopes)...)
-	var ids []string
-	for _, s := range sub.submitted() {
-		ids = append(ids, s.MessageID)
-	}
-	want := []string{session.SlackMessageID(conn, "C1", root.TS), session.SlackMessageID(conn, "C1", reply.TS)}
-	if !slices.Equal(ids, want) {
-		t.Fatalf("submitted turns %v; want the mention and the reply, not courier's own post %s", ids, answer)
-	}
-}
-
 // TestIntakePassesInteractionsOn: a press goes to the configured handler, and the handler's
 // error is the Intake's, so the event is left unacknowledged.
 func TestIntakePassesInteractionsOn(t *testing.T) {
-	var got []slack.Interaction
+	var got []chat.Interaction
 	fail := errors.New("busy")
-	in := slack.NewIntake(slack.IntakeConfig{Interactions: func(_ context.Context, i slack.Interaction) error {
+	in := chat.NewIntake(chat.IntakeConfig{Interactions: func(_ context.Context, i chat.Interaction) error {
 		got = append(got, i)
 		return fail
 	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	press := slack.Interaction{User: "U1", Channel: "C1", MessageTS: "5.5", ActionID: "submit"}
-	if err := in.Interaction(t.Context(), press); !errors.Is(err, fail) || len(got) != 1 || got[0].ActionID != "submit" {
+	press := chat.Interaction{User: "U1", At: chat.Ref{Channel: "C1", ID: "5.5"}, PromptID: "ix-1"}
+	if err := in.Interaction(t.Context(), press); !errors.Is(err, fail) || len(got) != 1 || got[0].PromptID != "ix-1" {
 		t.Fatalf("Interaction = %v, handler saw %+v; want its error, and the press", err, got)
 	}
 	// With no handler the press is dropped, and acknowledged.
-	if err := slack.NewIntake(slack.IntakeConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Interaction(t.Context(), press); err != nil {
+	if err := chat.NewIntake(chat.IntakeConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Interaction(t.Context(), press); err != nil {
 		t.Fatalf("Interaction with no handler = %v; want nil", err)
 	}
 }
@@ -282,22 +249,21 @@ func TestAThreadCourierCannotContinueGetsOneNotice(t *testing.T) {
 			var got notices
 			in, sub := newIntakeNotifying(t, got.take)
 			sub.fn = func(session.Inbound) (session.Result, error) { return session.Result{Disposition: tc.disposition}, nil }
-			// The app_mention and the message event of one mention: the same message, two events.
-			m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "<!channel> <@U2> [x](https://evil.example) & \u202e", Mentioned: true}
-			withType := m
-			withType.ChannelType = "channel"
-			for _, ev := range []slack.Message{m, withType} {
-				if err := in.Message(t.Context(), ev); err != nil {
+			// The two events of one mention: the same message, twice.
+			m := inbound("C1", "5.5", "4.4", true)
+			m.Text = "<!channel> <@U2> [x](https://evil.example) & \u202e"
+			for range 2 {
+				if err := in.Message(t.Context(), m); err != nil {
 					t.Fatal(err)
 				}
 			}
-			want := session.Notice{ID: session.SlackMessageID(conn, "C1", "5.5") + tc.suffix, Kind: tc.kind, MessageTS: "5.5"}
-			if len(got.got) != 1 || got.got[0] != want || got.key[0] != (session.Key{Connection: conn, Channel: "C1", ThreadTS: "4.4"}) {
+			want := session.Notice{ID: chat.MessageID(chat.Ref{Platform: "slack", Conn: conn, Channel: "C1", ID: "5.5"}) + tc.suffix, Kind: tc.kind, MessageRef: "5.5"}
+			if len(got.got) != 1 || got.got[0] != want || got.key[0] != (session.Key{Connection: conn, Channel: "C1", Thread: "4.4"}) {
 				t.Errorf("notices %+v for keys %+v; want exactly %+v in the thread of the reply, with no text of the message in it", got.got, got.key, want)
 			}
 			// Another message in the thread is its own notice.
 			other := m
-			other.TS = "6.6"
+			other.At.ID = "6.6"
 			if err := in.Message(t.Context(), other); err != nil || len(got.got) != 2 || got.got[1].ID == want.ID {
 				t.Errorf("a second message: %v, notices %+v; want a notice of its own", err, got.got)
 			}
@@ -324,7 +290,7 @@ func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
 			var got notices
 			in, sub := newIntakeNotifying(t, got.take)
 			sub.fn = fn
-			_ = in.Message(t.Context(), slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi"})
+			_ = in.Message(t.Context(), inbound("C1", "5.5", "4.4", false))
 			if len(got.got) != 0 {
 				t.Errorf("notices %+v; want none", got.got)
 			}
@@ -333,14 +299,14 @@ func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
 	for _, d := range []session.Disposition{session.Expired, session.BindingGone} {
 		in, sub := newIntakeNotifying(t, nil)
 		sub.fn = func(session.Inbound) (session.Result, error) { return session.Result{Disposition: d}, nil }
-		if err := in.Message(t.Context(), slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi"}); err != nil {
+		if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", false)); err != nil {
 			t.Errorf("%s with no notice func: %v; want it quiet", d, err)
 		}
 	}
 }
 
 // TestAFailedNoticeLeavesTheEventToBeRedelivered: a notice that could not be written is the event's
-// to retry. The error reaches Run, which leaves the event unacknowledged, and the message is not
+// to retry. The error reaches the platform, which leaves the event unacknowledged, and the message is not
 // remembered, so the redelivery, and the mention's other event, are tried again. The notice ID is the
 // same each time, so a notice written after all is still one row.
 func TestAFailedNoticeLeavesTheEventToBeRedelivered(t *testing.T) {
@@ -349,7 +315,7 @@ func TestAFailedNoticeLeavesTheEventToBeRedelivered(t *testing.T) {
 	sub.fn = func(session.Inbound) (session.Result, error) {
 		return session.Result{Disposition: session.Expired}, nil
 	}
-	m := slack.Message{Channel: "C1", TS: "5.5", ThreadTS: "4.4", User: "U1", Text: "hi", Mentioned: true}
+	m := inbound("C1", "5.5", "4.4", true)
 	if err := in.Message(t.Context(), m); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("Message with a failing notice = %v; want its error, so the event is not acknowledged", err)
 	}

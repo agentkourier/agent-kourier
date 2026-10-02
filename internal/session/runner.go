@@ -624,7 +624,7 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 		t.c.tries++
 		return blocked, fmt.Errorf("reset session: %w", err)
 	}
-	m.goneNotice(m.ctx, t.key, t.taskID, t.r.MessageTS) // named after the task, so a repeat, or a control's, is one
+	m.goneNotice(m.ctx, t.key, t.taskID, t.r.MessageRef) // named after the task, so a repeat, or a control's, is one
 	t.c.follow = nil
 	t.c.settle()
 	return ended, nil
@@ -634,7 +634,7 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 // the runner and a control that both find it gone post one notice.
 func (m *Manager) goneNotice(ctx context.Context, key Key, id a2a.TaskID, ts string) {
 	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(NoticeSessionGone), Kind: NoticeSessionGone, MessageTS: ts})
+		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(NoticeSessionGone), Kind: NoticeSessionGone, MessageRef: ts})
 	}
 }
 
@@ -812,7 +812,7 @@ func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
 
 func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
 	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageTS: t.r.MessageTS, Detail: detail})
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 )
 
-// PermanentCode returns the Slack error code in err if it says that the same post will never
+// permanentCode returns the Slack error code in err if it says that the same post will never
 // succeed, and "" otherwise (including for an error that is not Slack's own). Those codes are a
 // channel that is gone, archived or that courier is not in, text that is too long, and blocks Slack
 // refuses; a rate limit, a server error or a timeout may pass on another try, and a rejected token is
@@ -15,7 +15,7 @@ import (
 // UNCONFIRMED(WP-04): that these are the codes Slack answers with, in particular both
 // invalid_blocks and invalid_blocks_format for blocks it refuses, and that no other code is
 // permanent for a post (a channel that is not found can be a private one courier was removed from).
-func PermanentCode(err error) string {
+func permanentCode(err error) string {
 	var resp slackgo.SlackErrorResponse
 	if !errors.As(err, &resp) {
 		return ""
@@ -27,11 +27,11 @@ func PermanentCode(err error) string {
 	return ""
 }
 
-// ReactionPermanentCode returns the Slack error code in err if it says that the same reaction will
+// reactionPermanentCode returns the Slack error code in err if it says that the same reaction will
 // never be made, and "" otherwise: a message, a name or a channel that is not there or is archived,
 // courier not in the channel, no item or a bad ts given, a thread that is locked, a message that
 // takes no reactions, or a limit on reactions or emoji reached (which a retry does not lift). It is
-// not PermanentCode, which is for posts; the two sets differ
+// not permanentCode, which is for posts; the two sets differ
 // (a reaction has no text to be too long). A rate limit, a server error or a timeout may pass on
 // another try. It reads the code scrub keeps, through any wrapping, so it is "" for an error whose
 // text merely mentions a code.
@@ -40,7 +40,7 @@ func PermanentCode(err error) string {
 // was deleted and for a channel courier was removed from, that thread_locked, not_reactable,
 // too_many_reactions, too_many_emoji and bad_timestamp are Slack's codes and none passes on a
 // retry, and that no other is permanent.
-func ReactionPermanentCode(err error) string {
+func reactionPermanentCode(err error) string {
 	var resp slackgo.SlackErrorResponse
 	if !errors.As(err, &resp) {
 		return ""
@@ -53,12 +53,12 @@ func ReactionPermanentCode(err error) string {
 	return ""
 }
 
-// FatalAuthCode returns the Slack error code in err if it says that the tokens will never work: a
+// fatalAuthCode returns the Slack error code in err if it says that the tokens will never work: a
 // rejected, revoked or missing token, or a deactivated account. Running again cannot cure it, so the
 // process exits and says why, where any other error from Run is retried with a backoff. It is not
-// PermanentCode, which is about one post. It reads the code scrub keeps, through any wrapping, and
+// permanentCode, which is about one post. It reads the code scrub keeps, through any wrapping, and
 // is "" for an error that is not Slack's own, whatever its text says.
-func FatalAuthCode(err error) string {
+func fatalAuthCode(err error) string {
 	var resp slackgo.SlackErrorResponse
 	if !errors.As(err, &resp) {
 		return ""

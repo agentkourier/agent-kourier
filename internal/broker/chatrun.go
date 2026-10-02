@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -25,9 +25,11 @@ var (
 	ErrWiring = errors.New("the broker cannot be wired")
 )
 
-// SlackRunner is *slack.Client: it holds the Socket Mode connection until it fails or ctx ends.
-type SlackRunner interface {
-	Run(ctx context.Context, sink slack.Sink) error
+// PlatformRunner is a chat platform as RunPlatform runs it: chat.Platform. Run holds the connection until it fails or
+// ctx ends, and Classify says which of its errors no retry cures (chat.FatalAuth).
+type PlatformRunner interface {
+	Run(ctx context.Context, sink chat.Sink) error
+	Classify(op chat.Op, err error) chat.Verdict
 }
 
 // RunPolicy is how RunSlack paces its retries. Zero fields take their defaults.
@@ -43,13 +45,13 @@ type RunPolicy struct {
 	Logger *slog.Logger // slog.Default() if nil
 }
 
-// RunSlack runs the Slack connection for as long as ctx lives. slack-go reconnects by itself, so
-// when Run returns, the connection failed for good or never opened. An error that says the tokens
-// are rejected (slack.FatalAuthCode) ends RunSlack at once with ErrSlackAuth, since no retry cures
+// RunPlatform runs the chat connection for as long as ctx lives. An adapter reconnects by itself, so
+// when Run returns, the connection failed for good or never opened. An error that the platform classifies as
+// credentials it rejects (chat.FatalAuth) ends RunPlatform at once with ErrSlackAuth, since no retry cures
 // it. Any other error is retried after a pause that doubles from Base to Max, and starts over from
 // Base once a run has lasted ResetAfter. It returns an error wrapping ctx's when ctx ends: a
 // shutdown, not a failure. The errors it logs come from Run, which keeps tokens out of them.
-func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPolicy) error {
+func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p RunPolicy) error {
 	base, limit, reset := cmp.Or(p.Base, time.Second), cmp.Or(p.Max, time.Minute), cmp.Or(p.ResetAfter, 120*time.Second)
 	now, after, log := p.Now, p.After, p.Logger
 	if now == nil {
@@ -68,8 +70,8 @@ func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPol
 		if ctx.Err() != nil {
 			return stopped(ctx)
 		}
-		if code := slack.FatalAuthCode(err); code != "" {
-			return fmt.Errorf("%w: %s", ErrSlackAuth, code)
+		if v := runner.Classify(chat.OpOther, err); v.Class == chat.FatalAuth {
+			return fmt.Errorf("%w: %s", ErrSlackAuth, v.Code)
 		}
 		if now().Sub(started) >= reset {
 			pause = min(base, limit)
@@ -84,21 +86,14 @@ func RunSlack(ctx context.Context, runner SlackRunner, sink slack.Sink, p RunPol
 	}
 }
 
-// SlackConnection is the one ChatConnection v1 serves, with its tokens as read at startup.
-type SlackConnection struct {
-	Ref v1alpha1.ObjectRef
-	// BotToken and AppToken are secret.Values: they print as redacted.
-	BotToken, AppToken secret.Value
-}
-
-// ChooseConnection returns the only ChatConnection of snap, with the botToken and appToken keys of
-// its credentials Secret read through secrets. v1 serves exactly one, because the outbox has no
-// connection column (Phase 4), and only a Slack connection in Socket Mode. Anything else is an
+// ChooseConnection returns the only ChatConnection of snap, with the keys of its credentials Secret that its
+// platform needs (platformKeys) read through secrets. v1 serves exactly one, because the outbox has no
+// connection column (Phase 4), and only a platform that has an adapter (Slack, in Socket Mode). Anything else is an
 // error wrapping ErrWiring. The tokens are those of the startup snapshot: a change of the connection
 // or of its Secret applies on restart, which the stale flag shows.
-func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identity.SecretReader) (SlackConnection, error) {
+func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identity.SecretReader) (Connection, error) {
 	if snap == nil {
-		return SlackConnection{}, errors.New("broker: the config has not loaded yet")
+		return Connection{}, errors.New("broker: the config has not loaded yet")
 	}
 	conns := snap.ChatConnections()
 	if len(conns) != 1 {
@@ -106,12 +101,12 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 		for i, c := range conns {
 			names[i] = v1alpha1.NamespacedName(c.Namespace, c.Name)
 		}
-		return SlackConnection{}, fmt.Errorf("%w: v1 serves exactly one ChatConnection, and the config has %d [%s]", ErrWiring, len(conns), strings.Join(names, ", "))
+		return Connection{}, fmt.Errorf("%w: v1 serves exactly one ChatConnection, and the config has %d [%s]", ErrWiring, len(conns), strings.Join(names, ", "))
 	}
 	c := conns[0]
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
-	if c.Spec.Platform != v1alpha1.PlatformSlack || (c.Spec.Mode != "" && c.Spec.Mode != v1alpha1.ModeSocket) {
-		return SlackConnection{}, fmt.Errorf("%w: ChatConnection %s is %q in mode %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform, c.Spec.Mode)
+	if _, ok := platformKeys[c.Spec.Platform]; !ok || (c.Spec.Mode != "" && c.Spec.Mode != v1alpha1.ModeSocket) {
+		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q in mode %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform, c.Spec.Mode)
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)
@@ -129,13 +124,13 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 		}
 		return v, nil
 	}
-	bot, err := read("botToken")
-	if err != nil {
-		return SlackConnection{}, err
+	creds := map[string]secret.Value{}
+	for _, key := range platformKeys[c.Spec.Platform] {
+		v, err := read(key)
+		if err != nil {
+			return Connection{}, err
+		}
+		creds[key] = v
 	}
-	app, err := read("appToken")
-	if err != nil {
-		return SlackConnection{}, err
-	}
-	return SlackConnection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, BotToken: bot, AppToken: app}, nil
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
 }

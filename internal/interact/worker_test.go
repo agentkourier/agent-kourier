@@ -68,7 +68,7 @@ func (f *fakeProc) gaveUpOn() []int64 {
 
 // pr is a press of an interaction, made at d0.
 func pr(seq int64, id string) store.Press {
-	return store.Press{Seq: seq, InteractionID: id, User: "UALICE1", Channel: "C1", MessageTS: "100.1", PressedAt: d0}
+	return store.Press{Seq: seq, InteractionID: id, User: "UALICE1", Channel: "C1", MessageRef: "100.1", PressedAt: d0}
 }
 
 // startWorker runs a Worker, by default on a clock that stands at the time of every press, until the test ends

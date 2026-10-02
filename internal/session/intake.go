@@ -38,11 +38,11 @@ type Inbound struct {
 	Key Key
 	// Binding is used only to create a session: an existing one keeps the Binding it was
 	// created under (D14, 8.5).
-	Binding   string
-	MessageID string // the turn's A2A messageId and queue ID; keep it across redeliveries
-	MessageTS string // the Slack ts of the message, for the reaction on a queued reply
-	UserID    string // the Slack user who wrote the turn; empty when nobody did
-	Text      string
+	Binding    string
+	MessageID  string // the turn's A2A messageId and queue ID; keep it across redeliveries
+	MessageRef string // the platform's ID of the message, for the reaction on a queued reply
+	UserID     string // the platform's ID of the user who wrote the turn; empty when nobody did
+	Text       string
 	// Create lets the turn make the session if there is none: an @mention, a DM, an alert's
 	// first prompt. A plain thread reply leaves it false.
 	Create bool
@@ -65,8 +65,8 @@ const readAll = 100 * 365 * 24 * time.Hour
 // event repeats what is left. It does not wait for the agent. An expired session is
 // returned as Expired and left as it was.
 func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
-	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.ThreadTS == "" || in.MessageID == "" || in.MessageTS == "" || in.Text == "" || in.UserID == SystemUser || strings.HasPrefix(in.MessageID, recoveredPrefix) || (in.Create && in.Binding == "") {
-		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageTS and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
+	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.Thread == "" || in.MessageID == "" || in.MessageRef == "" || in.Text == "" || in.UserID == SystemUser || strings.HasPrefix(in.MessageID, recoveredPrefix) || (in.Create && in.Binding == "") {
+		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageRef and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
 	}
 	res, err := m.queue(ctx, in)
 	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
@@ -74,7 +74,7 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	}
 	m.wake(in.Key) // outside the intake lock: a slow wake must not hold up other turns
 	if res.Queued && m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: in.MessageID + "/queued", Kind: NoticeQueued, MessageTS: in.MessageTS})
+		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: in.MessageID + "/queued", Kind: NoticeQueued, MessageRef: in.MessageRef})
 	}
 	return res, nil
 }
@@ -96,7 +96,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		user = SystemUser
 	}
 	// A duplicate, or a turn already delivered, is not queued again, and still wakes the runner.
-	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageTS: in.MessageTS, Text: in.Text, EnqueuedAt: now})
+	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: now})
 	if err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}

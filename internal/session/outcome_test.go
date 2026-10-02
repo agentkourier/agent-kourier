@@ -115,7 +115,7 @@ func TestCredentialsRejectedFailsTheTurn(t *testing.T) {
 	if len(f.audits) != 0 {
 		t.Errorf("the manager audited %+v; Rejected writes the only row", f.audits)
 	}
-	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].MessageTS != "1" {
+	if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].MessageRef != "1" {
 		t.Errorf("failed notices = %+v; want one for turn 1", got)
 	}
 	if len(f.agent.msgs) != 2 {
@@ -229,7 +229,7 @@ func TestUnknownOutcomeFoundIsFollowedAndDuplicatesAreReported(t *testing.T) {
 	if sends, _, follows := f.agent.counts(); sends != 2 || follows != 1 {
 		t.Errorf("%d sends, %d follows; want turn 1 and turn 2 once, and the found task followed", sends, follows)
 	}
-	if got := sink.noticesOf(NoticeDuplicateRun); len(got) != 1 || got[0].MessageTS != "2" {
+	if got := sink.noticesOf(NoticeDuplicateRun); len(got) != 1 || got[0].MessageRef != "2" {
 		t.Errorf("duplicate-run notices = %+v; want one for turn 2", got)
 	}
 	f.amu.Lock()
@@ -355,7 +355,7 @@ func TestWedgedTaskIsCancelledAfterMaxWorkingAge(t *testing.T) {
 			if !slices.Equal(cancels, []a2a.TaskID{"t1"}) {
 				t.Errorf("cancelled %v; want t1 once", cancels)
 			}
-			if got := sink.noticesOf(NoticeWedged); len(got) != 1 || got[0].MessageTS != "1" {
+			if got := sink.noticesOf(NoticeWedged); len(got) != 1 || got[0].MessageRef != "1" {
 				t.Errorf("wedged notices = %+v; want one for turn 1", got)
 			}
 			f.amu.Lock()
@@ -427,7 +427,7 @@ func TestSessionGoneStartsAFreshContext(t *testing.T) {
 					}
 				}
 				waitFinal(t, sink) // turn 2
-				if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "1" || got[0].ID != "task:t1/session_gone" {
+				if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageRef != "1" || got[0].ID != "task:t1/session_gone" {
 					t.Errorf("session-gone notices = %+v; want one, for turn 1, named after the task", got)
 				}
 				f.agent.mu.Lock()
@@ -463,7 +463,7 @@ func TestReplacedContextIsAdoptedAndReported(t *testing.T) {
 		}
 		waitFinal(t, sink)
 	}
-	if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageTS != "2" {
+	if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageRef != "2" {
 		t.Errorf("session-gone notices = %+v; want one, for turn 2", got)
 	}
 	if sess, _ := f.session(); sess.ContextID != "c2" {
@@ -522,7 +522,7 @@ func TestRetryingNoticeIsSentOncePerTurn(t *testing.T) {
 		waitFinal(t, sink)
 	}
 	got := sink.noticesOf(NoticeRetrying)
-	if len(got) != 2 || got[0].MessageTS != "1" || got[1].MessageTS != "2" {
+	if len(got) != 2 || got[0].MessageRef != "1" || got[1].MessageRef != "2" {
 		t.Errorf("retrying notices = %+v; want one for turn 1 and one for turn 2", got)
 	}
 }
@@ -733,7 +733,7 @@ func TestBusyFromAnUnrecordedBlockerTellsTheThread(t *testing.T) {
 	}
 	waitFinal(t, sink)
 	got := sink.noticesOf(NoticeQueued)
-	if len(got) != 1 || got[0].ID != in.MessageID+"/queued" || got[0].MessageTS != "1" {
+	if len(got) != 1 || got[0].ID != in.MessageID+"/queued" || got[0].MessageRef != "1" {
 		t.Errorf("queued notices = %+v; want one, named like Submit's own, after four -32004", got)
 	}
 }

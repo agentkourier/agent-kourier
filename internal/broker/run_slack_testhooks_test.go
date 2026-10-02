@@ -351,7 +351,7 @@ func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", ThreadTS: thread}
+	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", Thread: thread}
 	if err := st.TouchSession(t.Context(), key, time.Now().Add(-10000*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 }
 
 func TestSlackConfigTakesItsAPIURLFromTestHooksWhenSet(t *testing.T) {
-	conn := SlackConnection{}
+	conn := Connection{}
 	t.Setenv(testhooks.SlackAPIURLEnv, "http://fake-slack.test/")
 	if got := slackConfig(conn, nil).APIURL; got != "http://fake-slack.test/" {
 		t.Errorf("APIURL = %q in a testhooks build with %s set, want it", got, testhooks.SlackAPIURLEnv)

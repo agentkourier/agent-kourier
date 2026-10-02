@@ -172,7 +172,7 @@ func TestPermanentErrorEndsTheRunAtOnce(t *testing.T) {
 			send := &failingSender{err: fmt.Errorf("deliver: %w", permanent)}
 			logs := &strings.Builder{}
 			r := live.New(live.Config{Sender: send, Platform: slack.NewPlatform(nil, "ns/conn"), Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
-			run := r.Start(t.Context(), live.Turn{Source: "turn-1", Channel: "C1", ThreadTS: e.root, Mode: v1alpha1.OutputLive})
+			run := r.Start(t.Context(), live.Turn{Source: "turn-1", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputLive})
 			run.Handle(text("a", "hello"))
 			select {
 			case <-run.Done():

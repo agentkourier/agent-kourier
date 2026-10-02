@@ -113,7 +113,7 @@ func (r *Replacer) Replace(ctx context.Context, id string) error {
 	}
 	editCtx, cancel := context.WithTimeout(ctx, r.cfg.EditTimeout)
 	defer cancel()
-	if err := r.cfg.Updater.Update(editCtx, r.cfg.Updater.RefAt(row.Key.Channel, row.Key.ThreadTS, row.MessageRef), out); err != nil {
+	if err := r.cfg.Updater.Update(editCtx, r.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), out); err != nil {
 		return fmt.Errorf("interact: replace the prompt of %s: %w", id, err)
 	}
 	r.mu.Lock()

@@ -12,7 +12,7 @@ import (
 // RecordPress implements store.Presses. The counts and the insert are one transaction on the
 // single write connection, so the limits hold under concurrent presses.
 func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
-	if p.InteractionID == "" || p.User == "" || p.Channel == "" || p.MessageTS == "" || p.PressedAt.IsZero() || limits.Total < 1 || limits.PerUser < 1 {
+	if p.InteractionID == "" || p.User == "" || p.Channel == "" || p.MessageRef == "" || p.PressedAt.IsZero() || limits.Total < 1 || limits.PerUser < 1 {
 		return 0, fmt.Errorf("record press: the interaction, user, message, time and positive limits are required: %w", store.ErrInvalid)
 	}
 	if p.Inputs == nil {
@@ -28,7 +28,7 @@ func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.Pre
 			return fmt.Errorf("%d presses wait, %d from %s: %w", total, user, p.User, store.ErrLimit)
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, p.InteractionID, p.User, p.Channel, p.MessageTS, p.Inputs, ts(p.PressedAt))
+			VALUES (?, ?, ?, ?, ?, ?)`, p.InteractionID, p.User, p.Channel, p.MessageRef, p.Inputs, ts(p.PressedAt))
 		if err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func (s *Store) ListPresses(ctx context.Context) ([]store.Press, error) {
 	for rows.Next() {
 		var p store.Press
 		var at int64
-		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Channel, &p.MessageTS, &p.Inputs, &at); err != nil {
+		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Channel, &p.MessageRef, &p.Inputs, &at); err != nil {
 			return nil, fmt.Errorf("list presses: %w", err)
 		}
 		p.PressedAt = fromTS(at)

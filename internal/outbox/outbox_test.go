@@ -126,7 +126,7 @@ func newOutbox(t *testing.T, st store.Outbox, p outbox.Platform) *outbox.Outbox 
 }
 
 func reply(source string) outbox.Post {
-	return outbox.Post{Source: source, Role: store.OutboxReply, Channel: "C1", ThreadTS: "1.1", Out: chat.Say(chat.Message{Fallback: "hello " + source})}
+	return outbox.Post{Source: source, Role: store.OutboxReply, Channel: "C1", Thread: "1.1", Out: chat.Say(chat.Message{Fallback: "hello " + source})}
 }
 
 func TestIDDerivesFromSourceAndRole(t *testing.T) {
@@ -355,7 +355,7 @@ func TestCrashAfterPost(t *testing.T) {
 	}
 	for _, thread := range []string{"", rootTS} { // a post to the channel, and a reply in a thread
 		p := reply("ev-" + thread)
-		p.ThreadTS = thread
+		p.Thread = thread
 		before := len(fake.Messages("C1"))
 		if _, err := newOutbox(t, failingRecord{st}, platform).Send(t.Context(), p); err == nil {
 			t.Fatal("Send survived the crash before recording")

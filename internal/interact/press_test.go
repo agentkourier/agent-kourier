@@ -87,7 +87,7 @@ func (r *pressRig) submit(t *testing.T, user string, idx int) chat.Interaction {
 	if idx >= 0 {
 		answers = []chat.Answer{{Question: 0, Values: []string{strconv.Itoa(idx)}}}
 	}
-	return chat.Interaction{User: user, At: chat.Ref{Platform: "slack", Conn: key.Connection, Channel: key.Channel, Thread: key.ThreadTS, ID: "100.1"}, PromptID: "ix-1", Answers: answers}
+	return chat.Interaction{User: user, At: chat.Ref{Platform: "slack", Conn: key.Connection, Channel: key.Channel, Thread: key.Thread, ID: "100.1"}, PromptID: "ix-1", Answers: answers}
 }
 
 // process records the press and processes it, as the worker will.
@@ -293,7 +293,7 @@ func TestWhatAPersonIsToldIsToldInTheThreadOfThePrompt(t *testing.T) {
 	if _, err := r.process(t, gone); err != nil {
 		t.Fatal(err)
 	}
-	want := []chat.Target{{Conn: key.Connection, Channel: key.Channel, Thread: key.ThreadTS}, {Channel: key.Channel}}
+	want := []chat.Target{{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}, {Channel: key.Channel}}
 	if got := r.eph.targets(); !slices.Equal(got, want) {
 		t.Errorf("told in %+v; want the prompt's thread, and for the gone interaction the press's channel alone", got)
 	}
@@ -321,11 +321,11 @@ func TestAPressRecordedByAnOlderVersionIsToldAndLoggedAsSuchNotAsCorruption(t *t
 	r.open(t)
 	pl, logs := r.loggedPipeline(t)
 	old := []byte(`{"q0":{"a0":{"Type":"plain_text_input","Values":["x"]}}}`)
-	seq, err := r.st.RecordPress(t.Context(), store.Press{InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageTS: "100.1", Inputs: old, PressedAt: r.now}, store.PressLimits{Total: 10, PerUser: 2})
+	seq, err := r.st.RecordPress(t.Context(), store.Press{InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: old, PressedAt: r.now}, store.PressLimits{Total: 10, PerUser: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := pl.Process(t.Context(), store.Press{Seq: seq, InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageTS: "100.1", Inputs: old, PressedAt: r.now})
+	res, err := pl.Process(t.Context(), store.Press{Seq: seq, InteractionID: "ix-1", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: old, PressedAt: r.now})
 	if err != nil || res != interact.Done || strings.Join(r.eph.list(), "|") != "UALICE1: This question is no longer available." || r.waiting(t) != 0 {
 		t.Fatalf("Process = %v, %v, told %q, %d waiting; want it done and the person told the question is gone", res, err, r.eph.list(), r.waiting(t))
 	}
@@ -344,7 +344,7 @@ func TestARequestThatCannotBeReadIsAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	pl, logs := r.loggedPipeline(t)
-	if res, err := pl.Process(t.Context(), store.Press{InteractionID: "ix-bad", User: "UALICE1", Channel: key.Channel, MessageTS: "100.1", Inputs: []byte("null"), PressedAt: r.now}); err != nil || res != interact.Done {
+	if res, err := pl.Process(t.Context(), store.Press{InteractionID: "ix-bad", User: "UALICE1", Channel: key.Channel, MessageRef: "100.1", Inputs: []byte("null"), PressedAt: r.now}); err != nil || res != interact.Done {
 		t.Fatalf("Process = %v, %v; want it done", res, err)
 	}
 	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "ix-bad") {

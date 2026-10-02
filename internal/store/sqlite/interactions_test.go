@@ -42,7 +42,7 @@ func TestInteractionsCreateAndGet(t *testing.T) {
 
 	for name, mutate := range map[string]func(*store.Interaction){
 		"empty ID":        func(i *store.Interaction) { i.ID = "" },
-		"empty key part":  func(i *store.Interaction) { i.Key.ThreadTS = "" },
+		"empty key part":  func(i *store.Interaction) { i.Key.Thread = "" },
 		"empty task ID":   func(i *store.Interaction) { i.TaskID = "" },
 		"unknown kind":    func(i *store.Interaction) { i.Kind = "bogus" },
 		"zero created":    func(i *store.Interaction) { i.CreatedAt = time.Time{} },

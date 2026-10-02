@@ -6,7 +6,6 @@ package session
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -138,10 +137,10 @@ const (
 // Notice is something for the thread that no turn's output says. ID is stable, so a renderer
 // that posts through the outbox posts it once.
 type Notice struct {
-	ID        string
-	Kind      NoticeKind
-	MessageTS string // the Slack message the notice is about
-	Detail    string // a short reason, fixed text: never agent output, never a secret
+	ID         string
+	Kind       NoticeKind
+	MessageRef string // the platform's ID of the message the notice is about
+	Detail     string // a short reason, fixed text: never agent output, never a secret
 }
 
 // Sink receives the output of turns; the renderer (WP-32) implements it. Turn returns the
@@ -249,11 +248,4 @@ func New(cfg Config) (*Manager, error) {
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil
-}
-
-// SlackMessageID derives the A2A messageId of a Slack message from where it is, not from
-// the event that delivered it: an @mention arrives as two events with different IDs, and
-// both must be one turn (spec 8.2). An alert's first prompt passes its own stable ID.
-func SlackMessageID(connection, channel, ts string) string {
-	return fmt.Sprintf("slack:%s:%s:%s", connection, channel, ts)
 }

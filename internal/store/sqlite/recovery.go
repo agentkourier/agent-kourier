@@ -19,7 +19,7 @@ func (s *Store) ListActiveSessions(ctx context.Context) ([]store.Session, error)
 	for rows.Next() {
 		var sess store.Session
 		var last int64
-		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.ThreadTS, &sess.ContextID, &sess.TaskID, &sess.Binding, &last); err != nil {
+		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Binding, &last); err != nil {
 			return nil, fmt.Errorf("scan session row: %w", err)
 		}
 		sess.LastActivity = fromTS(last)
@@ -42,7 +42,7 @@ func (s *Store) ListQueuedSessions(ctx context.Context) ([]store.ConversationKey
 	var out []store.ConversationKey
 	for rows.Next() {
 		var k store.ConversationKey
-		if err := rows.Scan(&k.Connection, &k.Channel, &k.ThreadTS); err != nil {
+		if err := rows.Scan(&k.Connection, &k.Channel, &k.Thread); err != nil {
 			return nil, fmt.Errorf("scan queued key: %w", err)
 		}
 		out = append(out, k)

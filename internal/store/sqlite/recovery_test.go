@@ -18,7 +18,7 @@ func TestListActiveSessions(t *testing.T) {
 	}
 	mk := func(thread, taskID string, age time.Duration) store.Session {
 		return store.Session{
-			Key:       store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: thread},
+			Key:       store.ConversationKey{Connection: "slack", Channel: "C1", Thread: thread},
 			ContextID: "ctx-" + thread, TaskID: taskID, Binding: "ns/b", LastActivity: t0.Add(-age),
 		}
 	}
@@ -26,7 +26,7 @@ func TestListActiveSessions(t *testing.T) {
 	// and the caller decides what to do with it.
 	for _, sess := range []store.Session{mk("3.3", "task-c", time.Hour), mk("1.1", "task-a", 2*time.Hour), mk("idle", "", 0), mk("old", "task-o", 4000*time.Hour)} {
 		if err := s.UpsertSession(ctx, sess); err != nil {
-			t.Fatalf("upsert %s: %v", sess.Key.ThreadTS, err)
+			t.Fatalf("upsert %s: %v", sess.Key.Thread, err)
 		}
 	}
 	before, _ := s.GetSession(ctx, mk("3.3", "", 0).Key, 1000*time.Hour, t0)
@@ -36,8 +36,8 @@ func TestListActiveSessions(t *testing.T) {
 	}
 	var threads, tasks []string
 	for _, sess := range got {
-		threads, tasks = append(threads, sess.Key.ThreadTS), append(tasks, sess.TaskID)
-		if sess.Binding != "ns/b" || sess.ContextID != "ctx-"+sess.Key.ThreadTS || sess.LastActivity.IsZero() {
+		threads, tasks = append(threads, sess.Key.Thread), append(tasks, sess.TaskID)
+		if sess.Binding != "ns/b" || sess.ContextID != "ctx-"+sess.Key.Thread || sess.LastActivity.IsZero() {
 			t.Errorf("session %+v lost a field", sess)
 		}
 	}
@@ -59,7 +59,7 @@ func TestListQueuedSessions(t *testing.T) {
 		t.Fatalf("empty store = %v, %v; want none", got, err)
 	}
 	k := func(thread string) store.ConversationKey {
-		return store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: thread}
+		return store.ConversationKey{Connection: "slack", Channel: "C1", Thread: thread}
 	}
 	// b's head comes first, though a has more rows and a's later ones interleave.
 	for _, r := range []struct{ id, thread string }{{"b1", "b"}, {"a1", "a"}, {"b2", "b"}, {"a2", "a"}, {"d1", "delivered"}} {
@@ -119,7 +119,7 @@ func TestListActiveSessionsTiesByKey(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
 	for _, thread := range []string{"b", "c", "a"} {
-		k := store.ConversationKey{Connection: "slack", Channel: "C1", ThreadTS: thread}
+		k := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: thread}
 		if err := s.UpsertSession(ctx, store.Session{Key: k, TaskID: "t-" + thread, Binding: "ns/b", LastActivity: t0}); err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestListActiveSessionsTiesByKey(t *testing.T) {
 	}
 	var threads []string
 	for _, sess := range got {
-		threads = append(threads, sess.Key.ThreadTS)
+		threads = append(threads, sess.Key.Thread)
 	}
 	if want := []string{"a", "b", "c"}; !slices.Equal(threads, want) {
 		t.Errorf("threads = %v; want %v", threads, want)

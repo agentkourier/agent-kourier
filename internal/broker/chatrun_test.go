@@ -14,18 +14,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// runner is a SlackRunner that plays one scripted step for each Run.
+// runner is a PlatformRunner that plays one scripted step for each Run.
 type runner struct {
 	steps []func(call int) error
 	calls int
 }
 
-func (r *runner) Run(context.Context, slack.Sink) error {
+func (r *runner) Classify(op chat.Op, err error) chat.Verdict {
+	return slack.NewPlatform(nil, "ns/conn").Classify(op, err)
+}
+
+func (r *runner) Run(context.Context, chat.Sink) error {
 	r.calls++
 	return r.steps[min(r.calls, len(r.steps))-1](r.calls)
 }
@@ -67,7 +72,7 @@ func stopAfter(cancel context.CancelFunc) func(int) error {
 	return func(int) error { cancel(); return context.Canceled }
 }
 
-func TestRunSlackBacksOffFromOneSecondToAMinute(t *testing.T) {
+func TestRunPlatformBacksOffFromOneSecondToAMinute(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &clock{}
 	steps := make([]func(int) error, 0, 10)
@@ -76,7 +81,7 @@ func TestRunSlackBacksOffFromOneSecondToAMinute(t *testing.T) {
 	}
 	steps = append(steps, stopAfter(cancel))
 
-	err := RunSlack(ctx, &runner{steps: steps}, nil, policy(c))
+	err := RunPlatform(ctx, &runner{steps: steps}, nil, policy(c))
 
 	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrSlackAuth) {
 		t.Errorf("RunSlack = %v, want the context's end", err)
@@ -86,7 +91,7 @@ func TestRunSlackBacksOffFromOneSecondToAMinute(t *testing.T) {
 	}
 }
 
-func TestRunSlackStopsAtOnceOnAFatalAuthError(t *testing.T) {
+func TestRunPlatformStopsAtOnceOnAFatalAuthError(t *testing.T) {
 	for _, code := range []string{"invalid_auth", "token_revoked", "account_inactive", "not_authed"} {
 		ctx, cancel := context.WithCancel(t.Context())
 		c := &clock{}
@@ -95,7 +100,7 @@ func TestRunSlackStopsAtOnceOnAFatalAuthError(t *testing.T) {
 			stopAfter(cancel), // a second run only happens if the error was retried
 		}}
 
-		err := RunSlack(ctx, r, nil, policy(c))
+		err := RunPlatform(ctx, r, nil, policy(c))
 		cancel()
 
 		if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), code) {
@@ -107,7 +112,7 @@ func TestRunSlackStopsAtOnceOnAFatalAuthError(t *testing.T) {
 	}
 }
 
-func TestRunSlackRetriesWhatIsNotFatal(t *testing.T) {
+func TestRunPlatformRetriesWhatIsNotFatal(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &clock{}
 	r := &runner{steps: []func(int) error{
@@ -117,13 +122,13 @@ func TestRunSlackRetriesWhatIsNotFatal(t *testing.T) {
 		stopAfter(cancel),
 	}}
 
-	if err := RunSlack(ctx, r, nil, policy(c)); errors.Is(err, ErrSlackAuth) || r.calls != 4 {
+	if err := RunPlatform(ctx, r, nil, policy(c)); errors.Is(err, ErrSlackAuth) || r.calls != 4 {
 		t.Errorf("RunSlack = %v after %d runs, want a retry of each of the first three", err, r.calls)
 	}
 }
 
 // A connection that stayed up for ResetAfter was healthy, so the next failure starts the backoff over.
-func TestRunSlackResetsTheBackoffAfterALongRun(t *testing.T) {
+func TestRunPlatformResetsTheBackoffAfterALongRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &clock{}
 	short := fails(errors.New("reset"))
@@ -135,19 +140,19 @@ func TestRunSlackResetsTheBackoffAfterALongRun(t *testing.T) {
 		stopAfter(cancel),
 	}}
 
-	_ = RunSlack(ctx, r, nil, policy(c))
+	_ = RunPlatform(ctx, r, nil, policy(c))
 
 	if want := secs(1, 2, 4, 1, 2, 4); !slices.Equal(c.waits, want) {
 		t.Errorf("waits = %v, want %v", c.waits, want)
 	}
 }
 
-func TestRunSlackStopsWhenTheContextEndsDuringABackoff(t *testing.T) {
+func TestRunPlatformStopsWhenTheContextEndsDuringABackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &clock{hang: true}
 	r := &runner{steps: []func(int) error{func(int) error { cancel(); return errors.New("reset") }}}
 
-	if err := RunSlack(ctx, r, nil, policy(c)); !errors.Is(err, context.Canceled) {
+	if err := RunPlatform(ctx, r, nil, policy(c)); !errors.Is(err, context.Canceled) {
 		t.Errorf("RunSlack = %v, want the context's end", err)
 	}
 	if r.calls != 1 {
@@ -181,7 +186,7 @@ func TestChooseConnectionReadsTheTokensOfTheOneConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Ref.Namespace != "platform" || got.Ref.Name != "slack" || got.BotToken.Reveal() != "xoxb-fake-bot" || got.AppToken.Reveal() != "xapp-fake-app" {
+	if got.Ref.Namespace != "platform" || got.Ref.Name != "slack" || got.Credentials["botToken"].Reveal() != "xoxb-fake-bot" || got.Credentials["appToken"].Reveal() != "xapp-fake-app" {
 		t.Errorf("ChooseConnection = %+v, want platform/slack with the bot and app tokens of its credentials Secret", got.Ref)
 	}
 	if strings.Contains(fmt.Sprintf("%v %+v", got, got), "xoxb-fake-bot") {
@@ -260,7 +265,7 @@ func TestChooseConnectionWiringErrorsAreOnlyTheOperators(t *testing.T) {
 }
 
 // A connection that stayed up for exactly ResetAfter counts as healthy.
-func TestRunSlackResetsAtExactlyTheThreshold(t *testing.T) {
+func TestRunPlatformResetsAtExactlyTheThreshold(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &clock{}
 	short := fails(errors.New("reset"))
@@ -270,7 +275,7 @@ func TestRunSlackResetsAtExactlyTheThreshold(t *testing.T) {
 		stopAfter(cancel),
 	}}
 
-	_ = RunSlack(ctx, r, nil, policy(c))
+	_ = RunPlatform(ctx, r, nil, policy(c))
 
 	if want := secs(1, 2, 1); !slices.Equal(c.waits, want) {
 		t.Errorf("waits = %v, want %v", c.waits, want)
@@ -278,14 +283,14 @@ func TestRunSlackResetsAtExactlyTheThreshold(t *testing.T) {
 }
 
 // A Base above Max still never waits longer than Max.
-func TestRunSlackFirstPauseIsCappedToo(t *testing.T) {
+func TestRunPlatformFirstPauseIsCappedToo(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &clock{}
 	p := policy(c)
 	p.Base, p.Max = 90*time.Second, 60*time.Second
 	r := &runner{steps: []func(int) error{fails(errors.New("reset")), stopAfter(cancel)}}
 
-	_ = RunSlack(ctx, r, nil, p)
+	_ = RunPlatform(ctx, r, nil, p)
 
 	if want := secs(60); !slices.Equal(c.waits, want) {
 		t.Errorf("waits = %v, want %v", c.waits, want)

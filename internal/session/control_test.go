@@ -100,7 +100,7 @@ func TestStopWithNoActiveTask(t *testing.T) {
 	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || did || len(f.cancelled()) != 0 {
 		t.Errorf("Stop = %v, %v, cancelled %v; want stopped=false and no cancel", did, err, f.cancelled())
 	}
-	other := Key{Connection: "slack", Channel: "C9", ThreadTS: "1.1"}
+	other := Key{Connection: "slack", Channel: "C9", Thread: "1.1"}
 	if did, err := f.m.Stop(t.Context(), other, "t1", "U9"); err != nil || did {
 		t.Errorf("Stop of a thread nobody owns = %v, %v; want stopped=false", did, err)
 	}

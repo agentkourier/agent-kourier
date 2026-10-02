@@ -161,7 +161,7 @@ func TestTheLoserOfARaceIsToldWhoWonAsAMention(t *testing.T) {
 			t.Fatal(err)
 		}
 		press := r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")
-		press.Interaction.Key.ThreadTS = root
+		press.Interaction.Key.Thread = root
 		if err := d.Decide(t.Context(), press); err != nil {
 			t.Fatalf("Decide = %v", err)
 		}

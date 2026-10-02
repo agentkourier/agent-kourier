@@ -4,19 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
 	"sync/atomic"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
-	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
-	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
@@ -109,21 +105,13 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
 	log.InfoContext(ctx, "ready")
 
-	// Slack: its client posts for the outbox, and a token revoked mid-run, which only a post sees,
-	// ends the Slack run with ErrSlackAuth (WatchPosts, WithAuthFailure).
-	// The Slack client gets a transport of its own, so that its idle connections can be closed at
-	// shutdown and no goroutine outlives Run.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	sc := slackConfig(conn, log)
-	sc.HTTPClient = &http.Client{Transport: transport}
-	var sl slackAPI
-	if cfg.newSlack != nil {
-		sl = cfg.newSlack(sc)
-	} else {
-		sl = slack.New(sc)
+	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
+	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
+	platform, err := cfg.newPlatform(conn, log)
+	if err != nil {
+		return err
 	}
 	slackCtx, report, stopSlack := WithAuthFailure(runCtx)
-	platform := slack.NewPlatform(sl, conn.Ref.Namespace+"/"+conn.Ref.Name)
 	ob := outbox.New(outbox.Config{
 		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
 	})
@@ -141,7 +129,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		// Slack's connections close only now: the drain posts through them, and a connection that its
 		// calls opened after an earlier close would be one that nothing closes.
-		transport.CloseIdleConnections()
+		platform.closeIdle()
 	})
 
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
@@ -158,12 +146,12 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, sl: sl, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
 	tap, late, err := parts.newTap(sink)
 	if err != nil {
 		return err
 	}
-	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: sl, Sink: tap, Logger: log, Audit: auditor})
+	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor})
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}
@@ -186,13 +174,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return err
 	}
 
-	intake := slack.NewIntake(slack.IntakeConfig{
+	intake := chat.NewIntake(chat.IntakeConfig{
 		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: interactions, Logger: log,
 		Notice: sink.QueueNotice,
 	})
 	slackDone, slackStopped := make(chan error, 1), make(chan struct{})
 	parts.traced("open-intake")
-	go func() { slackDone <- RunSlack(slackCtx, sl, intake, RunPolicy{Logger: log}); close(slackStopped) }()
+	go func() {
+		slackDone <- RunPlatform(slackCtx, platform, intake, RunPolicy{Logger: log})
+		close(slackStopped)
+	}()
 	sd.add(stepIntake, func(c context.Context) { // the intake stops before the interactions and the manager it feeds
 		stopSlack()
 		waitFor(c, slackStopped)
@@ -218,32 +209,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 }
 
 // renderSink is what Run needs of the renderer, which is *live.Sink: the session manager's Sink, and
-// the notice hook of the Slack intake, whose error leaves a notice's event unacknowledged so that it is
+// the notice hook of the chat intake, whose error leaves a notice's event unacknowledged so that it is
 // redelivered.
 type renderSink interface {
 	session.Sink
 	QueueNotice(ctx context.Context, key session.Key, n session.Notice) error
-}
-
-// slackAPI is what Run uses of the Slack client, which is *slack.Client: the connection, the renderer's edits and streams, and the user lookups, ephemerals and
-// membership checks that the interactions make.
-type slackAPI interface {
-	SlackRunner
-	slack.API
-	session.Users
-	PostEphemeral(ctx context.Context, channel, threadTS, user string, content slack.Content) error
-	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
-	IsBot(ctx context.Context, user string) (bool, error)
-}
-
-// slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and
-// from nothing else: that is "" in a production build, so the bot token can only be sent to Slack,
-// and a test image sets it to reach the fake.
-func slackConfig(conn SlackConnection, log *slog.Logger) slack.Config {
-	// AuthzTimeout is what a press is given for its membership checks, whose callers have no deadline.
-	cfg := slack.Config{BotToken: conn.BotToken, AppToken: conn.AppToken, Logger: log, AuthzTimeout: interact.PressAuthzTimeout}
-	if url := testhooks.SlackAPIURL(); url != "" {
-		cfg.APIURL = url
-	}
-	return cfg
 }

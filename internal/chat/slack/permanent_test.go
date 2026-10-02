@@ -38,10 +38,10 @@ func TestPermanentCode(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: Post succeeded", tt.code)
 		}
-		if got := slack.PermanentCode(err); got != tt.want {
+		if got := permanentCode(err); got != tt.want {
 			t.Errorf("PermanentCode(%s) = %q; want %q", tt.code, got, tt.want)
 		}
-		if got := slack.PermanentCode(fmt.Errorf("deliver ev1: post: %w", err)); got != tt.want { // however it is wrapped
+		if got := permanentCode(fmt.Errorf("deliver ev1: post: %w", err)); got != tt.want { // however it is wrapped
 			t.Errorf("PermanentCode(wrapped %s) = %q; want %q", tt.code, got, tt.want)
 		}
 	}
@@ -49,7 +49,7 @@ func TestPermanentCode(t *testing.T) {
 
 func TestPermanentCodeOfOtherErrors(t *testing.T) {
 	for _, err := range []error{nil, errors.New("channel_not_found"), fmt.Errorf("slack: %w", errors.New("connection reset"))} {
-		if got := slack.PermanentCode(err); got != "" {
+		if got := permanentCode(err); got != "" {
 			t.Errorf("PermanentCode(%v) = %q; want none: only Slack's own code counts", err, got)
 		}
 	}
@@ -89,7 +89,7 @@ func TestReactionPermanentCode(t *testing.T) {
 		{errors.New("message_not_found"), ""},                 // by the code Slack gave, not by text
 		{nil, ""},
 	} {
-		if got := slack.ReactionPermanentCode(tc.err); got != tc.want {
+		if got := reactionPermanentCode(tc.err); got != tc.want {
 			t.Errorf("ReactionPermanentCode(%v) = %q; want %q", tc.err, got, tc.want)
 		}
 	}

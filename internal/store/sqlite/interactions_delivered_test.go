@@ -112,6 +112,6 @@ func TestMigration0011TakesExistingAnswersAsDelivered(t *testing.T) {
 }
 
 func withThread(k store.ConversationKey, ts string) store.ConversationKey {
-	k.ThreadTS = ts
+	k.Thread = ts
 	return k
 }

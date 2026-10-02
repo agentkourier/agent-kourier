@@ -29,7 +29,7 @@ func TestFatalAuthCode(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: Run succeeded", code)
 		}
-		if got := slack.FatalAuthCode(err); got != want {
+		if got := fatalAuthCode(err); got != want {
 			t.Errorf("FatalAuthCode(%s) = %q, want %q", code, got, want)
 		}
 	}
@@ -37,7 +37,7 @@ func TestFatalAuthCode(t *testing.T) {
 
 func TestFatalAuthCodeIgnoresWhatIsNotSlacks(t *testing.T) {
 	for _, err := range []error{nil, errors.New("invalid_auth"), errors.New("dial tcp: connection refused"), t.Context().Err()} {
-		if got := slack.FatalAuthCode(err); got != "" {
+		if got := fatalAuthCode(err); got != "" {
 			t.Errorf("FatalAuthCode(%v) = %q, want none: only Slack's own answer counts", err, got)
 		}
 	}
@@ -53,7 +53,7 @@ func TestFatalAuthCodeOfARejectedAppToken(t *testing.T) {
 		cfg := clientConfig(newFake(t))
 		tok(&cfg)
 		_, wait := run(t, slack.New(cfg), &sink{})
-		if got := slack.FatalAuthCode(wait()); got != "invalid_auth" {
+		if got := fatalAuthCode(wait()); got != "invalid_auth" {
 			t.Errorf("%s: FatalAuthCode(Run's error) = %q, want invalid_auth", name, got)
 		}
 	}

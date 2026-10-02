@@ -11,7 +11,7 @@ import (
 )
 
 func validKey(k store.ConversationKey) bool {
-	return k.Connection != "" && k.Channel != "" && k.ThreadTS != ""
+	return k.Connection != "" && k.Channel != "" && k.Thread != ""
 }
 
 // UpsertSession implements store.Sessions.
@@ -24,7 +24,7 @@ func (s *Store) UpsertSession(ctx context.Context, sess store.Session) error {
 		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET
 			context_id = excluded.context_id, task_id = excluded.task_id,
 			binding = excluded.binding, last_activity = excluded.last_activity`,
-		sess.Key.Connection, sess.Key.Channel, sess.Key.ThreadTS, sess.ContextID, sess.TaskID, sess.Binding, ts(sess.LastActivity))
+		sess.Key.Connection, sess.Key.Channel, sess.Key.Thread, sess.ContextID, sess.TaskID, sess.Binding, ts(sess.LastActivity))
 	if err != nil {
 		return fmt.Errorf("upsert session %+v: %w", sess.Key, err)
 	}
@@ -39,7 +39,7 @@ func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl t
 	sess := store.Session{Key: key}
 	var last int64
 	err := s.read.QueryRowContext(ctx, `SELECT context_id, task_id, binding, last_activity FROM sessions
-		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.ThreadTS).
+		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.Thread).
 		Scan(&sess.ContextID, &sess.TaskID, &sess.Binding, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Session{}, fmt.Errorf("get session %+v: %w", key, store.ErrNotFound)
@@ -60,6 +60,6 @@ func (s *Store) TouchSession(ctx context.Context, key store.ConversationKey, at 
 		return fmt.Errorf("touch session %+v: key and time are required: %w", key, store.ErrInvalid)
 	}
 	n, err := s.exec(ctx, `UPDATE sessions SET last_activity = ? WHERE connection = ? AND channel = ? AND thread_ts = ?`,
-		ts(at), key.Connection, key.Channel, key.ThreadTS)
+		ts(at), key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("touch session %+v", key))
 }

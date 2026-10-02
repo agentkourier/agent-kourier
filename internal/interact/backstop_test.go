@@ -81,7 +81,7 @@ func (r *backstopRig) answered(t *testing.T, id, task string) {
 	t.Helper()
 	req, _ := json.Marshal(question)
 	k := key
-	k.ThreadTS = id // a thread of its own, so each has its own session
+	k.Thread = id // a thread of its own, so each has its own session
 	row := store.Interaction{ID: id, Key: k, TaskID: task, Kind: store.InteractionAskUser, Request: req, CreatedAt: d0, Deadline: deadline}
 	if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func (r *backstopRig) answered(t *testing.T, id, task string) {
 func (r *backstopRig) session(t *testing.T, id, task string) {
 	t.Helper()
 	k := key
-	k.ThreadTS = id
+	k.Thread = id
 	if err := r.st.UpsertSession(t.Context(), store.Session{Key: k, ContextID: "c1", TaskID: task, Binding: "ns/b", LastActivity: r.now}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestAnEndedTaskWithAnUndeliveredAnswerGetsOneNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	row, ok := r.notice(t, "ix-1")
-	if !ok || row.Role != store.OutboxNotice || row.Channel != key.Channel || row.ThreadTS != "ix-1" {
+	if !ok || row.Role != store.OutboxNotice || row.Channel != key.Channel || row.Thread != "ix-1" {
 		t.Fatalf("notice = %+v, %v; want one in the thread of the interaction", row, ok)
 	}
 	if want, err := json.Marshal(chat.Say(chat.Message{Fallback: closedBeforeText})); err != nil || row.Payload != string(want) {
@@ -224,7 +224,7 @@ func TestOnlyAnAnsweredInteractionIsLookedAt(t *testing.T) {
 	req, _ := json.Marshal(question)
 	for id, state := range map[string]store.InteractionState{"ix-pending": store.InteractionPending, "ix-timed": store.InteractionTimedOut, "ix-cancelled": store.InteractionCancelled} {
 		k := key
-		k.ThreadTS = id
+		k.Thread = id
 		if _, err := r.st.CreateInteraction(t.Context(), store.Interaction{ID: id, Key: k, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: d0, Deadline: deadline}); err != nil {
 			t.Fatal(err)
 		}

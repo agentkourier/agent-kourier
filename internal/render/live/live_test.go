@@ -267,7 +267,7 @@ func (e *env) start(t *testing.T, mode v1alpha1.OutputMode, recovered bool) (*li
 func (e *env) startFor(t *testing.T, turn live.Turn) (*live.Run, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	turn.Source, turn.Channel, turn.ThreadTS = "turn-1", "C1", e.root
+	turn.Source, turn.Channel, turn.Thread = "turn-1", "C1", e.root
 	return e.live.Start(ctx, turn), cancel
 }
 
@@ -370,7 +370,7 @@ func TestFinalTextIsTheLastUpdateAndToolLinesAreDropped(t *testing.T) {
 
 func TestRecoveredTurnUpdatesTheMessageItPosted(t *testing.T) {
 	e := setup(t)
-	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", ThreadTS: e.root, Out: chat.Say(chat.Message{Fallback: "before the crash"})}); err != nil {
+	if _, err := e.ob.Send(t.Context(), outbox.Post{Source: "turn-1", Role: "reply", Channel: "C1", Thread: e.root, Out: chat.Say(chat.Message{Fallback: "before the crash"})}); err != nil {
 		t.Fatal(err)
 	}
 	run, _ := e.start(t, v1alpha1.OutputLive, true)

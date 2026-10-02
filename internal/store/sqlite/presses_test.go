@@ -19,7 +19,7 @@ import (
 var roomy = store.PressLimits{Total: 100, PerUser: 100}
 
 func press(id, user string, at time.Time) store.Press {
-	return store.Press{InteractionID: id, User: user, Channel: "C1", MessageTS: "1700.01", Inputs: []byte(`{"q0":{"a0":"typed"}}`), PressedAt: at}
+	return store.Press{InteractionID: id, User: user, Channel: "C1", MessageRef: "1700.01", Inputs: []byte(`{"q0":{"a0":"typed"}}`), PressedAt: at}
 }
 
 // Presses come back in the order they were recorded, whoever pressed, and survive a restart.
@@ -63,7 +63,7 @@ func TestRecordPressRefusesIncompletePresses(t *testing.T) {
 	s := openTemp(t)
 	for name, mutate := range map[string]func(*store.Press){
 		"no interaction": func(p *store.Press) { p.InteractionID = "" }, "no user": func(p *store.Press) { p.User = "" },
-		"no channel": func(p *store.Press) { p.Channel = "" }, "no message": func(p *store.Press) { p.MessageTS = "" },
+		"no channel": func(p *store.Press) { p.Channel = "" }, "no message": func(p *store.Press) { p.MessageRef = "" },
 		"no time": func(p *store.Press) { p.PressedAt = time.Time{} },
 	} {
 		p := press("ix", "U1", t0)
