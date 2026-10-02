@@ -232,7 +232,12 @@ deploy_courier() {
 CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
 
 # delete_courier_pod NAME: delete a throwaway pod of namespace courier, if there is one. Needs K.
-delete_courier_pod() { "${K[@]}" -n courier delete pod "$1" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
+# An empty NAME is nothing to delete.
+delete_courier_pod() { [ -z "$1" ] || "${K[@]}" -n courier delete pod "$1" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
+
+# DEX_TOKEN_POD is the name of the pod refresh_dex_token is running, for a caller's EXIT trap: a Ctrl-C during its
+# `kubectl run` skips the function's own RETURN trap, and the pod's logs hold the token. Empty when there is none.
+DEX_TOKEN_POD=
 
 # dex_token_from: the token in what refresh_dex_token's pod printed, on stdin. The pod prints it as one line,
 # TOKEN:<jwt>:END, and the token is the first line that is exactly that. kubectl, when it cannot attach to the pod
@@ -256,12 +261,14 @@ refresh_dex_token() {
   "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   for attempt in 1 2 3; do
     pod=dex-token-${RANDOM}
+    DEX_TOKEN_POD=${pod}
     trap 'delete_courier_pod "${pod}"; trap - RETURN' RETURN # a return from here, an error included, still deletes it
     tok=$("${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
       curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \
         -d username=binding-test@example.test -d password=password -d "scope=openid email" \
         http://dex.dex.svc.cluster.local:5556/dex/token | sed -n "s/.*\"id_token\":\"\([^\"]*\)\".*/TOKEN:\1:END/p"' 2>/dev/null | dex_token_from) || tok=
     delete_courier_pod "${pod}"
+    DEX_TOKEN_POD=
     [ -z "${tok}" ] || break
   done
   [ -n "${tok}" ] || die "Dex gave no ID token for the Binding identity after three tries (is Dex up? did the pod run?)"

@@ -62,3 +62,23 @@ func TestARunInTheFullTierStartsFromAFreshToken(t *testing.T) {
 		t.Errorf("e2e-run.sh has the context check at %d, the full-tier refresh at %d and the Job at %d; want that order, so the token is made on the checked context, before the run", i, j, k)
 	}
 }
+
+// TestAnInterruptedRunLeavesNoTokenPod: a Ctrl-C during the pod's `kubectl run` skips the function's RETURN trap, so
+// the scripts that make a token delete the pod, by the name lib.sh keeps in DEX_TOKEN_POD, in their EXIT traps.
+func TestAnInterruptedRunLeavesNoTokenPod(t *testing.T) {
+	for _, file := range []string{"up-full.sh", "e2e-run.sh"} {
+		raw, err := os.ReadFile("../../hack/kind/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "trap ") && strings.HasSuffix(line, " EXIT") && strings.Contains(line, `delete_courier_pod "${DEX_TOKEN_POD:-}"`) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s has no EXIT trap that deletes the token pod (delete_courier_pod \"${DEX_TOKEN_POD:-}\")", file)
+		}
+	}
+}

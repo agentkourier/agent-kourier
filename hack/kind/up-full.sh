@@ -39,7 +39,7 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 BUILD=
-trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"' EXIT
+trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; delete_courier_pod "${DEX_TOKEN_POD:-}"' EXIT
 
 for tool in docker kind kubectl helm curl openssl jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"

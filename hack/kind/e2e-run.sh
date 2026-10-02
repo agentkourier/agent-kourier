@@ -39,7 +39,7 @@ assert_context "${tier}"
 
 BUILD=$(mktemp -d)
 # On any exit: the scratch build directory and the Job (the cluster itself is never torn down here).
-trap 'rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+trap 'rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_courier_pod "${DEX_TOKEN_POD:-}"' EXIT
 trap 'exit 130' INT TERM
 
 echo "==> build the test binary"
