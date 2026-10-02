@@ -71,7 +71,7 @@ func (m Message) Validate() error {
 	}
 	for i, p := range m.Parts {
 		switch p := p.(type) {
-		case Header, Body, Context, Note, ToolLine:
+		case Header, Body, Context, Note, ToolLine, Mention:
 		case Buttons:
 			for j, btn := range p.Buttons {
 				if btn.ID == "" || btn.Label == "" {
@@ -85,7 +85,7 @@ func (m Message) Validate() error {
 	return nil
 }
 
-// Part is one piece of a Message: Header, Body, Context, ToolLine, Note or Buttons. Every text field of
+// Part is one piece of a Message: Header, Body, Context, ToolLine, Note, Mention or Buttons. Every text field of
 // a part is literal (see the package comment), except Body.Markdown.
 type Part interface{ part() }
 
@@ -110,6 +110,12 @@ type ToolLine struct {
 	Summary string
 }
 
+// Mention is a line that names a person, and says something of them: User, as a mention where the platform has them,
+// and then Text, literal text of courier's own on one line, such as "answered this question first.". User is a
+// platform's own user ID, which the adapter checks against the shape of the platform's IDs before it makes a
+// mention of it; anything else is shown as "someone", and never as markup, whatever it holds.
+type Mention struct{ User, Text string }
+
 // Buttons is a row of buttons. A press comes back as an Interaction whose PromptID is the button's Value.
 type Buttons struct{ Buttons []Button }
 
@@ -125,6 +131,7 @@ func (Body) part()     {}
 func (Context) part()  {}
 func (Note) part()     {}
 func (ToolLine) part() {}
+func (Mention) part()  {}
 func (Buttons) part()  {}
 
 // wirePart is the stored form of a Part: its kind, and the fields of that kind.
@@ -134,6 +141,7 @@ type wirePart struct {
 	Markdown string   `json:"markdown,omitempty"`
 	Name     string   `json:"name,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
+	User     string   `json:"user,omitempty"`
 	Buttons  []Button `json:"buttons,omitempty"`
 }
 
@@ -157,6 +165,8 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			w.Parts = append(w.Parts, wirePart{Kind: "note", Text: p.Text})
 		case ToolLine:
 			w.Parts = append(w.Parts, wirePart{Kind: "tool", Name: p.Name, Summary: p.Summary})
+		case Mention:
+			w.Parts = append(w.Parts, wirePart{Kind: "mention", User: p.User, Text: p.Text})
 		case Buttons:
 			w.Parts = append(w.Parts, wirePart{Kind: "buttons", Buttons: p.Buttons})
 		default:
@@ -186,6 +196,8 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 			out.Parts = append(out.Parts, Note{p.Text})
 		case "tool":
 			out.Parts = append(out.Parts, ToolLine{Name: p.Name, Summary: p.Summary})
+		case "mention":
+			out.Parts = append(out.Parts, Mention{User: p.User, Text: p.Text})
 		case "buttons":
 			out.Parts = append(out.Parts, Buttons{p.Buttons})
 		default:

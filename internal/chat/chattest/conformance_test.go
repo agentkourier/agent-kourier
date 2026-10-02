@@ -3,6 +3,7 @@ package chattest
 import (
 	"context"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -51,6 +52,12 @@ type leaks struct {
 	updateGap         bool // the Update path leaves a field that starts with "<" as it is
 	stopGap           bool // the Stop path does not escape
 	emphasised        bool // the rich places hold the raw text inside emphasis: a reader once saw nothing there
+
+	// A platform with mentions shows a valid user ID as one, and the leaks are how its check of the ID can fail.
+	mentions    bool // the platform has mentions: a valid user ID of a Mention is shown as one
+	rawUser     bool // the user of a Mention or an Ending is put on the wire as it is
+	twoMentions bool // a valid user is shown as two mentions
+	looseID     bool // the shape of an ID is looked for anywhere in the text, and what holds it is taken for one
 }
 
 // markupPlatform is a platform whose wire format is text with markup: an adapter of it has to escape, which
@@ -63,6 +70,12 @@ type markupPlatform struct {
 	mode    string // the method being recorded, for the leaks that are of one method only
 	sent    []Shown
 }
+
+// validUser is the shape of the user IDs of the platform the markup platform models.
+var validUser = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
+
+// looseUser is a check of the shape that is not anchored: the ID is found anywhere in the text.
+var looseUser = regexp.MustCompile(`[UW][A-Z0-9]{2,20}`)
 
 func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
@@ -114,6 +127,18 @@ func (m *markupPlatform) encode(s string, w chat.Where) string {
 		s = strings.ReplaceAll(s, " ", "_")
 	}
 	l := m.leaks
+	if w == chat.WhereUser {
+		switch {
+		case l.rawUser:
+			return s
+		case l.mentions && (validUser.MatchString(s) || (l.looseID && looseUser.MatchString(s))):
+			token := "<@" + s + ">"
+			if l.twoMentions {
+				token += " " + token
+			}
+			return token
+		}
+	}
 	switch {
 	case l.emphasised && w.Rich():
 		return "*" + s + "*"
@@ -259,6 +284,9 @@ func (m *markupPlatform) subject() Subject {
 		},
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
 	}
+	if m.leaks.mentions {
+		s.MentionUser = "U0123456789"
+	}
 	if m.dialect == slackPlainText {
 		s.AllowAutolink = true // Slack makes a bare URL a link that shows itself, and no escape stops it
 	}
@@ -271,6 +299,7 @@ func (m *markupPlatform) subject() Subject {
 func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
 	for name, d := range map[string]dialectKind{"slack plain_text": slackPlainText, "commonmark": commonMark} {
 		t.Run(name, func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{}).subject()) })
+		t.Run(name+" with mentions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{mentions: true}).subject()) })
 	}
 }
 
@@ -304,6 +333,11 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"CommonMark: a reference link survives", commonMark, leaks{refLinks: true}, RuleActive, KindLink},
 		{"Slack: raw text inside emphasis in the rich places", slackPlainText, leaks{emphasised: true}, RuleActive, KindMention},
 		{"CommonMark: raw text inside emphasis in the rich places", commonMark, leaks{emphasised: true}, RuleActive, KindBroadcast},
+		{"Slack: a forged user ID put on the wire raw", slackPlainText, leaks{mentions: true, rawUser: true}, RuleActive, KindBroadcast},
+		{"CommonMark: a forged user ID put on the wire raw", commonMark, leaks{mentions: true, rawUser: true}, RuleActive, KindBroadcast},
+		{"Slack: an ID is looked for anywhere in the text", slackPlainText, leaks{mentions: true, looseID: true}, RuleActive, KindMention},
+		{"CommonMark: an ID is looked for anywhere in the text", commonMark, leaks{mentions: true, looseID: true}, RuleActive, KindMention},
+		{"Slack: a valid user shown as two mentions", slackPlainText, leaks{mentions: true, twoMentions: true}, RuleActive, KindMention},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

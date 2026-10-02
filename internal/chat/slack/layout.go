@@ -131,6 +131,9 @@ func renderMessage(m chat.Message) (Content, error) {
 			}
 		case chat.ToolLine:
 			blocks = append(blocks, contextLine(toolLine(p)))
+		case chat.Mention:
+			blocks = append(blocks, mentionLine(p))
+			note(p.Text)
 		case chat.Buttons:
 			if b := buttons(p); b != nil {
 				blocks = append(blocks, b)
@@ -337,6 +340,17 @@ func fieldSections(lines []string) []map[string]any {
 
 // userID is the shape of a Slack user ID, which is the only thing shown to a person as a mention.
 var userID = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
+
+// mentionLine is a context line that names a user and says Text of them. The user is a mention only if it has the
+// shape of a Slack ID, and then in an element of its own that holds nothing but the token; the words are a
+// plain_text element, in which nothing is markup. Anything else is "someone".
+func mentionLine(m chat.Mention) map[string]any {
+	words := plainObject(text(m.Text, maxContext-40, true))
+	if !userID.MatchString(m.User) {
+		return map[string]any{"type": "context", "elements": []map[string]any{plainObject("someone"), words}}
+	}
+	return map[string]any{"type": "context", "elements": []map[string]any{mrkdwnObject("<@" + m.User + ">"), words}}
+}
 
 // renderEnding is e as a Slack message: how it ended, who by and when, what was asked, and for an answered
 // prompt a line for each question and its answer. No input or button is left. The only mrkdwn in it is the

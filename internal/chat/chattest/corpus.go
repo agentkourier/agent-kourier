@@ -12,7 +12,7 @@ type Case struct {
 // made of, or loses it, fails Conformance. Add to it, never remove: a new attack is one more line here
 // and is held against every adapter at once.
 var Corpus = concat(
-	broadcast, mentions, links, html, markdown, invisible, lines, benign,
+	broadcast, mentions, forgedUsers, links, html, markdown, invisible, lines, benign,
 )
 
 func concat(groups ...[]Case) []Case {
@@ -48,6 +48,25 @@ var mentions = []Case{
 	{"workspace user", "<@W0123456789>"},
 	{"plain @name", "@ada"},
 	{"user text in a sentence", "ping <@U0123456789> now"},
+}
+
+// User IDs that only look like one, in the place of a user in a Mention and an Ending: each tries to end the ID and
+// start a token, or to be taken for an ID by a check that is too loose. None is a valid ID, so none may act.
+var forgedUsers = []Case{
+	{"ID then a broadcast", "U0123456789><!channel>"},
+	{"ID then a mention", "U0123456789><@U9876543210>"},
+	{"ID with a label", "U0123456789|ada"},
+	{"ID with a trailing newline", "U0123456789\n"},
+	{"ID then a newline and a broadcast", "U0123456789\n<!channel>"},
+	{"ID with a space", "U0123456789 <!here>"},
+	{"ID that opens a token", "U0123456789 <!channel"},
+	{"ID, lower case", "u0123456789"},
+	{"ID too short", "U1"},
+	{"ID too long", "U01234567890123456789012345"},
+	{"another prefix", "B0123456789"},
+	{"ID in a token", "<@U0123456789>"},
+	{"ID with an entity", "U0123456789&gt;"},
+	{"ID with a zero-width space", "U0123\u200b456789"},
 }
 
 // Links, with a label the author chooses or without, and the schemes that run or phone.

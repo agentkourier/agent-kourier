@@ -51,6 +51,10 @@ type Subject struct {
 	Concessions []Concession
 	// TooLarge, if set, is a prompt too large for the platform: Fits must refuse it with chat.ErrTooLarge.
 	TooLarge *chat.Prompt
+	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
+	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
+	// of it and nothing else the platform acts on; every other user ID they send is forged, and must never act.
+	MentionUser string
 }
 
 // Concession is a construct of the kinds Kinds that the platform acts on in the text of the place Where
@@ -184,6 +188,7 @@ func checkShard(ctx context.Context, s Subject, opts Options, places []placement
 	c := &checker{ctx: ctx, s: s, caps: s.Platform.Capabilities(), opts: opts, target: cmp.Or(s.Target, defaultTarget)}
 	if contract {
 		c.contract()
+		c.mention()
 	}
 	for _, p := range places {
 		for _, cs := range Corpus {
@@ -261,6 +266,85 @@ func (c *checker) contract() {
 	_ = c.s.Inert()
 }
 
+// mention checks a Mention of a valid user, in every method that takes a message: the platform shows exactly one
+// mention of that user and nothing else that acts (a platform with no mentions shows none), and the words that
+// follow it are shown whole. The forged IDs are the placement of the Mention's user, with the corpus.
+func (c *checker) mention() {
+	user := cmp.Or(c.s.MentionUser, "U0123456789")
+	words := canary + " answered this question first"
+	out := chat.Say(chat.Message{Fallback: "fallback", Parts: []chat.Part{chat.Mention{User: user, Text: words}}})
+	calls := []struct {
+		name string
+		prep func() error
+		do   func() error
+	}{{name: "Post", do: func() error { _, err := c.s.Platform.Post(c.ctx, c.target, out, "tag-m1"); return err }}}
+	var ref chat.Ref
+	calls = append(calls, struct {
+		name string
+		prep func() error
+		do   func() error
+	}{name: "Update",
+		prep: func() (err error) {
+			ref, err = c.s.Platform.Post(c.ctx, c.target, chat.Say(chat.Message{Fallback: "seed"}), "tag-m2")
+			return err
+		},
+		do: func() error { return c.s.Platform.Update(c.ctx, ref, out) }})
+	if c.caps.Ephemeral {
+		calls = append(calls, struct {
+			name string
+			prep func() error
+			do   func() error
+		}{name: "Ephemeral", do: func() error { return c.s.Platform.Ephemeral(c.ctx, c.target, "U1", *out.Message) }})
+	}
+	if c.caps.Streams {
+		var st chat.Stream
+		calls = append(calls, struct {
+			name string
+			prep func() error
+			do   func() error
+		}{name: "Stop",
+			prep: func() (err error) { st, err = c.s.Platform.Stream(c.ctx, c.target, "U1", "start"); return err },
+			do:   func() error { return st.Stop(c.ctx, "", *out.Message, "tag-m3") }})
+	}
+	for _, m := range calls {
+		if m.prep != nil {
+			if err := m.prep(); err != nil {
+				c.add(RuleRejected, chat.WhereUser, m.name, "valid mention", "a plain message was refused while preparing: %v", err)
+				continue
+			}
+		}
+		c.s.Sent()
+		_ = c.s.Inert()
+		err := m.do()
+		shown := c.s.Sent()
+		if err := c.s.Inert(); err != nil {
+			c.add(RuleInert, chat.WhereUser, m.name, "valid mention", "%v", err)
+		}
+		if err != nil {
+			c.add(RuleRejected, chat.WhereUser, m.name, "valid mention", "%v", err)
+			continue
+		}
+		mentions, whole := 0, false
+		for _, s := range shown {
+			for _, a := range s.Active {
+				switch {
+				case a.Kind == KindMention && c.s.MentionUser != "" && strings.Contains(a.Text, user):
+					mentions++
+				default:
+					c.add(RuleActive, chat.WhereUser, m.name, "valid mention", "a mention of a valid user became a %s: %q", a.Kind, a.Text)
+				}
+			}
+			whole = whole || strings.Contains(s.Displayed, words)
+		}
+		if c.s.MentionUser != "" && mentions != 1 {
+			c.add(RuleActive, chat.WhereUser, m.name, "valid mention", "the valid user became a mention %d times, want exactly one", mentions)
+		}
+		if !whole {
+			c.add(RuleFidelity, chat.WhereUser, m.name, "valid mention", "the words after the mention are not shown whole (shown: %q)", displayed(shown))
+		}
+	}
+}
+
 // call is one thing to send: a message, a prompt or an ending (Post, Update, and Ephemeral for a message),
 // or markdown for a stream.
 type call struct {
@@ -325,6 +409,8 @@ func placements() []placement {
 		}, false},
 		{chat.WhereAnswer, "ending answer", func(s string) call { return ending(func(e *chat.Ending) { e.Answers = [][]string{{s}} }) }, false},
 		{chat.WhereUser, "ending decider", func(s string) call { return ending(func(e *chat.Ending) { e.By = s }) }, true},
+		{chat.WhereUser, "mention user", func(s string) call { return msg(chat.Mention{User: s, Text: "answered first"}) }, true},
+		{chat.WhereContext, "mention text", func(s string) call { return msg(chat.Mention{User: "someone", Text: s}) }, false},
 		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false},
 	}
 }
@@ -437,6 +523,14 @@ func (c *checker) verify(p placement, method, name, text string, callErr error) 
 		if strings.Contains(s.Displayed, canary) {
 			carriers = append(carriers, s)
 		}
+	}
+	if p.where == chat.WhereUser && p.build(text).out.Message != nil {
+		// A forged user ID in a Mention: the message holds no mention of anyone, so nothing shown may act, whether or
+		// not it holds the text (a platform that shows "someone" shows none of it).
+		for _, s := range shown {
+			c.checkActive(p, method, name, s)
+		}
+		return
 	}
 	if len(carriers) == 0 {
 		if !p.optional {

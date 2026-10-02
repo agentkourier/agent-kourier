@@ -130,6 +130,8 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		},
 		Inert:    inertRequests(w),
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 60)},
+		// A user ID of Slack's shape is a mention in a Mention part, and nothing else is.
+		MentionUser: "U0123456789",
 		// Slack makes a bare URL in text and in markdown into a link that shows its own address, and no escape
 		// stops it: a backslash before a colon is shown as a backslash, and Slack has no escape for mrkdwn. The
 		// link goes where the text says and nowhere else, and every request is inert (no unfurl, so Slack does

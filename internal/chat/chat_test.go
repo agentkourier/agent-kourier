@@ -97,7 +97,7 @@ func TestWhereClassesAreExactlyTheRichAndLinePlaces(t *testing.T) {
 
 var everyPart = chat.Message{Fallback: "fallback", Parts: []chat.Part{
 	chat.Header{Text: "head"}, chat.Body{Markdown: "*body*"}, chat.Context{Text: "ctx"}, chat.Note{Text: "note"},
-	chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\""},
+	chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\""}, chat.Mention{User: "U0123456789", Text: "answered first"},
 	chat.Buttons{Buttons: []chat.Button{{ID: "go", Label: "Go", Value: "ix-1", Primary: true}}},
 }}
 
