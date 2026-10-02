@@ -127,7 +127,9 @@ func TestALineBasedLinkDefangerIsCaught(t *testing.T) {
 	seen := map[string]bool{}
 	names := []string{"markdown link, text over two lines", "markdown link, javascript, text over two lines", "markdown image, alt over two lines"}
 	for _, v := range catch(context.Background(), s, names...) {
-		seen[v.Case] = true
+		if v.Rule == RuleActive { // a live construct, and not another way the case was found wanting
+			seen[v.Case] = true
+		}
 	}
 	for _, name := range []string{"markdown link, text over two lines", "markdown link, javascript, text over two lines", "markdown image, alt over two lines"} {
 		if !seen[name] {
@@ -174,7 +176,9 @@ func TestALabelOverTwoLinesIsALinkReferenceDefinition(t *testing.T) {
 	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
 	seen := map[string]bool{}
 	for _, v := range catch(context.Background(), s, "markdown reference definition, label over two lines") {
-		seen[v.Case] = true
+		if v.Rule == RuleActive { // a live construct, and not another way the case was found wanting
+			seen[v.Case] = true
+		}
 	}
 	if !seen["markdown reference definition, label over two lines"] {
 		t.Error("the suite found no violation for a link reference definition whose label runs over two lines, which this adapter lets through live")
@@ -216,7 +220,9 @@ func TestAnEscapedBracketDoesNotEndALabel(t *testing.T) {
 	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
 	seen := map[string]bool{}
 	for _, v := range catch(context.Background(), s, "markdown reference, escaped brackets in the label") {
-		seen[v.Case] = true
+		if v.Rule == RuleActive { // a live construct, and not another way the case was found wanting
+			seen[v.Case] = true
+		}
 	}
 	if !seen["markdown reference, escaped brackets in the label"] {
 		t.Error("the suite found no violation for a reference whose label holds escaped brackets, which this adapter lets through live")
