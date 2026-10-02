@@ -13,13 +13,28 @@ func kinds(s Shown) []Kind {
 	return out
 }
 
-func TestScanReadsWhatAPlatformWouldMakeOfTheWire(t *testing.T) {
-	for _, tc := range []struct {
-		name, wire, displayed string
-		want                  []Kind
-	}{
+type scanCase struct {
+	name, wire, displayed string
+	want                  []Kind
+}
+
+func runScans(t *testing.T, scan func(string) Shown, cases []scanCase) {
+	t.Helper()
+	for _, tc := range cases {
+		got := scan(tc.wire)
+		if got.Displayed != tc.displayed || !slices.Equal(kinds(got), tc.want) {
+			t.Errorf("%s: scan(%q) = %q %v, want %q %v", tc.name, tc.wire, got.Displayed, kinds(got), tc.displayed, tc.want)
+		}
+	}
+}
+
+// What Slack's mrkdwn makes of the wire. There is no escape but the three entities, so a backslash does not
+// stop anything, which is how an adapter that escaped as for CommonMark once passed the suite.
+func TestScanSlackReadsWhatSlackMakesOfMrkdwn(t *testing.T) {
+	runScans(t, ScanSlack, []scanCase{
 		{"plain text", "The deploy finished.", "The deploy finished.", nil},
 		{"entities are characters", "a &amp; b &lt;!channel&gt;", "a & b <!channel>", nil},
+		{"only three entities", "&#60;!channel&#62; &quot;", "&#60;!channel&#62; &quot;", nil},
 		{"a raw broadcast", "<!channel>", "!channel", []Kind{KindBroadcast}},
 		{"a broadcast with a label", "<!here|here>", "here", []Kind{KindBroadcast}},
 		{"a user group", "<!subteam^S1|@oncall>", "@oncall", []Kind{KindBroadcast}},
@@ -30,12 +45,58 @@ func TestScanReadsWhatAPlatformWouldMakeOfTheWire(t *testing.T) {
 		{"mailto", "<mailto:a@b.c|mail>", "mail", []Kind{KindLink}},
 		{"a tag", "<b>x</b>", "bx/b", []Kind{KindHTML, KindHTML}},
 		{"a tag never closed", "x <b never closed", "x ", []Kind{KindHTML}},
-		{"a markdown link", "[bank](https://evil.test)", "bank", []Kind{KindLink}},
-		{"a markdown image", "![alt](https://evil.test/x.png)", "alt", []Kind{KindImage}},
+		{"a backslash is a backslash: the < is still a token", `\<!channel> \<@U1> \<https://evil.test|your bank>`, `\!channel \@U1 \your bank`, []Kind{KindBroadcast, KindMention, KindLink}},
+		{"a backslash before an ampersand is a backslash", `\&lt;!channel\&gt;`, `\<!channel\>`, nil},
+		{"markdown links are text", "[bank](https://evil.test)", "[bank](https://evil.test)", []Kind{KindAutolink}},
+		{"a reference is text", "[x][1]\n\n[1]: https://evil.test", "[x][1]\n\n[1]: https://evil.test", []Kind{KindAutolink}},
 		{"a bare URL", "see https://evil.test now", "see https://evil.test now", []Kind{KindAutolink}},
 		{"a bare www", "www.evil.test", "www.evil.test", []Kind{KindAutolink}},
+		{"an email address", "write to ada@evil.test now", "write to ada@evil.test now", []Kind{KindAutolink}},
 		{"emphasis", "*b* and _i_ and ~s~", "b and i and s", []Kind{KindEmphasis, KindEmphasis, KindEmphasis}},
-		{"double emphasis", "**b** __b__", "b b", []Kind{KindEmphasis, KindEmphasis}},
+		{"code", "`<!channel>`", "<!channel>", []Kind{KindCode}},
+		{"a quote", "> said", " said", []Kind{KindQuote}},
+		{"a heading and a list are text", "# title\n- one\n1. two", "# title\n- one\n1. two", nil},
+		{"snake_case is not emphasis", "snake_case_name", "snake_case_name", nil},
+		{"a star in a sum is not emphasis", "2 * 3 * 4", "2 * 3 * 4", nil},
+		{"emoji is not a construct", ":skull:", ":skull:", nil},
+	})
+}
+
+// A plain_text object shows its text as it is, so style is not a construct there, and the three entities
+// are read; a token or a link in it is still reported, because that it parses none is not known.
+func TestScanSlackPlainShowsTheTextAsItIsAndStillFindsTokens(t *testing.T) {
+	runScans(t, ScanSlackPlain, []scanCase{
+		{"entities", "a &amp; b &lt;!channel&gt;", "a & b <!channel>", nil},
+		{"style is text", "*b* _i_ `c` # h > q", "*b* _i_ `c` # h > q", nil},
+		{"an escaped markdown link", `\[a\]\(b\)`, `\[a\]\(b\)`, nil},
+		{"a raw broadcast", "<!channel>", "<!channel>", []Kind{KindBroadcast}},
+		{"a raw mention behind a backslash", `\<@U1>`, `\<@U1>`, []Kind{KindMention}},
+		{"a raw link", "<https://evil.test|x>", "<https://evil.test|x>", []Kind{KindLink}},
+		{"a bare URL", "https://evil.test", "https://evil.test", []Kind{KindAutolink}},
+	})
+}
+
+// What CommonMark makes of the wire: a backslash before punctuation is the character, entities are
+// characters, and links come inline, by reference, in angle brackets, and as images.
+func TestScanCommonMarkReadsWhatCommonMarkMakesOfTheWire(t *testing.T) {
+	runScans(t, ScanCommonMark, []scanCase{
+		{"plain text", "The deploy finished.", "The deploy finished.", nil},
+		{"entities are characters", "a &amp; b &lt;!channel&gt;", "a & b <!channel>", nil},
+		{"numeric and named entities are characters", "&#60;!channel&#x3E; &quot;", `<!channel> "`, nil},
+		{"a raw broadcast", "<!channel>", "!channel", []Kind{KindBroadcast}},
+		{"an angle autolink", "<https://evil.test|x>", "x", []Kind{KindLink}},
+		{"raw HTML", "<b>x</b>", "bx/b", []Kind{KindHTML, KindHTML}},
+		{"an inline link", "[bank](https://evil.test)", "bank", []Kind{KindLink}},
+		{"an image", "![alt](https://evil.test/x.png)", "alt", []Kind{KindImage}},
+		{"a reference link and its definition", "[x][1]\n\n[1]: https://evil.test", "x\n\n", []Kind{KindLink, KindLink}},
+		{"a definition survives its escapes", "[x][1]\n\n[1]: https\\:\\/\\/evil\\.test", "x\n\n", []Kind{KindLink, KindLink}},
+		{"a shortcut reference", "[evil]\n\n[evil]: https://evil.test", "evil\n\n", []Kind{KindLink, KindLink}},
+		{"a collapsed reference", "[evil][]\n\n[Evil]: https://evil.test", "evil\n\n", []Kind{KindLink, KindLink}},
+		{"a bracket with no definition is text", "[x][1] and [y]", "[x][1] and [y]", nil},
+		{"an escaped definition is text", `\[1\]: https\://evil.test`, "[1]: https://evil.test", nil},
+		{"a bare URL", "see https://evil.test now", "see https://evil.test now", []Kind{KindAutolink}},
+		{"an email address", "ada@evil.test", "ada@evil.test", []Kind{KindAutolink}},
+		{"emphasis", "*b* and _i_ and ~s~ and **b** __b__", "b and i and s and b b", []Kind{KindEmphasis, KindEmphasis, KindEmphasis, KindEmphasis, KindEmphasis}},
 		{"code", "`<!channel>`", "<!channel>", []Kind{KindCode}},
 		{"a fence", "```\nx\n```", "\nx\n", []Kind{KindCode}},
 		{"a heading", "# title", " title", []Kind{KindHeading}},
@@ -49,12 +110,7 @@ func TestScanReadsWhatAPlatformWouldMakeOfTheWire(t *testing.T) {
 		{"an escaped URL is no link", `https\://evil.test www\.evil.test`, "https://evil.test www.evil.test", nil},
 		{"entities are not a tag", "&lt;b&gt;x&lt;/b&gt;", "<b>x</b>", nil},
 		{"emoji is not a construct", ":skull:", ":skull:", nil},
-	} {
-		got := Scan(tc.wire)
-		if got.Displayed != tc.displayed || !slices.Equal(kinds(got), tc.want) {
-			t.Errorf("%s: Scan(%q) = %q %v, want %q %v", tc.name, tc.wire, got.Displayed, kinds(got), tc.displayed, tc.want)
-		}
-	}
+	})
 }
 
 func TestStyleKindsAreExactlyTheCosmeticOnes(t *testing.T) {

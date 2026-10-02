@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"unicode"
 
@@ -12,6 +13,7 @@ import (
 )
 
 func TestFakePlatformPassesConformance(t *testing.T) {
+	t.Parallel()
 	Conformance(t, NewFake().Subject())
 }
 
@@ -22,29 +24,81 @@ func TestConformanceRefusesAnIncompleteSubject(t *testing.T) {
 	}
 }
 
+// dialectKind is how the test platform's wire format is read: the reader that its Sent uses, which is the
+// reader of the platform it stands for.
+type dialectKind int
+
+const (
+	slackPlainText dialectKind = iota // Slack plain_text: only &amp; &lt; &gt;, no escape, tokens are tokens
+	commonMark                        // CommonMark: backslash escapes, entities, links by reference
+)
+
 // leaks are the ways markupPlatform can be made unsafe, one at a time. Each is a way a real adapter fails.
 type leaks struct {
 	noEscape, noClean, keepNewlines, noTruncate bool
-	drop                                        chat.Where // shows nothing of this place, if set (and dropping)
+	drop                                        chat.Where // shows nothing of this place, if dropping
 	dropping                                    bool
 	mangle, notInert                            bool
 	acceptsMalformed                            bool
 	noStreamError                               bool
 	tooLargeFits                                bool
+
+	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
+	backslashAll      bool // a backslash before every ASCII punctuation: Slack honours none, and the "<" is a token
+	backslashLt       bool // a backslash before "<" and "&" only
+	backslashMarkdown bool // a CommonMark-minded escaper (backslashes and no entities) for a platform that has none
+	refLinks          bool // entities and backslashes, except "[", "]" and ":": a CommonMark reference link survives
+	updateGap         bool // the Update path leaves a field that starts with "<" as it is
+	stopGap           bool // the Stop path does not escape
 }
 
 // markupPlatform is a platform whose wire format is text with markup: an adapter of it has to escape, which
 // is what a safe one does, and what each leak leaves out. It stores its messages in a FakePlatform and
-// reports what it sent by Scan, which is what a Subject has to say for such a platform.
+// reports what it sent by the reader of its dialect, which is what a Subject has to say for such a platform.
 type markupPlatform struct {
 	*FakePlatform
-	leaks leaks
-	sent  []Shown
-	wires []string
+	dialect dialectKind
+	leaks   leaks
+	mode    string // the method being recorded, for the leaks that are of one method only
+	sent    []Shown
 }
 
-func newMarkup(l leaks) *markupPlatform {
-	return &markupPlatform{FakePlatform: NewFake(), leaks: l}
+func newMarkup(d dialectKind, l leaks) *markupPlatform {
+	f := NewFake()
+	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
+	f.SetCaps(chat.Caps{
+		Streams: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300,
+		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
+	})
+	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
+}
+
+func (m *markupPlatform) read(wire string) Shown {
+	if m.dialect == commonMark {
+		return ScanCommonMark(wire)
+	}
+	return ScanSlackPlain(wire)
+}
+
+// safe is s escaped for the platform's dialect.
+func (m *markupPlatform) safe(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '&':
+			b.WriteString("&amp;")
+		case r == '<':
+			b.WriteString("&lt;")
+		case r == '>':
+			b.WriteString("&gt;")
+		case m.dialect == commonMark && r < 0x80 && (unicode.IsPunct(r) || unicode.IsSymbol(r)):
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // encode is text at place w as it goes on the wire.
@@ -58,36 +112,60 @@ func (m *markupPlatform) encode(s string, w chat.Where) string {
 	if m.leaks.mangle {
 		s = strings.ReplaceAll(s, " ", "_")
 	}
-	if m.leaks.noEscape {
+	l := m.leaks
+	switch {
+	case l.noEscape, l.stopGap && m.mode == "Stop":
 		return s
-	}
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '&':
-			b.WriteString("&amp;")
-		case r == '<':
-			b.WriteString("&lt;")
-		case r == '>':
-			b.WriteString("&gt;")
-		case r < 0x80 && (unicode.IsPunct(r) || unicode.IsSymbol(r)):
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		default:
-			b.WriteRune(r)
+	case l.updateGap && m.mode == "Update" && strings.HasPrefix(s, "<"):
+		return s
+	case l.backslashAll:
+		return strings.NewReplacer(escapes("\\<>&*_~`[]()#-+.!|:/")...).Replace(s)
+	case l.backslashLt:
+		return strings.NewReplacer("<", `\<`, "&", `\&`).Replace(s)
+	case l.backslashMarkdown:
+		return strings.NewReplacer(`\`, `\\`, "<", `\<`, "&", `\&`, "*", `\*`, "[", `\[`, "]", `\]`, "(", `\(`, "`", "\\`", "_", `\_`, "~", `\~`).Replace(s)
+	case l.refLinks:
+		var b strings.Builder
+		for _, r := range s {
+			switch {
+			case r == '&':
+				b.WriteString("&amp;")
+			case r == '<':
+				b.WriteString("&lt;")
+			case r == '>':
+				b.WriteString("&gt;")
+			case r == '[' || r == ']' || r == ':':
+				b.WriteRune(r)
+			case r < 0x80 && (unicode.IsPunct(r) || unicode.IsSymbol(r)):
+				b.WriteByte('\\')
+				b.WriteRune(r)
+			default:
+				b.WriteRune(r)
+			}
 		}
+		return b.String()
 	}
-	return b.String()
+	return m.safe(s)
 }
 
-func (m *markupPlatform) record(fields []Field) {
+// escapes is a replacer's arguments that put a backslash before each character of chars.
+func escapes(chars string) []string {
+	var out []string
+	for _, r := range chars {
+		out = append(out, string(r), `\`+string(r))
+	}
+	return out
+}
+
+func (m *markupPlatform) record(mode string, fields []Field) {
+	m.mode = mode
+	defer func() { m.mode = "" }()
+	m.Subject().Sent() // the fake keeps what it shows, which this platform reads for itself: let it go
 	for _, f := range fields {
 		if m.leaks.dropping && f.Where == m.leaks.drop {
 			continue
 		}
-		wire := m.encode(f.Text, f.Where)
-		m.wires = append(m.wires, wire)
-		m.sent = append(m.sent, Scan(wire))
+		m.sent = append(m.sent, m.read(m.encode(f.Text, f.Where)))
 	}
 }
 
@@ -97,7 +175,7 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	}
 	ref, err := m.FakePlatform.Post(ctx, t, o, tag)
 	if err == nil {
-		m.record(Fields(o))
+		m.record("Post", Fields(o))
 	}
 	return ref, err
 }
@@ -105,7 +183,7 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
 	err := m.FakePlatform.Update(ctx, r, o)
 	if err == nil {
-		m.record(Fields(o))
+		m.record("Update", Fields(o))
 	}
 	return err
 }
@@ -113,7 +191,7 @@ func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing
 func (m *markupPlatform) Ephemeral(ctx context.Context, t chat.Target, user string, msg chat.Message) error {
 	err := m.FakePlatform.Ephemeral(ctx, t, user, msg)
 	if err == nil {
-		m.record(MessageFields(msg))
+		m.record("Ephemeral", MessageFields(msg))
 	}
 	return err
 }
@@ -124,7 +202,7 @@ func (m *markupPlatform) Stream(ctx context.Context, t chat.Target, to, md strin
 	}
 	st, err := m.FakePlatform.Stream(ctx, t, to, md)
 	if err == nil {
-		m.record([]Field{{md, chat.WhereStream}})
+		m.record("Stream", []Field{{md, chat.WhereStream}})
 		st = &markupStream{Stream: st, m: m}
 	}
 	return st, err
@@ -138,7 +216,7 @@ type markupStream struct {
 func (s *markupStream) Append(ctx context.Context, md string) error {
 	err := s.Stream.Append(ctx, md)
 	if err == nil {
-		s.m.record([]Field{{md, chat.WhereStream}})
+		s.m.record("Append", []Field{{md, chat.WhereStream}})
 	}
 	return err
 }
@@ -146,7 +224,7 @@ func (s *markupStream) Append(ctx context.Context, md string) error {
 func (s *markupStream) Stop(ctx context.Context, final chat.Message, tag string) error {
 	err := s.Stream.Stop(ctx, final, tag)
 	if err == nil {
-		s.m.record(MessageFields(final))
+		s.m.record("Stop", MessageFields(final))
 	}
 	return err
 }
@@ -170,54 +248,105 @@ func (m *markupPlatform) subject() Subject {
 		},
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
 	}
+	if m.dialect == slackPlainText {
+		s.AllowAutolink = true // Slack makes a bare URL a link that shows itself, and no escape stops it
+	}
 	if m.leaks.noStreamError {
 		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, Edits: true})
 	}
 	return s
 }
 
-func TestAnEscapingMarkupAdapterPasses(t *testing.T) {
-	Conformance(t, newMarkup(leaks{}).subject())
+func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
+	for name, d := range map[string]dialectKind{"slack plain_text": slackPlainText, "commonmark": commonMark} {
+		t.Run(name, func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{}).subject()) })
+	}
 }
 
 // The suite is the safety gate, so each way an adapter can fail it must be caught: a deliberately unsafe
 // adapter is run for each, and the rule that names its failure must be among the violations. A leak that
-// is not caught is a hole in the suite.
+// is not caught is a hole in the suite. The last group is the escapers that an earlier suite passed: each
+// escapes for a dialect that does not honour the escape.
 func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		leaks leaks
-		rule  Rule
+		name    string
+		dialect dialectKind
+		leaks   leaks
+		rule    Rule
+		kind    Kind // the construct found, for RuleActive
 	}{
-		{"no escaping: markup on the wire", leaks{noEscape: true}, RuleActive},
-		{"hidden characters kept", leaks{noClean: true}, RuleInvisible},
-		{"newlines kept in a one-line place", leaks{keepNewlines: true}, RuleNewline},
-		{"text never cut", leaks{noTruncate: true}, RuleLimit},
-		{"a hint dropped", leaks{dropping: true, drop: chat.WhereHint}, RuleDropped},
-		{"a button label dropped", leaks{dropping: true, drop: chat.WhereButton}, RuleDropped},
-		{"text altered", leaks{mangle: true}, RuleFidelity},
-		{"a request that is not inert", leaks{notInert: true}, RuleInert},
-		{"a malformed message accepted", leaks{acceptsMalformed: true}, RuleContract},
-		{"no error from a platform with no streams", leaks{noStreamError: true}, RuleContract},
-		{"a prompt that is too large said to fit", leaks{tooLargeFits: true}, RuleContract},
+		{"no escaping: markup on the wire", slackPlainText, leaks{noEscape: true}, RuleActive, KindBroadcast},
+		{"hidden characters kept", slackPlainText, leaks{noClean: true}, RuleInvisible, ""},
+		{"newlines kept in a one-line place", slackPlainText, leaks{keepNewlines: true}, RuleNewline, ""},
+		{"text never cut", slackPlainText, leaks{noTruncate: true}, RuleLimit, ""},
+		{"a hint dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereHint}, RuleDropped, ""},
+		{"a button label dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereButton}, RuleDropped, ""},
+		{"text altered", slackPlainText, leaks{mangle: true}, RuleFidelity, ""},
+		{"a request that is not inert", slackPlainText, leaks{notInert: true}, RuleInert, ""},
+		{"a malformed message accepted", slackPlainText, leaks{acceptsMalformed: true}, RuleContract, ""},
+		{"no error from a platform with no streams", slackPlainText, leaks{noStreamError: true}, RuleContract, ""},
+		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},
+
+		{"Slack: a backslash before every punctuation, which Slack does not honour", slackPlainText, leaks{backslashAll: true}, RuleActive, KindHTML},
+		{"Slack: a backslash before < and & only", slackPlainText, leaks{backslashLt: true}, RuleActive, KindMention},
+		{"Slack: a CommonMark-minded escaper", slackPlainText, leaks{backslashMarkdown: true}, RuleActive, KindLink},
+		{"CommonMark: a reference link survives", commonMark, leaks{refLinks: true}, RuleActive, KindLink},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vs := CheckWith(t.Context(), newMarkup(tc.leaks).subject(), Options{Short: true})
+			t.Parallel()
+			s := newMarkup(tc.dialect, tc.leaks).subject()
+			vs := CheckWith(t.Context(), s, Options{Short: true}) // the gaps that need a variant are in the test below
 			var rules []Rule
+			found := false
 			for _, v := range vs {
 				rules = append(rules, v.Rule)
+				if v.Rule == tc.rule && (tc.kind == "" || strings.Contains(v.Detail, "became a "+string(tc.kind))) {
+					found = true
+				}
 			}
-			if !slices.Contains(rules, tc.rule) {
-				t.Errorf("rules found %v, want %s among them", slices.Compact(slices.Sorted(slices.Values(rules))), tc.rule)
+			if !found {
+				t.Errorf("rules found %v, want %s (%s) among them", slices.Compact(slices.Sorted(slices.Values(rules))), tc.rule, tc.kind)
 			}
 		})
 	}
 }
 
+// Each method is checked with every variant of the text, not one: a renderer that handles a field that starts
+// with "<" differently in Update, or in the final message of a stream, is caught for exactly that method.
+func TestAGapInOneMethodIsFoundByThatMethodAlone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		d      dialectKind
+		leaks  leaks
+		method string
+	}{
+		{commonMark, leaks{updateGap: true}, "Update"},
+		{slackPlainText, leaks{updateGap: true}, "Update"},
+		{commonMark, leaks{stopGap: true}, "Stop"},
+	} {
+		vs := Check(t.Context(), newMarkup(tc.d, tc.leaks).subject())
+		methods, broadcast := map[string]bool{}, false
+		for _, v := range vs {
+			methods[v.Method] = true
+			broadcast = broadcast || (v.Rule == RuleActive && strings.Contains(v.Detail, "became a broadcast"))
+		}
+		if len(methods) != 1 || !methods[tc.method] || !broadcast {
+			t.Errorf("a gap in %s was found by %v (a live broadcast seen: %t), want %s alone, and the broadcast", tc.method, methods, broadcast, tc.method)
+		}
+	}
+}
+
+// noEscape is what the suite finds of a CommonMark platform that escapes nothing, found once for the tests
+// that read it.
+var noEscape = sync.OnceValue(func() []Violation {
+	return Check(context.Background(), newMarkup(commonMark, leaks{noEscape: true}).subject())
+})
+
 // Dangerous constructs are found in every place where they must not appear, and each kind of dangerous
 // text of the corpus is found by name: a platform that lets one through is told which.
 func TestNoEscapingIsCaughtForEveryKindOfDangerousText(t *testing.T) {
-	vs := Check(t.Context(), newMarkup(leaks{noEscape: true}).subject())
+	t.Parallel()
+	vs := noEscape()
 	found := map[string]bool{}
 	for _, v := range vs {
 		if v.Rule == RuleActive {
@@ -225,7 +354,7 @@ func TestNoEscapingIsCaughtForEveryKindOfDangerousText(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"channel", "here", "everyone", "user group", "date", "channel link", "user", "user with a name",
-		"autolink", "link with a label", "markdown link", "markdown image", "bare URL", "script", "bold tag"} {
+		"autolink", "link with a label", "markdown link", "markdown image", "markdown reference link", "bare URL", "script", "bold tag"} {
 		if !found[name] {
 			t.Errorf("the corpus case %q was not caught as an active construct when nothing is escaped", name)
 		}
@@ -235,11 +364,11 @@ func TestNoEscapingIsCaughtForEveryKindOfDangerousText(t *testing.T) {
 // Style is cosmetic, so a platform that cannot show a literal place unstyled says so, once, and is held
 // to everything else; and a bare URL it cannot stop is the same. Nothing else is excused by them.
 func TestStyleAndAutolinkConcessionsExcuseOnlyThemselves(t *testing.T) {
-	strict := newMarkup(leaks{noEscape: true}).subject()
-	conceding := newMarkup(leaks{noEscape: true}).subject()
+	t.Parallel()
+	conceding := newMarkup(commonMark, leaks{noEscape: true}).subject()
 	conceding.StyleInLiteral, conceding.AllowAutolink = true, true
 	var strictKinds, concedingKinds []string
-	for _, v := range Check(t.Context(), strict) {
+	for _, v := range noEscape() {
 		if v.Rule == RuleActive {
 			strictKinds = append(strictKinds, v.Detail)
 		}
@@ -271,7 +400,8 @@ func TestStyleAndAutolinkConcessionsExcuseOnlyThemselves(t *testing.T) {
 
 // Style in the one rich place is not a violation, and a mention in it is.
 func TestTheRichPlaceMayBeStyledButNotNotify(t *testing.T) {
-	vs := Check(t.Context(), newMarkup(leaks{noEscape: true}).subject())
+	t.Parallel()
+	vs := noEscape()
 	for _, v := range vs {
 		if v.Rule == RuleActive && v.Where == chat.WhereBody && (strings.Contains(v.Detail, "became a emphasis") || strings.Contains(v.Detail, "became a code")) {
 			t.Errorf("style in the body was a violation: %v", v)

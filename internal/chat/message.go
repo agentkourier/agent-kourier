@@ -70,12 +70,16 @@ func (m Message) Validate() error {
 		return fmt.Errorf("%w: a message with no text and no parts", ErrInvalid)
 	}
 	for i, p := range m.Parts {
-		if b, ok := p.(Buttons); ok {
-			for j, btn := range b.Buttons {
+		switch p := p.(type) {
+		case Header, Body, Context, Note, ToolLine:
+		case Buttons:
+			for j, btn := range p.Buttons {
 				if btn.ID == "" || btn.Label == "" {
 					return fmt.Errorf("%w: button %d of part %d has no ID or no label", ErrInvalid, j, i)
 				}
 			}
+		default: // a nil part, or one of a type this package does not know: an adapter would drop it, silently
+			return fmt.Errorf("%w: part %d is %T", ErrInvalid, i, p)
 		}
 	}
 	return nil

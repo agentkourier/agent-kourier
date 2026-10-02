@@ -2,6 +2,7 @@ package chattest
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -16,11 +17,11 @@ const (
 	KindMention     Kind = "mention"      // notifies one person: <@U1>
 	KindBroadcast   Kind = "broadcast"    // notifies many: <!channel>, <!here>, <!everyone>, <!subteam^S1>
 	KindChannelLink Kind = "channel link" // <#C1>
-	KindLink        Kind = "link"         // one whose label the author chooses: <https://x|y>, [y](https://x)
+	KindLink        Kind = "link"         // one whose label the author chooses: <https://x|y>, [y](https://x), [y][1] with a definition
 	KindImage       Kind = "image"        // ![alt](https://x)
 	KindHTML        Kind = "html"         // a tag, or markup the platform's own parser would take
 	KindDate        Kind = "date"         // <!date^...>
-	KindAutolink    Kind = "autolink"     // a bare URL the platform makes into a link showing its own address
+	KindAutolink    Kind = "autolink"     // a bare URL or email address the platform makes into a link showing itself
 
 	KindEmphasis Kind = "emphasis" // *b*, _i_, ~s~
 	KindCode     Kind = "code"     // `c`, and a fenced block
@@ -46,30 +47,76 @@ type Active struct {
 
 // Shown is a piece of text as a person sees it, and the constructs the platform acted on in it. It is
 // what a platform's client makes of what an adapter sent, so an adapter that sends text with markup in it
-// has to say what that markup does.
+// has to say what that markup does, in the way the platform reads that text: with the reader of the
+// platform's dialect (ScanSlack, ScanSlackPlain or ScanCommonMark), and never with another's.
 type Shown struct {
 	Displayed string
 	Active    []Active
 }
 
-// Scan is the reference reading of text on the wire in a Slack-and-CommonMark style, for an adapter
-// whose wire format is text with markup (and for a test double that has one): entities (&amp; &lt; &gt;)
-// are the characters themselves, and a raw "<" starts a token; a backslash escapes the ASCII punctuation
-// after it; and *, _, ~ and ` pairs, [text](url) links, ![alt](url) images, bare URLs, and a line that
-// starts with #, > or a list marker are constructs. The displayed text is what is left once the markup is
-// taken out and the entities are read; a token shows its label.
+// dialect is how a platform reads one kind of text. The differences are what a careful adapter gets
+// wrong: escaping for a dialect that does not honour the escape (a backslash before "<" in Slack's mrkdwn
+// is a backslash, and the "<" is a token), and leaving a construct that the other dialect has (a link
+// reference definition in CommonMark).
+type dialect struct {
+	escapes bool // a backslash makes the ASCII punctuation after it a character
+	links   bool // [text](url), ![alt](url), and links by reference
+	markers bool // a line that starts with # or a list marker (a quote always is a marker)
+	numeric bool // &#60; &#x3C; &quot; and &apos; are characters
+}
+
+var (
+	slackDialect      = dialect{}
+	commonMarkDialect = dialect{escapes: true, links: true, markers: true, numeric: true}
+)
+
+// ScanSlack reads Slack's mrkdwn: a message's top-level text, and a mrkdwn text object. Only &amp; &lt; and
+// &gt; are entities, and there is no other escape: a backslash is a backslash, and what follows it is read as
+// if it were not there, so every "<" is the start of a token, a mention, a broadcast, a date, a channel
+// link or a link, or a tag. "[text](url)" is text there (a link is "<url|text>"). Bare URLs and email
+// addresses are autolinked. A quote is the one line marker.
+func ScanSlack(wire string) Shown { return scan(wire, slackDialect) }
+
+// ScanSlackPlain reads a Slack plain_text object, which has no emphasis, code or list: the text is shown as
+// it is, with the three entities read. A token or a link in it is still reported, because that a
+// plain_text object parses none is not known (UNCONFIRMED(WP-04)), and an adapter must not rely on it.
+func ScanSlackPlain(wire string) Shown {
+	var active []Active
+	for _, a := range scan(wire, slackDialect).Active {
+		if !a.Kind.Style() {
+			active = append(active, a)
+		}
+	}
+	return Shown{Displayed: slackEntities.Replace(wire), Active: active}
+}
+
+var slackEntities = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&")
+
+// ScanCommonMark reads CommonMark, as in Slack's markdown block and a stream's markdown_text: a backslash
+// makes the ASCII punctuation after it a character, entities (named and numeric) are characters, and there
+// are links inline, by reference, and in angle brackets, images, raw HTML, bare URLs, and the line markers.
 //
-// It reads what a careful platform would, and no less than the first reading of text it can: an adapter
-// is checked against it, so it errs towards finding a construct. The adapter's own tests, against its
+// It reads what a careful platform would, and no less than the first reading of text it can: an adapter is
+// checked against it, so it errs towards finding a construct. The adapter's own tests, against its
 // platform, are the last word.
-func Scan(wire string) Shown {
+func ScanCommonMark(wire string) Shown { return scan(wire, commonMarkDialect) }
+
+func scan(wire string, d dialect) Shown {
 	var out strings.Builder
 	var active []Active
+	var defs map[string]bool
+	if d.links {
+		defs = definitions(wire)
+	}
 	atLineStart := true
 	for i := 0; i < len(wire); {
 		if atLineStart {
-			if n, kind := lineMarker(wire[i:]); n > 0 {
+			if n, kind := lineMarker(wire[i:], d); n > 0 {
 				active = append(active, Active{kind, wire[i : i+n]})
+				if kind == KindLink { // a link reference definition is not shown
+					i += n
+					continue
+				}
 				i += n
 				continue // a marker is followed by more text on the same line
 			}
@@ -81,17 +128,16 @@ func Scan(wire string) Shown {
 			out.WriteByte('\n')
 			atLineStart = true
 			i += size
-		case r == '\\' && i+1 < len(wire) && isPunct(wire[i+1]):
+		case d.escapes && r == '\\' && i+1 < len(wire) && isPunct(wire[i+1]):
 			out.WriteByte(wire[i+1])
 			i += 2
 		case r == '&':
-			i += entity(wire[i:], &out)
+			i += entity(wire[i:], d, &out)
 		case r == '<':
-			n := token(wire[i:], &out, &active)
-			i += n
+			i += token(wire[i:], &out, &active)
 		case r == '`':
 			i += code(wire[i:], &out, &active)
-		case r == '!' && strings.HasPrefix(wire[i:], "!["):
+		case d.links && r == '!' && strings.HasPrefix(wire[i:], "!["):
 			if text, url, n, ok := link(wire[i+1:]); ok {
 				active = append(active, Active{KindImage, "![" + text + "](" + url + ")"})
 				out.WriteString(text)
@@ -100,9 +146,13 @@ func Scan(wire string) Shown {
 				out.WriteRune(r)
 				i += size
 			}
-		case r == '[':
+		case d.links && r == '[':
 			if text, url, n, ok := link(wire[i:]); ok {
 				active = append(active, Active{KindLink, "[" + text + "](" + url + ")"})
+				out.WriteString(text)
+				i += n
+			} else if text, n, ok := reference(wire[i:], defs); ok {
+				active = append(active, Active{KindLink, wire[i : i+n]})
 				out.WriteString(text)
 				i += n
 			} else {
@@ -112,14 +162,17 @@ func Scan(wire string) Shown {
 		case r == '*' || r == '_' || r == '~':
 			if n, inner := emphasis(wire, i); n > 0 {
 				active = append(active, Active{KindEmphasis, wire[i : i+n]})
-				out.WriteString(Scan(inner).Displayed)
+				out.WriteString(scan(inner, d).Displayed)
 				i += n
 			} else {
 				out.WriteRune(r)
 				i += size
 			}
-		case (r == 'h' || r == 'w') && wordStart(wire, i) && autolink.MatchString(wire[i:]):
+		case wordStart(wire, i) && (autolink.MatchString(wire[i:]) || email.MatchString(wire[i:])):
 			url := autolink.FindString(wire[i:])
+			if url == "" {
+				url = email.FindString(wire[i:])
+			}
 			active = append(active, Active{KindAutolink, url})
 			out.WriteString(url)
 			i += len(url)
@@ -132,9 +185,13 @@ func Scan(wire string) Shown {
 }
 
 var (
-	autolink      = regexp.MustCompile(`^(?:https?://|www\.)[^\s<>]+`)
-	headingMarker = regexp.MustCompile(`^#{1,6}(?: |$)`)
-	listMarker    = regexp.MustCompile(`^(?:[-*+]|\d{1,9}[.)])(?: |$)`)
+	autolink          = regexp.MustCompile(`^(?:https?://|www\.)[^\s<>]+`)
+	email             = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+`)
+	headingMarker     = regexp.MustCompile(`^#{1,6}(?: |$)`)
+	listMarker        = regexp.MustCompile(`^(?:[-*+]|\d{1,9}[.)])(?: |$)`)
+	definitionLine    = regexp.MustCompile(`^ {0,3}\[([^\]\n]+)\]:[ \t]*\S[^\n]*`)
+	numericEntity     = regexp.MustCompile(`^&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));`)
+	referenceLabelEnd = regexp.MustCompile(`^\[([^\]\n]*)\](?:\[([^\]\n]*)\])?`)
 )
 
 func isPunct(b byte) bool {
@@ -149,8 +206,9 @@ func wordStart(s string, i int) bool {
 	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
-// lineMarker returns the length of a heading, quote or list marker at the start of s, and its kind.
-func lineMarker(s string) (int, Kind) {
+// lineMarker returns the length of what the line at the start of s starts with, and its kind: a quote; in
+// CommonMark a heading, a list marker, or a link reference definition (the whole line).
+func lineMarker(s string, d dialect) (int, Kind) {
 	j := 0
 	for j < len(s) && s[j] == ' ' && j < 3 {
 		j++
@@ -159,21 +217,70 @@ func lineMarker(s string) (int, Kind) {
 	switch {
 	case strings.HasPrefix(rest, "> ") || rest == ">":
 		return j + 1, KindQuote
-	case headingMarker.MatchString(rest):
+	case d.links && definitionLine.MatchString(s):
+		return len(definitionLine.FindString(s)), KindLink
+	case d.markers && headingMarker.MatchString(rest):
 		return j + strings.IndexByte(rest+" ", ' '), KindHeading
-	case listMarker.MatchString(rest):
+	case d.markers && listMarker.MatchString(rest):
 		return j + strings.IndexByte(rest+" ", ' '), KindList
 	}
 	return 0, ""
 }
 
+// definitions returns the labels of the link reference definitions in wire, lower-cased: a line of
+// "[label]: destination" that starts at the beginning of a line.
+func definitions(wire string) map[string]bool {
+	defs := map[string]bool{}
+	for _, line := range strings.Split(wire, "\n") {
+		if m := definitionLine.FindStringSubmatch(line); m != nil {
+			defs[strings.ToLower(strings.TrimSpace(m[1]))] = true
+		}
+	}
+	return defs
+}
+
+// reference reads a link by reference at the start of s: "[text][label]", "[text][]" and "[label]", when
+// the label is one a definition gives. It returns the text and how much of s it used.
+func reference(s string, defs map[string]bool) (text string, n int, ok bool) {
+	m := referenceLabelEnd.FindStringSubmatch(s)
+	if m == nil {
+		return "", 0, false
+	}
+	label := strings.ToLower(strings.TrimSpace(m[2]))
+	if label == "" { // "[text][]" and "[label]" use the text as the label
+		label = strings.ToLower(strings.TrimSpace(m[1]))
+	}
+	if !defs[label] {
+		return "", 0, false
+	}
+	return m[1], len(m[0]), true
+}
+
 // entity writes the character that the entity at the start of s stands for, or "&" if it is not one, and
-// returns how much of s it used.
-func entity(s string, out *strings.Builder) int {
-	for ent, ch := range map[string]string{"&amp;": "&", "&lt;": "<", "&gt;": ">"} {
-		if strings.HasPrefix(s, ent) {
-			out.WriteString(ch)
-			return len(ent)
+// returns how much of s it used. Slack has three entities; CommonMark has numeric ones and more.
+func entity(s string, d dialect, out *strings.Builder) int {
+	for _, e := range [][2]string{{"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}} {
+		if strings.HasPrefix(s, e[0]) {
+			out.WriteString(e[1])
+			return len(e[0])
+		}
+	}
+	if d.numeric {
+		for _, e := range [][2]string{{"&quot;", `"`}, {"&apos;", "'"}} {
+			if strings.HasPrefix(s, e[0]) {
+				out.WriteString(e[1])
+				return len(e[0])
+			}
+		}
+		if m := numericEntity.FindStringSubmatch(s); m != nil {
+			base, digits := 10, m[2]
+			if m[1] != "" {
+				base, digits = 16, m[1]
+			}
+			if cp, err := strconv.ParseInt(digits, base, 32); err == nil && cp > 0 && cp <= unicode.MaxRune && utf8.ValidRune(rune(cp)) {
+				out.WriteRune(rune(cp))
+				return len(m[0])
+			}
 		}
 	}
 	out.WriteByte('&')

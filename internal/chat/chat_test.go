@@ -145,6 +145,8 @@ func TestValidateRefusesWhatCannotBeDelivered(t *testing.T) {
 		"a prompt with no ID":            chat.Ask(chat.Prompt{Questions: prompt.Questions}),
 		"a prompt with no question":      chat.Ask(chat.Prompt{ID: "ix-1"}),
 		"an ending with an unknown kind": chat.End(chat.Ending{Outcome: "vanished"}),
+		"a nil part":                     chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{chat.Header{Text: "h"}, nil}}),
+		"a part by pointer":              chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{&chat.Header{Text: "h"}}}),
 	} {
 		if err := o.Validate(); !errors.Is(err, chat.ErrInvalid) {
 			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)

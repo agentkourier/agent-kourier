@@ -105,9 +105,8 @@ func CheckWith(ctx context.Context, s Subject, opts Options) []Violation {
 	c.contract()
 	for _, p := range placements() {
 		for _, cs := range Corpus {
-			vs := c.variants(cs.Text)
-			for i, text := range vs {
-				c.run(p, cs.Name, text, i == len(vs)-1) // Update and Ephemeral take the last variant only: they share the rendering of Post
+			for _, text := range c.variants(cs.Text) {
+				c.run(p, cs.Name, text) // by every method and every variant: no two are assumed to share a renderer
 			}
 		}
 		c.oversize(p)
@@ -249,9 +248,9 @@ func placements() []placement {
 }
 
 // run sends text in the place p, by every method that takes it, and checks what the platform received.
-func (c *checker) run(p placement, name, text string, full bool) {
+func (c *checker) run(p placement, name, text string) {
 	if p.where == chat.WhereStream {
-		c.stream(p, name, text, full)
+		c.stream(p, name, text)
 		return
 	}
 	var ref chat.Ref // the message of a plain post, which Update replaces
@@ -268,15 +267,24 @@ func (c *checker) run(p placement, name, text string, full bool) {
 			},
 			do: func() error { return c.s.Platform.Update(c.ctx, ref, p.build(text).out) }},
 	}
-	if !full {
-		methods = methods[:1]
-	}
-	if m := p.build(text).out.Message; full && m != nil && c.caps.Ephemeral {
-		methods = append(methods, struct {
-			name string
-			prep func() error
-			do   func() error
-		}{name: "Ephemeral", do: func() error { return c.s.Platform.Ephemeral(c.ctx, target, "U1", *m) }})
+	if m := p.build(text).out.Message; m != nil {
+		if c.caps.Ephemeral {
+			methods = append(methods, struct {
+				name string
+				prep func() error
+				do   func() error
+			}{name: "Ephemeral", do: func() error { return c.s.Platform.Ephemeral(c.ctx, target, "U1", *m) }})
+		}
+		if c.caps.Streams { // a stream ends with a message of its own, which is rendered apart from Post's
+			var st chat.Stream
+			methods = append(methods, struct {
+				name string
+				prep func() error
+				do   func() error
+			}{name: "Stop",
+				prep: func() (err error) { st, err = c.s.Platform.Stream(c.ctx, target, "U1", "start"); return err },
+				do:   func() error { return st.Stop(c.ctx, *m, "tag-stop") }})
+		}
 	}
 	for _, m := range methods {
 		if m.prep != nil {
@@ -294,7 +302,7 @@ func (c *checker) run(p placement, name, text string, full bool) {
 
 // stream sends text through the stream methods: as the first markdown, as an append, and in the final
 // message.
-func (c *checker) stream(p placement, name, text string, full bool) {
+func (c *checker) stream(p placement, name, text string) {
 	if !c.caps.Streams {
 		return
 	}
@@ -304,9 +312,6 @@ func (c *checker) stream(p placement, name, text string, full bool) {
 		c.verify(p, method, name, text, f())
 	}
 	do("Stream", func() error { _, err := c.s.Platform.Stream(c.ctx, target, "U1", text); return err })
-	if !full {
-		return
-	}
 	open := func() (chat.Stream, bool) {
 		st, err := c.s.Platform.Stream(c.ctx, target, "U1", "start")
 		if err != nil {
@@ -418,6 +423,6 @@ func (c *checker) oversize(p placement) {
 		return
 	}
 	limit := c.caps.Limit(p.where)
-	c.run(p, "oversize", canary+strings.Repeat("x", limit+64), true)
-	c.run(p, "oversize astral", canary+strings.Repeat("\U0001F389", limit/2+32), false)
+	c.run(p, "oversize", canary+strings.Repeat("x", limit+64))
+	c.run(p, "oversize astral", canary+strings.Repeat("\U0001F389", limit/2+32))
 }
