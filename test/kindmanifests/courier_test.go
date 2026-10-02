@@ -355,11 +355,16 @@ func TestFullTierConfig(t *testing.T) {
 // authentication, like the fake Slack's and the stub agent's, so their Services are ClusterIP with no node port or
 // external address and their pods publish no host port (full/verify.sh proves the same against the cluster).
 func TestScenarioServersAreNotPublished(t *testing.T) {
-	const file = "../../hack/kind/full/scenarios/scenarios.yaml"
+	// The servers are in servers.yaml and the agents in scenarios.yaml; both are read, and each check says what it
+	// expects to find, so that moving an object between the files cannot make the check pass by finding nothing.
+	var docs []map[string]any
+	for _, file := range []string{"../../hack/kind/full/scenarios/servers.yaml", "../../hack/kind/full/scenarios/scenarios.yaml"} {
+		docs = append(docs, objects(t, file)...)
+	}
 	for _, name := range []string{"scenariollm", "scenariomcp"} {
 		var svc corev1.Service
 		var found bool
-		for _, doc := range objects(t, file) {
+		for _, doc := range docs {
 			meta, _ := doc["metadata"].(map[string]any)
 			if doc["kind"] == "Service" && meta["name"] == name {
 				b, _ := json.Marshal(doc)
@@ -370,7 +375,7 @@ func TestScenarioServersAreNotPublished(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("%s has no Service %s", file, name)
+			t.Fatalf("the scenario manifests have no Service %s", name)
 		}
 		if svc.Spec.Type != "" && svc.Spec.Type != corev1.ServiceTypeClusterIP || len(svc.Spec.ExternalIPs) != 0 || svc.Spec.LoadBalancerIP != "" {
 			t.Errorf("Service %s is %q with external IPs %v; want ClusterIP and nothing published", name, svc.Spec.Type, svc.Spec.ExternalIPs)
@@ -381,7 +386,8 @@ func TestScenarioServersAreNotPublished(t *testing.T) {
 			}
 		}
 	}
-	for _, doc := range objects(t, file) {
+	deployments := map[string]bool{}
+	for _, doc := range docs {
 		if doc["kind"] != "Deployment" {
 			continue
 		}
@@ -390,6 +396,7 @@ func TestScenarioServersAreNotPublished(t *testing.T) {
 		if err := json.Unmarshal(b, &d); err != nil {
 			t.Fatal(err)
 		}
+		deployments[d.Name] = true
 		pod := d.Spec.Template.Spec
 		if pod.HostNetwork {
 			t.Errorf("Deployment %s uses the host network", d.Name)
@@ -400,6 +407,11 @@ func TestScenarioServersAreNotPublished(t *testing.T) {
 					t.Errorf("Deployment %s publishes host port %d", d.Name, p.HostPort)
 				}
 			}
+		}
+	}
+	for _, name := range []string{"scenariollm", "scenariomcp"} {
+		if !deployments[name] {
+			t.Errorf("the scenario manifests have no Deployment %s, so its host ports were not checked", name)
 		}
 	}
 }

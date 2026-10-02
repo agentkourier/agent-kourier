@@ -294,7 +294,9 @@ deploy_scenario_agents() {
   local dir=${HERE}/full/scenarios
   "${K[@]}" -n kagent create configmap scenariollm --from-file=scenariollm.py="${dir}/scenariollm.py" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n kagent create configmap scenariomcp --from-file=scenariomcp.py="${dir}/scenariomcp.py" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  # The servers first, and the agents only once the tool server answers and kagent has discovered its tool: an agent
+  # The servers first, and the agents only once the tool server answers and kagent has discovered its tool (the wait is
+  # for the RemoteMCPServer's Accepted=True with reason DiscoverySucceeded, which kagent sets only after it has
+  # listed the server's tools, so a server that is up but not yet answering does not pass it): an agent
   # made beside a server that is still starting, or about to be restarted, can have its golden actor (the snapshot of
   # its template) crash on a tool server that is not there (GoldenActorCrashed), and then it never becomes Ready.
   "${K[@]}" apply -f "${dir}/servers.yaml" >/dev/null
