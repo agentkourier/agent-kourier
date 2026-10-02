@@ -379,6 +379,24 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 	}
 }
 
+// TestAMentionInsideEmphasisIsFoundByName: a mention in emphasis acts in both dialects, and the reader that sees
+// nothing inside emphasis is told by the case that is a mention in it. The rows of the table above are met by any case
+// of the corpus that the leak turns live, so they do not hold the reader to it.
+func TestAMentionInsideEmphasisIsFoundByName(t *testing.T) {
+	for name, d := range map[string]dialectKind{"Slack": slackPlainText, "CommonMark": commonMark} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			found := false
+			for _, v := range catch(t.Context(), newMarkup(d, leaks{emphasised: true}).subject()) {
+				found = found || (v.Rule == RuleActive && v.Case == "emphasis around a mention" && strings.Contains(v.Detail, "became a mention"))
+			}
+			if !found {
+				t.Error("no live mention was found for the case of a mention inside emphasis, which this adapter puts on the wire raw")
+			}
+		})
+	}
+}
+
 // TestAValidMentionIsTheOnlyConstructBesideHostileWords: the corpus is sent as the words of a Mention of a valid
 // user, and what the platform shows beside the mention must not act, nor may the user be mentioned twice. The
 // way a renderer that builds one text of the mention and the words fails is the "words beside" leak: the
@@ -423,7 +441,7 @@ func TestAGapInOneMethodIsFoundByThatMethodAlone(t *testing.T) {
 	} {
 		// The variants of the text are the point of this test, and each costs a run, so it sends few cases: ones that
 		// start or end with a token.
-		vs := CheckWith(t.Context(), newMarkup(tc.d, tc.leaks).subject(), Options{Cases: pick("channel", "user", "autolink", "markdown link")})
+		vs := CheckWith(t.Context(), newMarkup(tc.d, tc.leaks).subject(), Options{cases: pick("channel", "user", "autolink", "markdown link")})
 		found, broadcast := map[string]bool{}, false
 		for _, v := range vs {
 			found[v.Method] = true

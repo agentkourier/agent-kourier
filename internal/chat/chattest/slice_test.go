@@ -53,14 +53,14 @@ func pick(names ...string) []Case {
 // catch is what the suite finds of a Subject on the representative slice, and on the cases of more, with the text
 // alone. It is for a test that shows a leak is found, as CheckWith is for one that shows an adapter is safe.
 func catch(ctx context.Context, s Subject, more ...string) []Violation {
-	return CheckWith(ctx, s, Options{Short: true, Cases: slice(more...)})
+	return CheckWith(ctx, s, Options{Short: true, cases: slice(more...)})
 }
 
 // catchEveryVariant is catch with each case sent three times, with the marker before it, after it and around it on
 // lines of their own: a bare URL is a link only when nothing is glued to it, so a test that reads such a case by name needs
 // the variants.
 func catchEveryVariant(ctx context.Context, s Subject, more ...string) []Violation {
-	return CheckWith(ctx, s, Options{Cases: slice(more...)})
+	return CheckWith(ctx, s, Options{cases: slice(more...)})
 }
 
 // kindsOf is every kind of construct that either reader finds in a case.
@@ -87,10 +87,16 @@ func TestTheRepresentativeSliceHoldsEveryKindOfConstruct(t *testing.T) {
 			t.Errorf("no case of the representative slice is read as a %s, and one of the Corpus is", k)
 		}
 	}
-	for _, g := range [][]Case{broadcast, mentions, forgedUsers, links, html, markdown, invisible, lines, benign} {
+	groups := [][]Case{broadcast, mentions, forgedUsers, links, html, markdown, invisible, lines, benign}
+	n := 0
+	for _, g := range groups {
+		n += len(g)
 		if !slices.ContainsFunc(slice(), func(c Case) bool { return slices.Contains(g, c) }) {
 			t.Errorf("the representative slice holds nothing of the group that starts with %q", g[0].Name)
 		}
+	}
+	if n != len(Corpus) { // a group added to Corpus is added to the list above, and so to the check
+		t.Errorf("the groups listed here hold %d cases, and Corpus holds %d: a group of Corpus is missing from this list", n, len(Corpus))
 	}
 	if len(slice()) > len(Corpus)*3/5 {
 		t.Errorf("the slice holds %d of %d cases: it is not much cheaper", len(slice()), len(Corpus))
