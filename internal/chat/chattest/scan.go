@@ -199,7 +199,9 @@ var (
 	email             = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+`)
 	headingMarker     = regexp.MustCompile(`^#{1,6}(?: |$)`)
 	listMarker        = regexp.MustCompile(`^(?:[-*+]|\d{1,9}[.)])(?: |$)`)
-	definitionLine    = regexp.MustCompile(`(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:\n[ \t]*)?\S[^\n]*`)
+	definitionBody    = ` {0,3}\[([^\]]+)\]:[ \t]*(?:\n[ \t]*)?\S[^\n]*` // the label may run over lines; whether it holds a blank one is checked
+	definitionLine    = regexp.MustCompile(`(?m)^` + definitionBody)
+	definitionStart   = regexp.MustCompile(`^` + definitionBody)
 	numericEntity     = regexp.MustCompile(`^&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));`)
 	referenceLabelEnd = regexp.MustCompile(`^\[([^\]]*)\](?:\[([^\]]*)\])?`)
 	blankLine         = regexp.MustCompile(`\n[ \t]*\n`)
@@ -241,21 +243,42 @@ func lineMarker(s string, d dialect) (int, Kind) {
 // definitionAt is the length of the link reference definition that starts s, or 0: "[label]: destination", whose
 // destination may stand on the next line.
 func definitionAt(s string) int {
-	if loc := definitionLine.FindStringIndex(s); loc != nil && loc[0] == 0 {
-		return loc[1]
+	if m := definitionStart.FindStringSubmatchIndex(s); m != nil && validLabel(s[m[2]:m[3]]) {
+		return m[1]
 	}
 	return 0
 }
+
+// validLabel says whether text between brackets can be the label of a definition: it holds something that is not
+// white space, and no blank line, which ends it as it ends link text. A label may otherwise run over lines,
+// and start or end with a line ending: "[\nfoo\n]: /url" defines "foo".
+func validLabel(s string) bool { return strings.TrimSpace(s) != "" && !blankLine.MatchString(s) }
 
 // label is a link label as CommonMark matches it: white space of any kind and length is one space, and case
 // does not count.
 func label(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 
-// definitions returns the labels of the link reference definitions in wire.
+// definitions returns the labels of the link reference definitions in wire. A definition starts a line, so the
+// search goes line by line: a candidate whose label holds a blank line is not one, and the next line is looked at
+// again, because what it spans may hold a definition of its own ("[a\n\n[b]: /url").
 func definitions(wire string) map[string]bool {
 	defs := map[string]bool{}
-	for _, m := range definitionLine.FindAllStringSubmatch(wire, -1) {
-		defs[label(m[1])] = true
+	for pos := 0; pos < len(wire); {
+		m := definitionLine.FindStringSubmatchIndex(wire[pos:])
+		if m == nil {
+			break
+		}
+		resume := pos + m[1]
+		if validLabel(wire[pos+m[2] : pos+m[3]]) {
+			defs[label(wire[pos+m[2]:pos+m[3]])] = true
+		} else {
+			resume = pos + m[0] + 1
+		}
+		next := strings.IndexByte(wire[resume:], '\n')
+		if next < 0 {
+			break
+		}
+		pos = resume + next + 1
 	}
 	return defs
 }
