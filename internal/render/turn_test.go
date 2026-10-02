@@ -79,6 +79,32 @@ func TestToolRedactsBeforeItShowsOrCaps(t *testing.T) {
 	}
 }
 
+// TestToolRedactsWhatOnlyShowsAcrossTheArgumentsBeforeTheCap: an argument's key is not redacted on its own, so a
+// secret in a key (a URL with credentials, a "name=value") shows only in the summary the arguments make
+// together, which is redacted as a whole. That has to come before the cap at 160 units, or a cap that falls
+// inside the secret leaves a prefix of it with the part that makes it recognisable cut away. The filler is
+// swept so that the cap falls at every place in the secret.
+func TestToolRedactsWhatOnlyShowsAcrossTheArgumentsBeforeTheCap(t *testing.T) {
+	for _, tc := range []struct {
+		name, key string
+		leaks     []string // none of these may show: a prefix of the secret, and the credentials' shape
+	}{
+		{"a URL with credentials in a key", "https://user:s3cretpass@db.example", []string{"s3c", "user:"}},
+		{"a name=value in a key", "password=hunter2hunter2", []string{"hunt", "hunter"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for filler := 100; filler <= 160; filler++ {
+				line := Tool("run", map[string]any{"a": strings.Repeat("x", filler), tc.key: 1, "z": strings.Repeat("y", 40)})
+				for _, leak := range tc.leaks {
+					if strings.Contains(line.Summary, leak) {
+						t.Fatalf("with %d units before the key the summary %q shows %q of the secret", filler, line.Summary, leak)
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestEveryKeyAlternativeRedacts has one key for each of secretKey's alternatives.
 func TestEveryKeyAlternativeRedacts(t *testing.T) {
 	for _, key := range []string{"passwd", "x_secret", "x_token", "api_key", "Authorization", "my_credentials", "session_cookie"} {
