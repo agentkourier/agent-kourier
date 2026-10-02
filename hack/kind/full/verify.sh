@@ -265,3 +265,45 @@ fenced e2e app=e2e-runner "pod in e2e, where the test doubles and the runner run
 # The labels the policies trust, on pods outside the namespace those policies select.
 fenced default app.kubernetes.io/component=ui,app.kubernetes.io/name=kagent-frontdoor "pod in default labelled as the UI and the front door (8083 trust)"
 fenced default app.kubernetes.io/name=oauth2-proxy "pod in default labelled as the UI's oauth2-proxy (8080 trust)"
+
+# Courier itself, last: the checks above show the door and the fences, and this shows courier going through
+# them. It is the fast tier's Deployment, ready and connected to the fake Slack, and a mention of it in C1 comes
+# back answered by kagent: courier read the Binding's Dex token from its Secret, the door verified it, kagent ran
+# the turn on mockllm, and the reply streamed into the thread.
+echo "== courier: ready, connected to the fake Slack, and a turn through the front door"
+courier_fail() {
+  echo "FAIL: $1" >&2
+  "${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o wide >&2 || true
+  "${K[@]}" -n courier logs deploy/courier --tail=60 >&2 || true
+  "${K[@]}" -n courier describe pods -l app.kubernetes.io/name=courier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  exit 1
+}
+"${K[@]}" -n courier rollout status deploy/courier --timeout=180s || courier_fail "courier's rollout did not finish"
+courier_pod=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o jsonpath='{.items[*].metadata.name}')
+[[ -n "${courier_pod}" && "${courier_pod}" != *" "* ]] || courier_fail "want exactly one courier pod, have: ${courier_pod:-none}"
+echo "ok: one courier pod, ${courier_pod}, rolled out"
+for path in healthz readyz; do
+  "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${courier_pod}:8080/proxy/${path}" >/dev/null || courier_fail "courier's /${path} does not answer 200"
+  echo "ok: courier's /${path} answers 200"
+done
+probe e2e app=verify-courier <<'EOS'
+FS=http://fakeslack.e2e.svc.cluster.local:8080
+conns=0
+for _ in $(seq 60); do
+  conns=$(curl -s -m 10 "$FS/_control/connections" | sed -n 's/.*"connections":\([0-9]*\).*/\1/p')
+  [ "${conns:-0}" -ge 1 ] && break
+  sleep 1
+done
+assert "courier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+mark=verify-$(date +%s)
+sent=$(curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"channel":"C1","user":"UVERIFY","text":"<@UFAKEBOT> What is 2+2? '"$mark"'"}' "$FS/_control/mention")
+ts=$(printf %s "$sent" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
+assert "a mention of courier in C1 was delivered (ts ${ts:-none})" test -n "$ts"
+thread=
+for _ in $(seq 90); do
+  thread=$(curl -s -m 10 "$FS/_control/thread?channel=C1&ts=$ts")
+  has "$thread" 'The answer is 4.' && break
+  sleep 2
+done
+assert "courier's turn went through the front door to kagent and back: the thread has the answer" has "$thread" 'The answer is 4.'
+EOS

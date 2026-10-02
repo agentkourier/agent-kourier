@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Bring up the full E2E tier from nothing: kind, Agent Substrate (gVisor), kagent 1.0 alpha in
 # OIDC mode behind Dex, mockllm as the model, two test agents, courier's verifying front door,
-# the NetworkPolicies that make that door the only way in, and the fast tier's test doubles (fake
+# the NetworkPolicies that make that door the only way in, the fast tier's test doubles (fake
 # Slack, sink, and Alertmanager under prometheus-operator; spec 12.1) so `make e2e-full` can run
-# the same E2E tests. Their manifests and install steps are shared with up-fast.sh through lib.sh.
+# the same E2E tests, and courier itself, which reaches kagent through that door. Their manifests and install steps are shared with up-fast.sh through lib.sh.
 # Safe to re-run. Findings and workarounds: docs/spikes/wp01-kind-full.md.
 # One full tier per Docker host: the cluster name is fixed, so parallel worktrees share it.
 set -eEuo pipefail
@@ -173,6 +173,15 @@ step "test doubles: prometheus-operator ${OPERATOR_CHART_VERSION}, fake Slack, s
 install_operator
 build_doubles_image
 apply_doubles
+
+step "courier: image, the Binding's Dex token, config, Deployment"
+# Courier is the fast tier's Deployment (hack/kind/fast/courier), running the testhooks image against the fake
+# Slack in e2e, with the fast tier's Bindings and an AgentBackend for kagent's front door. Its pod carries the
+# label that frontdoor-admit-courier-only trusts, which no other pod has. The Binding's token is an ID token from
+# Dex, which expires after 24 hours (refresh_dex_token; e2e-run.sh refreshes it before each run).
+load_courier_image
+refresh_dex_token
+deploy_courier "${FULL}/courier/agentbackend.yaml"
 
 step "verify"
 "${FULL}/verify.sh"
