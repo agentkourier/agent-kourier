@@ -8,7 +8,7 @@
             "elements": [
               {
                 "text": "Calling slow_query(q=\"select 1\")",
-                "type": "mrkdwn"
+                "type": "plain_text"
               }
             ],
             "type": "context"

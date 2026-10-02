@@ -3,10 +3,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "I can't reach the agent right now, and I'm trying again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/retrying/notice",
         "parse": "none",
-        "text": "I can't reach the agent right now, and I'm trying again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "I can't reach the agent right now, and I'm trying again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -15,10 +24,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "This request failed, and I won't try it again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/failed/notice",
         "parse": "none",
-        "text": "This request failed, and I won't try it again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "This request failed, and I won't try it again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -27,10 +45,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/session_gone/notice",
         "parse": "none",
-        "text": "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -39,10 +66,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "This thread's agent is no longer set up, so I can't pass your messages on. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/binding_gone/notice",
         "parse": "none",
-        "text": "This thread's agent is no longer set up, so I can't pass your messages on. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "This thread's agent is no longer set up, so I can't pass your messages on. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -51,10 +87,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/expired/notice",
         "parse": "none",
-        "text": "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -63,10 +108,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "The agent rejected that answer, so I cancelled its task. You can ask again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/answer_rejected/notice",
         "parse": "none",
-        "text": "The agent rejected that answer, so I cancelled its task. You can ask again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "The agent rejected that answer, so I cancelled its task. You can ask again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -75,10 +129,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "That answer arrived after the task had ended, so I did not send it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/answer_dropped/notice",
         "parse": "none",
-        "text": "That answer arrived after the task had ended, so I did not send it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "That answer arrived after the task had ended, so I did not send it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -87,10 +150,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "The task was stopped. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/stopped/notice",
         "parse": "none",
-        "text": "The task was stopped. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "The task was stopped. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -99,10 +171,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "The task ran for too long without progress, so I cancelled it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/wedged/notice",
         "parse": "none",
-        "text": "The task ran for too long without progress, so I cancelled it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "The task ran for too long without progress, so I cancelled it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -111,10 +192,19 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "The agent ran this request more than once. Check that its work has not been done twice. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t1/duplicate_run/notice",
         "parse": "none",
-        "text": "The agent ran this request more than once. Check that its work has not been done twice. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+        "text": "The agent ran this request more than once. Check that its work has not been done twice. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
         "thread_ts": "ROOT",
         "unfurl_links": "false",
         "unfurl_media": "false"
@@ -129,6 +219,15 @@
     {
       "path": "/chat.postMessage",
       "form": {
+        "blocks": [
+          {
+            "text": {
+              "text": "This request failed, and I won't try it again.",
+              "type": "plain_text"
+            },
+            "type": "section"
+          }
+        ],
         "channel": "C1",
         "outbox_id": "task:t2/failed/notice",
         "parse": "none",
@@ -145,57 +244,156 @@
       "thread": true
     },
     {
-      "text": "I can't reach the agent right now, and I'm trying again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "I can't reach the agent right now, and I'm trying again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "I can't reach the agent right now, and I'm trying again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/retrying/notice"
     },
     {
-      "text": "This request failed, and I won't try it again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "This request failed, and I won't try it again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "This request failed, and I won't try it again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/failed/notice"
     },
     {
-      "text": "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "The agent no longer has this conversation, so it has lost its memory of it. Your next message starts a fresh one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/session_gone/notice"
     },
     {
-      "text": "This thread's agent is no longer set up, so I can't pass your messages on. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "This thread's agent is no longer set up, so I can't pass your messages on. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "This thread's agent is no longer set up, so I can't pass your messages on. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/binding_gone/notice"
     },
     {
-      "text": "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "This conversation has expired, so I can't continue it. Mention me in the channel to start a new one. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/expired/notice"
     },
     {
-      "text": "The agent rejected that answer, so I cancelled its task. You can ask again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "The agent rejected that answer, so I cancelled its task. You can ask again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "The agent rejected that answer, so I cancelled its task. You can ask again. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/answer_rejected/notice"
     },
     {
-      "text": "That answer arrived after the task had ended, so I did not send it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "That answer arrived after the task had ended, so I did not send it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "That answer arrived after the task had ended, so I did not send it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/answer_dropped/notice"
     },
     {
-      "text": "The task was stopped. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "The task was stopped. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "The task was stopped. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/stopped/notice"
     },
     {
-      "text": "The task ran for too long without progress, so I cancelled it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "The task ran for too long without progress, so I cancelled it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "The task ran for too long without progress, so I cancelled it. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/wedged/notice"
     },
     {
-      "text": "The agent ran this request more than once. Check that its work has not been done twice. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "text": "The agent ran this request more than once. Check that its work has not been done twice. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+      "blocks": [
+        {
+          "text": {
+            "text": "The agent ran this request more than once. Check that its work has not been done twice. \u0026lt;!channel\u0026gt; boom *x* yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy… (truncated)",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t1/duplicate_run/notice"
     },
     {
       "text": "This request failed, and I won't try it again.",
+      "blocks": [
+        {
+          "text": {
+            "text": "This request failed, and I won't try it again.",
+            "type": "plain_text"
+          },
+          "type": "section"
+        }
+      ],
       "thread": true,
       "outbox_id": "task:t2/failed/notice"
     }
