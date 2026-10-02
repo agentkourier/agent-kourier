@@ -32,12 +32,21 @@ linters:
             - pkg: github.com/agentkourier/agent-kourier/test/
               desc: packages under test/ (fakes, stubs, e2e helpers) are for tests; import them only from _test.go files and under test/
         render-is-platform-neutral:
-          files: ["**/internal/render/**", "!$test"]
+          files:
+            - "**/internal/chat/*.go"
+            - "**/internal/chat/chattest/**"
+            - "**/internal/config/**"
+            - "**/internal/interact/**"
+            - "**/internal/outbox/**"
+            - "**/internal/render/**"
+            - "**/internal/session/**"
+            - "**/internal/store/**"
+            - "!$test"
           deny:
             - pkg: github.com/agentkourier/agent-kourier/internal/chat/slack
-              desc: render builds neutral messages and never names a platform; text reaches the wire only through chat.Platform (or slack.Render, for the outbox until it stores the neutral payload), so literal render output cannot be put straight into a Slack Content
+              desc: "the core is platform-neutral (spec 13): it speaks chat.Platform and the neutral model, and a platform's adapter is named only by the adapter itself and by the broker, which chooses it"
             - pkg: github.com/slack-go/slack
-              desc: render builds neutral messages and never names a platform; text reaches the wire only through chat.Platform
+              desc: "the core is platform-neutral (spec 13): slack-go belongs to the Slack adapter"
     nolintlint:
       require-explanation: true
       require-specific: true
