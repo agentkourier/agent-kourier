@@ -247,7 +247,7 @@ func setup(t *testing.T) *env {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.ob = outbox.New(outbox.Config{Store: e.store, Poster: client, Reactor: client, Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
-	e.cfg = live.Config{Sender: e.ob, Updater: client, Streamer: client, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
+	e.cfg = live.Config{Sender: e.ob, Platform: slack.NewPlatform(client, "ns/conn"), Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
 	e.live = live.New(e.cfg)
 	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
 		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
@@ -335,8 +335,8 @@ func TestFinalTextIsTheLastUpdateAndToolLinesAreDropped(t *testing.T) {
 	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	e.clk.advance(throttle)
 	eventually(t, "the live tool line", func() bool { return strings.Contains(string(e.reply().Blocks), "Calling search") })
-	if !strings.Contains(string(e.reply().Blocks), `"context"`) || !strings.Contains(string(e.reply().Blocks), `"mrkdwn"`) {
-		t.Fatalf("blocks %s; want the tool line in a mrkdwn context block, not the markdown block", e.reply().Blocks)
+	if !strings.Contains(string(e.reply().Blocks), `"context"`) || !strings.Contains(string(e.reply().Blocks), `"plain_text"`) {
+		t.Fatalf("blocks %s; want the tool line in a plain_text context block, not the markdown block", e.reply().Blocks)
 	}
 	run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "search"})
 	run.Handle(text("a", "Looking again"))

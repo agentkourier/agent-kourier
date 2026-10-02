@@ -2,7 +2,6 @@ package live_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,10 +9,9 @@ import (
 	"testing"
 	"time"
 
-	slackgo "github.com/slack-go/slack"
-
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -262,15 +260,22 @@ func TestCancelDuringTheStartDoesNotOrphanAStream(t *testing.T) {
 	}
 }
 
-// stopFails is a Streamer whose stops fail with err, what Slack says to a stop.
+// stopFails is a Platform whose streams of earlier runs stop with err, what the adapter says to a stop.
 type stopFails struct {
-	live.Streamer
+	chat.Platform
 	err error
 }
 
-func (s stopFails) StopStream(context.Context, string, string, string, json.RawMessage, string) error {
-	return s.err
+func (s stopFails) StreamAt(r chat.Ref) chat.Stream {
+	return stoppingFails{Stream: s.Platform.StreamAt(r), err: s.err}
 }
+
+type stoppingFails struct {
+	chat.Stream
+	err error
+}
+
+func (s stoppingFails) Stop(context.Context, string, chat.Message, string) error { return s.err }
 
 // postedByUpdate runs a turn on the update path (no recipient), posts its message and abandons it, so
 // that a recovered turn with a recipient finds the row of a message that was never a stream.
@@ -307,14 +312,14 @@ func TestNotStreamingIsMatchedByTypeNotByText(t *testing.T) {
 		err     error
 		updates int // 1: the turn went on to update the message; 0: the stop failed and was retried until the deadline
 	}{
-		{"the code, wrapped", fmt.Errorf("stop: %w", slackgo.SlackErrorResponse{Err: "message_not_in_streaming_state"}), 1},
-		{"text that mentions it", errors.New("proxy said message_not_in_streaming_state"), 0},
-		{"another code", fmt.Errorf("stop: %w", slackgo.SlackErrorResponse{Err: "channel_not_found"}), 0},
+		{"the sentinel, wrapped", fmt.Errorf("stop: %w", chat.ErrNotStreaming), 1},
+		{"text that mentions it", errors.New("proxy said the message is not streaming"), 0},
+		{"another error", fmt.Errorf("stop: %w", errors.New("channel_not_found")), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
 			e.postedByUpdate(t)
-			e.cfg.Streamer = stopFails{Streamer: e.cfg.Streamer, err: tc.err}
+			e.cfg.Platform = stopFails{Platform: e.cfg.Platform, err: tc.err}
 			e.live = live.New(e.cfg)
 			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 			again.Handle(text("a", "the whole answer"))

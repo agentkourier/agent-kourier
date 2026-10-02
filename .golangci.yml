@@ -35,9 +35,9 @@ linters:
     forbidigo:
       analyze-types: true
       forbid:
-        - pattern: ^render\.(Text|Markdown|Body|ToolLine)$
+        - pattern: ^render\.(Text|Markdown)$
           pkg: ^github\.com/agentkourier/agent-kourier/internal/render$
-          msg: render's flavoured functions pair text with an escaping that must match the part it goes in; use a builder (MarkdownBlock, MarkdownText, Message, NoticeText) instead
+          msg: render.Text and render.Markdown are Slack-flavoured escaping, kept for the interaction prompts until they are ported (WP-37 S4); a message is built with Turn, Notice or Nothing and left literal, for the platform to make inert
     nolintlint:
       require-explanation: true
       require-specific: true

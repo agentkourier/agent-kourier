@@ -7,7 +7,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
-	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -81,7 +81,7 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
 			return nil
 		}
-		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, ThreadTS: key.ThreadTS, Content: slack.Content{Text: render.NoticeText(text, n.Detail)}}
+		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Channel: key.Channel, ThreadTS: key.ThreadTS, Out: chat.Say(render.Notice(text, n.Detail))}
 		_, err = s.queue.Enqueue(ctx, post)
 	}
 	if errors.Is(err, store.ErrInvalid) {

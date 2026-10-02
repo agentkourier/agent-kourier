@@ -178,7 +178,7 @@ func TestTurnHandlerDoesNotWaitOnSlack(t *testing.T) {
 	e := setup(t)
 	slow := &blocker{release: make(chan struct{})}
 	defer close(slow.release) // Slack answers in the end, and the run's write returns
-	r := live.New(live.Config{Sender: slow, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r := live.New(live.Config{Sender: slow, Platform: slack.NewPlatform(nil, "ns/conn"), Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	handle := live.NewSink(r, e.ob, nil).Turn(ctx, session.TurnRef{Key: thread, MessageID: "m1", UserID: session.SystemUser})

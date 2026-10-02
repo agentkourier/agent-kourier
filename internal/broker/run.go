@@ -144,8 +144,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	})
 
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
-	// Slack client; a notice is only queued on the outbox, off Slack's acknowledgement path.
-	renderer := live.New(live.Config{Sender: ob, Updater: sl, Streamer: sl, Store: st, Logger: log})
+	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
+	// acknowledgement path.
+	renderer := live.New(live.Config{Sender: ob, Platform: slack.NewPlatform(sl, conn.Ref.Namespace+"/"+conn.Ref.Name), Store: st, Logger: log})
 	var sink renderSink = live.NewSink(renderer, ob, log)
 	if cfg.sink != nil {
 		sink = cfg.sink
@@ -230,8 +231,7 @@ type slackAPI interface {
 	SlackRunner
 	outbox.Poster
 	outbox.Reactor
-	live.Updater
-	live.Streamer
+	slack.API
 	session.Users
 	PostEphemeral(ctx context.Context, channel, threadTS, user string, content slack.Content) error
 	IsChannelMember(ctx context.Context, channel, user string) (bool, error)

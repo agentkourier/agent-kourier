@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -169,7 +170,7 @@ func TestPermanentErrorEndsTheRunAtOnce(t *testing.T) {
 			e := setup(t)
 			send := &failingSender{err: fmt.Errorf("deliver: %w", permanent)}
 			logs := &strings.Builder{}
-			r := live.New(live.Config{Sender: send, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+			r := live.New(live.Config{Sender: send, Platform: slack.NewPlatform(nil, "ns/conn"), Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 			run := r.Start(t.Context(), live.Turn{Source: "turn-1", Channel: "C1", ThreadTS: e.root, Mode: v1alpha1.OutputLive})
 			run.Handle(text("a", "hello"))
 			select {
@@ -229,7 +230,7 @@ func TestFallbackTextIsCapped(t *testing.T) {
 }
 
 // TestEachFieldIsEscapedInItsOwnFlavour pushes hostile text through every field: the markdown
-// block escapes brackets as well, the mrkdwn tool line and the plain-text fallback do not.
+// block escapes brackets as well, the plain_text tool line and the fallback text do not.
 func TestEachFieldIsEscapedInItsOwnFlavour(t *testing.T) {
 	e := setup(t)
 	run, _ := e.start(t, v1alpha1.OutputLive, false)

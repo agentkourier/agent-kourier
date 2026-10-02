@@ -75,7 +75,7 @@ var secretShapes = []struct {
 
 func TestSecretShapesAreRedactedInToolLines(t *testing.T) {
 	for _, tc := range secretShapes {
-		got := ToolLine("run", tc.args, FlavourText)
+		got := ToolText(Tool("run", tc.args))
 		if tc.secret != "" && strings.Contains(got, tc.secret) {
 			t.Errorf("%s: %q shows %q", tc.name, got, tc.secret)
 		}
@@ -90,7 +90,7 @@ func TestWhatIsNoSecretIsShown(t *testing.T) {
 	args := map[string]any{
 		"sha": "0123456789abcdef0123456789abcdef01234567", "mail": "ada@example.test", "at": "12:30 on monday", "note": "the keyboard is monkey-proof",
 	}
-	got := ToolLine("run", args, FlavourText)
+	got := ToolText(Tool("run", args))
 	for _, keep := range []string{"0123456789abcdef0123456789abcdef01234567", "ada@example.test", "12:30 on monday", "keyboard is monkey-proof"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("%q lost %q", got, keep)
@@ -141,7 +141,7 @@ func TestLeavesAreBoundedAtAWordBeforeRedaction(t *testing.T) {
 }
 
 func TestAHugeArgumentStillMakesAToolLine(t *testing.T) {
-	got := ToolLine("run", map[string]any{"a": strings.Repeat("a=", 512<<10), "b": strings.Repeat("password=x ", 100000)}, FlavourText)
+	got := ToolText(Tool("run", map[string]any{"a": strings.Repeat("a=", 512<<10), "b": strings.Repeat("password=x ", 100000)}))
 	if !strings.HasPrefix(got, "Calling run(") || len(got) > 1000 {
 		t.Errorf("ToolLine of two huge arguments = %d bytes starting %q", len(got), got[:12])
 	}
@@ -156,7 +156,7 @@ func BenchmarkToolLineLongArguments(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			args := map[string]any{"cmd": v}
 			for range b.N {
-				ToolLine("run", args, FlavourText)
+				ToolText(Tool("run", args))
 			}
 		})
 	}
@@ -179,7 +179,7 @@ func FuzzSecretValueNeverShown(f *testing.F) {
 			"PGPASSWORD=" + secret + " psql", "password: " + secret, "tool --token " + secret + " x",
 			"a: 1\nkey: " + secret, `{"password":"` + secret + `"}`, "{'secret' => '" + secret + "'}",
 		} {
-			if got := ToolLine("run", map[string]any{"cmd": text}, FlavourText); strings.Contains(got, secret) {
+			if got := ToolText(Tool("run", map[string]any{"cmd": text})); strings.Contains(got, secret) {
 				t.Fatalf("%q shows %q", got, secret)
 			}
 		}
