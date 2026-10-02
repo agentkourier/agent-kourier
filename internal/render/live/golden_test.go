@@ -276,7 +276,7 @@ var scripts = []struct {
 	}},
 	{"hostile-text-in-the-reply", func(t *testing.T, e *env) {
 		release := e.hold() // the first write is not throttled: it must not be made before the events are in
-		t.Cleanup(release) // a failure before the release must not leave the renderer blocked in the clock
+		t.Cleanup(release)  // a failure before the release must not leave the renderer blocked in the clock
 		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive})
 		run.Handle(text("a", "<!channel> ping <@U123> [click](https://evil.test) ![x](https://evil.test/p.png) *b* `c` <b>t</b> & \u202e done"))
 		run.Handle(text("b", "second artifact: &lt;!here&gt;"))
