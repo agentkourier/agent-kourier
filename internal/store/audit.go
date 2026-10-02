@@ -41,8 +41,8 @@ type AuditEntry struct {
 	Sequence int64
 	At       time.Time
 	Kind     AuditKind
-	User     string // Slack user ID; empty when the actor is not a person
-	// Email is the user's email as Slack reports it. Optional: users.info can
+	User     string // the platform's user ID; empty when the actor is not a person
+	// Email is the user's email as the platform reports it. Optional: users.info can
 	// fail, and append-only rows cannot be backfilled.
 	Email    string
 	Identity string // Binding service identity the action ran as; may be empty

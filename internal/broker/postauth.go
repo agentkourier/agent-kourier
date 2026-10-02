@@ -63,8 +63,8 @@ func stopped(ctx context.Context) error {
 	return fmt.Errorf("slack run stopped: %w", ctx.Err())
 }
 
-// WithAuthFailure returns a context for RunSlack that ends, with ErrSlackAuth as its cause, when
-// report is called with a fatal code. RunSlack then returns that cause, so the process exits as for
+// WithAuthFailure returns a context for RunPlatform that ends, with ErrSlackAuth as its cause, when
+// report is called with a fatal code. RunPlatform then returns that cause, so the process exits as for
 // a rejected connection, and not as for a shutdown. stop releases the context. report may be called
 // from any goroutine, and only the first call counts.
 func WithAuthFailure(parent context.Context) (ctx context.Context, report func(code string), stop context.CancelFunc) {

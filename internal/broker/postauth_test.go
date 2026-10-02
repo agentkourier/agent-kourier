@@ -110,10 +110,10 @@ func TestAPostThatFindsTheTokenRevokedEndsTheSlackRun(t *testing.T) {
 	select {
 	case err := <-got:
 		if !errors.Is(err, ErrSlackAuth) || errors.Is(err, context.Canceled) {
-			t.Errorf("RunSlack = %v, want ErrSlackAuth and not a clean stop", err)
+			t.Errorf("RunPlatform = %v, want ErrSlackAuth and not a clean stop", err)
 		}
 		if !strings.Contains(err.Error(), "token_revoked") {
-			t.Errorf("RunSlack = %v, want the code token_revoked named", err)
+			t.Errorf("RunPlatform = %v, want the code token_revoked named", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the run was not ended")
@@ -138,6 +138,6 @@ func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 
 	cancel()
 	if err := <-got; !errors.Is(err, context.Canceled) || errors.Is(err, ErrSlackAuth) {
-		t.Errorf("RunSlack after a signal = %v, want a clean stop", err)
+		t.Errorf("RunPlatform after a signal = %v, want a clean stop", err)
 	}
 }

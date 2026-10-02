@@ -28,7 +28,7 @@ func (r OutboxRole) Valid() bool {
 	return false
 }
 
-// OutboxEntry is one intended Slack post (spec 8.6).
+// OutboxEntry is one intended chat post (spec 8.6).
 type OutboxEntry struct {
 	// ID is deterministic, derived from the source ID and the role.
 	ID string
@@ -42,7 +42,7 @@ type OutboxEntry struct {
 	// MessageRef identifies the posted message; empty until recorded.
 	MessageRef string
 	// Payload is the message to post, as JSON the store never interprets. It is cleared when
-	// the ref is recorded: from then on the text lives in Slack, not in the database too.
+	// the ref is recorded: from then on the text lives on the platform, not in the database too.
 	Payload string
 	// AbandonedAt is when courier gave up on posting the message; zero if it did not (see
 	// AbandonOutbox).

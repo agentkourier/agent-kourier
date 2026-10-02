@@ -111,7 +111,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return err
 	}
-	slackCtx, report, stopSlack := WithAuthFailure(runCtx)
+	chatCtx, report, stopChat := WithAuthFailure(runCtx)
 	ob := outbox.New(outbox.Config{
 		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
 	})
@@ -178,15 +178,15 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: interactions, Logger: log,
 		Notice: sink.QueueNotice,
 	})
-	slackDone, slackStopped := make(chan error, 1), make(chan struct{})
+	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
 	parts.traced("open-intake")
 	go func() {
-		slackDone <- RunPlatform(slackCtx, platform, intake, RunPolicy{Logger: log})
-		close(slackStopped)
+		chatDone <- RunPlatform(chatCtx, platform, intake, RunPolicy{Logger: log})
+		close(chatStopped)
 	}()
 	sd.add(stepIntake, func(c context.Context) { // the intake stops before the interactions and the manager it feeds
-		stopSlack()
-		waitFor(c, slackStopped)
+		stopChat()
+		waitFor(c, chatStopped)
 	})
 
 	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal between
@@ -196,8 +196,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	select {
 	case <-ctx.Done():
 		return nil
-	case err := <-slackDone:
-		slackDone <- err
+	case err := <-chatDone:
+		chatDone <- err
 		if ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) { // stopped by the signal, not by Slack
 			return nil
 		}

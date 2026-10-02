@@ -54,7 +54,7 @@ type Interaction struct {
 	// State is always pending on creation; CreateInteraction ignores it.
 	State   InteractionState
 	Request []byte
-	// MessageRef is the rendered Slack message. It is empty until
+	// MessageRef is the rendered prompt message, by its platform ID. It is empty until
 	// SetInteractionMessageRef records it; CreateInteraction ignores it.
 	MessageRef string
 	CreatedAt  time.Time
@@ -63,7 +63,7 @@ type Interaction struct {
 	// The fields below are set when the interaction is decided, and are
 	// ignored by CreateInteraction.
 	Answer    []byte
-	Decider   string // Slack user ID
+	Decider   string // the platform's user ID
 	DecidedAt time.Time
 	// DeliveredAt is when the answer was handed to the session, which took it; zero until MarkInteractionDelivered.
 	// A zero on an answered interaction is not proof that it never arrived: a crash can come between the

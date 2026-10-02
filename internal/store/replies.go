@@ -8,7 +8,7 @@ import (
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
 type Reply struct {
-	// ID is the turn's messageId, derived from the Slack message (spec 8.2), not the event
+	// ID is the turn's messageId, derived from the chat message (spec 8.2), not the event
 	// ID: an @mention arrives as two events with different IDs, and both must be one turn.
 	// It makes enqueueing idempotent, and the agent sees it as the A2A messageId.
 	ID  string
@@ -16,8 +16,8 @@ type Reply struct {
 	// Sequence orders replies within a session. The store assigns it on
 	// enqueue; the caller's value and clock never affect order.
 	Sequence int64
-	UserID   string // Slack user who wrote the reply
-	// MessageRef is the Slack timestamp of the reply, for the queued reaction.
+	UserID   string // the platform's ID of the user who wrote the reply
+	// MessageRef is the platform's ID of the reply message, for the queued reaction.
 	MessageRef string
 	Text       string
 	EnqueuedAt time.Time
@@ -26,7 +26,7 @@ type Reply struct {
 // ReplyQueue persists per-session FIFO queues of replies. Delivery is
 // at-least-once: the sender takes the head with NextReply, sends it, then
 // marks it delivered. A delivered reply stays as a tombstone (its text is
-// cleared), so a redelivered Slack event with the same ID is not queued again.
+// cleared), so a redelivered chat event with the same ID is not queued again.
 type ReplyQueue interface {
 	// EnqueueReply appends r to its session's queue, idempotently by ID, and
 	// reports whether it was newly enqueued; a delivered ID is a duplicate too.

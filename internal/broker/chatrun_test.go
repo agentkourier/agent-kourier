@@ -84,7 +84,7 @@ func TestRunPlatformBacksOffFromOneSecondToAMinute(t *testing.T) {
 	err := RunPlatform(ctx, &runner{steps: steps}, nil, policy(c))
 
 	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrSlackAuth) {
-		t.Errorf("RunSlack = %v, want the context's end", err)
+		t.Errorf("RunPlatform = %v, want the context's end", err)
 	}
 	if want := secs(1, 2, 4, 8, 16, 32, 60, 60, 60); !slices.Equal(c.waits, want) {
 		t.Errorf("waits = %v, want %v: doubling from 1 s, capped at 60 s", c.waits, want)
@@ -104,7 +104,7 @@ func TestRunPlatformStopsAtOnceOnAFatalAuthError(t *testing.T) {
 		cancel()
 
 		if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), code) {
-			t.Errorf("%s: RunSlack = %v, want ErrSlackAuth naming the code", code, err)
+			t.Errorf("%s: RunPlatform = %v, want ErrSlackAuth naming the code", code, err)
 		}
 		if r.calls != 1 || len(c.waits) != 0 {
 			t.Errorf("%s: %d runs and %d waits, want one run and no retry", code, r.calls, len(c.waits))
@@ -123,7 +123,7 @@ func TestRunPlatformRetriesWhatIsNotFatal(t *testing.T) {
 	}}
 
 	if err := RunPlatform(ctx, r, nil, policy(c)); errors.Is(err, ErrSlackAuth) || r.calls != 4 {
-		t.Errorf("RunSlack = %v after %d runs, want a retry of each of the first three", err, r.calls)
+		t.Errorf("RunPlatform = %v after %d runs, want a retry of each of the first three", err, r.calls)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestRunPlatformStopsWhenTheContextEndsDuringABackoff(t *testing.T) {
 	r := &runner{steps: []func(int) error{func(int) error { cancel(); return errors.New("reset") }}}
 
 	if err := RunPlatform(ctx, r, nil, policy(c)); !errors.Is(err, context.Canceled) {
-		t.Errorf("RunSlack = %v, want the context's end", err)
+		t.Errorf("RunPlatform = %v, want the context's end", err)
 	}
 	if r.calls != 1 {
 		t.Errorf("%d runs, want the loop to stop", r.calls)
