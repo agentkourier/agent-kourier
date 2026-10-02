@@ -9,6 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/prometheus/client_golang v1.24.1
 	github.com/slack-go/slack v0.29.0
+	github.com/yuin/goldmark v1.8.6
 	go.uber.org/goleak v1.3.0
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.1

@@ -570,7 +570,7 @@ func (c *checker) verify(p placement, method, name, text string, callErr error) 
 		if n := chat.Units(s.Displayed); n > limit {
 			c.add(RuleLimit, p.where, method, name, "%d units are shown, over the limit of %d", n, limit)
 		}
-		if strings.Contains(s.Displayed, want) {
+		if strings.Contains(squash(s.Displayed), squash(want)) {
 			faithful = true
 		}
 	}
@@ -587,6 +587,10 @@ func (c *checker) verify(p placement, method, name, text string, callErr error) 
 		c.add(RuleFidelity, p.where, method, name, "shown %q, want it to hold %q", displayed(carriers), want)
 	}
 }
+
+// squash is s with every run of white space one space and none at either end. A platform that reads CommonMark
+// shows text that way, and so what it shows has lost no text if it holds the same words in the same order.
+func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func displayed(ss []Shown) []string {
 	out := make([]string, len(ss))

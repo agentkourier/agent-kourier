@@ -3,6 +3,7 @@ package chattest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -97,10 +98,18 @@ func (m *markupPlatform) read(wire string) Shown {
 	return ScanSlackPlain(wire)
 }
 
-// safe is s escaped for the platform's dialect.
+// safe is s escaped for the platform's dialect. In CommonMark white space at the start of a line is written as an
+// entity, so that four columns of it do not make an indented block, which is code.
 func (m *markupPlatform) safe(s string) string {
 	var b strings.Builder
+	lineStart := true
 	for _, r := range s {
+		blank := r == ' ' || r == '\t'
+		if lineStart && blank && m.dialect == commonMark {
+			fmt.Fprintf(&b, "&#%d;", r)
+			continue
+		}
+		lineStart = r == '\n'
 		switch {
 		case r == '&':
 			b.WriteString("&amp;")

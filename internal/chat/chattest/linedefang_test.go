@@ -2,6 +2,7 @@ package chattest
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -176,5 +177,75 @@ func TestALabelOverTwoLinesIsALinkReferenceDefinition(t *testing.T) {
 	}
 	if !seen["markdown reference definition, label over two lines"] {
 		t.Error("the suite found no violation for a link reference definition whose label runs over two lines, which this adapter lets through live")
+	}
+}
+
+// innermost is the pattern a sanitiser uses to defang links: a bracketed span with no bracket inside it.
+var innermost = regexp.MustCompile(`\[[^\[\]]*\]`)
+
+// spanDefang escapes ASCII punctuation except brackets and colons, then escapes the brackets of every innermost
+// bracketed span, in one pass. It defangs "[your]" inside "[Verify [your] account]" and leaves the outer pair raw,
+// and a label may hold escaped brackets: the outer pair, with the escaped ones in it, is a live label.
+func spanDefang(s string) string {
+	var out strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '[' || r == ']' || r == ':':
+			out.WriteRune(r)
+		case r < 128 && isPunct(byte(r)):
+			out.WriteByte('\\')
+			out.WriteRune(r)
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return innermost.ReplaceAllStringFunc(out.String(), func(m string) string { return "\\[" + m[1:len(m)-1] + "\\]" })
+}
+
+// TestAnEscapedBracketDoesNotEndALabel: a label ends at the first bracket that is not escaped, and escaped ones may
+// stand inside it, so the scanner sees the live link that spanDefang leaves, on one line and over two, and the
+// suite finds it.
+func TestAnEscapedBracketDoesNotEndALabel(t *testing.T) {
+	for _, in := range []string{"[A [b] c]\n\n[a [b] c]: https://evil.test", "[Verify [your]\naccount]\n\n[verify [your]\naccount]: https://evil.test"} {
+		if sh := ScanCommonMark(spanDefang(in)); len(sh.Active) == 0 {
+			t.Errorf("%q goes out as %q, and the scanner finds nothing active in it", in, spanDefang(in))
+		}
+	}
+	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: spanDefang}
+	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
+	seen := map[string]bool{}
+	for _, v := range Check(context.Background(), s) {
+		seen[v.Case] = true
+	}
+	if !seen["markdown reference, escaped brackets in the label"] {
+		t.Error("the suite found no violation for a reference whose label holds escaped brackets, which this adapter lets through live")
+	}
+}
+
+// fenceRaw is an adapter's way of sending rich text it does not trust: it puts the text in a fence and leaves "<" raw,
+// on the thought that code is literal. Whether Slack's markdown block leaves a token alone inside code is not known
+// (UNCONFIRMED(WP-04)), so the scanner reports one there, as it does in mrkdwn, and an adapter must not rely on it.
+func fenceRaw(s string) string { return "```\n" + s + "\n```" }
+
+// TestAnAdapterThatFencesTextAndLeavesTokensRawIsCaught: the scanner reports a token inside a fenced block, a code
+// span and an indented block, and the suite, run on an adapter that fences every text raw, finds them.
+func TestAnAdapterThatFencesTextAndLeavesTokensRawIsCaught(t *testing.T) {
+	for _, in := range []string{fenceRaw("<@U1>"), "`<!channel>`", "    <@U1>"} {
+		var kinds []Kind
+		for _, a := range ScanCommonMark(in).Active {
+			kinds = append(kinds, a.Kind)
+		}
+		if len(kinds) < 2 || kinds[0] != KindCode || kinds[1].Style() {
+			t.Errorf("%q is read as %v; want code, and the token in it", in, kinds)
+		}
+	}
+	a := &lineDefangAdapter{FakePlatform: NewFake(), escape: fenceRaw}
+	s := Subject{Platform: a, Sent: func() []Shown { o := a.sent; a.sent = nil; return o }, Inert: func() error { return nil }}
+	found := false
+	for _, v := range Check(context.Background(), s) {
+		found = found || (v.Rule == RuleActive && strings.Contains(v.Detail, "mention"))
+	}
+	if !found {
+		t.Error("the suite found no mention on the wire of an adapter that fences every text and leaves its tokens raw")
 	}
 }

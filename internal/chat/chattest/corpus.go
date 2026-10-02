@@ -86,6 +86,7 @@ var links = []Case{
 	{"markdown reference link, label over two lines", "[a\nb][1]\n\n[1]: https://evil.test"},
 	{"markdown image", "![tracker](https://evil.test/pixel.png)"},
 	{"markdown reference definition, label over two lines", "[x\n]\n\n[x\n]: https://evil.test"},
+	{"markdown reference, escaped brackets in the label", "[A [b] c]\n\n[a [b] c]: https://evil.test"},
 	{"markdown reference link", "[x][1]\n\n[1]: https://evil.test"},
 	{"markdown reference link, destination on the next line", "[x][1]\n\n[1]:\n  https://evil.test"},
 	{"bare URL", "https://evil.test/login"},
