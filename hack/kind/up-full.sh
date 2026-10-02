@@ -186,6 +186,9 @@ load_courier_image
 refresh_dex_token
 deploy_courier "${FULL}/courier/agentbackend.yaml"
 
+step "settle: the kagent controller is ready and the front door answers by its Service name"
+settle_full_tier
+
 step "verify"
 "${FULL}/verify.sh"
 docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(kind get nodes --name "${CLUSTER}")"

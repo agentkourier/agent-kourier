@@ -281,3 +281,49 @@ deploy_scenario_agents() {
   "${K[@]}" -n kagent rollout status deploy/scenariollm deploy/scenariomcp --timeout=180s
   "${K[@]}" -n kagent wait --for=condition=Ready agent/scenario-gated agent/scenario-memory agent/scenario-ask agent/spike-approve --timeout=300s
 }
+
+# probe_frontdoor: whether a pod labelled as courier reaches kagent's front door by its Service name, which is the
+# one path the full tier exists to show. Five tries a few seconds apart, from a throwaway pod that is deleted after.
+# Needs K.
+probe_frontdoor() {
+  local pod=probe-door-${RANDOM} rc=0
+  # shellcheck disable=SC2016 # the script runs in the pod, where its variables are
+  "${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" \
+    --labels=app.kubernetes.io/name=courier --command -- sh -c '
+    for _ in 1 2 3 4 5; do
+      [ "$(curl -s -m 6 -o /dev/null -w "%{http_code}" http://kagent-frontdoor.kagent.svc.cluster.local:4180/ping)" = 200 ] && exit 0
+      sleep 2
+    done
+    exit 1' >/dev/null 2>&1 || rc=$?
+  delete_courier_pod "${pod}"
+  return "${rc}"
+}
+
+# settle_full_tier: before the full tier is verified, make sure the cluster is in a state its checks can mean
+# something in. On a loaded host the kagent controller can crash-loop on a DNS lookup that was cancelled, and
+# kindnet's network policy engine can time connections out (it logs "netlink receive: no such file or directory"
+# in bursts); a restart of either clears it. So: the controller is Ready (its pod is deleted, up to twice, if it is
+# not), then a courier-labelled pod reaches the front door by its Service name (kindnet is restarted, up to twice, if
+# it does not). Every wait is bounded, and it dies after the last. Needs K.
+settle_full_tier() {
+  local attempt
+  for attempt in 1 2 3; do
+    if "${K[@]}" -n kagent rollout status deploy/kagent-controller --timeout=120s >/dev/null 2>&1; then
+      break
+    fi
+    [ "${attempt}" -lt 3 ] || die "the kagent controller did not become ready"
+    echo "the kagent controller is not ready (try ${attempt}); deleting its pod" >&2
+    "${K[@]}" -n kagent delete pod -l app.kubernetes.io/component=controller --wait=false >/dev/null 2>&1 || true
+  done
+  for attempt in 1 2 3; do
+    if probe_frontdoor; then
+      echo "ok: the front door answers by its Service name"
+      return 0
+    fi
+    [ "${attempt}" -lt 3 ] || break
+    echo "the front door did not answer by its Service name (try ${attempt}); restarting kindnet" >&2
+    "${K[@]}" -n kube-system rollout restart ds/kindnet >/dev/null
+    "${K[@]}" -n kube-system rollout status ds/kindnet --timeout=120s >/dev/null
+  done
+  die "the front door never answered by its Service name, even after restarting kindnet"
+}
