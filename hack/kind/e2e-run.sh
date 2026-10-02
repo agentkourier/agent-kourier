@@ -57,7 +57,13 @@ echo "==> run the Job in ${CTX}"
 "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found >/dev/null
 # The runner's Role in courier's namespace needs the namespace to exist.
 "${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null
-sed "s/@TIER@/${tier}/" "${HERE}/e2e/runner.yaml" | "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
+# The scenarios release their gates (Stub.Release) where the tier holds them: the stub agent in the fast tier, and
+# the scenario model in the full one, which has the stub's release path.
+case "${tier}" in
+  fast) gate_url=http://stubagent.e2e.svc.cluster.local:8080 ;;
+  full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
+esac
+sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" "${HERE}/e2e/runner.yaml" | "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=
 deadline=$((SECONDS + WAIT_SECONDS))
 while [ -z "${result}" ]; do

@@ -275,24 +275,33 @@ func TestService(t *testing.T) {
 	}
 }
 
-// TestRunnerJobGetsItsTier: the Job runs the tests of one tier, and a test that needs courier (the smoke
-// test's mention) must be able to tell the fast tier, which has it, from the full tier, which does not
-// yet. The Job's template carries a placeholder and e2e-run.sh fills it with the tier it was given.
+// TestRunnerJobGetsItsTier: the Job runs the tests of one tier, which a test must be able to tell, and the
+// scenarios' gates are released at the place that holds them in that tier: the stub agent in the fast tier, and
+// the scenario model in the full one. The Job's template carries placeholders and e2e-run.sh fills them with the
+// tier it was given and that tier's gate URL.
 func TestRunnerJobGetsItsTier(t *testing.T) {
 	var job batchv1.Job
 	load(t, "../../hack/kind/e2e/runner.yaml", "Job", &job)
-	var tier string
+	var tier, stub string
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
-		if e.Name == "E2E_TIER" {
+		switch e.Name {
+		case "E2E_TIER":
 			tier = e.Value
+		case "E2E_STUB_URL":
+			stub = e.Value
 		}
 	}
 	script, err := os.ReadFile("../../hack/kind/e2e-run.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tier != "@TIER@" || !strings.Contains(string(script), `sed "s/@TIER@/${tier}/" "${HERE}/e2e/runner.yaml"`) {
+	if tier != "@TIER@" || !strings.Contains(string(script), `-e "s/@TIER@/${tier}/"`) {
 		t.Errorf("E2E_TIER = %q in the Job; want the placeholder @TIER@, and e2e-run.sh to substitute the tier it runs", tier)
+	}
+	if stub != "@STUB_URL@" || !strings.Contains(string(script), `-e "s|@STUB_URL@|${gate_url}|"`) ||
+		!strings.Contains(string(script), "fast) gate_url=http://stubagent.e2e.svc.cluster.local:8080") ||
+		!strings.Contains(string(script), "full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080") {
+		t.Errorf("E2E_STUB_URL = %q in the Job; want the placeholder @STUB_URL@, which e2e-run.sh sets to the stub's Service in the fast tier and the scenario model's in the full tier", stub)
 	}
 }
 
