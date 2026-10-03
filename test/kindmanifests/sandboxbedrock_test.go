@@ -164,9 +164,12 @@ func TestUpPicksTheBedrockSecretKey(t *testing.T) {
 	}
 	s := string(raw)
 	start := strings.Index(s, `if [ "${MODEL_PROVIDER}" = bedrock ]; then`)
+	if start < 0 {
+		t.Fatal("up.sh has no if bedrock / else / fi around the model Secret")
+	}
 	elseAt := strings.Index(s[start+1:], "\nelse\n") + start + 1
 	fiAt := strings.Index(s[elseAt:], "\nfi\n") + elseAt
-	if start < 0 || elseAt <= start || fiAt <= elseAt {
+	if elseAt <= start || fiAt <= elseAt {
 		t.Fatal("up.sh has no if bedrock / else / fi around the model Secret")
 	}
 	applies := func(block string) (lines []string) {

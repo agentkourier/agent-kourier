@@ -81,7 +81,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs (the first re
   left out. A Bedrock API key goes in under **`AWS_BEARER_TOKEN_BEDROCK`**, which `make sandbox-up` does from `MODEL_API_KEY`. IRSA is not used.
 - **Egress, and a workaround.** kagent 1.0.0-alpha5's Go ADK harness has a gap: the destination allowlist (`agentConfigDestinations`) has a case for
   OpenAI, Anthropic, Gemini and Ollama and none for Bedrock, while the Secret's bearer key makes kagent bind `Authorization: Bearer <key>` to
-  `bedrock-runtime.<region>.amazonaws.com`, and Substrate's policy compiler refuses a binding for a host that is not also an allowed destination
+  `bedrock-runtime.<region>.amazonaws.com`, and kagent's Substrate policy builder refuses a binding for a host that is not also an allowed destination
   (`policy.go:32-34`). Without more, every Bedrock session fails in preparation. So `modelconfig-bedrock.yaml` carries one `defaultHeaders` entry,
   `X-Courier-Egress-Host: https://bedrock-runtime.<region>.amazonaws.com`: the allowlist also takes every URL in the serialised model, headers included, so
   the host becomes a destination and the binding is accepted. This is a **kind-only workaround**; the upstream fix is a Bedrock case in
