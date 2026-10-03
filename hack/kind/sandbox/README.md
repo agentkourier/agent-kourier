@@ -59,6 +59,11 @@ anyone else, if a key is missing, repeated, malformed or still a `REPLACE` place
 the value. The values go into Secret manifests on stdin to `kubectl apply -f -` (server-side, so no last-applied copy
 is kept): on no command line, in no file, in no output.
 
+`MODEL_API_KEY` must be a key for `MODEL_PROVIDER`, and the check refuses one that is not, naming the key and the provider and
+never the value: `anthropic` needs `sk-ant-...`, and `openai` needs `sk-...` and not `sk-ant-`. A key goes to its provider's host through
+the egress gateway, so a key of the wrong kind would be sent to a host it is no use to, where it is seen. A key that looks like a Bedrock
+one (`ABSK...`, or `bedrock-api-key-...`) gets its own message, "looks like a Bedrock API key; this sandbox cannot use Bedrock yet".
+
 ### The scopes, against what courier calls
 
 | Call (`internal/chat/slack`) | Scope in the manifest |

@@ -87,6 +87,18 @@ sandbox_env_load() {
     esac
     sandbox_env_pattern "${key}"
     [[ ${value} =~ ${SANDBOX_ENV_RE} ]] || sandbox_env_fail "${key} is malformed; want ${SANDBOX_ENV_WANT}"
+    # The key is a key for the provider: one sent to another provider's host through the egress gateway is sent for nothing,
+    # and that host sees it (a Bedrock key once went to api.anthropic.com). MODEL_PROVIDER was checked above (it is listed
+    # before the key). Only a prefix is ever named, never the value.
+    if [ "${key}" = MODEL_API_KEY ]; then
+      case "${value}" in
+        ABSK* | bedrock-api-key-*) sandbox_env_fail "${key} looks like a Bedrock API key; this sandbox cannot use Bedrock yet" ;;
+      esac
+      case "${MODEL_PROVIDER}" in
+        anthropic) [[ ${value} == sk-ant-* ]] || sandbox_env_fail "${key} is not an Anthropic API key, which MODEL_PROVIDER=anthropic needs (it starts sk-ant-)" ;;
+        openai) { [[ ${value} == sk-* ]] && [[ ${value} != sk-ant-* ]]; } || sandbox_env_fail "${key} is not an OpenAI API key, which MODEL_PROVIDER=openai needs (it starts sk-, and not sk-ant-, which is Anthropic's)" ;;
+      esac
+    fi
   done
 }
 

@@ -20,7 +20,11 @@ const (
 	fakeApp     = "xapp-1-FAKE-LEAKCHECK-0002"
 	fakeChannel = "C0FAKELEAK1"
 	fakeModel   = "claude-fake-leakcheck"
-	fakeKey     = "sk-fake-leakcheck-key-0003"
+	fakeKey     = "sk-ant-FAKE-LEAKCHECK-key-0003"
+
+	// The other fake keys: an OpenAI key and a Bedrock key, each in its own shape.
+	fakeOpenAIKey  = "sk-proj-FAKE-LEAKCHECK-key-0005"
+	fakeBedrockKey = "ABSKFAKE-LEAKCHECK-key-0006"
 )
 
 // goodEnv is a file that passes, in the order of the example file.
@@ -84,7 +88,7 @@ func check(t *testing.T, path string, env ...string) (code int, stdout, stderr s
 // noLeak fails the test if any fake secret, which no output may hold, is in out.
 func noLeak(t *testing.T, what, out string) {
 	t.Helper()
-	for _, secret := range []string{fakeBot, fakeApp, fakeKey, "LEAKCHECK"} {
+	for _, secret := range []string{fakeBot, fakeApp, fakeKey, fakeOpenAIKey, fakeBedrockKey, "LEAKCHECK"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("%s holds %q; a value must never be printed", what, secret)
 		}
@@ -109,7 +113,7 @@ func TestEnvCheckAcceptsAGoodFile(t *testing.T) {
 // provider of either kind, and a group channel (G...) are all fine.
 func TestEnvCheckAcceptsTheShapesOfARealFile(t *testing.T) {
 	lines := []string{"# the sandbox", "", "  # indented comment", "export SLACK_BOT_TOKEN=\"" + fakeBot + "\"", "SLACK_APP_TOKEN='" + fakeApp + "'  ",
-		"SLACK_CHANNEL_ID=G0FAKELEAK1", "MODEL_PROVIDER=openai", "MODEL_NAME=gpt-4.1", "MODEL_API_KEY=" + fakeKey}
+		"SLACK_CHANNEL_ID=G0FAKELEAK1", "MODEL_PROVIDER=openai", "MODEL_NAME=gpt-4.1", "MODEL_API_KEY=" + fakeOpenAIKey}
 	path := filepath.Join(t.TempDir(), "crlf.env")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\r\n")), 0o600); err != nil { // no final newline either
 		t.Fatal(err)
