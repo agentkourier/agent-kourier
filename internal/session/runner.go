@@ -402,6 +402,7 @@ type tstate struct {
 	op        audit.Op   // the call audit rows name, when not a send
 	system    bool       // courier made the call itself: no person, no turn
 	recovered bool       // the task was found again after a restart
+	texted    bool       // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
 	key       Key
 	c         *convo
 	r         store.Reply
@@ -440,7 +441,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	}
 	var final *a2a.Task
 	var recordErr error
-	named, texted := false, false // the agent named the task; the turn said something to read
+	named := false // the agent named the task
 	err = send(func(e agent.Event) {
 		if c.life.renews(e) { // only what is new counts: a follow replays the snapshot it began with
 			c.lastSeen = m.cfg.Now()
@@ -474,7 +475,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 				}
 			}
 		case agent.TextEvent:
-			texted = texted || visible(ev.Text)
+			t.texted = t.texted || visible(ev.Text)
 		case agent.FinalEvent:
 			final = ev.Task
 			if !final.Status.State.Terminal() {
@@ -506,11 +507,15 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("send turn %s: the agent named no task", r.ID)
 	case final == nil:
+		// A real client never returns nil without a final event (Agent.Send and Follow return nil only once
+		// the task has settled), but the AgentAPI does not promise it: the thread is told, not left waiting.
+		m.notice(t, NoticeFailed, "the agent's reply ended before the task did")
+		m.finish(t, TurnNoFinal)
 		return ended, fmt.Errorf("send turn %s: the stream ended with no final task", r.ID)
 	case !final.Status.State.Terminal():
 		return paused, nil
 	}
-	m.taskEnded(t, final, texted)
+	m.taskEnded(t, final)
 	return ended, m.end(sctx, key, c.ttl)
 }
 
@@ -523,6 +528,7 @@ func (m *Manager) answer(c *convo, msg *a2a.Message) (outcome, error) {
 	c.parked, c.released, c.paused, c.driving = "", false, nil, msg.TaskID // no gap between parked and driving
 	m.mu.Unlock()
 	t.answer, t.nid, t.taskID, t.follow = true, msg.ID, msg.TaskID, false
+	t.texted = false // the answer's output is a message of its own: what the question said is not part of it
 	if msg.ContextID == "" {
 		msg.ContextID = t.sess.ContextID
 	}
@@ -624,7 +630,16 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 		m.drives(t.c, sl.TaskID) // it is followed again: still the task driven
 		t.c.tries++
 		return blocked, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
+	case m.ctx.Err() != nil: // a shutdown cut the stream: the task stays recorded, and nobody is told
+		return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 	}
+	// Any other answer or failure after the task was named, such as a refused identity on the follow or a
+	// permanent 4xx: it is no lost stream, so it is not followed again, and the turn is not left silent.
+	// The task stays recorded, for reconciliation.
+	t.c.follow = nil
+	m.drives(t.c, "")
+	m.notice(t, NoticeFailed, "the agent refused to continue the task")
+	m.finish(t, TurnRefused)
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
 
@@ -646,7 +661,7 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 	return ended, nil
 }
 
-// goneNotice tells the thread the agent no longer has the task's session. Its ID is the task's, so
+// goneNotice tells the thread the agent no longer has the task's session. Its ID is the task's and the thread's, so
 // the runner and a control that both find it gone post one notice.
 func (m *Manager) goneNotice(ctx context.Context, key Key, id a2a.TaskID, ts string) {
 	m.taskNotice(ctx, key, id, NoticeSessionGone, ts)
@@ -656,8 +671,15 @@ func (m *Manager) goneNotice(ctx context.Context, key Key, id a2a.TaskID, ts str
 // kind, so that every path that finds the same fact, whichever turn row it holds, posts it once.
 func (m *Manager) taskNotice(ctx context.Context, key Key, id a2a.TaskID, kind NoticeKind, ts string) {
 	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(kind), Kind: kind, MessageRef: ts})
+		m.cfg.Sink.Notice(ctx, key, Notice{ID: taskNoticeID(key, id, kind), Kind: kind, MessageRef: ts})
 	}
+}
+
+// taskNoticeID names the notice of kind about the task id in the thread key. The thread is part of it
+// because the outbox keeps one row per ID, and a backend's task IDs may repeat across threads (the stub
+// agent's do): a notice named after the task alone would be dropped in the second thread.
+func taskNoticeID(key Key, id a2a.TaskID, kind NoticeKind) string {
+	return "task:" + key.Connection + ":" + key.Channel + ":" + key.Thread + ":" + string(id) + "/" + string(kind)
 }
 
 // resume follows the task of a turn whose stream was lost. A task WORKING for longer than

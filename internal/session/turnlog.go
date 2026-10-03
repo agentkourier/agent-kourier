@@ -37,12 +37,17 @@ const (
 	TurnPauseEnded TurnOutcome = "pause_ended"
 	// TurnAnswerRejected is a turn whose answer the agent rejected, which cancelled its task (R17).
 	TurnAnswerRejected TurnOutcome = "answer_rejected"
+	// TurnRefused is a turn that was not followed to its end because the agent answered the follow, or the
+	// stream failed, with an error that is no lost stream, such as a refused identity or a permanent 4xx.
+	TurnRefused TurnOutcome = "refused"
+	// TurnNoFinal is a turn whose stream ended cleanly with no final task, which a real client never does.
+	TurnNoFinal TurnOutcome = "no_final"
 )
 
 // TurnOutcomes returns every outcome a turn can have.
 func TurnOutcomes() []TurnOutcome {
 	return []TurnOutcome{TurnCompleted, TurnFailed, TurnRejected, TurnCanceled, TurnCredentialsRejected, TurnForbidden, TurnUnreachable,
-		TurnSessionGone, TurnBindingGone, TurnWedged, TurnUncancellable, TurnPauseEnded, TurnAnswerRejected}
+		TurnSessionGone, TurnBindingGone, TurnWedged, TurnUncancellable, TurnPauseEnded, TurnAnswerRejected, TurnRefused, TurnNoFinal}
 }
 
 // Valid reports whether o is one of TurnOutcomes.
@@ -109,10 +114,11 @@ func (m *Manager) turnAttrs(t *tstate) []any {
 
 // taskEnded handles a turn whose task reached a terminal state: the thread is told what it would
 // otherwise not read, and the end of the turn is logged. A failed, rejected or cancelled task is told always
-// (a half answer is no sign that the task failed); a completed one only if it had nothing to show. output
+// (a half answer is no sign that the task failed); a completed one only if it had nothing to show: t.texted
 // says whether the turn said any text. The agent's status message is not shown: it is untrusted, and a
 // provider's error can hold a fragment of a key that no redaction knows (spec 8.4, R2).
-func (m *Manager) taskEnded(t *tstate, task *a2a.Task, output bool) {
+func (m *Manager) taskEnded(t *tstate, task *a2a.Task) {
+	output := t.texted
 	var kind NoticeKind
 	switch state := task.Status.State; {
 	case state == a2a.TaskStateCompleted && !output:

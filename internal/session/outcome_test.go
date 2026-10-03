@@ -427,7 +427,7 @@ func TestSessionGoneStartsAFreshContext(t *testing.T) {
 					}
 				}
 				waitFinal(t, sink) // turn 2
-				if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageRef != "1" || got[0].ID != "task:t1/session_gone" {
+				if got := sink.noticesOf(NoticeSessionGone); len(got) != 1 || got[0].MessageRef != "1" || got[0].ID != "task:slack:C1:1700.01:t1/session_gone" {
 					t.Errorf("session-gone notices = %+v; want one, for turn 1, named after the task", got)
 				}
 				f.agent.mu.Lock()

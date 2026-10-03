@@ -20,7 +20,7 @@ var ErrNotPaused = errors.New("session: the conversation is not paused on that t
 // was rendered for, and the queued replies then go on. It reports false, without calling the
 // agent, when that is not the task recorded for the thread, so an old button cannot stop a newer
 // task. The caller has already checked that by may press the button (D12). A running task's stream
-// ends cancelled, which the sink renders; a paused task has no stream, so Stop ends the pause and
+// ends cancelled, and the runner then posts NoticeTaskCanceled; a paused task has no stream, so Stop ends the pause and
 // tells the thread. It works after a restart. A failed cancel is classified as a wedged task's is
 // (see cancelActive). Stop calls the agent before it returns, so an adapter runs it off Slack's
 // 3-second acknowledgement path: enqueue the control, and act on it from the queue.
@@ -29,8 +29,8 @@ func (m *Manager) Stop(ctx context.Context, key Key, taskID a2a.TaskID, by strin
 	if err != nil || !done {
 		return false, err
 	}
-	if paused && m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(taskID) + "/stopped", Kind: NoticeStopped})
+	if paused {
+		m.taskNotice(ctx, key, taskID, NoticeStopped, "")
 	}
 	return true, nil
 }

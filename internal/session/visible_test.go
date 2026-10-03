@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -78,7 +79,7 @@ func TestTerminalTaskTellsTheThread(t *testing.T) {
 				}
 				return
 			}
-			want := Notice{ID: "task:t1/" + string(tc.want), Kind: tc.want, MessageRef: "1"}
+			want := Notice{ID: "task:slack:C1:1700.01:t1/" + string(tc.want), Kind: tc.want, MessageRef: "1"}
 			if len(sink.notices) != 1 || sink.notices[0] != want {
 				t.Errorf("notices = %+v; want exactly %+v: no detail, for the agent's text is not the courier's to show", sink.notices, want)
 			}
@@ -90,7 +91,7 @@ func TestTerminalTaskTellsTheThread(t *testing.T) {
 // post: after a stream lost and followed, and after a restart that follows the task again, whatever turn
 // row the follower holds.
 func TestTerminalTaskNoticeIsOneAcrossFollowAndRestart(t *testing.T) {
-	failedID := "task:t1/" + string(NoticeTaskFailed)
+	failedID := "task:slack:C1:1700.01:t1/" + string(NoticeTaskFailed)
 	t.Run("a stream lost before the end, then followed", func(t *testing.T) {
 		f := newFixture(t)
 		sink := f.live()
@@ -128,6 +129,26 @@ type logRecorder struct {
 	mu   *sync.Mutex
 	recs *[]logRecord
 	pre  map[string]any
+	text slog.Handler // the same records as production prints them, into out
+	out  *lockedBuf
+}
+
+// lockedBuf is a buffer a handler writes while a test reads.
+type lockedBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *lockedBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
 
 type logRecord struct {
@@ -137,12 +158,16 @@ type logRecord struct {
 }
 
 func newLogRecorder() *logRecorder {
-	return &logRecorder{mu: &sync.Mutex{}, recs: &[]logRecord{}, pre: map[string]any{}}
+	out := &lockedBuf{}
+	return &logRecorder{mu: &sync.Mutex{}, recs: &[]logRecord{}, pre: map[string]any{}, text: slog.NewTextHandler(out, nil), out: out}
 }
 
 func (l *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
 
-func (l *logRecorder) Handle(_ context.Context, r slog.Record) error {
+func (l *logRecorder) Handle(ctx context.Context, r slog.Record) error {
+	if err := l.text.Handle(ctx, r); err != nil {
+		return err
+	}
 	rec := logRecord{level: r.Level, msg: r.Message, attrs: map[string]any{}}
 	for k, v := range l.pre {
 		rec.attrs[k] = v
@@ -162,7 +187,7 @@ func (l *logRecorder) WithAttrs(as []slog.Attr) slog.Handler {
 	for _, a := range as {
 		pre[a.Key] = a.Value.Any()
 	}
-	return &logRecorder{mu: l.mu, recs: l.recs, pre: pre}
+	return &logRecorder{mu: l.mu, recs: l.recs, pre: pre, text: l.text.WithAttrs(as), out: l.out}
 }
 
 func (l *logRecorder) WithGroup(string) slog.Handler { return l }
@@ -179,16 +204,9 @@ func (l *logRecorder) lines(msg string) (out []logRecord) {
 	return out
 }
 
-// everything is all that was logged, as one string.
-func (l *logRecorder) everything() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var b strings.Builder
-	for _, r := range *l.recs {
-		fmt.Fprintf(&b, "%s %v\n", r.msg, r.attrs)
-	}
-	return b.String()
-}
+// everything is all that was logged, as slog's text handler prints it: a value that is a pointer shows
+// what it points to, as it would in production.
+func (l *logRecorder) everything() string { return l.out.String() }
 
 // turnEnds records the outcomes the manager reports.
 type turnEnds struct {
@@ -436,16 +454,24 @@ func TestStubTerminalTasksTellTheThread(t *testing.T) {
 // Every way a turn leaves the runner logs its end with the class of it, and reports it once: a Binding that
 // left the config, a session the agent lost, a task presumed wedged, and a pause that ended unanswered.
 func TestTurnLogsHowTheOtherEndingsClassify(t *testing.T) {
-	// ended waits for the end line, and checks that it is the only one and says want.
+	// ended waits for the end line of turn 1 that says want, and checks that it is the only one of that turn
+	// and was reported. (A turn queued behind it may end too, in its own way.)
 	ended := func(t *testing.T, logs *logRecorder, ends *turnEnds, want TurnOutcome) {
 		t.Helper()
-		eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
-		lines := logs.lines("session turn ended")
-		if len(lines) != 1 || lines[0].attrs["outcome"] != string(want) {
-			t.Errorf("end lines = %v; want one, outcome %s", lines, want)
+		first := func() (out []logRecord) {
+			for _, l := range logs.lines("session turn ended") {
+				if l.attrs["message"] == inbound("1").MessageID {
+					out = append(out, l)
+				}
+			}
+			return out
 		}
-		if got := ends.get(); len(got) != 1 || got[0] != "ns/b1 "+string(want) {
-			t.Errorf("outcomes reported = %v; want one, ns/b1 %s", got, want)
+		eventually(t, "the end of the turn", func() bool { return len(first()) >= 1 })
+		if lines := first(); len(lines) != 1 || lines[0].attrs["outcome"] != string(want) {
+			t.Errorf("end lines of turn 1 = %v; want one, outcome %s", lines, want)
+		}
+		if !slices.Contains(ends.get(), "ns/b1 "+string(want)) {
+			t.Errorf("outcomes reported = %v; want ns/b1 %s", ends.get(), want)
 		}
 	}
 	t.Run("a Binding that left the config", func(t *testing.T) {
@@ -481,6 +507,43 @@ func TestTurnLogsHowTheOtherEndingsClassify(t *testing.T) {
 		_, sink := wedgedFixture(t, func(f *fixture) { f.m.cfg.Logger, f.m.cfg.OnTurnEnd = slog.New(logs), ends.add }, "1")
 		eventually(t, "the wedged notice", func() bool { return len(sink.noticesOf(NoticeWedged)) == 1 })
 		ended(t, logs, ends, TurnWedged)
+	})
+	t.Run("a stream lost, and the front door refuses the follow", func(t *testing.T) {
+		f, _, logs, ends := logged(t)
+		f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+		f.agent.script = lost(fmt.Errorf("reconnect: %w", agent.ErrCredentialsRejected))
+		if _, err := f.submit(inbound("1")); err != nil {
+			t.Fatal(err)
+		}
+		ended(t, logs, ends, TurnCredentialsRejected)
+	})
+	// answered pauses turn 1 (turn 2 queues behind it), answers it, and reports how the answer ended turn 1.
+	answered := func(t *testing.T, answer func(*a2a.Message, agent.Handler) error, get func(a2a.TaskID) (*a2a.Task, error), want TurnOutcome) {
+		t.Helper()
+		logs, ends := newLogRecorder(), &turnEnds{}
+		f, _ := pausedFirst(t, answer)
+		f.m.cfg.Logger, f.m.cfg.OnTurnEnd = slog.New(logs), ends.add
+		if get != nil {
+			f.agent.mu.Lock()
+			f.agent.get = get
+			f.agent.mu.Unlock()
+		}
+		if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+			t.Fatal(err)
+		}
+		ended(t, logs, ends, want)
+	}
+	t.Run("an answer the agent rejects", func(t *testing.T) {
+		answered(t, func(*a2a.Message, agent.Handler) error {
+			return fmt.Errorf("send message: %w", agent.ErrAnswerRejected)
+		}, nil, TurnAnswerRejected)
+	})
+	t.Run("an answer that arrives after the task ended", func(t *testing.T) {
+		busy := func(*a2a.Message, agent.Handler) error { return fmt.Errorf("send message: %w", agent.ErrBusy) }
+		over := func(id a2a.TaskID) (*a2a.Task, error) {
+			return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateFailed, Timestamp: &t0}}, nil
+		}
+		answered(t, busy, over, TurnFailed)
 	})
 	t.Run("a pause cancelled", func(t *testing.T) {
 		logs, ends := newLogRecorder(), &turnEnds{}

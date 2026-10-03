@@ -524,8 +524,8 @@ func TestFailedStopIsClassified(t *testing.T) {
 					f.agent.mu.Lock()
 					last := f.agent.msgs[len(f.agent.msgs)-1]
 					f.agent.mu.Unlock()
-					if got := sink.noticesOf(NoticeSessionGone); last.ContextID != "" || len(got) != 1 || got[0].ID != "task:t1/session_gone" {
-						t.Errorf("held reply in context %q, notices %+v; want no context and the notice task:t1/session_gone", last.ContextID, got)
+					if got := sink.noticesOf(NoticeSessionGone); last.ContextID != "" || len(got) != 1 || got[0].ID != "task:slack:C1:1700.01:t1/session_gone" {
+						t.Errorf("held reply in context %q, notices %+v; want no context and the notice task:slack:C1:1700.01:t1/session_gone", last.ContextID, got)
 					}
 				}
 			}
