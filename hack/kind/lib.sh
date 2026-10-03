@@ -79,6 +79,16 @@ assert_owned() {
     die "kind cluster ${CLUSTER} exists but was not created by this script; refusing to touch it"
 }
 
+# refuse_while_sandbox_up: die while the sandbox tier's courier (hack/kind/sandbox) is in the cluster. Its pod carries the
+# label that the tier's own courier Deployment selects and its Service routes to (the front door's NetworkPolicy trusts that
+# label, so it must stay), so a run of the E2E tests would drive the sandbox's courier and a bring-up would start the tier's
+# beside it. An API error is not a refusal: only a Deployment that is there is. Needs K.
+refuse_while_sandbox_up() {
+  local found
+  found=$("${K[@]}" -n courier get deploy courier-sandbox --ignore-not-found -o name 2>/dev/null) || found=
+  [ -z "${found}" ] || die "the sandbox tier is up (${found}); its courier shares the tier's label and Service. Run: make sandbox-down first"
+}
+
 # owner_checkout: the checkout path recorded on the node, or "unknown".
 owner_checkout() {
   local path
@@ -226,6 +236,7 @@ load_courier_image() {
 # Needs HERE, K.
 deploy_courier() {
   local config
+  refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
   cp "${HERE}"/fast/courier/config/*.yaml "${config}"

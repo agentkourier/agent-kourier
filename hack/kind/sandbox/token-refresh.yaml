@@ -3,10 +3,11 @@
 # call is ever made on an expired one, and nobody has to run a loop in a terminal that may sleep. It is the same
 # exchange as lib.sh's refresh_dex_token (the password grant of the fake client and user in full/dex.yaml), from inside the
 # cluster, where Dex is: it asks Dex and PATCHes the Secret through the API server with its own ServiceAccount, whose Role
-# allows `patch` on that one Secret and nothing else. The token passes from one command to the next through pipes: it is
-# never printed, never in a file, never on an argument list of anything but this pod's curl (the SA token, which only
-# patches that Secret, is). Nothing the Job prints holds it: curl's -f drops an error body, and a successful PATCH's reply, which
-# is the Secret, goes to /dev/null. up.sh also makes a token itself before it starts courier, so the first six hours need no Job.
+# allows `patch` on that one Secret and nothing else. The tokens pass from one command to the next through pipes and curl's
+# --variable (which reads the ServiceAccount's token from its file): neither is printed, in a file of ours, or on an argument
+# list. Nothing the Job prints holds one: curl's -f drops an error body, and a successful PATCH's reply, which is the Secret,
+# goes to /dev/null. up.sh makes the first token by running this CronJob as a Job (create job --from=cronjob), so this
+# script is the only path that makes a token and it is proved at bring-up, not hours in.
 # The pod does not carry the label app.kubernetes.io/name=courier, which the front door's NetworkPolicy trusts.
 apiVersion: v1
 kind: ServiceAccount
@@ -63,7 +64,8 @@ spec:
                   printf '{"data":{"token":"%s"}}' "$(printf %s "${tok}" | base64 | tr -d '\n')" |
                     curl -sf -m 20 -o /dev/null -X PATCH --data-binary @- \
                       --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-                      -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                      --variable SA@/var/run/secrets/kubernetes.io/serviceaccount/token \
+                      --expand-header "Authorization: Bearer {{SA:trim}}" \
                       -H 'Content-Type: application/merge-patch+json' \
                       https://kubernetes.default.svc/api/v1/namespaces/courier/secrets/courier-agent-token
                   echo "refreshed the Binding's Dex token"

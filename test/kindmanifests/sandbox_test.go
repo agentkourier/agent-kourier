@@ -522,9 +522,51 @@ func TestSandboxTokenRefresh(t *testing.T) {
 			t.Errorf("the refresh script lacks %q", want)
 		}
 	}
-	// The token is never printed: no echo or printf of it to the output, only into the pipe to curl.
-	if regexp.MustCompile(`echo[^\n]*\$\{?tok`).MatchString(script) {
-		t.Error("the refresh script echoes the token")
+	// The token is never printed. Every line that mentions it is one of three (the assignment from Dex, the shape check, and
+	// the encoding into the pipe to the PATCH), and every line that writes anywhere is one of three: the two fixed
+	// messages and that pipe. So nothing else can print, log or file the token, whatever it is written as.
+	mentionsToken := regexp.MustCompile(`\$\{?tok\b|\btok=`)
+	writes := regexp.MustCompile(`\becho\b|\bprintf\b|\bcat\b|\btee\b|>&|/dev/(stdout|stderr|tty)|\s>\s|>>`)
+	const (
+		assign = `tok=$(curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \`
+		check  = `case "${tok}" in`
+		encode = `printf '{"data":{"token":"%s"}}' "$(printf %s "${tok}" | base64 | tr -d '\n')" |`
+		fail   = `*) echo "Dex gave no ID token" >&2; exit 1 ;;`
+		done   = `echo "refreshed the Binding's Dex token"`
+	)
+	seenToken, seenWrites := map[string]bool{}, map[string]bool{}
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if mentionsToken.MatchString(line) {
+			if !slices.Contains([]string{assign, check, encode}, line) {
+				t.Errorf("the refresh script mentions the token in %q; only the assignment, the shape check and the encoding into the PATCH may", line)
+			}
+			seenToken[line] = true
+		}
+		if writes.MatchString(line) {
+			if !slices.Contains([]string{encode, fail, done}, line) {
+				t.Errorf("the refresh script writes in %q; only the two fixed messages and the pipe into the PATCH may", line)
+			}
+			seenWrites[line] = true
+		}
+	}
+	if len(seenToken) != 3 || len(seenWrites) != 3 {
+		t.Errorf("the script mentions the token in %d lines and writes in %d; want 3 and 3 (the allowed lines have changed: update this test with them)", len(seenToken), len(seenWrites))
+	}
+	// curl says nothing it was not asked to: no verbose or trace output, no headers dumped.
+	for _, flag := range []string{"--verbose", "--trace", "--dump-header", " -v ", " -i ", "set -x", "set -o xtrace"} {
+		if strings.Contains(script, flag) {
+			t.Errorf("the refresh script uses %q", flag)
+		}
+	}
+	// The ServiceAccount's token is read from its file by curl, and is on no argument list.
+	for _, want := range []string{"--variable SA@/var/run/secrets/kubernetes.io/serviceaccount/token", `--expand-header "Authorization: Bearer {{SA:trim}}"`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the refresh script lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`Authorization[^\n]*[$]|\$\(cat |serviceaccount/token\)`).MatchString(script) {
+		t.Error("the ServiceAccount's token is put on an argument list")
 	}
 }
 

@@ -84,6 +84,7 @@ else
   "${K[@]}" annotate nodes -l "${OWNER_LABEL}" "${CHECKOUT_KEY}=${ROOT}" >/dev/null
 fi
 assert_context full
+refuse_while_sandbox_up
 # gVisor's loopback pod-to-pod path needs proxy ARP on the node (Substrate's create-kind-cluster.sh).
 for node in $(kind get nodes --name "${CLUSTER}"); do
   docker exec "${node}" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null

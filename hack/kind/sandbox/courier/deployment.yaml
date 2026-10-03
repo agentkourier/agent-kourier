@@ -1,6 +1,9 @@
 # Courier in the sandbox tier: the production image, courier:dev (make image; loaded into the cluster by up.sh, never
 # pulled), against a real Slack, in place of the full tier's own courier (the testhooks image on the fake Slack), which up.sh
-# scales to zero and down.sh scales back to one. A Deployment of its own, so that taking the sandbox away is deleting it.
+# scales to zero and down.sh scales back to one. A Deployment of its own, so that taking the sandbox away is deleting it, though
+# not an isolated one: its pod carries the label (app.kubernetes.io/name=courier) that the tier's courier Deployment selects and
+# the `courier` Service routes to, and that the front door's NetworkPolicy trusts, so it must. lib.sh's refuse_while_sandbox_up
+# makes e2e-run.sh, up-full.sh and deploy_courier refuse while this Deployment exists, so nothing drives it by mistake.
 # Everything else is the fast tier's courier (hack/kind/fast/courier/deployment.yaml): one replica with strategy Recreate (the
 # SQLite volume is never mounted by two pods), the same ServiceAccount and Role, and the pod label the front door's NetworkPolicy
 # trusts (app.kubernetes.io/name=courier). It differs by the volume and ConfigMap names, the image, and the missing

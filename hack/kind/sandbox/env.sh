@@ -31,7 +31,7 @@ sandbox_env_pattern() {
   esac
 }
 
-# sandbox_env_owner_and_mode FILE: "<uid> <octal mode>" of the file the path resolves to, by GNU stat or BSD stat.
+# sandbox_env_owner_and_mode FILE: "<uid> <octal mode>" of FILE itself (a symbolic link is refused before this), by GNU stat or BSD stat.
 sandbox_env_owner_and_mode() {
   stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1"
 }
@@ -43,6 +43,8 @@ sandbox_env_load() {
   for key in ${SANDBOX_ENV_KEYS}; do unset "${key}"; done # nothing is inherited from the environment
 
   [ -e "${file}" ] || sandbox_env_fail "does not exist; copy hack/kind/sandbox/sandbox.env.example there, fill it in and chmod 600 it"
+  # A link is refused, not followed: stat of a link reports the link's own mode, which chmod cannot fix.
+  [ ! -L "${file}" ] || sandbox_env_fail "is a symbolic link; point SANDBOX_ENV at the file itself"
   [ -f "${file}" ] || sandbox_env_fail "is not a regular file"
   [ -r "${file}" ] || sandbox_env_fail "is not readable by you"
   read -r owner mode <<<"$(sandbox_env_owner_and_mode "${file}")"
@@ -86,4 +88,29 @@ sandbox_env_load() {
     sandbox_env_pattern "${key}"
     [[ ${value} =~ ${SANDBOX_ENV_RE} ]] || sandbox_env_fail "${key} is malformed; want ${SANDBOX_ENV_WANT}"
   done
+}
+
+# apply_secret NAMESPACE NAME KEY=VARIABLE...: a Secret whose KEY holds what the shell variable VARIABLE holds, as a manifest
+# on stdin to a server-side apply (which keeps no last-applied copy of it in an annotation). printf is a builtin, so a value
+# is on no argument list, and the variables are never exported, so a value is in no child's environment (the base64 and tr
+# it pipes through get it on stdin only). K is the caller's kubectl command, an array that names its context.
+apply_secret() {
+  local ns=$1 name=$2 pair var
+  shift 2
+  {
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: Opaque\ndata:\n' "${name}" "${ns}"
+    for pair in "$@"; do
+      var=${pair#*=}
+      printf '  %s: %s\n' "${pair%%=*}" "$(printf %s "${!var}" | base64 | tr -d '\n')"
+    done
+  } | "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f - >/dev/null
+}
+
+# render FILE: FILE with its __MODEL_NAME__ and __SLACK_CHANNEL_ID__ filled in, on stdout. By parameter expansion,
+# so that neither value is on an argument list.
+render() {
+  local content
+  content=$(<"$1")
+  content=${content//__MODEL_NAME__/${MODEL_NAME}}
+  printf '%s\n' "${content//__SLACK_CHANNEL_ID__/${SLACK_CHANNEL_ID}}"
 }

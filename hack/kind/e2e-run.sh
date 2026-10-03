@@ -33,6 +33,7 @@ docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
 cluster_exists || die "kind cluster ${CLUSTER} does not exist; bring it up with: make e2e-${tier}-up"
 assert_owned
 assert_context "${tier}"
+refuse_while_sandbox_up
 # The full tier's agents are reached with the Binding's Dex ID token, which lasts 24 hours: make a fresh one for
 # the run, so that a tier that has been up a day does not fail on a token that expired.
 [ "${tier}" != full ] || refresh_dex_token

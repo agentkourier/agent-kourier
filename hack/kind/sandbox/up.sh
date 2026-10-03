@@ -8,6 +8,8 @@
 # `kubectl apply -f -`: on no command line, in no file, in no output.
 # Brings the full tier up first if it is not (up-full.sh), replaces its courier with the sandbox's (down.sh puts it back),
 # and is safe to re-run.
+# Exit 0: up, and courier is connected to Slack. 1: a refused secrets file, or something failed. 3: deployed and verified, but
+# Slack rejected the tokens (courier exited 1, fatal auth), so courier is not connected.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) # hack/kind, which lib.sh's functions expect
@@ -35,7 +37,7 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 SCRATCH=
-trap '[ -z "${SCRATCH}" ] || rm -rf "${SCRATCH}"; delete_courier_pod "${DEX_TOKEN_POD:-}"' EXIT
+trap '[ -z "${SCRATCH}" ] || rm -rf "${SCRATCH}"' EXIT
 
 # The secrets file comes first: a wrong one is refused before the cluster, Docker or any tool is asked anything.
 step "secrets file ${SANDBOX_ENV}"
@@ -46,30 +48,6 @@ for tool in docker kind kubectl helm jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
-
-# apply_secret NAMESPACE NAME KEY=VARIABLE...: a Secret whose KEY holds what the shell variable VARIABLE holds, as a manifest
-# on stdin to a server-side apply (which keeps no last-applied copy of it in an annotation). printf is a builtin, so a value
-# is on no argument list. Needs K.
-apply_secret() {
-  local ns=$1 name=$2 pair var
-  shift 2
-  {
-    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: Opaque\ndata:\n' "${name}" "${ns}"
-    for pair in "$@"; do
-      var=${pair#*=}
-      printf '  %s: %s\n' "${pair%%=*}" "$(printf %s "${!var}" | base64 | tr -d '\n')"
-    done
-  } | "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f - >/dev/null
-}
-
-# render FILE: FILE with its __MODEL_NAME__ and __SLACK_CHANNEL_ID__ filled in, on stdout. By parameter expansion,
-# so that neither value is on an argument list.
-render() {
-  local content
-  content=$(<"$1")
-  content=${content//__MODEL_NAME__/${MODEL_NAME}}
-  printf '%s\n' "${content//__SLACK_CHANNEL_ID__/${SLACK_CHANNEL_ID}}"
-}
 
 # ---------------------------------------------------------------------------------------------------------------------
 step "the full tier (kind cluster ${CLUSTER})"
@@ -110,8 +88,18 @@ render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml" | "${K[@]}" apply -f - >/dev/
 step "courier: Slack Secret, the Binding's Dex token and its refresh, config, Deployment"
 "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 apply_secret courier sandbox-slack botToken=SLACK_BOT_TOKEN appToken=SLACK_APP_TOKEN
-refresh_dex_token
 "${K[@]}" apply -f "${SBX}/token-refresh.yaml" >/dev/null
+# The first token is made by the CronJob's own script, as a Job from it, so that the one path that keeps the token fresh is
+# the one that made it and is proved now, not hours into a session; and no throwaway pod is left with the token in its log.
+"${K[@]}" -n courier delete job courier-token-refresh-bringup --ignore-not-found >/dev/null
+"${K[@]}" -n courier create job courier-token-refresh-bringup --from=cronjob/courier-token-refresh >/dev/null
+if ! "${K[@]}" -n courier wait --for=condition=Complete job/courier-token-refresh-bringup --timeout=120s >/dev/null; then
+  echo "error: the token refresh Job did not complete (is Dex up? does the Secret courier-agent-token exist?). Its log:" >&2
+  "${K[@]}" -n courier logs job/courier-token-refresh-bringup --tail=10 >&2 || true
+  "${K[@]}" -n courier delete job courier-token-refresh-bringup --ignore-not-found --wait=false >/dev/null || true
+  die "no Binding token"
+fi
+"${K[@]}" -n courier delete job courier-token-refresh-bringup >/dev/null
 SCRATCH=$(mktemp -d)
 for f in "${SBX}"/courier/config/*.yaml; do render "${f}" >"${SCRATCH}/$(basename "${f}")"; done
 cp "${HERE}/full/courier/agentbackend.yaml" "${SCRATCH}/agentbackend.yaml" # the verifying front door
@@ -201,7 +189,7 @@ done
 case "${state}" in
   ready) echo "ok: courier is Ready: connected to Slack (auth.test passed; Socket Mode is up)" ;;
   fatal-auth)
-    echo "WARNING: courier exited 1, which is fatal auth: Slack rejected the tokens, and a restart would be rejected again." >&2
+    echo "error: courier exited 1, which is fatal auth: Slack rejected the tokens, and a restart would be rejected again." >&2
     echo "         Fix SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${SANDBOX_ENV} and re-run make sandbox-up. Its log:" >&2
     "${K[@]}" -n courier logs deploy/courier-sandbox --tail=6 2>&1 | sed 's/^/         /' >&2 || true
     ;;
@@ -217,5 +205,7 @@ docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(k
 if [ "${state}" = ready ]; then
   echo "sandbox up in ${SECONDS}s (context ${CTX}): @-mention the bot in the channel; the dogfood checklist is hack/kind/sandbox/README.md"
 else
-  echo "sandbox up in ${SECONDS}s, but courier is NOT connected to Slack (see WARNING above)"
+  # Exit 3 is "deployed, but Slack rejected the tokens": all else is up and verified, and courier crash-loops until the file is fixed.
+  echo "sandbox deployed in ${SECONDS}s, but Slack rejected the tokens, so courier is NOT connected (exit 3; see the error above)" >&2
+  exit 3
 fi

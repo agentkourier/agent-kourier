@@ -23,8 +23,13 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
 
 | Target | What it does |
 |---|---|
-| `make sandbox-up` | Checks the secrets file first (before it touches anything). Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. |
+| `make sandbox-up` | Checks the secrets file first (before it touches anything). Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
 | `make sandbox-down` | Removes the overlay and restores the full tier's own courier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
+
+While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
+(`Run: make sandbox-down first`): the sandbox's pod carries the label the front door trusts, which the tier's own courier Deployment and
+its Service also select, so a test run would drive the sandbox's courier. `kubectl logs deploy/courier` is the tier's (scaled to zero);
+use `deploy/courier-sandbox`.
 
 `make` shows both in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-courier/sandbox.env`:
 `SANDBOX_ENV=/path/to/file make sandbox-up`. `hack/kind/sandbox/check-env.sh [FILE]` checks a file and nothing else.
@@ -49,7 +54,7 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
    ```
 6. `make sandbox-up`, then wait for `ok: courier is Ready: connected to Slack`.
 
-The file is **parsed, never sourced**, and is refused if it is missing, unreadable, not yours, readable or writable by
+The file is **parsed, never sourced**, and is refused if it is missing, a symbolic link, unreadable, not yours, readable or writable by
 anyone else, if a key is missing, repeated, malformed or still a `REPLACE` placeholder. The error names the key and never
 the value. The values go into Secret manifests on stdin to `kubectl apply -f -` (server-side, so no last-applied copy
 is kept): on no command line, in no file, in no output.
@@ -106,9 +111,10 @@ it is exactly `api.anthropic.com` (or `api.openai.com`), `kagent-controller.kage
 request from the Secret `sandbox-model`, so the key never enters the agent's sandbox. Nothing was added to any policy.
 
 **The Binding's token.** The Binding identity's Dex ID token (the Secret `courier-agent-token`) lasts 24 hours and courier reads
-it on every request. `make sandbox-up` mints a fresh one, and a CronJob in `courier` (every six hours, `0 */6 * * *`, may start
-up to an hour late if the laptop slept) mints another and patches it in, from inside the cluster, with a ServiceAccount whose
-only right is `patch` on that one Secret. It was chosen over a host loop because it needs no terminal that survives
+it on every request. a CronJob in `courier` (every six hours, `0 */6 * * *`, may start
+up to an hour late if the laptop slept) mints one and patches it in, from inside the cluster, with a ServiceAccount whose
+only right is `patch` on that one Secret. `make sandbox-up` makes the first token by running that same CronJob as a Job, so the one
+path that keeps the token fresh is proved at bring-up. It was chosen over a host loop because it needs no terminal that survives
 sleep or a closed lid, and over lib.sh's `refresh_dex_token` run by hand because that is a manual step in a multi-hour session.
 To force one: `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-token-refresh refresh-now`.
 
@@ -163,7 +169,7 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
 
 ## If it does not come up
 
-- **`WARNING: courier exited 1, which is fatal auth`**: Slack rejected `SLACK_BOT_TOKEN` or `SLACK_APP_TOKEN` (or the app is
+- **Exit 3, `error: courier exited 1, which is fatal auth`**: Slack rejected `SLACK_BOT_TOKEN` or `SLACK_APP_TOKEN` (or the app is
   not installed, or Socket Mode is off). A restart would be rejected again, so the pod crash-loops. Fix the file, re-run `make sandbox-up`.
 - **The bot does not answer**: is the bot in the channel, and is `SLACK_CHANNEL_ID` that channel's ID (not its name)? Courier answers in that channel only.
 - **The agent answers with a 401 or a model error**: the `MODEL_API_KEY`, `MODEL_PROVIDER` or `MODEL_NAME` is wrong. Fix the file and re-run.
