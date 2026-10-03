@@ -238,7 +238,7 @@ func TestTurnAttribution(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
 	f.attr = (&kagentv1.Dialect{}).Attribute
-	var logs bytes.Buffer // written by the runner before it sends, read after the turn ended
+	var logs bytes.Buffer // written by the runner, read once it has retired
 	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 	f.m.cfg.Users = fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}, "U3": {Name: "Eve"}}
 	for i, tc := range []struct{ user, want string }{
@@ -260,6 +260,7 @@ func TestTurnAttribution(t *testing.T) {
 			t.Errorf("turn %d = %+v; want one part %q", i, msg.Parts, tc.want)
 		}
 	}
+	f.retired(t) // the runner logs the end of a turn after its final event
 	if got := logs.String(); !strings.Contains(got, "U2") || !strings.Contains(got, "no such user") {
 		t.Errorf("log = %q; want the failed resolution of U2 and its cause", got)
 	}

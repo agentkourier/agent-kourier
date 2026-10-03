@@ -115,6 +115,14 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 		return "The task ran for too long without progress, so I cancelled it.", true
 	case session.NoticeDuplicateRun:
 		return "The agent ran this request more than once. Check that its work has not been done twice.", true
+	case session.NoticeTaskFailed:
+		return "The agent's task failed, so there is no answer. Its own logs say why.", true
+	case session.NoticeTaskRejected:
+		return "The agent rejected this request, so there is no answer.", true
+	case session.NoticeTaskCanceled:
+		return "The agent's task was canceled before it finished.", true
+	case session.NoticeNoOutput:
+		return "The agent finished without any output.", true
 	}
 	return "", false
 }

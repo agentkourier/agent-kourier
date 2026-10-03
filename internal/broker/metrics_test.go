@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -55,6 +56,7 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `courier_credential_rejections_total{binding=sre/sre-alerts} 1`},
 		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `courier_config_reload_errors_total{} 1`},
 		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `courier_outbox_abandoned_total{reason=channel_gone} 1`},
+		{"turn outcome", func(m *Metrics) { m.TurnOutcome("sre/sre-alerts", session.TurnFailed) }, `courier_turn_outcomes_total{binding=sre/sre-alerts,outcome=failed} 1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := mustMetrics(t, nil)
@@ -113,11 +115,12 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 		m.OutboxAbandoned("id", r)
 	}
 	m.CredentialRejected("sre/sre-alerts")
+	m.TurnOutcome("sre/sre-alerts", "an error text an agent chose")
 	fams, err := m.reg.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"kind": true, "binding": true, "reason": true}
+	allowed := map[string]bool{"kind": true, "binding": true, "reason": true, "outcome": true}
 	for _, f := range fams {
 		for _, s := range f.GetMetric() {
 			for _, l := range s.GetLabel() {
@@ -128,13 +131,24 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 		}
 	}
 	got := samples(t, m)
-	for _, bad := range []string{"not-a-kind", "U12345", "made-up"} {
+	for _, bad := range []string{"not-a-kind", "U12345", "made-up", "an error text"} {
 		if strings.Contains(strings.Join(got, "\n"), bad) {
 			t.Errorf("series %v carry %q; an unknown value must become %q", got, bad, "other")
 		}
 	}
 	if !slices.Contains(got, "courier_audit_write_failures_total{kind=other} 1") || !slices.Contains(got, "courier_outbox_abandoned_total{reason=other} 2") {
 		t.Errorf("samples = %v; want the unknown kind and the two unknown reasons counted as other", got)
+	}
+}
+
+// Every outcome the session manager can report is its own label, and one it cannot is "other".
+func TestEveryTurnOutcomeHasItsOwnLabel(t *testing.T) {
+	for _, o := range session.TurnOutcomes() {
+		m := mustMetrics(t, nil)
+		m.TurnOutcome("ns/b", o)
+		if got := samples(t, m); !slices.Contains(got, "courier_turn_outcomes_total{binding=ns/b,outcome="+string(o)+"} 1") {
+			t.Errorf("outcome %q: samples = %v; want its own label", o, got)
+		}
 	}
 }
 

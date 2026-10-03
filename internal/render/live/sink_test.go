@@ -59,7 +59,7 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
-	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun} {
+	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun, session.NoticeTaskFailed, session.NoticeTaskRejected, session.NoticeTaskCanceled, session.NoticeNoOutput} {
 		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, Detail: "<!channel> boom"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
@@ -262,6 +262,30 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 		session.NoticeBindingGone: "This thread's agent is no longer set up, so I can't pass your messages on.",
 	} {
 		n := session.Notice{ID: "m1/" + string(kind), Kind: kind, MessageRef: "5.5"}
+		sink.Notice(t.Context(), thread, n)
+		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
+		var out chat.Outgoing
+		_ = json.Unmarshal([]byte(row.Payload), &out)
+		if err != nil || out.Message == nil || out.Message.Fallback != want {
+			t.Errorf("%s: message %+v, %v; want %q", kind, out.Message, err, want)
+		}
+	}
+}
+
+// The notices of a turn that ended without an answer say what happened in courier's own fixed words, and
+// name no cause: the agent's status text is untrusted and not courier's to repeat (spec 8.4, R2).
+func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	thread := thread
+	thread.Thread = e.root
+	for kind, want := range map[session.NoticeKind]string{
+		session.NoticeTaskFailed:   "The agent's task failed, so there is no answer. Its own logs say why.",
+		session.NoticeTaskRejected: "The agent rejected this request, so there is no answer.",
+		session.NoticeTaskCanceled: "The agent's task was canceled before it finished.",
+		session.NoticeNoOutput:     "The agent finished without any output.",
+	} {
+		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, MessageRef: "5.5"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
 		var out chat.Outgoing

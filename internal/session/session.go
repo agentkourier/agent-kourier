@@ -132,6 +132,15 @@ const (
 	NoticeWedged NoticeKind = "wedged"
 	// NoticeDuplicateRun says the agent ran a turn more than once (spec 8.2).
 	NoticeDuplicateRun NoticeKind = "duplicate_run"
+	// NoticeTaskFailed says the agent's task ended failed. Its ID is the task's, so the turn that sees
+	// the end more than once, or a restart that follows the task again, raises one post.
+	NoticeTaskFailed NoticeKind = "task_failed"
+	// NoticeTaskRejected says the agent rejected the request, so its task ended with no answer.
+	NoticeTaskRejected NoticeKind = "task_rejected"
+	// NoticeTaskCanceled says the agent's task ended cancelled, such as when a person stopped it.
+	NoticeTaskCanceled NoticeKind = "task_canceled"
+	// NoticeNoOutput says the agent's task completed with nothing to show.
+	NoticeNoOutput NoticeKind = "no_output"
 )
 
 // Notice is something for the thread that no turn's output says. ID is stable, so a renderer
@@ -175,6 +184,9 @@ type Config struct {
 	// SendGiveUp is how long an unreachable agent is retried before the turn fails (spec 11).
 	// It defaults to 15 minutes.
 	SendGiveUp time.Duration
+	// OnTurnEnd is called once for each turn that ends, with the Binding's name and how it ended, for a
+	// metric. Nil does nothing. It must not block.
+	OnTurnEnd func(binding string, outcome TurnOutcome)
 }
 
 // attempt is a head turn that was sent and not yet taken and recorded. unknown says an earlier
@@ -201,6 +213,9 @@ type Manager struct {
 	// attempted holds, per conversation, the head turn that was sent and not yet taken and
 	// recorded: a send of it again is a resend, and is looked up first.
 	attempted map[Key]attempt
+	// begun holds, per turn that has started and not ended, when its start was logged, for the
+	// duration of its end line (see begin and finish). A turn that is retried is one entry.
+	begun map[string]time.Time
 	// fresh holds the turns this process enqueued itself, and has not yet sent and recorded: they
 	// cannot have been sent before. Any other undelivered head may have been, by a process that died.
 	// A turn leaves it when the agent takes it and it is recorded (accept), when it fails for good
@@ -244,7 +259,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, fresh: map[string]struct{}{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil

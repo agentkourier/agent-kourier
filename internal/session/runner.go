@@ -210,8 +210,12 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 			m.cfg.Logger.Error("end paused task", "key", key, "error", err)
 		}
 		m.mu.Lock()
+		over := c.paused // the turn that paused
 		c.parked, c.released, c.paused = "", false, nil
 		m.mu.Unlock()
+		if over != nil {
+			m.finish(over, TurnPauseEnded)
+		}
 		return ended, nil
 	case msg := <-c.answers:
 		return m.answer(c, msg)
@@ -265,7 +269,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		m.mu.Lock()
 		delete(m.fresh, r.ID)
 		m.mu.Unlock()
-		return ended, m.cfg.Store.MarkReplyDelivered(sctx, r.ID, m.cfg.Now())
+		if err := m.cfg.Store.MarkReplyDelivered(sctx, r.ID, m.cfg.Now()); err != nil {
+			return ended, err // still queued: dropped again on the next pass
+		}
+		m.finish(t, TurnBindingGone)
+		return ended, nil
 	} else if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
 	}
@@ -414,6 +422,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 		}
 	}()
 	sctx := context.WithoutCancel(m.ctx)
+	m.begin(t)
 	h := func(agent.Event) {}
 	// The sink's context ends when the send returns, not with the manager: a turn that ends with
 	// no FinalEvent frees what the sink started for it. A sink that must settle a finished turn
@@ -431,7 +440,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	}
 	var final *a2a.Task
 	var recordErr error
-	named := false
+	named, texted := false, false // the agent named the task; the turn said something to read
 	err = send(func(e agent.Event) {
 		if c.life.renews(e) { // only what is new counts: a follow replays the snapshot it began with
 			c.lastSeen = m.cfg.Now()
@@ -464,6 +473,8 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 					m.mu.Unlock()
 				}
 			}
+		case agent.TextEvent:
+			texted = texted || visible(ev.Text)
 		case agent.FinalEvent:
 			final = ev.Task
 			if !final.Status.State.Terminal() {
@@ -499,6 +510,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	case !final.Status.State.Terminal():
 		return paused, nil
 	}
+	m.taskEnded(t, final, texted)
 	return ended, m.end(sctx, key, c.ttl)
 }
 
@@ -534,6 +546,7 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 		// Agent.Answer cancelled the wedged task itself: record that call, made by no person.
 		m.auditCall(m.ctx, t.key, audit.Actor{Binding: t.sess.Binding, Identity: t.b.Identity},
 			audit.Call{Op: audit.OpCancel, TaskID: t.taskID, ContextID: t.sess.ContextID, MessageID: t.nid})
+		m.finish(t, TurnAnswerRejected)
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 	case errors.Is(err, agent.ErrBusy):
 		return m.readAnswered(t, true)
@@ -559,6 +572,7 @@ func (m *Manager) readAnswered(t *tstate, busy bool) (outcome, error) {
 		return m.repark(t), nil
 	case task.Status.State.Terminal():
 		m.notice(t, NoticeAnswerDropped, "")
+		m.finish(t, stateOutcome(task.Status.State))
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 	case running(task):
 		if busy && m.wedgedByAge(t.c, task) {
@@ -600,6 +614,7 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 		t.c.follow = nil  // the task stays recorded, for reconciliation
 		m.drives(t.c, "") // no longer driven, before the thread is told
 		m.notice(t, NoticeFailed, "the agent's front door refused the Binding's credentials")
+		m.finish(t, TurnCredentialsRejected)
 		return ended, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
 	case errors.As(err, &sl):
 		if t.c.since.IsZero() {
@@ -627,14 +642,21 @@ func (m *Manager) gone(t *tstate) (outcome, error) {
 	m.goneNotice(m.ctx, t.key, t.taskID, t.r.MessageRef) // named after the task, so a repeat, or a control's, is one
 	t.c.follow = nil
 	t.c.settle()
+	m.finish(t, TurnSessionGone)
 	return ended, nil
 }
 
 // goneNotice tells the thread the agent no longer has the task's session. Its ID is the task's, so
 // the runner and a control that both find it gone post one notice.
 func (m *Manager) goneNotice(ctx context.Context, key Key, id a2a.TaskID, ts string) {
+	m.taskNotice(ctx, key, id, NoticeSessionGone, ts)
+}
+
+// taskNotice tells the thread something about the task id. The notice is named after the task and its
+// kind, so that every path that finds the same fact, whichever turn row it holds, posts it once.
+func (m *Manager) taskNotice(ctx context.Context, key Key, id a2a.TaskID, kind NoticeKind, ts string) {
 	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(NoticeSessionGone), Kind: NoticeSessionGone, MessageRef: ts})
+		m.cfg.Sink.Notice(ctx, key, Notice{ID: "task:" + string(id) + "/" + string(kind), Kind: kind, MessageRef: ts})
 	}
 }
 
@@ -715,6 +737,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case kind == cancelDone:
 		m.audit(t, t.call(nil))
 		m.notice(t, NoticeWedged, "")
+		m.finish(t, TurnWedged)
 		c.follow = nil
 		c.settle()
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, c.ttl)
@@ -730,7 +753,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case kind == cancelForbidden, m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
 		m.audit(t, t.call(err))
 		c.follow = nil
-		return m.fail(t, "the wedged task could not be cancelled; stop it from the thread, or restart courier to reconcile it", err)
+		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; stop it from the thread, or restart courier to reconcile it", err)
 	}
 	c.tries++
 	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
@@ -742,10 +765,10 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 	switch {
 	case errors.Is(err, agent.ErrCredentialsRejected): // before ErrNotSent, which it comes with
 		m.rejected(t, err)
-		return m.fail(t, "the agent's front door refused the Binding's credentials", err)
+		return m.fail(t, TurnCredentialsRejected, "the agent's front door refused the Binding's credentials", err)
 	case errors.Is(err, agent.ErrForbidden):
 		m.audit(t, t.call(err))
-		return m.fail(t, "the agent refused the Binding's identity for this session", err)
+		return m.fail(t, TurnForbidden, "the agent refused the Binding's identity for this session", err)
 	case errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later, never give up
 		if !t.c.busyNoted { // Submit saw no task recorded, so it did not mark the reply queued: do it now
 			t.c.busyNoted = true
@@ -778,7 +801,7 @@ func (m *Manager) retry(t *tstate, err error) (outcome, error) {
 		c.since = m.cfg.Now()
 	}
 	if !c.patient && m.cfg.Now().Sub(c.since) >= m.cfg.SendGiveUp {
-		return m.fail(t, "the agent could not be reached", err)
+		return m.fail(t, TurnUnreachable, "the agent could not be reached", err)
 	}
 	c.tries++
 	if !c.notified {
@@ -797,8 +820,9 @@ func (m *Manager) duplicates(t *tstate, holders []a2a.TaskID) {
 
 // fail ends the turn without a task: it is not sent again, the thread is told why, and the
 // queue goes on. If marking the turn delivered fails, the turn stays queued and the next attempt
-// is a real second call, with its own audit row: bounded, and never silent.
-func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
+// is a real second call, with its own audit row: bounded, and never silent. class is what kind of
+// failure it was, for the end line of the turn.
+func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (outcome, error) {
 	m.drives(t.c, "") // it stops driving before it says so: a Stop that answers the notice must not find it driving
 	t.c.settle()
 	m.mu.Lock()
@@ -807,6 +831,7 @@ func (m *Manager) fail(t *tstate, why string, cause error) (outcome, error) {
 	m.mu.Unlock()
 	m.notice(t, NoticeFailed, why)
 	m.cfg.Logger.Warn("session turn failed", "key", t.key, "message", t.r.ID, "reason", why, "error", cause)
+	m.finish(t, class)
 	return ended, m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now())
 }
 

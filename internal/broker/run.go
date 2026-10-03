@@ -155,7 +155,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return err
 	}
-	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor})
+	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}
