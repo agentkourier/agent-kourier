@@ -169,8 +169,12 @@ fi
 check "the agent sandbox-sre is Accepted" "${K[@]}" -n kagent wait --for=condition=Accepted agent/sandbox-sre --timeout=5s
 check "the agent sandbox-sre is Ready" "${K[@]}" -n kagent wait --for=condition=Ready agent/sandbox-sre --timeout=5s
 
-# Courier: connected when its pod is Ready; if Slack rejected the tokens it exits 1 (fatal auth: a restart would be rejected
+# Courier: the pod is Ready as soon as /readyz holds, which is before the Slack connection is tried and says nothing of it (Slack is
+# not a readiness check on purpose; internal/broker/health.go). So Ready is not "connected": courier says that itself, with the
+# INFO line the Slack adapter logs when Slack says hello over Socket Mode (slack.ConnectedMessage, which a test keeps this to), and
+# as courier_chat_connected{...} 1 on /metrics. If Slack rejected the tokens it exits 1 (fatal auth: a restart would be rejected
 # again, so the pod crash-loops and says so); any other exit is a failure of the tier.
+SLACK_CONNECTED='slack: socket mode connected'
 courier_state() { # ready | fatal-auth | exit <code> | starting
   "${K[@]}" -n courier get pods -l app.kubernetes.io/instance=sandbox -o json | jq -r '
     [.items[] | select(.metadata.deletionTimestamp == null)] | sort_by(.metadata.creationTimestamp) | last // empty
@@ -179,19 +183,33 @@ courier_state() { # ready | fatal-auth | exit <code> | starting
       else ((.state.terminated // .lastState.terminated // null) as $t
             | if $t == null then "starting" elif $t.exitCode == 1 then "fatal-auth" else "exit \($t.exitCode)" end) end'
 }
+slack_connected() { # whether the current container has logged that Socket Mode connected
+  local log
+  log=$("${K[@]}" -n courier logs deploy/courier-sandbox --tail=1000 2>/dev/null || true)
+  [[ ${log} == *"${SLACK_CONNECTED}"* ]]
+}
 deadline=$((SECONDS + 150))
 state=starting
 while [ "${SECONDS}" -lt "${deadline}" ]; do
   state=$(courier_state || echo starting)
-  case "${state}" in ready | fatal-auth | exit*) break ;; esac
+  case "${state}" in
+    ready) if slack_connected; then state=connected; break; fi ;;
+    fatal-auth | exit*) break ;;
+  esac
   sleep 3
 done
 case "${state}" in
-  ready) echo "ok: courier is Ready: connected to Slack (auth.test passed; Socket Mode is up)" ;;
+  connected) echo "ok: courier is connected to Slack (it logged \"${SLACK_CONNECTED}\": auth.test passed and Socket Mode said hello)" ;;
   fatal-auth)
     echo "error: courier exited 1, which is fatal auth: Slack rejected the tokens, and a restart would be rejected again." >&2
     echo "         Fix SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${SANDBOX_ENV} and re-run make sandbox-up. Its log:" >&2
     "${K[@]}" -n courier logs deploy/courier-sandbox --tail=6 2>&1 | sed 's/^/         /' >&2 || true
+    ;;
+  ready)
+    echo "FAIL: courier is Ready but never connected to Slack (no \"${SLACK_CONNECTED}\" line in 150 s). Its Slack lines:" >&2
+    "${K[@]}" -n courier logs deploy/courier-sandbox --tail=1000 2>&1 | grep 'slack' | tail -10 | sed 's/^/         /' >&2 || true
+    echo "         'connection attempt failed' lines mean courier cannot reach Slack (egress, DNS or a proxy); see 'Where to look' in hack/kind/sandbox/README.md." >&2
+    failed=1
     ;;
   *)
     echo "FAIL: courier is not up (${state}). Its log:" >&2
@@ -202,7 +220,7 @@ esac
 
 docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(kind get nodes --name "${CLUSTER}")"
 [ "${failed}" -eq 0 ] || die "the sandbox is not as it should be (see FAIL above)"
-if [ "${state}" = ready ]; then
+if [ "${state}" = connected ]; then
   echo "sandbox up in ${SECONDS}s (context ${CTX}): @-mention the bot in the channel; the dogfood checklist is hack/kind/sandbox/README.md"
 else
   # Exit 3 is "deployed, but Slack rejected the tokens": all else is up and verified, and courier crash-loops until the file is fixed.

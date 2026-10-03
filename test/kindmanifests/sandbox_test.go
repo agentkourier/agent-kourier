@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
@@ -593,6 +594,30 @@ func TestSandboxMakeTargets(t *testing.T) {
 	}
 	if !strings.Contains(string(readme), "hack/kind/sandbox/slack-app-manifest.yaml") {
 		t.Error("the README does not point at the Slack app manifest")
+	}
+}
+
+// TestSandboxUpWaitsForCourierToSayItIsConnected: a Ready pod says nothing of Slack (readiness is not tied to it), so up.sh
+// claims a connection only after the log line the Slack adapter writes for it, which the README names with the gauge.
+func TestSandboxUpWaitsForCourierToSayItIsConnected(t *testing.T) {
+	up, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme, err := os.ReadFile(sandboxDir + "README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(up), "'"+slack.ConnectedMessage+"'") {
+		t.Errorf("up.sh does not wait for the line %q, which the Slack adapter logs when Socket Mode connects", slack.ConnectedMessage)
+	}
+	if strings.Contains(string(up), "courier is Ready: connected to Slack") {
+		t.Error("up.sh still claims a Ready pod is connected to Slack")
+	}
+	for _, want := range []string{slack.ConnectedMessage, "courier_chat_connected"} {
+		if !strings.Contains(string(readme), want) {
+			t.Errorf("the README's \"where to look\" does not name %q", want)
+		}
 	}
 }
 
