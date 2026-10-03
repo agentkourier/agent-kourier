@@ -28,8 +28,12 @@ type Config struct {
 	Logger *slog.Logger // slog.Default() if nil
 	// HTTPClient makes the Web API calls; slack-go's default if nil.
 	HTTPClient *http.Client
-	// Now is the clock of the user cache; time.Now if nil.
+	// Now is the clock of the user cache and of the pace of repeated connection errors in the log; time.Now if nil.
 	Now func() time.Time
+	// OnConnection, if set, is told true when the Socket Mode connection is up (Slack has said hello) and false when it is
+	// down again (the next connection attempt begins, or Run ends), so the broker can show it as a metric. It is
+	// called from the goroutine of Run, in order, and only when the state changes; it must not block.
+	OnConnection func(connected bool)
 	// UserTTL is how long a resolved user is kept (default 1 hour), and UserCacheSize how many
 	// users are (default 1000).
 	UserTTL       time.Duration
@@ -58,6 +62,7 @@ type Client struct {
 	// membersPage and authz are IsChannelMember's page size and the bound of it and IsBot.
 	membersPage int
 	authz       time.Duration
+	onConn      func(connected bool) // Config.OnConnection
 
 	mu    sync.Mutex
 	users map[string]cachedUser // guarded by mu
@@ -89,12 +94,14 @@ func New(cfg Config) *Client {
 		now: cfg.Now, ttl: cmp.Or(cfg.UserTTL, time.Hour), timeout: cmp.Or(cfg.UserTimeout, 5*time.Second), max: cmp.Or(cfg.UserCacheSize, 1000),
 		users: map[string]cachedUser{}, pageSize: cmp.Or(cfg.PageLimit, 200),
 		membersPage: cmp.Or(cfg.PageLimit, membersPage), authz: positiveOr(cfg.AuthzTimeout, authzTimeout),
+		onConn: cfg.OnConnection,
 	}
 }
 
 // Run connects over Socket Mode and gives sink each message that may be a turn and each
 // button press, one at a time and in order, until ctx ends (the error wraps ctx's) or the connection fails for
-// good, as with a rejected token. slack-go reconnects by itself otherwise.
+// good, as with a rejected token. slack-go reconnects by itself otherwise, and Run logs each step of that (watch)
+// and tells Config.OnConnection whether the connection is up.
 //
 // An events_api or interactive envelope is acknowledged only after the sink returns nil, so
 // a message the sink could not take is sent again by Slack; a press probably is not
@@ -113,9 +120,12 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	smc := socketmode.New(c.api)
 	done := make(chan error, 1)
 	go func() { done <- smc.RunContext(ctx) }()
+	w := &watch{c: c}
+	defer w.close()
 	for {
 		select {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
+			w.event(ctx, ev)
 			c.handle(ctx, smc, auth.UserID, sink, ev)
 		case err := <-done:
 			return c.scrub("socket mode", err)

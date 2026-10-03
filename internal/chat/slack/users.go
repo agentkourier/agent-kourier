@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -92,12 +93,17 @@ func (c *Client) scrub(op string, err error) error {
 	return &scrubbed{msg: "slack " + op + ": " + c.clean(err.Error()), causes: causes}
 }
 
-// clean returns s with the configured tokens, and anything shaped like a Slack token, replaced.
+// socketURL matches a WebSocket URL, such as the one apps.connections.open returns for Socket Mode: its ticket opens a
+// connection for the app, so the URL is a credential. It ends at white space, a quote (also an escaped one) or an
+// angle bracket. Compiled once and never modified.
+var socketURL = regexp.MustCompile(`wss?://[^\s"'<>\\]+`)
+
+// clean returns s with the configured tokens, anything shaped like a Slack token, and any WebSocket URL, replaced.
 func (c *Client) clean(s string) string {
 	for _, t := range []string{c.bot.Reveal(), c.app.Reveal()} {
 		if t != "" {
 			s = strings.ReplaceAll(s, t, "[redacted]")
 		}
 	}
-	return redact.Secrets(s)
+	return socketURL.ReplaceAllString(redact.Secrets(s), "[redacted]")
 }
