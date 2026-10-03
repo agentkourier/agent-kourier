@@ -28,7 +28,8 @@ type Message struct {
 	// Updates is how many times it was replaced, and Reactions the reactions on it.
 	Updates   int
 	Reactions []string
-	// Streamed is the markdown of a message that is, or was, a stream.
+	// Streamed is the markdown of a message that is, or was, a stream. A stopped stream keeps it, and Out, which
+	// Stop sets to the final message, is shown under it: the stop adds to the stream and does not replace it.
 	Streamed  string
 	Streaming bool
 	// Recipient is the user a stream is shown to.
@@ -312,6 +313,7 @@ func (s *fakeStream) Append(_ context.Context, markdown string) error {
 	return nil
 }
 
+// Stop implements chat.Stream. The final message is kept as Out, under what was streamed.
 func (s *fakeStream) Stop(_ context.Context, markdown string, final chat.Message, tag string) error {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()

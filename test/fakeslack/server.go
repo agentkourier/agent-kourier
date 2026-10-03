@@ -92,7 +92,9 @@
 //     invalid_chunks (also for any chunk type but markdown_text, task_update,
 //     plan_update and blocks, and for a blocks chunk with no blocks);
 //     appendStream returning only ok; a running
-//     stream being visible to reads; stopStream accepting blocks and metadata;
+//     stream being visible to reads; stopStream accepting blocks and metadata
+//     (that it appends the blocks under the streamed text is confirmed, in
+//     dogfood 2026-10-03; that Slack shows the text as rich_text is not);
 //     a metadata parameter being ignored by startStream and discarded by
 //     appendStream; task_update, plan_update and blocks chunks being accepted
 //     and kept without rendering; channel IDs starting with "D" needing no

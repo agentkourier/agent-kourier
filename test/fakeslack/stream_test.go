@@ -3,6 +3,7 @@ package fakeslack_test
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -66,6 +67,10 @@ func TestStreamLifecycle(t *testing.T) {
 	if m := stream(); m.Text != "Hello world" || m.Streaming || len(m.Blocks) == 0 {
 		t.Fatalf("after stop = %+v", m)
 	}
+	// The streamed text stays as the message's first block, and the stop's block follows it.
+	if got, want := blockSummary(t, stream().Blocks), []string{"markdown:Hello world", "section:done"}; !slices.Equal(got, want) {
+		t.Fatalf("blocks after stop = %v; want %v: the stop's blocks are appended under the streamed text", got, want)
+	}
 
 	// A finished stream is an ordinary message: reads return it, metadata included.
 	msgs, _, _, err := api.GetConversationReplies(&slack.GetConversationRepliesParameters{
@@ -83,6 +88,67 @@ func TestStreamLifecycle(t *testing.T) {
 	}
 	if _, _, _, err := api.UpdateMessage("C1", ts, text("edit")); err != nil {
 		t.Errorf("updating a finished stream = %v; want success", err)
+	}
+}
+
+// blockSummary lists blocks as "type:text": the text of a markdown block, or of a section.
+func blockSummary(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var blocks []struct {
+		Type string `json:"type"`
+		Text any    `json:"text"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			t.Fatalf("blocks %s: %v", raw, err)
+		}
+	}
+	var out []string
+	for _, b := range blocks {
+		text, _ := b.Text.(string)
+		if o, ok := b.Text.(map[string]any); ok {
+			text, _ = o["text"].(string)
+		}
+		out = append(out, b.Type+":"+text)
+	}
+	return out
+}
+
+// A stop that sends no blocks leaves the streamed text as the message's one block; one that sends the text
+// again, as a courier does that takes the stop to replace the stream, shows it twice. A stream that carried no
+// text has no block of its own.
+func TestStopStreamKeepsTheStreamedTextAsABlock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start string
+		stop  []slack.MsgOption
+		want  []string
+	}{
+		{"no stop blocks", "Hello", nil, []string{"markdown:Hello"}},
+		{"the text sent again", "Hello", []slack.MsgOption{slack.MsgOptionBlocks(slack.NewMarkdownBlock("", "Hello"))}, []string{"markdown:Hello", "markdown:Hello"}},
+		{"empty stop blocks", "Hello", []slack.MsgOption{slack.MsgOptionBlocks()}, []string{"markdown:Hello"}},
+		{"no text", "", []slack.MsgOption{slack.MsgOptionBlocks(slack.NewSectionBlock(mrkdwn("only"), nil, nil))}, []string{"section:only"}},
+		{"no text, no blocks", "", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, api := newFake(t)
+			parent := post(t, api, text("question"))
+			start := recipients()
+			if tc.start != "" {
+				start = append(start, slack.MsgOptionMarkdownText(tc.start))
+			}
+			ts, err := startIn(api, "C1", parent, start...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := stopOf(api, "C1", ts, tc.stop...); err != nil {
+				t.Fatal(err)
+			}
+			th := fake.Thread("C1", parent)
+			if got := blockSummary(t, th[len(th)-1].Blocks); !slices.Equal(got, tc.want) {
+				t.Errorf("blocks = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
 

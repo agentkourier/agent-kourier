@@ -270,8 +270,37 @@ func (c *checker) contract() {
 			c.add(RuleContract, chat.WhereStream, "Stream", "no streams", "a platform with Streams false gave %v, want chat.ErrNoStreams", err)
 		}
 	}
+	if c.caps.Streams {
+		c.zeroStop()
+	}
 	c.s.Sent() // the contract checks are not text checks
 	_ = c.s.Inert()
+}
+
+// zeroStop checks that a stream ends without showing anything more when it is stopped with no markdown and the zero
+// Message. What was streamed stays as the message's content, and a stop adds to it (chat.Stream.Stop): a platform
+// that shows more here repeats the streamed text, which is how a reply came to be posted twice.
+func (c *checker) zeroStop() {
+	st, err := c.s.Platform.Stream(c.ctx, c.target, "U1", "start")
+	if err != nil || st == nil {
+		c.add(RuleContract, chat.WhereStream, "Stream", "zero stop", "a stream of plain text gave %v, %v", st, err)
+		return
+	}
+	c.s.Sent() // what the stream began with is not what the stop shows
+	_ = c.s.Inert()
+	if err := st.Stop(c.ctx, "", chat.Message{}, "tag-zero"); err != nil {
+		c.add(RuleContract, chat.WhereStream, "Stop", "zero stop", "a stop with no markdown and the zero Message was refused: %v", err)
+		return
+	}
+	n := 0
+	for _, s := range c.s.Sent() {
+		if s.Displayed != "" { // the zero Message has an empty fallback, which is not text
+			n++
+		}
+	}
+	if n > 0 {
+		c.add(RuleContract, chat.WhereStream, "Stop", "zero stop", "a stop with no markdown and the zero Message showed %d texts, want none: it adds to the streamed text, and adds nothing", n)
+	}
 }
 
 // mention checks a Mention of a valid user, in every method that takes a message: the platform shows exactly one

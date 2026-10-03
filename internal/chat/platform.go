@@ -36,9 +36,15 @@ type Stream interface {
 	Ref() Ref
 	// Append adds markdown to the message.
 	Append(ctx context.Context, markdown string) error
-	// Stop adds the last markdown, if there is any, and ends the stream with the final message, tagged with tag
-	// as Post tags a message, so that Find can tell a message that was made from one that was not. Both are
-	// one call: the last of the text and the end of the stream come together.
+	// Stop adds the last markdown, if there is any, and ends the stream, tagged with tag as Post tags a message,
+	// so that Find can tell a message that was made from one that was not. Both are one call: the last of the
+	// text and the end of the stream come together.
+	//
+	// What was streamed stays as the message's content, and final is shown under it: a platform appends it, and
+	// does not replace the streamed text with it. A caller must never put the streamed text in final, or the
+	// message shows it twice. final is for what a stream cannot carry (buttons, say), and the zero Message adds
+	// nothing. A caller that wants other content than what was streamed ends the stream with the zero Message and
+	// then Updates the message.
 	Stop(ctx context.Context, markdown string, final Message, tag string) error
 }
 

@@ -53,8 +53,8 @@ func TestAStreamGrowsAndStopsWithItsBlocksAndTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, blocks := w.last(t)
-	if m.Streaming || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-9" || blocks[0]["text"] != "Hello" {
-		t.Errorf("message = %+v blocks %v; want it stopped, tagged, with the final markdown block", m, blocks)
+	if m.Streaming || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-9" || len(blocks) != 2 || blocks[1]["text"] != "Hello" {
+		t.Errorf("message = %+v blocks %v; want it stopped, tagged, with the final markdown block under the streamed text", m, blocks)
 	}
 	if err := st.Stop(t.Context(), "", chat.Message{}, "outbox-9"); !errors.Is(err, chat.ErrNotStreaming) {
 		t.Errorf("a second Stop = %v, want ErrNotStreaming", err)
@@ -65,7 +65,7 @@ func TestAStreamGrowsAndStopsWithItsBlocksAndTag(t *testing.T) {
 }
 
 // Stop takes the last of the text with it, as one call; a zero final sends no blocks and leaves the message as it
-// was streamed; and a stream that another run started is stopped by its Ref, and a message that was never a stream
+// was streamed, its text the one block; and a stream that another run started is stopped by its Ref, and a message that was never a stream
 // says so.
 func TestAStreamStopsWithItsLastTextAndAStreamOfAnotherRunByItsRef(t *testing.T) {
 	w := newWorld(t)
@@ -80,8 +80,8 @@ func TestAStreamStopsWithItsLastTextAndAStreamOfAnotherRunByItsRef(t *testing.T)
 	}
 
 	m, blocks := w.last(t)
-	if m.Streaming || m.Text != "Hello" || len(blocks) != 0 || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-1" {
-		t.Errorf("message = %+v blocks %v; want it stopped with the last text, no blocks, and the tag", m, blocks)
+	if m.Streaming || m.Text != "Hello" || len(blocks) != 1 || blocks[0]["text"] != "Hello" || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-1" {
+		t.Errorf("message = %+v blocks %v; want it stopped with the last text, the streamed text as its one block, and the tag", m, blocks)
 	}
 	posted, err := w.p.Post(t.Context(), w.target, chat.Say(chat.Message{Fallback: "x"}), "outbox-2")
 	if err != nil {

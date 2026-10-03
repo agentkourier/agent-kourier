@@ -46,6 +46,10 @@ func TestS1_AReplyStreamsIntoANewThread(t *testing.T) {
 	if got := BotMessages(final)[0]; !strings.Contains(got.Text, "Holding on gate "+gate) || got.ThreadTS != m.TS {
 		t.Errorf("the reply is %q in thread %q; want the whole text, in the mention's thread %q", got.Text, got.ThreadTS, m.TS)
 	}
+	// The stream's end adds nothing under the text it streamed (found in dogfood, 2026-10-03: it was shown twice).
+	if got := BotMessages(final)[0]; strings.Count(string(got.Blocks), "Released.") != 1 {
+		t.Errorf("the reply's blocks %s hold its text %d times; want once", got.Blocks, strings.Count(string(got.Blocks), "Released."))
+	}
 	// One post: the stream's end is not a second message, and nothing else is said.
 	err := Consistently(s.ctx, 3*time.Second, "the thread holds the one message of the bot", func(ctx context.Context) (bool, error) {
 		th, err := s.slack.Thread(ctx, ChannelS1, m.TS)

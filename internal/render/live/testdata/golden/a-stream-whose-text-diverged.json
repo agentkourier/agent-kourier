@@ -15,12 +15,6 @@
     {
       "path": "/chat.stopStream",
       "form": {
-        "blocks": [
-          {
-            "text": "The answer is 42",
-            "type": "markdown"
-          }
-        ],
         "channel": "C1",
         "outbox_id": "turn-1/reply",
         "parse": "none",

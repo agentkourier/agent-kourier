@@ -141,9 +141,10 @@ func (s *stream) Append(ctx context.Context, md string) error {
 	return notStreaming(s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown)))
 }
 
-// Stop adds the last markdown, if any, and ends the stream with final's blocks, tagged with tag, in one call. What
-// was streamed stays as the message's text: final's own fallback is not sent, since a stream has no separate
-// text. A zero final sends no blocks, and leaves the message as it was streamed.
+// Stop adds the last markdown, if any, and ends the stream, tagged with tag, in one call. What was streamed stays
+// as the message's content, and final's blocks are appended under it: Slack does not replace the streamed text
+// with them, so a final that repeats it shows it twice (dogfood, 2026-10-03). final's own fallback is not sent,
+// since a stream has no separate text. A zero final sends no blocks, and leaves the message as it was streamed.
 func (s *stream) Stop(ctx context.Context, md string, final chat.Message, tag string) error {
 	var blocks json.RawMessage
 	if final.Fallback != "" || len(final.Parts) > 0 {

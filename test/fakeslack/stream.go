@@ -64,8 +64,8 @@ func (s *Server) startStream(form url.Values) (response, string) {
 // streamChunk implements chat.appendStream and, with stop set, chat.stopStream
 // (https://docs.slack.dev/reference/methods/chat.appendStream/ and
 // https://docs.slack.dev/reference/methods/chat.stopStream/). Both append the
-// request's markdown_text and chunks; stopping also ends the stream and
-// applies blocks and metadata.
+// request's markdown_text and chunks; stopping also ends the stream, applies
+// metadata and appends blocks under the streamed text (see stoppedBlocks).
 //
 // UNCONFIRMED(WP-04): the error codes message_not_in_streaming_state,
 // invalid_chunks and, for an append with neither markdown_text nor chunks,
@@ -119,9 +119,7 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 			return response{}, ""
 		}
 		m.Streaming = false
-		if b := blocksOrNil(form.Get("blocks")); b != nil {
-			m.Blocks = b
-		}
+		m.Blocks = stoppedBlocks(m.Text, blocksOrNil(form.Get("blocks")))
 		if meta != nil {
 			m.Metadata = meta
 		}
@@ -131,6 +129,43 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 		return response{"channel": channel, "ts": ts, "message": echo}, ""
 	}
 	return nil, "message_not_found"
+}
+
+// stoppedBlocks is the blocks of a message that chat.stopStream has ended: the
+// text that was streamed, as one markdown block, followed by the blocks the
+// stop sent. A stop never replaces the streamed content, so a stop that sends
+// the text again shows it twice. A stream that carried no text has no such
+// block, and one with no text and no stop blocks has none at all.
+//
+// Confirmed in dogfood 2026-10-03: stop blocks are appended. A streamed reply
+// of 1222 characters, stopped with a markdown block of the same text, was read
+// back as one message with two identical rich_text blocks (1222 + 1 + 1222
+// characters). slack-go v0.29.0's own streaming example
+// (examples/chat_streaming/chat_streaming.go) stops with feedback buttons
+// alone, which is how the method is meant to be used.
+//
+// UNCONFIRMED(WP-04): that Slack stores the streamed text as a rich_text block,
+// not a markdown one; this fake keeps it as a markdown block so that a test can
+// count the copies.
+func stoppedBlocks(streamed string, stop json.RawMessage) json.RawMessage {
+	var all []json.RawMessage
+	if streamed != "" {
+		body, _ := json.Marshal(struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{"markdown", streamed}) // a struct of two strings always marshals
+		all = append(all, body)
+	}
+	if stop != nil {
+		var list []json.RawMessage
+		_ = json.Unmarshal(stop, &list) // blocksOrNil returned it as a non-empty list
+		all = append(all, list...)
+	}
+	if all == nil {
+		return nil
+	}
+	b, _ := json.Marshal(all) // raw messages that were valid JSON
+	return b
 }
 
 // maxStreamMarkdown is the most characters one markdown_text parameter, or one

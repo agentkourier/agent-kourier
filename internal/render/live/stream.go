@@ -18,9 +18,11 @@ import (
 // 6), so its ts is recorded before anything else is sent: a crash in that window leaves one
 // orphan stream and a row with no ts, and the recovered turn posts the whole text as a new message
 // (R16, accepted). Appends carry only the new suffix: a TextEvent replaces an artifact's text, so
-// what is new is what follows the text already sent. If the text is no longer a prefix of the
-// state, nothing can be appended: the stream is stopped with the final message, and an Update
-// then corrects the text, never while the stream runs.
+// what is new is what follows the text already sent. The stop sends no blocks, for a platform
+// shows them under the text that was streamed, and the stream already is the reply: its text goes
+// out once. If the text is no longer a prefix of the state,
+// nothing can be appended: the stream is stopped with no suffix, and an Update then replaces the
+// message with the final one, never while the stream runs.
 func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) error {
 	id := outbox.ID(u.turn.Source, store.OutboxReply)
 	if !u.rowMade {
@@ -64,7 +66,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, m chat.Message, bo
 		if !prefix {
 			u.diverged, suffix = true, ""
 		}
-		if err := u.stream.Stop(ctx, suffix, m, id); err != nil {
+		if err := u.stream.Stop(ctx, suffix, chat.Message{}, id); err != nil {
 			return err
 		}
 		u.stopped = true

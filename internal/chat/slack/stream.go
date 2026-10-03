@@ -62,8 +62,9 @@ func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string)
 	return nil
 }
 
-// StopStream adds the last markdown, if any, and ends the streaming message ts, setting its
-// blocks if not empty (`[]` clears them), and tagging it with metadata that names outboxID: a
+// StopStream adds the last markdown, if any, and ends the streaming message ts, appending blocks,
+// if any, under the text that was streamed (Slack keeps that text and does not replace it:
+// confirmed in dogfood, 2026-10-03), and tagging it with metadata that names outboxID: a
 // message found by that tag is one courier posted (spec 8.6). Like Post, it refuses an empty
 // outboxID. The error holds no token.
 //

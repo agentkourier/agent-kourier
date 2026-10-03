@@ -63,7 +63,10 @@ func TestStreamRecordsItsTsAtOnceAndAppendsOnlyTheSuffix(t *testing.T) {
 	e.assertInert(t)
 }
 
-func TestStreamStopsWithTheTagAndTheFinalBlocks(t *testing.T) {
+// TestStreamStopsWithTheTagAndNoBlocks: Slack appends what a stop sends under the text that was streamed, so
+// a stop that carried the reply again would show it twice (found in dogfood, 2026-10-03). The stop carries the
+// tag and the unsent suffix of the text, and nothing else: the message ends with its text once.
+func TestStreamStopsWithTheTagAndNoBlocks(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(text("a", "Hello"))
@@ -72,8 +75,14 @@ func TestStreamStopsWithTheTagAndTheFinalBlocks(t *testing.T) {
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	m := e.reply()
-	if m.Streaming || m.Text != "Hello world" || !strings.Contains(string(m.Blocks), "Hello world") || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "turn-1/reply" {
-		t.Fatalf("after the stop: %+v; want the whole text, the final blocks and the outbox tag", m)
+	if m.Streaming || m.Text != "Hello world" || m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "turn-1/reply" {
+		t.Fatalf("after the stop: %+v; want the whole text and the outbox tag", m)
+	}
+	if n := strings.Count(string(m.Blocks), "Hello world"); n != 1 {
+		t.Fatalf("the message has %d copies of its text in blocks %s; want exactly one", n, m.Blocks)
+	}
+	if stops := e.rec.sent("/chat.stopStream"); len(stops) != 1 || stops[0].Get("markdown_text") != " world" || stops[0].Has("blocks") {
+		t.Fatalf("stops %v; want one, with the unsent suffix as markdown_text and no blocks", stops)
 	}
 	if n := len(e.rec.sent("/chat.update")); n != 0 {
 		t.Fatalf("%d updates for a stream that did not diverge", n)
@@ -94,8 +103,11 @@ func TestDivergentFinalIsCorrectedAfterTheStop(t *testing.T) {
 	run.Handle(text("a", "Goodbye, all"))
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
-	if m := e.reply(); m.Streaming || m.Text != "Goodbye, all" {
-		t.Fatalf("after the stop: %+v; want the final text", m)
+	if m := e.reply(); m.Streaming || m.Text != "Goodbye, all" || strings.Count(string(m.Blocks), "Goodbye, all") != 1 || strings.Contains(string(m.Blocks), "Hello there") {
+		t.Fatalf("after the stop: %+v blocks %s; want the final text once, and none of what was streamed", m, m.Blocks)
+	}
+	if stops := e.rec.sent("/chat.stopStream"); len(stops) != 1 || stops[0].Has("blocks") || stops[0].Has("markdown_text") {
+		t.Fatalf("stops %v; want one that carries no blocks and no text, which the update replaces", stops)
 	}
 	var kinds []string
 	for _, p := range e.rec.orderOf() {

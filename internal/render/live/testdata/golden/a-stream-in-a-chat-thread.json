@@ -26,12 +26,6 @@
     {
       "path": "/chat.stopStream",
       "form": {
-        "blocks": [
-          {
-            "text": "Hello world, and more",
-            "type": "markdown"
-          }
-        ],
         "channel": "C1",
         "markdown_text": "ld, and more",
         "outbox_id": "turn-1/reply",

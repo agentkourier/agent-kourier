@@ -43,6 +43,7 @@ type leaks struct {
 	mangle, notInert                            bool
 	acceptsMalformed                            bool
 	noStreamError                               bool
+	stopRepeats                                 bool // a stop with nothing to add shows the streamed text again
 	tooLargeFits                                bool
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
@@ -271,6 +272,9 @@ func (s *markupStream) Stop(ctx context.Context, markdown string, final chat.Mes
 	err := s.Stream.Stop(ctx, markdown, final, tag)
 	if err == nil {
 		fields := MessageFields(final)
+		if s.m.leaks.stopRepeats && markdown == "" && final.Fallback == "" && len(final.Parts) == 0 {
+			fields = append(fields, Field{"the text that was streamed", chat.WhereStream})
+		}
 		if markdown != "" {
 			fields = append([]Field{{markdown, chat.WhereStream}}, fields...)
 		}
@@ -343,6 +347,7 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a request that is not inert", slackPlainText, leaks{notInert: true}, RuleInert, ""},
 		{"a malformed message accepted", slackPlainText, leaks{acceptsMalformed: true}, RuleContract, ""},
 		{"no error from a platform with no streams", slackPlainText, leaks{noStreamError: true}, RuleContract, ""},
+		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
 		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},
 
 		{"Slack: a backslash before every punctuation, which Slack does not honour", slackPlainText, leaks{backslashAll: true}, RuleActive, KindHTML},
