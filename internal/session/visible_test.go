@@ -267,6 +267,18 @@ func TestTurnLogsItsStartAndEnd(t *testing.T) {
 				t.Errorf("the %s line has %s = %v; want %v", name, k, rec.attrs[k], v)
 			}
 		}
+		// Only the named attributes, each a plain string, number or flag: a struct or a pointer (a task, a
+		// status message) would carry what the agent said, and the text handler prints it only partly.
+		for k, v := range rec.attrs {
+			switch v.(type) {
+			case string, bool, int64:
+			default:
+				t.Errorf("the %s line has %s = %T; want a plain string, number or flag", name, k, v)
+			}
+			if !slices.Contains([]string{"binding", "connection", "channel", "thread", "message", "session", "task", "recovered", "outcome", "duration_ms", "output"}, k) {
+				t.Errorf("the %s line has the attribute %q; want only the known ones", name, k)
+			}
+		}
 	}
 	end := endings[0].attrs
 	if end["outcome"] != "failed" || end["duration_ms"] != int64(5000) || end["task"] != "t1" || end["session"] != "c1" || end["output"] != true {
