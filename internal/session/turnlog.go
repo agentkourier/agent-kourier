@@ -91,10 +91,10 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	if begun {
 		attrs = append(attrs, "duration_ms", m.cfg.Now().Sub(start).Milliseconds())
 	}
-	m.cfg.Logger.Info("session turn ended", append(attrs, extra...)...)
 	if m.cfg.OnTurnEnd != nil {
 		m.cfg.OnTurnEnd(t.sess.Binding, outcome)
 	}
+	m.cfg.Logger.Info("session turn ended", append(attrs, extra...)...) // after the report: whoever sees the line finds it counted
 }
 
 // turnAttrs says where the turn t runs. It names ids and places only, never what anyone wrote.
