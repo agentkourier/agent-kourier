@@ -456,7 +456,7 @@ func (a *Agent) getTask(o *rw, params json.RawMessage) {
 func (a *Agent) cancelTask(o *rw, params json.RawMessage) {
 	a.s.mu.Lock()
 	t, err := a.find(params, o.owner)
-	if err == nil && (t.state == completed || t.state == canceled) {
+	if err == nil && (t.state == completed || t.state == canceled || t.state == failed || t.state == rejected) {
 		err = &rpcError{codeNotCancelable, "task is already " + t.state, "TASK_NOT_CANCELABLE"}
 	}
 	var snap obj
@@ -507,7 +507,7 @@ func (a *Agent) launch(t *task, steps []Step) {
 				return
 			}
 		}
-		r.finish(completed)
+		r.finish(completed, "")
 	}()
 }
 

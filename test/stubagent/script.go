@@ -137,13 +137,30 @@ func (r *run) pause(p *pause) bool {
 	})
 }
 
-// finish ends the turn in a final state, with the task snapshot as the last event.
-func (r *run) finish(state string) {
+// Fail ends the turn with the task FAILED and reason as its status message, as kagent's does when the
+// model call fails. The text said before it stays in the task's output, and steps after it do not run.
+func Fail(reason string) Step { return endStep{failed, reason} }
+
+// Reject ends the turn with the task REJECTED and reason as its status message. The text said before it
+// stays in the task's output, and steps after it do not run.
+func Reject(reason string) Step { return endStep{rejected, reason} }
+
+type endStep struct{ state, reason string }
+
+func (e endStep) play(r *run) bool {
+	r.finish(e.state, e.reason)
+	return false
+}
+
+// finish ends the turn in a final state, with the task snapshot as the last event. reason, if any, is
+// the status message of the task.
+func (r *run) finish(state, reason string) {
 	if !r.endText() {
 		return
 	}
 	r.emit(func(t *task) (obj, bool) {
 		t.setState(state, r.s.stamp())
+		t.note = reason
 		return obj{"task": t.snapshot()}, true
 	})
 }

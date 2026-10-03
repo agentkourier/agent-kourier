@@ -8,6 +8,8 @@ const (
 	working   = "TASK_STATE_WORKING"
 	completed = "TASK_STATE_COMPLETED"
 	canceled  = "TASK_STATE_CANCELED"
+	failed    = "TASK_STATE_FAILED"
+	rejected  = "TASK_STATE_REJECTED"
 
 	inputRequired = "TASK_STATE_INPUT_REQUIRED"
 )
@@ -33,6 +35,7 @@ type task struct {
 	state   string
 	history []obj
 	pause   *pause // what the task is waiting for, while it is INPUT_REQUIRED
+	note    string // the reason a FAILED or REJECTED task gives, as its status message
 	ext     bool   // the request that started the turn now playing named the HITL extension
 	arts    []*artifact
 	log     []event            // every stream event so far, in order; followers read from an index
@@ -83,8 +86,11 @@ func (t *task) setState(state, stamp string) {
 // snapshot is the task as GetTask returns it.
 func (t *task) snapshot() obj {
 	status := obj{"state": t.state, "timestamp": t.updated}
-	if t.pause != nil {
+	switch {
+	case t.pause != nil:
 		status["message"] = t.pause.message(t)
+	case t.note != "":
+		status["message"] = obj{"messageId": t.id + "-status", "contextId": t.sess.id, "taskId": t.id, "role": "ROLE_AGENT", "parts": textParts(t.note)}
 	}
 	snap := obj{
 		"id":        t.id,

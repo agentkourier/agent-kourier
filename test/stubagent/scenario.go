@@ -31,6 +31,9 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //   - scenario-ask asks the two questions of spike-ask's "two questions" (a multi-select and a
 //     free-text one), then echoes exactly what it received, one entry per answered question:
 //     `Answers: "PostgreSQL, MySQL" | "blue".`, an empty entry shown as (none).
+//   - scenario-fails ends its task FAILED with no output, and a provider's masked-key error as its status
+//     message ("Incorrect API key provided: sk-proj-...wxyz. HTTP 401"), which courier must not show. A prompt
+//     that says "empty" ends it COMPLETED with no output at all.
 //
 // The scenarios and the agents that serve them in the cluster:
 //
@@ -48,6 +51,8 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //	S5   test-agent       one instant chunk, so the kill lands between post and record
 //	S11  spike-approve    "I have added 3 and 5..." would mean the tool ran; courier's denial
 //	                      gives "Resumed after the tool result."
+//	S12  scenario-fails   the thread gets courier's notice that the task failed (or finished with no
+//	                      output), and none of the status message
 func ScenarioAgents(s *Server) {
 	const ns = "kagent"
 	s.Agent(ns, "scenario-gated").Reply(func(prompt string) []Step {
@@ -67,6 +72,12 @@ func ScenarioAgents(s *Server) {
 			earlier = strings.Join(quoted, ", ")
 		}
 		return []Step{Text(fmt.Sprintf("Message %d. Earlier: %s.", len(prior)+1, earlier))}
+	})
+	s.Agent(ns, "scenario-fails").Reply(func(prompt string) []Step {
+		if strings.Contains(prompt, "empty") {
+			return []Step{Text()}
+		}
+		return []Step{Fail("Incorrect API key provided: sk-proj-********************wxyz. HTTP 401")}
 	})
 	s.Agent(ns, "scenario-ask").Reply(func(string) []Step {
 		return []Step{Ask([]Question{

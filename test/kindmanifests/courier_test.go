@@ -44,8 +44,8 @@ var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "cou
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), courierDir+"config")
-	if err != nil || len(set.Bindings) != 7 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of six scenarios, and one connection and backend", set, err)
+	if err != nil || len(set.Bindings) != 8 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of seven scenarios, and one connection and backend", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -226,6 +226,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"S4", e2e.ChannelS4, "scenario-gated", false, v1alpha1.OutputLive},
 		{"S5", e2e.ChannelS5, "test-agent", false, v1alpha1.OutputFinal},
 		{"S11", e2e.ChannelS11, "spike-approve", false, v1alpha1.OutputLive},
+		{"S12", e2e.ChannelS12, "scenario-fails", false, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
 		if !ok {

@@ -135,6 +135,22 @@ func TestScenarioAskAsksTheTwoQuestions(t *testing.T) {
 	}
 }
 
+// scenario-fails ends its task FAILED with a provider-style error, the key masked as a provider masks it, in
+// the status message and no output; a prompt that says "empty" ends it COMPLETED with no output at all.
+func TestScenarioFailsAgentEndsWithoutOutput(t *testing.T) {
+	for _, tc := range []struct {
+		prompt, state, reason string
+	}{
+		{"anything", "TASK_STATE_FAILED", "Incorrect API key provided: sk-proj-********************wxyz. HTTP 401"},
+		{"say something empty", "TASK_STATE_COMPLETED", ""},
+	} {
+		final := last(scenario(t, "scenario-fails").send(msg("m1", tc.prompt, "")))
+		if _, _, state := ids(final); state != tc.state || statusText(final) != tc.reason || taskText(final) != "" {
+			t.Errorf("%q: state %s, status message %q, output %q; want %s, %q and no output", tc.prompt, state, statusText(final), taskText(final), tc.state, tc.reason)
+		}
+	}
+}
+
 func TestScenarioGatedAgentHoldsUntilReleased(t *testing.T) {
 	s := stubagent.New()
 	t.Cleanup(s.Close)
