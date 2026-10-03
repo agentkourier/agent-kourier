@@ -52,7 +52,11 @@ func TestTurnThatFailsForAGoodAfterTheTaskIsNamedIsTold(t *testing.T) {
 			eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) >= 1 })
 			eventually(t, "the end of the turn", func() bool { return len(logs.lines("session turn ended")) >= 1 })
 			f.retired(t)
-			if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tc.detail || got[0].ID != in.MessageID+"/failed" {
+			wantID := in.MessageID + "/failed"
+			if tc.outcome == TurnRefused {
+				wantID = taskNoticeID(key, "t1", NoticeFailed) // the refusal is named after the task, so a recovery raises the same post
+			}
+			if got := sink.noticesOf(NoticeFailed); len(got) != 1 || got[0].Detail != tc.detail || got[0].ID != wantID {
 				t.Errorf("failed notices = %+v; want one with the detail %q", got, tc.detail)
 			}
 			lines := logs.lines("session turn ended")

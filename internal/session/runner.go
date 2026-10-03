@@ -638,7 +638,10 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	// The task stays recorded, for reconciliation.
 	t.c.follow = nil
 	m.drives(t.c, "")
-	m.notice(t, NoticeFailed, "the agent refused to continue the task")
+	// Named after the task and the thread, not the turn row: a restart that follows the task again raises the same post.
+	if m.cfg.Sink != nil {
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: "the agent refused to continue the task"})
+	}
 	m.finish(t, TurnRefused)
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
