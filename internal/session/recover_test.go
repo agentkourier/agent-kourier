@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -288,6 +289,22 @@ func TestRecoverTakesTheHeadForTheRunningTurn(t *testing.T) {
 	defer sink.mu.Unlock()
 	if len(sink.refs) == 0 || sink.refs[0].MessageID != inbound("1").MessageID {
 		t.Errorf("turn refs = %+v; want the output under the head's turn", sink.refs)
+	}
+}
+
+// The turn that recovery takes the head for is never taken up from the queue again, only followed, so the
+// reaction it may carry from before the crash comes off then: recovery marks it.
+func TestRecoverTakesTheHeadsReactionOffWhenItFollowsItsTask(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	f.retired(t)
+	if got, want := sink.dequeued(), []string{inbound("1").MessageID + "/queued 1"}; !slices.Equal(got, want) {
+		t.Errorf("dequeued %q; want %q", got, want)
 	}
 }
 

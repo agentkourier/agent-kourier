@@ -548,23 +548,25 @@ func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, er
 
 // unreact settles the reaction that the removal row takes off, and reports whether the platform has to be
 // asked to take it off. The reaction's row is the one with the removal's source (see Reaction):
-//   - There is none, or it was abandoned (the platform refused it, or it expired): nothing was made, so there
-//     is nothing to take off.
-//   - It has a ref: the reaction was made, so it is taken off.
-//   - It is still unposted, waiting for its turn or for a retry: it is cancelled, so that it is never made
-//     after the removal, which would leave it for good, and the platform is asked too, since a delivery that
-//     a crash cut short may have made it already.
+//   - There is none: nothing was ever asked for, so there is nothing to take off.
+//   - There is one, in any state: the platform is asked. A reaction that was made has a ref. One that is
+//     unposted may have been made all the same (a call that timed out or was reset, a delivery that a crash cut
+//     short), and so may one that was abandoned, whether the platform refused it or an earlier delivery of this
+//     removal cancelled it and then failed to take it off. no_reaction is success, and a reaction that the
+//     platform refused for good makes the removal fail for good, which does no harm.
+//   - If it is still unposted it is also cancelled, so that it is never made after the removal, which would
+//     leave it for good.
 //
 // The caller holds o.mu, so no delivery of the reaction is in flight.
 func (o *Outbox) unreact(ctx context.Context, row store.OutboxEntry) (needed bool, err error) {
 	addID := ID(row.EventID, store.OutboxReaction)
 	add, err := o.cfg.Store.GetOutbox(ctx, addID)
 	switch {
-	case errors.Is(err, store.ErrNotFound), err == nil && !add.AbandonedAt.IsZero():
+	case errors.Is(err, store.ErrNotFound):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("deliver %s: read the reaction it takes off: %w", row.ID, err)
-	case add.MessageRef != "":
+	case add.MessageRef != "" || !add.AbandonedAt.IsZero():
 		return true, nil
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)

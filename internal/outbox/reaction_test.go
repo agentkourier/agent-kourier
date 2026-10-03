@@ -383,9 +383,11 @@ func TestUnreactionEnqueuedFirstStopsTheReaction(t *testing.T) {
 	}
 }
 
-// TestUnreactionAsksOnlyWhenAReactionWasMade: the removal of a reaction that was never enqueued, or that the
-// platform refused for good, takes nothing off; one that was made is taken off.
-func TestUnreactionAsksOnlyWhenAReactionWasMade(t *testing.T) {
+// TestUnreactionAsksUnlessNoReactionWasEverEnqueued: the removal of a reaction that was never enqueued takes
+// nothing off. For one that was, in whatever state, the platform is asked, even if the platform refused it for
+// good: that costs a call, and the removal cannot tell such a row from one an earlier delivery of the removal
+// cancelled (see TestUnreactionIsAskedAgainAfterItCancelledTheReactionAndFailed).
+func TestUnreactionAsksUnlessNoReactionWasEverEnqueued(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		react     bool // the reaction is enqueued
@@ -393,7 +395,7 @@ func TestUnreactionAsksOnlyWhenAReactionWasMade(t *testing.T) {
 		want      []string
 	}{
 		{"never enqueued", false, false, nil},
-		{"refused for good", true, true, []string{"C1 1.5 hourglass"}},
+		{"refused for good", true, true, []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}},
 		{"made", true, false, []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -429,6 +431,42 @@ func TestUnreactionAsksOnlyWhenAReactionWasMade(t *testing.T) {
 				t.Fatalf("removal ref = %q; want it done", ref(st, unreactionID))
 			}
 		})
+	}
+}
+
+// TestUnreactionIsAskedAgainAfterItCancelledTheReactionAndFailed: the reaction's call failed in a way that leaves
+// it unknown whether it was made (a reset, a timeout), and the first call to take it off failed too, after the
+// removal had cancelled the reaction. The retry, here in a restarted process, finds the reaction abandoned, and
+// must still ask Slack: the reaction may be there, and would stay for good.
+func TestUnreactionIsAskedAgainAfterItCancelledTheReactionAndFailed(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	r := &reactor{fail: func(n int) error {
+		if n <= 2 { // the reaction, then the first removal
+			return errors.New("connection reset")
+		}
+		return nil
+	}}
+	first, _, _ := reacting(t, st, &poster{}, r)
+	for _, enqueue := range []func(context.Context, outbox.Reaction) (string, error){first.EnqueueReaction, first.EnqueueUnreaction} {
+		if _, err := enqueue(t.Context(), queuedReaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := first.Reconcile(t.Context()); err == nil {
+		t.Fatal("Reconcile succeeded; want the failures")
+	}
+	if row, _ := st.GetOutbox(t.Context(), reactionID); row.AbandonedAt.IsZero() || ref(st, unreactionID) != "" {
+		t.Fatalf("reaction row %+v, removal ref %q; want the reaction cancelled and the removal not done", row, ref(st, unreactionID))
+	}
+	second, _, _ := reacting(t, st, &poster{}, r) // the restarted process
+	if err := second.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile after the restart = %v", err)
+	}
+	if got, want := r.list(), []string{"C1 1.5 hourglass", "- C1 1.5 hourglass", "- C1 1.5 hourglass"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %q; want the removal asked of Slack again, %q", got, want)
+	}
+	if ref(st, unreactionID) != "1.5" {
+		t.Fatalf("removal ref = %q; want it done", ref(st, unreactionID))
 	}
 }
 

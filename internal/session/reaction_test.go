@@ -301,6 +301,10 @@ func TestStuckTurnTellsTheThreadOnceAndKeepsTrying(t *testing.T) {
 				case 4:
 					early = sink.noticesOf(tc.kind)
 					f.now.Store(t0.Add(waitNoticeAfter).UnixNano())
+				case 5, 6, 7: // retries past the wait: the sink has the one notice, and no retry adds another
+					if got := len(sink.noticesOf(tc.kind)); got != 1 {
+						t.Errorf("%d %s notices before send %d; want exactly one", got, tc.kind, n)
+					}
 				case 8:
 					return turn(h, n, a2a.TaskStateCompleted)
 				}

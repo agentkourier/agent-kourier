@@ -95,6 +95,11 @@ func (m *Manager) recoverKey(key Key) {
 			if err == nil {
 				if task != nil && string(task.ID) == sess.TaskID {
 					turnRow = head
+					// The crash may have come before this turn's reaction was taken off, and nothing else
+					// would now do it: the runner never takes the row up again, it follows the task.
+					m.mu.Lock()
+					m.marked[head.ID] = struct{}{}
+					m.mu.Unlock()
 				}
 				break
 			}

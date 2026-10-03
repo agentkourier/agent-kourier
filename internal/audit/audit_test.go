@@ -109,6 +109,8 @@ func TestAgentCall(t *testing.T) {
 		{"outcome unknown", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", agent.ErrOutcomeUnknown)}, "message=m1", "send: failed outcome_unknown"},
 		{"stream lost names its task", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", lost)}, "task=t-lost context=c-lost message=m1", "send: failed stream_lost"},
 		{"answer rejected", Call{Op: OpAnswer, TaskID: "t1", Err: agent.ErrAnswerRejected}, "task=t1", "answer: failed answer_rejected"},
+		{"send busy", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w", agent.ErrBusy)}, "message=m1", "send: failed busy"},
+		{"send to a session not ready, which is busy too", Call{Op: OpSend, MessageID: "m1", Err: fmt.Errorf("x: %w: %w", agent.ErrNotReady, agent.ErrBusy)}, "message=m1", "send: failed not_ready,busy"},
 		{"cancel busy", Call{Op: OpCancel, TaskID: "t1", Err: agent.ErrBusy}, "task=t1", "cancel: failed busy"},
 		{"other error", Call{Op: OpCancel, TaskID: "t1", Err: errors.New("boom")}, "task=t1", "cancel: failed error"},
 		{"find task absent", Call{Op: OpFindTask, ContextID: "c1", MessageID: "m1"}, "context=c1 message=m1", "find_task: absent"},
