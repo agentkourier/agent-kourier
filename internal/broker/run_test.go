@@ -77,11 +77,16 @@ func (idleSlack) PostEphemeral(context.Context, string, string, string, slack.Co
 func (idleSlack) IsChannelMember(context.Context, string, string) (bool, error) { return false, nil }
 func (idleSlack) IsBot(context.Context, string) (bool, error)                   { return false, nil }
 func (idleSlack) React(context.Context, string, string, string) error           { return nil }
+func (idleSlack) Unreact(context.Context, string, string, string) error         { return nil }
 
 // revokedReacts is idleSlack whose reactions fail the way a revoked bot token fails them.
 type revokedReacts struct{ idleSlack }
 
 func (revokedReacts) React(context.Context, string, string, string) error {
+	return slackErr("token_revoked")
+}
+
+func (revokedReacts) Unreact(context.Context, string, string, string) error {
 	return slackErr("token_revoked")
 }
 

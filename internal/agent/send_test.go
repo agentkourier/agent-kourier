@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -92,6 +93,49 @@ func TestBusyIsTypedAndTheMessageCanBeResentUnchanged(t *testing.T) {
 	}
 	if ids := fa.sentMessageIDs(t); len(ids) != 2 || ids[0] != msg.ID || ids[1] != msg.ID {
 		t.Errorf("sent message IDs = %v, want %s twice", ids, msg.ID)
+	}
+}
+
+// rpcBusy is a -32004 event as kagent sends it: with the message, and an ErrorInfo whose metadata holds reason when
+// there is one.
+func rpcBusy(message, reason string) func(http.ResponseWriter) {
+	meta := ""
+	if reason != "" {
+		meta = fmt.Sprintf(`,"metadata":{"reason":%q,"retryAfterMs":"100"}`, reason)
+	}
+	return func(w http.ResponseWriter) {
+		write(w, fmt.Appendf(nil, `data: {"jsonrpc":"2.0","id":"1","error":{"code":-32004,"message":%q,"data":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"UNSUPPORTED_OPERATION","domain":"a2a-protocol.org"%s}]}}`+"\n\n", message, meta))
+	}
+}
+
+// A -32004 is a busy session or one that cannot take input yet, and the dialect tells which (the kagent dialect
+// does, by the reason or the text of kagent's answer). Both stay ErrBusy, for a caller that does not tell them
+// apart; one the dialect places as not ready is ErrNotReady too, and the busy answer, measured, is not. An Agent
+// with no NotReady (a backend whose dialect cannot tell) never says not ready.
+func TestNotReadyIsTypedWhenTheDialectSaysSo(t *testing.T) {
+	for _, tc := range []struct {
+		name, message, reason string
+		withDialect, want     bool
+	}{
+		{"busy", "resource conflict", "", true, false},
+		{"a lifecycle operation", "Session cannot accept work during a lifecycle operation", "", true, true},
+		{"not accepted", "input was not accepted; retry after the session becomes available", "KAGENT_SEND_NOT_ACCEPTED", true, true},
+		{"a lifecycle operation, with no dialect to say so", "Session cannot accept work during a lifecycle operation", "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { rpcBusy(tc.message, tc.reason)(w) })
+			a := fa.agent(t)
+			if tc.withDialect {
+				a = newPool(t).Agent(targetFor(fa, "team/sre", token("t")))
+			}
+			err := a.Send(t.Context(), message("hi"), nil)
+			if !errors.Is(err, ErrBusy) || errors.Is(err, ErrNotReady) != tc.want {
+				t.Errorf("err = %v; want ErrBusy, and ErrNotReady %t", err, tc.want)
+			}
+			if tc.want && (strings.Contains(err.Error(), "active task") || !strings.Contains(err.Error(), tc.message) || !errors.Is(err, a2a.ErrUnsupportedOperation)) {
+				t.Errorf("err = %v; want it to name the agent's own words and no busy task, and still carry its -32004", err)
+			}
+		})
 	}
 }
 

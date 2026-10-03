@@ -46,6 +46,11 @@ func (p noCalls) React(context.Context, chat.Ref, string) error {
 	return nil
 }
 
+func (p noCalls) Unreact(context.Context, chat.Ref, string) error {
+	p.t.Error("a Slack unreaction was made")
+	return nil
+}
+
 func (noCalls) RefAt(channel, thread, id string) chat.Ref {
 	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
 }
@@ -59,7 +64,7 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
-	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun, session.NoticeTaskFailed, session.NoticeTaskRejected, session.NoticeTaskCanceled, session.NoticeNoOutput} {
+	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeStillBusy, session.NoticeNotReady, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun, session.NoticeTaskFailed, session.NoticeTaskRejected, session.NoticeTaskCanceled, session.NoticeNoOutput} {
 		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, Detail: "<!channel> boom"}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
@@ -69,9 +74,91 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 			t.Errorf("%s: row %+v, %v; want a queued row in the thread with the detail as it was, for the platform to make inert", kind, row, err)
 		}
 	}
-	sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: session.NoticeQueued, MessageRef: "1.5"})
+	for _, kind := range []session.NoticeKind{session.NoticeQueued, session.NoticeDequeued} {
+		sink.Notice(t.Context(), thread, session.Notice{ID: "m/queued", Kind: kind, MessageRef: "1.5"})
+	}
 	if _, err := e.store.GetOutbox(t.Context(), outbox.ID("m/queued", "notice")); err == nil {
-		t.Error("the queued notice became a message; it is a reaction")
+		t.Error("the queued or dequeued notice became a message; it is a reaction")
+	}
+}
+
+// TestStuckNoticesSayWhatTheTurnWaitsFor: a turn that has waited long says whether it is for a busy task or for a
+// session not ready, in words that promise only what courier does: it keeps trying.
+func TestStuckNoticesSayWhatTheTurnWaitsFor(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	thread := thread
+	thread.Thread = e.root
+	for kind, want := range map[session.NoticeKind]string{
+		session.NoticeStillBusy: "The agent is still busy with an earlier task in this thread, so this message is waiting. I'll keep trying.",
+		session.NoticeNotReady:  "The agent isn't ready to take this message yet, so it is waiting. I'll keep trying.",
+	} {
+		n := session.Notice{ID: "slack:ns/conn:C1:1.5/" + string(kind), Kind: kind, MessageRef: "1.5"}
+		sink.Notice(t.Context(), thread, n)
+		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
+		var out chat.Outgoing
+		_ = json.Unmarshal([]byte(row.Payload), &out)
+		if err != nil || out.Message == nil || out.Message.Fallback != want {
+			t.Errorf("%s: row %+v, %v; want a notice in the thread that says %q", kind, row, err, want)
+		}
+	}
+}
+
+// TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction: the notice has the queued notice's ID, so its row is
+// the removal of that reaction, with the same emoji, which the sink names in one place; asked twice, it is one row;
+// and no call is made to Slack.
+func TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeDequeued, MessageRef: "1.5"}
+	for range 2 {
+		sink.Notice(t.Context(), thread, n)
+	}
+	row, err := e.store.GetOutbox(t.Context(), outbox.UnreactionID(n.ID))
+	if err != nil || row.Role != store.OutboxReaction || row.Channel != "C1" || row.MessageRef != "" || !strings.Contains(row.Payload, `"ts":"1.5"`) ||
+		!strings.Contains(row.Payload, `"name":"`+live.DefaultReactions().Queued+`"`) || !strings.Contains(row.Payload, `"remove":true`) {
+		t.Fatalf("row %+v, %v; want an unmade removal of the queued reaction on 1.5 in C1", row, err)
+	}
+	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 1 {
+		t.Fatalf("%d rows for one notice raised twice; want 1", len(rows))
+	}
+}
+
+// TestQueuedReactionIsTakenOffTheMessage runs the rows to Slack, in both orders the notices can come: the
+// hourglass is on while the reply waits, and off once it was sent; and a removal that comes first leaves nothing.
+func TestQueuedReactionIsTakenOffTheMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kinds []session.NoticeKind // in the order the sink gets them
+		mid   int                  // the notices after which the outbox drains once, to see the hourglass
+	}{
+		{"queued, then sent", []session.NoticeKind{session.NoticeQueued, session.NoticeDequeued}, 1},
+		{"sent, then queued", []session.NoticeKind{session.NoticeDequeued, session.NoticeQueued}, 0},
+		{"queued and sent before it was drained", []session.NoticeKind{session.NoticeQueued, session.NoticeDequeued}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			sink := e.sink(t, e.ob)
+			key := thread
+			key.Thread = e.root
+			for i, kind := range tc.kinds {
+				sink.Notice(t.Context(), key, session.Notice{ID: "slack:ns/conn:C1:" + e.root + "/queued", Kind: kind, MessageRef: e.root})
+				if i+1 == tc.mid {
+					if err := e.ob.Reconcile(t.Context()); err != nil {
+						t.Fatalf("Reconcile = %v", err)
+					}
+					if got := e.fake.Reactions("C1", e.root); len(got) != 1 || got[0].Name != live.DefaultReactions().Queued {
+						t.Fatalf("Reactions while the reply waits = %+v; want the hourglass", got)
+					}
+				}
+			}
+			if err := e.ob.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile = %v", err)
+			}
+			if got := e.fake.Reactions("C1", e.root); len(got) != 0 {
+				t.Fatalf("Reactions after the turn was sent = %+v; want none", got)
+			}
+		})
 	}
 }
 
@@ -319,6 +406,14 @@ func (f *flaky) EnqueueReaction(ctx context.Context, r outbox.Reaction) (string,
 	return f.q.EnqueueReaction(ctx, r)
 }
 
+func (f *flaky) EnqueueUnreaction(ctx context.Context, r outbox.Reaction) (string, error) {
+	if f.fails > 0 {
+		f.fails--
+		return "", f.err
+	}
+	return f.q.EnqueueUnreaction(ctx, r)
+}
+
 // TestQueueNoticeReturnsWhatKeepsANoticeFromBeingWritten: a notice that was not written is the
 // caller's to retry, so QueueNotice returns the error of the write, for a message and for a
 // reaction. What no retry can mend is not an error but a log: a notice of no wording, and one
@@ -331,6 +426,7 @@ func TestQueueNoticeReturnsWhatKeepsANoticeFromBeingWritten(t *testing.T) {
 	for _, n := range []session.Notice{
 		{ID: "m/failed", Kind: session.NoticeFailed},
 		{ID: "m/queued", Kind: session.NoticeQueued, MessageRef: "1.5"},
+		{ID: "m/queued", Kind: session.NoticeDequeued, MessageRef: "1.5"},
 	} {
 		if err := sink.QueueNotice(t.Context(), thread, n); !errors.Is(err, boom) {
 			t.Errorf("QueueNotice(%s) = %v; want the error of the write", n.Kind, err)
@@ -343,8 +439,9 @@ func TestQueueNoticeReturnsWhatKeepsANoticeFromBeingWritten(t *testing.T) {
 	}
 	good := e.sink(t, e.ob)
 	for name, n := range map[string]session.Notice{
-		"no wording":                 {ID: "m/odd", Kind: "never_heard_of_it"},
-		"a reaction with no message": {ID: "m/queued", Kind: session.NoticeQueued},
+		"no wording":                    {ID: "m/odd", Kind: "never_heard_of_it"},
+		"a reaction with no message":    {ID: "m/queued", Kind: session.NoticeQueued},
+		"an unreaction with no message": {ID: "m/queued", Kind: session.NoticeDequeued},
 	} {
 		if err := good.QueueNotice(t.Context(), thread, n); err != nil {
 			t.Errorf("QueueNotice(%s) = %v; want nil: no retry mends it", name, err)

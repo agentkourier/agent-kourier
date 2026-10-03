@@ -42,6 +42,10 @@ type Config struct {
 	ReconnectDelay time.Duration
 	// ConnectTimeout bounds a Pool's connect, which fetches the agent card. Default 30s.
 	ConnectTimeout time.Duration
+	// NotReady says whether a -32004 that a send got is a session that cannot take input yet and not one
+	// that is busy with a task (ErrNotReady). A Pool sets it from its dialect. Nil says never, and every
+	// -32004 is plain busy.
+	NotReady func(err error) bool
 }
 
 func (c Config) withDefaults() Config {
@@ -111,7 +115,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	case err == nil:
 		return nil
 	case !dropped(ctx, err):
-		err = sendError(ctx, err, answer)
+		err = sendError(ctx, err, answer, a.cfg.NotReady)
 		if errors.Is(err, ErrAnswerRejected) {
 			err = a.cancelWedged(ctx, err, cmp.Or(asm.taskID, msg.TaskID))
 		}

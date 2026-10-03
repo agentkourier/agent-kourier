@@ -46,6 +46,12 @@ var (
 	// terminal task too), so GetTask the task: if it has ended, drop the answer and tell the
 	// thread; if it is WORKING, apply the age rule.
 	ErrBusy = errors.New("agent: the session has an active task")
+	// ErrNotReady means the -32004 is no busy session, the backend's dialect says (Config.NotReady), but one that
+	// cannot take input yet: it is starting, or in a lifecycle operation, or the agent is not rolled out. The
+	// message was not recorded either, and is resent unchanged after a backoff just the same; what differs is
+	// that no other turn is ahead of it. The error is ErrBusy too, for a caller that does not tell the two
+	// apart, and says only that it is not ready.
+	ErrNotReady = errors.New("agent: the session is not ready to take input")
 	// ErrForbidden means the agent refused the caller's identity for this session (-31403).
 	ErrForbidden = errors.New("agent: caller is not the session's owner")
 	// ErrAnswerRejected means the agent failed an answer to an interaction with -32603, or
@@ -152,10 +158,23 @@ func isProtocol(err error) bool {
 // agent's answer or the caller's own cancellation.
 func dropped(ctx context.Context, err error) bool { return ctx.Err() == nil && !isProtocol(err) }
 
-// sendError types the agent's error, or the caller's cancellation, that ended a send.
-func sendError(ctx context.Context, err error, answer bool) error {
+// sendError types the agent's error, or the caller's cancellation, that ended a send. A -32004 that the
+// dialect says is a session not ready (notReady, which may be nil) is typed ErrNotReady besides ErrBusy.
+func sendError(ctx context.Context, err error, answer bool, notReady func(error) bool) error {
 	if ctx.Err() == nil {
-		err = typed(err, answer)
+		typedErr := typed(err, answer)
+		if errors.Is(typedErr, ErrBusy) && notReady != nil && notReady(err) {
+			typedErr = &notReadyError{err}
+		}
+		err = typedErr
 	}
 	return fmt.Errorf("send message: %w", err)
 }
+
+// notReadyError is a -32004 that the dialect says is a session not ready. It is ErrNotReady and also ErrBusy and
+// the agent's own error, and it says only the first in its text: "the session has an active task" would be false.
+type notReadyError struct{ cause error }
+
+func (e *notReadyError) Error() string { return fmt.Sprintf("%v: %v", ErrNotReady, e.cause) }
+
+func (e *notReadyError) Unwrap() []error { return []error{ErrNotReady, ErrBusy, e.cause} }

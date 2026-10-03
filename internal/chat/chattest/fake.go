@@ -368,6 +368,21 @@ func (f *FakePlatform) React(_ context.Context, r chat.Ref, name string) error {
 	return nil
 }
 
+// Unreact implements chat.Platform. A reaction that is not there is success.
+func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.fail("Unreact"); err != nil {
+		return err
+	}
+	m := f.find(r)
+	if m == nil {
+		return &FakeError{Verdict: chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "message_not_found"}, Msg: "no such message"}
+	}
+	m.Reactions = slices.DeleteFunc(m.Reactions, func(n string) bool { return n == name })
+	return nil
+}
+
 // IsMember implements chat.Platform.
 func (f *FakePlatform) IsMember(_ context.Context, channel, user string) (bool, error) {
 	f.mu.Lock()

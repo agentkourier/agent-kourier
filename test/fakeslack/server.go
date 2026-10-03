@@ -73,8 +73,9 @@
 //     rejected with cant_update_message.
 //   - Ephemerals (ephemeral.go) being readable through GET /_control/ephemerals alone, for e2e
 //     tests, and through no other read path, where Slack shows one to its recipient only.
-//   - reactions.add (reactions.go): already_reacted, message_not_found (and the code for a
-//     deleted message), the characters a name may have, and no event being sent.
+//   - reactions.add and reactions.remove (reactions.go): already_reacted and no_reaction,
+//     message_not_found (and the code for a deleted message), the characters a name may have, and
+//     no event being sent.
 //   - conversations.history and conversations.replies: invalid_limit; metadata
 //     only with include_all_metadata=1; with only oldest set, results stay
 //     newest first and cursors walk back toward oldest; replies return the
@@ -288,6 +289,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.updateMessage(r.Form)
 	case "reactions.add":
 		return s.addReaction(r.Form)
+	case "reactions.remove":
+		return s.removeReaction(r.Form)
 	case "conversations.history":
 		return s.history(r.Form)
 	case "conversations.replies":

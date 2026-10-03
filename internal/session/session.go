@@ -108,6 +108,17 @@ type NoticeKind string
 const (
 	// NoticeQueued asks for the reaction that marks a reply waiting for the active task (spec 8.2).
 	NoticeQueued NoticeKind = "queued"
+	// NoticeDequeued asks for that reaction to be taken off: the reply's turn was sent, or has ended some other
+	// way, so it no longer waits. Its ID is the queued notice's it undoes, so a sink that puts the two in one
+	// place finds the first from the second, whichever it sees first. It is raised only for a turn that may
+	// carry the reaction.
+	NoticeDequeued NoticeKind = "dequeued"
+	// NoticeStillBusy says a turn has waited, for a task of the session that courier did not record, longer
+	// than waitNoticeAfter: it is sent again after each backoff, and never dropped.
+	NoticeStillBusy NoticeKind = "still_busy"
+	// NoticeNotReady says the same of a turn the agent answered, for that long, that its session cannot take
+	// input yet (agent.ErrNotReady): it is starting, or in a lifecycle operation.
+	NoticeNotReady NoticeKind = "not_ready"
 	// NoticeRetrying says the agent cannot be reached and courier is trying again (spec 11).
 	NoticeRetrying NoticeKind = "retrying"
 	// NoticeFailed says the turn failed and will not be sent; Detail says why.
@@ -221,7 +232,12 @@ type Manager struct {
 	// A turn leaves it when the agent takes it and it is recorded (accept), when it fails for good
 	// (fail), and when it is dropped for a removed Binding. It stays while its row is queued in any
 	// other way, such as a held unrecorded turn, which is what lets it be looked up first.
-	fresh  map[string]struct{}
+	fresh map[string]struct{}
+	// marked holds the turns that may carry the queued reaction, which a turn gives up when it is sent or ends
+	// (unqueue). A turn is in it from the notice that asks for the reaction, or, for a turn an earlier process may
+	// have marked, from when the runner takes it up. Only those turns raise a NoticeDequeued: the sink is not asked
+	// to take a reaction off every turn that never had one.
+	marked map[string]struct{}
 	closed bool // set by Close: no runner starts after it, so wg.Add cannot race wg.Wait, and no convos entry leaks
 	// intake serializes Submit: UpsertSession replaces a whole row, so two Submits that
 	// both found no session must not both write one.
@@ -259,7 +275,7 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.SendGiveUp <= 0 {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
-	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}}
+	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}}
 	m.ctx, m.stop = context.WithCancel(context.Background())
 	m.wake = m.start
 	return m, nil

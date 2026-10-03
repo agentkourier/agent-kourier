@@ -117,6 +117,27 @@ func TestReactionsAreIdempotentAndNeedAMessage(t *testing.T) {
 	}
 }
 
+func TestUnreactTakesAReactionOffAndIsSuccessWhenItIsNotThere(t *testing.T) {
+	f := NewFake()
+	ref, _ := f.Post(ctx, tgt, say("x"), "t")
+	for _, name := range []string{"eyes", "hourglass"} {
+		if err := f.React(ctx, ref, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if err := f.Unreact(ctx, ref, "eyes"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := f.Messages()[0].Reactions; len(got) != 1 || got[0] != "hourglass" {
+		t.Errorf("reactions = %v, want only hourglass", got)
+	}
+	if err := f.Unreact(ctx, chat.Ref{ID: "nope"}, "eyes"); f.Classify(chat.OpReact, err).Class != chat.Permanent {
+		t.Errorf("an unreaction on a message that is not there = %v, want permanent", err)
+	}
+}
+
 func TestMembershipAndBotChecksFailClosed(t *testing.T) {
 	f := NewFake()
 	f.AddUser(chat.User{ID: "U1", Name: "ada"}, false)

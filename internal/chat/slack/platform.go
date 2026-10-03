@@ -41,6 +41,7 @@ type API interface {
 	StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error
 	PostEphemeral(ctx context.Context, channel, threadTS, user string, c Content) error
 	React(ctx context.Context, channel, ts, name string) error
+	Unreact(ctx context.Context, channel, ts, name string) error
 	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
@@ -182,6 +183,11 @@ func (p *Platform) Ephemeral(ctx context.Context, t chat.Target, user string, m 
 // React puts the reaction name on the message at r.
 func (p *Platform) React(ctx context.Context, r chat.Ref, name string) error {
 	return p.c.React(ctx, r.Channel, r.ID, name)
+}
+
+// Unreact takes the reaction name off the message at r.
+func (p *Platform) Unreact(ctx context.Context, r chat.Ref, name string) error {
+	return p.c.Unreact(ctx, r.Channel, r.ID, name)
 }
 
 // IsMember says whether user is in channel; it fails closed.

@@ -93,7 +93,9 @@ func NewPool(d dialect.Dialect, cfg Config) *Pool {
 
 // Agent returns an Agent for t. It is cheap and connects on first use.
 func (p *Pool) Agent(t Target) *Agent {
-	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, p.dialect.ToolPart, p.cfg)
+	cfg := p.cfg
+	cfg.NotReady = p.dialect.NotReady
+	return New(func(ctx context.Context) (Conn, error) { return p.conn(ctx, t) }, p.dialect.ToolPart, cfg)
 }
 
 // Warm connects to t's agent in the background and returns at once. A failed warm-up is

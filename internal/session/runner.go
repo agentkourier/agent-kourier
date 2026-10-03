@@ -23,6 +23,8 @@ type convo struct {
 	since      time.Time         // when the first of them failed, for SendGiveUp
 	notified   bool              // the thread was told courier is retrying, for this run of trouble
 	busyNoted  bool              // the thread was told the reply is queued behind a task nobody recorded
+	waitSince  time.Time         // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
+	waitNoted  bool              // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
 	lastSeen   time.Time         // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
 	life       life              // what courier already holds of that task, so a replayed snapshot is not life
 	cancelFrom time.Time         // when the first attempt to cancel a wedged task was made, for SendGiveUp
@@ -256,6 +258,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	} else if err != nil {
 		return idle, fmt.Errorf("read queue: %w", err)
 	}
+	m.mu.Lock()
+	if _, fresh := m.fresh[r.ID]; !fresh { // an earlier process may have marked it queued, and nothing here knows
+		m.marked[r.ID] = struct{}{} // so it is taken off when the turn is sent or ends, which does no harm if it is not there
+	}
+	m.mu.Unlock()
 	sess, err := m.cfg.Store.GetSession(sctx, key, readAll, m.cfg.Now())
 	if err != nil {
 		return idle, fmt.Errorf("read session: %w", err)
@@ -328,6 +335,7 @@ func (m *Manager) superseded(t *tstate) bool {
 // settle forgets the retry state of the head turn: it was taken, failed for good, or ended.
 func (c *convo) settle() {
 	c.tries, c.since, c.patient, c.notified, c.busyNoted, c.cancelFrom, c.cancelNow = 0, time.Time{}, false, false, false, time.Time{}, false
+	c.waitSince, c.waitNoted = time.Time{}, false
 }
 
 // drives records the task the runner is streaming or following, for endPause and the controls.
@@ -473,6 +481,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 					delete(m.fresh, r.ID)
 					m.mu.Unlock()
 				}
+				m.unqueue(t) // the agent has it, so the reply waits no more, however the recording went
 			}
 		case agent.TextEvent:
 			t.texted = t.texted || visible(ev.Text)
@@ -794,10 +803,21 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 	case errors.Is(err, agent.ErrForbidden):
 		m.audit(t, t.call(err))
 		return m.fail(t, TurnForbidden, "the agent refused the Binding's identity for this session", err)
-	case errors.Is(err, agent.ErrBusy): // some task of the session runs: try again later, never give up
-		if !t.c.busyNoted { // Submit saw no task recorded, so it did not mark the reply queued: do it now
-			t.c.busyNoted = true
-			m.notice(t, NoticeQueued, "")
+	case errors.Is(err, agent.ErrBusy): // some task of the session runs, or it is not ready: try again later, never give up
+		if errors.Is(err, agent.ErrNotReady) {
+			// A session that is starting or in a lifecycle operation holds no turn ahead of this one, so the
+			// reply is not queued behind anything and gets no reaction, however the first mention of a thread
+			// that starts one looks.
+			m.waiting(t, NoticeNotReady)
+		} else {
+			if !t.c.busyNoted { // Submit saw no task recorded, so it did not mark the reply queued: do it now
+				t.c.busyNoted = true
+				m.mu.Lock()
+				m.marked[t.r.ID] = struct{}{}
+				m.mu.Unlock()
+				m.notice(t, NoticeQueued, "")
+			}
+			m.waiting(t, NoticeStillBusy)
 		}
 		t.c.tries++
 		t.c.since = time.Time{} // the agent answered: its unreachable time starts over, and a turn that then fails to send is given up on as usual
@@ -816,6 +836,27 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 		return m.retry(t, err)
 	}
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
+}
+
+// waitNoticeAfter is how long the head turn may get -32004, busy or not ready, before the thread is told it waits.
+// A reply to a task courier recorded is held without a send, and its reaction says so; this is for the turn that
+// is sent again and again into a session that does not take it, such as a task that nobody recorded, or a
+// controller that crash-loops, which would otherwise show nothing past the reaction. A couple of minutes is
+// past a session that is merely starting, and well inside the time an operator takes to notice a stuck one.
+const waitNoticeAfter = 2 * time.Minute
+
+// waiting notes that the head turn got -32004 once more, and, once it has got it for waitNoticeAfter, tells the
+// thread of the kind once for the run of trouble: the turn is still sent after every backoff, and never dropped
+// (spec 8.2). The notice is named after the turn, so a repeat after a restart is one post.
+func (m *Manager) waiting(t *tstate, kind NoticeKind) {
+	c, now := t.c, m.cfg.Now()
+	if c.waitSince.IsZero() {
+		c.waitSince = now
+	}
+	if !c.waitNoted && now.Sub(c.waitSince) >= waitNoticeAfter {
+		c.waitNoted = true
+		m.notice(t, kind, "")
+	}
 }
 
 // retry waits and tries the head turn again. It gives up, failing the turn, after SendGiveUp of

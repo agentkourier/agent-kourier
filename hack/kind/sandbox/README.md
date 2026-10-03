@@ -107,7 +107,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs (the first re
 | `users.info` (and the email for the audit log) | `users:read`, `users:read.email` |
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` (Slack's method pages name no other scope) |
-| `reactions.add` | `reactions:write` |
+| `reactions.add`, `reactions.remove` | `reactions:write` |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
 | events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |

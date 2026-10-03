@@ -94,6 +94,7 @@ func testRef(channel, thread, id string) chat.Ref {
 // reacts is what makes the reactions of testPlatform: *reactor.
 type reacts interface {
 	React(ctx context.Context, channel, ts, name string) error
+	Unreact(ctx context.Context, channel, ts, name string) error
 }
 
 // React makes a reaction through the poster's reactor, if a test gave it one.
@@ -102,6 +103,14 @@ func (p *poster) React(ctx context.Context, r chat.Ref, name string) error {
 		return errors.New("no reactor in this test")
 	}
 	return p.reactor.React(ctx, r.Channel, r.ID, name)
+}
+
+// Unreact takes a reaction off through the poster's reactor, if a test gave it one.
+func (p *poster) Unreact(ctx context.Context, r chat.Ref, name string) error {
+	if p.reactor == nil {
+		return errors.New("no reactor in this test")
+	}
+	return p.reactor.Unreact(ctx, r.Channel, r.ID, name)
 }
 
 func (*poster) RefAt(channel, thread, id string) chat.Ref { return testRef(channel, thread, id) }

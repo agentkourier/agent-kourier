@@ -74,6 +74,10 @@ func (*poster) React(context.Context, chat.Ref, string) error {
 	return errors.New("this test makes no reactions")
 }
 
+func (*poster) Unreact(context.Context, chat.Ref, string) error {
+	return errors.New("this test makes no reactions")
+}
+
 func (*poster) RefAt(channel, thread, id string) chat.Ref {
 	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
 }

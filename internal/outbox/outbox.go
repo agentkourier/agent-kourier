@@ -13,7 +13,10 @@
 //
 // A reaction (EnqueueReaction) is a row too, with the role reaction: durable and made once per ID, with no lookup,
 // since making it twice is harmless (a reaction that is there already is success) and a reaction has no message of
-// its own to find. Its ref is the ID of the message it was made on.
+// its own to find. Its ref is the ID of the message it was made on. Taking one off (EnqueueUnreaction) is a row of
+// the same role, with an ID of its own made from the reaction's source, so the two find each other whichever is
+// enqueued first: a removal cancels a reaction that is not yet made, and a reaction enqueued after its removal is
+// not made. Without that, a reaction that failed and waits for a retry would be made after the removal, and stay.
 //
 // A post that can never succeed is abandoned, not retried for ever: what the platform says is permanent (Classify:
 // a channel that is gone, text too long, content it refuses), a message that is not valid or a stored payload that
@@ -68,6 +71,8 @@ type Platform interface {
 	Find(ctx context.Context, t chat.Target, tag string, since time.Time) (chat.Ref, bool, error)
 	// React puts a reaction on a message. One that is there already is success.
 	React(ctx context.Context, r chat.Ref, name string) error
+	// Unreact takes a reaction off a message. One that is not there is success.
+	Unreact(ctx context.Context, r chat.Ref, name string) error
 	// RefAt is the Ref of the message a row recorded by its ID alone.
 	RefAt(channel, thread, id string) chat.Ref
 	// Fits says whether a prompt can be shown in one message, which is checked before it is stored.
@@ -129,6 +134,11 @@ type Outbox struct {
 	// two deliveries of one row could post it twice.
 	mu    sync.Mutex
 	retry map[string]retryState // rows whose delivery failed; guarded by mu
+	// pairMu makes the rows of a reaction and of its removal come in one order whichever is enqueued first:
+	// EnqueueReaction looks for the removal and writes its own row under it, as EnqueueUnreaction writes the
+	// removal's, so that no reaction is written after its removal was delivered. It is held only across local
+	// writes, never a platform call, and never with mu held, so Enqueue never waits for a delivery.
+	pairMu sync.Mutex
 	// platformOK is when a call to the platform last worked, and lastPurge when the retention purge last ran.
 	// Both are guarded by mu.
 	platformOK, lastPurge time.Time
@@ -244,32 +254,75 @@ func (o *Outbox) enqueue(ctx context.Context, row store.OutboxEntry) (string, er
 	return row.ID, nil
 }
 
-// Reaction is a reaction to make on the message TS in Channel: Name is the bare emoji name. Source
-// gives its row's ID, which is ID(Source, store.OutboxReaction), and must differ for each reaction
-// of one source.
+// Reaction is a reaction to make on the message TS in Channel, or to take off it: Name is the bare emoji
+// name. Source gives the row's ID, which is ID(Source, store.OutboxReaction) for the reaction made and
+// UnreactionID(Source) for the one taken back, and must differ for each reaction of one source. A reaction
+// and the removal of it share a Source: that is how they find each other.
 type Reaction struct {
 	Source, Channel, TS, Name string
 }
 
-// reactionPayload is a reaction row's payload.
+// reactionPayload is a reaction row's payload. Remove makes it the removal of the reaction: a payload
+// with none, which is every one stored before removals, is a reaction to make.
 type reactionPayload struct {
-	TS   string `json:"ts"`
-	Name string `json:"name"`
+	TS     string `json:"ts"`
+	Name   string `json:"name"`
+	Remove bool   `json:"remove,omitempty"`
 }
+
+// UnreactionID returns the outbox ID of the removal of the reaction of source: ID(source, store.OutboxReaction)
+// is the reaction itself.
+func UnreactionID(source string) string { return source + "/unreaction" }
 
 // EnqueueReaction writes the row for r and returns its ID, and does nothing else: no platform call, so
 // it is safe where the platform waits for an answer. Run delivers the row. The same ID enqueued twice is
-// one row and one reaction. An empty field is ErrInvalid.
+// one row and one reaction. An empty field is ErrInvalid. A reaction whose removal is enqueued already
+// (EnqueueUnreaction, for the same Source) is not made at all, and gets no row, so that a removal that
+// comes first is never undone by the reaction that comes after it.
 func (o *Outbox) EnqueueReaction(ctx context.Context, r Reaction) (string, error) {
 	id := ID(r.Source, store.OutboxReaction)
-	if r.Source == "" || r.Channel == "" || r.TS == "" || r.Name == "" {
-		return "", fmt.Errorf("outbox reaction %s: the source, channel, ts and name are required: %w", id, store.ErrInvalid)
-	}
-	payload, err := json.Marshal(reactionPayload{TS: r.TS, Name: r.Name})
+	row, err := reactionRow(id, r, false, o.cfg.Now())
 	if err != nil {
-		return "", fmt.Errorf("outbox reaction %s: %w", id, err)
+		return "", err
 	}
-	return o.enqueue(ctx, store.OutboxEntry{ID: id, EventID: r.Source, Role: store.OutboxReaction, Channel: r.Channel, CreatedAt: o.cfg.Now(), Payload: string(payload)})
+	o.pairMu.Lock()
+	defer o.pairMu.Unlock()
+	switch _, err := o.cfg.Store.GetOutbox(ctx, UnreactionID(r.Source)); {
+	case err == nil:
+		return id, nil
+	case !errors.Is(err, store.ErrNotFound):
+		return "", fmt.Errorf("outbox reaction %s: look for its removal: %w", id, err)
+	}
+	return o.enqueue(ctx, row)
+}
+
+// EnqueueUnreaction writes the row that takes the reaction r off its message, which was or will be made with
+// EnqueueReaction of the same Source, and returns its ID. Like EnqueueReaction it makes no platform call.
+// Its ID is UnreactionID(r.Source), so asking twice is one row. It is safe even if the reaction was never
+// enqueued, or is still waiting to be made: delivery cancels a reaction not yet made, and takes off only one
+// that was or may have been (see unreact). An empty field is ErrInvalid.
+func (o *Outbox) EnqueueUnreaction(ctx context.Context, r Reaction) (string, error) {
+	id := UnreactionID(r.Source)
+	row, err := reactionRow(id, r, true, o.cfg.Now())
+	if err != nil {
+		return "", err
+	}
+	o.pairMu.Lock()
+	defer o.pairMu.Unlock()
+	return o.enqueue(ctx, row)
+}
+
+// reactionRow is the row id of r: the reaction to make, or with remove the removal of it. An empty field is
+// ErrInvalid.
+func reactionRow(id string, r Reaction, remove bool, now time.Time) (store.OutboxEntry, error) {
+	if r.Source == "" || r.Channel == "" || r.TS == "" || r.Name == "" {
+		return store.OutboxEntry{}, fmt.Errorf("outbox reaction %s: the source, channel, ts and name are required: %w", id, store.ErrInvalid)
+	}
+	payload, err := json.Marshal(reactionPayload{TS: r.TS, Name: r.Name, Remove: remove})
+	if err != nil {
+		return store.OutboxEntry{}, fmt.Errorf("outbox reaction %s: %w", id, err)
+	}
+	return store.OutboxEntry{ID: id, EventID: r.Source, Role: store.OutboxReaction, Channel: r.Channel, CreatedAt: now, Payload: string(payload)}, nil
 }
 
 // Run drains the outbox until ctx ends, and returns its error. It drains at once, which recovers
@@ -457,19 +510,30 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (chat.Ref,
 	return o.record(ctx, id, ref)
 }
 
-// react makes the reaction of row and records the ID of its message as the ref. There is no lookup:
-// a reaction made twice is made once, and one made before a crash is simply found there. The caller
-// holds o.mu.
+// react makes the reaction of row, or takes it off when the row is a removal, and records the ID of its
+// message as the ref. There is no lookup: a reaction made twice is made once, one taken off twice is taken
+// off once, and one made before a crash is simply found there. The caller holds o.mu.
 func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, error) {
 	var p reactionPayload
 	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil || p.TS == "" || p.Name == "" {
 		return chat.Ref{}, o.abandon(ctx, row, AbandonInvalid, "", fmt.Errorf("deliver %s: the reaction's payload is not usable: %w", row.ID, store.ErrInvalid))
 	}
 	ref := o.cfg.Platform.RefAt(row.Channel, "", p.TS)
+	call, verb := o.cfg.Platform.React, "react"
+	if p.Remove {
+		call, verb = o.cfg.Platform.Unreact, "unreact"
+		needed, err := o.unreact(ctx, row)
+		if err != nil {
+			return chat.Ref{}, err
+		}
+		if !needed {
+			return o.record(ctx, row.ID, ref) // nothing was made, so nothing is taken off
+		}
+	}
 	callCtx, cancel := context.WithTimeout(ctx, o.cfg.CallTimeout)
 	defer cancel()
-	if err := o.cfg.Platform.React(callCtx, ref, p.Name); err != nil {
-		err = fmt.Errorf("deliver %s: react: %w", row.ID, err)
+	if err := call(callCtx, ref, p.Name); err != nil {
+		err = fmt.Errorf("deliver %s: %s: %w", row.ID, verb, err)
 		if reason, code, ok := o.permanent(chat.OpReact, err); ok {
 			return chat.Ref{}, o.abandon(ctx, row, reason, code, err)
 		}
@@ -480,6 +544,36 @@ func (o *Outbox) react(ctx context.Context, row store.OutboxEntry) (chat.Ref, er
 	}
 	o.platformOK = o.cfg.Now()
 	return o.record(ctx, row.ID, ref)
+}
+
+// unreact settles the reaction that the removal row takes off, and reports whether the platform has to be
+// asked to take it off. The reaction's row is the one with the removal's source (see Reaction):
+//   - There is none, or it was abandoned (the platform refused it, or it expired): nothing was made, so there
+//     is nothing to take off.
+//   - It has a ref: the reaction was made, so it is taken off.
+//   - It is still unposted, waiting for its turn or for a retry: it is cancelled, so that it is never made
+//     after the removal, which would leave it for good, and the platform is asked too, since a delivery that
+//     a crash cut short may have made it already.
+//
+// The caller holds o.mu, so no delivery of the reaction is in flight.
+func (o *Outbox) unreact(ctx context.Context, row store.OutboxEntry) (needed bool, err error) {
+	addID := ID(row.EventID, store.OutboxReaction)
+	add, err := o.cfg.Store.GetOutbox(ctx, addID)
+	switch {
+	case errors.Is(err, store.ErrNotFound), err == nil && !add.AbandonedAt.IsZero():
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("deliver %s: read the reaction it takes off: %w", row.ID, err)
+	case add.MessageRef != "":
+		return true, nil
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
+	defer cancel()
+	if _, err := o.cfg.Store.AbandonOutbox(wctx, addID, o.cfg.Now()); err != nil {
+		return false, fmt.Errorf("deliver %s: cancel the reaction it takes off: %w", row.ID, err)
+	}
+	delete(o.retry, addID)
+	return true, nil
 }
 
 // lookupGivesUp notes how a lookup of id ended and reports whether the row should now be abandoned

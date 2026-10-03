@@ -88,6 +88,10 @@ type Dialect interface {
 	// Connect returns an A2A client for the agent that sends the Binding's identity to the
 	// backend's front door and to nowhere else.
 	Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds Credentials) (*a2aclient.Client, error)
+	// NotReady reports whether err, an error the agent answered a send with, says the session cannot take
+	// input yet (it is starting, or in a lifecycle operation), as opposed to being busy with a task. A backend
+	// that gives the two the same answer returns false for every error, which reads as busy.
+	NotReady(err error) bool
 	// ParseInteraction returns the interaction a paused task waits on. It returns nil, nil
 	// when the task has no structured pause (free text only, where the dialect allows it),
 	// and an error wrapping ErrUnusablePause, naming the reason, when the task is paused

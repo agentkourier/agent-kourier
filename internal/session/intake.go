@@ -72,11 +72,32 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
 		return res, err
 	}
-	m.wake(in.Key) // outside the intake lock: a slow wake must not hold up other turns
-	if res.Queued && m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: in.MessageID + "/queued", Kind: NoticeQueued, MessageRef: in.MessageRef})
+	// Both outside the intake lock: a slow wake or notice must not hold up other turns. The notice comes first, so
+	// that the runner never sends the turn, and takes its reaction off, before the reaction was asked for (the
+	// sink is made to cope with that order too, but this is the cheap half of it).
+	if res.Queued && m.markPending(in.MessageID) && m.cfg.Sink != nil {
+		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: queuedID(in.MessageID), Kind: NoticeQueued, MessageRef: in.MessageRef})
 	}
+	m.wake(in.Key)
 	return res, nil
+}
+
+// queuedID is the ID of the notice that asks for the queued reaction of the turn id, and of the one that
+// takes it off.
+func queuedID(id string) string { return id + "/queued" }
+
+// markPending remembers that the turn id may carry the queued reaction (see Manager.marked), and reports
+// whether the reaction is still wanted: it is while this process has the turn to send (fresh). A turn that was
+// sent in the meantime, or that a duplicate of its event names after it ended, is not waiting, and must not be
+// marked, for nothing would ever unmark it.
+func (m *Manager) markPending(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, pending := m.fresh[id]; !pending {
+		return false
+	}
+	m.marked[id] = struct{}{}
+	return true
 }
 
 // queue is Submit's durable half, under the intake lock. A live session is touched before the

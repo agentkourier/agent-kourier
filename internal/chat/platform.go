@@ -87,6 +87,9 @@ type Platform interface {
 	Ephemeral(ctx context.Context, t Target, user string, m Message) error
 	// React puts the reaction name on the message at r. A reaction that is there already is success.
 	React(ctx context.Context, r Ref, name string) error
+	// Unreact takes the reaction name that React put on the message at r off it. A reaction that is not there is
+	// success.
+	Unreact(ctx context.Context, r Ref, name string) error
 
 	// IsMember says whether user is in the conversation channel. It fails closed: an error is never
 	// "yes".
@@ -113,7 +116,7 @@ type Op int
 // The operations Classify tells apart.
 const (
 	OpPost  Op = iota // Post, Find, Update, Stream and Ephemeral
-	OpReact           // React
+	OpReact           // React and Unreact
 	OpOther           // anything else
 )
 

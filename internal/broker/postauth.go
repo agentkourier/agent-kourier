@@ -44,6 +44,12 @@ func (w authWatch) React(ctx context.Context, r chat.Ref, name string) error {
 	return err
 }
 
+func (w authWatch) Unreact(ctx context.Context, r chat.Ref, name string) error {
+	err := w.Platform.Unreact(ctx, r, name)
+	w.check(chat.OpReact, err)
+	return err
+}
+
 func (w authWatch) check(op chat.Op, err error) {
 	if err == nil {
 		return

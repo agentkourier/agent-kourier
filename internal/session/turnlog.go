@@ -66,6 +66,19 @@ func stateOutcome(s a2a.TaskState) TurnOutcome {
 	return TurnFailed // failed, and a terminal state this version does not know: the task did not complete
 }
 
+// unqueue asks the sink to take the queued reaction off the turn t's message, if the turn may carry one (see
+// Manager.marked), once: when the agent has the turn, or, for a turn that never reaches the agent, when it ends.
+// A turn that was never marked raises nothing.
+func (m *Manager) unqueue(t *tstate) {
+	m.mu.Lock()
+	_, marked := m.marked[t.r.ID]
+	delete(m.marked, t.r.ID)
+	m.mu.Unlock()
+	if marked && m.cfg.Sink != nil {
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: queuedID(t.r.ID), Kind: NoticeDequeued, MessageRef: t.r.MessageRef})
+	}
+}
+
 // begin logs the start of the turn t, once however often it is sent or followed: its first send, or, for a
 // turn a restart found again, the first time it is followed (marked recovered).
 func (m *Manager) begin(t *tstate) {
@@ -87,6 +100,7 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	start, begun := m.begun[t.r.ID]
 	delete(m.begun, t.r.ID)
 	m.mu.Unlock()
+	m.unqueue(t) // however it ended, the reply waits no more: most turns have been unqueued, when they were sent
 	attrs := append(m.turnAttrs(t), "outcome", string(outcome))
 	if begun {
 		attrs = append(attrs, "duration_ms", m.cfg.Now().Sub(start).Milliseconds())

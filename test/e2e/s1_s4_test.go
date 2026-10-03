@@ -99,6 +99,19 @@ func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
 	if bots := BotMessages(th); !strings.Contains(bots[0].Text, "Holding on gate "+first) || CompareTS(bots[1].TS, r.TS) <= 0 {
 		t.Errorf("replies %q and %q; want the first task's text, then the second's, which began after the reply it answers (%s)", bots[0].Text, bots[1].Text, r.TS)
 	}
+	// The reply no longer waits: its turn was sent, so the marker comes off, while the second task still runs.
+	err = Wait(s.ctx, stepTimeout, "the reaction that marked the reply as waiting to be taken off", func(ctx context.Context) (bool, error) {
+		rs, err := s.slack.Reactions(ctx, ChannelS4, r.TS)
+		for _, x := range rs {
+			if x.Name == queuedReaction {
+				return false, err
+			}
+		}
+		return true, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := s.stub.Release(s.ctx, second); err != nil {
 		t.Fatal(err)
 	}

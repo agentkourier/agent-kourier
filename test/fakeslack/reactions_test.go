@@ -66,3 +66,50 @@ func TestReactionsAddRefusesWhatSlackWould(t *testing.T) {
 		})
 	}
 }
+
+func TestReactionsRemoveTakesTheBotsReactionOffTheMessage(t *testing.T) {
+	fake, api := newFake(t)
+	root := post(t, api, text("root"))
+	item := slack.ItemRef{Channel: "C1", Timestamp: root}
+	for _, name := range []string{"hourglass", "eyes"} {
+		if err := api.AddReaction(name, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := api.RemoveReaction("hourglass", item); err != nil {
+		t.Fatalf("RemoveReaction = %v", err)
+	}
+	want := []fakeslack.Reaction{{Name: "eyes", Users: []string{"UFAKEBOT"}}}
+	if got := fake.Reactions("C1", root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Reactions = %+v; want only the one that was not removed, %+v", got, want)
+	}
+	if err := api.AddReaction("hourglass", item); err != nil { // it can be put back: removal left no trace
+		t.Fatalf("AddReaction after a removal = %v", err)
+	}
+}
+
+func TestReactionsRemoveRefusesWhatSlackWould(t *testing.T) {
+	_, api := newFake(t)
+	root := post(t, api, text("root"))
+	if err := api.AddReaction("hourglass", slack.ItemRef{Channel: "C1", Timestamp: root}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, reaction string
+		item           slack.ItemRef
+		want           string
+	}{
+		{"not there", "eyes", slack.ItemRef{Channel: "C1", Timestamp: root}, "no_reaction"},
+		{"no message", "hourglass", slack.ItemRef{Channel: "C1", Timestamp: "1.1"}, "message_not_found"},
+		{"no channel", "hourglass", slack.ItemRef{Timestamp: root}, "no_item_specified"},
+		{"no timestamp", "hourglass", slack.ItemRef{Channel: "C1"}, "no_item_specified"},
+		{"no name", "", slack.ItemRef{Channel: "C1", Timestamp: root}, "invalid_name"},
+		{"a name with a colon", ":eyes:", slack.ItemRef{Channel: "C1", Timestamp: root}, "invalid_name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := api.RemoveReaction(tc.reaction, tc.item); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RemoveReaction = %v; want %s", err, tc.want)
+			}
+		})
+	}
+}

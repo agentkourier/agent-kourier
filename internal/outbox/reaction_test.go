@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,17 +15,25 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// reactor is a Reactor that records its calls as "channel ts name"; fail, if set, decides each
-// call's result.
+// reactor is a Reactor that records its calls as "channel ts name", and those that take a reaction off
+// as "- channel ts name"; fail, if set, decides each call's result.
 type reactor struct {
 	mu    sync.Mutex
 	calls []string
-	fail  func(n int) error // n counts the calls from 1
+	fail  func(n int) error // n counts the calls, of both kinds, from 1
 }
 
 func (r *reactor) React(_ context.Context, channel, ts, name string) error {
+	return r.call(channel + " " + ts + " " + name)
+}
+
+func (r *reactor) Unreact(_ context.Context, channel, ts, name string) error {
+	return r.call("- " + channel + " " + ts + " " + name)
+}
+
+func (r *reactor) call(what string) error {
 	r.mu.Lock()
-	r.calls = append(r.calls, channel+" "+ts+" "+name)
+	r.calls = append(r.calls, what)
 	n, fail := len(r.calls), r.fail
 	r.mu.Unlock()
 	if fail != nil {
@@ -257,4 +266,272 @@ type hangingReactor struct{}
 func (hangingReactor) React(ctx context.Context, _, _, _ string) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (hangingReactor) Unreact(ctx context.Context, _, _, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+var (
+	reactionID   = queuedReaction.Source + "/reaction"
+	unreactionID = queuedReaction.Source + "/unreaction"
+)
+
+// TestUnreactionIsEnqueuedOnceByIDAndTakesTheReactionOffAfterItIsMade: the removal row is named after the
+// reaction's source, so asking twice is one row, and it is a local write. The drain makes the reaction and then
+// takes it off, in that order, with no post or lookup, and records the message's ts on each.
+func TestUnreactionIsEnqueuedOnceByIDAndTakesTheReactionOffAfterItIsMade(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	p, r := &poster{}, &reactor{}
+	o, _, _ := reacting(t, st, p, r)
+	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		id, err := o.EnqueueUnreaction(t.Context(), queuedReaction)
+		if err != nil || id != unreactionID || id != outbox.UnreactionID(queuedReaction.Source) {
+			t.Fatalf("EnqueueUnreaction = %q, %v; want %q", id, err, unreactionID)
+		}
+	}
+	if rows, _ := st.ListUnposted(t.Context()); len(rows) != 2 {
+		t.Fatalf("unposted = %+v; want the reaction and its removal", rows)
+	}
+	if got := r.list(); len(got) != 0 {
+		t.Fatalf("EnqueueUnreaction reacted (%q); it is a local write", got)
+	}
+	for range 2 {
+		if err := o.Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile = %v", err)
+		}
+	}
+	if got, want := r.list(), []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %q; want %q, in that order and once each", got, want)
+	}
+	if posts, finds := p.counts(); posts != 0 || finds != 0 {
+		t.Fatalf("%d posts and %d lookups for a removal; want none", posts, finds)
+	}
+	if ref(st, reactionID) != "1.5" || ref(st, unreactionID) != "1.5" {
+		t.Fatalf("refs = %q, %q; want the message's ts on both", ref(st, reactionID), ref(st, unreactionID))
+	}
+}
+
+// TestUnreactionCancelsAReactionThatIsNotYetMade is the ordering rule: a reaction that failed and waits for its
+// retry must not be made after its removal, or it would stay for good. The removal cancels it (no abandon is
+// reported, since nobody gave up) and takes off whatever a cut-short delivery may have made.
+func TestUnreactionCancelsAReactionThatIsNotYetMade(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	r := &reactor{fail: func(n int) error {
+		if n == 1 {
+			return errors.New("connection reset") // the reaction's first try
+		}
+		return nil
+	}}
+	o, hooks, logs := reacting(t, st, &poster{}, r)
+	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Reconcile(t.Context()); err == nil { // it fails, and waits out a retry delay that the frozen clock never ends
+		t.Fatal("Reconcile succeeded; want the reaction's failure")
+	}
+	if _, err := o.EnqueueUnreaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := o.Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile = %v", err)
+		}
+	}
+	if got, want := r.list(), []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %q; want the failed try and the removal, and no later reaction", got)
+	}
+	row, _ := st.GetOutbox(t.Context(), reactionID)
+	if row.AbandonedAt.IsZero() || row.MessageRef != "" || ref(st, unreactionID) != "1.5" {
+		t.Fatalf("reaction row %+v, removal ref %q; want the reaction cancelled and the removal done", row, ref(st, unreactionID))
+	}
+	if got := hooks.list(); len(got) != 0 || warnings(logs) != 0 {
+		t.Fatalf("abandons %q, %d warnings; want a cancel to be neither", got, warnings(logs))
+	}
+}
+
+// TestUnreactionEnqueuedFirstStopsTheReaction: the order of the two enqueues does not matter. A reaction that
+// arrives after its removal is not made and gets no row, and the removal, which finds nothing to take off, asks
+// the platform for nothing.
+func TestUnreactionEnqueuedFirstStopsTheReaction(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	r := &reactor{}
+	o, _, _ := reacting(t, st, &poster{}, r)
+	if _, err := o.EnqueueUnreaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil || id != reactionID {
+		t.Fatalf("EnqueueReaction after its removal = %q, %v; want its ID, and no error", id, err)
+	}
+	if _, err := st.GetOutbox(t.Context(), reactionID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the reaction's row = %v; want none", err)
+	}
+	for range 2 {
+		if err := o.Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile = %v", err)
+		}
+	}
+	if got := r.list(); len(got) != 0 {
+		t.Fatalf("calls = %q; want none: nothing was made, so nothing is taken off", got)
+	}
+	if ref(st, unreactionID) != "1.5" {
+		t.Fatalf("removal ref = %q; want it done", ref(st, unreactionID))
+	}
+}
+
+// TestUnreactionAsksOnlyWhenAReactionWasMade: the removal of a reaction that was never enqueued, or that the
+// platform refused for good, takes nothing off; one that was made is taken off.
+func TestUnreactionAsksOnlyWhenAReactionWasMade(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		react     bool // the reaction is enqueued
+		failReact bool // and refused for good
+		want      []string
+	}{
+		{"never enqueued", false, false, nil},
+		{"refused for good", true, true, []string{"C1 1.5 hourglass"}},
+		{"made", true, false, []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			r := &reactor{fail: func(int) error {
+				if tc.failReact {
+					return slackErr("message_not_found")
+				}
+				return nil
+			}}
+			o, _, _ := reacting(t, st, &poster{}, r)
+			if tc.react {
+				if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
+					t.Fatal(err)
+				}
+				_ = o.Reconcile(t.Context())
+			}
+			if tc.failReact {
+				r.mu.Lock()
+				r.fail = nil
+				r.mu.Unlock()
+			}
+			if _, err := o.EnqueueUnreaction(t.Context(), queuedReaction); err != nil {
+				t.Fatal(err)
+			}
+			if err := o.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile = %v", err)
+			}
+			if got := r.list(); !slices.Equal(got, tc.want) {
+				t.Fatalf("calls = %q; want %q", got, tc.want)
+			}
+			if ref(st, unreactionID) != "1.5" {
+				t.Fatalf("removal ref = %q; want it done", ref(st, unreactionID))
+			}
+		})
+	}
+}
+
+// TestPermanentUnreactionFailuresAbandonTheRow: a removal that can never be made is given up on, once; any
+// other failure leaves the row for a retry, and the reaction stays cancelled.
+func TestPermanentUnreactionFailuresAbandonTheRow(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		reason string // "" for a failure that is retried
+	}{
+		{slackErr("message_not_found"), "channel_gone"},
+		{slackErr("invalid_name"), "invalid_content"},
+		{slackErr("ratelimited"), ""},
+		{errors.New("connection reset"), ""},
+	} {
+		t.Run(tc.err.Error(), func(t *testing.T) {
+			st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+			r := &reactor{}
+			o, hooks, _ := reacting(t, st, &poster{}, r)
+			for _, enqueue := range []func(context.Context, outbox.Reaction) (string, error){o.EnqueueReaction, o.EnqueueUnreaction} {
+				if _, err := enqueue(t.Context(), queuedReaction); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.fail = func(n int) error {
+				if n == 2 { // the removal
+					return tc.err
+				}
+				return nil
+			}
+			err := o.Reconcile(t.Context())
+			row, _ := st.GetOutbox(t.Context(), unreactionID)
+			if tc.reason == "" {
+				if err == nil || !row.AbandonedAt.IsZero() || row.Payload == "" || len(hooks.list()) != 0 {
+					t.Fatalf("Reconcile = %v, row %+v, abandons %q; want a plain failure and an untouched row", err, row, hooks.list())
+				}
+				return
+			}
+			if err != nil || row.AbandonedAt.IsZero() {
+				t.Fatalf("Reconcile = %v, row %+v; want it abandoned, with no error from the drain", err, row)
+			}
+			if got := hooks.list(); len(got) != 1 || got[0] != unreactionID+" "+tc.reason {
+				t.Fatalf("abandons %q; want %q once", got, unreactionID+" "+tc.reason)
+			}
+		})
+	}
+}
+
+// TestEnqueueUnreactionRefusesWhatCannotBeMade: an empty field is ErrInvalid and leaves no row.
+func TestEnqueueUnreactionRefusesWhatCannotBeMade(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	o, _, _ := reacting(t, st, &poster{}, &reactor{})
+	for _, mod := range []func(*outbox.Reaction){
+		func(r *outbox.Reaction) { r.Source = "" }, func(r *outbox.Reaction) { r.Channel = "" },
+		func(r *outbox.Reaction) { r.TS = "" }, func(r *outbox.Reaction) { r.Name = "" },
+	} {
+		bad := queuedReaction
+		mod(&bad)
+		if id, err := o.EnqueueUnreaction(t.Context(), bad); !errors.Is(err, store.ErrInvalid) || id != "" {
+			t.Errorf("EnqueueUnreaction(%+v) = %q, %v; want ErrInvalid", bad, id, err)
+		}
+	}
+	if rows, _ := st.ListUnposted(t.Context()); len(rows) != 0 {
+		t.Fatalf("%d rows left by refused removals", len(rows))
+	}
+}
+
+// TestRunTakesAReactionOff: the signal of EnqueueUnreaction wakes Run too.
+func TestRunTakesAReactionOff(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	r := &reactor{}
+	o, _, _ := reacting(t, st, &poster{}, r)
+	start(t, o)
+	for _, enqueue := range []func(context.Context, outbox.Reaction) (string, error){o.EnqueueReaction, o.EnqueueUnreaction} {
+		if _, err := enqueue(t.Context(), queuedReaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the removal", func() bool { return ref(st, unreactionID) == "1.5" })
+	if got, want := r.list(), []string{"C1 1.5 hourglass", "- C1 1.5 hourglass"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %q; want %q", got, want)
+	}
+}
+
+// TestAHungUnreactionEndsAtCallTimeout: as for a reaction, the outbox bounds the call, and the row stays for a
+// retry.
+func TestAHungUnreactionEndsAtCallTimeout(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	o, hooks, _ := abandoning(t, st, &poster{reactor: hangingReactor{}}, func(c *outbox.Config) { c.CallTimeout = 50 * time.Millisecond })
+	if _, err := o.EnqueueReaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetOutbox(t.Context(), reactionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordMessageRef(t.Context(), reactionID, "1.5"); err != nil { // made
+		t.Fatal(err)
+	}
+	if _, err := o.EnqueueUnreaction(t.Context(), queuedReaction); err != nil {
+		t.Fatal(err)
+	}
+	err := o.Reconcile(t.Context())
+	if !errors.Is(err, context.DeadlineExceeded) || ref(st, unreactionID) != "" || len(hooks.list()) != 0 {
+		t.Fatalf("Reconcile = %v, ref %q, abandons %q; want the timeout, an unposted row, and no abandon", err, ref(st, unreactionID), hooks.list())
+	}
 }

@@ -26,7 +26,8 @@ func (p platform) Find(context.Context, chat.Target, string, time.Time) (chat.Re
 	return chat.Ref{ID: "2.0"}, true, p.findErr
 }
 
-func (p platform) React(context.Context, chat.Ref, string) error { return p.reactErr }
+func (p platform) React(context.Context, chat.Ref, string) error   { return p.reactErr }
+func (p platform) Unreact(context.Context, chat.Ref, string) error { return p.reactErr }
 
 func (platform) RefAt(channel, thread, id string) chat.Ref {
 	return chat.Ref{Channel: channel, Thread: thread, ID: id}
@@ -60,7 +61,7 @@ func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 		{"a network error", errors.New("dial tcp: connection refused"), ""},
 		{"success", nil, ""},
 	} {
-		for _, call := range []string{"Post", "Find", "React"} {
+		for _, call := range []string{"Post", "Find", "React", "Unreact"} {
 			var reported []string
 			w := WatchAuth(platform{postErr: tc.err, findErr: tc.err, reactErr: tc.err}, func(code string) { reported = append(reported, code) })
 
@@ -73,9 +74,11 @@ func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 				ref, _, err = w.Find(t.Context(), chat.Target{Channel: "C1"}, "id", time.Time{})
 			case "React":
 				err = w.React(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
+			case "Unreact":
+				err = w.Unreact(t.Context(), chat.Ref{Channel: "C1", ID: "1.1"}, "eyes")
 			}
 
-			if wantID := map[string]string{"Post": "1.0", "Find": "2.0", "React": ""}[call]; ref.ID != wantID || !errors.Is(err, tc.err) && tc.err != nil || tc.err == nil && err != nil {
+			if wantID := map[string]string{"Post": "1.0", "Find": "2.0"}[call]; ref.ID != wantID || !errors.Is(err, tc.err) && tc.err != nil || tc.err == nil && err != nil {
 				t.Errorf("%s/%s: got %+v, %v; want the platform's own answer untouched", tc.name, call, ref, err)
 			}
 			if tc.want == "" && len(reported) != 0 || tc.want != "" && (len(reported) != 1 || reported[0] != tc.want) {

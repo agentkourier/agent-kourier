@@ -131,6 +131,18 @@ func TestReactAndTheChecksOfWhoIsInTheChannel(t *testing.T) {
 	if v := w.p.Classify(chat.OpReact, err); v.Class != chat.Permanent || v.Reason != chat.ReasonChannelGone {
 		t.Errorf("a reaction on a message that is not there classifies as %+v (%v), want permanent and channel_gone", v, err)
 	}
+	for range 2 { // again is success
+		if err := w.p.Unreact(t.Context(), ref, "eyes"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.fake.Reactions("C1", ref.ID); len(got) != 0 {
+		t.Errorf("reactions after an unreaction = %+v, want none", got)
+	}
+	err = w.p.Unreact(t.Context(), chat.Ref{Channel: "C1", ID: "9.9"}, "eyes")
+	if v := w.p.Classify(chat.OpReact, err); v.Class != chat.Permanent || v.Reason != chat.ReasonChannelGone {
+		t.Errorf("an unreaction on a message that is not there classifies as %+v (%v), want permanent and channel_gone", v, err)
+	}
 
 	w.fake.AddUser(fakeslack.User{ID: "U1", Name: "ada", Email: "ada@example.test"})
 	w.fake.AddUser(fakeslack.User{ID: "B1", Name: "robot", IsBot: true})
