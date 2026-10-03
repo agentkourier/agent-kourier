@@ -2,9 +2,11 @@ package slack
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -81,15 +83,108 @@ func TestConnectionErrorsAreCollapsed(t *testing.T) {
 		t.Fatalf("the failure a minute later logged %q; want a second line that counts the 4 left out", got)
 	}
 
-	k.w.event(t.Context(), connectionError(errors.New("slack rate limit exceeded"), 7))
-	if got := k.lines("level=WARN"); len(got) != 3 || !strings.Contains(got[2], "rate limit") {
-		t.Fatalf("a different failure logged %q; want it at once", got)
+	limited, down := errors.New("slack rate limit exceeded"), errors.New("slack server error: 503")
+	k.w.event(t.Context(), connectionError(limited, 7))
+	if got := k.lines("level=WARN"); len(got) != 3 || !strings.Contains(got[2], "rate limit") || strings.Contains(got[2], "suppressed") {
+		t.Fatalf("a different failure logged %q; want it at once, with no count: the line before it ended its run", got)
+	}
+	k.w.event(t.Context(), connectionError(limited, 8)) // one left out
+
+	// The count goes on the line that ends the run of failures, and names the error it counts.
+	k.w.event(t.Context(), connectionError(down, 9))
+	if got := k.lines("level=WARN"); len(got) != 4 || !strings.Contains(got[3], "earlier_suppressed=1") || !strings.Contains(got[3], "earlier_error=") ||
+		!strings.Contains(got[3], "rate limit") || !strings.Contains(got[3], "503") {
+		t.Fatalf("a different failure after one left out logged %q; want its own line with the earlier error and its count of 1", got)
 	}
 
+	k.w.event(t.Context(), connectionError(down, 10))
+	k.w.event(t.Context(), connectionError(down, 11)) // two left out
 	k.w.event(t.Context(), hello())
-	k.w.event(t.Context(), connectionError(errors.New("slack rate limit exceeded"), 1))
-	if got := k.lines("level=WARN"); len(got) != 4 {
-		t.Fatalf("a failure after a connection logged %q; want it at once, as a new outage", got)
+	if got := k.lines("level=INFO"); len(got) == 0 || !strings.Contains(got[len(got)-1], "suppressed=2") || !strings.Contains(got[len(got)-1], "suppressed_error=") {
+		t.Fatalf("a hello after two left out logged %q; want the count and the error on the hello", got)
+	}
+	k.w.event(t.Context(), connectionError(down, 1))
+	if got := k.lines("level=WARN"); len(got) != 5 || strings.Contains(got[4], "suppressed") {
+		t.Fatalf("a failure after a connection logged %q; want it at once, as a new outage, with no count from the one before", got)
+	}
+}
+
+// A refresh is no failure. slack-go closes the socket itself and then reads from it, which it reports as a read
+// error on a closed network connection: that is DEBUG, while any other read error is a WARN. Both are checked on
+// the original error, which the scrubbed one only describes.
+func TestAReadOnASocketSlackGoClosedIsNotAWarning(t *testing.T) {
+	k := newWatched(t)
+	incoming := func(err error) socketmode.Event {
+		return socketmode.Event{Type: socketmode.EventTypeIncomingError, Data: &slackgo.IncomingEventError{ErrorObj: err}}
+	}
+	k.w.event(t.Context(), incoming(fmt.Errorf("read tcp 10.0.0.1:1->52.0.0.1:443: %w", net.ErrClosed)))
+	if got := k.lines("level=WARN"); len(got) != 0 {
+		t.Errorf("a read on a closed socket logged %q; want no WARN", got)
+	}
+	if got := k.lines("level=DEBUG"); len(got) != 1 {
+		t.Errorf("a read on a closed socket logged %q at DEBUG; want one line", got)
+	}
+	k.w.event(t.Context(), incoming(errors.New("connection reset by peer")))
+	if got := k.lines("level=WARN"); len(got) != 1 {
+		t.Errorf("another read error logged %q; want one WARN", got)
+	}
+}
+
+// Once Run's context has ended, slack-go still delivers the events it was sending (the attempt that the end
+// cancelled, the read of a socket it closed), and none of them is news: no WARN and no INFO, whatever the order.
+func TestNothingIsLoggedOnceTheContextHasEnded(t *testing.T) {
+	k := newWatched(t)
+	k.w.event(t.Context(), hello())
+	logged := len(k.lines("level="))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	for _, ev := range []socketmode.Event{
+		connecting(1, 1),
+		connectionError(fmt.Errorf("post: %w", context.Canceled), 1),
+		connectionError(errors.New("an error that is not the cancellation"), 1), // slack-go sends it after cancel too
+		{Type: socketmode.EventTypeIncomingError, Data: &slackgo.IncomingEventError{ErrorObj: net.ErrClosed}},
+		{Type: socketmode.EventTypeIncomingError, Data: &slackgo.IncomingEventError{ErrorObj: errors.New("use of closed network connection")}},
+	} {
+		k.w.event(ctx, ev)
+	}
+	if got := k.lines("level="); len(got) != logged {
+		t.Errorf("events after the context ended logged %q; want nothing more", got[logged:])
+	}
+	if fmt.Sprint(k.states) != fmt.Sprint([]bool{true}) {
+		t.Errorf("OnConnection was told %v; want only up: closing the watch, which Run defers, takes it down", k.states)
+	}
+	k.w.close()
+	if fmt.Sprint(k.states) != fmt.Sprint([]bool{true, false}) {
+		t.Errorf("after close OnConnection was told %v; want up, down", k.states)
+	}
+}
+
+// A connection error that is the cancellation of its own attempt is not logged even if the context is still live
+// when it is read: it says nothing of Slack.
+func TestACancelledAttemptIsNotAFailure(t *testing.T) {
+	k := newWatched(t)
+	k.w.event(t.Context(), connectionError(fmt.Errorf("Post: %w", context.Canceled), 1))
+	if got := k.lines("level=WARN"); len(got) != 0 {
+		t.Errorf("a cancelled attempt logged %q; want nothing", got)
+	}
+}
+
+// Connecting alone takes the connection down, with no error between: that is what a refresh looks like, because
+// slack-go closes the socket and reconnects, and sends nothing for the loss. It says reconnecting, at INFO, once.
+func TestConnectingAloneTakesTheConnectionDown(t *testing.T) {
+	k := newWatched(t)
+	for _, ev := range []socketmode.Event{hello(), connecting(1, 1), hello()} {
+		k.w.event(t.Context(), ev)
+	}
+	if want := []bool{true, false, true}; fmt.Sprint(k.states) != fmt.Sprint(want) {
+		t.Errorf("OnConnection was told %v; want %v", k.states, want)
+	}
+	if got := k.lines("level=INFO msg=\"slack: socket mode reconnecting\""); len(got) != 1 {
+		t.Errorf("a refresh logged %q; want one INFO reconnecting line", got)
+	}
+	if got := k.lines("level=WARN"); len(got) != 0 {
+		t.Errorf("a refresh logged %q; want no WARN", got)
 	}
 }
 
@@ -113,7 +208,7 @@ func TestConnectionStateFollowsTheEvents(t *testing.T) {
 	if want := []bool{true, false, true, false}; fmt.Sprint(k.states) != fmt.Sprint(want) {
 		t.Errorf("OnConnection was told %v; want %v", k.states, want)
 	}
-	if got := k.lines("socket mode connection lost"); len(got) != 1 || !strings.Contains(got[0], "level=INFO") {
+	if got := k.lines("socket mode reconnecting"); len(got) != 1 || !strings.Contains(got[0], "level=INFO") {
 		t.Errorf("a connection lost logged %q; want one INFO line", got)
 	}
 	if got := k.lines("msg=\"slack: socket mode connected\""); len(got) != 2 {
@@ -130,9 +225,11 @@ func TestConnectionStateFollowsTheEvents(t *testing.T) {
 // anything of an envelope's payload, which is what people wrote.
 func TestLifecycleLinesHoldNoTokenTicketOrPayload(t *testing.T) {
 	const ticket = "TICKET-5f3a9"
+	const plainTicket = "TICKET-77c1e" // a socket URL without TLS is a URL too: a proxy, or a test's fake
 	url := `wss://wss-primary.slack.com/link/?ticket=` + ticket + `&app_id=A123`
+	plain := `ws://127.0.0.1:8443/link?ticket=` + plainTicket
 	leaky := func(what string) error {
-		return fmt.Errorf("%s: Get %q: xapp-fake-app-token and xoxb-fake-bot-token: %w", what, url, errors.New("EOF"))
+		return fmt.Errorf("%s: Get %q then %q: xapp-fake-app-token and xoxb-fake-bot-token: %w", what, url, plain, errors.New("EOF"))
 	}
 	k := newWatched(t)
 	ctx := t.Context()
@@ -149,7 +246,7 @@ func TestLifecycleLinesHoldNoTokenTicketOrPayload(t *testing.T) {
 	}
 
 	logs := k.logs.String()
-	for _, bad := range []string{ticket, "wss://", "xapp-fake-app-token", "xoxb-fake-bot-token", "USER TEXT"} {
+	for _, bad := range []string{ticket, plainTicket, "wss://", "ws://", "xapp-fake-app-token", "xoxb-fake-bot-token", "USER TEXT"} {
 		if strings.Contains(logs, bad) {
 			t.Errorf("the log holds %q:\n%s", bad, logs)
 		}

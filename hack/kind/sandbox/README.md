@@ -173,7 +173,7 @@ before the Slack connection is tried. Ask the gauge, or read the log:
   before the first connection). A `0` that stays means courier cannot reach Slack or Slack turns it away.
 - `kubectl --context $CTX -n courier logs deploy/courier-sandbox | grep 'slack:'` shows the connection's life: `socket mode connecting`,
   `socket mode websocket opened`, `socket mode connected` (Slack said hello; `num_connections` above 1 means another process uses the same
-  app token), `socket mode connection lost; connecting again`, and WARN lines for `connection attempt failed; retrying` (courier
+  app token), `socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `connection attempt failed; retrying` (courier
   tries again by itself, with a pause that grows to 5 minutes, and repeats the same failure once a minute at most),
   `message could not be read`, `read failed` and `write failed`. Events Slack sends are logged at DEBUG only, by type and ID, never their
   text. A fatal rejection of the tokens is not one of these lines: courier prints `courier: slack rejected the tokens: ...` and exits 1

@@ -193,8 +193,8 @@ func TestLostConnectionIsReportedAndRecovers(t *testing.T) {
 
 	k.eventually(t, "the connection to be reported down", func() bool { return !k.states.last() })
 	k.eventually(t, "the failed attempt to be logged", func() bool { return k.logs.count("level=WARN", "connection attempt failed") > 0 })
-	if got := k.logs.count("level=INFO", "socket mode connection lost"); got != 1 {
-		t.Errorf("%d lines say the connection was lost; want 1:\n%s", got, k.logs)
+	if got := k.logs.count("level=INFO", "socket mode reconnecting"); got != 1 {
+		t.Errorf("%d lines say it was reconnecting; want 1:\n%s", got, k.logs)
 	}
 
 	k.gate.failOpen.Store(false)
@@ -207,6 +207,26 @@ func TestLostConnectionIsReportedAndRecovers(t *testing.T) {
 	}
 	if got := k.logs.count("connection attempt failed"); got != 1 {
 		t.Errorf("%d lines for the failed attempts; want the few that the pace allows, which here is 1:\n%s", got, k.logs)
+	}
+	k.noSecrets(t)
+}
+
+// A refresh, which Slack asks for with a disconnect and which slack-go answers by closing the socket and connecting
+// again, is routine: the connection goes down and up, and nothing is a WARN, though slack-go reports a read on the
+// socket it closed.
+func TestRefreshReconnectsWithoutAWarning(t *testing.T) {
+	k := startWatched(t)
+
+	if _, err := k.fake.SendEnvelope("disconnect", map[string]any{"reason": "refresh_requested"}); err != nil {
+		t.Fatal(err)
+	}
+
+	k.eventually(t, "the second hello", func() bool { return k.logs.count("level=INFO", "socket mode connected") == 2 })
+	if got := k.states.get(); len(got) != 3 || !got[0] || got[1] || !got[2] {
+		t.Errorf("OnConnection was told %v; want up, down, up", got)
+	}
+	if got := k.logs.count("level=WARN"); got != 0 {
+		t.Errorf("a refresh logged %d WARN lines:\n%s", got, k.logs)
 	}
 	k.noSecrets(t)
 }

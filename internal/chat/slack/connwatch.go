@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"time"
 
@@ -57,19 +58,27 @@ func (w *watch) close() { w.set(false) }
 // next attempt: slack-go reports no loss, and after one it goes straight to connecting. Nothing here logs an
 // envelope's payload, which holds what people wrote, or the URL of the socket, whose ticket opens a connection
 // for the app.
+//
+// Once ctx has ended, Run is stopping and slack-go still delivers what it was sending: the attempt that the end of
+// ctx cancelled, and the error of a read on a socket it closed. They are not news, so a connecting, a connection error
+// or a read error is neither logged nor followed then; close, which Run defers, takes the state down.
 func (w *watch) event(ctx context.Context, ev socketmode.Event) {
 	log := w.c.log
+	stopping := ctx.Err() != nil
 	switch ev.Type {
 	case socketmode.EventTypeConnecting:
+		if stopping {
+			return
+		}
 		d, _ := ev.Data.(*slackgo.ConnectingEvent)
 		if d == nil {
 			d = &slackgo.ConnectingEvent{}
 		}
-		lost := w.up
+		again := w.up
 		w.set(false)
 		switch {
-		case lost:
-			log.InfoContext(ctx, "slack: socket mode connection lost; connecting again", "connection_count", d.ConnectionCount)
+		case again: // a refresh that Slack asked for, or a connection that broke: slack-go says which of them to nobody
+			log.InfoContext(ctx, "slack: socket mode reconnecting", "connection_count", d.ConnectionCount)
 		case d.ConnectionCount == 0 && d.Attempt <= 1:
 			log.InfoContext(ctx, "slack: socket mode connecting")
 		default:
@@ -82,18 +91,25 @@ func (w *watch) event(ctx context.Context, ev socketmode.Event) {
 		}
 		log.InfoContext(ctx, "slack: socket mode websocket opened", "connection_count", d.ConnectionCount)
 	case socketmode.EventTypeHello:
-		w.lastErr, w.suppressed = "", 0 // the next failure is a new outage
 		w.set(true)
 		var n int
 		if ev.Request != nil {
 			n = ev.Request.NumConnections
 		}
 		// num_connections above 1 says that another process uses the same app token, and Slack spreads events over them.
-		log.InfoContext(ctx, ConnectedMessage, "num_connections", n)
+		attrs := []any{"num_connections", n}
+		if w.suppressed > 0 { // the outage ends here: say how many failures it left out of the log
+			attrs = append(attrs, "suppressed", w.suppressed, "suppressed_error", w.lastErr)
+		}
+		log.InfoContext(ctx, ConnectedMessage, attrs...)
+		w.lastErr, w.suppressed = "", 0 // the next failure is a new outage
 	case socketmode.EventTypeConnectionError:
 		d, _ := ev.Data.(*slackgo.ConnectionErrorEvent)
 		if d == nil {
 			d = &slackgo.ConnectionErrorEvent{}
+		}
+		if stopping || errors.Is(d.ErrorObj, context.Canceled) { // the attempt that the end of ctx cancelled
+			return
 		}
 		w.set(false)
 		w.connectionError(ctx, d)
@@ -105,7 +121,15 @@ func (w *watch) event(ctx context.Context, ev socketmode.Event) {
 		if d == nil {
 			d = &slackgo.IncomingEventError{}
 		}
-		log.WarnContext(ctx, "slack: socket mode read failed", "error", w.cause(d.ErrorObj))
+		switch {
+		case stopping:
+		case errors.Is(d.ErrorObj, net.ErrClosed):
+			// slack-go closed the socket itself, as it does for each refresh Slack asks for, and then read from it. The
+			// original error is tested: the scrubbed one keeps no cause that says so.
+			log.DebugContext(ctx, "slack: socket mode read ended on a closed socket", "error", w.cause(d.ErrorObj))
+		default:
+			log.WarnContext(ctx, "slack: socket mode read failed", "error", w.cause(d.ErrorObj))
+		}
 	case socketmode.EventTypeErrorBadMessage:
 		d, _ := ev.Data.(*socketmode.ErrorBadMessage)
 		if d == nil {
@@ -132,7 +156,9 @@ func (w *watch) event(ctx context.Context, ev socketmode.Event) {
 }
 
 // connectionError logs a failed connection attempt: at once if it is the first, or differs from the last one logged, and
-// otherwise once every errorLogEvery, with the number left out.
+// otherwise once every errorLogEvery. The number of failures left out goes on the line that ends the run of them, and
+// names the error it counts: this line if it is the same error again, else as earlier_suppressed of earlier_error.
+// (A hello ends a run too; see event.)
 func (w *watch) connectionError(ctx context.Context, d *slackgo.ConnectionErrorEvent) {
 	err := w.cause(d.ErrorObj)
 	now := w.c.now()
@@ -141,8 +167,12 @@ func (w *watch) connectionError(ctx context.Context, d *slackgo.ConnectionErrorE
 		return
 	}
 	attrs := []any{"error", err, "attempt", d.Attempt, "retry_in", d.Backoff}
-	if w.suppressed > 0 {
+	switch {
+	case w.suppressed == 0:
+	case err == w.lastErr:
 		attrs = append(attrs, "suppressed", w.suppressed)
+	default:
+		attrs = append(attrs, "earlier_error", w.lastErr, "earlier_suppressed", w.suppressed)
 	}
 	w.c.log.WarnContext(ctx, "slack: socket mode connection attempt failed; retrying", attrs...)
 	w.lastErr, w.lastLogged, w.suppressed = err, now, 0
