@@ -9,4 +9,4 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "${HERE}/env.sh"
 file=${1:-${SANDBOX_ENV:-${HOME:?HOME is not set}/.config/agent-courier/sandbox.env}}
 sandbox_env_load "${file}"
-echo "ok: ${file} has ${SANDBOX_ENV_KEYS// /, }"
+echo "ok: ${file} has ${SANDBOX_ENV_FOUND// /, }"

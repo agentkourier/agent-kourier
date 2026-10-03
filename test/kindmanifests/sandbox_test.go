@@ -28,7 +28,7 @@ import (
 
 // manifestFiles are the Kubernetes manifests of the sandbox, which must parse; two carry a placeholder that up.sh fills in.
 var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent.yaml", "token-refresh.yaml", "courier/deployment.yaml",
-	"courier/config/chatconnection.yaml", "courier/config/binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml"}
+	"courier/config/chatconnection.yaml", "courier/config/binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
 
 // sandboxObjects returns every object of the given kind in the sandbox's file, as a map of its name.
 func sandboxObjects[T any](t *testing.T, file, kind string) map[string]T {
@@ -61,7 +61,7 @@ func rendered(t *testing.T, file string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.NewReplacer("__MODEL_NAME__", "claude-fake-model", "__SLACK_CHANNEL_ID__", "C0SANDBOX01").Replace(string(raw))
+	return strings.NewReplacer("__MODEL_NAME__", "claude-fake-model", "__MODEL_REGION__", "us-east-1", "__SLACK_CHANNEL_ID__", "C0SANDBOX01").Replace(string(raw))
 }
 
 func TestSandboxManifestsParse(t *testing.T) {
@@ -77,7 +77,7 @@ func TestSandboxManifestsParse(t *testing.T) {
 		}
 	}
 	// The placeholders are each in exactly the files that up.sh renders, and the rendered files hold none.
-	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"courier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}} {
+	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"courier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}} {
 		raw, err := os.ReadFile(sandboxDir + tc.file)
 		if err != nil {
 			t.Fatal(err)
@@ -350,20 +350,27 @@ func TestSandboxAgent(t *testing.T) {
 		}
 	}
 	// The agent is the one the Binding names, and the model's Secret is the one up.sh makes.
-	for _, file := range []string{"modelconfig-anthropic.yaml", "modelconfig-openai.yaml"} {
+	for _, file := range []string{"modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"} {
 		mc := map[string]any{}
 		if err := yaml.Unmarshal([]byte(rendered(t, file)), &mc); err != nil {
 			t.Fatal(err)
 		}
 		spec := mc["spec"].(map[string]any)
-		want := map[string]string{"modelconfig-anthropic.yaml": "Anthropic", "modelconfig-openai.yaml": "OpenAI"}[file]
-		if mc["metadata"].(map[string]any)["name"] != "sandbox-model" || spec["provider"] != want || spec["model"] != "claude-fake-model" ||
-			spec["apiKeySecret"] != "sandbox-model" || spec["apiKeySecretKey"] != "apiKey" {
-			t.Errorf("%s: %v; want provider %s, the model name filled in, and the key from the Secret sandbox-model, key apiKey", file, spec, want)
+		want := map[string]string{"modelconfig-anthropic.yaml": "Anthropic", "modelconfig-openai.yaml": "OpenAI", "modelconfig-bedrock.yaml": "Bedrock"}[file]
+		if mc["metadata"].(map[string]any)["name"] != "sandbox-model" || spec["provider"] != want || spec["model"] != "claude-fake-model" || spec["apiKeySecret"] != "sandbox-model" {
+			t.Errorf("%s: %v; want provider %s, the model name filled in, and the key from the Secret sandbox-model", file, spec, want)
+		}
+		if file == "modelconfig-bedrock.yaml" {
+			// Bedrock's key is the Secret key that kagent fixes (AWS_BEARER_TOKEN_BEDROCK), so the ModelConfig names none; the region is required.
+			if _, named := spec["apiKeySecretKey"]; named || spec["bedrock"].(map[string]any)["region"] != "us-east-1" {
+				t.Errorf("%s: %v; want a region and no apiKeySecretKey", file, spec)
+			}
+		} else if spec["apiKeySecretKey"] != "apiKey" {
+			t.Errorf("%s: %v; want the key apiKey", file, spec)
 		}
 		// A real provider, not the mock model, and no key in the file.
 		for k := range spec {
-			if strings.Contains(strings.ToLower(k), "baseurl") || k == "defaultHeaders" {
+			if strings.Contains(strings.ToLower(k), "baseurl") || (k == "defaultHeaders" && file != "modelconfig-bedrock.yaml") { // Bedrock's one header is pinned in sandboxbedrock_test.go
 				t.Errorf("%s sets %s; the sandbox model is the provider's own API", file, k)
 			}
 		}

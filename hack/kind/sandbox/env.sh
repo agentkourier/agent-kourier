@@ -6,9 +6,11 @@
 # or writable by the group or others, or when a key is missing, set twice, malformed or still a
 # placeholder. What it holds goes into shell variables of the same names (SANDBOX_ENV_KEYS) and nowhere
 # else: no caller of this file prints them, writes them to a file or puts them on a command line.
+# MODEL_REGION is the one key that is not always there: it is required for MODEL_PROVIDER=bedrock and refused for the others.
 # Works on bash 3.2 (macOS) and GNU stat or BSD stat.
 
-SANDBOX_ENV_KEYS="SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_CHANNEL_ID MODEL_PROVIDER MODEL_NAME MODEL_API_KEY"
+SANDBOX_ENV_KEYS="SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_CHANNEL_ID MODEL_PROVIDER MODEL_NAME MODEL_API_KEY MODEL_REGION"
+SANDBOX_ENV_FOUND="" # the keys the last sandbox_env_load found, for a message
 
 # sandbox_env_fail MESSAGE: print "error: <file>: MESSAGE" and exit. Callers pass key names and line numbers,
 # never a value.
@@ -24,9 +26,10 @@ sandbox_env_pattern() {
     SLACK_BOT_TOKEN) SANDBOX_ENV_RE='^xoxb-[A-Za-z0-9-]{8,}$' SANDBOX_ENV_WANT='a bot token, xoxb- and then letters, digits and dashes' ;;
     SLACK_APP_TOKEN) SANDBOX_ENV_RE='^xapp-[A-Za-z0-9-]{8,}$' SANDBOX_ENV_WANT='an app-level token, xapp- and then letters, digits and dashes' ;;
     SLACK_CHANNEL_ID) SANDBOX_ENV_RE='^[CG][A-Z0-9]+$' SANDBOX_ENV_WANT='a channel ID such as C0123ABCDEF (C or G, then capitals and digits), not a name' ;;
-    MODEL_PROVIDER) SANDBOX_ENV_RE='^(anthropic|openai)$' SANDBOX_ENV_WANT='anthropic or openai' ;;
+    MODEL_PROVIDER) SANDBOX_ENV_RE='^(anthropic|openai|bedrock)$' SANDBOX_ENV_WANT='anthropic, openai or bedrock' ;;
     MODEL_NAME) SANDBOX_ENV_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$' SANDBOX_ENV_WANT='a model name: letters, digits and . _ : -' ;;
     MODEL_API_KEY) SANDBOX_ENV_RE='^[A-Za-z0-9_.~+/=-]{16,}$' SANDBOX_ENV_WANT='an API key: at least 16 letters, digits and _ . ~ + / = -' ;;
+    MODEL_REGION) SANDBOX_ENV_RE='^[a-z]{2}(-gov)?-[a-z]+-[0-9]$' SANDBOX_ENV_WANT='an AWS region such as us-east-1 or us-gov-west-1' ;;
     *) return 1 ;;
   esac
 }
@@ -36,7 +39,7 @@ sandbox_env_owner_and_mode() {
   stat -c '%u %a' "$1" 2>/dev/null || stat -f '%u %Lp' "$1"
 }
 
-# sandbox_env_load FILE: check FILE and set the six variables in SANDBOX_ENV_KEYS from it, or exit.
+# sandbox_env_load FILE: check FILE and set the variables in SANDBOX_ENV_KEYS from it (MODEL_REGION only for bedrock), or exit.
 sandbox_env_load() {
   SANDBOX_ENV_FILE=$1
   local file=$1 key value line trimmed n=0 seen=" " owner mode uid kv_re='^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$'
@@ -77,7 +80,13 @@ sandbox_env_load() {
     printf -v "${key}" %s "${value}"
   done <"${file}"
 
+  SANDBOX_ENV_FOUND=""
   for key in ${SANDBOX_ENV_KEYS}; do
+    # MODEL_PROVIDER was checked above (it is listed first): the region is the Bedrock provider's alone.
+    if [ "${key}" = MODEL_REGION ] && [ "${MODEL_PROVIDER}" != bedrock ]; then
+      case "${seen}" in *" MODEL_REGION "*) sandbox_env_fail "MODEL_REGION is only for MODEL_PROVIDER=bedrock; remove it" ;; esac
+      continue
+    fi
     case "${seen}" in *" ${key} "*) ;; *) sandbox_env_fail "${key} is missing" ;; esac
     value=${!key}
     [ -n "${value}" ] || sandbox_env_fail "${key} is empty"
@@ -87,19 +96,25 @@ sandbox_env_load() {
     esac
     sandbox_env_pattern "${key}"
     [[ ${value} =~ ${SANDBOX_ENV_RE} ]] || sandbox_env_fail "${key} is malformed; want ${SANDBOX_ENV_WANT}"
-    # The key is a key for the provider: one sent to another provider's host through the egress gateway is sent for nothing,
-    # and that host sees it (a Bedrock key once went to api.anthropic.com). MODEL_PROVIDER was checked above (it is listed
-    # before the key). Only a prefix is ever named, never the value.
+    # The key is a key for the provider: a key sent to the wrong provider's host is sent for nothing, and is seen by that host.
+    # The provider was checked above (it is listed before the key). Only the prefix is named, never the value.
     if [ "${key}" = MODEL_API_KEY ]; then
-      case "${value}" in
-        ABSK* | bedrock-api-key-*) sandbox_env_fail "${key} looks like a Bedrock API key; this sandbox cannot use Bedrock yet" ;;
+      # A key that is plainly another provider's gets a message that says whose it looks like, so that the fix is clear.
+      case "${MODEL_PROVIDER}:${value}" in
+        anthropic:ABSK* | anthropic:bedrock-api-key-* | openai:ABSK* | openai:bedrock-api-key-*)
+          sandbox_env_fail "${key} looks like a Bedrock API key; MODEL_PROVIDER=${MODEL_PROVIDER} cannot use it; set MODEL_PROVIDER=bedrock and MODEL_REGION" ;;
+        bedrock:sk-ant-*) sandbox_env_fail "${key} looks like an Anthropic API key; MODEL_PROVIDER=bedrock cannot use it; set MODEL_PROVIDER=anthropic" ;;
+        bedrock:sk-*) sandbox_env_fail "${key} looks like an OpenAI API key; MODEL_PROVIDER=bedrock cannot use it; set MODEL_PROVIDER=openai" ;;
       esac
       case "${MODEL_PROVIDER}" in
         anthropic) [[ ${value} == sk-ant-* ]] || sandbox_env_fail "${key} is not an Anthropic API key, which MODEL_PROVIDER=anthropic needs (it starts sk-ant-)" ;;
         openai) { [[ ${value} == sk-* ]] && [[ ${value} != sk-ant-* ]]; } || sandbox_env_fail "${key} is not an OpenAI API key, which MODEL_PROVIDER=openai needs (it starts sk-, and not sk-ant-, which is Anthropic's)" ;;
+        bedrock) [[ ${value} == ABSK* || ${value} == bedrock-api-key-* ]] || sandbox_env_fail "${key} is not a Bedrock API key, which MODEL_PROVIDER=bedrock needs (a long-term key starts ABSK, a short-term one bedrock-api-key-)" ;;
       esac
     fi
+    SANDBOX_ENV_FOUND="${SANDBOX_ENV_FOUND}${key} "
   done
+  SANDBOX_ENV_FOUND=${SANDBOX_ENV_FOUND% }
 }
 
 # apply_secret NAMESPACE NAME KEY=VARIABLE...: a Secret whose KEY holds what the shell variable VARIABLE holds, as a manifest
@@ -118,11 +133,12 @@ apply_secret() {
   } | "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f - >/dev/null
 }
 
-# render FILE: FILE with its __MODEL_NAME__ and __SLACK_CHANNEL_ID__ filled in, on stdout. By parameter expansion,
+# render FILE: FILE with its __MODEL_NAME__, __MODEL_REGION__ and __SLACK_CHANNEL_ID__ filled in, on stdout. By parameter expansion,
 # so that neither value is on an argument list.
 render() {
   local content
   content=$(<"$1")
   content=${content//__MODEL_NAME__/${MODEL_NAME}}
+  content=${content//__MODEL_REGION__/${MODEL_REGION:-}}
   printf '%s\n' "${content//__SLACK_CHANNEL_ID__/${SLACK_CHANNEL_ID}}"
 }

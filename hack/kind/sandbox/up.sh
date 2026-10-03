@@ -42,7 +42,7 @@ trap '[ -z "${SCRATCH}" ] || rm -rf "${SCRATCH}"' EXIT
 # The secrets file comes first: a wrong one is refused before the cluster, Docker or any tool is asked anything.
 step "secrets file ${SANDBOX_ENV}"
 sandbox_env_load "${SANDBOX_ENV}"
-echo "ok: all six keys are there and well-formed (values are never printed)"
+echo "ok: ${SANDBOX_ENV_FOUND// /, } are there and well-formed (values are never printed)"
 
 for tool in docker kind kubectl helm jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
@@ -78,7 +78,13 @@ step "read-only tool server (kagent-tools ${TOOLS_VERSION}, release sandbox-tool
   -f "${SBX}/tools-values.yaml" --wait --timeout 4m >/dev/null
 
 step "sandbox-sre: the model's API key, ModelConfig (${MODEL_PROVIDER}), tool server, agent"
-apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
+if [ "${MODEL_PROVIDER}" = bedrock ]; then
+  # kagent's Bedrock provider reads a bearer token from the Secret key of this fixed name, and its egress gateway sends it as
+  # Authorization: Bearer; the key is not named in the ModelConfig.
+  apply_secret kagent sandbox-model AWS_BEARER_TOKEN_BEDROCK=MODEL_API_KEY
+else
+  apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
+fi
 render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml" | "${K[@]}" apply -f - >/dev/null
 "${K[@]}" apply -f "${SBX}/agent.yaml" >/dev/null
 # The agent only after kagent has discovered the tool server's tools (the full tier's scenario agents wait the same way).

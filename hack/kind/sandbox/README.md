@@ -13,7 +13,7 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
                                                   v
                               kagent-frontdoor:4180 (verifies the token; the full tier's own)
                                                   v
-                  kagent  ->  sandbox-sre (Substrate actor, gVisor)  -- egress gateway -->  api.anthropic.com | api.openai.com
+                  kagent  ->  sandbox-sre (Substrate actor, gVisor)  -- egress gateway -->  api.anthropic.com | api.openai.com | bedrock-runtime.<region>.amazonaws.com
                                                   |  MCP
                                                   v
                   sandbox-tools (kagent's tool server, --read-only, ServiceAccount bound to `view`)  ->  namespace shop (and the cluster, read-only)
@@ -49,7 +49,7 @@ use `deploy/courier-sandbox`.
    mkdir -p ~/.config/agent-courier
    cp hack/kind/sandbox/sandbox.env.example ~/.config/agent-courier/sandbox.env
    chmod 600 ~/.config/agent-courier/sandbox.env
-   $EDITOR ~/.config/agent-courier/sandbox.env      # all six keys; MODEL_PROVIDER is anthropic or openai
+   $EDITOR ~/.config/agent-courier/sandbox.env      # all six keys; MODEL_PROVIDER is anthropic, openai or bedrock (plus MODEL_REGION)
    hack/kind/sandbox/check-env.sh                   # says "ok" and names the keys, never a value
    ```
 6. `make sandbox-up`, then wait for `ok: courier is connected to Slack`. That is courier's own word for it, the log line
@@ -60,10 +60,44 @@ anyone else, if a key is missing, repeated, malformed or still a `REPLACE` place
 the value. The values go into Secret manifests on stdin to `kubectl apply -f -` (server-side, so no last-applied copy
 is kept): on no command line, in no file, in no output.
 
-`MODEL_API_KEY` must be a key for `MODEL_PROVIDER`, and the check refuses one that is not, naming the key and the provider and
-never the value: `anthropic` needs `sk-ant-...`, and `openai` needs `sk-...` and not `sk-ant-`. A key goes to its provider's host through
-the egress gateway, so a key of the wrong kind would be sent to a host it is no use to, where it is seen. A key that looks like a Bedrock
-one (`ABSK...`, or `bedrock-api-key-...`) gets its own message, "looks like a Bedrock API key; this sandbox cannot use Bedrock yet".
+### The model: `MODEL_PROVIDER`
+
+| Provider | `MODEL_NAME` | `MODEL_API_KEY` | Also |
+|---|---|---|---|
+| `anthropic` | an Anthropic model name | an Anthropic API key, `sk-ant-...` | |
+| `openai` | an OpenAI model name | an OpenAI API key, `sk-...` (not `sk-ant-`, which is Anthropic's) | |
+| `bedrock` | a Bedrock model ID or **inference profile ID**, for example `us.anthropic.claude-haiku-4-5-20251001-v1:0` (also `global.anthropic.…` or a bare `anthropic.claude-…-v1:0`), not an ARN | a **Bedrock API key** (used as a bearer token), not AWS access keys: `ABSK...` for a long-term key, `bedrock-api-key-...` for a short-term one (12 hours at most, so it will go stale in a long session) | `MODEL_REGION`, required for bedrock and refused for the others: `^[a-z]{2}(-gov)?-[a-z]+-[0-9]$`, for example `us-east-1` |
+
+The check refuses a key that is not the provider's kind, naming the key and the provider and never the value: `anthropic` needs `sk-ant-...`, `openai`
+needs `sk-...` and not `sk-ant-`, and `bedrock` needs `ABSK...` or `bedrock-api-key-...`. A key goes to its provider's host through the egress gateway, so
+a Bedrock key under `anthropic` would be sent to `api.anthropic.com`, for nothing, where it is seen. A key that is plainly another provider's says whose it
+looks like: a Bedrock key under `anthropic` or `openai` ("looks like a Bedrock API key; MODEL_PROVIDER=anthropic cannot use it; set MODEL_PROVIDER=bedrock and
+MODEL_REGION"), or an Anthropic or OpenAI key under `bedrock`.
+(`bedrock-api-key-` is in the AWS token generator's README; `ABSK` is what a long-term key was seen to start with, and the AWS pages do not say.)
+
+How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs (the first real Bedrock turn is the proof):
+- **Auth.** kagent's Bedrock provider takes either AWS access keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) or a bearer token, and it reads
+  them from **fixed key names** in the Secret the ModelConfig's `apiKeySecret` names; the ModelConfig's `apiKeySecretKey` is exempt for Bedrock and is
+  left out. A Bedrock API key goes in under **`AWS_BEARER_TOKEN_BEDROCK`**, which `make sandbox-up` does from `MODEL_API_KEY`. IRSA is not used.
+- **Egress, and a workaround.** kagent 1.0.0-alpha5's Go ADK harness has a gap: the destination allowlist (`agentConfigDestinations`) has a case for
+  OpenAI, Anthropic, Gemini and Ollama and none for Bedrock, while the Secret's bearer key makes kagent bind `Authorization: Bearer <key>` to
+  `bedrock-runtime.<region>.amazonaws.com`, and Substrate's policy compiler refuses a binding for a host that is not also an allowed destination
+  (`policy.go:32-34`). Without more, every Bedrock session fails in preparation. So `modelconfig-bedrock.yaml` carries one `defaultHeaders` entry,
+  `X-Courier-Egress-Host: https://bedrock-runtime.<region>.amazonaws.com`: the allowlist also takes every URL in the serialised model, headers included, so
+  the host becomes a destination and the binding is accepted. This is a **kind-only workaround**; the upstream fix is a Bedrock case in
+  `agentConfigDestinations`, as `translator/claude/compiler.go:257` has for Claude on Bedrock, and the header goes with it. The header is also sent to
+  Bedrock on every request (the ADK's `headerTransport`). The key itself is never in the sandbox: the SDK holds a placeholder
+  (`kagent-credential-injected`) and the gateway swaps in the key.
+  All of this is read from the source, and `TestBedrockModelConfigPutsItsEndpointInTheModelJSON` pins the header, its rendered host, and a copy of the walk that finds it.
+  Nothing has run against Bedrock.
+- UNCONFIRMED, to check in the first real Bedrock turn (the egress gateway's log: `kubectl --context kind-courier-full -n ate-system logs deploy/atenet-egress -c agentgateway`,
+  and the ate-api-server log's `GetActorEgressPolicy` for the actor):
+  - the egress log shows **exactly `bedrock-runtime.<region>.amazonaws.com`** reached, with the injected `Authorization`, and the policy lists that host both
+    as an allowed destination and as the credential rule's host;
+  - **no other AWS host** is reached (no STS, no IMDS at `169.254.169.254`, no `bedrock.<region>`);
+  - that Bedrock ignores the unknown `X-Courier-Egress-Host` header (no request is rejected for it);
+  - that kagent's Go SDK accepts the placeholder in `AWS_BEARER_TOKEN_BEDROCK` and sends it as `Authorization: Bearer`, so the gateway has a header to replace.
+  If a turn fails, look at the gateway's log for a denied host and at the agent's error in the thread.
 
 ### The scopes, against what courier calls
 
@@ -115,6 +149,8 @@ pod leaves through Substrate's egress gateway, whose per-actor policy kagent inf
 it is exactly `api.anthropic.com` (or `api.openai.com`), `kagent-controller.kagent` and `sandbox-tools.kagent.svc.cluster.local`
 (read from the Substrate API's `GetActorEgressPolicy` response). The gateway also **injects the API key** into the
 request from the Secret `sandbox-model`, so the key never enters the agent's sandbox. Nothing was added to any policy.
+For `bedrock` the host is `bedrock-runtime.<MODEL_REGION>.amazonaws.com`, but kagent does not infer it: the ModelConfig carries a header that
+puts it in the allowlist (see "The model", above). That is read from kagent's source and has not been run.
 
 **The Binding's token.** The Binding identity's Dex ID token (the Secret `courier-agent-token`) lasts 24 hours and courier reads
 it on every request. A CronJob in `courier` (hourly, `0 * * * *`) mints one and patches it in, from inside the cluster, with a ServiceAccount whose
@@ -197,7 +233,7 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
 - **Exit 3, `error: courier exited 1, which is fatal auth`**: Slack rejected `SLACK_BOT_TOKEN` or `SLACK_APP_TOKEN` (or the app is
   not installed, or Socket Mode is off). A restart would be rejected again, so the pod crash-loops. Fix the file, re-run `make sandbox-up`.
 - **The bot does not answer**: is the bot in the channel, and is `SLACK_CHANNEL_ID` that channel's ID (not its name)? Courier answers in that channel only.
-- **The agent answers with a 401 or a model error**: the `MODEL_API_KEY`, `MODEL_PROVIDER` or `MODEL_NAME` is wrong. Fix the file and re-run.
+- **The agent answers with a 401 or a model error**: the `MODEL_API_KEY`, `MODEL_PROVIDER` or `MODEL_NAME` is wrong (for bedrock also `MODEL_REGION`, or the key's account has no access to that model or inference profile in that region). Fix the file and re-run.
 - **`the full tier is not complete`**: `make e2e-full-up`.
 - Anything else: `make sandbox-down && make sandbox-up`. To start from nothing, `make e2e-full-down` first (it removes the cluster and the sandbox with it).
 

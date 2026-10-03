@@ -1,0 +1,27 @@
+# The sandbox agent's model when MODEL_PROVIDER is bedrock: Amazon Bedrock's Converse API with a Bedrock API key (a bearer token,
+# not AWS access keys). up.sh replaces __MODEL_NAME__ with MODEL_NAME (a model ID or an inference profile ID, such as
+# us.anthropic.claude-haiku-4-5-20251001-v1:0; checked against ^[A-Za-z0-9][A-Za-z0-9._:-]*$ first) and __MODEL_REGION__ with
+# MODEL_REGION (checked against ^[a-z]{2}(-gov)?-[a-z]+-[0-9]$), and nothing else. The key is the Secret sandbox-model, key
+# AWS_BEARER_TOKEN_BEDROCK, which up.sh makes from MODEL_API_KEY; it is never in this file. There is no apiKeySecretKey: kagent's
+# Bedrock provider reads that fixed key name (or, without it, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY), and the
+# ModelConfig's rules exempt Bedrock from naming one.
+#
+# defaultHeaders: a KIND-ONLY WORKAROUND for a gap in kagent 1.0.0-alpha5's Go ADK harness. Substrate refuses a credential binding
+# (the one that injects the key) for a host that is not also an allowed destination (go/core/internal/substrate/policy.go:32-34),
+# and kagent's destination list (adkconfig/builder.go, agentConfigDestinations) has a case for OpenAI, Anthropic, Gemini and
+# Ollama and none for Bedrock; the one thing it adds besides is every URL it finds in the serialised model, headers included. So
+# this header, whose value is the Bedrock endpoint, puts bedrock-runtime.<region>.amazonaws.com into the allowlist, and the binding
+# is then accepted. The header is also sent on every request to Bedrock, where an unknown header is ignored (UNCONFIRMED until the
+# first real turn). The upstream fix is a Bedrock case in agentConfigDestinations, as translator/claude/compiler.go:257 has for Claude
+# on Bedrock; with it this header goes. Without the header every session fails in preparation.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: sandbox-model, namespace: kagent}
+spec:
+  provider: Bedrock
+  model: __MODEL_NAME__
+  apiKeySecret: sandbox-model
+  defaultHeaders:
+    X-Courier-Egress-Host: https://bedrock-runtime.__MODEL_REGION__.amazonaws.com
+  bedrock:
+    region: __MODEL_REGION__
