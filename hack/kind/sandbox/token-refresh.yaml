@@ -1,6 +1,9 @@
 # Keeps the Binding's Dex ID token fresh for a session of any length. The token (the Secret courier-agent-token) lasts 24 hours
-# and courier reads it from the Secret on every request, so a CronJob that mints a new one every six hours means that no
-# call is ever made on an expired one, and nobody has to run a loop in a terminal that may sleep. It is the same
+# and courier reads it from the Secret on every request, so a CronJob that mints a new one every hour keeps it far from expiry
+# and nobody has to run a loop in a terminal that may sleep. Hourly, not rarer, because a laptop's sleep can swallow runs: a
+# run that wakes late and then hits its deadline (activeDeadlineSeconds counts wall time, asleep or not) is over for good, and
+# startingDeadlineSeconds only saves a slot if the cluster wakes within it. After a closed-lid stretch of a day or more the
+# token can still have expired; the fix is a Job from this CronJob, or make sandbox-up (the README says how). It is the same
 # exchange as lib.sh's refresh_dex_token (the password grant of the fake client and user in full/dex.yaml), from inside the
 # cluster, where Dex is: it asks Dex and PATCHes the Secret through the API server with its own ServiceAccount, whose Role
 # allows `patch` on that one Secret and nothing else. The tokens pass from one command to the next through pipes and curl's
@@ -32,9 +35,9 @@ apiVersion: batch/v1
 kind: CronJob
 metadata: {name: courier-token-refresh, namespace: courier}
 spec:
-  schedule: "0 */6 * * *"
+  schedule: "0 * * * *"
   concurrencyPolicy: Forbid
-  startingDeadlineSeconds: 3600 # a run missed while the laptop slept still happens when it wakes, within the hour
+  startingDeadlineSeconds: 3600 # a run missed while the laptop slept starts on wake only if that is within the hour
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
   jobTemplate:

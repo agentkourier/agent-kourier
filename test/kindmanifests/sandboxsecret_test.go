@@ -308,3 +308,56 @@ func TestUpExitsThreeWhenSlackRejectsTheTokens(t *testing.T) {
 		t.Error("the README does not document exit 3")
 	}
 }
+
+// secretName matches the three variables that hold a secret.
+var secretName = regexp.MustCompile(`SLACK_BOT_TOKEN|SLACK_APP_TOKEN|MODEL_API_KEY`)
+
+// TestSecretVariablesAreOnlyEverNamesForApplySecret: no script expands a secret's variable. In up.sh, down.sh and check-env.sh
+// the three names appear only as the `=NAME` arguments of apply_secret calls (and in comments, and in the one message that
+// tells the person which keys to fix), never as `$NAME` or `${NAME...}`, and nothing in them expands a variable indirectly or
+// evals, which could reach a secret by a name held in another. In env.sh no secret is expanded by name either, and the only
+// indirect expansions are the loader's own check of each key and apply_secret's one.
+func TestSecretVariablesAreOnlyEverNamesForApplySecret(t *testing.T) {
+	read := func(name string) string {
+		raw, err := os.ReadFile(sandboxDir + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	expansion := regexp.MustCompile(`\$\{?!?(SLACK_BOT_TOKEN|SLACK_APP_TOKEN|MODEL_API_KEY)\b`)
+	for _, name := range []string{"up.sh", "down.sh", "check-env.sh", "env.sh"} {
+		src := read(name)
+		if m := expansion.FindString(src); m != "" {
+			t.Errorf("%s expands %q: a secret's variable is only ever named, as an argument to apply_secret", name, m)
+		}
+		if name == "env.sh" {
+			continue
+		}
+		if strings.Contains(src, "${!") || regexp.MustCompile(`\beval\b`).MatchString(src) {
+			t.Errorf("%s expands a variable indirectly or evals: that could reach a secret by a name held elsewhere", name)
+		}
+		for i, line := range strings.Split(src, "\n") {
+			trim := strings.TrimSpace(line)
+			if strings.HasPrefix(trim, "#") || !secretName.MatchString(trim) {
+				continue
+			}
+			if strings.HasPrefix(trim, "apply_secret ") {
+				// Every use on the line is the right-hand side of KEY=NAME.
+				for _, loc := range secretName.FindAllStringIndex(trim, -1) {
+					if loc[0] == 0 || trim[loc[0]-1] != '=' {
+						t.Errorf("%s:%d: %q is not the =NAME argument of apply_secret", name, i+1, trim)
+					}
+				}
+				continue
+			}
+			if strings.HasPrefix(trim, `echo "         Fix SLACK_BOT_TOKEN and SLACK_APP_TOKEN in `) {
+				continue
+			}
+			t.Errorf("%s:%d: %q names a secret's variable outside apply_secret", name, i+1, trim)
+		}
+	}
+	if n := strings.Count(read("env.sh"), "${!"); n != 2 {
+		t.Errorf("env.sh expands %d variables indirectly; want 2 (the loader's check of each key, and apply_secret's)", n)
+	}
+}

@@ -89,7 +89,7 @@ manifest. Direct messages are not enabled (no `im:` scopes or events), so the ap
 | Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
 | Agent | `sandbox-sre` (`agent.yaml`), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
 | Courier | `courier-sandbox` in namespace `courier`, the production image `courier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on, through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=courier` label the front door's NetworkPolicy trusts. Its own SQLite volume. The full tier's `courier` goes to zero replicas meanwhile. |
-| Token refresh | A CronJob, `courier-token-refresh`, every six hours (below). |
+| Token refresh | A CronJob, `courier-token-refresh`, every hour (below). |
 
 **The seeded faults**, in `shop`: `checkout` crash-loops after logging `FATAL: cannot resolve payments-db...`; `catalog` has a
 bad image tag (ImagePullBackOff); `recommender` is OOM killed at its 48Mi limit; `inventory`'s Service selects pods that
@@ -111,11 +111,13 @@ it is exactly `api.anthropic.com` (or `api.openai.com`), `kagent-controller.kage
 request from the Secret `sandbox-model`, so the key never enters the agent's sandbox. Nothing was added to any policy.
 
 **The Binding's token.** The Binding identity's Dex ID token (the Secret `courier-agent-token`) lasts 24 hours and courier reads
-it on every request. a CronJob in `courier` (every six hours, `0 */6 * * *`, may start
-up to an hour late if the laptop slept) mints one and patches it in, from inside the cluster, with a ServiceAccount whose
+it on every request. A CronJob in `courier` (hourly, `0 * * * *`) mints one and patches it in, from inside the cluster, with a ServiceAccount whose
 only right is `patch` on that one Secret. `make sandbox-up` makes the first token by running that same CronJob as a Job, so the one
 path that keeps the token fresh is proved at bring-up. It was chosen over a host loop because it needs no terminal that survives
-sleep or a closed lid, and over lib.sh's `refresh_dex_token` run by hand because that is a manual step in a multi-hour session.
+sleep, and over lib.sh's `refresh_dex_token` run by hand because that is a manual step in a multi-hour session.
+A sleeping laptop can still swallow runs: one that wakes late and then hits its 180 s deadline is over for good (the deadline counts wall time), and a
+run missed asleep starts on wake only if that is within the hour. Hourly keeps the token fresh through any ordinary sleep, but after a closed-lid
+stretch of a day or more the token can have expired (see the first row of "If it does not come up").
 To force one: `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-token-refresh refresh-now`.
 
 ## The dogfood checklist
@@ -169,6 +171,10 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
 
 ## If it does not come up
 
+- **The thread says `the agent's front door refused the Binding's credentials`**, and `courier_credential_rejections_total{binding="sandbox"}` keeps rising:
+  the Binding's Dex token expired (after a long sleep or closed lid). Mint a new one with
+  `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-token-refresh refresh-now` (then `kubectl --context kind-courier-full -n courier delete job refresh-now`),
+  or re-run `make sandbox-up`. Courier reads the Secret on every request, so the next message works.
 - **Exit 3, `error: courier exited 1, which is fatal auth`**: Slack rejected `SLACK_BOT_TOKEN` or `SLACK_APP_TOKEN` (or the app is
   not installed, or Socket Mode is off). A restart would be rejected again, so the pod crash-loops. Fix the file, re-run `make sandbox-up`.
 - **The bot does not answer**: is the bot in the channel, and is `SLACK_CHANNEL_ID` that channel's ID (not its name)? Courier answers in that channel only.

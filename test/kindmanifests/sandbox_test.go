@@ -512,9 +512,9 @@ func TestSandboxTokenRefresh(t *testing.T) {
 	if _, ok := pod.Labels["app.kubernetes.io/name"]; ok {
 		t.Errorf("the pod carries labels %v; it must not carry the courier label the front door trusts", pod.Labels)
 	}
-	// Every six hours at most (the token lasts 24), no overlap, a bounded run.
-	if cj.Spec.Schedule != "0 */6 * * *" || cj.Spec.ConcurrencyPolicy != batchv1.ForbidConcurrent || cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds == nil {
-		t.Errorf("schedule %q, concurrency %s; want every six hours, Forbid, and a deadline", cj.Spec.Schedule, cj.Spec.ConcurrencyPolicy)
+	// Hourly (the token lasts 24 hours, and a sleeping laptop swallows runs), no overlap, a bounded run.
+	if cj.Spec.Schedule != "0 * * * *" || cj.Spec.ConcurrencyPolicy != batchv1.ForbidConcurrent || cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds == nil {
+		t.Errorf("schedule %q, concurrency %s; want hourly, Forbid, and a deadline", cj.Spec.Schedule, cj.Spec.ConcurrencyPolicy)
 	}
 	script := strings.Join(pod.Spec.Containers[0].Command, "\n")
 	for _, want := range []string{"http://dex.dex.svc.cluster.local:5556/dex/token", "client_id=courier-binding", "merge-patch+json", "secrets/courier-agent-token", "--data-binary @-", "-o /dev/null", "curl -sf"} {
