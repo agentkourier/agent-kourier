@@ -18,8 +18,8 @@ const otherLabel = "other"
 
 // Metrics is the broker's Prometheus registry and the hooks that feed it. It is not the global
 // registry: each broker has its own, so tests and a second broker in one process do not collide.
-// The labels are Binding names, audit kinds and the abandon reasons of abandonLabel, never a user or a
-// channel. Its methods are safe for concurrent use.
+// The labels are Binding names, the ChatConnection's name, audit kinds and the abandon reasons of abandonLabel, never a
+// user or a channel. Its methods are safe for concurrent use.
 type Metrics struct {
 	reg           *prometheus.Registry
 	auditFailures *prometheus.CounterVec
@@ -29,6 +29,7 @@ type Metrics struct {
 	approvals     *prometheus.CounterVec
 	timeouts      prometheus.Counter
 	decisions     *prometheus.CounterVec
+	chatUp        *prometheus.GaugeVec
 }
 
 // NewMetrics returns the metrics. stale is read at each scrape for courier_config_stale, and
@@ -50,6 +51,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Interactions that timed out unanswered."}),
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_interaction_decisions_total",
 			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
+		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "courier_chat_connected",
+			Help: "1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
 	}
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "courier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
@@ -59,7 +62,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.decisions, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.decisions, m.chatUp, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -125,6 +128,16 @@ func abandonLabel(reason string) string {
 		return reason
 	}
 	return otherLabel
+}
+
+// ChatConnected sets courier_chat_connected for the ChatConnection named connection ("namespace/name"): 1 when the
+// platform's connection is up, 0 when it is not. The adapter's hook for it is Config.OnConnection of the Slack adapter.
+func (m *Metrics) ChatConnected(connection string, up bool) {
+	v := 0.0
+	if up {
+		v = 1
+	}
+	m.chatUp.WithLabelValues(connection).Set(v)
 }
 
 // Handler serves the registry in the Prometheus text format.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -83,7 +84,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return err
 	}
-	log.InfoContext(ctx, "serving a ChatConnection", "connection", conn.Ref.Namespace+"/"+conn.Ref.Name)
+	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
+	log.InfoContext(ctx, "serving a ChatConnection", "connection", connName)
 
 	st, err := sqlite.Open(runCtx, cfg.DBPath)
 	if err != nil {
@@ -107,7 +109,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 
 	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
 	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
-	platform, err := cfg.newPlatform(conn, log)
+	// courier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
+	metrics.ChatConnected(connName, false)
+	platform, err := cfg.newPlatform(conn, log, func(up bool) { metrics.ChatConnected(connName, up) })
 	if err != nil {
 		return err
 	}

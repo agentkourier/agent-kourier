@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,4 +159,55 @@ func TestApprovalOutcomeAndTimeoutHooksMoveTheirCounters(t *testing.T) {
 	if strings.Contains(got, "ia-1") || strings.Contains(got, "nobody defined") {
 		t.Error("an interaction ID or an outcome text became a label")
 	}
+}
+
+// upSlack is idleSlack that tells its config's OnConnection what the Slack client would: the connection is up, and
+// then, when it is told to, down.
+type upSlack struct {
+	idleSlack
+	onConn func(bool)
+	drop   chan struct{}
+}
+
+func (s upSlack) Run(ctx context.Context, _ slack.Sink) error {
+	s.onConn(true)
+	select {
+	case <-s.drop:
+		s.onConn(false)
+	case <-ctx.Done():
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// courier_chat_connected is 0 from the moment the connection is chosen, since a connection that never came up must
+// say so, and then follows the adapter: 1 when it is up, 0 when it drops. The label is the ChatConnection's name.
+func TestRunShowsWhetherTheChatConnectionIsUp(t *testing.T) {
+	const name = "courier-system/slack-main"
+	up, down := `courier_chat_connected{connection="`+name+`"} 1`, `courier_chat_connected{connection="`+name+`"} 0`
+	t.Run("never connected", func(t *testing.T) {
+		r := start(t, startConfig(t)) // idleSlack calls nothing
+		r.until("/readyz", http.StatusOK)
+
+		r.waitMetric(down)
+	})
+	t.Run("connects and drops", func(t *testing.T) {
+		c := startConfig(t)
+		drop := make(chan struct{})
+		c.newSlack = func(sc slack.Config) slackAPI { return upSlack{onConn: sc.OnConnection, drop: drop} }
+		r := start(t, c)
+
+		r.waitMetric(up)
+		close(drop)
+		r.waitMetric(down)
+	})
+}
+
+// Slack being down does not make courier unready: /readyz holds what courier needs to serve, and the gauge says the rest.
+func TestReadyzDoesNotWaitForTheChatConnection(t *testing.T) {
+	r := start(t, startConfig(t)) // idleSlack never connects
+
+	r.until("/readyz", http.StatusOK)
+
+	r.waitMetric(`courier_chat_connected{connection="courier-system/slack-main"} 0`)
 }

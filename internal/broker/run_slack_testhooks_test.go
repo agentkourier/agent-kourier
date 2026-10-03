@@ -135,6 +135,15 @@ func (w *slackWorld) mention(t *testing.T, r *running) {
 	}
 }
 
+// The real Slack client, against the fake, takes the gauge from 0 to 1 once Socket Mode is connected, which is what the
+// sandbox's up script waits for.
+func TestRunShowsTheSlackConnectionUpOnceItIsConnected(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	r := start(t, w.cfg)
+
+	r.waitMetric(`courier_chat_connected{connection="courier-system/slack-main"} 1`)
+}
+
 func TestRunCountsACredentialTheAgentRejected(t *testing.T) {
 	w := rejectedWorld(t)
 	r := start(t, w.cfg)

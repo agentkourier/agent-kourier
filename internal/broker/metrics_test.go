@@ -85,6 +85,24 @@ func TestStaleGaugeFollowsTheConfig(t *testing.T) {
 	}
 }
 
+// The chat gauge is 1 or 0 per ChatConnection, and its label is the connection's name alone.
+func TestChatConnectedGaugeFollowsTheConnection(t *testing.T) {
+	const series = "courier_chat_connected{connection=courier-system/slack-main} "
+	m := mustMetrics(t, nil)
+	if got := samples(t, m); slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "courier_chat_connected") }) {
+		t.Fatalf("samples = %v; a connection nobody reported has no series", got)
+	}
+	for _, step := range []struct {
+		up   bool
+		want string
+	}{{false, "0"}, {true, "1"}, {false, "0"}} {
+		m.ChatConnected("courier-system/slack-main", step.up)
+		if got := samples(t, m); !slices.Contains(got, series+step.want) {
+			t.Errorf("after ChatConnected(%v) samples = %v; want %q", step.up, got, series+step.want)
+		}
+	}
+}
+
 // Labels are bounded: Binding names, audit kinds and a fixed set of abandon reasons, never
 // anything a user or an agent can choose. A reason or a kind outside the sets is one series.
 func TestMetricLabelsAreBounded(t *testing.T) {

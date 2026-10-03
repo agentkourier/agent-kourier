@@ -55,13 +55,15 @@ type builtPlatform struct {
 
 // newPlatform builds the adapter of the connection's platform: the one place that names a platform. Only
 // slack exists; any other platform is a wiring error, which no retry mends. The Slack client gets a transport of its
-// own, so that its idle connections can be closed at shutdown.
-func (c RunConfig) newPlatform(conn Connection, log *slog.Logger) (builtPlatform, error) {
+// own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the platform's
+// connection is up: it is Config.OnConnection of the Slack adapter, and another platform would report through the same func.
+func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one more entry in platformKeys
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc := slackConfig(conn, log)
 		sc.HTTPClient = &http.Client{Transport: transport}
+		sc.OnConnection = onConnection
 		var api slack.API
 		if c.newSlack != nil {
 			api = c.newSlack(sc)
