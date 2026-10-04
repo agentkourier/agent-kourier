@@ -3,6 +3,9 @@ package v1alpha1
 import (
 	"cmp"
 	"io"
+	"maps"
+	"slices"
+	"strings"
 	"text/template"
 	"time"
 
@@ -210,9 +213,27 @@ checked, and the next steps a person should take.
 	}, true
 }
 
-// PromptView is the data a trigger's prompt template runs over. Validate executes each
-// template once against a PromptView, so a mistyped field fails at load; the prompt renderer
-// (CT-4) must therefore render this same type, and a field added here is added for both.
+// PromptView is the data a trigger's prompt template runs over. Load-time validation walks each
+// template (TemplateRefs) and runs it once against a PromptView, so a mistyped field fails at
+// load; the prompt renderer (internal/render, Prompt) renders this same type, and a field added
+// here must get a rule there (the renderer refuses a field that has none).
+//
+// Every value but Channel and Source, which courier sets, comes out of an attacker's message
+// (spec R2). The renderer writes a value into the instruction part only if the template reads it
+// and it passes its rule; a value that fails refuses the render with a *render.RefusedError and
+// nothing reaches the agent. A value the template does not read is not checked. The rules, which
+// internal/render enforces and its tests pin:
+//
+//   - Fields values, State, Channel and Source: the alert-name shape, which is ASCII letters
+//     and digits and "_", ".", "-" and ":", at most 128 bytes. The empty value passes.
+//   - Key: the same, and "/", at most 128 bytes. A key of group label values holds spaces
+//     (the alertmanager preset's does), so a template should read entries of .Fields, not .Key.
+//   - Link: at most 512 bytes of ASCII letters, digits and the URL characters
+//     -._~:/?#[]@!$&()*+,;=% (so no white space, quote, angle bracket, backtick or non-ASCII),
+//     an http or https scheme, a host and no credentials. The empty value passes.
+//
+// A template may name values only as .Name, $.Name, .Fields.name, $.Fields.name or
+// index .Fields "name"; see TemplateRefs.
 type PromptView struct {
 	// Channel is the channel the message arrived in.
 	Channel string
@@ -235,20 +256,31 @@ func ParsePromptTemplate(name, text string) (*template.Template, error) {
 	return template.New(name).Option("missingkey=error").Parse(text)
 }
 
-// checkPromptTemplate parses text and runs it once against a view whose Fields holds a
-// placeholder for each extract name, so a reference to a field the view or the trigger lacks
-// is an error here and not on the first alert.
+// placeholderLen is the length of the placeholder values checkPromptTemplate runs a template
+// against: long enough that {{ slice .Key 0 10 }} and the like load, as real values are longer.
+const placeholderLen = 64
+
+// checkPromptTemplate parses text, walks its parse trees so that every reference is checked in
+// every branch (see TemplateRefs; each .Fields entry must also be an extract of the trigger),
+// and then runs it once against a view whose values are placeholders, for the errors a walk
+// cannot see, such as a function called with the wrong arguments. The parse is the renderer's
+// (ParsePromptTemplate), so a template that passes here parses there.
 func checkPromptTemplate(name, text string, extract map[string]Extract) error {
 	tmpl, err := ParsePromptTemplate(name, text)
 	if err != nil {
 		return err
 	}
+	w := newRefWalker(slices.Collect(maps.Keys(extract)), true)
+	if err := w.walkAll(tmpl); err != nil {
+		return err
+	}
+	placeholder := strings.Repeat("x", placeholderLen)
 	view := PromptView{
-		Channel: "C0123456789", State: "state", Key: "key", Link: "link", Source: "source",
+		Channel: placeholder, State: placeholder, Key: placeholder, Link: placeholder, Source: placeholder,
 		Fields: make(map[string]string, len(extract)),
 	}
 	for n := range extract {
-		view.Fields[n] = "value"
+		view.Fields[n] = placeholder
 	}
 	return tmpl.Execute(io.Discard, view)
 }

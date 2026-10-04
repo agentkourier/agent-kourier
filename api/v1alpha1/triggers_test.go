@@ -495,14 +495,32 @@ func TestTriggersValidate(t *testing.T) {
 		{"template calling an unknown function", func(o *Binding) { bot(o).PromptTemplate = "{{ shout .State }}" },
 			at + `.promptTemplate: invalid template: template: promptTemplate:1: function "shout" not defined`},
 
-		// The template runs once at load against a view with a value for each extract.
+		// A walk of the parse tree checks every reference, in branches the load-time run does not
+		// take, and then the template runs once against a view with a value for each extract.
 		{"typo in a field name", func(o *Binding) { bot(o).PromptTemplate = "Alert {{ .Fields.alertnme }}" },
-			at + `.promptTemplate: invalid template: template: promptTemplate:1:16: executing "promptTemplate" at <.Fields.alertnme>: map has no entry for key "alertnme"`},
+			at + `.promptTemplate: invalid template: promptTemplate:1:16: .Fields.alertnme is not an extract of this trigger (extract has alertname, key, state)`},
 		{"typo in a top-level field", func(o *Binding) { bot(o).PromptTemplate = "State {{ .Stat }}" },
-			at + `.promptTemplate: invalid template: template: promptTemplate:1:9: executing "promptTemplate" at <.Stat>: can't evaluate field Stat in type v1alpha1.PromptView`},
+			at + `.promptTemplate: invalid template: promptTemplate:1:9: no field .Stat in the prompt view (it has .Channel, .State, .Key, .Link, .Source and .Fields)`},
 		{"field of an extract this trigger lacks", func(o *Binding) {
 			bot(o).PromptTemplate = "Env {{ .Fields.env }}"
-		}, at + `.promptTemplate: invalid template: template: promptTemplate:1:14: executing "promptTemplate" at <.Fields.env>: map has no entry for key "env"`},
+		}, at + `.promptTemplate: invalid template: promptTemplate:1:14: .Fields.env is not an extract of this trigger (extract has alertname, key, state)`},
+		{"typo in a field name in a branch the placeholder view does not take", func(o *Binding) {
+			bot(o).PromptTemplate = `{{ if eq .State "FIRING" }}{{ .Fields.alertnme }}{{ end }}`
+		}, at + `.promptTemplate: invalid template: promptTemplate:1:37: .Fields.alertnme is not an extract of this trigger (extract has alertname, key, state)`},
+		{"typo in an index with a constant name, in a branch", func(o *Binding) {
+			bot(o).PromptTemplate = `{{ if eq .State "FIRING" }}{{ index .Fields "alertnme" }}{{ else }}x{{ end }}`
+		}, at + `.promptTemplate: invalid template: promptTemplate:1:30: .Fields.alertnme is not an extract of this trigger (extract has alertname, key, state)`},
+		{"typo in a top-level field in the else branch", func(o *Binding) {
+			bot(o).PromptTemplate = `{{ if eq .State "FIRING" }}x{{ else }}{{ .Stat }}{{ end }}`
+		}, at + `.promptTemplate: invalid template: promptTemplate:1:41: no field .Stat in the prompt view (it has .Channel, .State, .Key, .Link, .Source and .Fields)`},
+		{"the whole of .Fields", func(o *Binding) { bot(o).PromptTemplate = `{{ range .Fields }}{{ . }}{{ end }}` },
+			at + `.promptTemplate: invalid template: promptTemplate:1:9: .Fields as a whole cannot be read: name an entry, such as .Fields.alertname`},
+		{"a slice of the key that a long key fits", func(o *Binding) {
+			bot(o).PromptTemplate = `{{ slice .Key 0 10 }} {{ slice .Fields.alertname 0 10 }}`
+		}, ""},
+		{"a template function used wrongly still fails the run", func(o *Binding) {
+			bot(o).PromptTemplate = `{{ slice .Key 0 100 }}`
+		}, at + `.promptTemplate: invalid template: template: promptTemplate:1:3: executing "promptTemplate" at <slice .Key 0 100>: error calling slice: index out of range: 100`},
 		{"template reading every view field and every extract", func(o *Binding) {
 			bot(o).PromptTemplate = "{{ .Channel }} {{ .State }} {{ .Key }} {{ .Link }} {{ .Source }} {{ .Fields.state }} {{ .Fields.key }} {{ .Fields.alertname }}"
 		}, ""},
