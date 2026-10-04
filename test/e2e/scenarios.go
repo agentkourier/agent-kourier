@@ -25,4 +25,9 @@ const (
 	// ChannelS13 is S13's: scenario-tools, whose reply has two tool calls, the second of them failing. Both tiers:
 	// the full tier's kagent has the agent, with a tool server of its own to call.
 	ChannelS13 = "CS13"
+	// ChannelS14 is S14's: scenario-alert, behind a botMessage trigger with the alertmanager preset for the bot BotS14.
+	// The fast tier only: the full tier's kagent has no such agent.
+	ChannelS14 = "CS14"
+	// BotS14 is the bot ID S14's alerts are posted as, which the Binding's trigger names (never a display name, D36).
+	BotS14 = "B0S14ALERT1"
 )

@@ -379,4 +379,3 @@ func TestRunLogsAndAuditsNoAlertText(t *testing.T) {
 		}
 	}
 }
-

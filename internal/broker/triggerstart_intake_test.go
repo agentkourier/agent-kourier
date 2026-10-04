@@ -85,7 +85,9 @@ func newAlertWorld(t *testing.T) (*alertWorld, *starter) {
 
 // alert is a message of the preset's shape in the alert channel, at ts, with the alertname in its title and the
 // group's key in its fallback, which is the same for every alert of the group.
-func alert(ts, state, name string) chat.Inbound { return alertOf(ts, state, name, "KubePodCrashLooping shop") }
+func alert(ts, state, name string) chat.Inbound {
+	return alertOf(ts, state, name, "KubePodCrashLooping shop")
+}
 
 // alertOf is alert for the group of label values group, which is the key of its thread.
 func alertOf(ts, state, name, group string) chat.Inbound {

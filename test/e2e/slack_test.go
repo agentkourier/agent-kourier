@@ -130,6 +130,28 @@ func TestSlackActsAsUsersAndReadsTheirAcks(t *testing.T) {
 	}
 }
 
+// Webhook posts as an incoming webhook does, which is how Alertmanager's alerts reach a channel: a bot's message with
+// its content in an attachment and no user. The fake delivers the event to the connected client, which acks it, and
+// stores the message with its attachment.
+func TestSlackPostsThroughTheIncomingWebhook(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	if _, err := f.sl.Webhook(ctx, fakeslack.WebhookPost{Channel: "C1", BotID: "B0ALERT01", Attachments: []fakeslack.Attachment{{Title: "FIRING (1) - Disk"}}}); err == nil {
+		t.Fatal("Webhook with no client connected succeeded; want the fake's refusal")
+	}
+	f.connect(t, true)
+	m, err := f.sl.Webhook(ctx, fakeslack.WebhookPost{Channel: "C1", BotID: "B0ALERT01", Attachments: []fakeslack.Attachment{{Title: "FIRING (1) - Disk", TitleLink: "http://am/#/alerts?receiver=a"}}})
+	if err != nil || m.Channel != "C1" || m.TS == "" || len(m.Envelopes) != 1 {
+		t.Fatalf("Webhook = %+v, %v; want a message with one envelope", m, err)
+	}
+	if _, err := f.sl.AckWait(ctx, 5*time.Second, m.Envelopes[0]); err != nil {
+		t.Errorf("AckWait = %v", err)
+	}
+	msgs, err := f.sl.Messages(ctx, "C1")
+	if err != nil || len(msgs) != 1 || msgs[0].BotID != "B0ALERT01" || msgs[0].User != "" || len(msgs[0].Attachments) != 1 || msgs[0].Attachments[0].Title != "FIRING (1) - Disk" {
+		t.Fatalf("Messages = %+v, %v; want the bot's message with its attachment", msgs, err)
+	}
+}
+
 func TestSlackSetsUpUsersAndMembers(t *testing.T) {
 	f, ctx := newFixture(t), t.Context()
 	if err := f.sl.AddUser(ctx, fakeslack.User{ID: "U1", Name: "ada", Email: "ada@example.test"}); err != nil {

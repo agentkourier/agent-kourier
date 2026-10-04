@@ -14,6 +14,8 @@ const gateName = `[\w-]+`
 var (
 	gatePattern   = regexp.MustCompile(`gate:(` + gateName + `)`) // finds the gate a prompt names
 	validGatePatt = regexp.MustCompile(`^` + gateName + `$`)
+	// blockTag finds the name of the untrusted block courier appends to a trigger's first prompt.
+	blockTag = regexp.MustCompile(`untrusted-data-[0-9a-f]{12}`)
 )
 
 // ValidGate reports whether name can name a gate. Gates stay open for the life of the server, so
@@ -59,8 +61,18 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //	                      output), and none of the status message
 //	S13  scenario-tools   the reply's tool steps: check_status done, restart_service an error, none left
 //	                      in progress, and each text once
+//	S14  scenario-alert   "Investigating: <the prompt's first line> Block: <the untrusted block's tag>." shows
+//	                      that an alert's first turn is the template's output and the hashed block
 func ScenarioAgents(s *Server) {
 	const ns = "kagent"
+	s.Agent(ns, "scenario-alert").Reply(func(prompt string) []Step {
+		first, _, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
+		block := "none"
+		if tag := blockTag.FindString(prompt); tag != "" {
+			block = tag
+		}
+		return []Step{Text("Investigating: " + first + " Block: " + block + ".")}
+	})
 	s.Agent(ns, "scenario-tools").Reply(func(string) []Step {
 		service := map[string]any{"service": "api"}
 		return []Step{

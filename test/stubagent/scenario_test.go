@@ -251,6 +251,20 @@ func TestScenarioToolsAgentMakesTwoCallsAndTheSecondFails(t *testing.T) {
 	}
 }
 
+// scenario-alert answers a trigger's first prompt with what it saw: the first line, which is the template's output, and
+// the tag of the untrusted block that courier appends, or that there was none. A turn that is not a prompt of that shape
+// is told so.
+func TestScenarioAlertAgentSaysWhatThePromptHeld(t *testing.T) {
+	c := scenario(t, "scenario-alert")
+	prompt := "An alert is FIRING in channel CS14: KubePodCrashLooping.\n\nThe message that triggered this is below, between the <untrusted-data-0123456789ab> and </untrusted-data-0123456789ab> tags.\n<untrusted-data-0123456789ab>\n<title>x</title>\n</untrusted-data-0123456789ab>\n"
+	if got, want := taskText(last(c.send(msg("m1", prompt, "")))), "Investigating: An alert is FIRING in channel CS14: KubePodCrashLooping. Block: untrusted-data-0123456789ab."; got != want {
+		t.Errorf("said %q, want %q", got, want)
+	}
+	if got, want := taskText(last(c.send(msg("m2", "what about the database?", "")))), "Investigating: what about the database? Block: none."; got != want {
+		t.Errorf("said %q, want %q", got, want)
+	}
+}
+
 // firstPartOf is the first part of an artifact of a task.
 func firstPartOf(artifact any) any {
 	parts, _ := dig(artifact, "parts").([]any)

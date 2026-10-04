@@ -37,15 +37,22 @@ func (s *Slack) Reply(ctx context.Context, channel, threadTS, user, text string)
 	return s.say(ctx, "reply", map[string]string{"channel": channel, "thread_ts": threadTS, "user": user, "text": text})
 }
 
+// Webhook posts as an incoming webhook does, which is how Alertmanager's Slack receiver reaches a channel: a message
+// from the bot p.BotID with its content in attachments. Like Mention it needs a connected client (else 409), and
+// the UserMessage lists the envelope of the event delivered, for AckWait.
+func (s *Slack) Webhook(ctx context.Context, p fakeslack.WebhookPost) (fakeslack.UserMessage, error) {
+	return s.say(ctx, "webhook", p)
+}
+
 // DM posts text as user in their direct-message channel with the bot (fakeslack.DMChannel).
 func (s *Slack) DM(ctx context.Context, user, text string) (fakeslack.UserMessage, error) {
 	return s.say(ctx, "dm", map[string]string{"user": user, "text": text})
 }
 
-// say makes one of the three posts. If the fake stored the message but could not deliver its events
+// say makes one of the posts. If the fake stored the message but could not deliver its events
 // (no client connected any more), the error body carries the stored message, and say returns it
 // with the error, so a caller that retries need not post it twice.
-func (s *Slack) say(ctx context.Context, action string, in map[string]string) (fakeslack.UserMessage, error) {
+func (s *Slack) say(ctx context.Context, action string, in any) (fakeslack.UserMessage, error) {
 	var out fakeslack.UserMessage
 	err := s.c.do(ctx, http.MethodPost, "/_control/"+action, in, &out)
 	var se *StatusError

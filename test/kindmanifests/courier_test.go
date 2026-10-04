@@ -44,8 +44,8 @@ var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "cou
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), courierDir+"config")
-	if err != nil || len(set.Bindings) != 9 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of eight scenarios, and one connection and backend", set, err)
+	if err != nil || len(set.Bindings) != 10 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of nine scenarios, and one connection and backend", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -228,6 +228,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"S11", e2e.ChannelS11, "spike-approve", false, v1alpha1.OutputLive},
 		{"S12", e2e.ChannelS12, "scenario-fails", false, v1alpha1.OutputLive},
 		{"S13", e2e.ChannelS13, "scenario-tools", false, v1alpha1.OutputLive},
+		{"S14", e2e.ChannelS14, "scenario-alert", false, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
 		if !ok {
@@ -246,6 +247,29 @@ func TestScenarioBindings(t *testing.T) {
 			t.Errorf("%s: channel %s is another scenario's too; scenarios must not share a thread", tc.scenario, tc.channel)
 		}
 		seen[tc.channel] = true
+	}
+}
+
+// TestS14TakesTheAlertBotByItsIDWithThePreset: S14's channel has a botMessage trigger for the bot ID the scenario posts
+// as, with the alertmanager preset, narrowed to the kind receiver as the trial's is, and no mention trigger: only an
+// alert starts a session there, and a person's reply in its thread continues it. The ID is the one test/e2e names.
+func TestS14TakesTheAlertBotByItsIDWithThePreset(t *testing.T) {
+	set, err := config.Load(t.Context(), courierDir+"config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb, ok := snap.BindingForChannel("courier", "slack-fast", e2e.ChannelS14)
+	if !ok {
+		t.Fatalf("channel %s resolves to no Binding", e2e.ChannelS14)
+	}
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS14 ||
+		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Errorf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS14)
 	}
 }
 
