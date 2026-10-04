@@ -707,7 +707,7 @@ func TestPromptEveryViewFieldHasACheck(t *testing.T) {
 // chat.BotMessage later is filled in here too, so it fails this test until it is shown, and cannot be left out
 // of what the agent sees. BotID names the sender and is not content.
 func TestMessageOfPutsEveryFieldOfTheInboundInTheBlock(t *testing.T) {
-	in := chat.Inbound{Text: "marker-Text", Bot: &chat.BotMessage{}}
+	in := chat.Inbound{Text: "mk_Text_end", Bot: &chat.BotMessage{}}
 	bot := reflect.ValueOf(in.Bot).Elem()
 	var markers []string
 	markers = append(markers, in.Text)
@@ -720,7 +720,7 @@ func TestMessageOfPutsEveryFieldOfTheInboundInTheBlock(t *testing.T) {
 			bot.Field(i).SetString("B0TESTBOT01")
 			continue
 		}
-		m := "marker-" + f.Name
+		m := "mk_" + f.Name + "_end" // none is a prefix of another, so a hit is the field's own
 		bot.Field(i).SetString(m)
 		markers = append(markers, m)
 	}
