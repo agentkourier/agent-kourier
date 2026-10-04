@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -168,5 +169,25 @@ func TestQuestionControlReadsWhereAQuestionIsAnswered(t *testing.T) {
 	}
 	if _, _, _, ok := QuestionControl(json.RawMessage(`not json`), 0); ok {
 		t.Error("QuestionControl read blocks that are not JSON")
+	}
+}
+
+// TestTasksReadsTheChunksOfTheView: a view decoded from the fake's control surface has its chunks on the view and none on
+// the Message it embeds (JSON skips those), so the view's own Tasks method, which reads the Message's, finds none.
+func TestTasksReadsTheChunksOfTheView(t *testing.T) {
+	var v fakeslack.MessageView
+	raw := `{"streaming":false,"chunks":[` +
+		`{"type":"task_update","id":"s1","title":"check_status","status":"in_progress","details":"service=\"api\""},` +
+		`{"type":"markdown_text","text":"hi"},` +
+		`{"type":"task_update","id":"s1","title":"check_status","status":"complete","details":"service=\"api\""}]}`
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Tasks(); len(got) != 0 {
+		t.Fatalf("the view's own Tasks = %+v; the premise of Tasks is that it finds none", got)
+	}
+	want := []fakeslack.Task{{ID: "s1", Title: "check_status", Status: "complete", Details: `service="api"`}}
+	if got := Tasks(v); !slices.Equal(got, want) {
+		t.Errorf("Tasks = %+v; want %+v", got, want)
 	}
 }

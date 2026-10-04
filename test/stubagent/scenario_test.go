@@ -3,6 +3,7 @@ package stubagent_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -212,4 +213,49 @@ func TestScenarioGatedAgentDoesNotHoldWithoutAGate(t *testing.T) {
 	if got := taskText(last(c.send(msg("m1", "investigate", "")))); got != "No gate named, not holding." {
 		t.Errorf("said %q, want it to finish at once", got)
 	}
+}
+
+// scenario-tools says something, makes two tool calls (the second's result reports an error, in the "error" entry
+// kagent reports a failed call with), and says the rest. The final task holds, in order: the text, the first call and
+// its result, the text, the second call and its result, the text.
+func TestScenarioToolsAgentMakesTwoCallsAndTheSecondFails(t *testing.T) {
+	final := last(scenario(t, "scenario-tools").send(msg("m1", "check it", "")))
+	_, e := body(final)
+	arts, _ := e["artifacts"].([]any)
+	var got []string
+	var callIDs []any
+	for _, a := range arts {
+		part := firstPartOf(a)
+		switch dig(part, "metadata", "kagent.dev/a2a/part-type") {
+		case "function_call":
+			got = append(got, fmt.Sprintf("call %v %v", dig(part, "data", "name"), dig(part, "data", "args", "service")))
+			callIDs = append(callIDs, dig(part, "data", "id"))
+		case "function_response":
+			got = append(got, fmt.Sprintf("result %v %v", dig(part, "data", "name"), dig(part, "data", "response")))
+			if id := dig(part, "data", "id"); id != callIDs[len(callIDs)-1] {
+				t.Errorf("result %v answers call %v; want the call just made", id, callIDs[len(callIDs)-1])
+			}
+		default:
+			got = append(got, "text "+text(dig(a, "parts")))
+		}
+	}
+	want := []string{
+		"text Checking the service.",
+		"call check_status api", "result check_status map[output:api is up]",
+		"text It is up, so I will restart it.",
+		"call restart_service api", "result restart_service map[error:restart refused: api is locked]",
+		"text The restart was refused.",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("artifacts, in order:\n%q\nwant\n%q", got, want)
+	}
+}
+
+// firstPartOf is the first part of an artifact of a task.
+func firstPartOf(artifact any) any {
+	parts, _ := dig(artifact, "parts").([]any)
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts[0]
 }

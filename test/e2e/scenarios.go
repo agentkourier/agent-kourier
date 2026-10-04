@@ -22,4 +22,7 @@ const (
 	// ChannelS12 is S12's: scenario-fails, whose task fails or completes with no output. The fast tier only:
 	// the full tier's kagent has no such agent.
 	ChannelS12 = "CS12"
+	// ChannelS13 is S13's: scenario-tools, whose reply has two tool calls, the second of them failing. Both tiers:
+	// the full tier's kagent has the agent, with a tool server of its own to call.
+	ChannelS13 = "CS13"
 )

@@ -1,9 +1,23 @@
-"""A one-tool MCP server for the full tier's S11 agent: add_numbers(a, b). The agent lists it with
-requireApproval, so kagent pauses the task for approval before the tool runs, and courier, on a Binding
-that does not allow approvals, denies it. Streamable HTTP, stateless, JSON answers. Test only."""
+"""A three-tool MCP server for the full tier's scenario agents. Streamable HTTP, stateless, JSON answers. Test only.
+
+  add_numbers(a, b)        S11's agent lists it with requireApproval, so kagent pauses the task for approval before
+                           the tool runs, and courier, on a Binding that does not allow approvals, denies it.
+  check_status(service)    S13's agent calls it: it works ("<service> is up").
+  restart_service(service) S13's agent calls it: it fails, as an MCP tool reports a failure, with isError true and the
+                           reason as its text ("restart refused: <service> is locked").
+"""
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def call(name, args):
+    """The result of a tools/call: add_numbers and check_status answer, restart_service reports a failure."""
+    if name == "check_status":
+        return {"content": [{"type": "text", "text": "%s is up" % args["service"]}]}
+    if name == "restart_service":
+        return {"content": [{"type": "text", "text": "restart refused: %s is locked" % args["service"]}], "isError": True}
+    return {"content": [{"type": "text", "text": str(args["a"] + args["b"])}]}
 
 
 class MCP(BaseHTTPRequestHandler):
@@ -31,11 +45,14 @@ class MCP(BaseHTTPRequestHandler):
             result = {"protocolVersion": req["params"]["protocolVersion"], "capabilities": {"tools": {}},
                       "serverInfo": {"name": "scenario-mcp", "version": "1"}}
         elif method == "tools/list":
-            result = {"tools": [{"name": "add_numbers", "description": "Add two numbers", "inputSchema": {
-                "type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}, "required": ["a", "b"]}}]}
+            service = {"type": "object", "properties": {"service": {"type": "string"}}, "required": ["service"]}
+            result = {"tools": [
+                {"name": "add_numbers", "description": "Add two numbers", "inputSchema": {
+                    "type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}, "required": ["a", "b"]}},
+                {"name": "check_status", "description": "Check that a service is up", "inputSchema": service},
+                {"name": "restart_service", "description": "Restart a service", "inputSchema": service}]}
         else:
-            args = req["params"]["arguments"]
-            result = {"content": [{"type": "text", "text": str(args["a"] + args["b"])}]}
+            result = call(req["params"]["name"], req["params"]["arguments"])
         self.send_json({"jsonrpc": "2.0", "id": rid, "result": result})
 
 

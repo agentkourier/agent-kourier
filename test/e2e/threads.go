@@ -24,6 +24,12 @@ func BotMessages(thread []fakeslack.MessageView) []fakeslack.MessageView {
 	return out
 }
 
+// Tasks returns the task cards of a streamed message, as fakeslack.Message.Tasks does. A view read from the fake's control
+// surface has its chunks on the view and none on the Message it embeds, so the view's own Tasks method finds nothing.
+func Tasks(v fakeslack.MessageView) []fakeslack.Task {
+	return fakeslack.Message{Chunks: v.Chunks}.Tasks()
+}
+
 // HasAction reports whether blocks, a message's blocks as JSON, hold an element with the action_id, at any
 // depth: an input's element, a button in an actions block. Blocks that are absent or unreadable hold none.
 func HasAction(blocks json.RawMessage, actionID string) bool { return findAction(blocks, actionID, "") }

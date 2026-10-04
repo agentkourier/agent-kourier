@@ -44,8 +44,8 @@ var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "cou
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), courierDir+"config")
-	if err != nil || len(set.Bindings) != 8 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of seven scenarios, and one connection and backend", set, err)
+	if err != nil || len(set.Bindings) != 9 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of eight scenarios, and one connection and backend", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -227,6 +227,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"S5", e2e.ChannelS5, "test-agent", false, v1alpha1.OutputFinal},
 		{"S11", e2e.ChannelS11, "spike-approve", false, v1alpha1.OutputLive},
 		{"S12", e2e.ChannelS12, "scenario-fails", false, v1alpha1.OutputLive},
+		{"S13", e2e.ChannelS13, "scenario-tools", false, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
 		if !ok {
@@ -337,7 +338,7 @@ func TestFullTierConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, channel := range []string{e2e.ChannelSmoke, e2e.ChannelS1, e2e.ChannelS2, e2e.ChannelS3, e2e.ChannelS4, e2e.ChannelS5, e2e.ChannelS11} {
+	for _, channel := range []string{e2e.ChannelSmoke, e2e.ChannelS1, e2e.ChannelS2, e2e.ChannelS3, e2e.ChannelS4, e2e.ChannelS5, e2e.ChannelS11, e2e.ChannelS13} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", channel)
 		if !ok {
 			t.Errorf("channel %s resolves to no Binding in the full tier", channel)
@@ -426,5 +427,68 @@ func TestTheControllerRestartTouchesOnlyTheController(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `delete pod -l app.kubernetes.io/component=controller,app.kubernetes.io/name=kagent `) {
 		t.Error("lib.sh's settle_full_tier does not delete the controller's pod by its component and name labels together")
+	}
+}
+
+// TestFullTierHasTheToolsScenarioAgent: S13 runs in both tiers, so the full tier's kagent has an agent of the name its
+// Binding gives (scenario-tools), whose model is the scenario model playing the "tools" scenario, and whose tools are the
+// scenario MCP server's, run without approval (the calls are the scenario, and S13's Binding does not allow approvals).
+// The server has the two tools the scenario model calls.
+func TestFullTierHasTheToolsScenarioAgent(t *testing.T) {
+	var agent, model map[string]any
+	for _, doc := range objects(t, "../../hack/kind/full/scenarios/scenarios.yaml") {
+		meta, _ := doc["metadata"].(map[string]any)
+		if meta["name"] != "scenario-tools" {
+			continue
+		}
+		switch doc["kind"] {
+		case "Agent":
+			agent = doc
+		case "ModelConfig":
+			model = doc
+		}
+	}
+	if agent == nil || model == nil {
+		t.Fatalf("scenarios.yaml has Agent %v and ModelConfig %v named scenario-tools; want both", agent != nil, model != nil)
+	}
+	b, _ := json.Marshal(agent)
+	var a struct {
+		Spec struct {
+			Template struct {
+				ModelConfig struct{ Name string }
+				Tools       []struct {
+					MCP struct {
+						Server          struct{ Kind, Name string }
+						RequireApproval bool
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(b, &a); err != nil {
+		t.Fatal(err)
+	}
+	tpl := a.Spec.Template
+	if tpl.ModelConfig.Name != "scenario-tools" || len(tpl.Tools) != 1 || tpl.Tools[0].MCP.Server.Kind != "RemoteMCPServer" ||
+		tpl.Tools[0].MCP.Server.Name != "scenariomcp" || tpl.Tools[0].MCP.RequireApproval {
+		t.Errorf("agent %+v; want the model scenario-tools and the one tool server scenariomcp, with no approval", tpl)
+	}
+	spec, _ := model["spec"].(map[string]any)
+	if headers, _ := spec["defaultHeaders"].(map[string]any); headers["X-Scenario"] != "tools" {
+		t.Errorf("the model sends %v; want X-Scenario: tools, the scenario that scenariollm.py plays for this agent", headers)
+	}
+	for file, wants := range map[string][]string{
+		"../../hack/kind/full/scenarios/scenariollm.py": {`scenario == "tools"`},
+		"../../hack/kind/full/scenarios/scenariomcp.py": {`"check_status"`, `"restart_service"`},
+	} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range wants {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("%s has no %s", filepath.Base(file), want)
+			}
+		}
 	}
 }

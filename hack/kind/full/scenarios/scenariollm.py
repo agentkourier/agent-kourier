@@ -14,6 +14,10 @@ scenario agent in scenarios.yaml; everything else comes from the conversation ka
           "Answers: ..." with what it was given, an empty one as (none) (S3).
   approve calls the MCP tool add_numbers(3, 5), which needs approval; "I have added 3 and 5. The result is 8."
           if it ran, and "Resumed after the tool result." if the call was rejected (S11).
+  tools   says "Checking the service.", calls the MCP tool check_status(service="api"), says "It is up, so I will
+          restart it.", calls restart_service(service="api"), which fails, and says "The restart was refused." Which
+          of the three model calls this is comes from the tool results since the last user message (S13). This is the
+          stub agent's scenario-tools: the reply has a step card for each call, done and error.
 
 It logs the shape of each request, the roles and the first words of each message and never a header, so what
 kagent sends a model can be read from its log (the full tier's findings come from there). Test only.
@@ -77,10 +81,22 @@ def answers_of(tool_text):
 
 
 class Script:
-    """What the model does with one request: some text, held on a gate after its first part, or one tool call."""
+    """What the model does with one request: some text, held on a gate after its first part, and then, if there is
+    one, a tool call."""
 
     def __init__(self, parts=(), hold=None, tool=None):
         self.parts, self.hold, self.tool = list(parts), hold, tool
+
+
+def tool_results_since_user(messages):
+    """How many tool results the conversation has after its last user message: how far the model is in its own turn."""
+    n = 0
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            break
+        if m.get("role") == "tool":
+            n += 1
+    return n
 
 
 def play(scenario, messages):
@@ -105,6 +121,13 @@ def play(scenario, messages):
         if last.get("role") == "tool":
             return Script(["Resumed after the tool result." if "reject" in last_text.lower() else "I have added 3 and 5. The result is 8."])
         return Script(tool=("add_numbers", {"a": 3, "b": 5}))
+    if scenario == "tools":
+        done = tool_results_since_user(messages)
+        if done == 0:
+            return Script(["Checking the service."], tool=("check_status", {"service": "api"}))
+        if done == 1:
+            return Script(["It is up, so I will restart it."], tool=("restart_service", {"service": "api"}))
+        return Script(["The restart was refused."])
     return Script(["The answer is 4."])
 
 
@@ -155,27 +178,32 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
             self.wfile.flush()
 
+        for i, part in enumerate(script.parts):
+            send({"role": "assistant", "content": part})
+            if script.hold and i == 0:
+                gate(script.hold).wait(timeout=GATE_TIMEOUT)
         if script.tool:
             name, args = script.tool
-            send({"role": "assistant", "content": None, "tool_calls": [{"index": 0, "id": "call_scenario", "type": "function",
+            send({"role": "assistant", "content": None, "tool_calls": [{"index": 0, "id": call_id(name), "type": "function",
                                                                           "function": {"name": name, "arguments": json.dumps(args)}}]})
             send({}, "tool_calls")
         else:
-            for i, part in enumerate(script.parts):
-                send({"role": "assistant", "content": part})
-                if script.hold and i == 0:
-                    gate(script.hold).wait(timeout=GATE_TIMEOUT)
             send({}, "stop")
         end = b"data: [DONE]\n\n"
         self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(end), end))
         self.wfile.flush()
 
 
+def call_id(name):
+    """A tool call's ID, its own for each tool: a turn that calls two tools must not give both one ID."""
+    return "call_scenario_" + name
+
+
 def completion(script):
     if script.tool:
         name, args = script.tool
-        message = {"role": "assistant", "content": None, "tool_calls": [{"id": "call_scenario", "type": "function",
-                                                                          "function": {"name": name, "arguments": json.dumps(args)}}]}
+        message = {"role": "assistant", "content": "".join(script.parts) or None, "tool_calls": [{
+            "id": call_id(name), "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
         finish = "tool_calls"
     else:
         message, finish = {"role": "assistant", "content": "".join(script.parts)}, "stop"

@@ -34,6 +34,10 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //   - scenario-fails ends its task FAILED with no output, and a provider's masked-key error as its status
 //     message ("Incorrect API key provided: sk-proj-...wxyz. HTTP 401"), which courier must not show. A prompt
 //     that says "empty" ends it COMPLETED with no output at all.
+//   - scenario-tools says "Checking the service.", calls check_status(service="api"), which succeeds, says
+//     "It is up, so I will restart it.", calls restart_service(service="api"), whose result is an error
+//     ({"error": "restart refused: api is locked"}, the entry kagent reports a failed call with), and says
+//     "The restart was refused." It never waits, so the whole turn ends in moments.
 //
 // The scenarios and the agents that serve them in the cluster:
 //
@@ -53,8 +57,20 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //	                      gives "Resumed after the tool result."
 //	S12  scenario-fails   the thread gets courier's notice that the task failed (or finished with no
 //	                      output), and none of the status message
+//	S13  scenario-tools   the reply's tool steps: check_status done, restart_service an error, none left
+//	                      in progress, and each text once
 func ScenarioAgents(s *Server) {
 	const ns = "kagent"
+	s.Agent(ns, "scenario-tools").Reply(func(string) []Step {
+		service := map[string]any{"service": "api"}
+		return []Step{
+			Text("Checking the service."),
+			Tool("check_status", service, map[string]any{"output": "api is up"}),
+			Text("It is up, so I will restart it."),
+			Tool("restart_service", service, map[string]any{"error": "restart refused: api is locked"}),
+			Text("The restart was refused."),
+		}
+	})
 	s.Agent(ns, "scenario-gated").Reply(func(prompt string) []Step {
 		m := gatePattern.FindStringSubmatch(prompt)
 		if m == nil {

@@ -1,8 +1,9 @@
 # The Phase 1 scenario agents of the full tier (WP-36h), the kagent side of the stub agents the fast tier has by the
 # same names, so the scenario Bindings are the same in both tiers (full/courier/agentbackend.yaml). Each agent's
 # model is the scenario model (scenariollm.py), which plays the agent its ModelConfig header names; S5 and the
-# smoke test use test-agent on mockllm (agent.yaml). The one tool, add_numbers (scenariomcp.py), is the S11
-# agent's, and needs approval before it runs. The two servers' code comes from ConfigMaps that up-full.sh makes
+# smoke test use test-agent on mockllm (agent.yaml). The tools are scenariomcp.py's: add_numbers is the S11
+# agent's, and needs approval before it runs; check_status and restart_service are the S13 agent's, which runs them
+# at once, the second failing. S12's scenario-fails has no agent here. The two servers' code comes from ConfigMaps that up-full.sh makes
 # from the files in scenarios/ (the servers and the tool server's RemoteMCPServer are servers.yaml, applied first, and the
 # agents are made only once the tool server answers). Test only: no authentication, never published.
 apiVersion: api.kagent.dev/v1alpha3
@@ -106,6 +107,34 @@ spec:
     description: "S11: calls a tool that needs approval, then says what became of it"
     systemPrompt: Use the tool.
     tools: [{mcp: {server: {kind: RemoteMCPServer, name: scenariomcp}, requireApproval: true}}]
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef: {name: kagent-default}
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see agent.yaml
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: scenario-tools, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: gpt-4.1-mini
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  openAI: {baseUrl: "http://scenariollm.kagent.svc.cluster.local:8080/v1"}
+  defaultHeaders: {X-Scenario: tools}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: scenario-tools, namespace: kagent}
+spec:
+  template:
+    modelConfig: {name: scenario-tools}
+    description: "S13: checks a service and restarts it; the first call works and the second fails"
+    systemPrompt: Use the tools.
+    tools: [{mcp: {server: {kind: RemoteMCPServer, name: scenariomcp}}}]
   harness:
     kagent: {}
     workload:
