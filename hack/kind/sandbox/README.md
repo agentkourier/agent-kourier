@@ -365,7 +365,7 @@ A second Binding, `courier/alert-trial` (`courier/alert-trial/alert-binding.yaml
 | Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0EXAMPLE01` (by ID), the `alertmanager` preset, and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention courier into this channel. |
 | What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
 | Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
-| Limits | None yet; they are CT-5's. Each first fire of an alert is one model call, and only an operator can fire one. |
+| Limits | The `alertmanager` preset's: 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
 | The channel | The constant `ALERT_CHANNEL_ID` in `webhook.sh`, checked by `make sandbox-up` before it touches anything (a channel ID, and not `SLACK_CHANNEL_ID`: two Bindings cannot share a channel). A test keeps it equal to the dry run's channel. |
 
 Courier receives every message of the channel over Socket Mode, because it is a member, and acts on none but the matching ones. A person's reply in a thread courier started continues that thread's
