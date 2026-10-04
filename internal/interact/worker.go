@@ -20,6 +20,8 @@ type PressProcessor interface {
 	GiveUp(ctx context.Context, press store.Press) error
 }
 
+const defaultGiveUpAfter = time.Hour
+
 // WorkerConfig configures a Worker. Everything but Processor is optional.
 type WorkerConfig struct {
 	Processor PressProcessor
@@ -80,7 +82,7 @@ func NewWorker(cfg WorkerConfig) (*Worker, error) {
 		cfg.MaxBackoff = max(30*time.Second, cfg.Backoff)
 	}
 	if cfg.GiveUpAfter <= 0 {
-		cfg.GiveUpAfter = time.Hour
+		cfg.GiveUpAfter = defaultGiveUpAfter
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

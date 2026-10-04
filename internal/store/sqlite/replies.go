@@ -48,14 +48,25 @@ func (s *Store) HasReply(ctx context.Context, id string) (telemetryResult0 bool,
 func (s *Store) NextReply(ctx context.Context, key store.ConversationKey) (telemetryResult0 store.Reply, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.NextReply")
 	defer func() { finishStore(op, telemetryErr) }()
-	if !validKey(key) {
+	return s.nextReplyAfter(ctx, key, 0)
+}
+
+// NextReplyAfter implements store.ReplyQueue.
+func (s *Store) NextReplyAfter(ctx context.Context, key store.ConversationKey, after int64) (result store.Reply, err error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.NextReplyAfter")
+	defer func() { finishStore(op, err) }()
+	return s.nextReplyAfter(ctx, key, after)
+}
+
+func (s *Store) nextReplyAfter(ctx context.Context, key store.ConversationKey, after int64) (store.Reply, error) {
+	if !validKey(key) || after < 0 {
 		return store.Reply{}, fmt.Errorf("next reply %+v: key is required: %w", key, store.ErrInvalid)
 	}
 	r := store.Reply{Key: key}
 	var enqueued int64
-	err := s.read.QueryRowContext(ctx, `SELECT id, sequence, user_id, message_ts, text, enqueued_at, trace_parent, trace_state FROM reply_queue
-		WHERE connection = ? AND channel = ? AND thread_ts = ? AND delivered_at IS NULL ORDER BY sequence LIMIT 1`,
-		key.Connection, key.Channel, key.Thread).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Text, &enqueued, &r.TraceParent, &r.TraceState)
+	err := s.read.QueryRowContext(ctx, `SELECT id, sequence, user_id, message_ts, text, enqueued_at, interaction_id, trace_parent, trace_state FROM reply_queue
+		WHERE connection = ? AND channel = ? AND thread_ts = ? AND delivered_at IS NULL AND sequence > ? ORDER BY sequence LIMIT 1`,
+		key.Connection, key.Channel, key.Thread, after).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Text, &enqueued, &r.InteractionID, &r.TraceParent, &r.TraceState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Reply{}, fmt.Errorf("next reply %+v: %w", key, store.ErrNotFound)
 	}
@@ -76,4 +87,13 @@ func (s *Store) MarkReplyDelivered(ctx context.Context, id string, at time.Time)
 	}
 	n, err := s.exec(ctx, `UPDATE reply_queue SET delivered_at = COALESCE(delivered_at, ?), text = '' WHERE id = ?`, ts(at), id)
 	return errIfUnchanged(n, err, fmt.Sprintf("mark reply %q delivered", id))
+}
+
+// ClaimReplyInteraction pins a queued answer to one question; retries cannot answer another.
+func (s *Store) ClaimReplyInteraction(ctx context.Context, id, interaction string) error {
+	if id == "" || interaction == "" {
+		return store.ErrInvalid
+	}
+	n, err := s.exec(ctx, `UPDATE reply_queue SET interaction_id = ? WHERE id = ? AND (interaction_id = '' OR interaction_id = ?)`, interaction, id, interaction)
+	return errIfUnchanged(n, err, "claim reply interaction")
 }

@@ -19,7 +19,7 @@ import (
 // The fast tier only: the full tier's kagent has no agent of that name, so its Binding for CS12 points nowhere.
 func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 	s := newScenario(t)
-	if s.env.Tier != "fast" {
+	if s.env.Tier == "full" {
 		t.Skip("scenario-fails is a stub agent of the fast tier; the full tier's kagent does not have it")
 	}
 	for _, tc := range []struct {
@@ -33,7 +33,11 @@ func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 			const metric = "courier_turn_outcomes_total"
 			before := s.counter(metric, labels)
 
-			m := s.mention(ChannelS12, "US12", tc.prompt)
+			prompt := tc.prompt
+			if s.env.Tier == "ax" && tc.outcome == "failed" {
+				prompt = "provider-error"
+			}
+			m := s.mention(ChannelS12, "US12", prompt)
 			th := s.thread(ChannelS12, m.TS, "courier's notice", func(th []fakeslack.MessageView) bool {
 				for _, b := range BotMessages(th) {
 					if strings.Contains(b.Text, tc.notice) {
@@ -44,7 +48,7 @@ func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 			})
 			// The status message of the failed task has a key's last characters in it: the thread shows no part of it.
 			for _, b := range BotMessages(th) {
-				if strings.Contains(b.Text, "wxyz") || strings.Contains(b.Text, "401") {
+				if strings.Contains(b.Text, "wxyz") || strings.Contains(b.Text, "401") || strings.Contains(b.Text, "AGENT_SECRET_MARKER") {
 					t.Errorf("the thread says %q: the agent's status message reached it", b.Text)
 				}
 			}

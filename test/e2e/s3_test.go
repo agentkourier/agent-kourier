@@ -25,7 +25,7 @@ func promptOf(th []fakeslack.MessageView) (fakeslack.MessageView, bool) {
 	return fakeslack.MessageView{}, false
 }
 
-// TestS3_AnAskUserPromptTakesACompleteAnswerAndRefusesAnIncompleteOne: the agent asks two questions, a
+// TestS3_AnAskUserPromptAcceptsOnlyACompleteAuthorizedAnswer: the agent asks two questions, a
 // multiple choice and a free-text one, courier posts them as a prompt with a Submit button, and:
 //   - a Submit with the second question unanswered is told to its sender alone, by number, and leaves the
 //     prompt as it was, so what the others have typed is not reset, and the agent is not told anything;
@@ -35,8 +35,12 @@ func promptOf(th []fakeslack.MessageView) (fakeslack.MessageView, bool) {
 // UNCONFIRMED(D8): whether the paused task's final event makes the renderer post the question as a message
 // of its own besides the prompt. The scenario finds the prompt by its Submit button and counts no messages.
 // UNCONFIRMED(WP-04): that Slack sends the inputs' state with a button in a message, as the fake does.
-func TestS3_AnAskUserPromptTakesACompleteAnswerAndRefusesAnIncompleteOne(t *testing.T) {
+func TestS3_AnAskUserPromptAcceptsOnlyACompleteAuthorizedAnswer(t *testing.T) {
 	s := newScenario(t)
+	if s.env.Tier == "ax" {
+		axTextQuestion(t, s)
+		return
+	}
 	const user = "US3"
 	// Only a member of the channel who is not a bot may answer: courier asks Slack.
 	s.know(user)

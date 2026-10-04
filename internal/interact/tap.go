@@ -189,3 +189,6 @@ func (t *Tap) delay(tries int) time.Duration {
 	}
 	return min(d, t.cfg.MaxBackoff)
 }
+
+// PauseNow ensures the durable prompt exists before a queued text reply is decided.
+func (t *Tap) PauseNow(ctx context.Context, p Pause) error { return t.cfg.Handler.Paused(ctx, p) }

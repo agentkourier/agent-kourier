@@ -47,6 +47,8 @@ func (s InteractionState) Valid() bool {
 // Interaction is one pause waiting on a person (spec 9, table interactions).
 // Request and Answer are opaque to the store: the dialect owns their shape.
 type Interaction struct {
+	// TextReplies marks questions whose durable queue can contain answers.
+	TextReplies bool
 	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
 	TraceParent, TraceState string
 	ID                      string

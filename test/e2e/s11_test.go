@@ -20,6 +20,9 @@ import (
 // kagent does.
 func TestS11_AToolApprovalOnABindingThatDoesNotAllowThemIsDenied(t *testing.T) {
 	s := newScenario(t)
+	if s.env.Tier == "ax" {
+		t.Skip("AX/ADK exposes plain-text questions; structured tool approval metadata is a kagent capability")
+	}
 	labels := map[string]string{"binding": "courier/fast-s11", "outcome": "auto_denied"}
 	const metric = "courier_approval_outcomes_total"
 	before := s.counter(metric, labels)

@@ -1,0 +1,16 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s1, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: ax-gated}
+    namespace: courier-ax
+    name: gated
+  identity:
+    userId: courier-ax
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: CS1
+    output: live
+  interactions: {askUser: true, toolApprovals: false}

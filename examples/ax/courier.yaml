@@ -1,0 +1,26 @@
+# These are Courier's file-loaded resources. Reuse your existing ChatConnection and refreshed ID token Secret.
+apiVersion: agentcourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax, namespace: courier}
+spec:
+  dialect: a2a
+  url: https://YOUR_AX_GATEWAY/a2a
+  headers:
+    - {name: ate-target-actor, value: courier-ax/assistant}
+---
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: ax-assistant, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: ax}
+    namespace: courier-ax
+    name: assistant
+  identity:
+    userId: courier-ax
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: sandbox-slack}
+    channel: C_REPLACE_WITH_CHANNEL_ID
+    output: live
+  interactions: {askUser: true, toolApprovals: false}

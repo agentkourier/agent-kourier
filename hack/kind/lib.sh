@@ -25,11 +25,11 @@ die() {
 # use_tier full|fast: make the functions below act on that tier's cluster.
 use_tier() {
   case "$1" in
-    full | fast)
+    full | fast | ax)
       CLUSTER=courier-$1
       OWNER_LABEL=courier.agent-courier.dev/owner=up-$1
       ;;
-    *) die "unknown tier '$1' (want full or fast)" ;;
+    *) die "unknown tier '$1' (want full, fast or ax)" ;;
   esac
 }
 
@@ -53,8 +53,8 @@ cluster_exists() {
 assert_context() {
   local tier=$1 name server kind_server
   case "${tier}" in
-    fast | full) ;;
-    *) die "assert_context: unknown tier '${tier}' (want fast or full)" ;;
+    fast | full | ax) ;;
+    *) die "assert_context: unknown tier '${tier}' (want fast, full or ax)" ;;
   esac
   name=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.contexts[0].name}' 2>/dev/null) || name=
   server=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || server=
@@ -507,4 +507,36 @@ require_network_policy() {
     *) die "cannot tell whether the network policy is live in ${CLUSTER}: ${line#*: }
   Look at: ${K[*]} -n kagent get pods; then run make sandbox-heal again" ;;
   esac
+}
+
+# probe_ax_agents: verify authenticated cards through Courier's actual cluster network path.
+# The token is read from a Secret volume and passed to curl's stdin config, never its argv or logs.
+probe_ax_agents() {
+  local pod=probe-ax-${RANDOM} phase deadline=$((SECONDS + 300))
+  sed "s/@NAME@/${pod}/g" "${HERE}/ax/probe.yaml" | "${K[@]}" apply -f - >/dev/null
+  while :; do
+    phase=$("${K[@]}" -n courier get pod "${pod}" -o jsonpath='{.status.phase}') || phase=Failed
+    case "${phase}" in
+      Succeeded) delete_courier_pod "${pod}"; return 0 ;;
+      Failed) break ;;
+    esac
+    [ "${SECONDS}" -lt "${deadline}" ] || break
+    sleep 2
+  done
+  "${K[@]}" -n courier logs "${pod}" --tail=5 >&2 || true
+  delete_courier_pod "${pod}"
+  die "AX agents did not answer authenticated card requests through the router"
+}
+
+# settle_ax_tier: use the full tier's bounded kind-network recovery when ingress is not reachable.
+settle_ax_tier() {
+  local attempt
+  for attempt in 1 2 3; do
+    if (probe_ax_agents); then return 0; fi
+    [ "${attempt}" -lt 3 ] || break
+    echo "AX ingress did not settle (try ${attempt}); restarting kindnet" >&2
+    "${K[@]}" -n kube-system rollout restart ds/kindnet >/dev/null
+    "${K[@]}" -n kube-system rollout status ds/kindnet --timeout=120s >/dev/null
+  done
+  die "AX ingress never settled after kind network recovery"
 }

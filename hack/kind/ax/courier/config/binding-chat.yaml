@@ -1,0 +1,16 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-chat, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: ax-default}
+    namespace: courier-ax
+    name: default
+  identity:
+    userId: courier-ax
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: C1
+    output: final
+  interactions: {askUser: true, toolApprovals: false}

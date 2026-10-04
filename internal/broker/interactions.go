@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -121,6 +122,18 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the press pipeline: %w", err)
 	}
+	mgr.SetTextReplyHandler(func(ctx context.Context, key session.Key, reply store.Reply, task a2a.Task) (bool, error) {
+		if reply.InteractionID == "" {
+			sess, err := d.st.GetSession(ctx, key, 100*365*24*time.Hour, time.Now())
+			if err != nil {
+				return false, err
+			}
+			if err := tap.PauseNow(ctx, interact.Pause{Key: key, Binding: sess.Binding, Task: task}); err != nil {
+				return false, err
+			}
+		}
+		return pipeline.TextReply(ctx, key, reply, task)
+	})
 	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pipeline, Logger: d.log}); err != nil {
 		return nil, fmt.Errorf("interactions: the worker: %w", err)
 	}

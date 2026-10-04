@@ -1,0 +1,16 @@
+{
+  "actor": {"atespace": "courier-ax", "name": "assistant"},
+  "egressPolicy": {
+    "metadata": {"atespace": "courier-ax", "name": "default"},
+    "rules": [
+      {"hostnames": {
+        "patterns": ["bedrock-runtime.us-east-1.amazonaws.com"],
+        "effects": {"injectStaticHeaders": [{
+          "header": "Authorization", "prefix": "Bearer ",
+          "credentialUri": "ate-secret://YOUR_PROVIDER_CLASS/YOUR_PROVIDER_NAME/YOUR_SECRET_REFERENCE"
+        }]}
+      }},
+      {"hostnames": {"patterns": ["YOUR_ISSUER_HOST"]}}
+    ]
+  }
+}

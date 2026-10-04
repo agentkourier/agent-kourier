@@ -1,0 +1,16 @@
+# Merge these fields into the AX-generated ActorTemplate before its golden snapshot is built.
+# This is a Substrate template fragment, not a Kubernetes resource or an `ax apply` resource.
+volumes:
+  - name: egress-trust
+    systemInfo:
+      dataSources:
+        - trustBundle: {name: egress-mitm.ate.dev, path: trust-bundle.pem}
+# Add under the existing runner container's volumeMounts, retaining /workspace:
+containers:
+  - name: guest
+    volumeMounts:
+      - {name: egress-trust, mountPath: /run/ate}
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_DATA
+  onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
+  onResume: {fromData: RESUME_SOURCE_COLD_BOOT}

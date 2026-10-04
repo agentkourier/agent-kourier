@@ -61,9 +61,11 @@ type Nested struct {
 // Answer are stored as JSON, so their tags are a stored format: never rename one (interaction_test.go
 // pins them).
 type Interaction struct {
-	Kind      Kind       `json:"kind"`
-	TaskID    a2a.TaskID `json:"task_id"` // the paused task, which the answer is addressed to
-	ContextID string     `json:"context_id"`
+	// TextReplies permits queued plain-text answers to this question.
+	TextReplies bool       `json:"text_replies,omitempty"`
+	Kind        Kind       `json:"kind"`
+	TaskID      a2a.TaskID `json:"task_id"` // the paused task, which the answer is addressed to
+	ContextID   string     `json:"context_id"`
 	// Hint is the agent's own one-line description of the pause, when it sends one. It is
 	// untrusted text, like every question and tool argument.
 	Hint      string     `json:"hint"`

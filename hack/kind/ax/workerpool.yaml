@@ -1,0 +1,10 @@
+# Same Substrate worker runtime as the kagent full tier, owned by the AX test namespace.
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: courier-ax
+  namespace: courier-ax
+spec:
+  replicas: 1
+  sandboxClass: gvisor
+  workerImage: ghcr.io/kagent-dev/substrate/ateom-gvisor:v0.3.0-alpha1

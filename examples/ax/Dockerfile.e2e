@@ -1,0 +1,20 @@
+# Test-only binary and the unmodified, go.mod-pinned AX control plane/CLI.
+FROM golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/ax-task-runner ./cmd/ax-task-runner
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/ax-e2e-agent ./cmd/e2e-agent
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/e2e-control ./cmd/e2e-control
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/ax-server github.com/google/ax/cmd/ax-server
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/ax github.com/google/ax/cmd/ax
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/ax-task-runner /usr/local/bin/ax-task-runner
+COPY --from=build /out/ax-e2e-agent /usr/local/bin/ax-e2e-agent
+COPY --from=build /out/e2e-control /usr/local/bin/e2e-control
+COPY --from=build /out/ax-server /usr/local/bin/ax-server
+COPY --from=build /out/ax /usr/local/bin/ax
+ENTRYPOINT ["/usr/local/bin/ax-task-runner"]

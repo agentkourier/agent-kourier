@@ -69,6 +69,8 @@ type PressConfig struct {
 	// (default 2 minutes), before the person is told to press again. It is for that alone: a press whose
 	// check of the person fails is kept until the worker gives up on it.
 	EarlyFor time.Duration
+	// GiveUpAfter bounds failed text-answer retries; default matches the press worker.
+	GiveUpAfter time.Duration
 	// Notify, if set, is called with each press recorded, for the worker (WP-33d1d) to pick it up. It runs
 	// in Press, on the path that acknowledges the button to Slack, so it must never block: a hand-off to a
 	// buffered or unbounded queue, as Worker.Submit is, and not to a channel a worker may not be reading.
@@ -99,6 +101,9 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 	}
 	if cfg.EarlyFor <= 0 {
 		cfg.EarlyFor = 2 * time.Minute
+	}
+	if cfg.GiveUpAfter <= 0 {
+		cfg.GiveUpAfter = defaultGiveUpAfter
 	}
 	return &Pipeline{cfg}, nil
 }

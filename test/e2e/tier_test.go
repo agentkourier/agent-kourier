@@ -3,7 +3,7 @@ package e2e
 import "testing"
 
 func TestCheckTier(t *testing.T) {
-	for _, tier := range []string{"fast", "full"} {
+	for _, tier := range []string{"fast", "full", "ax"} {
 		if err := CheckTier(tier); err != nil {
 			t.Errorf("CheckTier(%q) = %v; want nil", tier, err)
 		}

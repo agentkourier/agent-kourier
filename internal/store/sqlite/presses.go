@@ -107,8 +107,14 @@ func (s *Store) PendingPresses(ctx context.Context, interactionID string, before
 		return false, fmt.Errorf("pending presses: an interaction and a time are required: %w", store.ErrInvalid)
 	}
 	var found bool
-	err := s.read.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM interaction_presses WHERE interaction_id = ? AND pressed_at <= ?)`,
-		interactionID, ts(before)).Scan(&found)
+	err := s.read.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM interaction_presses WHERE interaction_id = ? AND pressed_at <= ?)
+		OR EXISTS (SELECT 1 FROM reply_queue WHERE interaction_id = ? AND delivered_at IS NULL AND enqueued_at <= ?)
+		OR EXISTS (SELECT 1 FROM interactions i JOIN reply_queue r
+		ON r.connection = i.connection AND r.channel = i.channel AND r.thread_ts = i.thread_ts
+		WHERE i.id = ? AND i.text_replies = 1 AND i.state = 'pending' AND i.message_ref <> ''
+		AND r.interaction_id = '' AND r.delivered_at IS NULL AND r.enqueued_at >= i.created_at
+		AND r.enqueued_at <= ?)`,
+		interactionID, ts(before), interactionID, ts(before), interactionID, ts(before)).Scan(&found)
 	if err != nil {
 		return false, fmt.Errorf("pending presses of %s: %w", interactionID, err)
 	}

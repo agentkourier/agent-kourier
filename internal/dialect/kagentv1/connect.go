@@ -76,22 +76,36 @@ func (d *Dialect) Connect(ctx context.Context, backend *v1alpha1.AgentBackend, a
 	}
 	endpoint, err := d.Endpoint(backend, agent)
 	if err != nil {
-		return nil, fmt.Errorf("connect to agent %s/%s: %w", agent.Namespace, agent.Name, err)
+		return nil, fmt.Errorf("connect to endpoint: %w", err)
+	}
+	return d.ConnectEndpoint(ctx, endpoint, creds, HITLExtension)
+}
+
+// ConnectEndpoint connects to an exact A2A endpoint with the same credential protections as kagent.
+// extensions lists the extensions this caller understands; an empty list negotiates none.
+func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds dialect.Credentials, extensions ...string) (*a2aclient.Client, error) {
+	if d.base == nil {
+		return nil, errors.New("a2a: Connect needs a dialect built with New")
 	}
 	frontDoor, err := url.Parse(endpoint) // valid: Endpoint checked it, and it holds no credentials
 	if err != nil {
-		return nil, fmt.Errorf("connect to agent %s/%s: %w", agent.Namespace, agent.Name, err)
+		return nil, fmt.Errorf("connect to endpoint: %w", err)
 	}
 	hc := d.httpClient(creds, frontDoor)
-	card, err := agentcard.NewResolver(hc).Resolve(ctx, endpoint+cardPath)
+	card, err := agentcard.NewResolver(hc).Resolve(ctx, strings.TrimRight(endpoint, "/")+cardPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve card of agent %s/%s: %w", agent.Namespace, agent.Name, err)
+		return nil, fmt.Errorf("resolve agent card: %w", err)
+	}
+	for _, ext := range card.Capabilities.Extensions {
+		if ext.Required && !slices.Contains(extensions, ext.URI) {
+			return nil, errors.New("agent requires an unsupported extension")
+		}
 	}
 	card.SupportedInterfaces = slices.DeleteFunc(card.SupportedInterfaces, func(i *a2a.AgentInterface) bool {
 		return i == nil || i.ProtocolBinding != a2a.TransportProtocolJSONRPC
 	})
 	if len(card.SupportedInterfaces) == 0 {
-		return nil, fmt.Errorf("card of agent %s/%s lists no JSON-RPC interface", agent.Namespace, agent.Name)
+		return nil, errors.New("agent card lists no JSON-RPC interface")
 	}
 	for _, i := range card.SupportedInterfaces {
 		i.URL = endpoint
@@ -99,10 +113,10 @@ func (d *Dialect) Connect(ctx context.Context, backend *v1alpha1.AgentBackend, a
 	// Defaults off, so JSON-RPC over hc is the only transport the client can pick.
 	client, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithDefaultsDisabled(),
-		a2aclient.WithCallInterceptors(a2aext.NewActivator(HITLExtension)),
+		a2aclient.WithCallInterceptors(a2aext.NewActivator(extensions...)),
 		a2aclient.WithJSONRPCTransport(hc))
 	if err != nil {
-		return nil, fmt.Errorf("create client for agent %s/%s: %w", agent.Namespace, agent.Name, err)
+		return nil, fmt.Errorf("create agent client: %w", err)
 	}
 	return client, nil
 }

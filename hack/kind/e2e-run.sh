@@ -4,7 +4,7 @@
 # e2e (hack/kind/e2e/runner.yaml). The tests then reach the test doubles by their ClusterIP Service
 # names, and nothing is published to the host: the fake Slack's /_control/ has no authentication.
 # The Job's logs are printed, the Job is deleted, and the exit status is the test result.
-# Usage: e2e-run.sh fast|full. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
+# Usage: e2e-run.sh fast|full|ax. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
 # have the same doubles in namespaces e2e and monitoring, so the same tests run in both.
 #
 # Every kubectl call names --context kind-courier-<tier> and every kind call names
@@ -48,7 +48,11 @@ else
 fi
 # The full tier's agents are reached with the Binding's Dex ID token, which lasts 24 hours: make a fresh one for
 # the run, so that a tier that has been up a day does not fail on a token that expired.
-[ "${tier}" != full ] || refresh_dex_token
+[ "${tier}" = fast ] || refresh_dex_token
+if [ "${tier}" = ax ]; then
+  "${K[@]}" -n e2e rollout status deploy/ax-gates --timeout=540s
+  settle_ax_tier
+fi
 
 BUILD=$(mktemp -d)
 
@@ -72,6 +76,7 @@ echo "==> run the Job in ${CTX}"
 case "${tier}" in
   fast) gate_url=http://stubagent.e2e.svc.cluster.local:8080 ;;
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
+  ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
 esac
 sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" "${HERE}/e2e/runner.yaml" | "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=

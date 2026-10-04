@@ -151,6 +151,7 @@ type fixture struct {
 	attr             func(*a2a.Message, dialect.User)
 	bindingErr       error // when set, every Binding lookup fails with it (guarded by amu)
 	noRejected       bool  // the Backend has no identity Source to call Rejected on
+	textReplies      bool
 	output           v1alpha1.OutputMode
 }
 
@@ -185,7 +186,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output}
+	b := Backend{TextReplies: f.textReplies, ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output}
 	if f.noRejected {
 		b.Rejected = nil
 	}

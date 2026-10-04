@@ -1,0 +1,16 @@
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s2, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: ax-memory}
+    namespace: courier-ax
+    name: memory
+  identity:
+    userId: courier-ax
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: CS2
+    output: live
+  interactions: {askUser: true, toolApprovals: false}

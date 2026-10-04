@@ -47,20 +47,33 @@ func TestDexTokenIsTheSentinelLine(t *testing.T) {
 	}
 }
 
-// TestARunInTheFullTierStartsFromAFreshToken: the Binding's Dex token lasts 24 hours, so e2e-run.sh makes a new one
-// for a full-tier run, after it has checked the context it will act on and before it starts the Job. A fast-tier
+// TestARunInAnOIDCTierStartsFromAFreshToken: the Binding's Dex token lasts 24 hours, so e2e-run.sh makes a new one
+// for full and AX runs, after it has checked the context it will act on and before it starts the Job. A fast-tier
 // run, whose token is not Dex's, does not.
-func TestARunInTheFullTierStartsFromAFreshToken(t *testing.T) {
+func TestARunInAnOIDCTierStartsFromAFreshToken(t *testing.T) {
 	raw, err := os.ReadFile("../../hack/kind/e2e-run.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(raw)
-	check, refresh, job := `assert_context "${tier}"`, `[ "${tier}" != full ] || refresh_dex_token`, `echo "==> run the Job in`
+	check, refresh, job := `assert_context "${tier}"`, `[ "${tier}" = fast ] || refresh_dex_token`, `echo "==> run the Job in`
 	i, j, k := strings.Index(script, check), strings.Index(script, refresh), strings.Index(script, job)
 	if i < 0 || j < 0 || k < 0 || i >= j || j >= k {
-		t.Errorf("e2e-run.sh has the context check at %d, the full-tier refresh at %d and the Job at %d; want that order, so the token is made on the checked context, before the run", i, j, k)
+		t.Errorf("e2e-run.sh has the context check at %d, the OIDC-tier refresh at %d and the Job at %d; want that order, so the token is made on the checked context, before the run", i, j, k)
 	}
+	for _, tier := range []string{"fast", "full", "ax"} {
+		t.Run(tier, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", "refresh_dex_token() { echo refreshed; }; tier=$1; "+refresh, "refresh-test", tier)
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if refreshed := strings.TrimSpace(string(out)) == "refreshed"; refreshed != (tier != "fast") {
+				t.Errorf("tier %s refreshed = %v", tier, refreshed)
+			}
+		})
+	}
+
 }
 
 // TestAnInterruptedRunLeavesNoTokenPod: a Ctrl-C during the pod's `kubectl run` skips the function's RETURN trap, so

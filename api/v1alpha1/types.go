@@ -94,7 +94,8 @@ type AgentBackendList struct {
 type AgentBackendSpec struct {
 	// +kubebuilder:validation:Enum=a2a;kagent-v1
 	Dialect Dialect `json:"dialect"`
-	// URL is the http or https base URL of the backend.
+	// URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a.
+	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
 	// Headers are sent on every request.

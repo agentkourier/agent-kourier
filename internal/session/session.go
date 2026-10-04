@@ -48,6 +48,8 @@ type AgentAPI interface {
 type Backend struct {
 	// Name, AgentName and Dialect identify configured backend resources for spans.
 	Name, AgentName, Dialect string
+	// TextReplies allows queued thread replies to answer plain-text pauses.
+	TextReplies bool
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.
@@ -197,6 +199,10 @@ type Config struct {
 	Now      func() time.Time
 	Logger   *slog.Logger
 	Audit    Auditor // required: a failure the manager must record is never dropped (spec 8.6 step 7)
+	// TextReply durably decides a queued answer through the interaction policy and audit.
+	// False means the prompt is not ready; the queue remains intact.
+	// store.ErrReplyNotAnswer keeps the reply queued as an ordinary turn.
+	TextReply func(context.Context, Key, store.Reply, a2a.Task) (bool, error)
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.

@@ -279,3 +279,45 @@ func TestSecureDeleteAndThePendingIndex(t *testing.T) {
 		t.Errorf("query plan = %q, %v; want it to use interaction_presses_interaction", plan, err)
 	}
 }
+
+func TestTimelyUnclaimedTextReplyDelaysTimeoutOnlyForTextQuestions(t *testing.T) {
+	for _, textReplies := range []bool{false, true} {
+		t.Run(fmt.Sprintf("text_replies_%v", textReplies), func(t *testing.T) {
+			s := openTemp(t)
+			ctx := t.Context()
+			i := newInteraction("question", time.Minute)
+			i.TextReplies = textReplies
+			if _, err := s.CreateInteraction(ctx, i); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetInteractionMessageRef(ctx, i.ID, "prompt"); err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				at   time.Time
+				want bool
+			}{
+				{"before question", t0.Add(-time.Second), false},
+				{"after deadline", i.Deadline.Add(time.Nanosecond), false},
+				{"in time", i.Deadline.Add(-time.Second), textReplies},
+			} {
+				r := newReply(tc.name, i.Key)
+				r.EnqueuedAt = tc.at
+				if _, err := s.EnqueueReply(ctx, r); err != nil {
+					t.Fatal(err)
+				}
+				pending, err := s.PendingPresses(ctx, i.ID, i.Deadline)
+				if err != nil || pending != tc.want {
+					t.Fatalf("%s pending=%v error=%v", tc.name, pending, err)
+				}
+				if err := s.MarkReplyDelivered(ctx, r.ID, t0.Add(time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if pending, err := s.PendingPresses(ctx, i.ID, i.Deadline); err != nil || pending {
+				t.Fatalf("consumed replies pending=%v error=%v", pending, err)
+			}
+		})
+	}
+}

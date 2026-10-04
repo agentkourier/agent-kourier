@@ -318,7 +318,7 @@ Courier speaks A2A 1.0 over JSON-RPC: `SendStreamingMessage`, `GetTask`,
 
 | Dialect | Chat and alerts | Approvals | Notes |
 |---|---|---|---|
-| `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text, and the next thread reply is sent as a plain message. | Any A2A 1.0 agent that does not advertise a structured HITL extension |
+| `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text. Replies enqueued after the question pass the same authorization, audit, and deadline checks as Submit before being sent as plain messages. | A2A 1.0 agents without a structured HITL extension, with a card at the exact RPC URL plus `/.well-known/agent-card.json`, as AX serves it |
 | `kagent-v1` | Yes | Yes: tool approvals, ask-user questions, and nested sub-agent interactions, through extension `https://kagent.dev/extensions/hitl/v1` | `POST /agents/{ns}/{name}`, card at `.well-known/agent-card.json`. Auth by bearer token in OIDC mode, or `X-User-Id` in insecure mode. |
 
 kagent 1.0.0-alpha5 validates HITL responses far less than assumed (WP-02, measured). Too
@@ -991,6 +991,7 @@ simulated alert webhooks and a simulated Slack, before it reaches the pilot.
 | Unit | Every change | Go tests, no cluster | Logic, parsing, state transitions |
 | E2E fast | Every change that touches a flow | kind; real Alertmanager (prometheus-operator); fake Slack; stub A2A agent; courier; a sink receiver | Courier's flows, quickly and deterministically |
 | E2E full | Phase gates, and when the kagent pin changes | kind; Agent Substrate (gVisor); pinned kagent 1.0 alpha; `kagent-dev/mockllm` as the model; Dex for OIDC; fake Slack; Alertmanager; courier | Real kagent behavior: session ownership, busy rejection, HITL payloads, OIDC service identity |
+| E2E AX | When AX/ADK or generic A2A changes | Separate kind cluster; pinned unmodified AX, Redis, Substrate (gVisor), persistent ADK/A2A server, deterministic model, Dex, fake Slack, Alertmanager, courier | Shared streaming, queue, context and outbox scenarios; authorized plain-text question replies, restart recovery, actor suspend/resume and deadlines. Structured kagent tool approvals are explicitly excluded. |
 | Live smoke | Pilot start, manually | Pilot environment, real Slack sandbox workspace | Things fakes cannot prove: Slack rate limits, real rendering |
 
 Components:
@@ -1012,6 +1013,10 @@ Components:
   OpenAI-compatible server kagent uses in its own E2E suite. It returns fixed text and
   tool calls, including ask-user calls, so full-tier runs cost nothing and are
   repeatable.
+- **AX fixture model.** The separate test agent runs deterministic ADK responses through the same
+  persistent server as the Bedrock reference. Its cluster-local controls release gates and call
+  AX task lifecycle RPCs. Tests check Substrate state as well as AX phase. `make ax-smoke`
+  exercises actual Bedrock/Haiku calls separately. See `hack/kind/ax/README.md`.
 - **Fault injection.** A build tag compiles hooks into test images only, for example
   crash-after-post for the outbox test (8.6). Production images do not contain them.
 

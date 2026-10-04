@@ -192,7 +192,7 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 		kind = store.InteractionToolApproval
 	}
 	id := InteractionID(in)
-	row := store.Interaction{ID: id, Key: p.Key, TaskID: string(in.TaskID), Kind: kind, Request: request, CreatedAt: at, Deadline: at.Add(b.Timeout)}
+	row := store.Interaction{TextReplies: in.TextReplies, ID: id, Key: p.Key, TaskID: string(in.TaskID), Kind: kind, Request: request, CreatedAt: at, Deadline: at.Add(b.Timeout)}
 	if _, err := i.cfg.Store.CreateInteraction(ctx, row); err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: record %s: %w", id, err)
 	}

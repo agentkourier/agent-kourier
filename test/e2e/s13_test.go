@@ -23,6 +23,9 @@ import (
 // reply. The assertions do not depend on how the text is split into artifacts, only on each piece being said once.
 func TestS13_AToolCallIsAStepCardAndAFailedOneIsAnError(t *testing.T) {
 	s := newScenario(t)
+	if s.env.Tier == "ax" {
+		t.Skip("generic A2A leaves backend-specific tool parts opaque")
+	}
 	m := s.mention(ChannelS13, "US13", "check the api service and restart it")
 
 	pieces := []string{"Checking the service.", "It is up, so I will restart it.", "The restart was refused."}

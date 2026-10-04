@@ -12,14 +12,14 @@ import (
 )
 
 const interactionCols = `id, connection, channel, thread_ts, task_id, kind, state, request, message_ref,
-	created_at, deadline, answer, decider, decided_at, delivered_at, trace_parent, trace_state`
+	created_at, deadline, answer, decider, decided_at, delivered_at, trace_parent, trace_state, text_replies`
 
 // scanInteraction reads one row selected with interactionCols.
 func scanInteraction(row interface{ Scan(...any) error }) (store.Interaction, error) {
 	var i store.Interaction
 	var created, deadline, decided, delivered int64
 	err := row.Scan(&i.ID, &i.Key.Connection, &i.Key.Channel, &i.Key.Thread, &i.TaskID, &i.Kind, &i.State,
-		&i.Request, &i.MessageRef, &created, &deadline, &i.Answer, &i.Decider, &decided, &delivered, &i.TraceParent, &i.TraceState)
+		&i.Request, &i.MessageRef, &created, &deadline, &i.Answer, &i.Decider, &decided, &delivered, &i.TraceParent, &i.TraceState, &i.TextReplies)
 	if err != nil {
 		return store.Interaction{}, err
 	}
@@ -48,9 +48,9 @@ func (s *Store) CreateInteraction(ctx context.Context, i store.Interaction) (tel
 		i.Request = []byte{} // a nil slice would bind as NULL
 	}
 	n, err := s.exec(ctx, `INSERT INTO interactions (id, connection, channel, thread_ts, task_id, kind, request,
-		created_at, deadline, trace_parent, trace_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		created_at, deadline, trace_parent, trace_state, text_replies) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		i.ID, i.Key.Connection, i.Key.Channel, i.Key.Thread, i.TaskID, string(i.Kind), i.Request,
-		ts(i.CreatedAt), ts(i.Deadline), i.TraceParent, i.TraceState)
+		ts(i.CreatedAt), ts(i.Deadline), i.TraceParent, i.TraceState, i.TextReplies)
 	if err != nil {
 		return false, fmt.Errorf("create interaction %q: %w", i.ID, err)
 	}

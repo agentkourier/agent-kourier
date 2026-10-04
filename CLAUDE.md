@@ -40,9 +40,11 @@ Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive)
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
 - `make fmt lint test build tidy`: `test` runs `go test -race ./...` and then `go test -race -tags testhooks ./internal/...`; `build` writes `bin/courier`.
-- `make e2e-fast-up` / `e2e-full-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
-  `e2e-full-down` and `e2e-down` (both) tear them down. `e2e-fast` / `e2e-full` run the E2E tests in that tier
+- `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
+  `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
+- AX fixtures use the separate `examples/ax` module and unmodified pinned AX/Substrate APIs; see
+  `hack/kind/ax/README.md` for shared scenarios and capability differences. `make ax-smoke` exercises Bedrock/Haiku.
 - `make image` builds `courier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless
   images, in `hack/kind/lib.sh`); `make image-testhooks` builds `courier-e2e/courier-testhooks:dev`, the
   labelled test image the kind tiers run and nothing pushes; `make image-check` proves the production

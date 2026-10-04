@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -157,5 +158,60 @@ func TestReplyQueueConcurrentEnqueueKeepsOneSequence(t *testing.T) {
 		if err := s.MarkReplyDelivered(ctx, got.ID, t0); err != nil {
 			t.Fatalf("mark delivered: %v", err)
 		}
+	}
+}
+
+func TestReplyQueueCursorKeepsEarlierTurnsQueued(t *testing.T) {
+	s := openTemp(t)
+	for _, id := range []string{"earlier", "answer", "later"} {
+		if _, err := s.EnqueueReply(t.Context(), newReply(id, key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	head, _ := s.NextReply(t.Context(), key)
+	answer, err := s.NextReplyAfter(t.Context(), key, head.Sequence)
+	if err != nil || answer.ID != "answer" {
+		t.Fatalf("cursor = %+v, %v", answer, err)
+	}
+	if err := s.MarkReplyDelivered(t.Context(), answer.ID, t0); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.NextReply(t.Context(), key); err != nil || got.ID != "earlier" {
+		t.Fatalf("earlier turn lost: %+v, %v", got, err)
+	}
+	if got, err := s.NextReplyAfter(t.Context(), key, answer.Sequence); err != nil || got.ID != "later" {
+		t.Fatalf("later reply = %+v, %v", got, err)
+	}
+}
+
+// A database from current main must gain the reply claim without losing queued
+// turns or the trace context persisted by migration 12.
+func TestReplyClaimMigrationUpgradesCurrentMain(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "courier.db")
+	databaseAt(t, path, 14)
+	db, err := openPool(ctx, path, 1, "journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO reply_queue (id, connection, channel, thread_ts, user_id, message_ts, text, enqueued_at, trace_parent, trace_state) VALUES ('upgrade', 'slack', 'C1', '1.1', 'U1', '1.2', 'answer', ?, 'parent', 'state')`, ts(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := openAt(t, path)
+	key := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
+	r, err := s.NextReply(ctx, key)
+	if err != nil || r.Text != "answer" || r.InteractionID != "" || r.TraceParent != "parent" || r.TraceState != "state" {
+		t.Fatalf("upgraded reply = %+v, %v", r, err)
+	}
+	if err := s.ClaimReplyInteraction(ctx, r.ID, "question"); err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.NextReplyAfter(ctx, key, 0)
+	if err != nil || r.InteractionID != "question" || r.TraceParent != "parent" || r.TraceState != "state" {
+		t.Fatalf("claimed upgraded reply = %+v, %v", r, err)
 	}
 }

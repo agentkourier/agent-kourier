@@ -22,27 +22,32 @@ import (
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
 // Only the runner reads and writes tries and ttl; the Manager's mutex guards the rest.
 type convo struct {
-	again      bool            // a wake arrived while the runner was busy
-	tries      int             // sends of the head turn that failed in a way to retry, in a row
-	since      time.Time       // when the first of them failed, for SendGiveUp
-	unreached  int             // sends or lookups of the head turn that failed to reach the agent, in a row: the second tells the thread
-	busyNoted  bool            // the thread was told the reply is queued behind a task nobody recorded
-	waitSince  time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
-	waitNoted  bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
-	lastSeen   time.Time       // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
-	life       life            // what courier already holds of that task, so a replayed snapshot is not life
-	cancelFrom time.Time       // when the first attempt to cancel a wedged task was made, for SendGiveUp
-	cancelNow  bool            // the task is known to be wedged: cancel it at once, without waiting for its age
-	patient    bool            // the turn is never given up on: the agent may have taken it
-	follow     *tstate         // the turn whose task is followed again, after its stream was lost
-	paused     *tstate         // the turn whose task waits for input, while it does
-	answers    chan answerWork // answers to the paused task, for the parked runner to send
-	attach     *tstate         // a recovered task for the runner to take up; guarded by the Manager's mutex
-	ttl        time.Duration   // the Binding's threadTTL, for end
-	parked     a2a.TaskID      // the task the runner waits on, while it waits for input
-	driving    a2a.TaskID      // the task the runner streams or follows, between named and ended
-	released   bool            // the pause ended, and the runner has not yet moved on
-	resume     chan struct{}   // tells the parked runner that the pause ended
+	again        bool            // a wake arrived while the runner was busy
+	tries        int             // sends of the head turn that failed in a way to retry, in a row
+	since        time.Time       // when the first of them failed, for SendGiveUp
+	unreached    int             // sends or lookups of the head turn that failed to reach the agent, in a row: the second tells the thread
+	busyNoted    bool            // the thread was told the reply is queued behind a task nobody recorded
+	waitSince    time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
+	waitNoted    bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
+	lastSeen     time.Time       // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
+	life         life            // what courier already holds of that task, so a replayed snapshot is not life
+	cancelFrom   time.Time       // when the first attempt to cancel a wedged task was made, for SendGiveUp
+	cancelNow    bool            // the task is known to be wedged: cancel it at once, without waiting for its age
+	patient      bool            // the turn is never given up on: the agent may have taken it
+	follow       *tstate         // the turn whose task is followed again, after its stream was lost
+	paused       *tstate         // the turn whose task waits for input, while it does
+	answers      chan answerWork // answers to the paused task, for the parked runner to send
+	attach       *tstate         // a recovered task for the runner to take up; guarded by the Manager's mutex
+	ttl          time.Duration   // the Binding's threadTTL, for end
+	parked       a2a.TaskID      // the task the runner waits on, while it waits for input
+	driving      a2a.TaskID      // the task the runner streams or follows, between named and ended
+	released     bool            // the pause ended, and the runner has not yet moved on
+	resume       chan struct{}   // tells the parked runner that the pause ended
+	textRejected bool            // credential rejection was reported for this pause
+	textTries    int
+	textAfter    int64         // queue cursor for the current question; skipped replies stay queued
+	pendingReply store.Reply   // decided reply whose delivery write must succeed before its answer is sent
+	queued       chan struct{} // wakes a parked text-question runner
 }
 
 // outcome is how one turn left the conversation: nothing queued, the task ended, or the task
@@ -65,6 +70,10 @@ func (m *Manager) start(key Key) {
 	}
 	if c, ok := m.convos[key]; ok {
 		c.again = true
+		select {
+		case c.queued <- struct{}{}:
+		default:
+		}
 		return
 	}
 	c := m.newConvo(key)
@@ -98,7 +107,7 @@ func (m *Manager) adopt(key Key, t *tstate) {
 
 // newConvo registers a conversation's state. The caller holds m.mu.
 func (m *Manager) newConvo(key Key) *convo {
-	c := &convo{resume: make(chan struct{}, 1), answers: make(chan answerWork, 1)}
+	c := &convo{resume: make(chan struct{}, 1), answers: make(chan answerWork, 1), queued: make(chan struct{}, 1)}
 	m.convos[key] = c
 	telemetry.AddGauge(m.ctx, "courier_sessions_active", 1)
 	return c
@@ -223,19 +232,78 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 	defer telemetry.AddGauge(m.ctx, "courier_sessions_paused", -1)
 	select {
 	case <-c.resume:
-		// The park, and its release, stay until the record is cleared: a duplicate endPause in between
-		// must still be refused, not find a runner that is neither parked nor driving.
-		if err := m.end(context.WithoutCancel(m.ctx), key, c.ttl); err != nil {
-			m.cfg.Logger.Error("end paused task", "key", key, "error", err)
+		return m.releasePause(key, c)
+	default:
+	}
+	// Persist consumption before sending a decided answer, including after a write retry.
+	if err := m.flushTextReply(c); err != nil {
+		return m.waitTextReply(key, c, err)
+	}
+	select {
+	case msg := <-c.answers:
+		return m.answer(c, msg)
+	default:
+	}
+	m.mu.Lock()
+	textReply := m.cfg.TextReply
+	m.mu.Unlock()
+	if c.paused != nil && c.paused.b.TextReplies && textReply != nil {
+		r, err := m.cfg.Store.NextReplyAfter(m.ctx, key, c.textAfter)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return m.waitTextReply(key, c, err)
 		}
-		m.mu.Lock()
-		over := c.paused // the turn that paused
-		c.parked, c.released, c.paused = "", false, nil
-		m.mu.Unlock()
-		if over != nil {
-			m.finish(over, TurnPauseEnded)
+		if err == nil {
+			task, err := c.paused.b.Agent.GetTask(m.ctx, c.paused.taskID)
+			if errors.Is(err, a2a.ErrTaskNotFound) {
+				return m.releasePause(key, c)
+			}
+			if err != nil {
+				if errors.Is(err, agent.ErrCredentialsRejected) && !c.textRejected {
+					c.textRejected = true
+					m.rejected(c.paused, err)
+				}
+				return m.waitTextReply(key, c, err)
+			}
+			if task.Status.State.Terminal() {
+				return m.releasePause(key, c)
+			}
+			if task.Status.State != a2a.TaskStateInputRequired {
+				if !running(task) {
+					return m.waitTextReply(key, c, nil)
+				}
+				if c.since.IsZero() {
+					c.since = m.cfg.Now()
+				}
+				c.follow = c.paused
+				m.unpark(c)
+				return m.resume(c)
+			}
+			done, err := textReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, *task)
+			if errors.Is(err, store.ErrReplyNotAnswer) {
+				c.textAfter = r.Sequence
+				return paused, nil
+			}
+			if err != nil || !done {
+				return m.waitTextReply(key, c, err)
+			}
+			c.pendingReply = r
+			if err := m.flushTextReply(c); err != nil {
+				return m.waitTextReply(key, c, err)
+			}
+			select {
+			case msg := <-c.answers:
+				return m.answer(c, msg)
+			default:
+				// Drain rejected replies even when their enqueue wakes coalesced.
+				return paused, nil
+			}
 		}
-		return ended, nil
+	}
+	select {
+	case <-c.queued:
+		return paused, nil
+	case <-c.resume:
+		return m.releasePause(key, c)
 	case msg := <-c.answers:
 		return m.answer(c, msg)
 	case <-m.ctx.Done():
@@ -243,9 +311,81 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 	}
 }
 
+// releasePause clears a pause once, without requeueing its end signal.
+func (m *Manager) releasePause(key Key, c *convo) (outcome, error) {
+	m.mu.Lock()
+	c.released = true
+	m.mu.Unlock()
+	// The park, and its release, stay until the record is cleared: a duplicate endPause in between
+	// must still be refused, not find a runner that is neither parked nor driving.
+	if err := m.end(context.WithoutCancel(m.ctx), key, c.ttl); err != nil {
+		m.cfg.Logger.Error("end paused task", "key", key, "error", err)
+	}
+	m.mu.Lock()
+	over := c.paused // the turn that paused
+	c.parked, c.released, c.paused = "", false, nil
+	select {
+	case <-c.resume:
+	default:
+	}
+	select {
+	case <-c.answers:
+	default:
+	}
+	m.mu.Unlock()
+	if over != nil {
+		m.finish(over, TurnPauseEnded)
+	}
+	return ended, nil
+}
+
+// flushTextReply retries only the queue write; the decision and answer are not repeated.
+func (m *Manager) flushTextReply(c *convo) error {
+	if c.pendingReply.ID == "" {
+		return nil
+	}
+	if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), c.pendingReply.ID, m.cfg.Now()); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if _, fresh := m.fresh[c.pendingReply.ID]; !fresh {
+		m.marked[c.pendingReply.ID] = struct{}{}
+	}
+	delete(m.fresh, c.pendingReply.ID)
+	m.mu.Unlock()
+	m.unqueue(&tstate{key: c.pendingReply.Key, r: c.pendingReply})
+	c.pendingReply = store.Reply{}
+	c.textTries, c.tries = 0, 0
+	return nil
+}
+
+// waitTextReply bounds retries and handles cancellation without sending an unrecorded answer.
+func (m *Manager) waitTextReply(key Key, c *convo, err error) (outcome, error) {
+	c.textTries++
+	answers := c.answers
+	if c.pendingReply.ID != "" {
+		// A decided text answer must wait until its queue delivery write succeeds.
+		answers = nil
+	}
+	select {
+	case work := <-answers:
+		return m.answer(c, work)
+	case <-c.resume:
+		return m.releasePause(key, c)
+	case <-m.cfg.After(m.backoff(c.textTries)):
+		return paused, err
+	case <-m.ctx.Done():
+		return ended, m.ctx.Err()
+	}
+}
+
 // turn sends the oldest queued turn of key and follows it until its task ends or pauses.
 // Store writes ignore a shutdown, so an accepted turn is never left unrecorded.
 func (m *Manager) turn(key Key, c *convo) (outcome, error) {
+	if err := m.flushTextReply(c); err != nil {
+		c.tries++
+		return blocked, err
+	}
 	m.mu.Lock()
 	var taken *tstate
 	if a := c.attach; a != nil { // Recover found a task for this conversation
@@ -301,6 +441,29 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		return ended, nil
 	} else if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
+	}
+	// A claimed answer left by a crash must be reconciled with its original question,
+	// never sent as an ordinary turn after the task ends.
+	if r.InteractionID != "" && backend.TextReplies {
+		m.mu.Lock()
+		textReply := m.cfg.TextReply
+		m.mu.Unlock()
+		if textReply == nil {
+			c.tries++
+			return blocked, errors.New("session: claimed text reply has no handler")
+		}
+		done, err := textReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, a2a.Task{})
+		if err != nil || !done {
+			c.tries++
+			return blocked, err
+		}
+		c.pendingReply = r
+		if err := m.flushTextReply(c); err != nil {
+			c.tries++
+			return blocked, err
+		}
+		c.tries = 0
+		return ended, nil
 	}
 	c.ttl = backend.ThreadTTL
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
@@ -538,6 +701,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 				// The pause is rendered inside this handler, and whoever renders it may end it at
 				// once: the runner must already be parked on this task.
 				m.mu.Lock()
+				c.textAfter, c.textTries, c.textRejected = 0, 0, false
 				c.parked, c.paused, c.driving = final.ID, t, "" // a pause is not a stream
 				m.mu.Unlock()
 			}

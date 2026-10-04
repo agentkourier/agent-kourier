@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -62,16 +63,17 @@ type Bindings struct {
 	secrets identity.SecretReader
 	aud     identity.Auditor
 	opts    Options
-	kits    map[v1alpha1.Dialect]kit // one pool per dialect; kagent-v1 is the only one built
+	kits    map[v1alpha1.Dialect]kit // one pool per dialect; a2a and kagent-v1
 }
 
 // NewBindings returns Bindings that read the config from snaps, Secrets through secrets, and
 // record rejected credentials through aud. Close it when done.
 func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Auditor, opts Options) *Bindings {
 	d := kagentv1.New(opts.ResponseTimeout)
+	g := generic.New(opts.ResponseTimeout)
 	return &Bindings{
 		snaps: snaps, secrets: secrets, aud: aud, opts: opts,
-		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}},
+		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}, v1alpha1.DialectA2A: {g, agent.NewPool(g, opts.Agent), g.Attribute, g.CloseIdleConnections}},
 	}
 }
 
@@ -98,8 +100,8 @@ func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
 	}
 	k, ok := b.kits[rb.Backend.Spec.Dialect]
 	if !ok {
-		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: backend %s uses the %q dialect, and only %q is supported",
-			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1)
+		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: backend %s uses the %q dialect, supported dialects are %q and %q",
+			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectA2A)
 	}
 	return rb, k, nil
 }
@@ -119,12 +121,13 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	}
 	return session.Backend{
 		Name: v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), AgentName: v1alpha1.NamespacedName(rb.Binding.Spec.Agent.Namespace, rb.Binding.Spec.Agent.Name), Dialect: string(rb.Backend.Spec.Dialect),
-		ThreadTTL: rb.Binding.Spec.Session.ThreadTTL.Duration,
-		Agent:     k.pool.Agent(src.Target()),
-		Attribute: k.attribute,
-		Rejected:  src.Rejected,
-		Identity:  src.Identity(),
-		Output:    rb.Binding.Spec.Chat.Output,
+		ThreadTTL:   rb.Binding.Spec.Session.ThreadTTL.Duration,
+		Agent:       k.pool.Agent(src.Target()),
+		Attribute:   k.attribute,
+		Rejected:    src.Rejected,
+		Identity:    src.Identity(),
+		Output:      rb.Binding.Spec.Chat.Output,
+		TextReplies: rb.Backend.Spec.Dialect == v1alpha1.DialectA2A,
 	}, nil
 }
 

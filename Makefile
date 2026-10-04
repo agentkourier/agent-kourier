@@ -57,7 +57,7 @@ e2e-full: ## Run the E2E tests in the full tier, as a Job (the tier must be up, 
 e2e-full-down: ## Tear down the full E2E tier only
 	hack/kind/down.sh full
 
-e2e-down: ## Tear down both E2E tiers
+e2e-down: ## Tear down all E2E tiers
 	hack/kind/down.sh
 
 sandbox-up: ## Dogfood tier on the full tier: courier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
@@ -71,3 +71,24 @@ sandbox-heal: ## Restart the full tier's kindnet if NetworkPolicy is not applied
 
 sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a seeded fault's alert, e.g. ALERT=KubePodCrashLooping: it posts to the real alert channel as [kind]
 	hack/kind/sandbox/alert.sh "$(ALERT)" "$(STATE)"
+
+.PHONY: ax-test ax-image ax-smoke
+ax-test: ## Test the separate AX/ADK/Bedrock reference module with the race detector
+	cd examples/ax && go test -race ./...
+	cd examples/ax && go vet ./...
+
+ax-image: ## Build the AX reference agent and runner image
+	docker build -t courier-ax:dev examples/ax
+
+ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentials file
+	bash examples/ax/smoke.sh
+
+.PHONY: e2e-ax-up e2e-ax e2e-ax-down
+e2e-ax-up: ## Bring up AX/Substrate with deterministic ADK scenarios and fake Slack
+	hack/kind/up-ax.sh
+
+e2e-ax: ## Run the shared E2E scenarios and AX text-question/lifecycle scenarios
+	hack/kind/e2e-run.sh ax
+
+e2e-ax-down: ## Tear down only the AX E2E tier
+	hack/kind/down.sh ax

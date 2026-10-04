@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrReplyNotAnswer means a reply must remain queued as an ordinary turn.
+var ErrReplyNotAnswer = errors.New("store: reply is not an answer to this question")
 
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
@@ -21,8 +25,10 @@ type Reply struct {
 	UserID   string // the platform's ID of the user who wrote the reply
 	// MessageRef is the platform's ID of the reply message, for the queued reaction.
 	MessageRef string
-	Text       string
-	EnqueuedAt time.Time
+	// InteractionID pins a text reply to its first question across recovery.
+	InteractionID string
+	Text          string
+	EnqueuedAt    time.Time
 }
 
 // ReplyQueue persists per-session FIFO queues of replies. Delivery is
@@ -42,6 +48,9 @@ type ReplyQueue interface {
 	// NextReply returns the oldest undelivered reply of the session, or
 	// ErrNotFound if there is none.
 	NextReply(ctx context.Context, key ConversationKey) (Reply, error)
+	// NextReplyAfter reads the oldest undelivered reply whose sequence exceeds after.
+	// Skipped rows remain queued; normal turns still use NextReply.
+	NextReplyAfter(ctx context.Context, key ConversationKey, after int64) (Reply, error)
 	// MarkReplyDelivered records that the reply was sent at the given time and
 	// discards its text. Marking again is a no-op. It returns ErrNotFound for
 	// an unknown ID and ErrInvalid for an empty ID or zero time.
