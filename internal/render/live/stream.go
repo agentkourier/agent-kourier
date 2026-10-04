@@ -178,9 +178,11 @@ func (u *Run) shown(v view) view {
 // reply its text, so a step that fails is not an error of the write: the text goes on, and the step is tried again with
 // the next change. A platform that refuses one for good, or says it shows none, or fails Attempts in a row, ends the
 // steps of the turn. At the final the stop must not wait on a step, so one that fails then is let go, and the steps
-// after it are still sent. A rate limit is none of these: it is an error of the write, which the run waits out as the
-// platform asked, and it is no strike against the steps, since the text would be limited as well. A stream that has
-// ended says so to the text that follows, which is where it is dealt with.
+// after it are still sent. Before the final a rate limit is none of these: it is an error of the write, which the run
+// waits out as the platform asked, and it is no strike against the steps, since the text would be limited as well. At
+// the final it is a failure like any other and the step is let go: with many steps left, at the few calls a minute a
+// platform allows, the waits would outlast the FinalDeadline and cost the stop, and the last of the text it carries.
+// A stream that has ended says so to the text that follows, which is where it is dealt with.
 //
 // When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
 // among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
@@ -199,7 +201,7 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 		u.cfg.Logger.InfoContext(ctx, "live: the stream shows no steps; the turn goes on without them", "channel", u.turn.Channel)
 		u.stepsOff, u.stepsSent = true, nil
 		return false, nil
-	case verdict.RetryAfter > 0:
+	case verdict.RetryAfter > 0 && !final:
 		return false, err
 	case verdict.Class != chat.Transient:
 		u.cfg.Logger.WarnContext(ctx, "live: the platform refused a step; the turn goes on without steps", "channel", u.turn.Channel, "err", err)

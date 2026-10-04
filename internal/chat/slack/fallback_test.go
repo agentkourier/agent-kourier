@@ -120,6 +120,71 @@ func TestAStreamOfAnotherRunInMarkdownModeIsStoppedByItsFirstTextInTheOtherMode(
 	}
 }
 
+// An ordinary failure is no refusal of the mode: a timeout or a rate limit on a start in chunks mode is not tried again in
+// markdown_text, and nothing is latched or logged, so the next stream starts in chunks mode as before. The same holds for
+// the text of a stream that is already running.
+func TestAnOrdinaryFailureLeavesTheChunksModeAlone(t *testing.T) {
+	for name, fail := range map[string]func(*counter){
+		"a timeout":    func(c *counter) { c.err = errors.New("i/o timeout") },
+		"a rate limit": func(c *counter) { c.status, c.body = http.StatusTooManyRequests, "" },
+	} {
+		heal := func(c *counter) {
+			c.mu.Lock()
+			c.err, c.status, c.body = nil, 0, ""
+			c.mu.Unlock()
+		}
+		t.Run(name+" on a start", func(t *testing.T) {
+			c, _, calls, root := updateClient(t)
+			ctx := t.Context()
+			if _, err := c.TeamID(ctx); err != nil {
+				t.Fatal(err)
+			}
+			logs := &bytes.Buffer{}
+			p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+			target := chat.Target{Channel: "C1", Thread: root}
+			fail(calls)
+			if _, err := p.Stream(ctx, target, "U1", "x"); err == nil {
+				t.Fatal("Stream succeeded through a failing transport")
+			}
+			heal(calls)
+			if n := len(calls.sent("/chat.startStream")); n > 1 {
+				t.Fatalf("%d start requests; want no second try in the other mode", n)
+			}
+			if _, err := p.Stream(ctx, target, "U1", "x"); err != nil {
+				t.Fatal(err)
+			}
+			starts := calls.sent("/chat.startStream")
+			if last := starts[len(starts)-1]; !last.Has("chunks") || logs.Len() != 0 {
+				t.Fatalf("the next start was %v, log %q; want it in chunks mode, and nothing logged", last, logs)
+			}
+		})
+		t.Run(name+" on an append", func(t *testing.T) {
+			c, _, calls, root := updateClient(t)
+			ctx := t.Context()
+			logs := &bytes.Buffer{}
+			p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+			st, err := p.Stream(ctx, chat.Target{Channel: "C1", Thread: root}, "U1", "Hel")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fail(calls)
+			if err := st.Append(ctx, "lo"); err == nil {
+				t.Fatal("Append succeeded through a failing transport")
+			}
+			heal(calls)
+			if n := len(calls.sent("/chat.appendStream")); n > 1 {
+				t.Fatalf("%d append requests; want no second try in the other mode", n)
+			}
+			if err := st.Append(ctx, "lo"); err != nil {
+				t.Fatal(err)
+			}
+			if appends := calls.sent("/chat.appendStream"); !appends[len(appends)-1].Has("chunks") || logs.Len() != 0 {
+				t.Fatalf("the stream left chunks mode, or logged: %q", logs)
+			}
+		})
+	}
+}
+
 // A start that is refused in both modes is not the chunks mode's trouble: the platform stays in it, and the error is
 // returned, with no latch.
 func TestAStartRefusedInBothModesDoesNotLatchTheFallback(t *testing.T) {

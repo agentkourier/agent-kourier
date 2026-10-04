@@ -200,3 +200,54 @@ func TestAReplyStillStreamsWhenSlackRefusesTheChunksMode(t *testing.T) {
 		t.Fatalf("the renderer warned of a stream that simply shows no steps:\n%s", e.logs)
 	}
 }
+
+// At the final a step's rate limit is a failure like any other: the step is let go, and the stop is sent. A wait for every
+// step that is limited would outlast the FinalDeadline, at the few calls a minute Slack allows, and cost the stop and the
+// last of the text it carries.
+func TestAStepsRateLimitAtTheFinalDoesNotHoldBackTheStop(t *testing.T) {
+	e := setup(t)
+	release := e.hold()
+	t.Cleanup(release)
+	limited := &slackgo.RateLimitedError{RetryAfter: 30 * time.Second}
+	steps := e.spy(t, true, func(int) error { return limited })
+	run := e.stream(t)
+	run.Handle(text("a", "Done."))
+	for i := 1; i <= 3; i++ {
+		run.Handle(call(fmt.Sprint("c", i), "step", nil))
+	}
+	run.Handle(agent.FinalEvent{})
+	release()
+	e.finish(t, run)
+	if n := steps.Load(); n != 3 {
+		t.Fatalf("%d steps asked for; want each of the three once: the run did not wait on a limit and try a step again", n)
+	}
+	m := e.reply()
+	if m.Streaming || m.Text != "Done." || m.Metadata == nil || len(m.Tasks()) != 0 {
+		t.Fatalf("message %+v tasks %+v; want the stop, with the text and the tag, and no card", m, m.Tasks())
+	}
+}
+
+// A stream that fails for now is tried again and is not posted instead: the post is for a stream that can never
+// start, and a post beside a stream that then starts would be the reply twice.
+func TestATransientFailureOfTheStreamIsRetriedAndNeverPosted(t *testing.T) {
+	e := setup(t)
+	var starts atomic.Int32
+	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFn: func() error {
+		if starts.Add(1) == 1 {
+			return errors.New("connection reset")
+		}
+		return nil
+	}}
+	e.live = live.New(e.cfg)
+	run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
+	run.Handle(text("a", "Hello"))
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+	th := e.fake.Thread("C1", e.root)
+	if len(th) != 2 || th[1].Streaming || th[1].Text != "Hello" {
+		t.Fatalf("thread %+v; want one message, the stream, with the reply", th)
+	}
+	if s, p := len(e.rec.sent("/chat.startStream")), len(e.rec.sent("/chat.postMessage")); s != 1 || p != 0 || starts.Load() != 2 {
+		t.Fatalf("%d streams started, %d posts, %d tries; want one stream after the retry and no post", s, p, starts.Load())
+	}
+}

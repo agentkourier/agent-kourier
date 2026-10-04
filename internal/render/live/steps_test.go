@@ -307,6 +307,7 @@ type spy struct {
 	steps      *atomic.Int32
 	fail       func(n int) error // the error of the nth step, or nil
 	streamFail error             // what Stream says, if it is not nil
+	streamFn   func() error      // or this, which is asked at each Stream and says nil to let it through
 }
 
 func (s spy) Capabilities() chat.Caps { return s.caps }
@@ -314,6 +315,11 @@ func (s spy) Capabilities() chat.Caps { return s.caps }
 func (s spy) Stream(ctx context.Context, t chat.Target, to, md string) (chat.Stream, error) {
 	if s.streamFail != nil {
 		return nil, s.streamFail
+	}
+	if s.streamFn != nil {
+		if err := s.streamFn(); err != nil {
+			return nil, err
+		}
 	}
 	st, err := s.Platform.Stream(ctx, t, to, md)
 	return spyStream{Stream: st, spy: s}, err
