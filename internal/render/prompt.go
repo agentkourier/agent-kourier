@@ -87,6 +87,17 @@ type TriggerMessage struct {
 	AttachmentText string
 }
 
+// MessageOf returns the untrusted block's message for m: its text and the fields of its bot's attachment, each read
+// through chat.Inbound.Field, the accessor the trigger's regexes use. It is the only place an Inbound becomes a
+// TriggerMessage; a test fills every field of the Inbound and checks each reaches the block, so a field added to
+// the Inbound later cannot be left out of what the agent sees.
+func MessageOf(m chat.Inbound) TriggerMessage {
+	return TriggerMessage{
+		Text: m.Field(v1alpha1.FieldText), Title: m.Field(v1alpha1.FieldTitle), TitleLink: m.Field(v1alpha1.FieldTitleLink),
+		Fallback: m.Field(v1alpha1.FieldFallback), Footer: m.Field(v1alpha1.FieldFooter), AttachmentText: m.Field(v1alpha1.FieldAttachmentText),
+	}
+}
+
 // Prompt is a parsed promptTemplate, ready to render the first prompt of a trigger. Parse it once
 // at load; it is safe for concurrent use.
 type Prompt struct {

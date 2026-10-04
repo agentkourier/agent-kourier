@@ -702,6 +702,67 @@ func TestPromptEveryViewFieldHasACheck(t *testing.T) {
 	}
 }
 
+// MessageOf is the one place a chat.Inbound becomes the message of the untrusted block. Every content field of the
+// Inbound is given a marker of its own, found by reflection, and each must show in the block: a field added to
+// chat.BotMessage later is filled in here too, so it fails this test until it is shown, and cannot be left out
+// of what the agent sees. BotID names the sender and is not content.
+func TestMessageOfPutsEveryFieldOfTheInboundInTheBlock(t *testing.T) {
+	in := chat.Inbound{Text: "marker-Text", Bot: &chat.BotMessage{}}
+	bot := reflect.ValueOf(in.Bot).Elem()
+	var markers []string
+	markers = append(markers, in.Text)
+	for i := range bot.NumField() {
+		f := bot.Type().Field(i)
+		if f.Type.Kind() != reflect.String {
+			t.Fatalf("chat.BotMessage.%s is a %s; this test and MessageOf read strings only: show it in the block too", f.Name, f.Type)
+		}
+		if f.Name == "BotID" {
+			bot.Field(i).SetString("B0TESTBOT01")
+			continue
+		}
+		m := "marker-" + f.Name
+		bot.Field(i).SetString(m)
+		markers = append(markers, m)
+	}
+	got, err := newPrompt(t, simpleTemplate).Render(simpleView(), MessageOf(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range markers {
+		if !strings.Contains(got, m) {
+			t.Errorf("the prompt lacks %q: a field of the message is not in the untrusted block:\n%s", m, got)
+		}
+	}
+	if strings.Contains(got, "B0TESTBOT01") {
+		t.Errorf("the prompt holds the bot ID, which is not content:\n%s", got)
+	}
+}
+
+// A message that is not a bot's has its text and nothing else.
+func TestMessageOfAPersonsMessageIsItsText(t *testing.T) {
+	if got, want := MessageOf(chat.Inbound{Text: "hello"}), (TriggerMessage{Text: "hello"}); got != want {
+		t.Errorf("MessageOf = %+v, want %+v", got, want)
+	}
+}
+
+// Each reason has a short code for a metric label and an audit entry, and the codes are distinct.
+func TestReasonCodes(t *testing.T) {
+	seen := map[string]Reason{}
+	for _, r := range []Reason{ReasonCharacters, ReasonTooLong, ReasonNotLink} {
+		c := r.Code()
+		if c == "" || strings.ContainsAny(c, " \n") {
+			t.Errorf("%q has the code %q; want a short word", r, c)
+		}
+		if prev, dup := seen[c]; dup {
+			t.Errorf("%q and %q share the code %q", prev, r, c)
+		}
+		seen[c] = r
+	}
+	if got := Reason("something new").Code(); got != "other" {
+		t.Errorf("a reason with no code is %q; want other", got)
+	}
+}
+
 func TestPromptTemplateErrors(t *testing.T) {
 	t.Run("a template that does not parse", func(t *testing.T) {
 		if _, err := NewPrompt("promptTemplate", "{{ .Fields.alertname "); err == nil {

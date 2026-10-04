@@ -33,6 +33,20 @@ const (
 	ReasonNotLink Reason = "is not an http or https URL"
 )
 
+// Code is the reason as a short word from a closed set, for a metric label and an audit entry: "characters",
+// "too_long" or "not_link"; "other" for any reason added without one.
+func (r Reason) Code() string {
+	switch r {
+	case ReasonCharacters:
+		return "characters"
+	case ReasonTooLong:
+		return "too_long"
+	case ReasonNotLink:
+		return "not_link"
+	}
+	return "other"
+}
+
 // RefusedError is the error of a render that refused a value, so that nothing reached the
 // agent. The caller audits it. It names the value but never holds it: the text is the
 // attacker's, and the error ends up in logs.
