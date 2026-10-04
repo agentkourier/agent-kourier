@@ -94,6 +94,55 @@ func TestEvent(t *testing.T) {
 	}
 }
 
+// A refused trigger start is an event of the chat source: the message and the trigger it was for, and which value failed
+// and how, by name, reason and length. The value itself is never a field of the call, so it cannot be stored.
+func TestTriggerRefused(t *testing.T) {
+	ctx := context.Background()
+	w, s := newWriter(t)
+	r := TriggerRefusal{MessageID: "slack:ns/conn:C1:1759.002", Trigger: 1, Ref: "Fields.alertname", Reason: "characters", Len: 57}
+	if err := w.TriggerRefused(ctx, Actor{Binding: "ns/b"}, r); err != nil {
+		t.Fatalf("TriggerRefused: %v", err)
+	}
+	want := store.AuditEntry{Sequence: 1, At: t0, Kind: store.AuditEvent, Binding: "ns/b", Subject: "message=slack:ns/conn:C1:1759.002 trigger=1",
+		Outcome: "slack_message: trigger_refused ref=Fields.alertname reason=characters len=57"}
+	if got := only(t, s); got != want {
+		t.Errorf("row = %+v, want %+v", got, want)
+	}
+
+	for name, bad := range map[string]struct {
+		a Actor
+		r TriggerRefusal
+	}{
+		"no Binding":    {Actor{}, r},
+		"no message":    {Actor{Binding: "ns/b"}, TriggerRefusal{Trigger: 1, Ref: "Key", Reason: "characters"}},
+		"no ref":        {Actor{Binding: "ns/b"}, TriggerRefusal{MessageID: "m", Reason: "characters"}},
+		"no reason":     {Actor{Binding: "ns/b"}, TriggerRefusal{MessageID: "m", Ref: "Key"}},
+		"negative":      {Actor{Binding: "ns/b"}, TriggerRefusal{MessageID: "m", Ref: "Key", Reason: "characters", Len: -1}},
+		"bad trigger #": {Actor{Binding: "ns/b"}, TriggerRefusal{MessageID: "m", Trigger: -1, Ref: "Key", Reason: "characters"}},
+	} {
+		if err := w.TriggerRefused(ctx, bad.a, bad.r); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s: TriggerRefused = %v, want ErrInvalid", name, err)
+		}
+	}
+	if n := len(rows(t, s)); n != 1 {
+		t.Errorf("%d rows after the invalid calls; want only the first", n)
+	}
+}
+
+// The ref and reason are closed sets the caller chose, but a stored string is cleaned and capped whoever wrote it:
+// a ref that holds a secret's shape or a line break is neither stored whole nor split into two entries.
+func TestTriggerRefusedCleansWhatItStores(t *testing.T) {
+	w, s := newWriter(t)
+	r := TriggerRefusal{MessageID: "slack:ns/conn:C1:1.2", Ref: "Fields.x\nslack_message: accepted " + fakes[0], Reason: "characters\r\n", Len: 3}
+	if err := w.TriggerRefused(context.Background(), Actor{Binding: "ns/b"}, r); err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, s)
+	if strings.ContainsAny(got.Outcome, "\r\n") || strings.Contains(got.Outcome, fakes[0]) {
+		t.Errorf("outcome = %q; want no line break and no token", got.Outcome)
+	}
+}
+
 func TestAgentCall(t *testing.T) {
 	notSent401 := fmt.Errorf("send: %w", errors.Join(agent.ErrNotSent, agent.ErrCredentialsRejected, &dialect.HTTPStatusError{Code: 401}))
 	lost := &agent.StreamLostError{TaskID: "t-lost", ContextID: "c-lost", Err: errors.New("dropped")}

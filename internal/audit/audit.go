@@ -181,6 +181,33 @@ func (w *Writer) Event(ctx context.Context, a Actor, src Source, eventID string,
 	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), clean(eventID, maxField), string(src)+": "+string(outcome))
 }
 
+// TriggerRefusal is a botMessage trigger's start that was refused (spec 8.2, R2): the first prompt failed its check, or
+// could not be rendered, so no turn started. It names the value that failed and never holds it: the value is text
+// from the alert, untrusted, and the audit log keeps identifiers and typed outcomes.
+type TriggerRefusal struct {
+	// MessageID is the alert message's turn ID (chat.MessageID), which names the message without its text.
+	MessageID string
+	// Trigger is the trigger's place in the Binding's chat.triggers.
+	Trigger int
+	// Ref is the value that failed as a template names it ("Fields.alertname", "Key"), and Reason why: short codes
+	// from closed sets.
+	Ref, Reason string
+	// Len is the length of the value in bytes.
+	Len int
+}
+
+// TriggerRefused records that a trigger's start was refused. It is an event of the chat source whose outcome says so,
+// like the other events, and a record of something already decided: the caller follows its failure as the
+// failure policy says, which is to log and carry on.
+func (w *Writer) TriggerRefused(ctx context.Context, a Actor, r TriggerRefusal) error {
+	if a.Binding == "" || r.MessageID == "" || r.Ref == "" || r.Reason == "" || r.Trigger < 0 || r.Len < 0 {
+		return fail(store.ErrInvalid, "audit trigger refusal %q: a Binding, message, ref and reason are required, and no negative number", r.MessageID)
+	}
+	subj := "message=" + clean(r.MessageID, maxField) + " trigger=" + strconv.Itoa(r.Trigger)
+	outcome := string(SourceChat) + ": trigger_refused ref=" + clean(r.Ref, maxField) + " reason=" + clean(r.Reason, maxField) + " len=" + strconv.Itoa(r.Len)
+	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, outcome)
+}
+
 // AgentCall records a send, answer, cancel or FindTask and its typed outcome.
 func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 	var lost *agent.StreamLostError
