@@ -63,6 +63,14 @@ func (m Inbound) Field(f v1alpha1.MessageField) string {
 	return ""
 }
 
+// Permalinker is an optional interface of a Platform: it builds a link to a message from what the platform learned when
+// it connected, with no call of its own, so it is fit for the acknowledgement path, where a call is not allowed.
+type Permalinker interface {
+	// Permalink returns the link to the message r, and false if the platform cannot make one: it has not connected
+	// yet, or r does not name a message of the platform's.
+	Permalink(r Ref) (string, bool)
+}
+
 // Sink receives what Platform.Run decodes.
 type Sink interface {
 	// Message takes m. An error means it was not taken, and the platform delivers it again.

@@ -70,6 +70,7 @@ type Client struct {
 	mu    sync.Mutex
 	users map[string]cachedUser // guarded by mu
 	team  string                // the workspace ID, from auth.test; guarded by mu
+	url   string                // the workspace's origin, from auth.test, once Run has asked; guarded by mu
 
 	// ownNamed makes the warning that a trigger names courier's own bot ID one, however many of its posts arrive.
 	ownNamed sync.Once
@@ -126,6 +127,9 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	if auth.UserID == "" { // without it courier cannot tell its own posts that arrive with no bot_id
 		return errors.New("slack auth.test: no bot user ID")
 	}
+	c.mu.Lock()
+	c.url = workspaceOrigin(auth.URL)
+	c.mu.Unlock()
 	smc := socketmode.New(c.api)
 	done := make(chan error, 1)
 	go func() { done <- smc.RunContext(ctx) }()
