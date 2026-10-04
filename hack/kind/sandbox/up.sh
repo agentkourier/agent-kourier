@@ -7,7 +7,7 @@
 # anything else is touched, and parsed, never sourced (env.sh). Their values go into Secret manifests that are piped to
 # `kubectl apply -f -`: on no command line, in no file, in no output.
 # Brings the full tier up first if it is not (up-full.sh), replaces its courier with the sandbox's (down.sh puts it back),
-# and is safe to re-run.
+# and is safe to re-run. It also restarts the full tier's egress gateway if its certificate is stale (heal.sh; `make sandbox-heal`).
 # Exit 0: up, and courier is connected to Slack. 1: a refused secrets file, or something failed. 3: deployed and verified, but
 # Slack rejected the tokens (courier exited 1, fatal auth), so courier is not connected.
 set -eEuo pipefail
@@ -19,6 +19,8 @@ SBX=${HERE}/sandbox
 . "${HERE}/lib.sh"
 # shellcheck source-path=SCRIPTDIR source=env.sh
 . "${SBX}/env.sh"
+# shellcheck source-path=SCRIPTDIR source=heal.sh
+. "${SBX}/heal.sh"
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 H=(helm --kube-context "${CTX}")
@@ -61,6 +63,10 @@ assert_context full
 "${K[@]}" -n kagent get deploy kagent-controller >/dev/null 2>&1 ||
   die "the full tier is not complete (no kagent controller in ${CTX}); bring it up with: make e2e-full-up"
 "${K[@]}" -n kagent rollout status deploy/kagent-controller --timeout=120s >/dev/null
+
+# The egress gateway reads its 24-hour certificate once, so a tier that has been up a day turns every actor away (heal.sh).
+step "the egress gateway's certificate"
+heal_egress_gateway
 
 step "the production courier image"
 build_courier_image

@@ -11,8 +11,8 @@
 # and kagent's destination list (adkconfig/builder.go, agentConfigDestinations) has a case for OpenAI, Anthropic, Gemini and
 # Ollama and none for Bedrock; the one thing it adds besides is every URL it finds in the serialised model, headers included. So
 # this header, whose value is the Bedrock endpoint, puts bedrock-runtime.<region>.amazonaws.com into the allowlist, and the binding
-# is then accepted. The header is also sent on every request to Bedrock, where an unknown header is ignored (UNCONFIRMED until the
-# first real turn). The upstream fix is a Bedrock case in agentConfigDestinations, as translator/claude/compiler.go:257 has for Claude
+# is then accepted. The header is also sent on every request to Bedrock, where an unknown header is ignored (confirmed in the first real
+# turn, dogfood 2026-10-03). The upstream fix is a Bedrock case in agentConfigDestinations, as translator/claude/compiler.go:257 has for Claude
 # on Bedrock; with it this header goes. Without the header every session fails in preparation.
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig

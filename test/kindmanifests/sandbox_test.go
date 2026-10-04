@@ -578,7 +578,7 @@ func TestSandboxTokenRefresh(t *testing.T) {
 	}
 }
 
-// TestSandboxMakeTargets: the two targets exist, are in `make` help, and are in the README's list.
+// TestSandboxMakeTargets: the three targets exist, are in `make` help, and are in the README's list.
 func TestSandboxMakeTargets(t *testing.T) {
 	mk, err := os.ReadFile("../../Makefile")
 	if err != nil {
@@ -588,7 +588,7 @@ func TestSandboxMakeTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"sandbox-up", "sandbox-down"} {
+	for _, target := range []string{"sandbox-up", "sandbox-down", "sandbox-heal"} {
 		if !regexp.MustCompile(`(?m)^` + target + `: .*## \S`).Match(mk) {
 			t.Errorf("the Makefile has no %s target with a help line", target)
 		}
@@ -596,7 +596,7 @@ func TestSandboxMakeTargets(t *testing.T) {
 			t.Errorf("the README does not list make %s", target)
 		}
 	}
-	if !regexp.MustCompile(`(?m)^\.PHONY:.*\bsandbox-up\b.*\bsandbox-down\b`).Match(mk) {
+	if !regexp.MustCompile(`(?m)^\.PHONY:.*\bsandbox-up\b.*\bsandbox-down\b.*\bsandbox-heal\b`).Match(mk) {
 		t.Error("the sandbox targets are not .PHONY")
 	}
 	if !strings.Contains(string(readme), "hack/kind/sandbox/slack-app-manifest.yaml") {

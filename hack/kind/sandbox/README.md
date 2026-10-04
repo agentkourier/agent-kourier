@@ -25,13 +25,14 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
 |---|---|
 | `make sandbox-up` | Checks the secrets file first (before it touches anything). Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
 | `make sandbox-down` | Removes the overlay and restores the full tier's own courier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
+| `make sandbox-heal` | Restarts the full tier's **egress gateway** (`deploy/atenet-egress`) and waits for it, if its pod is more than 20 hours old or a log holds `CertificateExpired`; otherwise it says `ok` and changes nothing. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the same before it verifies. Changes nothing else; needs no secrets file. |
 
 While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
 (`Run: make sandbox-down first`): the sandbox's pod carries the label the front door trusts, which the tier's own courier Deployment and
 its Service also select, so a test run would drive the sandbox's courier. `kubectl logs deploy/courier` is the tier's (scaled to zero);
 use `deploy/courier-sandbox`.
 
-`make` shows both in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-courier/sandbox.env`:
+`make` shows all three in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-courier/sandbox.env`:
 `SANDBOX_ENV=/path/to/file make sandbox-up`. `hack/kind/sandbox/check-env.sh [FILE]` checks a file and nothing else.
 
 ## Setup (once)
@@ -75,7 +76,7 @@ looks like: a Bedrock key under `anthropic` or `openai` ("looks like a Bedrock A
 MODEL_REGION"), or an Anthropic or OpenAI key under `bedrock`.
 (`bedrock-api-key-` is in the AWS token generator's README; `ABSK` is what a long-term key was seen to start with, and the AWS pages do not say.)
 
-How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs (the first real Bedrock turn is the proof):
+How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the first real Bedrock turn showed:
 - **Auth.** kagent's Bedrock provider takes either AWS access keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) or a bearer token, and it reads
   them from **fixed key names** in the Secret the ModelConfig's `apiKeySecret` names; the ModelConfig's `apiKeySecretKey` is exempt for Bedrock and is
   left out. A Bedrock API key goes in under **`AWS_BEARER_TOKEN_BEDROCK`**, which `make sandbox-up` does from `MODEL_API_KEY`. IRSA is not used.
@@ -88,15 +89,14 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs (the first re
   `agentConfigDestinations`, as `translator/claude/compiler.go:257` has for Claude on Bedrock, and the header goes with it. The header is also sent to
   Bedrock on every request (the ADK's `headerTransport`). The key itself is never in the sandbox: the SDK holds a placeholder
   (`kagent-credential-injected`) and the gateway swaps in the key.
-  All of this is read from the source, and `TestBedrockModelConfigPutsItsEndpointInTheModelJSON` pins the header, its rendered host, and a copy of the walk that finds it.
-  Nothing has run against Bedrock.
-- UNCONFIRMED, to check in the first real Bedrock turn (the egress gateway's log: `kubectl --context kind-courier-full -n ate-system logs deploy/atenet-egress -c agentgateway`,
-  and the ate-api-server log's `GetActorEgressPolicy` for the actor):
-  - the egress log shows **exactly `bedrock-runtime.<region>.amazonaws.com`** reached, with the injected `Authorization`, and the policy lists that host both
-    as an allowed destination and as the credential rule's host;
-  - **no other AWS host** is reached (no STS, no IMDS at `169.254.169.254`, no `bedrock.<region>`);
-  - that Bedrock ignores the unknown `X-Courier-Egress-Host` header (no request is rejected for it);
+  All of this was read from the source, and `TestBedrockModelConfigPutsItsEndpointInTheModelJSON` pins the header, its rendered host, and a copy of the walk that finds it.
+- **Confirmed in dogfood 2026-10-03**, in a real Bedrock turn through the workaround (read from the egress gateway's log: `kubectl --context kind-courier-full -n ate-system logs deploy/atenet-egress -c agentgateway`):
+  the gateway reached **exactly `bedrock-runtime.us-east-1.amazonaws.com`**, with the key injected; **no other AWS host** was reached; and Bedrock **ignored the extra
+  `X-Courier-Egress-Host` header** (no request was rejected for it).
+- UNCONFIRMED, still (the ate-api-server log's `GetActorEgressPolicy` for the actor shows the first):
+  - that the policy lists that host both as an allowed destination and as the credential rule's host;
   - that kagent's Go SDK accepts the placeholder in `AWS_BEARER_TOKEN_BEDROCK` and sends it as `Authorization: Bearer`, so the gateway has a header to replace.
+
   If a turn fails, look at the gateway's log for a denied host and at the agent's error in the thread.
 
 ### The scopes, against what courier calls
@@ -113,12 +113,14 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs (the first re
 | events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
-The manifest covers every call. UNCONFIRMED(WP-04): that the streaming methods need no app feature beyond `chat:write` (the
-"Agents & AI Apps" feature and `assistant:write` are named on none of the three method pages, and nothing here enables
-them); that `chat.startStream` accepts the channel form courier sends (`recipient_user_id` and `recipient_team_id` are
-documented as required in channels, and courier sends both); and that `chat.stopStream` takes the blocks and metadata
-courier sends (its page lists `blocks` and `metadata`). If `chat.startStream` fails with `missing_scope` or a feature error in
-the first run, that is the finding: note the error code in the checklist's streaming row and add the scope or feature to the
+The manifest covers every call. **Confirmed in dogfood 2026-10-03:** `chat.stopStream` appends the stop blocks courier sends
+(WP-39c), and chunk-mode streams work: the `task_update` cards of tool calls are placed in the text where the calls were made,
+and a finished step shows status complete (WP-39e). Still UNCONFIRMED(WP-04): that the streaming methods need no app feature
+beyond `chat:write` (the "Agents & AI Apps" feature and `assistant:write` are named on none of the three method pages, and
+nothing here enables them); that `chat.startStream` accepts the channel form courier sends (`recipient_user_id` and
+`recipient_team_id` are documented as required in channels, and courier sends both); and that `chat.stopStream` takes the
+metadata courier sends (its page lists `blocks` and `metadata`). If `chat.startStream` fails with `missing_scope` or a feature
+error, that is the finding: note the error code in the checklist's streaming row and add the scope or feature to the
 manifest. Direct messages are not enabled (no `im:` scopes or events), so the app has no DM trigger.
 
 ## What `make sandbox-up` makes
@@ -150,7 +152,7 @@ it is exactly `api.anthropic.com` (or `api.openai.com`), `kagent-controller.kage
 (read from the Substrate API's `GetActorEgressPolicy` response). The gateway also **injects the API key** into the
 request from the Secret `sandbox-model`, so the key never enters the agent's sandbox. Nothing was added to any policy.
 For `bedrock` the host is `bedrock-runtime.<MODEL_REGION>.amazonaws.com`, but kagent does not infer it: the ModelConfig carries a header that
-puts it in the allowlist (see "The model", above). That is read from kagent's source and has not been run.
+puts it in the allowlist (see "The model", above). That was read from kagent's source, and the Bedrock turn of dogfood 2026-10-03 confirmed the host it reaches.
 
 **The Binding's token.** The Binding identity's Dex ID token (the Secret `courier-agent-token`) lasts 24 hours and courier reads
 it on every request. A CronJob in `courier` (hourly, `0 * * * *`) mints one and patches it in, from inside the cluster, with a ServiceAccount whose
@@ -168,7 +170,7 @@ Courier answers in the one channel. Watch it while you try each row (where to lo
 
 | # | Try | Look for |
 |---|---|---|
-| 1 | `@courier why is checkout crashlooping?` | A thread opens under your message. The reply **streams** (it grows as the model writes) and shows **tool lines** (`k8s_get_pod_logs ...`, one per call, with a status). It quotes the `FATAL: cannot resolve payments-db` line, says what it checked, and changes nothing. If it streams in one piece, or fails at `chat.startStream`, that is a WP-04 finding. |
+| 1 | `@courier why is checkout crashlooping?` | A thread opens under your message. The reply **streams** (it grows as the model writes) and shows **tool steps** as cards (`k8s_get_pod_logs ...`, one per call, placed in the text where the call was made, status complete once it is done; confirmed in dogfood 2026-10-03). It quotes the `FATAL: cannot resolve payments-db` line, says what it checked, and changes nothing. If it streams in one piece, or fails at `chat.startStream`, that is a WP-04 finding. |
 | 2 | Other questions: `why is catalog stuck?`, `is recommender healthy?`, `why does inventory have no endpoints?`, `what is wrong with search?`, `is frontend ok?` | Each finds its fault: ImagePullBackOff and the missing tag; OOMKilled and the 48Mi limit; the Service's selector against the pods' labels; the readiness probe's 404; and `frontend` fine, with how it knows. |
 | 3 | **A thread reply**, in the same thread, after the answer: `and which pods does that affect?` | The answer comes in the same thread, and knows the earlier turn (same session). No new thread. |
 | 4 | **A reply while a turn is running**: send a long question (`check every deployment in shop and tell me about each`), and answer or add to it before it finishes | Courier queues it: a notice says it is queued, and the answer follows when the first turn ends, in order. Never two answers at once, never a lost message. |
@@ -207,13 +209,25 @@ before the Slack connection is tried. Ask the gauge, or read the log:
 
 - `courier_chat_connected{connection="courier-system/slack-main"}` is `1` while Socket Mode is up and `0` while it is not (after a drop, or
   before the first connection). A `0` that stays means courier cannot reach Slack or Slack turns it away.
-- `kubectl --context $CTX -n courier logs deploy/courier-sandbox | grep 'slack:'` shows the connection's life: `socket mode connecting`,
-  `socket mode websocket opened`, `socket mode connected` (Slack said hello; `num_connections` above 1 means another process uses the same
-  app token), `socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `connection attempt failed; retrying` (courier
+- `kubectl --context $CTX -n courier logs deploy/courier-sandbox | grep 'slack:'` shows the connection's life: `slack: socket mode connecting`,
+  `slack: socket mode websocket opened`, `slack: socket mode connected` (Slack said hello; `num_connections` above 1 means another process uses the same
+  app token), `slack: socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `connection attempt failed; retrying` (courier
   tries again by itself, with a pause that grows to 5 minutes, and repeats the same failure once a minute at most),
   `message could not be read`, `read failed` and `write failed`. Events Slack sends are logged at DEBUG only, by type and ID, never their
   text. A fatal rejection of the tokens is not one of these lines: courier prints `courier: slack rejected the tokens: ...` and exits 1
   (`kubectl logs --previous` after the restart).
+
+Did the turn run, and how did it end? Courier logs every turn at INFO, by ids and places and never by what anyone wrote:
+
+- `session turn started`, and `session turn ended`, which carries the `outcome` (`completed`, `failed`, `rejected`, `canceled`,
+  `credentials_rejected`, `forbidden`, `unreachable`, `session_gone`, `binding_gone`, `wedged`, `uncancellable`, `pause_ended`,
+  `answer_rejected`, `refused`, `no_final`) and `duration_ms`. `grep 'session turn'` reads a session at a glance; a start with no end
+  is a turn still running, or one a restart recovers (`recovered=true` on its lines).
+- `courier_turn_outcomes_total{binding="sandbox",outcome="..."}` counts the ends by the same outcomes. It is counted before the
+  line is logged, so a line you see is already in the count.
+- WARN `slack: the chunks mode of a stream was refused; streams are in markdown_text mode from now on and show no steps`, logged once
+  per process: Slack turned away the chunk form of `chat.startStream`, so replies still stream, as text, with no step cards until
+  courier restarts. Chunk-mode streams work (confirmed in dogfood 2026-10-03), so this line is a finding: its `err` field is Slack's answer.
 
 Courier's other metrics (`/metrics`): `courier_credential_rejections_total` (the Binding's token was refused),
 `courier_interaction_decisions_total` and `courier_interaction_timeouts_total` (row 5), `courier_outbox_abandoned_total` (row 7),
@@ -230,6 +244,14 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
   the Binding's Dex token expired (after a long sleep or closed lid). Mint a new one with
   `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-token-refresh refresh-now` (then `kubectl --context kind-courier-full -n courier delete job refresh-now`),
   or re-run `make sandbox-up`. Courier reads the Secret on every request, so the next message works.
+- **A thread says the agent "isn't ready to take this message yet" and the notice never clears**, and `kubectl --context kind-courier-full -n kagent logs deploy/kagent-default | grep CertificateExpired`
+  finds `atunnel failed to open egress tunnel ... egress gateway rejected CONNECT with 403 Forbidden: actor identity check denied ... CertificateExpired`
+  (kagent answers courier `-32004`, "session not ready", for good): the **egress gateway's certificate expired**. Every agent connection leaves through
+  `deploy/atenet-egress` in `ate-system`, whose pod certificate lives 24 hours and is read once, when the pod starts, so a gateway that has run for about a day turns all of
+  them away while it shows Running and 0 restarts. Run **`make sandbox-heal`**: it restarts the gateway and waits for it, and the next message works (`make sandbox-up`
+  does the same before it verifies, if the pod is more than 20 hours old or a log has the line). Seen in dogfood 2026-10-03. After 31 hours the other `ate-system`
+  pods that carry such certificates (`ate-controller`, `atenet-router`, `k8s-credential-provider`) showed no expiry in their logs, so only the gateway is restarted; if another
+  starts rejecting, that is a finding.
 - **Exit 3, `error: courier exited 1, which is fatal auth`**: Slack rejected `SLACK_BOT_TOKEN` or `SLACK_APP_TOKEN` (or the app is
   not installed, or Socket Mode is off). A restart would be rejected again, so the pod crash-loops. Fix the file, re-run `make sandbox-up`.
 - **The bot does not answer**: is the bot in the channel, and is `SLACK_CHANNEL_ID` that channel's ID (not its name)? Courier answers in that channel only.
