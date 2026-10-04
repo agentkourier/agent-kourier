@@ -104,7 +104,7 @@ func firing(t *testing.T) chat.TriggerMatch {
 	tr := b.Spec.Chat.Triggers[0]
 	const link = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind"
 	return chat.TriggerMatch{
-		Binding: startBinding, Index: 1, Preset: tr.Preset, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread,
+		Binding: startBinding, Index: 1, Preset: tr.Preset, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0EXAMPLE01:" + alertTS,
 		Fields:   map[string]string{"state": "FIRING", "key": "KubePodCrashLooping shop", "alertname": "KubePodCrashLooping"},
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
 		Message: chat.Inbound{

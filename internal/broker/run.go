@@ -222,10 +222,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
 	starter := &triggerStarter{conn: connName, submit: mgr, notice: sink.QueueNotice, audit: auditor, link: permalinks(platform.Platform), log: log}
-	intake := chat.NewIntake(chat.IntakeConfig{
-		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: interactions, Logger: log,
-		Notice: sink.QueueNotice, TriggerThreads: st, OnStart: starter.OnStart, TurnQueued: st.HasReply,
-	})
+	intake := chat.NewIntake(newIntakeConfig(intakeParts{
+		conn: conn.Ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+		notice: sink.QueueNotice, starter: starter, threads: st, replies: st,
+	}))
 	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
 	parts.traced("open-intake")
 	go func() {

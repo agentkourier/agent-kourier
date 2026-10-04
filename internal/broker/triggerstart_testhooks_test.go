@@ -4,6 +4,7 @@ package broker
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -380,5 +381,46 @@ func TestRunLogsAndAuditsNoAlertText(t *testing.T) {
 				t.Errorf("audit entry %+v holds %q of the alert", e, w)
 			}
 		}
+	}
+}
+
+// The window between queueing the first turn and marking its thread started, through Run: the alert's turn was taken,
+// and the mark is lost (the row is set back to a reservation that is over a minute old, with no cooldown), as a crash
+// between the two writes leaves it. The same alert firing again after the restart is a note in the first alert's
+// thread, and the agent is asked once. Run must connect the Intake's check of the reply queue: without it the second
+// fire takes the key over and starts a second investigation.
+func TestRunDoesNotInvestigateAnAlertTwiceWhenTheMarkOfItsThreadWasLost(t *testing.T) {
+	a := newAlerts(t)
+	a.run(t)
+	alert := a.fire(t, post("FIRING", "KubePodCrashLooping"))
+	a.inThread(t, alert.TS, "the agent's answer", hasText("investigated"))
+	a.r.cancel()
+	if err := a.r.wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", a.cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := int64(2 * time.Minute)
+	res, err := db.ExecContext(t.Context(), `UPDATE trigger_threads SET cooldown_until = 0, opened = opened - ?, last_seen = last_seen - ?`, back, back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("%d trigger thread rows changed; want the one of the alert's key", n)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	a.cfg.Listener = valid(t).Listener
+	a.run(t)
+	a.fire(t, post("FIRING", "KubePodCrashLooping"))
+	a.inThread(t, alert.TS, "the note of a repeat in the first alert's thread", hasText("Fired again at"))
+	settle()
+	if got := a.agent.asked(); len(got) != 1 {
+		t.Errorf("the agent was asked %d times for the alert and its fire again after a lost mark; want once", len(got))
 	}
 }

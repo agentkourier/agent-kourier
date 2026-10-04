@@ -105,9 +105,9 @@ func TestAFireDoesNotTakeOverAThreadWhoseTurnWasQueued(t *testing.T) {
 		t.Errorf("a fire inside the first turn's cooldown: %q; want repeat", got)
 	}
 	h.send(t, "104.1", kindResolved)
-	h.clk.advance(20 * time.Minute) // 16:12
+	h.clk.advance(9 * time.Minute) // 16:01: past the first turn's cooldown (16:00), inside the cooldown a lazy adoption from the second fire would give (16:02)
 	if got := h.send(t, "105.1", kindFiring); got != "started" {
-		t.Errorf("a fire after the first turn's cooldown: %q; want started", got)
+		t.Errorf("a fire just after the first turn's cooldown, which runs from its own message: %q; want started", got)
 	}
 }
 

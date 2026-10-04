@@ -83,7 +83,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 	if err != nil {
 		return s.refuse(ctx, m, err)
 	}
-	id := chat.MessageID(chat.Ref{Platform: at.Platform, Conn: s.conn, Channel: at.Channel, ID: at.ID})
+	id := m.MessageID
 	res, err := s.submit.Submit(ctx, session.Inbound{
 		Key:       session.Key{Connection: s.conn, Channel: at.Channel, Thread: at.ID},
 		Binding:   m.Binding,
@@ -110,7 +110,7 @@ func (s *triggerStarter) refuse(ctx context.Context, m chat.TriggerMatch, cause 
 	if errors.As(cause, &refused) {
 		ref, reason, length, detail = refused.Ref, refused.Reason.Code(), refused.Len, "."+refused.Ref+" failed the prompt check."
 	}
-	id := chat.MessageID(chat.Ref{Platform: at.Platform, Conn: s.conn, Channel: at.Channel, ID: at.ID})
+	id := m.MessageID
 	key := session.Key{Connection: s.conn, Channel: at.Channel, Thread: at.ID}
 	n := session.Notice{ID: id + "/" + string(session.NoticeTriggerRefused), Kind: session.NoticeTriggerRefused, MessageRef: at.ID, Detail: detail}
 	if err := s.notice(ctx, key, n); err != nil {

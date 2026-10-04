@@ -30,6 +30,9 @@ type TriggerMatch struct {
 	// Preset is the trigger's preset, empty if it has none, and PromptTemplate its template after defaulting: what
 	// the start renders the first prompt from.
 	Preset, PromptTemplate string
+	// MessageID is the ID of the turn this match starts and of the notes it causes (MessageID of the message), set
+	// by the Intake so that the hook queues, and the Intake later asks about, one ID.
+	MessageID string
 	// Received is when the Intake took the message. The thread rules take it for now: the cooldown runs from
 	// it, and it is the time a note names.
 	Received time.Time

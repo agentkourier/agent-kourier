@@ -1,0 +1,67 @@
+package broker
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+)
+
+// Every part of the botMessage triggers' path is connected in the Intake Run builds, and each is the store's or the
+// starter's own: a keyed trigger's threads are the store's; a start submits the rendered prompt through the
+// starter; and the check that a stale reservation's turn was queued reads the store's reply queue, which is what
+// closes the window between queueing a turn and marking its thread.
+func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	s := newStarter(t)
+	cfg := newIntakeConfig(intakeParts{
+		conn: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, submitter: s.sub, notice: s.notes.take,
+		starter: s.triggerStarter, threads: st, replies: st, log: s.log,
+	})
+
+	if cfg.TriggerThreads != store.TriggerThreads(st) {
+		t.Errorf("TriggerThreads = %v; want the store", cfg.TriggerThreads)
+	}
+	if cfg.Notice == nil || cfg.Submitter == nil {
+		t.Errorf("Notice %t, Submitter %t; want both set", cfg.Notice != nil, cfg.Submitter != nil)
+	}
+
+	if cfg.OnStart == nil {
+		t.Fatal("OnStart is not set: a started thread would investigate nothing")
+	}
+	if err := cfg.OnStart(t.Context(), firing(t)); err != nil || len(s.sub.got) != 1 {
+		t.Errorf("OnStart = %v with %d turns submitted; want the starter to submit the one turn", err, len(s.sub.got))
+	}
+
+	if cfg.TurnQueued == nil {
+		t.Fatal("TurnQueued is not set: a lost mark would give the key a second turn")
+	}
+	const id = "slack:courier-system/slack-main:C0EXAMPLE01:1759560000.123456"
+	queued := func() bool {
+		t.Helper()
+		ok, err := cfg.TurnQueued(t.Context(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if queued() {
+		t.Error("TurnQueued says a turn that was never queued was")
+	}
+	key := session.Key{Connection: "courier-system/slack-main", Channel: "C0EXAMPLE01", Thread: "1759560000.123456"}
+	if _, err := st.EnqueueReply(context.Background(), store.Reply{ID: id, Key: key, UserID: session.SystemUser, MessageRef: key.Thread, Text: "x", EnqueuedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if !queued() {
+		t.Error("TurnQueued does not see a turn in the store's reply queue")
+	}
+}

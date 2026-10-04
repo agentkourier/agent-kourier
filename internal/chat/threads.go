@@ -173,8 +173,9 @@ func (in *Intake) adoptQueuedTurn(ctx context.Context, m TriggerMatch, hash stri
 	if th.Started() || th.Thread == m.Message.At.ID || !th.Opened.Before(m.Received.Add(-reservationGrace)) {
 		return nil // not the stale reservation of another message, which is what OpenTriggerThread takes over
 	}
-	id := MessageID(Ref{Platform: m.Message.At.Platform, Conn: in.conn, Channel: m.Message.At.Channel, ID: th.Thread})
-	queued, err := in.cfg.TurnQueued(ctx, id)
+	reserved := m.Message // the reserving message sat in the same channel of the same platform
+	reserved.At.ID = th.Thread
+	queued, err := in.cfg.TurnQueued(ctx, in.messageID(reserved))
 	if err != nil {
 		return fmt.Errorf("ask whether the turn of thread %s of key %s was queued: %w", th.Thread, hash[:8], err)
 	}
@@ -272,7 +273,7 @@ func (in *Intake) note(ctx context.Context, m TriggerMatch, thread string, kind 
 		in.log.WarnContext(ctx, "chat: a trigger's note was not posted; the Intake has no notice sink", "kind", kind, "channel", m.Message.At.Channel, "thread", thread)
 		return nil
 	}
-	id := in.messageID(m.Message) + "/" + string(kind)
+	id := m.MessageID + "/" + string(kind)
 	key := session.Key{Connection: in.conn, Channel: m.Message.At.Channel, Thread: thread}
 	n := session.Notice{ID: id, Kind: kind, MessageRef: m.Message.At.ID, Detail: m.Received.UTC().Format("2006-01-02 15:04 UTC") + "."}
 	if err := in.cfg.Notice(ctx, key, n); err != nil {
