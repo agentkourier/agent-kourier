@@ -296,6 +296,7 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 		{"exclude", len(t.Exclude) > 0}, {"extract", len(t.Extract) > 0},
 		{"thread", t.Thread.By != "" || t.Thread.Cooldown.Duration != 0 || t.Thread.MaxIdle.Duration != 0 || len(t.Thread.CloseWhen) > 0},
 		{"promptTemplate", t.PromptTemplate != ""},
+		{"limits", !t.Limits.IsZero()},
 	} {
 		if f.set {
 			p.add(path+"."+f.name, "not allowed with type: mention")
@@ -319,6 +320,7 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 		p.extract(path+".extract."+name, name, t.Extract[name])
 	}
 	p.thread(path+".thread", &t.Thread, t.Extract)
+	p.limits(path+".limits", t.Limits)
 	if t.PromptTemplate == "" {
 		p.add(path+".promptTemplate", "required")
 	} else if err := checkPromptTemplate("promptTemplate", t.PromptTemplate, t.Extract); err != nil {
@@ -337,6 +339,22 @@ func (p *problems) extract(path, name string, e Extract) {
 	re := p.regex(path+".regex", e.Regex)
 	if re != nil && validName && !slices.Contains(re.SubexpNames(), name) {
 		p.add(path+".regex", "must have a named group (?P<%s>...) that supplies the value", name)
+	}
+}
+
+// limits checks a trigger's limits as they are after defaulting, so a rate limit that is set in part and has no
+// preset to fill it fails on each field it lacks. The window is bounded on both sides: see MinRateWindow and
+// MaxLimitWindow. A cap of 0 means none.
+func (p *problems) limits(path string, l TriggerLimits) {
+	if r := l.RateLimit; r != nil {
+		p.positive(path+".rateLimit.maxRuns", int64(r.MaxRuns))
+		p.positive(path+".rateLimit.maxConcurrent", int64(r.MaxConcurrent))
+		if d := r.Per.Duration; d < MinRateWindow || d > MaxLimitWindow {
+			p.add(path+".rateLimit.per", "%s is out of range, must be between %s and %s", d, MinRateWindow, MaxLimitWindow)
+		}
+	}
+	if n := l.MaxRunsPerDay; n != nil && *n < 0 {
+		p.add(path+".maxRunsPerDay", "must not be negative; 0 means no cap")
 	}
 }
 

@@ -22,6 +22,7 @@ spec:
         match: { titleLink: 'receiver=slack-critical$' }
         exclude: { title: '^Prometheus heartbeat$' }
         thread: { cooldown: 2h }     # overrides the preset's 4h
+        limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
   alerts:
     type: alertmanager
     tokenSecretRef: { name: courier-webhook-token }  # same namespace as the Binding

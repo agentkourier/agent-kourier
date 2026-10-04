@@ -83,7 +83,10 @@ type Trigger struct {
 	// .State, .Key, .Fields, .Link, .Source). Required for botMessage, directly or from the
 	// preset.
 	PromptTemplate string `json:"promptTemplate,omitempty"`
-	// Per-trigger rate limits belong here (CT-5). There is no field for them yet.
+	// Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). What the
+	// Binding leaves out comes from the preset; a trigger with no preset and no limits is unlimited.
+	// +optional
+	Limits TriggerLimits `json:"limits,omitzero"`
 }
 
 // BotSource identifies the bot whose messages a trigger accepts.
@@ -164,8 +167,8 @@ func (c *ChatBinding) defaultTriggers() {
 // applyPreset fills what the trigger leaves unset from its preset, so a field the Binding
 // sets always wins. The maps (match, exclude, extract) merge by key: an entry the Binding
 // sets replaces the preset's entry of the same name and the preset's other entries stay.
-// The thread merges by its parts (by, cooldown, closeWhen as a whole), and the prompt
-// template is taken whole. Applying it twice changes nothing. An unknown preset is left for
+// The thread merges by its parts (by, cooldown, closeWhen as a whole), the limits by theirs
+// (each of rateLimit's fields, and the daily cap), and the prompt template is taken whole. Applying it twice changes nothing. An unknown preset is left for
 // Validate to reject.
 func (t *Trigger) applyPreset() {
 	if t.Type != TriggerBotMessage {
@@ -184,6 +187,7 @@ func (t *Trigger) applyPreset() {
 		t.Thread.CloseWhen = p.Thread.CloseWhen
 	}
 	t.PromptTemplate = cmp.Or(t.PromptTemplate, p.PromptTemplate)
+	t.Limits = t.Limits.withDefaults(p.Limits)
 }
 
 // fillMissing adds the entries of defaults that dst lacks and returns dst, which is a new map
@@ -233,6 +237,12 @@ func presetTrigger(name string) (Trigger, bool) {
 			By:        ThreadByKey,
 			Cooldown:  metav1.Duration{Duration: 4 * time.Hour},
 			CloseWhen: map[string]string{extractState: "RESOLVED"},
+		},
+		// Five investigations in 10 minutes, two at a time, 40 a day: the Binding's alerts example (spec 7). The
+		// cooldown already folds repeats of an alert into its thread, so these bound distinct alerts, such as a storm.
+		Limits: TriggerLimits{
+			RateLimit:     &RateLimit{MaxRuns: 5, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 2},
+			MaxRunsPerDay: new(int32(40)),
 		},
 		PromptTemplate: `An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
 Investigate it with your read-only tools. Report the likely cause, the evidence you
