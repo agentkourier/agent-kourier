@@ -11,7 +11,7 @@ type stepName int
 
 const (
 	stepIntake       stepName = iota // the Slack run and its intake stop, so nothing new reaches the interactions
-	stepInteractions                 // what the interactions started stops: the press worker, the sweeper, the replacer, retention and the pause tap
+	stepInteractions                 // what the interactions started stops: the press worker, the sweeper, the replacer, retention and the pause tap, and the trigger-thread sweep
 	stepManager                      // the session manager stops its runners
 	stepDrain                        // the outbox stops, then posts what is pending one last time, and Slack's idle connections close
 	stepPool                         // the agent clients close
