@@ -32,7 +32,6 @@ const (
 	maxTriggerRegexLen = 512
 	minThreadCooldown  = time.Minute
 	maxThreadCooldown  = 7 * 24 * time.Hour
-	maxThreadMaxIdle   = 30 * 24 * time.Hour
 )
 
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
@@ -365,8 +364,8 @@ func (p *problems) thread(path string, th *TriggerThread, extract map[string]Ext
 		p.add(path+".cooldown", "%s is out of range, must be between %s and %s", d, minThreadCooldown, maxThreadCooldown)
 	}
 	if d := th.MaxIdle.Duration; d != 0 {
-		if floor := 2 * th.Cooldown.Duration; d < floor || d > maxThreadMaxIdle {
-			p.add(path+".maxIdle", "%s is out of range, must be between twice the cooldown (%s) and %s", d, floor, maxThreadMaxIdle)
+		if floor := 2 * th.Cooldown.Duration; d < floor || d > MaxThreadMaxIdle {
+			p.add(path+".maxIdle", "%s is out of range, must be between twice the cooldown (%s) and %s", d, floor, MaxThreadMaxIdle)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {

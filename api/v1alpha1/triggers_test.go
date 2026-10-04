@@ -583,6 +583,20 @@ func TestTriggersValidateReportsEveryProblem(t *testing.T) {
 	}
 }
 
+// The sweep that deletes the rows of idle threads cuts off at MaxThreadMaxIdle, so it must be the most idle time any
+// trigger can mean: the ceiling validation holds a set maxIdle to, and above the default of the longest cooldown. A
+// shorter cutoff would delete a thread that a trigger with a long maxIdle still counts as live.
+func TestMaxThreadMaxIdleIsTheMostAnyTriggerMeans(t *testing.T) {
+	if MaxThreadMaxIdle != 720*time.Hour {
+		t.Errorf("MaxThreadMaxIdle = %v; want 720h", MaxThreadMaxIdle)
+	}
+	for _, cooldown := range []time.Duration{minThreadCooldown, time.Hour, 4 * time.Hour, 12 * time.Hour, 13 * time.Hour, maxThreadCooldown} {
+		if got := (TriggerThread{Cooldown: metav1.Duration{Duration: cooldown}}).EffectiveMaxIdle(); got > MaxThreadMaxIdle {
+			t.Errorf("the default maxIdle of cooldown %v is %v, over MaxThreadMaxIdle %v", cooldown, got, MaxThreadMaxIdle)
+		}
+	}
+}
+
 // An open thread is abandoned after maxIdle, which is 24h unless the trigger says, and never less than twice the
 // cooldown, so that the default of a long cooldown is still one that validation accepts.
 func TestEffectiveMaxIdle(t *testing.T) {

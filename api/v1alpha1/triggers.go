@@ -118,7 +118,12 @@ type TriggerThread struct {
 	// MaxIdle is how long an open thread may go without a message of its key before courier counts it
 	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
 	// resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
-	// means the larger of 24h and twice the cooldown (EffectiveMaxIdle).
+	// means the larger of 24h and twice the cooldown (EffectiveMaxIdle). It must be longer than the
+	// sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that
+	// interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and
+	// starts a second investigation for it. Twice the cooldown covers that only for the preset's 4h
+	// cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
+	// above it.
 	// +optional
 	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
 	// CloseWhen maps an extracted field to the value that closes the thread: courier posts a
@@ -126,6 +131,11 @@ type TriggerThread struct {
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
 }
+
+// MaxThreadMaxIdle is the most idle time a trigger can mean (720h): the ceiling validation holds a set
+// thread.maxIdle to, above the default of the longest cooldown. A sweep of the rows of idle threads must cut off
+// no later than now minus this, or it would delete a thread that a trigger with a long maxIdle still counts live.
+const MaxThreadMaxIdle = 30 * 24 * time.Hour
 
 // DefaultMaxIdle is the idle time after which an open thread is abandoned, when the trigger does not say.
 const DefaultMaxIdle = 24 * time.Hour

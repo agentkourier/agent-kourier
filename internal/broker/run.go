@@ -210,6 +210,13 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return err
 	}
+	// The rows of old trigger threads are purged on a timer. It writes only to the store, so it stops with the
+	// interactions' loops, before the store closes.
+	sweep, err := newThreadSweep(threadSweepConfig{Store: st, Interval: cfg.threadSweepEvery, Logger: log})
+	if err != nil {
+		return fmt.Errorf("trigger thread sweep: %w", err)
+	}
+	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
 
 	// A match of a botMessage trigger that starts a turn becomes a session through the manager's intake, the path a
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it

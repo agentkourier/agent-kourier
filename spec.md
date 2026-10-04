@@ -609,8 +609,12 @@ one investigation). An open thread takes its key's messages, so an alert that ke
 `thread.maxIdle` is abandoned, whatever the cooldown, and the next fire starts a new
 investigation. That is what mends a resolve that never registered: courier down past Slack's
 retry window, or a resolve that arrived before its fire. `maxIdle` is at least twice the
-cooldown (so that the 4h repeats of an alert land as notes), at most 720h, and unset it is the
-larger of 24h and twice the cooldown. The cooldown begins when the turn has started and not
+cooldown, at most 720h, and unset it is the larger of 24h and twice the cooldown. It must also
+be longer than the sender's repeat interval (Alertmanager's `repeat_interval`), or an alert
+that is still firing is counted abandoned between two of its repeats and gets a second
+investigation. Twice the cooldown covers that only because the preset's cooldown and
+Alertmanager's default `repeat_interval` are both 4h; a longer `repeat_interval` needs a
+`maxIdle` set above it. The cooldown begins when the turn has started and not
 when the thread is reserved, so a turn that could not start holds no key. A session hook that
 fails for a reason that will pass (a store error) returns an ordinary error, and the redelivery
 asks again; one that will not start the turn (a refused prompt) returns `chat.ErrNotStarted`,
@@ -621,6 +625,10 @@ the message that caused it, so a redelivered event adds none. Each step is idemp
 is queued before the change it goes with, so an error returns to Slack as an unacknowledged
 event and the redelivery finishes the work; all of it is local writes, as it runs on the
 acknowledgement path. A trigger with no `thread` has none of this: every match starts a turn.
+A sweep deletes the rows that no longer do anything once an hour: a closed thread past its
+cooldown, and an open one with no message of its key for 720h, which is the longest any `maxIdle`
+can be, so it never deletes a thread that some trigger still counts as live. A key whose row is
+gone starts afresh, as one with no row does.
 Every decision is counted as `courier_trigger_decisions_total{binding,decision}`.
 
 **The first turn of a started thread.** The broker renders the trigger's `promptTemplate` over
