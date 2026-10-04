@@ -187,6 +187,7 @@ upstream webhook trigger stays compatible with courier.
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 | D34 | Binding token source | For the pilot, a Binding's bearer token is read from `identity.tokenSecretRef` on every call (cached from a watch, never stored elsewhere), and rotated outside courier before it expires (Dex: 24 h). A rejected credential (`ErrCredentialsRejected`, HTTP 401/403 at the front door) fails the turn, re-reads the Secret, is audited and raises a metric; courier never falls back to `userId`. Minting with the client-credentials grant plugs in behind the same `TokenSource` interface once H-02 picks a provider that supports it (Q9). Secret values are held in a type whose every formatting path redacts. Secrets courier reads are type `Opaque`; the watch keeps values for Opaque Secrets only (key names for every other type), in the namespaces courier is granted. After the pilot, narrow to one watch per referenced Secret (a `metadata.name` field selector plus RBAC `resourceNames`). (Resolves Q10, after WP-03; narrowed by the WP-21e1 review.) |
 | D35 | Chat-neutral model | Slack sits behind one platform-neutral seam, `chat.Platform` (6.2), so a second chat platform is one adapter and no change to session, interact, render, outbox or store. The model carries literal text with no markup field; each adapter neutralises markup for its platform and passes a shared hostile-text conformance suite before it ships. The outbox stores the versioned neutral message and the adapter renders it at delivery; a payload of the earlier, Slack-shaped form is abandoned as invalid with a log line, not migrated. Abandon metrics use neutral reasons (channel_gone, too_long, invalid_content, other), with the platform's own code in the log. The Slack message ID string is unchanged (`slack:<connection>:<channel>:<ts>`), and the store's columns keep their names. (Owner-approved 2026-10-02; WP-37.) |
+| D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the bot by ID, never by display name. Courier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial; CT-1, awaiting owner review.) |
 
 ## 6. Architecture
 
@@ -407,6 +408,14 @@ spec:
     connectionRef: { namespace: courier-system, name: slack-main }
     channel: C0123456789             # investigation channel ID, not name
     output: live                     # live | final
+    triggers:                        # empty means [{type: mention}]; see 8.2
+      - type: mention
+      - type: botMessage             # alerts Alertmanager itself posts to this channel
+        from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
+        preset: alertmanager         # fills in match, extract, thread and promptTemplate
+        match: { titleLink: 'receiver=slack-critical' }
+        exclude: { title: '^Prometheus heartbeat$' }
+        thread: { cooldown: 2h }     # overrides the preset's 4h
   alerts:
     type: alertmanager
     tokenSecretRef: { name: courier-webhook-token }  # same namespace as the Binding
@@ -511,15 +520,43 @@ untrusted data. See risk R2.
 
 ### 8.2 Chat
 
+These are the defaults, which a Binding with no `chat.triggers` gets. `chat.triggers` extends
+them (below the table).
+
 | Trigger | Behavior |
 |---|---|
 | @mention in a bound channel (not in a thread) | New thread, new session |
 | Reply in a thread courier owns, with or without an @mention | Continues that session |
 | @mention inside a thread courier doesn't own, in a bound channel | New session anchored to that thread; courier owns it from then on |
 | Reply without an @mention in any other thread | Ignored |
-| Any message posted by courier itself (including `message_changed` from its own edits), or by any other bot or app | Ignored: another bot's messages would let two bots reply to each other without end, and bot text is untrusted (R2) |
+| Any message posted by courier itself (including `message_changed` from its own edits) | Ignored, always: courier would otherwise answer itself without end |
+| A message posted by any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID (D36): two bots could otherwise reply to each other without end, and bot text is untrusted (R2) |
 | An edit or deletion of any message (`message_changed`, `message_deleted`), or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages |
 | DM | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. |
+
+**`chat.triggers` (D36).** An empty list is `[{type: mention}]`, the table above. A Binding adds
+triggers; v1 has two types, `mention` (the @mention rows) and `botMessage`. Triggers are tried in
+order and the first that matches handles the message. A `botMessage` trigger accepts messages
+from one bot, named by `from.botId` and never by display name, and then:
+
+- `match` and `exclude` map a message field to a regex. The fields are `text`, `title`,
+  `titleLink`, `fallback`, `footer` and `attachmentText`; the adapter flattens a legacy
+  attachment into them. Every `match` entry must match and no `exclude` entry may.
+- `extract` names values taken from a field by a regex, whose named group carries the entry's
+  name. A message in which an extract does not match does not match the trigger.
+- `thread.by: key` gives messages with the same extracted `key` one thread, anchored as for an
+  @mention inside a thread courier doesn't own. `cooldown` (1m to 168h) allows no new turn for a
+  key inside the window, and `closeWhen` (`{state: RESOLVED}`) posts a note and starts no turn.
+- `promptTemplate` is a Go template over the trigger's view of the message, parsed at load.
+- `preset: alertmanager` fills in `match`, `extract`, `thread` and `promptTemplate` for
+  Alertmanager's Slack receiver (title `FIRING (n) - <alertname>` or `RESOLVED - <alertname>`,
+  the default fallback with the group label values). Whatever the Binding sets overrides it per
+  entry: a `match`, `exclude` or `extract` entry replaces the preset's entry of that name, and
+  `thread.by`, `thread.cooldown`, `thread.closeWhen` and `promptTemplate` replace the preset's.
+
+Regexes are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups
+and the template: a Binding that fails any of them is rejected. A bot message that no trigger
+matches is ignored and counted.
 
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
 is derived from the Slack message itself, `(channel, message ts)`, not the event ID:
@@ -849,7 +886,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | # | Risk | Severity | Mitigation |
 |---|---|---|---|
 | R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). Phase 5 cannot exit without a recorded R1 decision. `interactions.approverGroups` is reserved in the schema so it can be added without a breaking change. |
-| R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, webhook auth, rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. |
+| R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, webhook auth, rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
 | R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode, and in OIDC mode `X-Agent-Name` plus `X-User-Id` or `?user_id=`, which selects the acting user even with a valid token (WP-03: oauth2-proxy forwards them). | High | Courier talks only to a verifying front door (oauth2-proxy or agentgateway) that strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`; NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. Proven for the header path (WP-01d): through the door, B's valid token with `X-Agent-Name` plus `X-User-Id` or `?user_id=`, in any case, gets `-31403` on send, stream, `GetTask`, `SubscribeToTask` and `CancelTask`, and a bogus `X-Share-Token` is dropped, while the same spoof works at 8083 (canary) and the Binding's own send, SSE and `GetTask` still work. The `X-User-Id` and runtime-identity strips are defence in depth (config and source; no observable while `X-Agent-Name` is stripped). The pilot door must use the same config (WP-05). The risk stays High: the controller is unchanged, only mitigated. |
 | R5 | No stream replay in kagent. Text produced during a disconnect may be lost from the live view. | Medium | Reconcile from `GetTask` on reconnect and render the final task output. |
