@@ -417,6 +417,7 @@ spec:
         match: { titleLink: 'receiver=slack-critical$' }
         exclude: { title: '^Prometheus heartbeat$' }
         thread: { cooldown: 2h }     # overrides the preset's 4h
+        limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
   alerts:
     type: alertmanager
     tokenSecretRef: { name: courier-webhook-token }  # same namespace as the Binding
@@ -556,12 +557,17 @@ from one bot, named by `from.botId` and never by display name, and then:
   an open thread that has had no message of its key for that long.
 - `promptTemplate` is a Go template over the trigger's view of the message. It is parsed and run
   once at load against a placeholder view, so a mistyped field name rejects the Binding.
-- `preset: alertmanager` fills in `match`, `extract`, `thread` and `promptTemplate` for
+- `limits` bounds how many investigations the trigger starts (below): `rateLimit` (`maxRuns`,
+  `per`, `maxConcurrent`) and `maxRunsPerDay`, the shapes of `alerts.rateLimit` and
+  `alerts.maxRunsPerDay` in section 7. A trigger with neither a preset nor `limits` is unlimited.
+- `preset: alertmanager` fills in `match`, `extract`, `thread`, `limits` and `promptTemplate` for
   Alertmanager's Slack receiver (title `FIRING (n) - <alertname>` or `RESOLVED - <alertname>`,
   the default fallback with the group label values). Whatever the Binding sets overrides it per
   entry: a `match`, `exclude` or `extract` entry replaces the preset's entry of that name, and
   `thread.by`, `thread.cooldown`, `thread.closeWhen` and `promptTemplate` replace the preset's.
-  An empty value means unset, so in v1 a Binding cannot switch a preset entry off. To drop a
+  `limits` merges by field: each of `rateLimit.maxRuns`, `rateLimit.per`, `rateLimit.maxConcurrent`
+  and `maxRunsPerDay` that the Binding sets replaces the preset's, and the others stay (an
+  explicit `maxRunsPerDay: 0` is no cap, not unset). An empty value means unset, so in v1 a Binding cannot switch a preset entry off. To drop a
   `match` entry, override it with a regex that always matches (`'.*'`); to change more than
   that, leave `preset` out and write the trigger in full.
 
@@ -600,6 +606,7 @@ equal `closeWhen`; any other match is a *fire*. The time is when courier took th
 | fire, key empty | (no thread: the key came out empty) | `empty_key` | An investigation of its own, with no cooldown and no note. A warning, once for the trigger. |
 | close | an open thread whose turn started | `closed` | Note "Resolved at `<time>`." in that thread, and close it. No turn. The cooldown goes on. |
 | close | no thread, a closed one, or one whose turn never started | `close_unknown` | Ignored and counted. |
+| fire | would be `started`, and a limit of the trigger is reached (`limits`, below) | `limited` | No turn, nothing posted in the alert's thread, and the reservation is given back, so the key holds nothing: its next fire starts once there is capacity. Counted, and in the digest of its window. |
 | fire | the turn was refused: the session hook returned `chat.ErrNotStarted` (the first prompt failed its check, or its template could not run) | `not_started` | The event is acknowledged and not delivered again. The thread stays reserved and unmarked: no cooldown, and the key's next fire takes it over after a minute. The hook has already posted the note, audited and counted the refusal (below). |
 
 The cooldown runs from the message that started the turn, not from the last message, so a key
@@ -630,6 +637,43 @@ cooldown, and an open one with no message of its key for 720h, which is the long
 can be, so it never deletes a thread that some trigger still counts as live. A key whose row is
 gone starts afresh, as one with no row does.
 Every decision is counted as `courier_trigger_decisions_total{binding,decision}`.
+
+**Limits of a trigger (D26, D31).** `limits` holds a start to the trigger's `rateLimit.maxRuns` in
+any `rateLimit.per`, `rateLimit.maxConcurrent` investigations running at once and `maxRunsPerDay`
+in any 24 hours. The alertmanager preset's are the example of section 7: 5 in 10m, 2 at once, 40
+a day (the cooldown folds an alert's repeats into its thread already, so they bound distinct
+alerts, a storm). `per` is 10s to 24h. Only a start is limited: a repeat, a close and a note are
+never. The check is the last step before the turn is asked for, and when it stops a start the
+decision is `limited`: no turn, no note (D26), the key's reservation is given back so that it
+holds nothing, and `courier_trigger_limited_total{binding,trigger,limit}` is counted, where
+`limit` is `rate`, `concurrent` or `daily` (when several are reached, the daily is reported
+first, then the rate, then the concurrency). A stopped alert reached people through its own
+receiver. Giving the reservation back, rather than holding the key with no investigation behind
+it, means a repeat of that alert, or a re-fire after the storm, starts an investigation as soon as
+there is a place, and no thread of the key says "fired again" about an alert nobody looked at.
+
+The counts are durable (`trigger_runs`, section 9), so they hold across a restart. Rate and daily
+are sliding windows over the starts of the Binding's trigger (a start counts from the moment it
+is decided until the window passes it); a fixed window would let twice the limit through at a
+boundary. A start is one row for its message, so a redelivered event is counted once, and a start
+whose turn was refused (`not_started`) is taken back and uses no place. Concurrency counts the
+trigger's started investigations whose session has an active task (running, or paused for a
+person) or a turn that is queued and not yet delivered: a start that was taken has a place at
+once, not when the agent gets to it. An investigation that never ends is counted for at most 24
+hours, after which its row is purged. The trigger's place in the list names it, so a Binding that
+reorders its triggers shares counts across the two for up to 24 hours. The check is a local read
+and write, as the acknowledgement path allows. A trigger with no thread rules is limited the same
+way.
+
+**The digest line (D26).** Once for each window and each trigger, courier posts one line at the top
+level of the Binding's channel through the outbox: "7 alerts not investigated in the last 10m
+(rate limit)." (more than one limit in a window: "(rate limit: 5, daily cap: 2)"). A window
+opens with the first stopped start after the last digest and lasts the trigger's `rateLimit.per`
+(an hour for a trigger with only a daily cap); the line is posted when it has ended, within
+15 seconds, so that it can count. The row it asks the outbox for is named after the connection,
+Binding, trigger and the start of the window, so a crash or a failed write between queueing it
+and recording that it was queued posts it once. The line holds a count, a length and a limit and
+never any text of an alert. A window that ended while courier was down is posted when it is up.
 
 **The first turn of a started thread.** The broker renders the trigger's `promptTemplate` over
 the trigger's view of the message (`.Channel`, `.State`, `.Key`, `.Fields`, `.Link`, `.Source`)
@@ -875,6 +919,7 @@ this with an outbox:
 | `sessions` | conversation key | `contextId`, current task ID, binding, last activity (expires at `threadTTL`) |
 | `alert_groups` | dedup key | Session link, root message ref, firing or resolved |
 | `run_counters` | binding, window | Rate-limit and daily-cap counters, and skipped counts for the digest |
+| `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours. The alert Binding's `run_counters` (WP-43) is a separate counter for the webhook |
 | `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps |
 | `reply_queue` | session, sequence | Thread replies waiting for the active task to finish |
 | `feedback` | session, Slack user | Verdict, alert name, agent, binding, timestamps |
