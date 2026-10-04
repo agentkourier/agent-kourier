@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +241,23 @@ func loadAlertConfig(t *testing.T) alertConfig {
 	return cfg
 }
 
+// routeMatches reports whether labels satisfy every one of the route's matchers, which are of the forms name="value" and
+// name!="value" (an absent label is the empty string, as Alertmanager has it).
+func routeMatches(t *testing.T, matchers []string, labels map[string]string) bool {
+	t.Helper()
+	re := regexp.MustCompile(`^([a-z_]+)(!?=)"([^"]*)"$`)
+	for _, m := range matchers {
+		parts := re.FindStringSubmatch(m)
+		if parts == nil {
+			t.Fatalf("matcher %q is not of the form name=\"value\" or name!=\"value\"", m)
+		}
+		if equal := labels[parts[1]] == parts[3]; equal != (parts[2] == "=") {
+			return false
+		}
+	}
+	return true
+}
+
 // TestAlertRouting: every synthetic alert (severity critical, which every preset has) reaches slack-critical-kind, through
 // a route in the base configuration, which the operator adds no namespace matcher to; the route continues, so that the
 // sink, whose route the operator puts first, and any route after it see the alert too; the group and the repeat interval are
@@ -253,8 +271,34 @@ func TestAlertRouting(t *testing.T) {
 		t.Fatalf("routes %+v; want the one for slack-critical-kind", cfg.Route.Routes)
 	}
 	r := cfg.Route.Routes[0]
-	if r.Receiver != "slack-critical-kind" || !reflect.DeepEqual(r.Matchers, []string{`severity="critical"`}) || !r.Continue {
-		t.Errorf("the route is %+v; want slack-critical-kind for severity=\"critical\", with continue", r)
+	wantMatchers := []string{`severity="critical"`, `courier_trial="true"`, `alertname!="Watchdog"`}
+	if r.Receiver != "slack-critical-kind" || !reflect.DeepEqual(r.Matchers, wantMatchers) || !r.Continue {
+		t.Errorf("the route is %+v; want slack-critical-kind for %v, with continue", r, wantMatchers)
+	}
+	// What the route lets through: an alert that alert.sh posts, and nothing else. The production channel is behind it.
+	trial := map[string]string{"alertname": "KubePodCrashLooping", "severity": "critical", "namespace": "shop", "courier_trial": "true"}
+	without := func(m map[string]string, k string) map[string]string {
+		out := map[string]string{}
+		for key, v := range m {
+			if key != k {
+				out[key] = v
+			}
+		}
+		return out
+	}
+	for name, tc := range map[string]struct {
+		labels map[string]string
+		want   bool
+	}{
+		"a trial alert":                      {trial, true},
+		"a critical alert of anyone's":       {without(trial, "courier_trial"), false},
+		"the trial label set to false":       {map[string]string{"alertname": "X", "severity": "critical", "courier_trial": "false"}, false},
+		"a trial alert that is a Watchdog":   {map[string]string{"alertname": "Watchdog", "severity": "critical", "courier_trial": "true"}, false},
+		"a trial alert that is not critical": {map[string]string{"alertname": "X", "severity": "warning", "courier_trial": "true"}, false},
+	} {
+		if got := routeMatches(t, r.Matchers, tc.labels); got != tc.want {
+			t.Errorf("%s: the route matches: %t, want %t", name, got, tc.want)
+		}
 	}
 	for _, rc := range cfg.Receivers {
 		for _, sc := range rc.SlackConfigs {
@@ -714,6 +758,9 @@ func TestAlertPresets(t *testing.T) {
 		if p.Labels["alertname"] != name || p.Labels["severity"] != "critical" || p.Labels["namespace"] != "shop" {
 			t.Errorf("%s: labels %v; want its alertname, severity=critical and namespace=shop (the route matches on the severity)", name, p.Labels)
 		}
+		if _, ok := p.Labels["courier_trial"]; ok {
+			t.Errorf("%s sets courier_trial: alert.sh adds it, so that no preset can leave it out or set it otherwise", name)
+		}
 		if p.Annotations["summary"] == "" || p.Annotations["description"] == "" {
 			t.Errorf("%s: annotations %v; want a summary and a description, which the receiver's text prints", name, p.Annotations)
 		}
@@ -750,18 +797,34 @@ func TestAlertPresets(t *testing.T) {
 func alertStubs(t *testing.T, configSecret string) (bin, logs string) {
 	t.Helper()
 	bin, logs = t.TempDir(), t.TempDir()
+	// The pod lists are PodList JSON as `kubectl get pods -o json` gives it, a terminating pod (it has a deletionTimestamp) first
+	// and the live one after it. ALERT_STUB_PODS=none gives an empty list and =terminating a list of only the terminating pod.
+	// ALERT_STUB_RUNFAILS=N makes the first N probe pods fail with no output, as a pod that never ran does.
 	kubectl := `#!/bin/sh
 printf '%s\n' "$*" | tr '\n' ' ' >> ` + logs + `/kubectl.argv
 echo >> ` + logs + `/kubectl.argv
+pods() { # APP LIVE-POD
+  terminating='{"metadata":{"name":"'"$1"'-terminating-zzzzz","deletionTimestamp":"2026-10-04T00:00:00Z"}}'
+  case "$ALERT_STUB_PODS" in
+    none) echo '{"apiVersion":"v1","kind":"List","items":[]}' ;;
+    terminating) echo '{"apiVersion":"v1","kind":"List","items":['"$terminating"']}' ;;
+    *) echo '{"apiVersion":"v1","kind":"List","items":['"$terminating"',{"metadata":{"name":"'"$2"'","labels":{"app":"'"$1"'"}}}]}' ;;
+  esac
+}
 case "$*" in
   *"contexts[0].name"*) echo kind-courier-full ;;
   *"clusters[0].cluster.server"*) echo https://127.0.0.1:6443 ;;
   *"get alertmanager courier"*) printf %s '` + configSecret + `' ;;
-  *"get pods -l app=checkout"*) echo checkout-7d9f8c6b5-abcde ;;
-  *"get pods -l app=search"*) echo search-5f6b9d-xyz12 ;;
-  *"get pods -l app=catalog"*) echo catalog-6c7d8e-qwert ;;
-  *"get pods -l app=recommender"*) echo recommender-8b9c-mnbvc ;;
-  *" run "*) cat >> ` + logs + `/kubectl.stdin; printf 200 ;;
+  *"get pods -l app=checkout -o json"*) pods checkout checkout-7d9f8c6b5-abcde ;;
+  *"get pods -l app=search -o json"*) pods search search-5f6b9d-xyz12 ;;
+  *"get pods -l app=catalog -o json"*) pods catalog catalog-6c7d8e-qwert ;;
+  *"get pods -l app=recommender -o json"*) pods recommender recommender-8b9c-mnbvc ;;
+  *" run "*)
+    n=$(cat ` + logs + `/runs 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > ` + logs + `/runs
+    cat >> ` + logs + `/kubectl.stdin
+    [ "$n" -gt "${ALERT_STUB_RUNFAILS:-0}" ] || exit 1
+    printf 200 ;;
+  *" delete pod "*) ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 `
@@ -822,12 +885,19 @@ func TestAlertShFiresEachPreset(t *testing.T) {
 					t.Fatalf("the probe pod was given %q: %d alerts, %v; want one", readLog(t, logs, "kubectl.stdin"), len(posted), err)
 				}
 				a := posted[0]
-				wantLabels := map[string]string{}
+				// The preset's labels with the live pod's name in, and the one label alert.sh adds, which the route requires.
+				wantLabels := map[string]string{"courier_trial": "true"}
 				for k, v := range presets[name].Labels {
 					wantLabels[k] = strings.ReplaceAll(v, "__POD__", pod)
 				}
 				if !reflect.DeepEqual(a.Labels, wantLabels) {
 					t.Errorf("labels %v; want %v", a.Labels, wantLabels)
+				}
+				if strings.Contains(a.Labels["pod"], "terminating") || strings.Contains(a.Annotations["description"], "terminating") {
+					t.Errorf("the alert names a terminating pod: %v", a.Labels)
+				}
+				if !routeMatches(t, loadAlertConfig(t).Route.Routes[0].Matchers, a.Labels) {
+					t.Errorf("the route of slack-critical-kind does not take %v: nothing would be posted", a.Labels)
 				}
 				if a.Annotations["summary"] == "" || strings.Contains(a.Annotations["description"], "__POD__") || (pod != "" && !strings.Contains(a.Annotations["description"], pod)) {
 					t.Errorf("annotations %v", a.Annotations)
@@ -858,7 +928,7 @@ func TestAlertShResolves(t *testing.T) {
 	if !a.EndsAt.Before(time.Now()) || !a.StartsAt.Before(a.EndsAt) {
 		t.Errorf("startsAt %v, endsAt %v; want an end in the past and after the start", a.StartsAt, a.EndsAt)
 	}
-	if a.Labels["pod"] != "checkout-7d9f8c6b5-abcde" || a.Labels["alertname"] != "KubePodCrashLooping" {
+	if a.Labels["pod"] != "checkout-7d9f8c6b5-abcde" || a.Labels["alertname"] != "KubePodCrashLooping" || a.Labels["courier_trial"] != "true" {
 		t.Errorf("labels %v: a resolve must carry the labels of the firing alert", a.Labels)
 	}
 }
@@ -930,6 +1000,104 @@ func TestAlertShRefuses(t *testing.T) {
 	}
 }
 
+// TestAlertShFindsOnlyALivePod: a pod that is terminating is not the pod the alert is about, and with none that is live the script says
+// so and posts nothing. (The live pod being the one posted, with a terminating one listed first, is TestAlertShFiresEachPreset's.)
+func TestAlertShFindsOnlyALivePod(t *testing.T) {
+	for name, pods := range map[string]string{"the list is empty": "none", "every pod is terminating": "terminating"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ALERT_STUB_PODS", pods)
+			bin, logs := alertStubs(t, "alertmanager-kind-config")
+			code, stdout, stderr := fireAlert(t, bin, "KubePodCrashLooping")
+			if code != 1 || stdout != "" || !strings.Contains(stderr, "there is no checkout pod in namespace shop") {
+				t.Errorf("exit %d, stdout %q, stderr %q; want 1 and no pod found", code, stdout, stderr)
+			}
+			if readLog(t, logs, "kubectl.stdin") != "" || strings.Contains(readLog(t, logs, "kubectl.argv"), " run ") {
+				t.Error("an alert was posted")
+			}
+		})
+	}
+}
+
+// TestAlertShDeletesEachProbePod: every try's probe pod is deleted when that try is over, whether it answered or not, so that tries
+// that fail leave nothing behind; none is left for the exit trap but one that is in flight.
+func TestAlertShDeletesEachProbePod(t *testing.T) {
+	run := regexp.MustCompile(` -n monitoring run (sandbox-alert-\d+) `)
+	del := regexp.MustCompile(` -n monitoring delete pod (sandbox-alert-\d+) --ignore-not-found`)
+	for name, tc := range map[string]struct {
+		fails, tries int
+		ok           bool
+	}{"the first try answers": {0, 1, true}, "two tries get nothing": {2, 3, true}, "every try gets nothing": {3, 3, false}} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ALERT_STUB_RUNFAILS", strconv.Itoa(tc.fails))
+			bin, logs := alertStubs(t, "alertmanager-kind-config")
+			code, _, stderr := fireAlert(t, bin, "TargetDown")
+			if (code == 0) != tc.ok || (!tc.ok && !strings.Contains(stderr, "HTTP none")) {
+				t.Errorf("exit %d, stderr %q; want success: %t", code, stderr, tc.ok)
+			}
+			var runs, dels []string
+			for _, m := range run.FindAllStringSubmatch(readLog(t, logs, "kubectl.argv"), -1) {
+				runs = append(runs, m[1])
+			}
+			for _, m := range del.FindAllStringSubmatch(readLog(t, logs, "kubectl.argv"), -1) {
+				dels = append(dels, m[1])
+			}
+			if len(runs) != tc.tries || !reflect.DeepEqual(runs, dels) {
+				t.Errorf("probe pods run %v, deleted %v; want %d tries, each deleted once, in order", runs, dels, tc.tries)
+			}
+		})
+	}
+}
+
+// TestUpPreflightSetsAlertSource: the check of the webhook file sets ALERT_SOURCE to 1 for a good file and to 0, with the one line, when
+// there is none; a bad file stops it before either. The step is run as up.sh has it, after the real env.sh and webhook.sh.
+func TestUpPreflightSetsAlertSource(t *testing.T) {
+	raw, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	start := strings.Index(s, "if [ -e \"${ALERTMANAGER_WEBHOOK_FILE}\" ]")
+	if start < 0 {
+		t.Fatal("up.sh does not test for the webhook file")
+	}
+	end := strings.Index(s[start:], "\nfi\n")
+	if end < 0 {
+		t.Fatal("the webhook file check has no fi")
+	}
+	block := s[start : start+end+len("\nfi\n")]
+	for name, tc := range map[string]struct {
+		path    string
+		wantOut string
+		refused bool
+	}{
+		"no file":  {filepath.Join(t.TempDir(), "nowhere"), "alert source: not configured; see README Alert trial\nALERT_SOURCE=0\n", false},
+		"a file":   {webhookFile(t, 0o600, fakeWebhook+"\n"), "ALERT_SOURCE=1\n", false},
+		"bad file": {webhookFile(t, 0o644, fakeWebhook+"\n"), "", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			script := "set -eu\n. \"$1\"\n. \"$2\"\nstep() { :; }\nALERTMANAGER_WEBHOOK_FILE=$3\n" + block + "echo \"ALERT_SOURCE=${ALERT_SOURCE}\"\n"
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", sandboxDir+"env.sh", sandboxDir+"webhook.sh", tc.path)
+			var out, errOut bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &errOut
+			err := cmd.Run()
+			if tc.refused {
+				if err == nil || strings.Contains(out.String(), "ALERT_SOURCE") {
+					t.Errorf("a bad file was not refused: %v, %q", err, out.String())
+				}
+				return
+			}
+			// The step's own "ok: <file> holds ..." line is not what is compared: the lines after it are.
+			got := out.String()
+			if i := strings.Index(got, "ok: "); i >= 0 {
+				got = got[strings.Index(got[i:], "\n")+i+1:]
+			}
+			if err != nil || got != tc.wantOut {
+				t.Errorf("%v, stdout %q, stderr %q; want %q", err, out.String(), errOut.String(), tc.wantOut)
+			}
+		})
+	}
+}
+
 // TestAlertShFailsWhenAlertmanagerRefuses: a status other than 200 is a failure that says the status and not the body.
 func TestAlertShFailsWhenAlertmanagerRefuses(t *testing.T) {
 	bin, _ := alertStubs(t, "alertmanager-kind-config")
@@ -970,27 +1138,41 @@ func TestDownRemovesTheAlertSource(t *testing.T) {
 		t.Fatalf("down.sh: the alert-source step is at %d..%d", start, end)
 	}
 	block := s[start : end+len(endMarker)]
+	// The pod's arguments, as the wait reads them: POD_MODE "" is a pod that has none of ours, "kind-then-gone" has the alert source's
+	// external URL on the first look and not after (the operator's roll), and "other" has an external URL that is not ours, which is
+	// what a revert looks like when the tier has set one of its own: it is not the alert source, so the wait is over.
 	for name, tc := range map[string]struct {
 		configSecret string
 		patched      bool
+		podMode      string
+		podLooks     int // how many times the pod's arguments are read
 	}{
-		"the alert source is up":         {"alertmanager-kind-config", true},
-		"the Alertmanager is the tier's": {"", false},
-		"another configuration":          {"alertmanager-other", false},
+		"the alert source is up":                         {"alertmanager-kind-config", true, "", 1},
+		"the alert source is up and the pod rolls":       {"alertmanager-kind-config", true, "kind-then-gone", 2},
+		"the pod has another external URL after reverts": {"alertmanager-kind-config", true, "other", 1},
+		"the Alertmanager is the tier's":                 {"", false, "", 0},
+		"another configuration":                          {"alertmanager-other", false, "", 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bin, logs := t.TempDir(), t.TempDir()
-			stub := "#!/bin/sh\necho \"$*\" >> " + logs + "/argv\ncase \"$*\" in\n  *\"get alertmanager courier\"*) printf %s \"$CONFIG_SECRET\" ;;\nesac\n"
+			stub := "#!/bin/sh\necho \"$*\" >> " + logs + "/argv\ncase \"$*\" in\n  *\"get alertmanager courier\"*) printf %s \"$CONFIG_SECRET\" ;;\n" +
+				"  *\"get pod alertmanager-courier-0\"*)\n    case \"$POD_MODE\" in\n" +
+				"      kind-then-gone) n=$(cat " + logs + "/n 2>/dev/null || echo 0); n=$((n + 1)); echo \"$n\" > " + logs + "/n\n" +
+				"        [ \"$n\" -gt 1 ] || printf '%s' '[\"--web.external-url=http://alertmanager.kind.local\"]' ;;\n" +
+				"      other) printf '%s' '[\"--web.external-url=http://other.example\"]' ;;\n    esac ;;\nesac\n"
 			if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(stub), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			script := "set -eu\nK=(kubectl --context kind-courier-full)\ndie() { echo \"error: $*\" >&2; exit 1; }\n" + block
 			cmd := exec.CommandContext(t.Context(), "bash", "-c", script)
-			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "CONFIG_SECRET="+tc.configSecret)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "CONFIG_SECRET="+tc.configSecret, "POD_MODE="+tc.podMode)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
 			argv := readLog(t, logs, "argv")
+			if got := strings.Count(argv, " get pod alertmanager-courier-0 "); got != tc.podLooks {
+				t.Errorf("the pod's arguments were read %d times, want %d\n%s", got, tc.podLooks, argv)
+			}
 			if got := strings.Contains(argv, " patch alertmanager courier "); got != tc.patched {
 				t.Errorf("patched: %t, want %t\n%s", got, tc.patched, argv)
 			}

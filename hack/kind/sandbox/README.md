@@ -211,7 +211,9 @@ Alertmanager puts in every `title_link`.
 The configuration is the Alertmanager's base configuration (`alertmanager/config.yaml`), not an `AlertmanagerConfig` resource, for two reasons: that
 resource cannot say `api_url_file`, which is how production reads its webhook, and the operator adds a `namespace="monitoring"` matcher to a
 resource's routes (unless the Alertmanager says `alertmanagerConfigMatcherStrategy: None`, as the tier's does for its sink), which would turn
-away alerts for namespace `shop`. The route matches `severity="critical"`, as production's does, and continues, so the sink's own route, which the operator puts first, still gets every alert.
+away alerts for namespace `shop`. The route matches `severity="critical"`, as production's does, and also `courier_trial="true"` and `alertname!="Watchdog"`: `make sandbox-alert` puts that label on every alert it
+posts and nothing else in the cluster carries it, so nothing but a trial alert can reach the production channel through this receiver. The route continues, so the sink's own route, which the operator
+puts first, still gets every alert.
 
 **Setup (once, optional).** Without the file, `make sandbox-up` skips the alert source and says `alert source: not configured; see README Alert trial`,
 and `make sandbox-alert` refuses and says the same. (Taking the file away later does not remove an alert source that is already up: `make sandbox-down` does.) The webhook URL goes in `~/.config/agent-courier/alertmanager-webhook-url`, on one line, alone:
@@ -235,7 +237,7 @@ make sandbox-alert ALERT=KubePodCrashLooping                  # fires it (STATE=
 make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved   # the same alert, ended
 ```
 
-| `ALERT` | The seeded fault it is about | Labels, besides `severity=critical` and `namespace=shop` |
+| `ALERT` | The seeded fault it is about | Labels, besides `severity=critical`, `namespace=shop` and the `courier_trial=true` that every one gets |
 |---|---|---|
 | `KubePodCrashLooping` | `checkout`, which crash-loops | `pod` (the live pod's name), `container=checkout` |
 | `KubePodNotReady` | `search`, running and never Ready | `pod` |
@@ -260,7 +262,7 @@ and its link are Alertmanager's, the fallback is its default):
 ```
 title      [kind] FIRING (1) - KubePodCrashLooping    (the state is not at the start: allow the prefix, for example ^(\[kind\] )?(?P<state>FIRING|RESOLVED))
 title_link http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind
-fallback   [FIRING:1] KubePodCrashLooping shop (checkout-... critical) | http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind
+fallback   [FIRING:1] KubePodCrashLooping shop (checkout true kube-state-metrics checkout-... CrashLoopBackOff critical) | http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind
 text       *KubePodCrashLooping* - critical  Pod is crash looping.  Pod shop/checkout-... (checkout) is in waiting state (reason: "CrashLoopBackOff").
 ```
 

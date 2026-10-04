@@ -25,9 +25,14 @@ route:
   group_interval: 30s
   repeat_interval: 4h
   routes:
+    # This receiver posts to the production channel, so only what `make sandbox-alert` sends reaches it: alert.sh puts
+    # courier_trial="true" on every alert it posts, and nothing else in the cluster carries it. Production's own route takes any
+    # critical alert; this one does not. The Watchdog exclusion is belt and braces: the heartbeat is production's, not this tier's.
     - receiver: slack-critical-kind
       matchers:
         - severity="critical"
+        - courier_trial="true"
+        - alertname!="Watchdog"
       continue: true
 receivers:
   - name: "null"

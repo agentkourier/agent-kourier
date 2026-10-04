@@ -6,7 +6,8 @@
 # with the labels and annotations a kube-prometheus rule would give it for one of the faults seeded in namespace shop
 # (alertmanager/alerts.json, the presets). With the sandbox up, Alertmanager sends it to the owner's REAL alert channel,
 # tagged [kind], through the receiver slack-critical-kind (alertmanager/config.yaml); hack/kind/sandbox/README.md, Alert trial.
-# ALERT must be a preset: nothing else is ever posted.
+# ALERT must be a preset: nothing else is ever posted. Every alert it posts carries the label courier_trial="true", which the receiver's
+# route requires (alertmanager/config.yaml), so nothing else in the cluster can reach the production channel through it.
 #
 # A firing alert carries an end an hour away, so that one that is forgotten resolves itself; resolved posts the same alert,
 # with the same labels, with an end in the past. Pod names are read from the live pod, so a pod that was replaced between a
@@ -43,16 +44,17 @@ assert_context full
 pod=
 app=$(jq -r --arg a "${alert}" '.[$a].app // empty' "${PRESETS}")
 if [ -n "${app}" ]; then
-  pods=$("${K[@]}" -n shop get pods -l "app=${app}" -o 'jsonpath={.items[?(@.metadata.deletionTimestamp==null)].metadata.name}') ||
-    die "could not list the ${app} pods in namespace shop"
-  pod=${pods%% *}
+  # The live pod: not one that is terminating. (kubectl's JSONPath has no null to filter on, so jq does it.)
+  pods=$("${K[@]}" -n shop get pods -l "app=${app}" -o json) || die "could not list the ${app} pods in namespace shop"
+  pod=$(jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name][0] // empty' <<<"${pods}") ||
+    die "could not read the ${app} pods in namespace shop"
   [ -n "${pod}" ] || die "there is no ${app} pod in namespace shop; bring the sandbox up first: make sandbox-up"
 fi
 
 body=$(jq -c --arg a "${alert}" --arg pod "${pod}" --arg state "${state}" --argjson ttl "${FIRING_FOR}" '
   .[$a] | walk(if type == "string" then gsub("__POD__"; $pod) else . end) as $p
   | (now | floor) as $now
-  | [{labels: $p.labels, annotations: $p.annotations,
+  | [{labels: ($p.labels + {courier_trial: "true"}), annotations: $p.annotations,
       startsAt: (if $state == "resolved" then $now - 120 else $now end | todate),
       endsAt: (if $state == "resolved" then $now - 1 else $now + $ttl end | todate)}]' "${PRESETS}")
 
@@ -67,6 +69,8 @@ for _ in 1 2 3; do
     curl -s -m 20 -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" --data-binary @- '"${ALERTMANAGER_API}" \
     <<<"${body}" 2>/dev/null) || code=
   code=${code: -3}
+  "${K[@]}" -n monitoring delete pod "${probe}" --ignore-not-found --wait=false >/dev/null 2>&1 || true # --rm has; a try that failed may not have
+  probe= # none is in flight now: the trap has nothing to do
   [ -z "${code}" ] || break # an answer, even a refusal, is final; no answer is tried again
 done
 [ "${code}" = 200 ] || die "Alertmanager did not accept the alert (HTTP ${code:-none}); is it running? kubectl --context ${CTX} -n monitoring get pods"

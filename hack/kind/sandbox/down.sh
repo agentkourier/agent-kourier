@@ -45,7 +45,7 @@ step "the alert source (Alertmanager's receiver and its webhook Secret)"
 if [ "$("${K[@]}" -n monitoring get alertmanager courier --ignore-not-found -o 'jsonpath={.spec.configSecret}')" = alertmanager-kind-config ]; then
   "${K[@]}" -n monitoring patch alertmanager courier --type=merge -p '{"spec":{"configSecret":null,"secrets":null,"externalUrl":null}}' >/dev/null
   deadline=$((SECONDS + 180))
-  until [[ $("${K[@]}" -n monitoring get pod alertmanager-courier-0 -o 'jsonpath={.spec.containers[*].args}' 2>/dev/null || echo unknown) != *--web.external-url* ]] &&
+  until [[ $("${K[@]}" -n monitoring get pod alertmanager-courier-0 -o 'jsonpath={.spec.containers[*].args}' 2>/dev/null || echo unknown) != *--web.external-url=http://alertmanager.kind.local* ]] &&
     "${K[@]}" -n monitoring wait --for=condition=Ready pod/alertmanager-courier-0 --timeout=5s >/dev/null 2>&1; do
     [ "${SECONDS}" -lt "${deadline}" ] || die "the full tier's Alertmanager did not come back to its own configuration in 180 s"
     sleep 3
