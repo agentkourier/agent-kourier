@@ -583,6 +583,29 @@ How a bot message reaches the triggers:
   A bot's reply inside a thread is ignored and not counted: a trigger is about a message that opens
   its own thread. A bot's message is never a mention, whatever its text says.
 
+What a matched bot message does to its thread, for a trigger with `thread.by: key`. The key is
+hashed (with the connection, channel and bot) and the store holds that hash, one row per key with
+its thread, when it opened, was last seen and closed, and when its cooldown ends; the logs name a
+key by the first eight characters of the hash. A *close* is a message whose extracted fields all
+equal `closeWhen`; any other match is a *fire*. The time is when courier took the message.
+
+| Message | The key has | Decision | What happens |
+|---|---|---|---|
+| fire | no thread, or a closed one whose cooldown has ended | `started` | Record the thread, anchored to this message, with the cooldown running from now. Hand the start to the session (CT-4). |
+| fire | an open thread, however old, or a closed one inside its cooldown | `repeat` | Note "Fired again at `<time>`." in that thread, and reopen it. No turn. |
+| fire | this very message as its thread (a redelivery) | `dedup` | Ask for the start again, since the first ask may have been lost. |
+| close | an open thread | `closed` | Note "Resolved at `<time>`." in that thread, and close it. No turn. The cooldown goes on. |
+| close | no thread, or a closed one | `close_unknown` | Ignored and counted. |
+
+The cooldown runs from the start of the thread, not from the last message, so a key starts at
+most one turn in each window however often it fires and resolves (a flapping alert is one
+investigation); a thread that never resolves stays the key's thread. The notes are fixed text
+and a time, never any of the message; each is one outbox row named after the message that
+caused it, so a redelivered event adds none. Each step is idempotent and a note is queued
+before the change it goes with, so an error returns to Slack as an unacknowledged event and the
+redelivery finishes the work. A trigger with no `thread` has none of this: every match starts a
+turn. Every decision is counted as `courier_trigger_decisions_total{binding,decision}`.
+
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
 is derived from the Slack message itself, `(channel, message ts)`, not the event ID:
 Slack delivers an @mention as both an `app_mention` and a `message` event with different

@@ -37,7 +37,8 @@ type IntakeConfig struct {
 	// Interactions takes the presses of buttons. Nil drops them, acknowledged.
 	Interactions func(ctx context.Context, i Interaction) error
 	// Notice, if set, tells a thread that courier cannot continue it: session.NoticeExpired for a
-	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config.
+	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config. It also
+	// takes the notes of a trigger's thread: session.NoticeTriggerRepeat and session.NoticeTriggerClosed.
 	// The notice ID is the message's ID and a suffix, so a notice for the same message is the same
 	// row for the outbox. It queues and does not call the platform (live.Sink.QueueNotice). Its error means
 	// the notice was not written: Message returns it, so the platform leaves the event unacknowledged and

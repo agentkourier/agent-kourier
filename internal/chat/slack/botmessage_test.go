@@ -359,7 +359,7 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 	intake := chat.NewIntake(chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Logger: log,
-		OnTrigger: func(_ context.Context, m chat.TriggerMatch) error {
+		OnStart: func(_ context.Context, m chat.TriggerMatch) error {
 			bi.mu.Lock()
 			defer bi.mu.Unlock()
 			bi.matches = append(bi.matches, m)
@@ -376,7 +376,7 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 		cancel()
 		<-done
 		if got := sub.submitted(); len(got) != 0 {
-			t.Errorf("a bot's message started a session: %+v (CT-2 starts none)", got)
+			t.Errorf("a bot's message started a session: %+v (the Intake hands starts on, and CT-4 starts the session)", got)
 		}
 	})
 	waitConnected(t, bi.fake)
