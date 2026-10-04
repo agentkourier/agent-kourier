@@ -128,6 +128,8 @@ func startWatched(t *testing.T) *watched {
 	})
 	run(t, c, &sink{})
 	k.eventually(t, "the client to be told it is connected", k.states.last)
+	// The state is set before the line is logged, so being told says nothing yet of the log.
+	k.eventually(t, "the connection to be logged", func() bool { return k.logs.count("level=INFO", "socket mode connected") > 0 })
 	return k
 }
 
@@ -199,6 +201,8 @@ func TestLostConnectionIsReportedAndRecovers(t *testing.T) {
 
 	k.gate.failOpen.Store(false)
 	k.eventually(t, "the connection to be reported up again", k.states.last)
+	// The state is set before the line is logged: wait for the second line, then count.
+	k.eventually(t, "the second connection to be logged", func() bool { return k.logs.count("level=INFO", "socket mode connected") >= 2 })
 	if got := k.states.get(); len(got) != 3 || !got[0] || got[1] || !got[2] {
 		t.Errorf("OnConnection was told %v; want up, down, up", got)
 	}
