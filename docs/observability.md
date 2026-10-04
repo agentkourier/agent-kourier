@@ -107,7 +107,7 @@ terminal turn outcome metrics retain their names and hooks.
 | `courier_agent_first_text_duration_seconds` | Attempt start to first nonempty text observed on send/answer; no observations for follow snapshots |
 | `http_client_request_duration_seconds` | HTTP request through response EOF or close; an SSE response includes its stream lifetime |
 | `courier_store_operation_duration_seconds` | Domain store call, including database pool wait |
-| `courier_intake_total` | Message/press dispositions; `source="reply_queue",disposition="duplicate"` counts durable duplicates separately |
+| `courier_intake_total` | Message/press dispositions; `source="reply_queue",disposition="duplicate"` counts durable duplicates separately; a bot's message is `trigger_matched`, `trigger_unmatched` (no trigger took it) or `ignored` (an unbound channel, or a reply in a thread) |
 | `courier_slack_ack_duration_seconds` | Envelope handling start to completion of the ack attempt, or return with ack withheld; measures queueing the ack, not confirmation from Slack |
 | `courier_turn_queue_wait_seconds` | Enqueue to first execution attempt in this process; a restart may observe the same waiting reply again |
 | `courier_sessions_active` / `courier_sessions_paused` | Current in-process runners and runners parked on input |

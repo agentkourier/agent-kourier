@@ -205,6 +205,7 @@ func TestFiltersEvents(t *testing.T) {
 		{"empty text", message(map[string]any{"text": ""}), false},
 		{"mention in an edit", message(map[string]any{"type": "app_mention", "edited": map[string]any{"user": "U1", "ts": "1.2"}}), false},
 		{"mention by a bot", message(map[string]any{"type": "app_mention", "bot_id": "BOTHER"}), false},
+		{"courier's own mention, by user ID alone", message(map[string]any{"type": "app_mention", "user": "UFAKEBOT", "text": botMark + " hi"}), false},
 	}
 	for _, tt := range tests {
 		before := len(sk.messages())

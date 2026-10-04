@@ -64,6 +64,8 @@ type Intake struct {
 	log    *slog.Logger
 	seen   recent
 	tables tableCache
+	// mentionless holds the Bindings that were said to have no mention trigger, so that it is said once.
+	mentionless sync.Map
 }
 
 var (
@@ -123,7 +125,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		MessageRef: m.At.ID, UserID: m.User, Text: m.Text,
 	}
 	if m.Mentioned {
-		req.Binding, req.Create = in.binding(m.At.Channel)
+		req.Binding, req.Create = in.binding(ctx, m.At.Channel)
 	}
 	if !req.Create && m.At.Thread == "" {
 		return nil
@@ -201,13 +203,13 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 		return "trigger_unmatched", nil
 	}
 	match := TriggerMatch{Binding: name, Index: index, Fields: fields, Message: m}
-	telemetry.Count(ctx, "courier_trigger_matched_total", name)
 	in.log.InfoContext(ctx, "chat: bot message matched a trigger; no turn is started yet", "binding", name, "trigger", index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 	if in.cfg.OnTrigger != nil {
 		if err := in.cfg.OnTrigger(ctx, match); err != nil {
 			return "", fmt.Errorf("trigger %d of %s for %s: %w", index, name, MessageID(Ref{Platform: m.At.Platform, Conn: in.conn, Channel: m.At.Channel, ID: m.At.ID}), err)
 		}
 	}
+	telemetry.Count(ctx, "courier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
 	return "trigger_matched", nil
 }
 
@@ -227,8 +229,11 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 	})
 }
 
-// binding returns the namespace/name of the Binding that owns channel on this connection.
-func (in *Intake) binding(channel string) (name string, ok bool) {
+// binding returns the namespace/name of the Binding that owns channel on this connection and takes @mentions: a
+// Binding whose triggers are listed and leave out the mention one does not (spec 8.2), and says so, once. An empty
+// list is the mention trigger. It decides only whether a mention may create a session: a reply in a thread
+// courier owns continues it whatever the triggers say.
+func (in *Intake) binding(ctx context.Context, channel string) (name string, ok bool) {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
 		return "", false
@@ -237,7 +242,15 @@ func (in *Intake) binding(channel string) (name string, ok bool) {
 	if !ok {
 		return "", false
 	}
-	return v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name), true
+	name = v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) > 0 && !slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerMention }) {
+		if _, told := in.mentionless.LoadOrStore(name, struct{}{}); !told {
+			in.log.InfoContext(ctx, "chat: the triggers of a Binding have no mention trigger, so an @mention in its channel starts no session; replies in a thread courier owns still continue it", "binding", name)
+		}
+		return "", false
+	}
+	return name, true
 }
 
 // recentMax bounds each generation of recent.

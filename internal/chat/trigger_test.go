@@ -8,6 +8,7 @@ import (
 	"maps"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -120,6 +121,7 @@ func (l *lockedBuffer) String() string {
 type triggered struct {
 	in      *chat.Intake
 	cfg     chat.IntakeConfig // what in was made from, for a test that wants another Intake over the same table
+	snap    atomic.Pointer[config.Snapshot]
 	sub     *submitter
 	ctx     context.Context
 	reg     *prometheus.Registry
@@ -164,7 +166,9 @@ func (h *triggered) counter(t *testing.T, name, binding string) float64 {
 	return 0
 }
 
-func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
+// snapshotOf is a routing table in which C1 is bound to sre/sre-alerts with the triggers, defaulted and checked as
+// the loader would, and G1 to payments/pay with none.
+func snapshotOf(t *testing.T, triggers []v1alpha1.Trigger) *config.Snapshot {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string, triggers []v1alpha1.Trigger) v1alpha1.Binding {
@@ -194,15 +198,27 @@ func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 			t.Fatalf("the test's triggers are invalid: %v", err)
 		}
 	}
+	return snap
+}
+
+// reload swaps in a routing table with the given triggers, as a config reload does.
+func (h *triggered) reload(t *testing.T, triggers ...v1alpha1.Trigger) {
+	t.Helper()
+	h.snap.Store(snapshotOf(t, triggers))
+}
+
+func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
+	t.Helper()
 	reg := prometheus.NewRegistry()
 	obs, err := telemetry.New(reg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := &triggered{sub: &submitter{}, reg: reg, logs: &lockedBuffer{}, ctx: telemetry.WithObserver(t.Context(), obs)}
+	h.snap.Store(snapshotOf(t, triggers))
 	h.cfg = chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
-		Snapshot:   func() *config.Snapshot { return snap }, Submitter: h.sub, OnTrigger: h.hook,
+		Snapshot:   h.snap.Load, Submitter: h.sub, OnTrigger: h.hook,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	h.in = chat.NewIntake(h.cfg)
 	return h
@@ -645,9 +661,15 @@ func TestAFailingHookLeavesTheEventToBeRedelivered(t *testing.T) {
 	if err := h.in.Message(h.ctx, m); !errors.Is(err, h.hookErr) {
 		t.Fatalf("Message = %v; want the hook's error", err)
 	}
+	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 0 {
+		t.Fatalf("courier_trigger_matched_total = %v after the hook failed; want 0, the match was not taken", n)
+	}
 	h.hookErr = nil
 	if err := h.in.Message(h.ctx, m); err != nil || len(h.got()) != 2 {
 		t.Fatalf("redelivery: %v, hook called %d times; want it tried again and taken", err, len(h.got()))
+	}
+	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
+		t.Fatalf("courier_trigger_matched_total = %v after the redelivery; want 1", n)
 	}
 	if err := h.in.Message(h.ctx, m); err != nil || len(h.got()) != 2 {
 		t.Fatalf("third delivery: %v, hook called %d times; want it remembered", err, len(h.got()))
