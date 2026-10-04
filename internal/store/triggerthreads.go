@@ -63,6 +63,11 @@ type TriggerThreads interface {
 	// has no row, and ErrConflict if its thread is another message's, which took the key over: the turn is
 	// not the key's. cooldownUntil is required, and after the Unix epoch (ErrInvalid otherwise).
 	MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, cooldownUntil time.Time) error
+	// ReleaseTriggerThread gives the key back: it deletes the key's row if its thread is this message's and its
+	// turn has not started (no cooldown runs), and reports whether it did. It is for a reservation whose start a
+	// limit stopped, so that it holds nothing and a later fire of the key may start once there is capacity. A row
+	// that is another message's, or whose turn started, is left alone, and so is a missing one.
+	ReleaseTriggerThread(ctx context.Context, binding, keyHash, thread string) (released bool, err error)
 	// GetTriggerThread returns the key's row, or ErrNotFound.
 	GetTriggerThread(ctx context.Context, binding, keyHash string) (TriggerThread, error)
 	// ReopenTriggerThread records that the key fired again at at: it moves LastSeen forward, never back, and

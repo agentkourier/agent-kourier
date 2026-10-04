@@ -100,6 +100,20 @@ func (s *Store) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread
 	return nil
 }
 
+// ReleaseTriggerThread implements store.TriggerThreads.
+func (s *Store) ReleaseTriggerThread(ctx context.Context, binding, keyHash, thread string) (telemetryResult0 bool, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.ReleaseTriggerThread")
+	defer func() { finishStore(op, telemetryErr) }()
+	if binding == "" || keyHash == "" || thread == "" {
+		return false, fmt.Errorf("release trigger thread of %q: the Binding, key hash and thread are required: %w", binding, store.ErrInvalid)
+	}
+	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE binding = ? AND key_hash = ? AND thread = ? AND cooldown_until = 0`, binding, keyHash, thread)
+	if err != nil {
+		return false, fmt.Errorf("release trigger thread of %q: %w", binding, err)
+	}
+	return n > 0, nil
+}
+
 // GetTriggerThread implements store.TriggerThreads.
 func (s *Store) GetTriggerThread(ctx context.Context, binding, keyHash string) (telemetryResult0 store.TriggerThread, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.GetTriggerThread")

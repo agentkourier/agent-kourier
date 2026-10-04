@@ -456,3 +456,42 @@ func TestPurgeTriggerThreads(t *testing.T) {
 		t.Errorf("a purge with no time: %v; want ErrInvalid", err)
 	}
 }
+
+// A reservation that a limit stopped is given back, and the key is as if it had never fired: the next fire reserves
+// it again at once, with no stale takeover and no cooldown to wait out.
+func TestReleaseTriggerThreadFreesAReservationThatNeverStarted(t *testing.T) {
+	s := openTemp(t)
+	if _, opened, err := reserve(t, s, opening("100.1", t0)); err != nil || !opened {
+		t.Fatalf("OpenTriggerThread = %v, %v", opened, err)
+	}
+	if rel, err := s.ReleaseTriggerThread(t.Context(), tBinding, tKey, "100.1"); err != nil || !rel {
+		t.Fatalf("ReleaseTriggerThread = %v, %v; want it released", rel, err)
+	}
+	if _, err := s.GetTriggerThread(t.Context(), tBinding, tKey); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTriggerThread after the release = %v; want ErrNotFound", err)
+	}
+	if got, opened, err := reserve(t, s, opening("100.2", t0.Add(time.Second))); err != nil || !opened || got.Thread != "100.2" {
+		t.Errorf("the next fire = %+v, %v, %v; want it reserved at once", got, opened, err)
+	}
+	if rel, err := s.ReleaseTriggerThread(t.Context(), tBinding, tKey, "100.1"); err != nil || rel {
+		t.Errorf("ReleaseTriggerThread of the message that no longer holds the key = %v, %v; want the other's row left", rel, err)
+	}
+}
+
+// What has started is not given back: its investigation exists and its cooldown runs.
+func TestReleaseTriggerThreadLeavesAStartedThread(t *testing.T) {
+	s := openTemp(t)
+	startAt(t, s, "100.1", t0)
+	if rel, err := s.ReleaseTriggerThread(t.Context(), tBinding, tKey, "100.1"); err != nil || rel {
+		t.Fatalf("ReleaseTriggerThread of a started thread = %v, %v; want it left", rel, err)
+	}
+	if th, err := s.GetTriggerThread(t.Context(), tBinding, tKey); err != nil || !th.Started() {
+		t.Errorf("thread = %+v, %v; want it started still", th, err)
+	}
+	if rel, err := s.ReleaseTriggerThread(t.Context(), tBinding, "nokey", "100.1"); err != nil || rel {
+		t.Errorf("ReleaseTriggerThread of a missing key = %v, %v; want nothing", rel, err)
+	}
+	if _, err := s.ReleaseTriggerThread(t.Context(), tBinding, tKey, ""); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("ReleaseTriggerThread with no thread = %v; want ErrInvalid", err)
+	}
+}
