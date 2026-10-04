@@ -274,6 +274,18 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 				tr.Extract = map[string]v1alpha1.Extract{"pct": {Field: v1alpha1.FieldAttachmentText, Regex: `(?P<what>\w+) is at (?P<pct>\d+)%`}}
 			}), msg(nil), true, map[string]string{"pct": "97"}},
+		{"a group that took part and matched empty text is a match, with an empty value",
+			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
+				tr.Extract = map[string]v1alpha1.Extract{"note": {Field: v1alpha1.FieldFooter, Regex: `^(?P<note>x*)key`}}
+			}), msg(func(b *chat.BotMessage) { b.Footer = "key: disk" }), true, map[string]string{"note": ""}},
+		{"an optional group that took no part is a miss, so the trigger does not match",
+			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
+				tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^key: (?:(?P<key>\S+)/)?ns1$`}}
+			}), msg(func(b *chat.BotMessage) { b.Footer = "key: ns1" }), false, nil},
+		{"the same optional group, taking part, is a match",
+			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
+				tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^key: (?:(?P<key>\S+)/)?ns1$`}}
+			}), msg(func(b *chat.BotMessage) { b.Footer = "key: disk/ns1" }), true, map[string]string{"key": "disk"}},
 		{"an extract that does not match is no match",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 				tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `courier-key: (?P<key>\S+)`}}
@@ -329,6 +341,10 @@ func TestTheFirstTriggerThatMatchesTakesTheMessage(t *testing.T) {
 		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldFooter: "^"}
 		tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `courier-key: (?P<key>\S+)`}}
 	})
+	optionalKey := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
+		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldAttachmentText: "^"}
+		tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^(?:no (?P<key>key)|no key here)$`}}
+	})
 	hasState := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: "^"}
 		tr.Extract = map[string]v1alpha1.Extract{"state": {Field: v1alpha1.FieldTitle, Regex: `^(?P<state>FIRING|RESOLVED)`}}
@@ -347,6 +363,7 @@ func TestTheFirstTriggerThatMatchesTakesTheMessage(t *testing.T) {
 		{"both match, the first wins", []v1alpha1.Trigger{always("first"), always("second")}, 0, map[string]string{}},
 		{"both match, in the other order", []v1alpha1.Trigger{hasState, always("second")}, 0, map[string]string{"state": "FIRING"}},
 		{"the first misses an extract, the second takes it", []v1alpha1.Trigger{needsKey, hasState}, 1, map[string]string{"state": "FIRING"}},
+		{"the first has an optional group that took no part, so it misses and the second takes it", []v1alpha1.Trigger{optionalKey, hasState}, 1, map[string]string{"state": "FIRING"}},
 		{"the first is excluded, the second takes it", []v1alpha1.Trigger{excluded, always("second")}, 1, map[string]string{}},
 		{"the first is for another bot, the second takes it", []v1alpha1.Trigger{otherBot, always("second")}, 1, map[string]string{}},
 		{"a mention trigger first still counts its place in the list", []v1alpha1.Trigger{{Type: v1alpha1.TriggerMention}, always("second")}, 1, map[string]string{}},

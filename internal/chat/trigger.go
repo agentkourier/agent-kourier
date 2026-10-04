@@ -89,8 +89,9 @@ func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
 
 // evaluate applies the trigger to m: it is for m's bot, every match regex matches, no exclude regex does, and
 // every extract finds its group; it returns the extracted values. A regex is a search, not anchored unless it
-// says so, on the raw text of its field; a field the message lacks is empty. An extract that matches takes
-// its group's text, empty or not.
+// says so, on the raw text of its field; a field the message lacks is empty. An extract's value is its group's
+// text, which may be empty if the group took part in the match; a group that took no part (an optional one) is
+// a miss, like a regex that does not match, so that no message gets an empty key by default.
 func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
 	if m.Bot == nil || m.Bot.BotID != t.botID {
 		return nil, false
@@ -107,11 +108,14 @@ func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
 	}
 	fields := make(map[string]string, len(t.extract))
 	for _, e := range t.extract {
-		sub := e.re.FindStringSubmatch(m.Field(e.field))
-		if sub == nil {
+		text := m.Field(e.field)
+		loc := e.re.FindStringSubmatchIndex(text)
+		// No match, or a match in which the entry's group took no part (an optional group): both are a miss.
+		// A group that took part and matched empty text is a match, with an empty value.
+		if loc == nil || loc[2*e.group] < 0 {
 			return nil, false
 		}
-		fields[e.name] = sub[e.group]
+		fields[e.name] = text[loc[2*e.group]:loc[2*e.group+1]]
 	}
 	return fields, true
 }
