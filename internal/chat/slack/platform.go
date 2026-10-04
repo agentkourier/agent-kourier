@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	slackgo "github.com/slack-go/slack"
@@ -28,6 +31,12 @@ const PlatformName = "slack"
 type Platform struct {
 	c    API
 	conn string
+	log  *slog.Logger
+
+	// markdown is latched when Slack refused the chunks mode and took the markdown_text one: every stream
+	// from then on starts in the mode that works, with no failed call first. warned makes the log of it one.
+	markdown atomic.Bool
+	warned   sync.Once
 }
 
 // API is what the Platform asks of the Slack client: *Client, or a double of it.
@@ -36,10 +45,10 @@ type API interface {
 	Post(ctx context.Context, channel, threadTS string, c Content, outboxID string) (string, error)
 	Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error)
 	Update(ctx context.Context, channel, ts string, c Content) error
-	StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string) (string, error)
-	AppendStream(ctx context.Context, channel, ts, markdown string) error
+	StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string, mode StreamMode) (string, error)
+	AppendStream(ctx context.Context, channel, ts, markdown string, mode StreamMode) error
 	AppendStep(ctx context.Context, channel, ts string, u TaskUpdate) error
-	StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error
+	StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string, mode StreamMode) error
 	PostEphemeral(ctx context.Context, channel, threadTS, user string, c Content) error
 	React(ctx context.Context, channel, ts, name string) error
 	Unreact(ctx context.Context, channel, ts, name string) error
@@ -58,7 +67,18 @@ func Render(o chat.Outgoing) (Content, error) { return renderOutgoing(o) }
 var _ chat.Platform = (*Platform)(nil)
 
 // NewPlatform returns the adapter of the ChatConnection conn ("namespace/name"), which c is the client of.
-func NewPlatform(c API, conn string) *Platform { return &Platform{c: c, conn: conn} }
+func NewPlatform(c API, conn string) *Platform {
+	return &Platform{c: c, conn: conn, log: slog.Default()}
+}
+
+// WithLogger sets the logger of the Platform, which logs the one thing it reports on its own: Slack's refusal of the
+// chunks mode (Stream). It returns p, for the call that builds it.
+func (p *Platform) WithLogger(l *slog.Logger) *Platform {
+	if l != nil {
+		p.log = l
+	}
+	return p
+}
 
 func (p *Platform) ref(channel, thread, ts string) chat.Ref {
 	return chat.Ref{Platform: PlatformName, Conn: p.conn, Channel: channel, Thread: thread, ID: ts}
@@ -122,24 +142,96 @@ func (p *Platform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) erro
 	return p.c.Update(ctx, r.Channel, r.ID, c)
 }
 
-// Stream starts a streaming message in t, shown to the user to, with the markdown first.
+// Stream starts a streaming message in t, shown to the user to, with the markdown first. The stream starts in the
+// chunks mode, which is the one that can show steps. That mode is a guess about Slack that no one has confirmed
+// (UNCONFIRMED(WP-04)), and a Slack that refuses it, with one of the codes of refusesChunks, must not cost courier its
+// replies: the start is made once more in the markdown_text mode, and if that works the platform stays in it for
+// the process, so that the next stream starts there with no failed call first, and is logged once. A stream in that
+// mode shows no steps. A start with no text carries no mode and cannot be refused for it.
 func (p *Platform) Stream(ctx context.Context, t chat.Target, to, md string) (chat.Stream, error) {
-	ts, err := p.c.StartStream(ctx, t.Channel, t.Thread, to, markdown(md, maxMarkdown))
+	mode := p.streamMode()
+	text := markdown(md, maxMarkdown)
+	ts, err := p.c.StartStream(ctx, t.Channel, t.Thread, to, text, mode)
+	if err != nil && mode == ChunksMode && text != "" && refusesChunks(err) {
+		first := err
+		mode = MarkdownMode
+		if ts, err = p.c.StartStream(ctx, t.Channel, t.Thread, to, text, mode); err != nil {
+			return nil, err // the mode was not the trouble: the first answer is not the one to keep, nor is the latch set
+		}
+		p.fallBack(ctx, first)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &stream{p: p, ref: p.ref(t.Channel, t.Thread, ts)}, nil
+	s := &stream{p: p, ref: p.ref(t.Channel, t.Thread, ts)}
+	s.mode.Store(int32(mode))
+	return s, nil
+}
+
+// streamMode is the mode a stream of this platform starts in.
+func (p *Platform) streamMode() StreamMode {
+	if p.markdown.Load() {
+		return MarkdownMode
+	}
+	return ChunksMode
+}
+
+// fallBack latches the markdown_text mode, and logs it once at WARN with Slack's answer.
+func (p *Platform) fallBack(ctx context.Context, refused error) {
+	p.markdown.Store(true)
+	p.warned.Do(func() {
+		p.log.WarnContext(ctx, "slack: the chunks mode of a stream was refused; streams are in markdown_text mode from now on and show no steps",
+			"conn", p.conn, "err", refused)
+	})
+}
+
+// refusesChunks says whether err is the way Slack refuses a request for its mode: a chunk it does not take, a stream
+// whose mode is another, both parameters at once, or arguments it does not take at all. The code is read from Slack's
+// answer, never matched in text.
+// UNCONFIRMED(WP-04): the codes, which are documented for chat.appendStream and chat.stopStream (the first three), and
+// the last, which a stream started with chunks it cannot read may be answered with.
+func refusesChunks(err error) bool {
+	var resp slackgo.SlackErrorResponse
+	if !errors.As(err, &resp) {
+		return false
+	}
+	switch resp.Err {
+	case "invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks", "invalid_arguments":
+		return true
+	}
+	return false
 }
 
 type stream struct {
-	p   *Platform
-	ref chat.Ref
+	p    *Platform
+	ref  chat.Ref
+	mode atomic.Int32 // the StreamMode of the stream, which a refusal of the chunks mode changes
 }
 
 func (s *stream) Ref() chat.Ref { return s.ref }
 
+// text makes a call that carries text, in the mode of the stream. A stream that was started with no text has no mode
+// yet, and the first text may be what Slack refuses in chunks: it is sent once more in markdown_text, and if that works
+// the stream, and the platform, are in that mode from then on. One that is refused in both is no mode's trouble, and
+// the first answer is kept.
+func (s *stream) text(ctx context.Context, md string, call func(StreamMode) error) error {
+	mode := StreamMode(s.mode.Load())
+	err := call(mode)
+	if err != nil && mode == ChunksMode && md != "" && refusesChunks(err) {
+		if retry := call(MarkdownMode); retry == nil {
+			s.mode.Store(int32(MarkdownMode))
+			s.p.fallBack(ctx, err)
+			return nil
+		}
+	}
+	return err
+}
+
 func (s *stream) Append(ctx context.Context, md string) error {
-	return notStreaming(s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown)))
+	text := markdown(md, maxMarkdown)
+	return notStreaming(s.text(ctx, text, func(m StreamMode) error {
+		return s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, text, m)
+	}))
 }
 
 // noResult is what the card of a step says when the stream ended with no result for it. Slack has no state for a
@@ -155,6 +247,9 @@ const noResult = "No result was reported."
 // The chunk always carries the whole card, title and details with the status, so that it reads the same whether Slack
 // replaces a task by a chunk or merges the two.
 func (s *stream) Step(ctx context.Context, st chat.Step) error {
+	if StreamMode(s.mode.Load()) == MarkdownMode {
+		return chat.ErrNoSteps // a stream in the markdown_text mode cannot take a task_update chunk
+	}
 	if st.ID == "" {
 		return fmt.Errorf("%w: a step with no ID", chat.ErrInvalid)
 	}
@@ -189,11 +284,19 @@ func (s *stream) Stop(ctx context.Context, md string, final chat.Message, tag st
 		}
 		blocks = c.Blocks
 	}
-	return notStreaming(s.p.c.StopStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown), blocks, tag))
+	text := markdown(md, maxMarkdown)
+	return notStreaming(s.text(ctx, text, func(m StreamMode) error {
+		return s.p.c.StopStream(ctx, s.ref.Channel, s.ref.ID, text, blocks, tag, m)
+	}))
 }
 
-// StreamAt is the stream that is the message at r.
-func (p *Platform) StreamAt(r chat.Ref) chat.Stream { return &stream{p: p, ref: r} }
+// StreamAt is the stream that is the message at r. Its mode is the platform's, and if the stream of the earlier run
+// that started it was in the other, the first text it is sent finds out (stream.text).
+func (p *Platform) StreamAt(r chat.Ref) chat.Stream {
+	s := &stream{p: p, ref: r}
+	s.mode.Store(int32(p.streamMode()))
+	return s
+}
 
 // notStreaming marks the error of a message that is not streaming, which Slack says by the code of its response:
 // it ended, or it never was a stream (an update-path message's ts). Matched by the code, never by text.

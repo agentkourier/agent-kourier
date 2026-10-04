@@ -144,7 +144,8 @@ func TestAStepIsAnErrorWhenItsResultSaysTheCallFailed(t *testing.T) {
 }
 
 // Several calls are several steps, in the order of the calls, and each ends by its own result, whatever order the
-// results come in. A step that is over before it is first shown is begun in its outcome, in one call.
+// results come in. A step that is over before it is first shown is begun in its outcome, in one call. A window begins
+// at most maxBegins steps, so the third comes with the next window.
 func TestSeveralToolsAreStepsInOrderEachEndedByItsOwnResult(t *testing.T) {
 	e := setup(t)
 	release := e.hold()
@@ -156,7 +157,9 @@ func TestSeveralToolsAreStepsInOrderEachEndedByItsOwnResult(t *testing.T) {
 	run.Handle(result("c2", map[string]any{"output": "x"}))
 	run.Handle(result("c1", map[string]any{"error": "no"}))
 	release()
-	eventually(t, "the steps to be shown", func() bool { return len(e.tasks()) == 3 })
+	eventually(t, "the first two steps to be shown", func() bool { return len(e.tasks()) == 2 })
+	e.window(t)
+	eventually(t, "the third step to be shown", func() bool { return len(e.tasks()) == 3 })
 	want := []fakeslack.Task{{ID: "s1", Title: "first", Status: "error"}, {ID: "s2", Title: "second", Status: "complete"}, {ID: "s3", Title: "third", Status: "in_progress"}}
 	if got := e.tasks(); !slices.Equal(got, want) {
 		t.Fatalf("tasks %+v; want %+v", got, want)
@@ -299,14 +302,18 @@ func TestTheArgumentsOfACallAreNeverShownInAStep(t *testing.T) {
 // given, whatever the adapter under it can do.
 type spy struct {
 	chat.Platform
-	caps  chat.Caps
-	steps *atomic.Int32
-	fail  func(n int) error // the error of the nth step, or nil
+	caps       chat.Caps
+	steps      *atomic.Int32
+	fail       func(n int) error // the error of the nth step, or nil
+	streamFail error             // what Stream says, if it is not nil
 }
 
 func (s spy) Capabilities() chat.Caps { return s.caps }
 
 func (s spy) Stream(ctx context.Context, t chat.Target, to, md string) (chat.Stream, error) {
+	if s.streamFail != nil {
+		return nil, s.streamFail
+	}
 	st, err := s.Platform.Stream(ctx, t, to, md)
 	return spyStream{Stream: st, spy: s}, err
 }
@@ -359,6 +366,9 @@ func TestNoStepIsAskedOfAPlatformWithoutThem(t *testing.T) {
 	if n := steps.Load(); n != 0 {
 		t.Fatalf("%d steps were asked of a platform with none", n)
 	}
+	if strings.Contains(e.logs.String(), "level=WARN") {
+		t.Fatalf("a platform with no steps drew a warning:\n%s", e.logs)
+	}
 	if m := e.reply(); m.Streaming || m.Text != "Hello" || len(m.Tasks()) != 0 {
 		t.Fatalf("message %+v tasks %+v; want the text, streamed and stopped, and no step", m, m.Tasks())
 	}
@@ -407,8 +417,8 @@ func TestAPlatformThatRefusesAStepForGoodEndsTheStepsAndNotTheReply(t *testing.T
 			if n := steps.Load(); n != 1 {
 				t.Fatalf("%d steps were asked for; want one, which was refused for good: the turn goes on without steps", n)
 			}
-			if !strings.Contains(e.logs.String(), "refused a step") {
-				t.Errorf("no warning was logged:\n%s", e.logs)
+			if warned := strings.Contains(e.logs.String(), "level=WARN"); warned != (name == "refused") {
+				t.Errorf("warned %t for %s; want a warning for a step refused for good, and none for a stream that has no steps:\n%s", warned, name, e.logs)
 			}
 		})
 	}

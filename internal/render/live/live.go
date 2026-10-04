@@ -46,6 +46,10 @@ import (
 // platform and a card in the message: the calls after these are made, and not shown.
 const maxSteps = 50
 
+// maxBegins is the most steps one window begins: a platform's rate limit is a few calls a minute, and each step is
+// a call to begin it, with another to finish it. A window that finds more waits for the next.
+const maxBegins = 2
+
 // Sender posts through the outbox: *outbox.Outbox.
 type Sender interface {
 	Send(ctx context.Context, p outbox.Post) (chat.Ref, error)
@@ -181,6 +185,7 @@ type Run struct {
 	stepsSent []chat.Step // the steps sent to the stream, each in the state it was last sent
 	stepsOff  bool        // the platform refused a step for good: the turn goes on without steps
 	stepFails int         // steps that failed in a row
+	more      bool        // a write left steps to begin, which the next window goes on with
 }
 
 // stepRec is a tool call of a stream, which is a step: the call, how it ended, and where in the text it was made.
@@ -361,6 +366,10 @@ func (u *Run) run(ctx context.Context) {
 				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
 			}
+			if u.more { // steps are left to begin: the next window, which the throttle spaces, goes on with them
+				u.more = false
+				continue
+			}
 			if v.final {
 				finalOutcome = "delivered"
 				return
@@ -507,5 +516,6 @@ func (u *Run) snapshot() view {
 	return v
 }
 
-// stepsOn says whether the stream shows steps: it is a stream, the platform has them, and has not refused one.
-func (u *Run) stepsOn() bool { return u.streaming && u.caps.Steps && !u.stepsOff }
+// stepsOn says whether the stream shows steps: the turn is eligible for them (a stream, on a platform that has them),
+// it is still the stream it began as, and the platform has not refused one.
+func (u *Run) stepsOn() bool { return u.eligible && u.streaming && !u.stepsOff }

@@ -64,14 +64,16 @@ func (idleSlack) ResolveUser(context.Context, string) (dialect.User, error) {
 // idleSlack answers each as a Slack that has nothing against it would, and calls nothing.
 func (idleSlack) Update(context.Context, string, string, slack.Content) error { return nil }
 
-func (idleSlack) StartStream(context.Context, string, string, string, string) (string, error) {
+func (idleSlack) StartStream(context.Context, string, string, string, string, slack.StreamMode) (string, error) {
 	return "1.0", nil
 }
-func (idleSlack) AppendStream(context.Context, string, string, string) error { return nil }
+func (idleSlack) AppendStream(context.Context, string, string, string, slack.StreamMode) error {
+	return nil
+}
 func (idleSlack) AppendStep(context.Context, string, string, slack.TaskUpdate) error {
 	return nil
 }
-func (idleSlack) StopStream(context.Context, string, string, string, json.RawMessage, string) error {
+func (idleSlack) StopStream(context.Context, string, string, string, json.RawMessage, string, slack.StreamMode) error {
 	return nil
 }
 func (idleSlack) PostEphemeral(context.Context, string, string, string, slack.Content) error {

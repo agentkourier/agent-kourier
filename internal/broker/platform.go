@@ -72,7 +72,7 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 		} else {
 			api = slack.New(sc)
 		}
-		return builtPlatform{Platform: slack.NewPlatform(api, name), closeIdle: transport.CloseIdleConnections}, nil
+		return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 	}
 	return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: the platform %q has no adapter", ErrWiring, name, conn.Platform)
 }
@@ -90,7 +90,7 @@ func buildSlack(c RunConfig, conn Connection, log *slog.Logger) (builtPlatform, 
 	} else {
 		api = slack.New(sc)
 	}
-	return builtPlatform{Platform: slack.NewPlatform(api, name), closeIdle: transport.CloseIdleConnections}, nil
+	return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 }
 
 // slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and

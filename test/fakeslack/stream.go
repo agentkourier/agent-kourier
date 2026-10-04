@@ -51,6 +51,9 @@ func (s *Server) startStream(form url.Values) (response, string) {
 	if code != "" {
 		return nil, code
 	}
+	if code := s.refusedMode(mode); code != "" {
+		return nil, code
+	}
 	if runes(text) > maxMessageText {
 		return nil, "msg_too_long"
 	}
@@ -96,6 +99,9 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 	}
 	mode, code := requestMode(form)
 	if code != "" {
+		return nil, code
+	}
+	if code := s.refusedMode(mode); code != "" {
 		return nil, code
 	}
 	if !stop && text == "" && len(chunks) == 0 {
@@ -172,6 +178,25 @@ func requestMode(form url.Values) (mode, code string) {
 		return modeChunks, ""
 	}
 	return "", ""
+}
+
+// RefuseChunkMode makes every streaming request that carries chunks fail with code (invalid_chunks, say), as a Slack
+// that did not take the chunks mode would, until it is called again with "". A request in markdown_text mode is not
+// touched. It is for a test of an adapter's fallback from one mode to the other.
+func (s *Server) RefuseChunkMode(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chunkRefusal = code
+}
+
+// refusedMode is the code a request in the mode is refused with by RefuseChunkMode, or "".
+func (s *Server) refusedMode(mode string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mode == modeChunks {
+		return s.chunkRefusal
+	}
+	return ""
 }
 
 // stoppedBlocks is the blocks of a message that chat.stopStream has ended: the

@@ -33,14 +33,14 @@ func chunkList(t *testing.T, form map[string][]string) []map[string]any {
 func TestStreamTextGoesAsMarkdownTextChunksAndNeverAsMarkdownText(t *testing.T) {
 	c, _, calls, root := updateClient(t)
 	ctx := t.Context()
-	ts, err := c.StartStream(ctx, "C1", root, "U1", "Hel")
+	ts, err := c.StartStream(ctx, "C1", root, "U1", "Hel", slack.ChunksMode)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AppendStream(ctx, "C1", ts, "lo"); err != nil {
+	if err := c.AppendStream(ctx, "C1", ts, "lo", slack.ChunksMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.StopStream(ctx, "C1", ts, "!", nil, "ob-1"); err != nil {
+	if err := c.StopStream(ctx, "C1", ts, "!", nil, "ob-1", slack.ChunksMode); err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{"/chat.startStream": "Hel", "/chat.appendStream": "lo", "/chat.stopStream": "!"} {
@@ -61,11 +61,11 @@ func TestStreamTextGoesAsMarkdownTextChunksAndNeverAsMarkdownText(t *testing.T) 
 // A stream that starts with no text, or stops with none, sends no chunks for it, as it sent no markdown_text.
 func TestAStreamWithNoTextSendsNoTextChunk(t *testing.T) {
 	c, _, calls, root := updateClient(t)
-	ts, err := c.StartStream(t.Context(), "C1", root, "U1", "")
+	ts, err := c.StartStream(t.Context(), "C1", root, "U1", "", slack.ChunksMode)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.StopStream(t.Context(), "C1", ts, "", nil, "ob-1"); err != nil {
+	if err := c.StopStream(t.Context(), "C1", ts, "", nil, "ob-1", slack.ChunksMode); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"/chat.startStream", "/chat.stopStream"} {
@@ -78,7 +78,7 @@ func TestAStreamWithNoTextSendsNoTextChunk(t *testing.T) {
 func TestAppendStepSendsATaskUpdateChunkInTheSameModeAsTheText(t *testing.T) {
 	c, fake, calls, root := updateClient(t)
 	ctx := t.Context()
-	ts, err := c.StartStream(ctx, "C1", root, "U1", "Hel")
+	ts, err := c.StartStream(ctx, "C1", root, "U1", "Hel", slack.ChunksMode)
 	if err != nil {
 		t.Fatal(err)
 	}

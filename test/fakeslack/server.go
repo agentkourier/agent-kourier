@@ -135,6 +135,8 @@ type Server struct {
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
 
+	chunkRefusal string // the code that requests in chunks mode are refused with, set by RefuseChunkMode, guarded by mu
+
 	channelTypes map[string]string      // set by SetChannelType, guarded by mu
 	ephemerals   map[string][]Ephemeral // per channel, in order, guarded by mu
 	ownPending   []ownEvent             // events queued by the request holding ownMu, for flushOwn; guarded by mu

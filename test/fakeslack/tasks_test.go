@@ -136,3 +136,25 @@ func TestTheModeOfAStreamIsKeptAfterAFirstAppendSetsIt(t *testing.T) {
 		t.Fatalf("append in the other mode = %v; want streaming_mode_mismatch", err)
 	}
 }
+
+// RefuseChunkMode makes the requests in chunks mode fail with the code given, and leaves markdown_text mode alone,
+// until it is lifted.
+func TestRefuseChunkModeRefusesOnlyRequestsInChunksMode(t *testing.T) {
+	fake, api := newFake(t)
+	parent := post(t, api, text("question"))
+	fake.RefuseChunkMode("invalid_chunks")
+	if _, err := startIn(api, "C1", parent, append(recipients(), chunks(slack.NewMarkdownTextChunk("x")))...); err == nil || err.Error() != "invalid_chunks" {
+		t.Fatalf("start in chunks mode = %v; want invalid_chunks", err)
+	}
+	ts, err := startIn(api, "C1", parent, append(recipients(), slack.MsgOptionMarkdownText("x"))...)
+	if err != nil {
+		t.Fatalf("start in markdown_text mode = %v; want success", err)
+	}
+	if _, _, err := api.AppendStream("C1", ts, slack.MsgOptionMarkdownText("y")); err != nil {
+		t.Fatalf("append in markdown_text mode = %v; want success", err)
+	}
+	fake.RefuseChunkMode("")
+	if _, err := startIn(api, "C1", parent, append(recipients(), chunks(slack.NewMarkdownTextChunk("x")))...); err != nil {
+		t.Fatalf("start in chunks mode after the lift = %v; want success", err)
+	}
+}

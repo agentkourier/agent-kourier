@@ -244,16 +244,17 @@ func runsAlive() bool {
 }
 
 type env struct {
-	fake  *fakeslack.Server
-	rec   *recorder
-	clk   *clock
-	store *sqlite.Store
-	ob    *outbox.Outbox
-	rf    *recordFail
-	cfg   live.Config // what live was made from, for a test that needs another Renderer
-	live  *live.Renderer
-	root  string
-	logs  *bytes.Buffer
+	fake   *fakeslack.Server
+	rec    *recorder
+	clk    *clock
+	store  *sqlite.Store
+	ob     *outbox.Outbox
+	rf     *recordFail
+	client *slack.Client // the Slack client of the platform, for a test that builds another one
+	cfg    live.Config   // what live was made from, for a test that needs another Renderer
+	live   *live.Renderer
+	root   string
+	logs   *bytes.Buffer
 }
 
 func setup(t *testing.T) *env {
@@ -271,6 +272,7 @@ func setup(t *testing.T) *env {
 	}
 	e.root = root
 	client := slack.New(slack.Config{BotToken: secret.New("xoxb-fake"), AppToken: secret.New("xapp-fake"), APIURL: e.fake.URL() + "/", HTTPClient: &http.Client{Transport: e.rec}})
+	e.client = client
 	if e.store, err = sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "live.db")); err != nil {
 		t.Fatal(err)
 	}
