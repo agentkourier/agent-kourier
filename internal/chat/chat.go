@@ -10,10 +10,10 @@
 // chattest.Conformance before it ships.
 //
 //  1. The model carries literal text and nothing else. A Header, Context, Note, button label, hint,
-//     question, choice, sub-agent name, tool name, argument, answer or Fallback holds characters, never
-//     markup: "<!channel>", "<@U1>", "<https://x|y>", "[a](b)", "*b*" and "<b>" are text there, and an
-//     adapter must show them as text. There is no field in which a caller can put a platform's markup
-//     (no Blocks, no Native, no raw JSON), so nothing can bypass an adapter's escaping.
+//     question, choice, sub-agent name, tool name, argument, step title, step detail, answer or Fallback
+//     holds characters, never markup: "<!channel>", "<@U1>", "<https://x|y>", "[a](b)", "*b*" and "<b>"
+//     are text there, and an adapter must show them as text. There is no field in which a caller can put a
+//     platform's markup (no Blocks, no Native, no raw JSON), so nothing can bypass an adapter's escaping.
 //  2. Body.Markdown is the one rich field, and it is untrusted too: a CommonMark subset in which an
 //     adapter may allow emphasis, code and lists, and must not allow a mention, a broadcast, a link, an
 //     image, raw HTML or a date, whatever the platform's own syntax for them is.
@@ -59,22 +59,24 @@ type Where int
 // The places text can be. A Line place is one line, with no newline in it; a Text place may have several
 // lines; Rich is Body, whose markdown may be styled.
 const (
-	WhereFallback Where = iota // Message.Fallback, and the fixed text of a notice
-	WhereHeader                // Header.Text
-	WhereBody                  // Body.Markdown: the one rich place
-	WhereContext               // Context.Text
-	WhereNote                  // Note.Text
-	WhereToolName              // ToolLine.Name
-	WhereToolArg               // ToolLine.Summary
-	WhereButton                // Button.Label
-	WhereHint                  // Prompt.Hint
-	WhereSubagent              // Prompt.Subagent
-	WhereQuestion              // Question.Text
-	WhereChoice                // one of Question.Choices
-	WhereAnswer                // one of an Ending's answers
-	WhereStream                // the markdown a Stream appends: rich, like Body
-	WhereUser                  // Ending.By, a user ID courier verified, shown as a mention only if it is one
-	wherePast                  // one past the last, for loops
+	WhereFallback   Where = iota // Message.Fallback, and the fixed text of a notice
+	WhereHeader                  // Header.Text
+	WhereBody                    // Body.Markdown: the one rich place
+	WhereContext                 // Context.Text
+	WhereNote                    // Note.Text
+	WhereToolName                // ToolLine.Name
+	WhereToolArg                 // ToolLine.Summary
+	WhereButton                  // Button.Label
+	WhereHint                    // Prompt.Hint
+	WhereSubagent                // Prompt.Subagent
+	WhereQuestion                // Question.Text
+	WhereChoice                  // one of Question.Choices
+	WhereAnswer                  // one of an Ending's answers
+	WhereStream                  // the markdown a Stream appends: rich, like Body
+	WhereStepTitle               // Step.Title
+	WhereStepDetail              // Step.Detail
+	WhereUser                    // Ending.By, a user ID courier verified, shown as a mention only if it is one
+	wherePast                    // one past the last, for loops
 )
 
 // AllWheres lists every place, for adapters and tests that visit each.
@@ -92,14 +94,14 @@ func (w Where) Rich() bool { return w == WhereBody || w == WhereStream }
 // Line says whether text in w is one line.
 func (w Where) Line() bool {
 	switch w {
-	case WhereHeader, WhereContext, WhereToolName, WhereToolArg, WhereButton, WhereHint, WhereSubagent, WhereQuestion, WhereChoice, WhereAnswer, WhereUser:
+	case WhereHeader, WhereContext, WhereToolName, WhereToolArg, WhereStepTitle, WhereStepDetail, WhereButton, WhereHint, WhereSubagent, WhereQuestion, WhereChoice, WhereAnswer, WhereUser:
 		return true
 	}
 	return false
 }
 
 func (w Where) String() string {
-	names := [...]string{"fallback", "header", "body", "context", "note", "tool name", "tool argument", "button", "hint", "sub-agent", "question", "choice", "answer", "stream", "user"}
+	names := [...]string{"fallback", "header", "body", "context", "note", "tool name", "tool argument", "button", "hint", "sub-agent", "question", "choice", "answer", "stream", "step title", "step detail", "user"}
 	if w < 0 || int(w) >= len(names) {
 		return "unknown"
 	}
@@ -110,6 +112,7 @@ func (w Where) String() string {
 // caller degrades (no Streams: a turn is posted once when it ends).
 type Caps struct {
 	Streams   bool // Stream works
+	Steps     bool // Stream.Step shows progress steps in a stream; needs Streams
 	Ephemeral bool // Ephemeral shows a message to one person alone
 	Edits     bool // Update works
 	Inputs    bool // a Prompt's questions are answered inline; otherwise by a reply

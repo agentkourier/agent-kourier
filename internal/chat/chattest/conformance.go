@@ -270,8 +270,12 @@ func (c *checker) contract() {
 			c.add(RuleContract, chat.WhereStream, "Stream", "no streams", "a platform with Streams false gave %v, want chat.ErrNoStreams", err)
 		}
 	}
+	if c.caps.Steps && !c.caps.Streams {
+		c.add(RuleContract, chat.WhereStepTitle, "Capabilities", "steps", "Steps is true and Streams is false: a step is shown in a stream")
+	}
 	if c.caps.Streams {
 		c.zeroStop()
+		c.stepContract()
 	}
 	c.s.Sent() // the contract checks are not text checks
 	_ = c.s.Inert()
@@ -300,6 +304,46 @@ func (c *checker) zeroStop() {
 	}
 	if n > 0 {
 		c.add(RuleContract, chat.WhereStream, "Stop", "zero stop", "a stop with no markdown and the zero Message showed %d texts, want none: it adds to the streamed text, and adds nothing", n)
+	}
+}
+
+// stepContract checks what a stream promises of its steps. A platform that shows none says so with ErrNoSteps and shows
+// nothing; one that shows them refuses a step of a stream that ended with ErrNotStreaming, and accepts a step it has seen
+// again, which is how one is finished.
+func (c *checker) stepContract() {
+	st, err := c.s.Platform.Stream(c.ctx, c.target, "U1", "start")
+	if err != nil || st == nil {
+		c.add(RuleContract, chat.WhereStream, "Stream", "step", "a stream of plain text gave %v, %v", st, err)
+		return
+	}
+	step := chat.Step{ID: "s1", Title: canary + " tool", Detail: "k=v"}
+	c.s.Sent()
+	_ = c.s.Inert()
+	err = st.Step(c.ctx, step)
+	shown := c.s.Sent()
+	if !c.caps.Steps {
+		if !errors.Is(err, chat.ErrNoSteps) {
+			c.add(RuleContract, chat.WhereStepTitle, "Step", "no steps", "a platform with Steps false gave %v, want chat.ErrNoSteps", err)
+		}
+		if len(shown) > 0 {
+			c.add(RuleContract, chat.WhereStepTitle, "Step", "no steps", "a platform with Steps false showed %d texts for a step", len(shown))
+		}
+		return
+	}
+	if err != nil {
+		c.add(RuleContract, chat.WhereStepTitle, "Step", "begin", "a step was refused: %v", err)
+		return
+	}
+	step.State = chat.StepDone
+	if err := st.Step(c.ctx, step); err != nil {
+		c.add(RuleContract, chat.WhereStepTitle, "Step", "finish", "a step it had begun was refused when it was finished: %v", err)
+	}
+	if err := st.Stop(c.ctx, "", chat.Message{}, "tag-step"); err != nil {
+		c.add(RuleContract, chat.WhereStream, "Stop", "step", "a stream with a step was not stopped: %v", err)
+		return
+	}
+	if err := st.Step(c.ctx, step); !errors.Is(err, chat.ErrNotStreaming) {
+		c.add(RuleContract, chat.WhereStepTitle, "Step", "after stop", "a step of a stopped stream gave %v, want an error wrapping chat.ErrNotStreaming", err)
 	}
 }
 
@@ -385,8 +429,9 @@ func (c *checker) mention() {
 // call is one thing to send: a message, a prompt or an ending (Post, Update, and Ephemeral for a message),
 // or markdown for a stream.
 type call struct {
-	out chat.Outgoing
-	md  string // for a stream
+	out  chat.Outgoing
+	md   string     // for a stream
+	step *chat.Step // for a step of a stream
 }
 
 // placement is a place text can go, and how to put some there.
@@ -451,6 +496,8 @@ func placements(mentionUser string) []placement {
 		{chat.WhereUser, "ending decider", func(s string) call { return ending(func(e *chat.Ending) { e.By = s }) }, true, false},
 		{chat.WhereUser, "mention user", func(s string) call { return msg(chat.Mention{User: s, Text: "answered first"}) }, true, false},
 		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false, false},
+		{chat.WhereStepTitle, "step title", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: s}} }, false, false},
+		{chat.WhereStepDetail, "step detail", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: "tool", Detail: s}} }, false, false},
 	}
 	// The words of a Mention, beside a user the platform shows as a mention, and beside one it does not: the words
 	// of the first must stay text next to a live mention, which is where a renderer that builds one text of the
@@ -469,6 +516,10 @@ func placements(mentionUser string) []placement {
 func (c *checker) run(p placement, name, text string) {
 	if p.where == chat.WhereStream {
 		c.stream(p, name, text)
+		return
+	}
+	if st := p.build(text).step; st != nil {
+		c.step(p, name, text, *st)
 		return
 	}
 	var ref chat.Ref // the message of a plain post, which Update replaces
@@ -555,6 +606,25 @@ func (c *checker) stream(p placement, name, text string) {
 		do("StreamAt Stop", func() error {
 			return at.Stop(c.ctx, text, chat.Message{Fallback: "done", Parts: []chat.Part{chat.Body{Markdown: "done"}}}, "tag-4")
 		})
+	}
+}
+
+// step sends text as a step of a stream in each state a step goes through: begun, done, failed, and ended with no
+// outcome, which a platform shows with words of its own beside the text.
+func (c *checker) step(p placement, name, text string, st chat.Step) {
+	if !c.caps.Streams || !c.caps.Steps {
+		return
+	}
+	stream, err := c.s.Platform.Stream(c.ctx, c.target, "U1", "start")
+	if err != nil {
+		c.add(RuleRejected, p.where, "Stream", name, "a stream of plain text was refused: %v", err)
+		return
+	}
+	for _, state := range []chat.StepState{chat.StepRunning, chat.StepDone, chat.StepFailed, chat.StepEnded} {
+		st.State = state
+		c.s.Sent()
+		_ = c.s.Inert()
+		c.verify(p, "Step ("+state.String()+")", name, text, stream.Step(c.ctx, st))
 	}
 }
 

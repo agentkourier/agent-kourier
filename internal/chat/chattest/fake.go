@@ -32,6 +32,8 @@ type Message struct {
 	// Stop sets to the final message, is shown under it: the stop adds to the stream and does not replace it.
 	Streamed  string
 	Streaming bool
+	// Steps are the progress steps of a stream, in the order each was begun, each in the state it was last given.
+	Steps []chat.Step
 	// Recipient is the user a stream is shown to.
 	Recipient string
 	Posted    time.Time
@@ -74,7 +76,7 @@ func NewFake() *FakePlatform {
 	return &FakePlatform{
 		MaxQuestions: 20, Now: time.Now,
 		caps: chat.Caps{
-			Streams: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000,
+			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000,
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
 		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, ready: make(chan struct{}),
@@ -125,6 +127,7 @@ func (f *FakePlatform) Messages() []Message {
 	for i, m := range f.messages {
 		out[i] = *m
 		out[i].Reactions = slices.Clone(m.Reactions)
+		out[i].Steps = slices.Clone(m.Steps)
 	}
 	return out
 }
@@ -310,6 +313,33 @@ func (s *fakeStream) Append(_ context.Context, markdown string) error {
 	}
 	m.Streamed += markdown
 	s.f.sent = append(s.f.sent, s.f.showMarkdown(markdown))
+	return nil
+}
+
+// Step implements chat.Stream: a step the stream has not seen is added, and one it has seen takes the new state. A
+// fake whose caps say no Steps shows none.
+func (s *fakeStream) Step(_ context.Context, st chat.Step) error {
+	s.f.mu.Lock()
+	defer s.f.mu.Unlock()
+	if !s.f.caps.Steps {
+		return chat.ErrNoSteps
+	}
+	if err := s.f.fail("Step"); err != nil {
+		return err
+	}
+	m := s.f.find(s.ref)
+	if m == nil || !m.Streaming {
+		return errNotStreaming()
+	}
+	if i := slices.IndexFunc(m.Steps, func(have chat.Step) bool { return have.ID == st.ID }); i >= 0 {
+		m.Steps[i] = st
+	} else {
+		m.Steps = append(m.Steps, st)
+	}
+	s.f.sent = append(s.f.sent, s.f.literal(st.Title, chat.WhereStepTitle))
+	if st.Detail != "" {
+		s.f.sent = append(s.f.sent, s.f.literal(st.Detail, chat.WhereStepDetail))
+	}
 	return nil
 }
 

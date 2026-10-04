@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -98,6 +99,47 @@ func TestAPlatformWithNoStreamsSaysSo(t *testing.T) {
 	f.SetCaps(chat.Caps{MaxText: 4000})
 	if _, err := f.Stream(ctx, tgt, "U1", "x"); !errors.Is(err, chat.ErrNoStreams) {
 		t.Errorf("Stream = %v, want ErrNoStreams", err)
+	}
+}
+
+func TestAStepIsBegunOnceAndThenMovedForward(t *testing.T) {
+	f := NewFake()
+	st, _ := f.Stream(ctx, tgt, "U1", "x")
+	for _, s := range []chat.Step{
+		{ID: "s1", Title: "search", Detail: "q=1"},
+		{ID: "s2", Title: "fetch"},
+		{ID: "s1", Title: "search", Detail: "q=1", State: chat.StepDone},
+	} {
+		if err := st.Step(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []chat.Step{{ID: "s1", Title: "search", Detail: "q=1", State: chat.StepDone}, {ID: "s2", Title: "fetch"}}
+	if got := f.Messages()[0].Steps; !slices.Equal(got, want) {
+		t.Errorf("steps = %+v, want %+v: in the order begun, each in its last state", got, want)
+	}
+}
+
+func TestAPlatformWithNoStepsSaysSoAndShowsNone(t *testing.T) {
+	f := NewFake()
+	f.SetCaps(chat.Caps{Streams: true, MaxText: 4000})
+	st, _ := f.Stream(ctx, tgt, "U1", "x")
+	if err := st.Step(ctx, chat.Step{ID: "s1", Title: "search"}); !errors.Is(err, chat.ErrNoSteps) {
+		t.Errorf("Step = %v, want ErrNoSteps", err)
+	}
+	if got := f.Messages()[0].Steps; len(got) != 0 {
+		t.Errorf("steps = %+v, want none", got)
+	}
+}
+
+func TestAStepOfAStoppedStreamIsRefused(t *testing.T) {
+	f := NewFake()
+	st, _ := f.Stream(ctx, tgt, "U1", "x")
+	if err := st.Stop(ctx, "", chat.Message{}, "t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Step(ctx, chat.Step{ID: "s1", Title: "search"}); !errors.Is(err, chat.ErrNotStreaming) {
+		t.Errorf("Step = %v, want ErrNotStreaming", err)
 	}
 }
 

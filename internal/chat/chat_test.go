@@ -90,7 +90,7 @@ func TestWhereClassesAreExactlyTheRichAndLinePlaces(t *testing.T) {
 	if !reflect.DeepEqual(rich, []string{"body", "stream"}) {
 		t.Errorf("rich places = %v, want body and stream only", rich)
 	}
-	if len(line) == 0 || len(chat.AllWheres()) != 15 {
+	if len(line) == 0 || len(chat.AllWheres()) != 17 {
 		t.Errorf("%d places, %d lines; a place was added without deciding its class", len(chat.AllWheres()), len(line))
 	}
 }
@@ -162,5 +162,16 @@ func TestAMessageWithAPartOfAForeignTypeCannotBeStored(t *testing.T) {
 	_, err := json.Marshal(chat.Message{Parts: []chat.Part{nil}})
 	if !errors.Is(err, chat.ErrInvalid) {
 		t.Errorf("Marshal = %v, want ErrInvalid", err)
+	}
+}
+
+func TestAStepBeginsRunningAndEveryStateHasAName(t *testing.T) {
+	if (chat.Step{}).State != chat.StepRunning {
+		t.Errorf("the zero Step is %v, want running: a step begins that way", (chat.Step{}).State)
+	}
+	for s, want := range map[chat.StepState]string{chat.StepRunning: "running", chat.StepDone: "done", chat.StepFailed: "failed", chat.StepEnded: "ended", chat.StepState(99): "unknown"} {
+		if got := s.String(); got != want {
+			t.Errorf("StepState(%d) = %q, want %q", int(s), got, want)
+		}
 	}
 }

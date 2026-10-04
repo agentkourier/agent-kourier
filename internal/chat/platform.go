@@ -36,6 +36,14 @@ type Stream interface {
 	Ref() Ref
 	// Append adds markdown to the message.
 	Append(ctx context.Context, markdown string) error
+	// Step shows the progress of one unit of the agent's work in the message, in the place in the text where
+	// the stream is now: a step with an ID the stream has not seen is begun there, and one it has seen is moved
+	// to the state it now has, where it stands. A platform shows it however it does, and Caps.Steps says
+	// whether it does: without it Step returns ErrNoSteps and shows nothing, so a caller asks first. The
+	// Title and Detail are untrusted literal text (see Step). A step that is never finished stays as it was, so a
+	// caller that ends a stream finishes its steps first (StepEnded for one with no outcome). Like Append, Step
+	// says ErrNotStreaming of a message that is not streaming.
+	Step(ctx context.Context, s Step) error
 	// Stop adds the last markdown, if there is any, and ends the stream, tagged with tag as Post tags a message,
 	// so that Find can tell a message that was made from one that was not. Both are one call: the last of the
 	// text and the end of the stream come together.

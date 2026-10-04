@@ -43,6 +43,7 @@ type leaks struct {
 	mangle, notInert                            bool
 	acceptsMalformed                            bool
 	noStreamError                               bool
+	noStepError                                 bool // says it has no steps, and shows one when asked
 	stopRepeats                                 bool // a stop with nothing to add shows the streamed text again
 	tooLargeFits                                bool
 
@@ -86,7 +87,7 @@ func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
 	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
 	f.SetCaps(chat.Caps{
-		Streams: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300,
+		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300,
 		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
 	})
 	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
@@ -268,6 +269,18 @@ func (s *markupStream) Append(ctx context.Context, md string) error {
 	return err
 }
 
+func (s *markupStream) Step(ctx context.Context, st chat.Step) error {
+	if s.m.leaks.noStepError {
+		s.m.record("Step", []Field{{st.Title, chat.WhereStepTitle}, {st.Detail, chat.WhereStepDetail}})
+		return nil
+	}
+	err := s.Stream.Step(ctx, st)
+	if err == nil {
+		s.m.record("Step", []Field{{st.Title, chat.WhereStepTitle}, {st.Detail, chat.WhereStepDetail}})
+	}
+	return err
+}
+
 func (s *markupStream) Stop(ctx context.Context, markdown string, final chat.Message, tag string) error {
 	err := s.Stream.Stop(ctx, markdown, final, tag)
 	if err == nil {
@@ -315,6 +328,9 @@ func (m *markupPlatform) subject() Subject {
 	if m.leaks.noStreamError {
 		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, Edits: true})
 	}
+	if m.leaks.noStepError {
+		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true})
+	}
 	return s
 }
 
@@ -348,6 +364,9 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a malformed message accepted", slackPlainText, leaks{acceptsMalformed: true}, RuleContract, ""},
 		{"no error from a platform with no streams", slackPlainText, leaks{noStreamError: true}, RuleContract, ""},
 		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
+		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
+		{"a step title dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepTitle}, RuleDropped, ""},
+		{"a step detail dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepDetail}, RuleDropped, ""},
 		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},
 
 		{"Slack: a backslash before every punctuation, which Slack does not honour", slackPlainText, leaks{backslashAll: true}, RuleActive, KindHTML},
@@ -483,6 +502,25 @@ func TestNoEscapingIsCaughtForEveryKindOfDangerousText(t *testing.T) {
 		"autolink", "link with a label", "markdown link", "markdown image", "markdown reference link", "markdown reference link, destination on the next line", "bare URL", "script", "bold tag"} {
 		if !found[name] {
 			t.Errorf("the corpus case %q was not caught as an active construct when nothing is escaped", name)
+		}
+	}
+}
+
+// A step's title and detail are text from outside like any other: the suite sends the corpus through both, in every
+// state a step goes through, and finds markup that reaches the wire in either.
+func TestMarkupInAStepIsCaughtInItsTitleAndItsDetail(t *testing.T) {
+	t.Parallel()
+	got := map[chat.Where]map[string]bool{chat.WhereStepTitle: {}, chat.WhereStepDetail: {}}
+	for _, v := range noEscape() {
+		if v.Rule == RuleActive && got[v.Where] != nil {
+			got[v.Where][v.Method] = true
+		}
+	}
+	for w, methods := range got {
+		for _, m := range []string{"Step (running)", "Step (done)", "Step (failed)", "Step (ended)"} {
+			if !methods[m] {
+				t.Errorf("markup in the %s of a step in the state %q was not caught when nothing is escaped", w, m)
+			}
 		}
 	}
 }
