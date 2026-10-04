@@ -106,6 +106,34 @@ func TestErrorTelemetryAndLogsExcludeContents(t *testing.T) {
 	}
 }
 
+// Every operation is one observation of courier_operation_duration_seconds and of no other
+// operation histogram: agent and store calls used to be counted again in a histogram of their own.
+func TestAnOperationIsOneDurationObservation(t *testing.T) {
+	ctx, _, reg := traced(t)
+	for _, name := range []string{"courier.agent.send", "courier.store.GetSession", "courier.outbox.deliver"} {
+		_, op := Start(ctx, name)
+		op.Finish(nil)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations := 0
+	for _, f := range families {
+		if strings.HasSuffix(f.GetName(), "operation_duration_seconds") {
+			if f.GetName() != "courier_operation_duration_seconds" {
+				t.Errorf("a second operation histogram: %s", f.GetName())
+			}
+			for _, m := range f.Metric {
+				observations += int(m.Histogram.GetSampleCount())
+			}
+		}
+	}
+	if observations != 3 {
+		t.Fatalf("%d observations for 3 operations", observations)
+	}
+}
+
 func TestRecoveryLinksDoNotReplaceParent(t *testing.T) {
 	ctx, exporter, _ := traced(t)
 	original, op := Start(ctx, "courier.turn.attempt")
