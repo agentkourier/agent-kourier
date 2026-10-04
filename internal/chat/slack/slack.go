@@ -109,6 +109,9 @@ func New(cfg Config) *Client {
 // good, as with a rejected token. slack-go reconnects by itself otherwise, and Run logs each step of that (watch)
 // and tells Config.OnConnection whether the connection is up.
 //
+// A bot's message is given to the sink only if the sink is a BotFilter that takes the bot in the message's
+// channel, and courier's own posts never are (decode, takes).
+//
 // An events_api or interactive envelope is acknowledged only after the sink returns nil, so
 // a message the sink could not take is sent again by Slack; a press probably is not
 // (UNCONFIRMED(WP-04)), and its failure is only shown to the person. Envelopes that are neither

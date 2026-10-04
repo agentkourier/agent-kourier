@@ -561,7 +561,23 @@ from one bot, named by `from.botId` and never by display name, and then:
 
 Regexes are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups
 and the template: a Binding that fails any of them is rejected. A bot message that no trigger
-matches is ignored and counted.
+matches is ignored and counted (`courier_trigger_unmatched_total{binding}`, plus a debug log line
+that names no message text).
+
+How a bot message reaches the triggers:
+
+- The Slack adapter hands one on only if the intake says a `botMessage` trigger of that channel's
+  Binding names the bot, so the bots no trigger names never reach it, and an intake that cannot
+  say gets none. It flattens the message's first legacy attachment into `title`, `titleLink`,
+  `fallback`, `footer` and `attachmentText`, and `text` is the message's own text: all raw, as
+  delivered, neither rendered nor unescaped (`mrkdwn_in` changes how Slack shows text, not the
+  text). Later attachments are not read, so that a trigger matches the fields of one attachment.
+  Both an incoming webhook's `bot_message` and an app's own post count as a bot's message.
+- Courier's own messages, by user ID or by bot ID, are never handed on, even if a trigger names
+  courier's own bot ID; that mistake is logged once, at warn, since load cannot know the ID.
+- An edit or a deletion of a bot's message, and any other subtype, is ignored as it is for a person.
+  A bot's reply inside a thread is ignored and not counted: a trigger is about a message that opens
+  its own thread. A bot's message is never a mention, whatever its text says.
 
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
 is derived from the Slack message itself, `(channel, message ts)`, not the event ID:
