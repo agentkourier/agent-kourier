@@ -136,6 +136,7 @@ func TestStreamErrorsNameNoToken(t *testing.T) {
 		"Update":       func() error { return warm.Update(ctx, "C1", "1.1", slack.Content{Text: "x"}) },
 		"StartStream":  func() error { _, err := warm.StartStream(ctx, "C1", "1.1", "U1", "x"); return err },
 		"AppendStream": func() error { return warm.AppendStream(ctx, "C1", "1.1", "x") },
+		"AppendStep":   func() error { return warm.AppendStep(ctx, "C1", "1.1", slack.TaskUpdate{ID: "s1", Title: "x"}) },
 		"StopStream":   func() error { return warm.StopStream(ctx, "C1", "1.1", "x", nil, "ob") },
 	} {
 		err := call()

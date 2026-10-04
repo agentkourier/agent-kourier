@@ -67,6 +67,9 @@ func shownBy(r sentRequest) []chattest.Shown {
 	if s := r.form.Get("markdown_text"); s != "" {
 		out = append(out, chattest.ScanCommonMark(s))
 	}
+	if raw := r.form.Get("chunks"); raw != "" {
+		out = append(out, chunkTexts(raw)...)
+	}
 	if raw := r.form.Get("blocks"); raw != "" {
 		var blocks any
 		if json.Unmarshal([]byte(raw), &blocks) == nil {
@@ -74,6 +77,48 @@ func shownBy(r sentRequest) []chattest.Shown {
 		}
 	}
 	return out
+}
+
+// chunkTexts reads the chunks of a streaming request: a markdown_text chunk as CommonMark, as markdown_text is, and the
+// title, details and output of a task_update chunk by taskShown.
+func chunkTexts(raw string) []chattest.Shown {
+	var chunks []struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Title   string `json:"title"`
+		Details string `json:"details"`
+		Output  string `json:"output"`
+	}
+	if json.Unmarshal([]byte(raw), &chunks) != nil {
+		return nil
+	}
+	var out []chattest.Shown
+	if len(chunks) == 0 {
+		return nil
+	}
+	for _, c := range chunks {
+		if c.Text != "" {
+			out = append(out, chattest.ScanCommonMark(c.Text))
+		}
+		for _, s := range []string{c.Title, c.Details, c.Output} {
+			if s != "" {
+				out = append(out, taskShown(s))
+			}
+		}
+	}
+	return out
+}
+
+// taskEscapes undoes the escapes the adapter writes in a task's text: the three entities of Slack's text, and the
+// backslash escapes that keep a link, an image or a link reference definition out of markdown.
+var taskEscapes = strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">", `\\`, `\`, `\[`, "[", `\(`, "(")
+
+// taskShown is how a task's text is read, which Slack does not say (UNCONFIRMED(WP-04)): the constructs in it are
+// those of CommonMark, the strictest of the readings it may have, and what a person sees is the characters it holds with
+// the adapter's escapes undone. A reading as plain text finds no construct and shows the backslashes; one as mrkdwn
+// finds only the tokens that the entities already stop. Style is the one thing that may act (see slackSubject).
+func taskShown(s string) chattest.Shown {
+	return chattest.Shown{Displayed: taskEscapes.Replace(s), Active: chattest.ScanCommonMark(s).Active}
 }
 
 func walk(v any, out *[]chattest.Shown) {
@@ -138,6 +183,14 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		// not fetch it). UNCONFIRMED(WP-04): whether a plain_text object does the same.
 		AllowAutolink: true,
 		Concessions: []chattest.Concession{{
+			Where: chat.WhereStepTitle, Kinds: chattest.StyleKinds(),
+			Why: "a task's text may be read as markdown, in which *a* is bold: cosmetic, and every construct that is not style (a link, an " +
+				"image, a mention, a broadcast, HTML) is escaped, which is what is read",
+		}, {
+			Where: chat.WhereStepDetail, Kinds: chattest.StyleKinds(),
+			Why: "a task's text may be read as markdown, in which *a* is bold: cosmetic, and every construct that is not style (a link, an " +
+				"image, a mention, a broadcast, HTML) is escaped, which is what is read",
+		}, {
 			Where: chat.WhereFallback, Kinds: chattest.StyleKinds(),
 			Why: "a message's top-level text is mrkdwn and has no plain form: *a* shows bold in a notification. Slack shows it only where " +
 				"it cannot show the blocks, and the adapter sends every message's text as a plain_text block too, which is what is read",

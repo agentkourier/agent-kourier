@@ -23,6 +23,9 @@ func TestPermanentCode(t *testing.T) {
 		{"msg_too_long", "msg_too_long"},
 		{"invalid_blocks", "invalid_blocks"},
 		{"invalid_blocks_format", "invalid_blocks_format"},
+		{"invalid_chunks", "invalid_chunks"},
+		{"streaming_mode_mismatch", "streaming_mode_mismatch"},
+		{"cannot_provide_both_markdown_text_and_chunks", "cannot_provide_both_markdown_text_and_chunks"},
 		{"ratelimited", ""}, // a try later may work
 		{"internal_error", ""},
 		{"invalid_auth", ""}, // a revoked token is the restart policy's, not a post's

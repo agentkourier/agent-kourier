@@ -68,6 +68,9 @@ func (idleSlack) StartStream(context.Context, string, string, string, string) (s
 	return "1.0", nil
 }
 func (idleSlack) AppendStream(context.Context, string, string, string) error { return nil }
+func (idleSlack) AppendStep(context.Context, string, string, slack.TaskUpdate) error {
+	return nil
+}
 func (idleSlack) StopStream(context.Context, string, string, string, json.RawMessage, string) error {
 	return nil
 }

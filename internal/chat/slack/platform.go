@@ -38,6 +38,7 @@ type API interface {
 	Update(ctx context.Context, channel, ts string, c Content) error
 	StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string) (string, error)
 	AppendStream(ctx context.Context, channel, ts, markdown string) error
+	AppendStep(ctx context.Context, channel, ts string, u TaskUpdate) error
 	StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error
 	PostEphemeral(ctx context.Context, channel, threadTS, user string, c Content) error
 	React(ctx context.Context, channel, ts, name string) error
@@ -139,6 +140,40 @@ func (s *stream) Ref() chat.Ref { return s.ref }
 
 func (s *stream) Append(ctx context.Context, md string) error {
 	return notStreaming(s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, markdown(md, maxMarkdown)))
+}
+
+// noResult is what the card of a step says when the stream ended with no result for it. Slack has no state for a
+// step whose outcome is not known, so the card is complete, and says so in words of courier's own: a tick alone
+// would read as success. It is the only text of a step that is not the agent's.
+const noResult = "No result was reported."
+
+// Step shows the progress of one unit of the agent's work as a task_update chunk, which Slack shows as a card. The
+// title and the details are untrusted text of one line, cleaned, escaped as markdown is (a task's text is not known to
+// be plain, so nothing in it may be a link or a mention if it is rendered as markdown) and cut at the cap of a task's
+// text, and a title that is nothing once cleaned is shown as blank, as a button's label is.
+//
+// The chunk always carries the whole card, title and details with the status, so that it reads the same whether Slack
+// replaces a task by a chunk or merges the two.
+func (s *stream) Step(ctx context.Context, st chat.Step) error {
+	if st.ID == "" {
+		return fmt.Errorf("%w: a step with no ID", chat.ErrInvalid)
+	}
+	u := TaskUpdate{
+		ID:      st.ID,
+		Title:   cmp.Or(stepText(st.Title, caps.Limit(chat.WhereStepTitle)), "(blank)"),
+		Details: stepText(st.Detail, caps.Limit(chat.WhereStepDetail)),
+	}
+	switch st.State {
+	case chat.StepDone:
+		u.Status = string(slackgo.TaskCardStatusComplete)
+	case chat.StepFailed:
+		u.Status = string(slackgo.TaskCardStatusError)
+	case chat.StepEnded:
+		u.Status, u.Output = string(slackgo.TaskCardStatusComplete), noResult
+	default:
+		u.Status = string(slackgo.TaskCardStatusInProgress)
+	}
+	return notStreaming(s.p.c.AppendStep(ctx, s.ref.Channel, s.ref.ID, u))
 }
 
 // Stop adds the last markdown, if any, and ends the stream, tagged with tag, in one call. What was streamed stays
@@ -248,6 +283,7 @@ var (
 	postReason = map[string]chat.Reason{
 		"channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone, "not_in_channel": chat.ReasonChannelGone,
 		"msg_too_long": chat.ReasonTooLong, "invalid_blocks": chat.ReasonInvalidContent, "invalid_blocks_format": chat.ReasonInvalidContent,
+		"invalid_chunks": chat.ReasonInvalidContent, "streaming_mode_mismatch": chat.ReasonInvalidContent, "cannot_provide_both_markdown_text_and_chunks": chat.ReasonInvalidContent,
 	}
 	reactionReason = map[string]chat.Reason{
 		"message_not_found": chat.ReasonChannelGone, "channel_not_found": chat.ReasonChannelGone, "is_archived": chat.ReasonChannelGone,

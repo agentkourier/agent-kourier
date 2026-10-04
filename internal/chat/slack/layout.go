@@ -32,6 +32,7 @@ const (
 	maxValue         = 2000  // a button's value
 	maxToolName      = 100   // a tool's name in a status line
 	maxToolArgs      = 190   // the arguments in a status line, which with its words is at most 300
+	maxStepText      = 256   // a task_update's title, and its details: documented as 256 characters
 	maxSubagentLine  = 100   // the line that names a sub-agent, with its words
 	maxAnswerLine    = 600   // a question and its answer in an ending
 	maxQuestionInEnd = 100   // a question's text in the ending's summary of it
@@ -45,10 +46,11 @@ const (
 // name and its arguments are shown in one status line, so both have its limit; a choice is shown on a
 // numbered line, and an answer on the line of its question.
 var caps = chat.Caps{
-	Streams: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection,
+	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection,
 	Limits: map[chat.Where]int{
 		chat.WhereFallback: maxSection, chat.WhereHeader: maxHeader, chat.WhereBody: maxMarkdown, chat.WhereStream: maxMarkdown,
 		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300,
+		chat.WhereStepTitle: maxStepText, chat.WhereStepDetail: maxStepText,
 		chat.WhereButton: maxOption, chat.WhereHint: maxHeader, chat.WhereSubagent: maxSubagentLine, chat.WhereQuestion: maxLabel,
 		chat.WhereChoice: maxListLine, chat.WhereAnswer: maxAnswerLine,
 	},
@@ -164,6 +166,40 @@ func notBlank(a, b string) string {
 // the summary already.
 func toolLine(t chat.ToolLine) string {
 	return "Calling " + text(t.Name, maxToolName, true) + "(" + text(t.Summary, maxToolArgs, true) + ")"
+}
+
+// stepText is the text of a task_update's title or details: one line, cleaned, cut to limit, and escaped so that it is
+// no link, image, mention, broadcast or tag whether Slack reads it as plain text, mrkdwn or markdown.
+// UNCONFIRMED(WP-04): which of the three it is. Entities do for "&", "<" and ">", which stops every token of mrkdwn and
+// every tag and autolink of markdown. What is left of markdown in one line of text is a link or an image, which needs "]("
+// and so has its "(" escaped, a link reference definition, which has to start the text and so has its "[" escaped, and
+// a backslash that would undo one of these, which is escaped too. Nothing else is touched, since a visible backslash is the
+// price of each of them if the text is plain, and "[redacted]" is in every redacted argument. Emphasis, code, a heading
+// and a list may act, which is cosmetic (see the concessions of the Slack subject in platform_test.go).
+func stepText(s string, limit int) string {
+	return fitWith(chat.Clean(s, true), limit, taskEscaper)
+}
+
+// taskEscaper escapes the text of a task, in order (see stepText).
+func taskEscaper() escaper {
+	var prev rune
+	blank := true // nothing but white space so far: a "[" now could open a link reference definition
+	return func(r rune) string {
+		out := escapeRune(r, false)
+		switch {
+		case r == '\\':
+			out = `\\`
+		case r == '[' && blank:
+			out = `\[`
+		case r == '(' && prev == ']':
+			out = `\(`
+		}
+		prev = r
+		if r != ' ' && r != '\t' {
+			blank = false
+		}
+		return out
+	}
 }
 
 // buttons is an actions block of p's buttons, or nil if there are none. A label cut to nothing reads

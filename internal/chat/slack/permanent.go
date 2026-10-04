@@ -13,7 +13,9 @@ import (
 // the restart policy's. It reads the code scrub keeps, through any wrapping.
 //
 // UNCONFIRMED(WP-04): that these are the codes Slack answers with, in particular both
-// invalid_blocks and invalid_blocks_format for blocks it refuses, and that no other code is
+// invalid_blocks and invalid_blocks_format for blocks it refuses, invalid_chunks for a chunk it refuses, and
+// streaming_mode_mismatch and cannot_provide_both_markdown_text_and_chunks for a stream that mixes the two modes
+// (documented, with chat.appendStream), and that no other code is
 // permanent for a post (a channel that is not found can be a private one courier was removed from).
 func permanentCode(err error) string {
 	var resp slackgo.SlackErrorResponse
@@ -21,7 +23,8 @@ func permanentCode(err error) string {
 		return ""
 	}
 	switch resp.Err {
-	case "channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format":
+	case "channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format",
+		"invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks":
 		return resp.Err
 	}
 	return ""

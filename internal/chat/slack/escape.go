@@ -56,10 +56,21 @@ func markdown(s string, limit int) string { return fit(chat.Clean(s, false), lim
 
 // fit escapes the cleaned text s and cuts the result to limit units.
 func fit(s string, limit int, md bool) string {
+	return fitWith(s, limit, func() escaper { return func(r rune) string { return escapeRune(r, md) } })
+}
+
+// escaper escapes the runes of one text in the order they come, so that what it writes for one may depend on
+// what came before it.
+type escaper func(r rune) string
+
+// fitWith is fit with the escape of the caller's: newEscaper makes one for each pass over s, which are two when the text
+// is cut.
+func fitWith(s string, limit int, newEscaper func() escaper) string {
 	var out strings.Builder
 	total := 0
+	esc := newEscaper()
 	for _, r := range s {
-		u := escapeRune(r, md)
+		u := esc(r)
 		out.WriteString(u)
 		total += chat.Units(u)
 	}
@@ -71,8 +82,9 @@ func fit(s string, limit int, md bool) string {
 	}
 	out.Reset()
 	used := 0
+	esc = newEscaper()
 	for _, r := range s {
-		u := escapeRune(r, md)
+		u := esc(r)
 		if used+chat.Units(u) > limit-chat.Units(chat.Truncated) {
 			break
 		}
