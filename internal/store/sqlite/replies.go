@@ -30,6 +30,20 @@ func (s *Store) EnqueueReply(ctx context.Context, r store.Reply) (telemetryResul
 	return n > 0, nil
 }
 
+// HasReply implements store.ReplyQueue.
+func (s *Store) HasReply(ctx context.Context, id string) (telemetryResult0 bool, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.HasReply")
+	defer func() { finishStore(op, telemetryErr) }()
+	if id == "" {
+		return false, fmt.Errorf("has reply: an ID is required: %w", store.ErrInvalid)
+	}
+	var found bool
+	if err := s.read.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM reply_queue WHERE id = ?)`, id).Scan(&found); err != nil {
+		return false, fmt.Errorf("has reply %q: %w", id, err)
+	}
+	return found, nil
+}
+
 // NextReply implements store.ReplyQueue.
 func (s *Store) NextReply(ctx context.Context, key store.ConversationKey) (telemetryResult0 store.Reply, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.NextReply")

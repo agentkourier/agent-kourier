@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
@@ -48,7 +50,11 @@ func (w *alertWorld) advance(d time.Duration) {
 	w.now = w.now.Add(d)
 }
 
-func newAlertWorld(t *testing.T) (*alertWorld, *starter) {
+func newAlertWorld(t *testing.T) (*alertWorld, *starter) { return newAlertWorldWith(t, nil) }
+
+// newAlertWorldWith is newAlertWorld whose Intake config and starter tune may change before the Intake is made, given
+// the store they share.
+func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sqlite.Store)) (*alertWorld, *starter) {
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	b := v1alpha1.Binding{ObjectMeta: meta("sre", "sre-alerts"), Spec: v1alpha1.BindingSpec{
@@ -76,10 +82,14 @@ func newAlertWorld(t *testing.T) (*alertWorld, *starter) {
 
 	s := newStarter(t)
 	w := &alertWorld{sub: s.sub, notes: s.notes, aud: s.aud, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}
-	w.in = chat.NewIntake(chat.IntakeConfig{
+	cfg := chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Snapshot: func() *config.Snapshot { return snap },
 		Submitter: s.sub, Notice: s.notes.take, TriggerThreads: st, OnStart: s.OnStart, Now: w.clock, Logger: s.log,
-	})
+	}
+	if tune != nil {
+		tune(&cfg, s, st)
+	}
+	w.in = chat.NewIntake(cfg)
 	return w, s
 }
 
@@ -188,5 +198,67 @@ func TestARedeliveredAlertStartsNoSecondTurnAndARefusedOneIsNotAskedAgain(t *tes
 	}
 	if len(w.notes.got) != notes || len(w.aud.got) != 1 {
 		t.Errorf("notes %d (was %d), audit entries %d after redeliveries of a refused alert; want no more", len(w.notes.got), notes, len(w.aud.got))
+	}
+}
+
+// queuesInStore is a submitter that does what the session manager's Submit does to the reply queue, in the real store: the
+// turn is durable once it returns, so the Intake's question to the store has an answer.
+type queuesInStore struct {
+	st   *sqlite.Store
+	next *startSubmitter
+}
+
+func (q queuesInStore) Submit(ctx context.Context, in session.Inbound) (session.Result, error) {
+	res, err := q.next.Submit(ctx, in)
+	if err != nil {
+		return res, err
+	}
+	_, err = q.st.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: session.SystemUser, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: time.Now()})
+	return res, err
+}
+
+// marksFailOnce is a TriggerThreads whose first mark of a started thread fails: the turn was queued, and the write that
+// says so was lost.
+type marksFailOnce struct {
+	store.TriggerThreads
+	failed bool
+}
+
+func (m *marksFailOnce) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, until time.Time) error {
+	if !m.failed {
+		m.failed = true
+		return errors.New("disk full")
+	}
+	return m.TriggerThreads.MarkTriggerStarted(ctx, binding, keyHash, thread, until)
+}
+
+// The window between queueing the first turn and marking its thread started, through the real store: the first alert's
+// turn is queued, the mark is lost, and the event is not delivered again. The alert firing again after the grace does
+// not start a second investigation: the broker's check of the reply queue finds the first turn, and the fire is a
+// repeat in the first alert's thread. Without the check it would start a second turn in its own thread.
+func TestAnAlertWhoseMarkWasLostIsNotInvestigatedTwice(t *testing.T) {
+	w, _ := newAlertWorldWith(t, func(cfg *chat.IntakeConfig, s *starter, st *sqlite.Store) {
+		s.submit = queuesInStore{st: st, next: s.sub}
+		cfg.TriggerThreads = &marksFailOnce{TriggerThreads: st}
+		cfg.TurnQueued = st.HasReply
+	})
+	if err := w.in.Message(t.Context(), alert("100.1", "FIRING", "KubePodCrashLooping")); err == nil {
+		t.Fatal("Message = nil; want the lost mark's error")
+	}
+	if got := w.started(); !slices.Equal(got, []string{"100.1"}) {
+		t.Fatalf("turns submitted for %v; want the first alert's, queued before the mark failed", got)
+	}
+
+	w.advance(2 * time.Minute) // past the grace, and Slack has not delivered the first event again
+	w.send(t, alert("101.1", "FIRING", "KubePodCrashLooping"))
+	if got := w.started(); !slices.Equal(got, []string{"100.1"}) {
+		t.Errorf("turns submitted for %v after the second fire; want only the first alert's: one investigation", got)
+	}
+	if got := w.noted(); !slices.Equal(got, []session.NoticeKind{session.NoticeTriggerRepeat}) || w.notes.keys[0].Thread != "100.1" {
+		t.Errorf("notes %v in %v; want a repeat in the first alert's thread", got, w.notes.keys)
+	}
+	w.send(t, alert("102.1", "RESOLVED", "KubePodCrashLooping"))
+	if got := w.noted(); !slices.Equal(got, []session.NoticeKind{session.NoticeTriggerRepeat, session.NoticeTriggerClosed}) {
+		t.Errorf("notes %v after the resolve; want it noted in the first thread, whose investigation started", got)
 	}
 }

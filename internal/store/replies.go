@@ -35,6 +35,10 @@ type ReplyQueue interface {
 	// ID, the key, UserID, MessageRef and EnqueuedAt are required (ErrInvalid
 	// otherwise).
 	EnqueueReply(ctx context.Context, r Reply) (enqueued bool, err error)
+	// HasReply reports whether a reply with this ID was ever enqueued, queued or delivered (a delivered one stays as
+	// a tombstone). It is how a caller tells a turn that was durably taken from one that never was. ErrInvalid for an
+	// empty ID.
+	HasReply(ctx context.Context, id string) (bool, error)
 	// NextReply returns the oldest undelivered reply of the session, or
 	// ErrNotFound if there is none.
 	NextReply(ctx context.Context, key ConversationKey) (Reply, error)

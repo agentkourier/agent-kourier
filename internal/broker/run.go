@@ -217,7 +217,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	starter := &triggerStarter{conn: connName, submit: mgr, notice: sink.QueueNotice, audit: auditor, link: permalinks(platform.Platform), log: log}
 	intake := chat.NewIntake(chat.IntakeConfig{
 		Connection: conn.Ref, Snapshot: boot.Reloader.Current, Submitter: mgr, Interactions: interactions, Logger: log,
-		Notice: sink.QueueNotice, TriggerThreads: st, OnStart: starter.OnStart,
+		Notice: sink.QueueNotice, TriggerThreads: st, OnStart: starter.OnStart, TurnQueued: st.HasReply,
 	})
 	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
 	parts.traced("open-intake")

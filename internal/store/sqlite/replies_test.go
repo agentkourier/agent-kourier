@@ -15,6 +15,38 @@ func newReply(id string, k store.ConversationKey) store.Reply {
 	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Text: "hello", EnqueuedAt: t0}
 }
 
+// HasReply says whether a turn was ever durably queued, which a delivered one still was: the tombstone answers.
+func TestHasReplySeesQueuedAndDeliveredReplies(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	has := func(id string) bool {
+		t.Helper()
+		ok, err := s.HasReply(ctx, id)
+		if err != nil {
+			t.Fatalf("HasReply(%q): %v", id, err)
+		}
+		return ok
+	}
+	if has("r1") {
+		t.Fatal("HasReply of an ID never enqueued is true")
+	}
+	if _, err := s.EnqueueReply(ctx, newReply("r1", key)); err != nil {
+		t.Fatal(err)
+	}
+	if !has("r1") || has("r2") {
+		t.Fatal("HasReply after enqueueing r1: want r1 yes, r2 no")
+	}
+	if err := s.MarkReplyDelivered(ctx, "r1", t0); err != nil {
+		t.Fatal(err)
+	}
+	if !has("r1") {
+		t.Error("HasReply of a delivered reply is false; want the tombstone to answer yes")
+	}
+	if _, err := s.HasReply(ctx, ""); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("HasReply with no ID = %v; want ErrInvalid", err)
+	}
+}
+
 func TestReplyQueueIsFIFOPerSession(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)

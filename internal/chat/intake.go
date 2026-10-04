@@ -63,6 +63,14 @@ type IntakeConfig struct {
 	// the key takes over after a minute; until then the key's messages are notes in a thread with no
 	// investigation.
 	OnStart func(ctx context.Context, m TriggerMatch) error
+	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
+	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
+	// thread being marked started (a failed write, a crash, an event Slack never delivered again): a later fire
+	// that finds that reservation stale would take the key over and start a second turn. So before it does, the
+	// Intake asks about the reservation's turn, and if it was taken marks that thread started, with its cooldown
+	// from its own message, and the fire is a repeat in it. Its error is the event's: the platform delivers it
+	// again. Nil asks nothing, and a stale reservation is always taken over.
+	TurnQueued func(ctx context.Context, messageID string) (bool, error)
 	// Now is the time the thread rules take for a bot message, which is when it arrives (time.Now if nil).
 	Now    func() time.Time
 	Logger *slog.Logger // slog.Default() if nil

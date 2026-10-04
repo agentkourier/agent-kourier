@@ -119,6 +119,9 @@ func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
 // fireThread is decide for a fire of a key that has threads.
 func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
 	at := m.Message.At.ID
+	if err := in.adoptQueuedTurn(ctx, m, hash); err != nil {
+		return out, err
+	}
 	th, opened, err := in.cfg.TriggerThreads.OpenTriggerThread(ctx,
 		store.TriggerThread{Binding: m.Binding, KeyHash: hash, Thread: at, Opened: m.Received},
 		store.TriggerStale{Unstarted: m.Received.Add(-reservationGrace), Idle: m.Received.Add(-m.Thread.EffectiveMaxIdle())})
@@ -145,6 +148,48 @@ func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, o
 	}
 	out.decision = DecisionRepeat
 	return out, nil
+}
+
+// adoptQueuedTurn closes the window in which one key gets two turns. OnStart queues a turn and then the thread is
+// marked started; if the mark never lands (a failed write, a crash) and the event is not delivered again, the
+// reservation stays unmarked, and the next fire to find it stale would take the key over and start a second turn
+// beside the first. So, before a fire may take over a reservation of another message that is stale and not started,
+// it asks (IntakeConfig.TurnQueued) whether that reservation's turn was taken, and if so marks that thread started,
+// as the lost write would have, with the cooldown running from its own message. OpenTriggerThread then finds a
+// started open thread, and the fire is a repeat in it. A reservation whose turn was not taken (the start failed or
+// was refused) is left for the takeover. Marking is idempotent, and a thread that someone else marked or took
+// over in the meantime is not this fire's to mend.
+func (in *Intake) adoptQueuedTurn(ctx context.Context, m TriggerMatch, hash string) error {
+	if in.cfg.TurnQueued == nil {
+		return nil
+	}
+	th, err := in.cfg.TriggerThreads.GetTriggerThread(ctx, m.Binding, hash)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("get the thread of key %s: %w", hash[:8], err)
+	}
+	if th.Started() || th.Thread == m.Message.At.ID || !th.Opened.Before(m.Received.Add(-reservationGrace)) {
+		return nil // not the stale reservation of another message, which is what OpenTriggerThread takes over
+	}
+	id := MessageID(Ref{Platform: m.Message.At.Platform, Conn: in.conn, Channel: m.Message.At.Channel, ID: th.Thread})
+	queued, err := in.cfg.TurnQueued(ctx, id)
+	if err != nil {
+		return fmt.Errorf("ask whether the turn of thread %s of key %s was queued: %w", th.Thread, hash[:8], err)
+	}
+	if !queued {
+		return nil
+	}
+	switch err := in.cfg.TriggerThreads.MarkTriggerStarted(ctx, m.Binding, hash, th.Thread, th.Opened.Add(m.Thread.Cooldown.Duration)); {
+	case err == nil:
+		in.log.WarnContext(ctx, "chat: a thread's turn was queued but its mark was lost; marked it started instead of taking the key over",
+			"binding", m.Binding, "keyHash", hash[:8], "thread", th.Thread, "channel", m.Message.At.Channel)
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
+	default:
+		return fmt.Errorf("mark the thread %s of key %s started: %w", th.Thread, hash[:8], err)
+	}
+	return nil
 }
 
 // closeThread is decide for a close of a key that has threads.
