@@ -70,6 +70,9 @@ type Client struct {
 	mu    sync.Mutex
 	users map[string]cachedUser // guarded by mu
 	team  string                // the workspace ID, from auth.test; guarded by mu
+
+	// ownNamed makes the warning that a trigger names courier's own bot ID one, however many of its posts arrive.
+	ownNamed sync.Once
 }
 
 // positiveOr is d if it is positive, else def: a zero or a negative bound would expire a call at once.
@@ -129,7 +132,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 		select {
 		case ev := <-smc.Events: // every type is drained, or slack-go's reader stalls
 			w.event(ctx, ev)
-			c.handle(ctx, smc, auth.UserID, sink, ev)
+			c.handle(ctx, smc, self{user: auth.UserID, bot: auth.BotID}, sink, ev)
 		case err := <-done:
 			return c.scrub("socket mode", err)
 		}
@@ -138,7 +141,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 
 // handle gives sink the message of an events_api event, or the press of an interactive one,
 // then acknowledges the event.
-func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser string, sink Sink, ev socketmode.Event) {
+func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, sink Sink, ev socketmode.Event) {
 	if ev.Request == nil {
 		return
 	}
@@ -152,7 +155,7 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser str
 	switch ev.Type {
 	case socketmode.EventTypeEventsAPI:
 		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
-			if m, ok := decode(botUser, outer.InnerEvent.Data); ok {
+			if m, v := decode(me, outer.InnerEvent.Data); c.takes(ctx, sink, m, v) {
 				if err := sink.Message(ctx, m); err != nil {
 					c.log.WarnContext(ctx, "slack: message not taken; left unacknowledged for Slack to send again",
 						"channel", m.Channel, "ts", m.TS, "err", err)
@@ -162,7 +165,7 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser str
 		}
 	case socketmode.EventTypeInteractive:
 		if cb, ok := ev.Data.(slackgo.InteractionCallback); ok {
-			if i, ok := decodeInteraction(botUser, cb); ok {
+			if i, ok := decodeInteraction(me.user, cb); ok {
 				if err := sink.Interaction(ctx, i); err != nil {
 					c.log.WarnContext(ctx, "slack: interaction not taken; left unacknowledged",
 						"channel", i.Channel, "ts", i.MessageTS, "err", err)
@@ -181,4 +184,27 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser str
 		outcome = "failed"
 		c.log.WarnContext(ctx, "slack: acknowledging an event failed", "err", err)
 	}
+}
+
+// takes says whether the sink is given m, which decode made a v of. A person's message always is. A bot's is
+// only if the sink says, for the message's channel and bot ID, that a trigger names the bot (BotFilter), and a sink
+// that cannot say is given none. Courier's own post never is, even if a trigger names its bot ID, which load
+// cannot know is courier's: that misconfiguration is logged once, at WARN, the first time it would have
+// mattered. The sink may route on the answer at once, so it is asked per message and nothing is kept.
+func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) bool {
+	if v == dropped {
+		return false
+	}
+	filter, filters := sink.(BotFilter)
+	named := m.Bot.ID != "" && filters && filter.AcceptsBot(m.Channel, m.Bot.ID)
+	if v == ownPost {
+		if named {
+			c.ownNamed.Do(func() {
+				c.log.WarnContext(ctx, "slack: a botMessage trigger names courier's own bot ID; courier's own messages are never forwarded, so it matches nothing",
+					"channel", m.Channel, "bot", m.Bot.ID)
+			})
+		}
+		return false
+	}
+	return m.Bot.ID == "" || named
 }

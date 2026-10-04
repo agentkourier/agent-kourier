@@ -4,20 +4,63 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
-// Inbound is a message a person wrote in a conversation courier is in.
+// Inbound is a message written in a conversation courier is in: by a person, or, if Bot is set, by a bot.
 type Inbound struct {
 	// At is the message, with its thread in At.Thread.
 	At Ref
-	// User is who wrote it.
+	// User is who wrote it. A message of a bot that has no user of its own (an incoming webhook's) has none.
 	User string
-	// Text is what they wrote, verbatim, with any mention of courier in it.
+	// Text is what they wrote, verbatim, with any mention of courier in it. For a bot's message it is the
+	// message's own text, which is often empty: its content is in Bot.
 	Text string
 	// Mentioned says the message mentions courier. Direct says it is in a conversation of its own with
 	// courier, a direct message, where no mention is needed. The adapter decides both, so the routing
-	// that uses them knows nothing of a platform's syntax.
+	// that uses them knows nothing of a platform's syntax. A bot's message is never Mentioned: only a
+	// person's mention starts a session (D36).
 	Mentioned, Direct bool
+	// Bot is set when a bot posted the message, and only then. A platform forwards a bot's message only
+	// if the Sink takes it (BotFilter), and never courier's own.
+	Bot *BotMessage
+}
+
+// BotMessage is what a bot's message carries beyond a person's: the bot, by its ID and never its display name
+// (D36), and the content of its attachment flattened into the fields a botMessage trigger's regexes read
+// (v1alpha1.MessageField). Every value is the raw text the platform delivered: untrusted (R2), and neither
+// rendered nor unescaped.
+type BotMessage struct {
+	// BotID is the bot that posted the message.
+	BotID string
+	// Title, TitleLink, Fallback, Footer and AttachmentText are the fields of the message's attachment. A
+	// message with several attachments is flattened from the first (see the adapter).
+	Title, TitleLink, Fallback, Footer, AttachmentText string
+}
+
+// Field returns the value of the named message field: Text from the message itself, and the others from the
+// bot's attachment. A message with no Bot, or a name that is no field, has the empty string.
+func (m Inbound) Field(f v1alpha1.MessageField) string {
+	if f == v1alpha1.FieldText {
+		return m.Text
+	}
+	if m.Bot == nil {
+		return ""
+	}
+	switch f {
+	case v1alpha1.FieldTitle:
+		return m.Bot.Title
+	case v1alpha1.FieldTitleLink:
+		return m.Bot.TitleLink
+	case v1alpha1.FieldFallback:
+		return m.Bot.Fallback
+	case v1alpha1.FieldFooter:
+		return m.Bot.Footer
+	case v1alpha1.FieldAttachmentText:
+		return m.Bot.AttachmentText
+	}
+	return ""
 }
 
 // Sink receives what Platform.Run decodes.
@@ -27,6 +70,16 @@ type Sink interface {
 	// Interaction takes i. An error leaves the event unacknowledged, which is the person's only sign
 	// that the press failed; nothing may rely on a platform delivering it again.
 	Interaction(ctx context.Context, i Interaction) error
+}
+
+// BotFilter is an optional interface of a Sink that takes the messages of bots. A platform asks it before it
+// forwards one, so a bot that no trigger can match is dropped at the adapter and never reaches the Sink (D36),
+// and a Sink that does not implement it is given none: a platform fails closed. The platform never forwards
+// courier's own messages, whatever the answer. The answer is a routing question, so the adapter holds no copy
+// of the config.
+type BotFilter interface {
+	// AcceptsBot says whether a botMessage trigger of the Binding that owns channel names botID.
+	AcceptsBot(channel, botID string) bool
 }
 
 // Stream is a message that grows while an agent writes it. The markdown that Append and Stop take is

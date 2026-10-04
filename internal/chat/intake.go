@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -24,7 +25,7 @@ type Submitter interface {
 	Submit(ctx context.Context, in session.Inbound) (session.Result, error)
 }
 
-// IntakeConfig configures an Intake. Every field but Logger is required.
+// IntakeConfig configures an Intake. Connection, Snapshot and Submitter are required; the rest are optional.
 type IntakeConfig struct {
 	// Connection is the ChatConnection this adapter serves, with a namespace and a name. It
 	// scopes every conversation key and messageId.
@@ -42,7 +43,15 @@ type IntakeConfig struct {
 	// delivers it again, and the message is not remembered, so the redelivery asks again. The same ID
 	// makes that safe. Nil only logs them.
 	Notice func(ctx context.Context, key session.Key, n session.Notice) error
-	Logger *slog.Logger // slog.Default() if nil
+	// OnTrigger, if set, takes a bot message that a botMessage trigger matched, after the Intake has
+	// logged and counted it. Its error means it was not taken: Message returns it, so the platform leaves
+	// the event unacknowledged and delivers it again, and the message is not remembered.
+	//
+	// STUB(CT-3, CT-4): this is where the match goes onward, and CT-2 starts no session from it. CT-3
+	// maps the key to its thread and applies the cooldown and the close rule; CT-4 renders the prompt and
+	// starts the turn. Both replace this hook, which is for a test to see what matched until then.
+	OnTrigger func(ctx context.Context, m TriggerMatch) error
+	Logger    *slog.Logger // slog.Default() if nil
 }
 
 // Intake is the Sink that applies spec 8.2's trigger table, the same for every platform: it turns each
@@ -50,13 +59,17 @@ type IntakeConfig struct {
 // has decided what is a mention and who is who, so nothing here knows a platform's syntax. It is safe for
 // concurrent use, though a platform's Run calls it from one goroutine.
 type Intake struct {
-	cfg  IntakeConfig
-	conn string // the connection as it appears in keys: namespace/name
-	log  *slog.Logger
-	seen recent
+	cfg    IntakeConfig
+	conn   string // the connection as it appears in keys: namespace/name
+	log    *slog.Logger
+	seen   recent
+	tables tableCache
 }
 
-var _ Sink = (*Intake)(nil)
+var (
+	_ Sink      = (*Intake)(nil)
+	_ BotFilter = (*Intake)(nil)
+)
 
 // NewIntake returns an Intake over cfg.
 func NewIntake(cfg IntakeConfig) *Intake {
@@ -69,6 +82,9 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //   - Any other message in a thread continues the thread's session if courier owns it;
 //     the session manager says NotOwned otherwise, and it is ignored.
 //   - A message outside a thread that does not start one is ignored without asking.
+//   - A bot's message (m.Bot set) is never a mention and is never submitted: it is tried against the
+//     botMessage triggers of its channel's Binding, in order (botMessage). A match is handed to
+//     IntakeConfig.OnTrigger, and a message no trigger matches is ignored and counted.
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -89,6 +105,16 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	seen := [2]string{m.At.Channel, m.At.ID}
 	if in.seen.has(seen) {
 		disposition = "duplicate"
+		return nil
+	}
+	if m.Bot != nil {
+		d, err := in.botMessage(ctx, m)
+		if err != nil {
+			return err
+		}
+		if disposition = d; d != "ignored" {
+			in.seen.add(seen) // a redelivery is neither matched nor counted again
+		}
 		return nil
 	}
 	req := session.Inbound{
@@ -146,6 +172,59 @@ func (in *Intake) Interaction(ctx context.Context, i Interaction) (telemetryErr 
 		return nil
 	}
 	return in.cfg.Interactions(ctx, i)
+}
+
+// botMessage tries a bot's message against the botMessage triggers of the Binding that owns its channel, and
+// returns the disposition for the intake metric. Nothing here starts a session (CT-2).
+//   - A channel with no Binding, or a bot's reply inside a thread, is ignored and not counted: a trigger is about
+//     a message that opens its own, and a bot must not continue, or hijack, a thread of people or of courier's
+//     own. The adapter has already refused courier's own messages, and every bot no trigger names.
+//   - A message that no trigger matches is counted as courier_trigger_unmatched_total of the Binding, so that a
+//     changed template shows up as a rising count, and logged at DEBUG with where it was and which bot, and never
+//     what it said.
+//   - A match is counted, logged and handed to OnTrigger (the stub, see IntakeConfig.OnTrigger).
+func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string, err error) {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return "ignored", nil
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	if !ok || (m.At.Thread != "" && m.At.Thread != m.At.ID) {
+		return "ignored", nil
+	}
+	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.binding", name))
+	index, fields, ok := in.tables.table(snap, rb.Binding, in.log).match(m)
+	if !ok {
+		telemetry.Count(ctx, "courier_trigger_unmatched_total", name)
+		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
+		return "trigger_unmatched", nil
+	}
+	match := TriggerMatch{Binding: name, Index: index, Fields: fields, Message: m}
+	telemetry.Count(ctx, "courier_trigger_matched_total", name)
+	in.log.InfoContext(ctx, "chat: bot message matched a trigger; no turn is started yet", "binding", name, "trigger", index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
+	if in.cfg.OnTrigger != nil {
+		if err := in.cfg.OnTrigger(ctx, match); err != nil {
+			return "", fmt.Errorf("trigger %d of %s for %s: %w", index, name, MessageID(Ref{Platform: m.At.Platform, Conn: in.conn, Channel: m.At.Channel, ID: m.At.ID}), err)
+		}
+	}
+	return "trigger_matched", nil
+}
+
+// AcceptsBot implements BotFilter: it says whether a botMessage trigger of the Binding that owns channel
+// names botID, by ID and never by display name (D36). A channel with no Binding, and an empty ID, accept none.
+func (in *Intake) AcceptsBot(channel, botID string) bool {
+	snap := in.cfg.Snapshot()
+	if snap == nil || botID == "" {
+		return false
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(rb.Binding.Spec.Chat.Triggers, func(t v1alpha1.Trigger) bool {
+		return t.Type == v1alpha1.TriggerBotMessage && t.From != nil && t.From.BotID == botID
+	})
 }
 
 // binding returns the namespace/name of the Binding that owns channel on this connection.

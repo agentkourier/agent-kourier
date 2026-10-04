@@ -47,6 +47,8 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		labels     []string
 	}{
 		{"courier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition"}},
+		{"courier_trigger_matched_total", "Bot messages a botMessage trigger matched, by Binding.", []string{"binding"}},
+		{"courier_trigger_unmatched_total", "Bot messages the platform passed on that matched none of the Binding's triggers, by Binding.", []string{"binding"}},
 		{"courier_stream_reconnects_total", "Stream reconnect attempts by outcome.", []string{"outcome"}},
 		{"courier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
 		{"courier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},

@@ -100,11 +100,25 @@ type inbound struct {
 }
 
 func (in inbound) Message(ctx context.Context, m Message) error {
-	return in.sink.Message(ctx, chat.Inbound{
+	msg := chat.Inbound{
 		At: in.p.ref(m.Channel, m.ThreadTS, m.TS), User: m.User, Text: m.Text,
 		Mentioned: m.Mentioned, Direct: m.ChannelType == "im",
-	})
+	}
+	if m.Bot.ID != "" {
+		msg.Bot = &chat.BotMessage{BotID: m.Bot.ID, Title: m.Bot.Title, TitleLink: m.Bot.TitleLink, Fallback: m.Bot.Fallback,
+			Footer: m.Bot.Footer, AttachmentText: m.Bot.Text}
+	}
+	return in.sink.Message(ctx, msg)
 }
+
+// AcceptsBot is BotFilter: the neutral sink's answer, and no if it gives none (chat.BotFilter), so that a sink that
+// knows nothing of bots is given none of their messages.
+func (in inbound) AcceptsBot(channel, botID string) bool {
+	f, ok := in.sink.(chat.BotFilter)
+	return ok && f.AcceptsBot(channel, botID)
+}
+
+var _ BotFilter = inbound{}
 
 func (in inbound) Interaction(ctx context.Context, i Interaction) error {
 	return in.sink.Interaction(ctx, in.p.interaction(i))
