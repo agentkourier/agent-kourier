@@ -22,23 +22,7 @@ func TestTriggerRunQueriesUseAnIndex(t *testing.T) {
 		{"the starts in a window", startsSince, []any{"b", 0, int64(1)}, ""},
 		{"the running investigations", runningStarts, []any{"b", 0, int64(1)}, ""},
 	} {
-		rows, err := s.read.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+q.sql, q.args...)
-		if err != nil {
-			t.Fatalf("%s: %v", q.name, err)
-		}
-		var plan []string
-		for rows.Next() {
-			var id, parent, unused int
-			var detail string
-			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-				t.Fatal(err)
-			}
-			plan = append(plan, detail)
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		_ = rows.Close()
+		plan := queryPlan(t, s, q.sql, q.args)
 		t.Logf("%s:\n  %s", q.name, strings.Join(plan, "\n  "))
 		used := false
 		for _, d := range plan {
@@ -54,4 +38,27 @@ func TestTriggerRunQueriesUseAnIndex(t *testing.T) {
 			t.Errorf("%s uses no index of trigger_runs: %q", q.name, plan)
 		}
 	}
+}
+
+// queryPlan is the detail lines of the plan SQLite makes for the query.
+func queryPlan(t *testing.T, s *Store, query string, args []any) []string {
+	t.Helper()
+	rows, err := s.read.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }
