@@ -67,7 +67,7 @@ func TestStreamRecordsItsTsAtOnceAndAppendsOnlyTheSuffix(t *testing.T) {
 	run.Handle(text("a", "Hello wor"))
 	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"}) // a step, and no tool line
 	e.clk.advance(throttle)
-	eventually(t, "the append", func() bool { return e.reply().Text == "Hello wor" })
+	eventually(t, "the append and the step", func() bool { return len(e.rec.sent("/chat.appendStream")) == 2 })
 	// The text goes first, as only its new suffix, and then the step that was begun after it.
 	if got := e.rec.sent("/chat.appendStream"); len(got) != 2 || textOf(got[0]) != "lo wor" || len(chunksOf(t, got[1])) != 1 || chunksOf(t, got[1])[0]["type"] != "task_update" {
 		t.Fatalf("appends %v; want the new suffix of the text, and then the step", got)
