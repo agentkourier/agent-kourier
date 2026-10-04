@@ -280,7 +280,7 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 	if !aliveAtStep.Load() {
 		t.Error("no hand-off was in flight when the interactions' step began (the control: the scan finds it)")
 	}
-	if want := "tap,worker,sweeper,replacer,backstop,retention,trigger-threads"; notes.got() != want {
+	if want := "tap,worker,sweeper,replacer,backstop,retention,trigger-digest,trigger-threads"; notes.got() != want {
 		t.Errorf("the interactions stopped as %s, want %s", notes.got(), want)
 	}
 	if tapHandOffAlive() {
