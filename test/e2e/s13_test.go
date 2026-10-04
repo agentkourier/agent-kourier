@@ -63,6 +63,11 @@ func TestS13_AToolCallIsAStepCardAndAFailedOneIsAnError(t *testing.T) {
 	if d := cards[0].Details; d != `service="api"` {
 		t.Errorf("the first card's details are %q; want the call's arguments, service=\"api\"", d)
 	}
+	// A call whose result came is done. One that was left without its result is closed at the stream's end as complete
+	// with a note that no result was reported, which the status alone does not tell from done.
+	if cards[0].Output != "" {
+		t.Errorf("the first card says %q; want none: its call returned, so it is done and not closed at the stream's end", cards[0].Output)
+	}
 	for _, c := range cards {
 		if c.Status == "in_progress" || c.Status == "pending" {
 			t.Errorf("card %+v is not finished though the reply is", c)
