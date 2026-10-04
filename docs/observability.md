@@ -3,7 +3,10 @@
 Courier exports Prometheus metrics at `/metrics` and optionally exports traces with
 OTLP over HTTP/protobuf. Metrics remain available when trace export is disabled.
 Each broker owns its registry and tracer provider. The application does not install
-a global OpenTelemetry provider.
+a global OpenTelemetry provider. It does install OpenTelemetry's diagnostic logger and
+error handler, once at startup, because the SDK and the exporter reach them only
+through process-wide hooks; they log through courier's logger and carry no values
+(see "Exporter diagnostics").
 
 ## Enable traces
 
@@ -14,7 +17,10 @@ env:
   - name: OTEL_SERVICE_NAME
     value: agent-courier
   - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: http://otel-collector.observability.svc:4318
+    value: https://otel-collector.observability.svc:4318
+  - name: OTEL_EXPORTER_OTLP_HEADERS  # only if the collector wants credentials
+    valueFrom:
+      secretKeyRef: {name: otlp-credentials, key: headers}  # Authorization=Bearer%20<token>
   - name: OTEL_EXPORTER_OTLP_PROTOCOL
     value: http/protobuf
   - name: OTEL_TRACES_SAMPLER
@@ -24,6 +30,12 @@ env:
   - name: COURIER_ENVIRONMENT
     value: pilot
 ```
+
+Credentials travel only over TLS. Courier refuses to start when headers are configured
+for an `http://` endpoint, because they would cross the network in cleartext. Use
+`https://`, or set `COURIER_OTLP_ALLOW_INSECURE_HEADERS=true` to accept it for a
+collector you reach over a link you trust (a sidecar on localhost, say). An `http://`
+endpoint with no headers needs no opt-in.
 
 Allow courier to reach the collector under the deployment's egress policy.
 The collector must accept OTLP HTTP/protobuf and forward traces to your trace backend.
@@ -38,7 +50,8 @@ a random service instance ID for each provider lifetime, and the environment whe
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Exact trace URL; overrides the base URL |
 | `OTEL_TRACES_EXPORTER` | `otlp`, or `none` to disable export |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf`; other protocols are rejected |
-| `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Comma-separated `key=value` headers; trace-specific settings override general settings |
+| `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Comma-separated `key=value` headers, values percent-decoded, names valid HTTP tokens; trace-specific settings override general settings. Both are checked even when the other wins, and a bad one stops startup |
+| `COURIER_OTLP_ALLOW_INSECURE_HEADERS` | `true` accepts headers on an `http://` endpoint; default refuses them |
 | `OTEL_TRACES_SAMPLER` | `parentbased_traceidratio` |
 | `OTEL_TRACES_SAMPLER_ARG` | Root trace sampling ratio in `[0,1]`, default `1`; children respect their parent's sampling flag |
 | `OTEL_SERVICE_NAME` | Service resource name |
@@ -47,13 +60,41 @@ a random service instance ID for each provider lifetime, and the environment whe
 Without an export endpoint, tracing is disabled. These are the environment settings
 courier explicitly supports; this is not a general implementation of every OTel SDK
 configuration variable. Put collector credentials in Secret-backed environment values.
-Endpoints must not contain URL credentials, query parameters or fragments.
+Endpoints must not contain URL credentials, query parameters or fragments. Both the
+general and the trace-specific endpoint are checked, whichever one is used.
+
+The OTLP exporter also reads some variables of its own from the environment, which
+courier does not validate and passes through unchanged:
+`OTEL_EXPORTER_OTLP_CERTIFICATE` (a CA bundle file for an `https://` collector),
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` with `OTEL_EXPORTER_OTLP_CLIENT_KEY` (mutual TLS),
+`OTEL_EXPORTER_OTLP_COMPRESSION` (`gzip` or none) and `OTEL_EXPORTER_OTLP_TIMEOUT`
+(milliseconds), each also with the `_TRACES_` infix. `OTEL_EXPORTER_OTLP_INSECURE` is
+ignored: the endpoint's scheme alone decides whether TLS is used. A value among these
+that the exporter cannot use is reported as a warning (below), without the value.
+
+Span attribute values are cut to 256 bytes, so an agent-supplied task or context ID
+cannot grow a span without limit.
 
 Export runs through a bounded batch queue. After broker shutdown drains its work,
 courier allows three seconds for the tracer provider to flush. A collector outage
 must not block intake or backend execution; queued spans may be lost when the exporter
-cannot keep up or the process is killed. Collector error details are scrubbed from
-SDK diagnostics. Metrics are not derived from sampled traces.
+cannot keep up or the process is killed. Metrics are not derived from sampled traces.
+
+## Exporter diagnostics
+
+Collector error details never reach the SDK's diagnostics, and none of the SDK's own
+diagnostics reach stderr outside courier's logger. Three things log, all as warnings:
+
+- A failed export logs `trace export failed` with `error_type`, one of `refused`,
+  `timeout`, `dns`, `tls`, `http_<status>` (for example `http_401`), `http_retryable`
+  (the exporter retried a 429, 502, 503 or 504 until it gave up, and does not say
+  which), `cancelled` or `error`. Each class logs at most once a minute, with the number
+  withheld since in `suppressed`. The collector's response body, URL and credentials are
+  never logged.
+- An exporter complaint about its own configuration, such as an unusable timeout or
+  certificate file, logs `otel: <what it was doing>`, with no value from the variable.
+- Any other OpenTelemetry error logs `otel: OpenTelemetry error` with `error_type`, at
+  most once a minute.
 
 ## Trace boundaries
 
@@ -102,11 +143,9 @@ terminal turn outcome metrics retain their names and hooks.
 
 | Added metric | Definition |
 |---|---|
-| `courier_operation_duration_seconds` | Duration of a finite operation, including failures and retries |
-| `courier_agent_operation_duration_seconds` | Send/answer/follow and unary A2A operation duration; execution ends at a terminal state, input-required or auth-required; both pause states are non-error outcomes |
+| `courier_operation_duration_seconds` | Duration of a finite operation, including failures and retries, by `operation` (the span name, such as `courier.agent.send` or `courier.store.GetSession`) and `outcome`. Agent execution ends at a terminal state, input-required or auth-required; both pause states are non-error outcomes. Agent and store calls are no longer also recorded in `courier_agent_operation_duration_seconds` and `courier_store_operation_duration_seconds`, which duplicated this histogram: select them with `operation=~"courier.agent.*"` and `operation=~"courier.store.*"` |
 | `courier_agent_first_text_duration_seconds` | Attempt start to first nonempty text observed on send/answer; no observations for follow snapshots |
 | `http_client_request_duration_seconds` | HTTP request through response EOF or close; an SSE response includes its stream lifetime |
-| `courier_store_operation_duration_seconds` | Domain store call, including database pool wait |
 | `courier_intake_total` | Message/press dispositions; `source="reply_queue",disposition="duplicate"` counts durable duplicates separately; a bot's message is `trigger_matched`, `trigger_unmatched` (no trigger took it) or `ignored` (an unbound channel, or a reply in a thread) |
 | `courier_slack_ack_duration_seconds` | Envelope handling start to completion of the ack attempt, or return with ack withheld; measures queueing the ack, not confirmation from Slack |
 | `courier_turn_queue_wait_seconds` | Enqueue to first execution attempt in this process; a restart may observe the same waiting reply again |
@@ -119,7 +158,7 @@ terminal turn outcome metrics retain their names and hooks.
 | `courier_render_final_total` | Final rendering outcomes: delivered, empty output, permanent failure, retry exhaustion, deadline exceeded or cancelled |
 | `courier_interactions_pending` | Durable pending interactions |
 | `courier_interaction_wait_seconds` | Creation to first committed resolution, by kind/state; retries do not add another observation |
-| `courier_chat_api_calls_total` | Slack adapter operations and results, including logical API errors over HTTP 200; cached user lookups are adapter operations too |
+| `courier_chat_api_calls_total` | Slack adapter operations and results, including logical API errors over HTTP 200; cached user lookups are adapter operations too. Outcomes include `rate_limited`, `auth_rejected`, `channel_gone`, `not_streaming`, `api_error`, and `mode_refused` (Slack refused the chunks mode of a stream, which makes courier fall back to `markdown_text` and show no more steps) |
 | `courier_trigger_matched_total` / `courier_trigger_unmatched_total` | Bot messages a Binding's `botMessage` trigger matched, and bot messages in its channel that matched none (the heartbeat an `exclude` turns away counts here), by `binding`. A rising unmatched count after a template change means the trigger's regexes no longer fit; the debug log line names the channel, message and bot, never the text |
 | `go_*`, `process_*`, `go_sql_*` | Runtime/process metrics and separate read/write pool statistics |
 
@@ -136,7 +175,7 @@ Example PromQL queries:
 ```promql
 # p95 agent send time
 histogram_quantile(0.95,
-  sum by (le) (rate(courier_agent_operation_duration_seconds_bucket{operation="send"}[5m])))
+  sum by (le) (rate(courier_operation_duration_seconds_bucket{operation="courier.agent.send"}[5m])))
 
 # final output failures
 sum(rate(courier_render_final_total{outcome=~"permanent_failure|retry_exhausted|deadline_exceeded"}[5m]))

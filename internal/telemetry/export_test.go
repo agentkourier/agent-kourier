@@ -71,12 +71,12 @@ func TestCollectorErrorDetailsDoNotEnterSDKDiagnostics(t *testing.T) {
 // realExporter is the OTLP exporter courier uses, aimed at url, with retries short enough for a test.
 func realExporter(t *testing.T, url string, timeout time.Duration) sdktrace.SpanExporter {
 	t.Helper()
-	real, err := otlptracehttp.New(t.Context(), otlptracehttp.WithEndpointURL(url), otlptracehttp.WithTimeout(timeout),
+	exporter, err := otlptracehttp.New(t.Context(), otlptracehttp.WithEndpointURL(url), otlptracehttp.WithTimeout(timeout),
 		otlptracehttp.WithRetry(otlptracehttp.RetryConfig{Enabled: true, InitialInterval: time.Millisecond, MaxInterval: 5 * time.Millisecond, MaxElapsedTime: 50 * time.Millisecond}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return real
+	return exporter
 }
 
 // exportOne sends one span through e and returns what the SDK is told.
@@ -89,7 +89,7 @@ func exportOne(t *testing.T, e sdktrace.SpanExporter) error {
 // refusedURL is an address nothing listens on.
 func refusedURL(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

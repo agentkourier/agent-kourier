@@ -195,7 +195,8 @@ func TestUpsertSessionWithoutASpanKeepsTheSavedTraceContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := telemetry.WithObserver(t.Context(), obs)
-	first, op := telemetry.Start(base, "courier.intake")
+	// The first caller's trace comes with a trace state, so that the state is saved too.
+	first, op := telemetry.Start(telemetry.Restore(base, "00-11111111111111111111111111111111-2222222222222222-01", "vendor=kept"), "courier.intake")
 	op.Finish(nil)
 	s := openTemp(t)
 	key := store.ConversationKey{Connection: "ns/conn", Channel: "C", Thread: "1.0"}
@@ -204,7 +205,7 @@ func TestUpsertSessionWithoutASpanKeepsTheSavedTraceContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved, err := s.GetSession(t.Context(), key, time.Hour, t0)
-	if err != nil || saved.TraceParent == "" {
+	if err != nil || saved.TraceParent == "" || saved.TraceState != "vendor=kept" {
 		t.Fatalf("saved = %+v, %v", saved, err)
 	}
 	// A caller with no span (here, no observer at all) must not blank the carrier it did not write.

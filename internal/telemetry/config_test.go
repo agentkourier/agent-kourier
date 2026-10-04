@@ -45,7 +45,7 @@ func TestLoadConfig(t *testing.T) {
 		{"http trace endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://collector/t", "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "Authorization=x"}, "", true},
 		{"http endpoint with headers, opted in", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "true"}, "http://collector:4318/v1/traces", false},
 		{"http endpoint with headers, opt-in false", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "false"}, "", true},
-		{"opt-in is not a boolean", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "canary"}, "", true},
+		{"opt-in is only exactly true", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "canary"}, "", true},
 		{"http endpoint without headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}, "http://collector:4318/v1/traces", false},
 		{"https endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x"}, "https://collector/v1/traces", false},
 	} {

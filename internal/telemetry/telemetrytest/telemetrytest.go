@@ -109,18 +109,18 @@ func (h *Harness) Exported(t testing.TB) string {
 	for _, s := range h.Exporter.GetSpans() {
 		fmt.Fprintf(&b, "span %s %s %s\n", s.Name, s.Status.Code, s.Status.Description)
 		for _, a := range s.Attributes {
-			fmt.Fprintf(&b, "  attr %s=%s\n", a.Key, a.Value.Emit())
+			fmt.Fprintf(&b, "  attr %s=%s\n", a.Key, a.Value.String())
 		}
 		for _, e := range s.Events {
 			fmt.Fprintf(&b, "  event %s\n", e.Name)
 			for _, a := range e.Attributes {
-				fmt.Fprintf(&b, "    attr %s=%s\n", a.Key, a.Value.Emit())
+				fmt.Fprintf(&b, "    attr %s=%s\n", a.Key, a.Value.String())
 			}
 		}
 		for _, l := range s.Links {
 			fmt.Fprintf(&b, "  link %s\n", l.SpanContext.TraceID())
 			for _, a := range l.Attributes {
-				fmt.Fprintf(&b, "    attr %s=%s\n", a.Key, a.Value.Emit())
+				fmt.Fprintf(&b, "    attr %s=%s\n", a.Key, a.Value.String())
 			}
 		}
 	}

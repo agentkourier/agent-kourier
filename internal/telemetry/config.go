@@ -91,11 +91,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		c.Headers = general
 	}
 	if len(c.Headers) > 0 && strings.HasPrefix(c.Endpoint, "http://") {
-		allow := getenv("COURIER_OTLP_ALLOW_INSECURE_HEADERS")
-		if allow != "" && allow != "true" && allow != "false" {
-			return c, errors.New("COURIER_OTLP_ALLOW_INSECURE_HEADERS must be true or false")
-		}
-		if allow != "true" {
+		if getenv("COURIER_OTLP_ALLOW_INSECURE_HEADERS") != "true" {
 			return c, errors.New("OTEL export headers would travel in cleartext to an http endpoint: use https, or set COURIER_OTLP_ALLOW_INSECURE_HEADERS=true")
 		}
 	}
@@ -145,7 +141,10 @@ func headerToken(k string) bool {
 		return false
 	}
 	for _, c := range k {
-		if c > unicode.MaxASCII || !(unicode.IsLetter(c) || unicode.IsDigit(c) || strings.ContainsRune("!#$%&'*+-.^_`|~", c)) {
+		if c > unicode.MaxASCII {
+			return false
+		}
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && !strings.ContainsRune("!#$%&'*+-.^_`|~", c) {
 			return false
 		}
 	}
