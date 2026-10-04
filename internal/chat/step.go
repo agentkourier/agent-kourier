@@ -46,8 +46,8 @@ type Step struct {
 	// Title is what the step is, such as a tool's name: literal text, one line, untrusted (see the package
 	// comment), and must not be empty after cleaning, or the adapter shows it as blank.
 	Title string
-	// Detail is a short line about it, such as a summary of a tool's arguments, with its secrets already
-	// redacted: literal text, one line, untrusted. It may be empty.
+	// Detail is a short line about it, such as the redacted summary of a tool's arguments (the secrets taken out by
+	// the caller, never the raw arguments): literal text, one line, untrusted. It may be empty.
 	Detail string
 	// State is how far the step has got.
 	State StepState

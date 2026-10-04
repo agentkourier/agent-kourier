@@ -274,9 +274,10 @@ func TestStepTitlesAreCleanedEscapedAndCapped(t *testing.T) {
 	e.assertInert(t)
 }
 
-// The arguments of a call are summarised with their secrets taken out, by the name they sit under and by the shape of
-// what they hold (spec 8.4), and nothing that was taken out reaches Slack, in a step or in any request.
-func TestTheArgumentsOfACallAreNeverShownInAStep(t *testing.T) {
+// The arguments of a call are shown in a step as a summary with their secrets taken out, by the name they sit under and by
+// the shape of what they hold (spec 8.4), as they are in the status line of the update path. Nothing that was taken out
+// reaches Slack, in a step or in any request.
+func TestTheArgumentsOfACallAreShownInAStepOnlyAsTheirRedactedSummary(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
 	run.Handle(call("c1", "run", map[string]any{

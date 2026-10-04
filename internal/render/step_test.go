@@ -26,7 +26,7 @@ func TestStepIsTheToolLineAsAStepInTheStateGiven(t *testing.T) {
 }
 
 // The arguments are redacted by the name they sit under and by the shape of what they hold, before they are shown or
-// cut (spec 8.4), and the step never holds the raw arguments.
+// cut (spec 8.4): the step holds the redacted summary, never the raw arguments.
 func TestStepNeverHoldsASecretOfTheArguments(t *testing.T) {
 	step := Step("s1", agent.ToolCallEvent{Name: "run", Args: map[string]any{
 		"password":      "hunter2hunter2",

@@ -164,7 +164,7 @@ func (p *Platform) Stream(ctx context.Context, t chat.Target, to, md string) (ch
 		return nil, err
 	}
 	s := &stream{p: p, ref: p.ref(t.Channel, t.Thread, ts)}
-	s.mode.Store(int32(mode))
+	s.markdown.Store(mode == MarkdownMode)
 	return s, nil
 }
 
@@ -203,23 +203,31 @@ func refusesChunks(err error) bool {
 }
 
 type stream struct {
-	p    *Platform
-	ref  chat.Ref
-	mode atomic.Int32 // the StreamMode of the stream, which a refusal of the chunks mode changes
+	p        *Platform
+	ref      chat.Ref
+	markdown atomic.Bool // the stream is in MarkdownMode, which a refusal of the chunks mode changes it to
 }
 
 func (s *stream) Ref() chat.Ref { return s.ref }
+
+// streamMode is the mode the stream is in.
+func (s *stream) streamMode() StreamMode {
+	if s.markdown.Load() {
+		return MarkdownMode
+	}
+	return ChunksMode
+}
 
 // text makes a call that carries text, in the mode of the stream. A stream that was started with no text has no mode
 // yet, and the first text may be what Slack refuses in chunks: it is sent once more in markdown_text, and if that works
 // the stream, and the platform, are in that mode from then on. One that is refused in both is no mode's trouble, and
 // the first answer is kept.
 func (s *stream) text(ctx context.Context, md string, call func(StreamMode) error) error {
-	mode := StreamMode(s.mode.Load())
+	mode := s.streamMode()
 	err := call(mode)
 	if err != nil && mode == ChunksMode && md != "" && refusesChunks(err) {
 		if retry := call(MarkdownMode); retry == nil {
-			s.mode.Store(int32(MarkdownMode))
+			s.markdown.Store(true)
 			s.p.fallBack(ctx, err)
 			return nil
 		}
@@ -247,7 +255,7 @@ const noResult = "No result was reported."
 // The chunk always carries the whole card, title and details with the status, so that it reads the same whether Slack
 // replaces a task by a chunk or merges the two.
 func (s *stream) Step(ctx context.Context, st chat.Step) error {
-	if StreamMode(s.mode.Load()) == MarkdownMode {
+	if s.streamMode() == MarkdownMode {
 		return chat.ErrNoSteps // a stream in the markdown_text mode cannot take a task_update chunk
 	}
 	if st.ID == "" {
@@ -294,7 +302,7 @@ func (s *stream) Stop(ctx context.Context, md string, final chat.Message, tag st
 // that started it was in the other, the first text it is sent finds out (stream.text).
 func (p *Platform) StreamAt(r chat.Ref) chat.Stream {
 	s := &stream{p: p, ref: r}
-	s.mode.Store(int32(p.streamMode()))
+	s.markdown.Store(p.streamMode() == MarkdownMode)
 	return s
 }
 

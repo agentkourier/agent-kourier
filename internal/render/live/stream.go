@@ -181,6 +181,9 @@ func (u *Run) shown(v view) view {
 // after it are still sent. A rate limit is none of these: it is an error of the write, which the run waits out as the
 // platform asked, and it is no strike against the steps, since the text would be limited as well. A stream that has
 // ended says so to the text that follows, which is where it is dealt with.
+//
+// When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
+// among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
 func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, error) {
 	err := u.stream.Step(ctx, st)
 	if err == nil {
@@ -221,6 +224,8 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 // text. It shows no steps of its own, so none of the earlier attempt's is shown twice: a step is begun only on
 // the stream this run started. With none, the earlier attempt may have started a stream that cannot be found (R16): the
 // whole text is posted as a new message, under a row of its own.
+// UNCONFIRMED(WP-04): whether the update that follows the stop of an adopted stream removes the cards the earlier run
+// showed, or leaves them as they were last sent.
 func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, v view, id string) error {
 	row, err := u.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
