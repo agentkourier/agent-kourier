@@ -104,8 +104,8 @@ func (r *Replay) Classify(h HistoryMessage) ReplayVerdict {
 	case m.At.Thread != "" && m.At.Thread != m.At.ID:
 		return ReplayVerdict{Outcome: ReplayIgnored}
 	}
-	if index, fields, ok := r.table.match(m); ok {
-		return ReplayVerdict{Outcome: ReplayMatched, Trigger: index, Fields: fields}
+	if t, fields, ok := r.table.match(m); ok {
+		return ReplayVerdict{Outcome: ReplayMatched, Trigger: t.index, Fields: fields}
 	}
 	outcome := ReplayUnmatched
 	var why []string

@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
@@ -49,22 +50,29 @@ func loadBotToken(file string, getenv func(string) string) (secret.Value, error)
 
 // readTokenFile returns the bot token that the file holds. See loadBotToken.
 func readTokenFile(path string) (string, error) {
-	fi, err := os.Lstat(path)
-	switch {
-	case err != nil:
+	// A link is refused by name, and then not followed: the open itself refuses one that appears between the two
+	// (O_NOFOLLOW), and what is checked is the open file, so the file that is read is the file that was checked.
+	if fi, err := os.Lstat(path); err != nil {
 		return "", fmt.Errorf("token file: %w", err)
-	case fi.Mode()&os.ModeSymlink != 0:
+	} else if fi.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("token file %s is a symbolic link; name the file itself", path)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // the operator names the token file
+	if errors.Is(err, syscall.ELOOP) {
+		return "", fmt.Errorf("token file %s is a symbolic link; name the file itself", path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("token file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	switch fi, err := f.Stat(); {
+	case err != nil:
+		return "", fmt.Errorf("token file %s: %w", path, err)
 	case !fi.Mode().IsRegular():
 		return "", fmt.Errorf("token file %s is not a regular file", path)
 	case fi.Mode().Perm()&0o077 != 0:
 		return "", fmt.Errorf("token file %s has mode %04o; it holds a secret, so chmod 600 it", path, fi.Mode().Perm())
 	}
-	f, err := os.Open(path) //nolint:gosec // the operator names the token file
-	if err != nil {
-		return "", fmt.Errorf("token file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, maxTokenFile+1))
 	if err != nil {
 		return "", fmt.Errorf("token file %s: %w", path, err)

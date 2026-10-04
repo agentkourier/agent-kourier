@@ -113,3 +113,18 @@ func TestStartSaysItRunsOnlyInACluster(t *testing.T) {
 		t.Errorf("stderr %q should say courier runs only in a cluster", stderr.String())
 	}
 }
+
+// Flag parsing stops at the first argument that is no flag, so a mistyped subcommand must be refused and not start the
+// broker, which in a pod would be a second one. The argument is not echoed: it may be a token typed in its place.
+func TestRunRefusesAnUnknownCommand(t *testing.T) {
+	for _, args := range [][]string{{"dryrun"}, {"dry_run", "--config", "/c"}, {"dry-run-all"}, {"--version", "extra"}, {"xoxb-CANARY-0123456789"}} {
+		var stdout, stderr bytes.Buffer
+		code := run(args, "dev", &stdout, &stderr, env{"COURIER_LISTEN": "127.0.0.1:0"}.get)
+		if code != exitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown command") || !strings.Contains(stderr.String(), "dry-run") {
+			t.Errorf("run(%q) = %d, stdout %q, stderr %q; want %d and an unknown command that names dry-run", args, code, stdout.String(), stderr.String(), exitUsage)
+		}
+		if strings.Contains(stderr.String(), "CANARY") || strings.Contains(stderr.String(), args[0]+"\n") {
+			t.Errorf("run(%q) echoed the argument: %q", args, stderr.String())
+		}
+	}
+}

@@ -113,26 +113,29 @@ func TestReplayFollowsTheOrderOfTheTriggersAndExplainsEachMiss(t *testing.T) {
 	}
 }
 
-// Whatever the dry run says is matched is exactly what the intake hands to its trigger hook, with the same
-// trigger and fields, and what it says is not matched never reaches the hook: the two cannot disagree.
+// Whatever the dry run says is matched is what the intake counts as matched, and the rest it counts as unmatched, for
+// the same messages: the two cannot disagree. When the match starts a turn, which a firing alert does and a resolve
+// or a repeat does not (it is a note in a thread), the intake hands on the same trigger and fields.
 func TestReplayAgreesWithTheIntake(t *testing.T) {
+	const binding = "sre/sre-alerts"
 	msgs := []chat.BotMessage{kindFiring, kindResolved, kindGroup, prodFiring, prodResolved, grafanaFiring, heartbeat}
 	for _, tr := range []v1alpha1.Trigger{trialTrigger(), productionTrigger()} {
 		h := newTriggered(t, tr)
 		r := replayOf(t, h)
 		for i, m := range msgs {
 			id := strconv.Itoa(i+1) + ".0"
-			before := len(h.got())
+			started, matched, unmatched := len(h.got()), h.counter(t, "courier_trigger_matched_total", binding), h.counter(t, "courier_trigger_unmatched_total", binding)
 			if err := h.in.Message(h.ctx, botInbound("C1", id, m)); err != nil {
 				t.Fatal(err)
 			}
-			intake := h.got()[before:]
+			intakeMatched := h.counter(t, "courier_trigger_matched_total", binding)-matched == 1
+			intakeUnmatched := h.counter(t, "courier_trigger_unmatched_total", binding)-unmatched == 1
 			got := r.Classify(history(id, &m))
-			if matched := got.Outcome == chat.ReplayMatched; matched != (len(intake) == 1) {
-				t.Fatalf("%q: replay says %q; the intake handed on %d matches", m.Title, got.Outcome, len(intake))
+			if want := got.Outcome == chat.ReplayMatched; want != intakeMatched || want == intakeUnmatched {
+				t.Fatalf("%q: replay says %q; the intake matched %t and counted it unmatched %t", m.Title, got.Outcome, intakeMatched, intakeUnmatched)
 			}
-			if len(intake) == 1 && (intake[0].Index != got.Trigger || !maps.Equal(intake[0].Fields, got.Fields)) {
-				t.Errorf("%q: replay says trigger %d with %v; the intake %d with %v", m.Title, got.Trigger, got.Fields, intake[0].Index, intake[0].Fields)
+			if began := h.got()[started:]; len(began) == 1 && (began[0].Index != got.Trigger || !maps.Equal(began[0].Fields, got.Fields)) {
+				t.Errorf("%q: replay says trigger %d with %v; the intake started %d with %v", m.Title, got.Trigger, got.Fields, began[0].Index, began[0].Fields)
 			}
 		}
 	}

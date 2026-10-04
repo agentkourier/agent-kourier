@@ -120,6 +120,13 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	// Flag parsing stops at the first argument that is no flag, so a mistyped subcommand (dryrun, dry_run) would
+	// fall through and start the broker: in a pod, a second one. The broker takes no arguments. The argument is not
+	// echoed: a person may have typed a token in its place.
+	if fs.NArg() > 0 {
+		_, _ = fmt.Fprintln(stderr, "courier: unknown command; the broker takes no arguments (did you mean dry-run?)")
+		return exitUsage
+	}
 	if *showVersion {
 		_, _ = fmt.Fprintln(stdout, ver)
 		return exitOK

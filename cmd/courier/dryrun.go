@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -55,9 +56,21 @@ type dryRunOptions struct {
 	pageLimit int    // how many messages to ask for per page; the client's default if zero
 }
 
+// tokenShape matches what looks like a Slack token, as a person may type one in the wrong place.
+var tokenShape = regexp.MustCompile(`xox[a-z]-[^\s"]+|xapp-[^\s"]+`)
+
 // parseDryRun reads the command line of `courier dry-run`. It returns flag.ErrHelp for --help, and otherwise an
-// error that says what is wrong with the arguments.
+// error that says what is wrong with the arguments, with anything shaped like a token taken out of it: the flag
+// package quotes the value it could not read, and a token is never an argument.
 func parseDryRun(args []string, getenv func(string) string) (dryRunOptions, error) {
+	o, err := parseDryRunArgs(args, getenv)
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
+		err = errors.New(tokenShape.ReplaceAllString(err.Error(), "[redacted]"))
+	}
+	return o, err
+}
+
+func parseDryRunArgs(args []string, getenv func(string) string) (dryRunOptions, error) {
 	var o dryRunOptions
 	fs := flag.NewFlagSet("courier dry-run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // the caller reports the error, and the usage is its own text
@@ -74,7 +87,7 @@ func parseDryRun(args []string, getenv func(string) string) (dryRunOptions, erro
 	}
 	switch {
 	case fs.NArg() > 0:
-		return o, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+		return o, errors.New("unexpected argument at position 1; the command takes options only")
 	case o.configDir == "":
 		return o, errors.New("--config is required (or COURIER_CONFIG_DIR)")
 	case o.binding == "":

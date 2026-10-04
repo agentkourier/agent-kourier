@@ -52,7 +52,7 @@ func TestLoadBotToken(t *testing.T) {
 // A token that cannot be used is refused with a message that names where it looked and what is wrong, and never
 // holds the token, nor any other line of the file.
 func TestLoadBotTokenRefusals(t *testing.T) {
-	link := filepath.Join(t.TempDir(), "link")
+	link := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(writeSecretFile(t, 0o600, canaryToken), link); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestLoadBotTokenRefusals(t *testing.T) {
 		{"a file that does not exist", filepath.Join(t.TempDir(), "absent"), nil, "absent"},
 		{"a file the group can read", writeSecretFile(t, 0o640, canaryToken), nil, "0640"},
 		{"a file anyone can read", writeSecretFile(t, 0o644, canaryToken), nil, "0644"},
-		{"a link", link, nil, "link"},
+		{"a link", link, nil, "symbolic link"},
 		{"a directory", t.TempDir(), nil, "regular file"},
 		{"a secrets file with no bot token", writeSecretFile(t, 0o600, "SLACK_APP_TOKEN=xapp-OTHER-0123456789\n"), nil, "SLACK_BOT_TOKEN"},
 		{"a bot token given twice", writeSecretFile(t, 0o600, "SLACK_BOT_TOKEN="+canaryToken+"\nSLACK_BOT_TOKEN="+canaryToken+"\n"), nil, "twice"},

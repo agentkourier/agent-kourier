@@ -12,12 +12,16 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -427,12 +431,16 @@ func TestDryRunNeverPrintsTheToken(t *testing.T) {
 	}
 }
 
-// slackStub is a Slack that knows who the bot is and answers every history request with the error, which may quote the
-// token, as a hostile or broken server could.
-func slackStub(t *testing.T, historyError string) string {
+// slackStub is a Slack that fails auth.test with authError if it is set, and else knows who the bot is and answers every
+// history request with historyError. Either may quote the token, as a hostile or broken server could.
+func slackStub(t *testing.T, authError, historyError string) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/auth.test") {
+			if authError != "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": authError})
+				return
+			}
 			_, _ = io.WriteString(w, `{"ok":true,"user_id":"UFAKEBOT","bot_id":"BFAKEBOT"}`)
 			return
 		}
@@ -446,13 +454,15 @@ func slackStub(t *testing.T, historyError string) string {
 // cause, and the token is not in it, even if Slack's error quotes it.
 func TestDryRunReportsASlackRefusalWithoutTheToken(t *testing.T) {
 	for _, tc := range []struct {
-		name, slackError, want string
-		wantCode               int
+		name, authError, slackError, want string
+		wantCode                          int
 	}{
-		{"the bot is not in the channel", "not_in_channel", "invite", exitFailure},
-		{"the bot lacks the scope", "missing_scope", "channels:history", exitFailure},
-		{"the token is revoked", "token_revoked", "token_revoked", exitSlackAuth},
-		{"an error that quotes the token", "invalid_auth for " + canaryToken, "invalid_auth", exitSlackAuth},
+		{"the bot is not in the channel", "", "not_in_channel", "invite", exitFailure},
+		{"the bot lacks the scope", "", "missing_scope", "channels:history", exitFailure},
+		{"the token is revoked", "", "token_revoked", "token_revoked", exitSlackAuth},
+		{"an error that quotes the token", "", "invalid_auth for " + canaryToken, "invalid_auth", exitSlackAuth},
+		{"auth.test refuses the token and quotes it", "invalid_auth for " + canaryToken, "", "invalid_auth", exitSlackAuth},
+		{"auth.test says the account is inactive", "account_inactive", "", "account_inactive", exitSlackAuth},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := env{"SLACK_BOT_TOKEN": canaryToken}.get
@@ -460,7 +470,7 @@ func TestDryRunReportsASlackRefusalWithoutTheToken(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts.apiURL = slackStub(t, tc.slackError)
+			opts.apiURL = slackStub(t, tc.authError, tc.slackError)
 			var out, errb bytes.Buffer
 			code := execDryRun(t.Context(), opts, getenv, &out, &errb)
 			if code != tc.wantCode || !strings.Contains(errb.String(), tc.want) || out.Len() != 0 {
@@ -487,7 +497,10 @@ func TestDryRunCommandLine(t *testing.T) {
 		{"a token as an argument", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", "--token", canaryToken}, "not defined"},
 		{"a negative limit", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", "--limit", "-1"}, "--limit"},
 		{"a negative since", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", "--since", "-1h"}, "--since"},
-		{"a stray argument", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", "extra"}, "extra"},
+		{"a stray argument", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", "extra"}, "unexpected argument at position 1"},
+		{"a token as a stray argument", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", canaryToken}, "unexpected argument at position 1"},
+		{"a token as the value of a flag", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial", "--since", canaryToken}, "-since"},
+		{"a token as the Binding", []string{"dry-run", "--config", dryRunConfig, "--binding", canaryToken}, "namespace/name"},
 		{"no token", []string{"dry-run", "--config", dryRunConfig, "--binding", "courier/trial"}, "SLACK_BOT_TOKEN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -504,5 +517,80 @@ func TestDryRunCommandLine(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"dry-run", "--help"}, "dev", &stdout, &stderr, env{}.get); code != exitOK || !strings.Contains(stderr.String(), "--binding") || strings.Contains(stderr.String(), "xoxb-") {
 		t.Errorf("--help = %d, %q; want 0 and the usage", code, stderr.String())
+	}
+}
+
+// --since is passed on to Slack: a message older than the window is not read, and the same channel read with no --since
+// gives all of it.
+func TestDryRunSinceReachesSlack(t *testing.T) {
+	var clock atomic.Int64 // the fake's idea of now, in seconds
+	clock.Store(time.Now().Add(-100 * time.Hour).Unix())
+	fake := fakeslack.New(fakeslack.WithClock(func() time.Time { return time.Unix(clock.Load(), 0) }))
+	t.Cleanup(fake.Close)
+	connect(t, fake)
+	post := func(a fakeslack.Attachment) string {
+		t.Helper()
+		got, err := fake.Webhook(webhook(webhookBot, a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.TS
+	}
+	old := post(kindFiring)
+	clock.Store(time.Now().Unix())
+	recent := post(kindResolved)
+	if r := replay(t, fake, "trial", "--since", "24h"); len(r.Messages) != 1 || r.Messages[0].TS != recent {
+		t.Errorf("--since 24h read %+v; want only the message of now, %s", r.Messages, recent)
+	}
+	if r := replay(t, fake, "trial"); len(r.Messages) != 2 || r.Messages[0].TS != old {
+		t.Errorf("no --since read %+v; want both, from %s", r.Messages, old)
+	}
+}
+
+// flapReport builds the report of the trial over a sequence of states of one alert, F for firing and R for resolved, from
+// the loaded Binding as the command builds it.
+func flapReport(t *testing.T, states string) dryRunReport {
+	t.Helper()
+	set, err := config.Load(t.Context(), dryRunConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := findBinding(set, "courier/trial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := chat.NewReplay(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history []chat.HistoryMessage
+	for i, st := range states {
+		a := kindFiring
+		if st == 'R' {
+			a = kindResolved
+		}
+		history = append(history, chat.HistoryMessage{Message: chat.Inbound{
+			At:  chat.Ref{Platform: "slack", Channel: alertChannel, ID: strconv.Itoa(1000+i) + ".000000"},
+			Bot: &chat.BotMessage{BotID: webhookBot, Title: a.Title, TitleLink: a.TitleLink, Fallback: a.Fallback, AttachmentText: a.Text}}})
+	}
+	return buildReport("courier/trial", alertChannel, history, replay, closingStates(b))
+}
+
+// A cycle is a closing state after an opening one: a window that starts with a resolve (its firing is before the window)
+// and a resolve repeated count for nothing. R,F,F,R,R,F,R is two cycles, short of the three that flag a key, and
+// R,F,F,R,R,F,R,F,R is three.
+func TestDryRunCountsFlappingCycles(t *testing.T) {
+	if r := flapReport(t, "RFFRRFR"); len(r.Summary.Flapping) != 0 {
+		t.Errorf("RFFRRFR flagged %+v; want two cycles, which is not flapping", r.Summary.Flapping)
+	}
+	r := flapReport(t, "RFFRRFRFR")
+	if f := r.Summary.Flapping; len(f) != 1 || f[0].Cycles != 3 || f[0].States["FIRING"] != 4 || f[0].States["RESOLVED"] != 5 {
+		t.Errorf("RFFRRFRFR flagged %+v; want one key with 3 cycles, 4 FIRING and 5 RESOLVED", f)
+	}
+	if f := flapReport(t, "FRFRFR").Summary.Flapping; len(f) != 1 || f[0].Cycles != 3 {
+		t.Errorf("FRFRFR flagged %+v; want 3 cycles", f)
+	}
+	if f := flapReport(t, "FFFF").Summary.Flapping; len(f) != 0 {
+		t.Errorf("FFFF flagged %+v; want none: nothing closed", f)
 	}
 }
