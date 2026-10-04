@@ -23,7 +23,7 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
 
 | Target | What it does |
 |---|---|
-| `make sandbox-up` | Checks the secrets file, and the alert webhook file if there is one (optional; see "Alert trial"), first, before it touches anything. Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
+| `make sandbox-up` | Checks the secrets file, and the alert webhook file if there is one (optional; see "Alert trial"), first, before it touches anything (with the file, it also checks the alert trial's channel). Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
 | `make sandbox-down` | Removes the overlay, takes the Alertmanager off the alert source, and restores the full tier's own courier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
 | `make sandbox-alert ALERT=<name> [STATE=firing\|resolved]` | Fires, or resolves, the alert of one seeded fault in the full tier's Alertmanager, which posts it to the owner's **real alert channel**, tagged `[kind]`. Needs `make sandbox-up` first. See "Alert trial". |
 | `make sandbox-heal` | Restarts the full tier's **egress gateway** (`deploy/atenet-egress`) and waits for it, if its pod is more than 20 hours old or a log holds `CertificateExpired`; otherwise it says `ok` and changes nothing. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the same before it verifies. Changes nothing else; needs no secrets file. |
@@ -40,7 +40,7 @@ use `deploy/courier-sandbox`.
 
 1. **Create the Slack app.** Open <https://api.slack.com/apps>, Create New App, From a manifest, pick the sandbox
    workspace, and paste `hack/kind/sandbox/slack-app-manifest.yaml` (YAML tab). It asks for Socket Mode, interactivity, the
-   `app_mention`, `message.channels` and `message.groups` events and the bot scopes below. **Use the sandbox workspace only.**
+   `app_mention`, `message.channels` and `message.groups` events and the bot scopes below. **Use the sandbox workspace only**, unless you run the alert trial: its channel is in the owner's workspace, so the app is installed there (see "Run the alert trial").
 2. **Make an app-level token.** Basic Information, App-Level Tokens, Generate Token, with the scope
    `connections:write`. That is `SLACK_APP_TOKEN` (`xapp-...`). The manifest cannot make it.
 3. **Install the app** to the sandbox workspace (Install App). The Bot User OAuth Token is `SLACK_BOT_TOKEN` (`xoxb-...`).
@@ -131,7 +131,7 @@ manifest. Direct messages are not enabled (no `im:` scopes or events), so the ap
 | Faults | Namespace `shop`: six small Deployments (below). |
 | Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
 | Agent | `sandbox-sre` (`agent.yaml`), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
-| Courier | `courier-sandbox` in namespace `courier`, the production image `courier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on, through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=courier` label the front door's NetworkPolicy trusts. Its own SQLite volume. The full tier's `courier` goes to zero replicas meanwhile. |
+| Courier | `courier-sandbox` in namespace `courier`, the production image `courier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on (and, only with the alert webhook file, a second one on the alert channel; see "Run the alert trial"), through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=courier` label the front door's NetworkPolicy trusts. Its own SQLite volume. The full tier's `courier` goes to zero replicas meanwhile. |
 | Token refresh | A CronJob, `courier-token-refresh`, every hour (below). |
 
 **The seeded faults**, in `shop`: `checkout` crash-loops after logging `FATAL: cannot resolve payments-db...`; `catalog` has a
@@ -253,7 +253,7 @@ annotations like kube-prometheus's and the pod's real name, so what the agent fi
 - Firing an alert that is already firing posts nothing: its next repeat is 4 hours on. To see the alert again, resolve it, wait for the resolved
   post, and fire it again. A second alert of the same name and namespace joins the group and is posted as an update.
 
-**What courier should do.** The trial trigger is a `botMessage` trigger on the incoming webhook's bot ID (the same bot posts production's alerts, Grafana's and the heartbeat),
+**What courier should do** (the runbook is "Run the alert trial", below). The trial trigger is a `botMessage` trigger on the incoming webhook's bot ID (the same bot posts production's alerts, Grafana's and the heartbeat),
 matching only `receiver=slack-critical-kind` in the title link: production's messages (`receiver=slack-critical`), the heartbeat and Grafana's must stay ignored. For a fired alert
 courier starts an investigation in the alert's thread, and `sandbox-sre` answers there from the fault; the same alert again within the cooldown attaches to that thread; the resolved
 post gets a note and starts no turn; people follow up in the thread without a mention. What the message looks like, for the trigger's regexes (the attachment's fields; the title
@@ -350,6 +350,100 @@ Read it as a check on the triggers:
 - **The flapping hint.** A cycle is a closing state (the trigger's `thread.closeWhen.state`, `RESOLVED` by default) after an opening one for the same key. A key with several cycles is one the `cooldown` and the close rule are for; a `cooldown` shorter than the gap between its cycles starts a new investigation each time.
 
 `--render`, which would show whether each match's prompt would be refused (ref and reason), is not built yet: it waits for the prompt renderer (CT-4a).
+
+## Run the alert trial
+
+**Warning: this posts into the owner's real alert channel, `#alerts-critical` (`C0EXAMPLE01`), where production's alerts arrive.** Two things post there: kind's
+Alertmanager, tagged `[kind]`, when someone fires an alert, and courier, in the threads of the `[kind]` alerts it investigates, and nowhere else. Do it with the owner at hand, and resolve
+what you fire.
+
+**What `make sandbox-up` adds when the webhook file is there** (without the file nothing changes from the dogfood sandbox: the same one Binding, and no `alert-binding.yaml` in courier's config).
+A second Binding, `courier/alert-trial` (`courier/alert-trial/alert-binding.yaml`), on that channel, with `sandbox-sre` through the same front door and the same identity as the dogfood Binding:
+
+| | |
+|---|---|
+| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0EXAMPLE01` (by ID), the `alertmanager` preset, and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention courier into this channel. |
+| What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
+| Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
+| Limits | None yet; they are CT-5's. Each first fire of an alert is one model call, and only an operator can fire one. |
+| The channel | The constant `ALERT_CHANNEL_ID` in `webhook.sh`, checked by `make sandbox-up` before it touches anything (a channel ID, and not `SLACK_CHANNEL_ID`: two Bindings cannot share a channel). A test keeps it equal to the dry run's channel. |
+
+Courier receives every message of the channel over Socket Mode, because it is a member, and acts on none but the matching ones. A person's reply in a thread courier started continues that thread's
+session without a mention: anyone in the channel can talk to `sandbox-sre` there.
+
+**Before you start**
+
+1. **A regenerated webhook in the file.** The URL was pasted into a chat once, so regenerate it in Slack (the app's Incoming Webhooks, add one for `#alerts-critical`, revoke the old one), put the new URL in
+   `~/.config/agent-courier/alertmanager-webhook-url` (see "Alert trial", Setup) and `chmod 600` it.
+2. **Courier invited to the alert channel**: `/invite @courier` in `#alerts-critical`. The tokens in the secrets file must belong to an app installed in the workspace that channel is in (a channel ID is only good in its own workspace),
+   which is also the workspace of `SLACK_CHANNEL_ID`; the one connection serves both Bindings. The dry run below needs the same membership and `channels:history`.
+3. **The dry run shows 0 trial matches on production history.** From the repo root (see "Tune triggers with a dry run" for the options):
+
+   ```
+   go run ./cmd/courier dry-run --config hack/kind/sandbox/dryrun --binding courier/trial \
+     --token-file ~/.config/agent-courier/sandbox.env --json | jq '[.messages[] | select(.outcome=="matched")] | length'   # 0
+   go run ./cmd/courier dry-run --config hack/kind/sandbox/dryrun --binding courier/production \
+     --token-file ~/.config/agent-courier/sandbox.env     # about 203 matched: production's alerts, which the trial must leave alone
+   ```
+
+   The dry run's `courier/trial` Binding keeps a mention trigger, so its `botMessage` trigger is index 1 there and 0 in the live Binding; a test keeps the two triggers the same. A trial run that matches anything
+   from before the trial is a finding: stop and read the lines.
+
+**Run it**
+
+1. `make sandbox-up`. It checks the webhook file and the channel first, and ends with `ok: courier is connected to Slack` (the log line `slack: socket mode connected`) and
+   `alert source up, and courier watches C0EXAMPLE01 for [kind] alerts`. Check the Binding is in courier's config and the connection is up:
+
+   ```
+   CTX=kind-courier-full
+   kubectl --context $CTX -n courier get cm courier-sandbox-config -o json | jq '.data | keys'       # includes "alert-binding.yaml"
+   kubectl --context $CTX -n courier logs deploy/courier-sandbox | grep 'slack: socket mode connected'
+   ```
+
+2. **Fire.** `make sandbox-alert ALERT=KubePodCrashLooping`. It prints `sent: KubePodCrashLooping firing`. Alertmanager groups for 30 seconds, then the channel gets `[kind] FIRING (1) - KubePodCrashLooping`, posted by the
+   webhook, with `receiver=slack-critical-kind` in its link. Within seconds courier opens a thread under that post and a **courier investigation streams into it**, with **step cards** for the tool calls
+   (`k8s_get_pod_logs ...`, one per call). It should find checkout's `FATAL: cannot resolve payments-db` line and say what it checked. Nothing else in the channel reacts.
+
+3. **Fire it again**, and nothing happens. Alertmanager deduplicates: an alert it already holds, with the same labels and still firing, is not notified again until the receiver's `repeat_interval` (4 hours, copied from the owner's receiver), so
+   there is no second post for courier to see, and `make sandbox-alert` only refreshes the alert's end time. A **"Fired again at" note** comes only after a resolve and a re-fire:
+
+   ```
+   make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved    # then wait for the "[kind] RESOLVED - KubePodCrashLooping" post, within about 30 s
+   make sandbox-alert ALERT=KubePodCrashLooping                   # about 30 s later: "[kind] FIRING (1)" is posted again
+   ```
+
+   The note goes in the **first** thread, not under the new post, and starts no turn, for as long as the first investigation is within its 4-hour cooldown (and always while its thread is open and not idle past
+   `maxIdle`, 24 hours). A re-fire after the cooldown starts a new investigation in a new thread. Alertmanager's own repeat of a still-firing alert, 4 hours on, is also a "Fired again" note.
+
+4. **Resolve.** `make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved`. The resolve is posted within about 30 seconds (`[kind] RESOLVED - KubePodCrashLooping`), and the thread gets a **"Resolved at" note**: no turn. Resolve
+   before checkout's pod is replaced, as the "Alert trial" section says. An alert you forget ends by itself an hour after it fired, which posts the same resolve.
+
+5. **Fire the other presets**, one at a time: `KubePodNotReady`, `KubeContainerWaiting`, `KubeContainerOOMKilled`, `TargetDown`. Each has its own alert name, so its own key and **a separate thread** and investigation, which finds
+   its own fault (`search`'s probe, `catalog`'s image, `recommender`'s OOM kill, `inventory`'s Service with no endpoints). Resolve each when you are done.
+
+**Where to look**
+
+```
+CTX=kind-courier-full
+kubectl --context $CTX -n courier logs deploy/courier-sandbox -f | grep -e 'chat: ' -e 'session turn'
+kubectl --context $CTX -n courier port-forward deploy/courier-sandbox 8080:8080     # then, in another terminal:
+curl -s localhost:8080/metrics | grep -e courier_trigger -e courier_turn_outcomes
+```
+
+- **Logs.** `chat: bot message matched a trigger` (the Binding `courier/alert-trial`, trigger 0), then `chat: trigger decided` with the `decision` (`started`, `repeat`, `closed`, `dedup`, ...), then `session turn started`
+  and `session turn ended` with its `outcome`. A `not_started` decision means the first prompt was refused: the thread has a "Not investigated:" note, there is no `session turn started`, and a `chat: a trigger's prompt was refused` WARN says which value failed.
+- **Metrics.** `courier_trigger_decisions_total{binding="courier/alert-trial",decision="started"|"repeat"|"closed"|...}` counts what each matched message did to its thread. `courier_trigger_refused_total` should not appear at all. `courier_trigger_unmatched_total`
+  rises with the channel's own traffic (production's alerts, Grafana's, the heartbeat), which is the trial turning them away: a rise with no `[kind]` post is as it should be. A fired alert that raises `unmatched` and not `matched` has a
+  title or link the triggers do not take: dry-run it.
+- **The dry run**, again after the trial: the `courier/trial` run now matches the `[kind]` alerts you fired and only them, and the `courier/production` run is as before. Alertmanager's side (is the alert routed, did the post fail) is under "Alert trial".
+- **Nothing happens at all**: `courier_trigger_matched_total` and `unmatched` both stay at zero when a `[kind]` post appears, so courier is not getting the channel's events. Is courier a member of the channel, and does the app have the `message.channels` event and
+  `channels:history` (the manifest does)? `courier_chat_connected` should be 1.
+
+**How to stop**
+
+- `make sandbox-down` takes everything away: courier and its config, the Alertmanager's `slack-critical-kind` receiver and the webhook Secret. The webhook file stays on disk; revoke the URL in Slack when the trial is over.
+- To stop courier watching the channel and keep the rest, delete the webhook file and re-run `make sandbox-up`: it rebuilds courier's config without `alert-binding.yaml` and restarts courier, so the channel is ignored again (check with the `jq '.data | keys'` above).
+  Alertmanager keeps its receiver until `make sandbox-down`, but `make sandbox-alert` refuses without the file, so nothing more is fired.
 
 ## Where to look
 

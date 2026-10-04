@@ -11,6 +11,8 @@
 # $ALERTMANAGER_WEBHOOK_FILE (default ~/.config/agent-courier/alertmanager-webhook-url). With no such file the alert source is skipped, and
 # the run says so; a file that is there is checked second, right after the secrets file (webhook.sh), refused as strictly, and handled as
 # the secrets are: parsed, never printed, and only ever piped to `kubectl apply -f -`. Nothing posts until `make sandbox-alert` fires an alert.
+# With the alert source, courier's config also gets the alert trial's Binding (courier/alert-trial): it watches that real channel for the [kind]
+# alerts, and only them (README, Run the alert trial). Without the webhook file the config is the dogfood Binding's alone, as it was.
 # Brings the full tier up first if it is not (up-full.sh), replaces its courier with the sandbox's (down.sh puts it back),
 # and is safe to re-run. It also restarts the full tier's egress gateway if its certificate is stale (heal.sh; `make sandbox-heal`).
 # Exit 0: up, and courier is connected to Slack. 1: a refused secrets file, or something failed. 3: deployed and verified, but
@@ -58,6 +60,7 @@ echo "ok: ${SANDBOX_ENV_FOUND// /, } are there and well-formed (values are never
 step "alert webhook file ${ALERTMANAGER_WEBHOOK_FILE}"
 if [ -e "${ALERTMANAGER_WEBHOOK_FILE}" ] || [ -L "${ALERTMANAGER_WEBHOOK_FILE}" ]; then
   webhook_url_load "${ALERTMANAGER_WEBHOOK_FILE}"
+  alert_channel_check # the trial Binding's channel is a channel ID and not the dogfood channel; checked before anything is touched
   ALERT_SOURCE=1
   echo "ok: ${ALERTMANAGER_WEBHOOK_FILE} holds an incoming-webhook URL (never printed)"
 else
@@ -144,8 +147,7 @@ if ! "${K[@]}" -n courier wait --for=condition=Complete job/courier-token-refres
 fi
 "${K[@]}" -n courier delete job courier-token-refresh-bringup >/dev/null
 SCRATCH=$(mktemp -d)
-for f in "${SBX}"/courier/config/*.yaml; do render "${f}" >"${SCRATCH}/$(basename "${f}")"; done
-cp "${HERE}/full/courier/agentbackend.yaml" "${SCRATCH}/agentbackend.yaml" # the verifying front door
+render_courier_config "${SCRATCH}" # the Binding, the connection and the verifying front door; with the alert source, the alert trial's Binding too
 "${K[@]}" -n courier create configmap courier-sandbox-config --from-file="${SCRATCH}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 # One courier at a time: the full tier's own goes to zero (down.sh puts it back), and the sandbox's starts.
 "${K[@]}" -n courier scale deploy/courier --replicas=0 >/dev/null
@@ -285,7 +287,7 @@ docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(k
 [ "${failed}" -eq 0 ] || die "the sandbox is not as it should be (see FAIL above)"
 if [ "${state}" = connected ]; then
   echo "sandbox up in ${SECONDS}s (context ${CTX}): @-mention the bot in the channel; the dogfood checklist is hack/kind/sandbox/README.md"
-  [ "${ALERT_SOURCE}" != 1 ] || echo "alert source up: fire an alert with make sandbox-alert (README, Alert trial)"
+  [ "${ALERT_SOURCE}" != 1 ] || echo "alert source up, and courier watches ${ALERT_CHANNEL_ID} for [kind] alerts: fire one with make sandbox-alert (README, Run the alert trial)"
 else
   # Exit 3 is "deployed, but Slack rejected the tokens": all else is up and verified, and courier crash-loops until the file is fixed.
   echo "sandbox deployed in ${SECONDS}s, but Slack rejected the tokens, so courier is NOT connected (exit 3; see the error above)" >&2

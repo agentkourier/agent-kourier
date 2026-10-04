@@ -26,9 +26,9 @@ import (
 // These tests pin the sandbox tier's manifests (hack/kind/sandbox): what it applies to the full tier's cluster to dogfood
 // courier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go.
 
-// manifestFiles are the Kubernetes manifests of the sandbox, which must parse; two carry a placeholder that up.sh fills in.
+// manifestFiles are the Kubernetes manifests of the sandbox, which must parse; some carry a placeholder that up.sh fills in.
 var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent.yaml", "token-refresh.yaml", "courier/deployment.yaml",
-	"courier/config/chatconnection.yaml", "courier/config/binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
+	"courier/config/chatconnection.yaml", "courier/config/binding.yaml", "courier/alert-trial/alert-binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
 
 // sandboxObjects returns every object of the given kind in the sandbox's file, as a map of its name.
 func sandboxObjects[T any](t *testing.T, file, kind string) map[string]T {
@@ -61,7 +61,7 @@ func rendered(t *testing.T, file string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.NewReplacer("__MODEL_NAME__", "claude-fake-model", "__MODEL_REGION__", "us-east-1", "__SLACK_CHANNEL_ID__", "C0SANDBOX01").Replace(string(raw))
+	return strings.NewReplacer("__MODEL_NAME__", "claude-fake-model", "__MODEL_REGION__", "us-east-1", "__SLACK_CHANNEL_ID__", "C0SANDBOX01", "__ALERT_CHANNEL_ID__", trialChannel).Replace(string(raw))
 }
 
 func TestSandboxManifestsParse(t *testing.T) {
@@ -77,7 +77,7 @@ func TestSandboxManifestsParse(t *testing.T) {
 		}
 	}
 	// The placeholders are each in exactly the files that up.sh renders, and the rendered files hold none.
-	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"courier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}} {
+	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"courier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}, {"courier/alert-trial/alert-binding.yaml", "__ALERT_CHANNEL_ID__"}} {
 		raw, err := os.ReadFile(sandboxDir + tc.file)
 		if err != nil {
 			t.Fatal(err)
@@ -99,7 +99,8 @@ func TestSandboxHoldsNoSecret(t *testing.T) {
 	}
 	more, _ := filepath.Glob(sandboxDir + "courier/*.yaml")
 	more2, _ := filepath.Glob(sandboxDir + "courier/config/*.yaml")
-	for _, file := range slices.Concat(entries, more, more2) {
+	more3, _ := filepath.Glob(sandboxDir + "courier/alert-trial/*.yaml")
+	for _, file := range slices.Concat(entries, more, more2, more3) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

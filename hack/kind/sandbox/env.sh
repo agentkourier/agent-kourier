@@ -133,12 +133,25 @@ apply_secret() {
   } | "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f - >/dev/null
 }
 
-# render FILE: FILE with its __MODEL_NAME__, __MODEL_REGION__ and __SLACK_CHANNEL_ID__ filled in, on stdout. By parameter expansion,
-# so that neither value is on an argument list.
+# render FILE: FILE with its __MODEL_NAME__, __MODEL_REGION__, __SLACK_CHANNEL_ID__ and __ALERT_CHANNEL_ID__ filled in, on stdout. By parameter
+# expansion, so that no value is on an argument list. ALERT_CHANNEL_ID is the constant of webhook.sh, which the caller sources to render the alert trial.
 render() {
   local content
   content=$(<"$1")
   content=${content//__MODEL_NAME__/${MODEL_NAME}}
   content=${content//__MODEL_REGION__/${MODEL_REGION:-}}
+  content=${content//__ALERT_CHANNEL_ID__/${ALERT_CHANNEL_ID:-}}
   printf '%s\n' "${content//__SLACK_CHANNEL_ID__/${SLACK_CHANNEL_ID}}"
+}
+
+# render_courier_config DIR: the sandbox courier's config in DIR, which up.sh makes the ConfigMap from: the files of courier/config, rendered, and the
+# full tier's AgentBackend (the verifying front door). With ALERT_SOURCE=1 it also holds the alert trial's Binding (courier/alert-trial), which is not in
+# it at all otherwise. SBX is hack/kind/sandbox and HERE is hack/kind: the caller's, as K is for apply_secret.
+render_courier_config() {
+  local dir=$1 f
+  for f in "${SBX}"/courier/config/*.yaml; do render "${f}" >"${dir}/$(basename "${f}")"; done
+  cp "${HERE}/full/courier/agentbackend.yaml" "${dir}/agentbackend.yaml"
+  if [ "${ALERT_SOURCE}" = 1 ]; then
+    for f in "${SBX}"/courier/alert-trial/*.yaml; do render "${f}" >"${dir}/$(basename "${f}")"; done
+  fi
 }

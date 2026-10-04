@@ -539,6 +539,12 @@ func TestWebhookFileRefuses(t *testing.T) {
 // the run succeeded, and the tools that ran.
 func upWithWebhook(t *testing.T, webhook string) (out string, ok bool, ran string) {
 	t.Helper()
+	return upWithEnv(t, webhook, goodEnv()...)
+}
+
+// upWithEnv is upWithWebhook with the given lines in the secrets file.
+func upWithEnv(t *testing.T, webhook string, env ...string) (out string, ok bool, ran string) {
+	t.Helper()
 	bin := t.TempDir()
 	mark := filepath.Join(bin, "ran")
 	for _, tool := range []string{"docker", "kind", "kubectl", "helm", "jq"} {
@@ -551,7 +557,7 @@ func upWithWebhook(t *testing.T, webhook string) (out string, ok bool, ran strin
 		}
 	}
 	cmd := exec.CommandContext(t.Context(), "bash", sandboxDir+"up.sh")
-	cmd.Env = append(os.Environ(), "SANDBOX_ENV="+envFile(t, 0o600, goodEnv()...), "ALERTMANAGER_WEBHOOK_FILE="+webhook,
+	cmd.Env = append(os.Environ(), "SANDBOX_ENV="+envFile(t, 0o600, env...), "ALERTMANAGER_WEBHOOK_FILE="+webhook,
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	raw, err := cmd.CombinedOutput()
 	marks, _ := os.ReadFile(mark)
@@ -1075,7 +1081,7 @@ func TestUpPreflightSetsAlertSource(t *testing.T) {
 		"bad file": {webhookFile(t, 0o644, fakeWebhook+"\n"), "", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			script := "set -eu\n. \"$1\"\n. \"$2\"\nstep() { :; }\nALERTMANAGER_WEBHOOK_FILE=$3\n" + block + "echo \"ALERT_SOURCE=${ALERT_SOURCE}\"\n"
+			script := "set -eu\n. \"$1\"\n. \"$2\"\nstep() { :; }\nSLACK_CHANNEL_ID=C0SANDBOX01\nALERTMANAGER_WEBHOOK_FILE=$3\n" + block + "echo \"ALERT_SOURCE=${ALERT_SOURCE}\"\n"
 			cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", sandboxDir+"env.sh", sandboxDir+"webhook.sh", tc.path)
 			var out, errOut bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &out, &errOut

@@ -10,6 +10,24 @@
 
 WEBHOOK_URL_FILE="" # the file the last webhook_url_load was given, for a message
 
+# The ID of the owner's real alert channel, #alerts-critical: the channel the webhook posts to, and the one the alert trial's Binding
+# (courier/alert-trial) watches. It is a constant, set here and nowhere else and never read from the environment or a file, so that it cannot be pointed
+# at another channel by accident; a test keeps it equal to the channel of the dry run's Bindings and the README.
+ALERT_CHANNEL_ID=C0EXAMPLE01
+
+# alert_channel_check: ALERT_CHANNEL_ID is a channel ID, and not the dogfood channel (SLACK_CHANNEL_ID, which env.sh checked), which the dogfood Binding
+# holds: two Bindings cannot share a channel on one connection, and courier would refuse the config. Exits 1, naming the key and never a value of a file.
+alert_channel_check() {
+  [[ ${ALERT_CHANNEL_ID} =~ ^[CG][A-Z0-9]+$ ]] || {
+    echo "error: ALERT_CHANNEL_ID (webhook.sh) is not a channel ID such as C0123ABCDEF (C or G, then capitals and digits), not a name" >&2
+    exit 1
+  }
+  [ "${ALERT_CHANNEL_ID}" != "${SLACK_CHANNEL_ID}" ] || {
+    echo "error: SLACK_CHANNEL_ID is the alert channel ${ALERT_CHANNEL_ID}: the dogfood Binding and the alert trial's cannot share a channel; use another channel for the dogfood, or take away the alert webhook file" >&2
+    exit 1
+  }
+}
+
 # webhook_fail MESSAGE: print "error: <file>: MESSAGE" and exit. Callers pass what is wrong with the file, never what is in it.
 webhook_fail() {
   echo "error: ${WEBHOOK_URL_FILE}: $*" >&2
