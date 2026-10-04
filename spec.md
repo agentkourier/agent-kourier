@@ -594,13 +594,13 @@ equal `closeWhen`; any other match is a *fire*. The time is when courier took th
 
 | Message | The key has | Decision | What happens |
 |---|---|---|---|
-| fire | no thread, or a closed one whose cooldown has ended, or one whose turn never started and is over a minute old, or an open one idle past `maxIdle` | `started` | Reserve the thread, anchored to this message. Hand the start to the session (CT-4); once that is taken, mark the thread started, which is when the cooldown begins. |
+| fire | no thread, or a closed one whose cooldown has ended, or one whose turn never started and is over a minute old, or an open one idle past `maxIdle` | `started` | Reserve the thread, anchored to this message. Render the first prompt and queue it as a turn of a session anchored to this message (below); once that is taken, mark the thread started, which is when the cooldown begins. |
 | fire | an open thread that is not idle past `maxIdle`, or a closed one inside its cooldown | `repeat` | Note "Fired again at `<time>`." in that thread, and reopen it. No turn. |
 | fire | this very message as its thread (a redelivery) | `dedup` | Nothing if its turn started; otherwise ask for the start again, since the first ask failed. |
 | fire, key empty | (no thread: the key came out empty) | `empty_key` | An investigation of its own, with no cooldown and no note. A warning, once for the trigger. |
 | close | an open thread whose turn started | `closed` | Note "Resolved at `<time>`." in that thread, and close it. No turn. The cooldown goes on. |
 | close | no thread, a closed one, or one whose turn never started | `close_unknown` | Ignored and counted. |
-| fire | the turn was refused: the session hook returned `chat.ErrNotStarted` | `not_started` | The event is acknowledged and not delivered again. The thread stays reserved and unmarked: no cooldown, and the key's next fire takes it over after a minute. |
+| fire | the turn was refused: the session hook returned `chat.ErrNotStarted` (the first prompt failed its check, or its template could not run) | `not_started` | The event is acknowledged and not delivered again. The thread stays reserved and unmarked: no cooldown, and the key's next fire takes it over after a minute. The hook has already posted the note, audited and counted the refusal (below). |
 
 The cooldown runs from the message that started the turn, not from the last message, so a key
 starts at most one turn in each window however often it fires and resolves (a flapping alert is
@@ -622,6 +622,37 @@ is queued before the change it goes with, so an error returns to Slack as an una
 event and the redelivery finishes the work; all of it is local writes, as it runs on the
 acknowledgement path. A trigger with no `thread` has none of this: every match starts a turn.
 Every decision is counted as `courier_trigger_decisions_total{binding,decision}`.
+
+**The first turn of a started thread.** The broker renders the trigger's `promptTemplate` over
+the trigger's view of the message (`.Channel`, `.State`, `.Key`, `.Fields`, `.Link`, `.Source`)
+and appends the whole message in the untrusted block (R2). `.Link` is the Slack
+permalink that courier builds from the workspace address `auth.test` returned when it connected,
+the channel and the message's ts (`https://<workspace>.slack.com/archives/<channel>/p<ts without
+the dot>`); it is never a field of the message, so a sender's `titleLink` cannot reach the
+instructions. The rendered prompt is submitted through the session manager's own intake, the path
+a mention takes (the session row, the queued turn and a wake, all local writes), with the alert
+message's ts as the thread and its ID as the turn's `messageId`, so a redelivery is the same
+turn. Nobody wrote the turn, so it names no user: it is filed under the manager's system user
+and carries no attribution prefix, which is for what a person wrote, and its audit rows name no
+person. A person's reply in that thread then continues the session without a mention, as in
+any thread courier owns. The text of a template reads `.Fields` entries, not `.Key`: the preset's
+key is the group's label values, which hold spaces, and a value in the instruction part must be
+name-shaped, so a template that reads `.Key` is refused.
+
+A prompt that fails its check (a value outside the name shape, too long, a `.Link` that is no
+link) or cannot be rendered (a template that reads an entry the trigger does not extract, or
+fails to run) starts no turn. The thread gets a fixed note, "Not investigated: `.Fields.alertname`
+failed the prompt check." (or "the prompt template could not be rendered."); the audit log gets an
+event that names the message, the trigger, the value's name, the reason and the value's length and
+never the value; and `courier_trigger_refused_total{binding,trigger,ref,reason}` is counted, where
+`ref` and `reason` are from closed sets. The hook then returns `chat.ErrNotStarted`.
+
+One window remains between queueing a turn and marking its thread started: a failed write or a
+crash there, with the event not delivered again, leaves a reservation whose turn was taken. A later
+fire that finds it stale would take the key over and start a second turn. So before taking over
+a stale, unmarked reservation of another message, the intake asks the reply queue whether that
+message's turn exists (queued or sent); if it does, it marks that thread started, with the cooldown
+running from its own message, and the fire is a repeat in it.
 
 Conversation key: `(connection, channel, thread_ts)` maps to `contextId`. The `messageId`
 is derived from the Slack message itself, `(channel, message ts)`, not the event ID:
