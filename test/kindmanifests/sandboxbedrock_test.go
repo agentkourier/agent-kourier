@@ -186,8 +186,8 @@ func TestUpPicksTheBedrockSecretKey(t *testing.T) {
 	if got := applies(s[elseAt:fiAt]); len(got) != 1 || got[0] != "apply_secret kagent sandbox-model apiKey=MODEL_API_KEY" {
 		t.Errorf("the other branch makes %q; want exactly one Secret for sandbox-model, under apiKey", got)
 	}
-	if n := strings.Count(s, "sandbox-model"); n < 2 || len(applies(s)) != 3 { // those two and the Slack Secret
-		t.Errorf("up.sh applies %d Secrets in all; want three (the model's in each branch, and Slack's)", len(applies(s)))
+	if n := strings.Count(s, "sandbox-model"); n < 2 || len(applies(s)) != 5 { // those two, the Slack Secret, and the alert source's two (the webhook and the Alertmanager configuration)
+		t.Errorf("up.sh applies %d Secrets in all; want five (the model's in each branch, Slack's, and the alert source's two)", len(applies(s)))
 	}
 	if !strings.Contains(s, `render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml"`) {
 		t.Error("up.sh does not render the provider's own ModelConfig")
