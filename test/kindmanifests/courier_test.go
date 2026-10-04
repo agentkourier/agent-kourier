@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -44,8 +45,8 @@ var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "cou
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), courierDir+"config")
-	if err != nil || len(set.Bindings) != 10 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of nine scenarios, and one connection and backend", set, err)
+	if err != nil || len(set.Bindings) != 11 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of ten scenarios, and one connection and backend", set, err)
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -229,6 +230,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"S12", e2e.ChannelS12, "scenario-fails", false, v1alpha1.OutputLive},
 		{"S13", e2e.ChannelS13, "scenario-tools", false, v1alpha1.OutputLive},
 		{"S14", e2e.ChannelS14, "scenario-alert", false, v1alpha1.OutputLive},
+		{"S15", e2e.ChannelS15, "scenario-alert", false, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
 		if !ok {
@@ -270,6 +272,37 @@ func TestS14TakesTheAlertBotByItsIDWithThePreset(t *testing.T) {
 	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS14 ||
 		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
 		t.Errorf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS14)
+	}
+}
+
+// TestS15LimitsTheStormToThreeStartsInTenSeconds: S15's trigger is S14's, for the bot the scenario posts as, with limits
+// of its own: three starts in 10 seconds (the shortest window, so the digest comes within a minute), enough room to run
+// at once, and no daily cap, so that runs of the scenario never meet the preset's 40 a day. The preset's thread rules
+// stay. The numbers are the ones the scenario asserts.
+func TestS15LimitsTheStormToThreeStartsInTenSeconds(t *testing.T) {
+	set, err := config.Load(t.Context(), courierDir+"config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb, ok := snap.BindingForChannel("courier", "slack-fast", e2e.ChannelS15)
+	if !ok {
+		t.Fatalf("channel %s resolves to no Binding", e2e.ChannelS15)
+	}
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS15 ||
+		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Fatalf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS15)
+	}
+	l := triggers[0].Limits
+	if l.RateLimit == nil || l.RateLimit.MaxRuns != 3 || l.RateLimit.Per.Duration != 10*time.Second || l.RateLimit.MaxConcurrent != 5 || l.MaxRunsPerDay == nil || *l.MaxRunsPerDay != 0 {
+		t.Errorf("limits %+v (rate %+v); want 3 in 10s, 5 at once and no daily cap", l, l.RateLimit)
+	}
+	if triggers[0].Thread.Cooldown.Duration != 4*time.Hour {
+		t.Errorf("thread %+v; want the preset's", triggers[0].Thread)
 	}
 }
 

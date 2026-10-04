@@ -30,4 +30,9 @@ const (
 	ChannelS14 = "CS14"
 	// BotS14 is the bot ID S14's alerts are posted as, which the Binding's trigger names (never a display name, D36).
 	BotS14 = "B0S14ALERT1"
+	// ChannelS15 is S15's: scenario-alert behind a botMessage trigger with the alertmanager preset for the bot BotS15, whose
+	// limits are three starts in 10 seconds. The fast tier only, as S14's.
+	ChannelS15 = "CS15"
+	// BotS15 is the bot ID S15's alerts are posted as.
+	BotS15 = "B0S15ALERT1"
 )

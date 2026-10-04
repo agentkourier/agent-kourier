@@ -1,0 +1,31 @@
+# S15: a storm of distinct Alertmanager alerts posted to the channel through an incoming webhook is held to the trigger's
+# limits: the first three start an investigation each in their own thread, the rest start nothing and get no note, and
+# one digest line in the channel, when the window ends, says how many were not investigated. The window is the shortest
+# there is (10s) so the digest comes within a minute; the daily cap is explicitly off (0), so that runs of the scenario
+# on one cluster never meet the preset's 40 a day. The bot is named by its ID (D36), the receiver anchored as in S14's.
+# A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel, the bot and
+# the agent are pinned by test/kindmanifests and test/e2e/scenarios.go. Like S14 it runs in the fast tier only: the full
+# tier's kagent has no scenario-alert agent.
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s15, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: agents}
+    namespace: kagent
+    name: scenario-alert
+  identity:
+    userId: courier-fast
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: CS15
+    output: live
+    triggers:
+      - type: botMessage
+        from: {botId: B0S15ALERT1}
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}
+        limits:
+          rateLimit: {maxRuns: 3, per: 10s, maxConcurrent: 5}
+          maxRunsPerDay: 0
