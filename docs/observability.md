@@ -120,6 +120,7 @@ terminal turn outcome metrics retain their names and hooks.
 | `courier_interactions_pending` | Durable pending interactions |
 | `courier_interaction_wait_seconds` | Creation to first committed resolution, by kind/state; retries do not add another observation |
 | `courier_chat_api_calls_total` | Slack adapter operations and results, including logical API errors over HTTP 200; cached user lookups are adapter operations too |
+| `courier_trigger_matched_total` / `courier_trigger_unmatched_total` | Bot messages a Binding's `botMessage` trigger matched, and bot messages in its channel that matched none (the heartbeat an `exclude` turns away counts here), by `binding`. A rising unmatched count after a template change means the trigger's regexes no longer fit; the debug log line names the channel, message and bot, never the text |
 | `go_*`, `process_*`, `go_sql_*` | Runtime/process metrics and separate read/write pool statistics |
 
 Duration histograms cover milliseconds through one hour. Use separate latency
