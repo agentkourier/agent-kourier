@@ -181,7 +181,7 @@ func (m *Manager) run(key Key, c *convo) {
 	defer telemetry.AddGauge(m.ctx, "courier_sessions_active", -1)
 	for m.ctx.Err() == nil {
 		out, err := m.turn(key, c)
-		for m.log(key, err); out == paused && m.ctx.Err() == nil; m.log(key, err) {
+		for m.log(key, c, out, err); out == paused && m.ctx.Err() == nil; m.log(key, c, out, err) {
 			out, err = m.parked(key, c)
 		}
 		switch {
@@ -196,12 +196,21 @@ func (m *Manager) run(key Key, c *convo) {
 	}
 }
 
-// log reports the error of a turn: a hold is expected and only informs.
-func (m *Manager) log(key Key, err error) {
+// log reports the error of a turn. A hold is expected and only informs, and so is a send the agent refused as
+// busy or not ready (-32004) that is sent again after a backoff: it names the reason and the attempt, and
+// leaves out the error, which holds nothing the reason does not say. Anything else is a failure.
+func (m *Manager) log(key Key, c *convo, out outcome, err error) {
 	switch {
 	case errors.Is(err, errHeld):
 		m.cfg.Logger.Info("session turn held", "key", key, "reason", err)
-	case err != nil && m.ctx.Err() == nil:
+	case err == nil || m.ctx.Err() != nil:
+	case out == blocked && errors.Is(err, agent.ErrBusy):
+		reason := "busy"
+		if errors.Is(err, agent.ErrNotReady) {
+			reason = "not_ready"
+		}
+		m.cfg.Logger.Info("session turn waiting", "key", key, "reason", reason, "attempt", c.tries)
+	default:
 		m.cfg.Logger.Error("session turn failed", "key", key, "error", err)
 	}
 }
@@ -591,8 +600,8 @@ func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
 }
 
 // unanswered handles an answer that failed before the agent named a task again. A rejected one
-// wedged its task, which Agent.Answer has already cancelled (R17). A busy one is read (see
-// busyAnswer). Any other failure leaves the task paused, so the person can answer again.
+// wedged its task, which Agent.Answer has already cancelled (R17). A busy one, or one refused as not ready, is read
+// (see readAnswered). Any other failure leaves the task paused, so the person can answer again.
 func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	switch {
 	case errors.Is(err, agent.ErrAnswerRejected):
@@ -610,9 +619,9 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 		m.finish(t, TurnAnswerRejected)
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 	case errors.Is(err, agent.ErrBusy):
-		return m.readAnswered(t, true)
+		return m.readAnswered(t, err)
 	case errors.Is(err, agent.ErrOutcomeUnknown):
-		return m.readAnswered(t, false)
+		return m.readAnswered(t, nil)
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		m.rejected(t, err)
 	}
@@ -620,12 +629,25 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	return m.repark(t), nil
 }
 
-// readAnswered reads the task an answer may or may not have reached: it got -32004 (busy, wedged,
-// or ended), or its outcome is unknown (it may have been delivered). An ended task drops the
-// answer; a WORKING one past maxWorkingAge that refused it is cancelled (R17); any other WORKING
-// one is followed, so its end is seen and the queue goes on (the thread is told when it refused
-// the answer); one still waiting for input reopens the pause.
-func (m *Manager) readAnswered(t *tstate, busy bool) (outcome, error) {
+// Details of the notice an answer that the agent refused gets, by what it said (see readAnswered). Courier does
+// not send the answer again: the thread is told, and the person answers again if the pause is open.
+const (
+	answerBusyDetail     = "the agent is busy with the task, and did not take the answer"
+	answerNotReadyDetail = "the agent's session was not ready, and did not take the answer"
+)
+
+// readAnswered reads the task an answer may or may not have reached: refused is the -32004 it got (busy,
+// wedged, or ended; ErrNotReady besides ErrBusy for a session that is not ready), or nil when its outcome is
+// unknown (it may have been delivered). An ended task drops the answer; a WORKING one past maxWorkingAge that
+// refused it is cancelled (R17); any other WORKING one is followed, so its end is seen and the queue goes on (the
+// thread is told when it refused the answer, and why); one still waiting for input reopens the pause, and tells
+// the thread the same.
+func (m *Manager) readAnswered(t *tstate, refused error) (outcome, error) {
+	busy := refused != nil
+	detail := answerBusyDetail
+	if errors.Is(refused, agent.ErrNotReady) {
+		detail = answerNotReadyDetail
+	}
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
 	case err != nil:
@@ -640,13 +662,13 @@ func (m *Manager) readAnswered(t *tstate, busy bool) (outcome, error) {
 			return m.wedged(t)
 		}
 		if busy {
-			m.notice(t, NoticeFailed, "the agent is busy with the task, and did not take the answer")
+			m.notice(t, NoticeFailed, detail)
 		}
 		t.c.follow, t.follow = t, true
 		return m.resume(t.c)
 	}
 	if busy {
-		m.notice(t, NoticeFailed, "the agent is busy with the task, and did not take the answer")
+		m.notice(t, NoticeFailed, detail)
 	}
 	return m.repark(t), nil
 }
