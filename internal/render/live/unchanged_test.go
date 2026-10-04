@@ -29,11 +29,10 @@ func parked() bool {
 // TestAnEventThatChangesNothingShownWritesNothing: the window opens, the renderer looks at the state, finds that it
 // would show what is shown already, and writes nothing, since an edit that changes nothing still counts against
 // Slack's rate limit. Without that, every event that is no change (a text event repeated, the result of a call
-// that was never started, a tool call in a stream, which has no tool line) would cost an edit a window.
+// that was never started) would cost an edit a window.
 func TestAnEventThatChangesNothingShownWritesNothing(t *testing.T) {
 	same := func(run *live.Run) { run.Handle(text("a", "Hel")) }
 	unknownResult := func(run *live.Run) { run.Handle(agent.ToolResultEvent{CallID: "never-started", Name: "x"}) }
-	toolInAStream := func(run *live.Run) { run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"}) }
 	for _, tc := range []struct {
 		name      string
 		recipient string // a stream if there is one
@@ -45,7 +44,6 @@ func TestAnEventThatChangesNothingShownWritesNothing(t *testing.T) {
 		{"the result of a call never started", "", unknownResult, "/chat.postMessage", "/chat.update"},
 		{"a text event repeated, in a stream", "U1", same, "/chat.startStream", "/chat.appendStream"},
 		{"the result of a call never started, in a stream", "U1", unknownResult, "/chat.startStream", "/chat.appendStream"},
-		{"a tool call in a stream, which has no tool line", "U1", toolInAStream, "/chat.startStream", "/chat.appendStream"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)

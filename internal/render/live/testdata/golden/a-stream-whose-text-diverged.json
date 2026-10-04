@@ -4,7 +4,12 @@
       "path": "/chat.startStream",
       "form": {
         "channel": "C1",
-        "markdown_text": "The answer is 41",
+        "chunks": [
+          {
+            "text": "The answer is 41",
+            "type": "markdown_text"
+          }
+        ],
         "parse": "none",
         "recipient_user_id": "U1",
         "thread_ts": "ROOT",

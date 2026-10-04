@@ -44,8 +44,8 @@ func (e *env) assertLastStopIsBare(t *testing.T) {
 	if len(stops) == 0 {
 		t.Fatal("no chat.stopStream request was sent")
 	}
-	if last := stops[len(stops)-1]; last.Has("blocks") || last.Has("markdown_text") {
-		t.Errorf("the stop of the earlier run's stream carried blocks %v and text %q; want neither", last["blocks"], last.Get("markdown_text"))
+	if last := stops[len(stops)-1]; last.Has("blocks") || last.Has("markdown_text") || last.Has("chunks") {
+		t.Errorf("the stop of the earlier run's stream carried blocks %v and text %q; want neither", last["blocks"], textOf(last))
 	}
 }
 
@@ -65,11 +65,12 @@ func TestStreamRecordsItsTsAtOnceAndAppendsOnlyTheSuffix(t *testing.T) {
 	run.Handle(text("a", "Hello"))
 	eventually(t, "the window", func() bool { return e.clk.waiting() == 1 })
 	run.Handle(text("a", "Hello wor"))
-	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"}) // no tool lines in a stream
+	run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "search"}) // a step, and no tool line
 	e.clk.advance(throttle)
 	eventually(t, "the append", func() bool { return e.reply().Text == "Hello wor" })
-	if got := e.rec.sent("/chat.appendStream"); len(got) != 1 || got[0].Get("markdown_text") != "lo wor" {
-		t.Fatalf("appends %v; want one, carrying only the new suffix", got)
+	// The text goes first, as only its new suffix, and then the step that was begun after it.
+	if got := e.rec.sent("/chat.appendStream"); len(got) != 2 || textOf(got[0]) != "lo wor" || len(chunksOf(t, got[1])) != 1 || chunksOf(t, got[1])[0]["type"] != "task_update" {
+		t.Fatalf("appends %v; want the new suffix of the text, and then the step", got)
 	}
 	if strings.Contains(string(e.reply().Blocks), "Calling") || len(e.rec.sent("/chat.update")) != 0 {
 		t.Fatalf("a tool line or an update reached the stream: %+v", e.reply())
@@ -95,8 +96,8 @@ func TestStreamStopsWithTheTagAndNoBlocks(t *testing.T) {
 	if n := strings.Count(string(m.Blocks), "Hello world"); n != 1 {
 		t.Fatalf("the message has %d copies of its text in blocks %s; want exactly one", n, m.Blocks)
 	}
-	if stops := e.rec.sent("/chat.stopStream"); len(stops) != 1 || stops[0].Get("markdown_text") != " world" || stops[0].Has("blocks") {
-		t.Fatalf("stops %v; want one, with the unsent suffix as markdown_text and no blocks", stops)
+	if stops := e.rec.sent("/chat.stopStream"); len(stops) != 1 || textOf(stops[0]) != " world" || stops[0].Has("blocks") {
+		t.Fatalf("stops %v; want one, with the unsent suffix as its text and no blocks", stops)
 	}
 	if n := len(e.rec.sent("/chat.update")); n != 0 {
 		t.Fatalf("%d updates for a stream that did not diverge", n)
@@ -120,7 +121,7 @@ func TestDivergentFinalIsCorrectedAfterTheStop(t *testing.T) {
 	if m := e.reply(); m.Streaming || m.Text != "Goodbye, all" || strings.Count(string(m.Blocks), "Goodbye, all") != 1 || strings.Contains(string(m.Blocks), "Hello there") {
 		t.Fatalf("after the stop: %+v blocks %s; want the final text once, and none of what was streamed", m, m.Blocks)
 	}
-	if stops := e.rec.sent("/chat.stopStream"); len(stops) != 1 || stops[0].Has("blocks") || stops[0].Has("markdown_text") {
+	if stops := e.rec.sent("/chat.stopStream"); len(stops) != 1 || stops[0].Has("blocks") || textOf(stops[0]) != "" {
 		t.Fatalf("stops %v; want one that carries no blocks and no text, which the update replaces", stops)
 	}
 	var kinds []string

@@ -1,0 +1,76 @@
+{
+  "requests": [
+    {
+      "path": "/chat.startStream",
+      "form": {
+        "channel": "C1",
+        "parse": "none",
+        "recipient_user_id": "U1",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "details": "q=\"\u0026lt;@U123\u0026gt; ![x]\\(https://evil.test/p.png) \u0026lt;b\u0026gt;t\u0026lt;/b\u0026gt;\"",
+            "id": "s1",
+            "status": "complete",
+            "title": "\u0026lt;!channel\u0026gt; [click]\\(https://evil.test) *b* `c` \u0026amp; done",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.stopStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "text": "done",
+            "type": "markdown_text"
+          }
+        ],
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "done",
+      "blocks": [
+        {
+          "text": "done",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "tasks": [
+        {
+          "id": "s1",
+          "title": "\u0026lt;!channel\u0026gt; [click]\\(https://evil.test) *b* `c` \u0026amp; done",
+          "status": "complete",
+          "details": "q=\"\u0026lt;@U123\u0026gt; ![x]\\(https://evil.test/p.png) \u0026lt;b\u0026gt;t\u0026lt;/b\u0026gt;\""
+        }
+      ],
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

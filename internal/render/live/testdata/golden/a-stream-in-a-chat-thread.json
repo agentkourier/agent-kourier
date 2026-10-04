@@ -4,7 +4,12 @@
       "path": "/chat.startStream",
       "form": {
         "channel": "C1",
-        "markdown_text": "Hel",
+        "chunks": [
+          {
+            "text": "Hel",
+            "type": "markdown_text"
+          }
+        ],
         "parse": "none",
         "recipient_user_id": "U1",
         "thread_ts": "ROOT",
@@ -16,7 +21,49 @@
       "path": "/chat.appendStream",
       "form": {
         "channel": "C1",
-        "markdown_text": "lo wor",
+        "chunks": [
+          {
+            "text": "lo wor",
+            "type": "markdown_text"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "id": "s1",
+            "status": "in_progress",
+            "title": "search",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "id": "s1",
+            "output": "No result was reported.",
+            "status": "complete",
+            "title": "search",
+            "type": "task_update"
+          }
+        ],
         "parse": "none",
         "ts": "TS1",
         "unfurl_links": "false",
@@ -27,7 +74,12 @@
       "path": "/chat.stopStream",
       "form": {
         "channel": "C1",
-        "markdown_text": "ld, and more",
+        "chunks": [
+          {
+            "text": "ld, and more",
+            "type": "markdown_text"
+          }
+        ],
         "outbox_id": "turn-1/reply",
         "parse": "none",
         "ts": "TS1",
@@ -50,6 +102,14 @@
         }
       ],
       "thread": true,
+      "tasks": [
+        {
+          "id": "s1",
+          "title": "search",
+          "status": "complete",
+          "output": "No result was reported."
+        }
+      ],
       "outbox_id": "turn-1/reply"
     }
   ]

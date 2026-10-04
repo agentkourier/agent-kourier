@@ -37,8 +37,18 @@ type goldenMessage struct {
 	Blocks    any    `json:"blocks,omitempty"`
 	Thread    bool   `json:"thread,omitempty"`
 	Streaming bool   `json:"streaming,omitempty"`
+	Tasks     []task `json:"tasks,omitempty"`
 	Edited    bool   `json:"edited,omitempty"`
 	OutboxID  string `json:"outbox_id,omitempty"`
+}
+
+// task is a task_update of a streamed message as it ended.
+type task struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+	Details string `json:"details,omitempty"`
+	Output  string `json:"output,omitempty"`
 }
 
 type golden struct {
@@ -114,6 +124,13 @@ func (e *env) record(t *testing.T) golden {
 			}
 			req.Form["blocks"] = n.value(blocks)
 		}
+		if raw := form.Get("chunks"); raw != "" {
+			var chunks any
+			if err := json.Unmarshal([]byte(raw), &chunks); err != nil {
+				t.Fatal(err)
+			}
+			req.Form["chunks"] = n.value(chunks)
+		}
 		if raw := form.Get("metadata"); raw != "" {
 			var md struct {
 				Payload map[string]any `json:"event_payload"`
@@ -132,6 +149,9 @@ func (e *env) record(t *testing.T) golden {
 				t.Fatal(err)
 			}
 			gm.Blocks = n.value(blocks)
+		}
+		for _, tk := range m.Tasks() {
+			gm.Tasks = append(gm.Tasks, task(tk))
 		}
 		if m.Metadata != nil {
 			gm.OutboxID, _ = m.Metadata.EventPayload["outbox_id"].(string)
@@ -251,6 +271,32 @@ var scripts = []struct {
 		e.settle(t, 2) // the append
 		run.Handle(text("a", "Hello world, and more"))
 		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+	}},
+	{"a-stream-with-tool-steps", func(t *testing.T, e *env) {
+		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
+		run.Handle(text("a", "Checking the pods."))
+		e.settle(t, 1) // the stream starts
+		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "kubectl_get", Args: map[string]any{"namespace": "prod", "resource": "pods", "password": "hunter2", "url": "https://user:s3cr3t@host.test/x"}})
+		e.settle(t, 2) // the step begins, after the text that came before the call
+		run.Handle(agent.ToolResultEvent{CallID: "c1", Name: "kubectl_get", Response: map[string]any{"output": "3 pods"}})
+		run.Handle(text("b", "Three pods, all ready."))
+		e.settle(t, 4)                                                // the step is done, and the text that came after it is appended
+		run.Handle(agent.ToolCallEvent{CallID: "c2", Name: "search"}) // never answered: ended at the stop
+		run.Handle(agent.ToolCallEvent{CallID: "c3", Name: "fetch"})
+		run.Handle(agent.ToolResultEvent{CallID: "c3", Name: "fetch", Response: map[string]any{"error": "call rejected"}})
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+	}},
+	{"a-stream-with-a-hostile-tool-name", func(t *testing.T, e *env) {
+		release := e.hold() // the first write is not throttled: it must not be made before the events are in
+		t.Cleanup(release)
+		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
+		run.Handle(agent.ToolCallEvent{CallID: "c1", Name: "<!channel> [click](https://evil.test)\n\u202e*b* `c` & done", Args: map[string]any{"q": "<@U123> ![x](https://evil.test/p.png) <b>t</b>"}})
+		run.Handle(agent.ToolResultEvent{CallID: "c1", Response: map[string]any{"output": "ok"}})
+		run.Handle(text("a", "done"))
+		run.Handle(agent.FinalEvent{})
+		release()
 		e.finish(t, run)
 	}},
 	{"a-stream-whose-text-diverged", func(t *testing.T, e *env) {

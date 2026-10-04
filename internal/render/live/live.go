@@ -9,9 +9,12 @@
 // Two paths write the message. For a chat thread, where the platform shows a stream to the person who
 // asked, the turn streams: Stream, throttled Append of what is new, Stop with the outbox tag and the
 // final message, and an Update after the stop only if what was streamed diverged from the final text (see
-// stream.go). Otherwise, such as in an alert thread, or on a platform that does not stream, it posts and
-// updates. Neither ever updates a message that is still streaming. Text is built at the last step, from
-// the raw events (package render), and is literal: the platform makes it inert.
+// stream.go). On a platform that has progress steps (Caps.Steps) a stream shows each tool call as a step, where in
+// the text it was made: begun when the call is, finished when its result is. A step is only ever moved
+// forward, so nothing has to be taken back. Otherwise, such as in an alert thread, or on a platform that does not
+// stream, the turn posts and updates, and shows a tool call as a status line while it runs. Neither path ever
+// updates a message that is still streaming. Text is built at the last step, from the raw events (package
+// render), and is literal: the platform makes it inert.
 package live
 
 import (
@@ -20,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +41,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
+
+// maxSteps is the most steps a stream shows. A turn may call tools without end, and each step is a call to the
+// platform and a card in the message: the calls after these are made, and not shown.
+const maxSteps = 50
 
 // Sender posts through the outbox: *outbox.Outbox.
 type Sender interface {
@@ -144,11 +153,15 @@ type Run struct {
 	turn Turn
 	wake chan struct{} // a slot: the state changed
 	done chan struct{}
+	// eligible says the turn may show steps: it began as a stream, on a platform that has them. It is set at the
+	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
+	eligible bool
 
 	mu    sync.Mutex // guards the state below
 	texts map[a2a.ArtifactID]string
 	order []a2a.ArtifactID
 	tool  *agent.ToolCallEvent // the call being made, if any
+	steps []stepRec            // the tool calls of a stream, in the order they were made
 	final bool
 
 	// Below: the goroutine's alone.
@@ -165,12 +178,23 @@ type Run struct {
 	diverged  bool        // the streamed text is not a prefix of the final text
 	stream    chat.Stream // the stream this turn started
 	streamed  string      // the markdown sent to the stream so far
+	stepsSent []chat.Step // the steps sent to the stream, each in the state it was last sent
+	stepsOff  bool        // the platform refused a step for good: the turn goes on without steps
+	stepFails int         // steps that failed in a row
+}
+
+// stepRec is a tool call of a stream, which is a step: the call, how it ended, and where in the text it was made.
+type stepRec struct {
+	call  agent.ToolCallEvent
+	state chat.StepState
+	after int // how many text artifacts there were when the call was made: the step follows their text
 }
 
 // Start begins rendering a turn and returns it. Its goroutine ends once the final text is
 // written, or given up on, or when ctx ends.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
-	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams && r.cfg.Store != nil, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
+	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams && r.cfg.Store != nil
+	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
 	r.runs.Add(1)
 	go func() { defer r.runs.Done(); u.run(ctx) }()
 	return u
@@ -196,10 +220,12 @@ func (u *Run) Handle(ev agent.Event) {
 		u.texts[e.ArtifactID] = e.Text
 	case agent.ToolCallEvent:
 		u.tool = &e
+		u.beginStep(e)
 	case agent.ToolResultEvent:
 		if u.tool != nil && u.tool.CallID == e.CallID {
 			u.tool = nil
 		}
+		u.endStep(e)
 	case agent.FinalEvent:
 		u.final = true
 	}
@@ -208,6 +234,34 @@ func (u *Run) Handle(ev agent.Event) {
 	case u.wake <- struct{}{}:
 	default: // a signal is waiting already
 	}
+}
+
+// beginStep records a tool call as a step of the stream, once: a call that is reported again is the same step, and
+// a call with no ID, which no result can name, is a step of its own. The caller holds u.mu.
+func (u *Run) beginStep(e agent.ToolCallEvent) {
+	if !u.eligible || len(u.steps) >= maxSteps || (e.CallID != "" && u.stepIndex(e.CallID) >= 0) {
+		return
+	}
+	u.steps = append(u.steps, stepRec{call: e, after: len(u.order)})
+}
+
+// endStep finishes the step of a tool call that has its result: done, or failed if the response says so (render.Failed).
+// A result of a call that is no step, or of one that has its result already, changes nothing. The caller holds u.mu.
+func (u *Run) endStep(e agent.ToolResultEvent) {
+	if i := u.stepIndex(e.CallID); i >= 0 && u.steps[i].state == chat.StepRunning {
+		u.steps[i].state = chat.StepDone
+		if render.Failed(e.Response) {
+			u.steps[i].state = chat.StepFailed
+		}
+	}
+}
+
+// stepIndex is the place of the step of the call callID, or -1. The caller holds u.mu.
+func (u *Run) stepIndex(callID string) int {
+	if callID == "" {
+		return -1
+	}
+	return slices.IndexFunc(u.steps, func(s stepRec) bool { return s.call.CallID == callID })
 }
 
 // run writes the state each time its window opens, until the final text is out.
@@ -254,19 +308,19 @@ func (u *Run) run(ctx context.Context) {
 				}
 				return
 			}
-			m, body, final, ok := u.snapshot() // after the wait, so that what is sent is the latest
-			if !ok && final {                  // the turn ended with nothing to show
+			v := u.snapshot()     // after the wait, so that what is sent is the latest
+			if !v.ok && v.final { // the turn ended with nothing to show
 				if ref.ID == "" {
 					finalOutcome = "empty_output"
 					return
 				}
-				m, body, ok = render.Nothing(), render.NoOutput, true // but a message stands: do not leave its tool line up
+				v.m, v.body, v.ok = render.Nothing(), render.NoOutput, true // but a message stands: do not leave its tool line up
 			}
-			if !ok || (u.turn.Mode == v1alpha1.OutputFinal && !final) {
+			if !v.ok || (u.turn.Mode == v1alpha1.OutputFinal && !v.final) {
 				break
 			}
-			if u.want(m, body, final) == u.sent {
-				if final {
+			if u.want(v) == u.sent {
+				if v.final {
 					finalOutcome = "delivered"
 					return
 				}
@@ -277,7 +331,7 @@ func (u *Run) run(ctx context.Context) {
 			if finalOp != nil {
 				writeCtx = finalCtx
 			}
-			err := u.write(writeCtx, &ref, m, body, final)
+			err := u.write(writeCtx, &ref, v)
 			next = u.cfg.Now().Add(u.cfg.Throttle)
 			if err != nil {
 				switch verdict := u.cfg.Platform.Classify(chat.OpPost, err); {
@@ -293,7 +347,7 @@ func (u *Run) run(ctx context.Context) {
 				u.cfg.Logger.WarnContext(ctx, "live: writing the message failed; it will be tried again", "channel", u.turn.Channel, "err", err)
 				if fails++; fails >= u.cfg.Attempts {
 					u.cfg.Logger.ErrorContext(ctx, "live: giving up on a message", "channel", u.turn.Channel)
-					if final {
+					if v.final {
 						finalOutcome = "retry_exhausted"
 						return
 					}
@@ -307,7 +361,7 @@ func (u *Run) run(ctx context.Context) {
 				u.stale, u.sent = false, "" // the post may be the old message: write once more
 				continue
 			}
-			if final {
+			if v.final {
 				finalOutcome = "delivered"
 				return
 			}
@@ -349,25 +403,34 @@ func (u *Run) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// want is the key of what the state would show: the message's content, or for a stream its text
-// and whether it has ended.
-func (u *Run) want(m chat.Message, body string, final bool) string {
+// want is the key of what the state would show: the message's content, or for a stream its text, its steps and
+// whether it has ended.
+func (u *Run) want(v view) string {
 	if u.streaming {
-		return body + map[bool]string{false: "", true: "\x00final"}[final]
+		return v.body + "\x00" + stepsKey(v.steps) + map[bool]string{false: "", true: "\x00final"}[v.final]
 	}
-	key, _ := json.Marshal(m) // a message of parts of known kinds always marshals
+	key, _ := json.Marshal(v.m) // a message of parts of known kinds always marshals
 	return string(key)
+}
+
+// stepsKey is the steps by ID and state: what a stream shows of them.
+func stepsKey(steps []chat.Step) string {
+	var b strings.Builder
+	for _, s := range steps {
+		fmt.Fprintf(&b, "%s:%d;", s.ID, s.State)
+	}
+	return b.String()
 }
 
 // write posts the message the first time, through the outbox, and updates it after, or, on the
 // stream path, takes the next step of the stream.
-func (u *Run) write(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.render.write", attribute.Bool("courier.render.final", final), attribute.Bool("courier.render.streaming", u.streaming))
+func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.render.write", attribute.Bool("courier.render.final", v.final), attribute.Bool("courier.render.streaming", u.streaming))
 	defer func() { op.Finish(telemetryErr) }()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout) // see WriteTimeout
 	defer cancel()
 	if u.streaming {
-		return u.writeStream(ctx, ref, m, body, final)
+		return u.writeStream(ctx, ref, v)
 	}
 	if ref.ID != "" {
 		if u.adoptStop { // an earlier run's stream: end it, or the platform refuses the update
@@ -377,40 +440,72 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, m chat.Message, body str
 			}
 			u.adoptStop = false
 		}
-		err := u.cfg.Platform.Update(ctx, *ref, chat.Say(m))
+		err := u.cfg.Platform.Update(ctx, *ref, chat.Say(v.m))
 		if err == nil {
-			u.sent = u.want(m, body, final)
+			u.sent = u.want(v)
 		}
 		return err
 	}
 	u.sends++
-	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(m)})
+	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(v.m)})
 	if err == nil {
 		*ref = got
 		// A Send that follows a failed one, or a recovered turn's, returns the message that is
 		// there already, or posts the payload stored first, not necessarily this content.
 		u.stale = u.sends > 1 || u.turn.Recovered
-		u.sent = u.want(m, body, final)
+		u.sent = u.want(v)
 	}
 	return err
 }
 
-// snapshot builds the state as a message: the text so far as its body and, while a tool call is under way, its
-// status line. Once the turn is final the line is gone. body is the text a stream carries. ok is false if there
-// is nothing to show yet.
-func (u *Run) snapshot() (m chat.Message, body string, final, ok bool) {
+// view is what the state shows at one moment.
+type view struct {
+	m     chat.Message // the message of the update path: the text so far, and while a tool call is under way its status line
+	body  string       // the text a stream carries
+	steps []chat.Step  // the steps a stream shows, in the order of the calls, each in the state to show
+	pos   []int        // where in body each step follows: the text before that place was written before the call
+	final bool
+	ok    bool // there is something to show yet
+}
+
+// snapshot builds the state: the text so far as the body and, while a tool call is under way, its status line on the
+// update path, and on the stream path the steps. Once the turn is final the line is gone, and a step with no result is
+// ended: the turn will not hear of it again.
+func (u *Run) snapshot() view {
 	u.mu.Lock()
 	events := make([]agent.TextEvent, 0, len(u.order))
 	for _, id := range u.order {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
 	tool, final := u.tool, u.final
+	var recs []stepRec
+	if u.stepsOn() {
+		recs = slices.Clone(u.steps)
+	}
 	u.mu.Unlock()
+	v := view{final: final}
 	var shown *agent.ToolCallEvent
-	if tool != nil && !final && !u.streaming { // no tool lines in a stream (v1): they cannot be taken back
+	if tool != nil && !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
 		shown = tool
 	}
-	body = render.Body(events, u.caps.Limit(chat.WhereStream))
-	m, ok = render.Turn(events, shown, u.caps)
-	return m, body, final, ok
+	v.body = render.Body(events, u.caps.Limit(chat.WhereStream))
+	v.m, v.ok = render.Turn(events, shown, u.caps)
+	for i, r := range recs {
+		state := r.state
+		if final && state == chat.StepRunning {
+			state = chat.StepEnded
+		}
+		before := render.Body(events[:min(r.after, len(events))], u.caps.Limit(chat.WhereStream))
+		pos := len(v.body)
+		if strings.HasPrefix(v.body, before) {
+			pos = len(before)
+		}
+		v.steps = append(v.steps, render.Step(fmt.Sprintf("s%d", i+1), r.call, state))
+		v.pos = append(v.pos, pos)
+	}
+	v.ok = v.ok || len(v.steps) > 0
+	return v
 }
+
+// stepsOn says whether the stream shows steps: it is a stream, the platform has them, and has not refused one.
+func (u *Run) stepsOn() bool { return u.streaming && u.caps.Steps && !u.stepsOff }
