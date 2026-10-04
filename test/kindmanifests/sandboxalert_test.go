@@ -1,0 +1,880 @@
+package kindmanifests_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"sigs.k8s.io/yaml"
+)
+
+// These tests pin the sandbox's alert source (hack/kind/sandbox/alertmanager, webhook.sh, alert.sh): the full tier's
+// Alertmanager posting to the owner's real alert channel through a copy of the owner's receiver, and the tool that fires
+// the seeded faults' alerts. Nothing here touches a cluster or the real webhook file: every secret below is a fake constant.
+const (
+	alertDir = sandboxDir + "alertmanager/"
+
+	// fakeWebhook is shaped as the webhook file demands, and its parts are found by name in any output that holds them.
+	fakeWebhook = "https://hooks.slack.com/services/T0LEAKCHECK/B0LEAKCHECK/LEAKCHECKwebhook0007"
+	leakMarker  = "LEAKCHECK"
+
+	// ownerTemplate is where the owner's production Alertmanager configuration lives; the test that compares against it
+	// skips when it is not there.
+	ownerTemplate = "development/cluster-apps/templates/prometheus-operator.yaml"
+)
+
+// ownerSample is the owner's receivers as that file had them on 2026-10-03 (lines 447-467), Helm escapes and all. It is what
+// the comparison runs against where the owner's repository is not checked out, and what it is shown to catch a changed copy on.
+const ownerSample = `            receivers:
+              - name: "null"
+              - name: slack-heartbeat
+                slack_configs:
+                  - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url
+                    channel: "#alerts-critical"
+                    send_resolved: false
+                    title: 'Prometheus heartbeat'
+                    text: 'Watchdog firing — Prometheus + Alertmanager are alive.'
+              - name: slack-critical
+                slack_configs:
+                  - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url
+                    channel: "#alerts-critical"
+                    send_resolved: true
+                    title: '{{ "{{" }} .Status | toUpper {{ "}}" }}{{ "{{" }} if eq .Status "firing" {{ "}}" }} ({{ "{{" }} .Alerts.Firing | len {{ "}}" }}){{ "{{" }} end {{ "}}" }} - {{ "{{" }} .CommonLabels.alertname {{ "}}" }}'
+                    text: >-
+                      {{ "{{" }} range .Alerts {{ "}}" }}
+                      *{{ "{{" }} .Labels.alertname {{ "}}" }}* - {{ "{{" }} .Labels.severity {{ "}}" }}
+                      {{ "{{" }} .Annotations.summary {{ "}}" }}
+                      {{ "{{" }} .Annotations.description {{ "}}" }}
+                      {{ "{{" }} end {{ "}}" }}
+          route:
+            main:
+              enabled: true
+`
+
+// ownerReceiver returns the receiver called name from the owner's Helm template src, as a map, with Helm's escapes of
+// Alertmanager's own braces undone. It finds the receiver's list item by its name and takes the lines indented below it.
+func ownerReceiver(t *testing.T, src, name string) map[string]any {
+	t.Helper()
+	lines := strings.Split(src, "\n")
+	indentOf := func(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
+	start := -1
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "- name: "+name {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("the owner's template has no receiver %q", name)
+	}
+	indent := indentOf(lines[start])
+	block := []string{lines[start][indent:]}
+	for _, l := range lines[start+1:] {
+		if strings.TrimSpace(l) != "" && indentOf(l) <= indent {
+			break
+		}
+		if len(l) >= indent {
+			l = l[indent:]
+		}
+		block = append(block, l)
+	}
+	text := strings.NewReplacer(`{{ "{{" }}`, "{{", `{{ "}}" }}`, "}}").Replace(strings.Join(block, "\n"))
+	var items []map[string]any
+	if err := yaml.Unmarshal([]byte(text), &items); err != nil || len(items) != 1 {
+		t.Fatalf("the owner's receiver %q: %d items, %v\n%s", name, len(items), err, text)
+	}
+	return items[0]
+}
+
+// kindReceiver returns the sandbox's receiver slack-critical-kind from its Alertmanager configuration.
+func kindReceiver(t *testing.T) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(alertDir + "config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Receivers []map[string]any `json:"receivers"`
+	}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range cfg.Receivers {
+		if r["name"] == "slack-critical-kind" {
+			return r
+		}
+	}
+	t.Fatal("the sandbox's Alertmanager configuration has no receiver slack-critical-kind")
+	return nil
+}
+
+// expectedKindReceiver is what the owner's receiver becomes for the sandbox: renamed, and each title prefixed `[kind] `.
+func expectedKindReceiver(t *testing.T, owner map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(owner) // a deep copy
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	want["name"] = "slack-critical-kind"
+	configs, ok := want["slack_configs"].([]any)
+	if !ok || len(configs) == 0 {
+		t.Fatal("the owner's receiver has no slack_configs")
+	}
+	for _, c := range configs {
+		m := c.(map[string]any)
+		m["title"] = "[kind] " + m["title"].(string)
+	}
+	return want
+}
+
+// jsonForm round-trips v through JSON, so that two values from different decoders compare by what they hold.
+func jsonForm(t *testing.T, v any) any {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestKindReceiverIsACopyOfTheOwnersExceptTheTitlePrefix: slack_configs of slack-critical-kind are those of the owner's
+// slack-critical receiver, with the one change of the `[kind] ` prefix on the title. It runs against the owner's file as it is
+// now when that is checked out (and skips that half with a message when it is not), and always against the owner's template as
+// it was on 2026-10-03, so that a copy edited here is caught either way.
+func TestKindReceiverIsACopyOfTheOwnersExceptTheTitlePrefix(t *testing.T) {
+	kind := jsonForm(t, kindReceiver(t))
+	t.Run("the template as it was on 2026-10-03", func(t *testing.T) {
+		want := jsonForm(t, expectedKindReceiver(t, ownerReceiver(t, ownerSample, "slack-critical")))
+		if !reflect.DeepEqual(kind, want) {
+			t.Errorf("slack-critical-kind is not the owner's slack-critical with the [kind] prefix:\n got %v\nwant %v", kind, want)
+		}
+	})
+	t.Run("the owner's file now", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("no home directory (%v): cannot find the owner's repository", err)
+		}
+		raw, err := os.ReadFile(filepath.Join(home, ownerTemplate))
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skipf("the owner's template %s is not checked out: only the copy of 2026-10-03 was compared", ownerTemplate)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := jsonForm(t, expectedKindReceiver(t, ownerReceiver(t, string(raw), "slack-critical")))
+		if !reflect.DeepEqual(kind, want) {
+			t.Errorf("the owner changed slack-critical, or the sandbox's copy drifted; update alertmanager/config.yaml:\n got %v\nwant %v", kind, want)
+		}
+	})
+}
+
+// TestKindReceiverComparisonCatchesADrift: the comparison above is not vacuous. Each change to the copy that it must refuse
+// is refused, and the prefix is the only change it accepts.
+func TestKindReceiverComparisonCatchesADrift(t *testing.T) {
+	want := jsonForm(t, expectedKindReceiver(t, ownerReceiver(t, ownerSample, "slack-critical"))).(map[string]any)
+	cfg := want["slack_configs"].([]any)[0].(map[string]any)
+	if cfg["title"] != `[kind] {{ .Status | toUpper }}{{ if eq .Status "firing" }} ({{ .Alerts.Firing | len }}){{ end }} - {{ .CommonLabels.alertname }}` ||
+		cfg["send_resolved"] != true || !strings.HasPrefix(cfg["text"].(string), "{{ range .Alerts }} *{{ .Labels.alertname }}*") {
+		t.Fatalf("the owner's receiver was read as %v", cfg)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"no prefix":         func(c map[string]any) { c["title"] = strings.TrimPrefix(c["title"].(string), "[kind] ") },
+		"send_resolved off": func(c map[string]any) { c["send_resolved"] = false },
+		"another text":      func(c map[string]any) { c["text"] = "changed" },
+		"another channel":   func(c map[string]any) { c["channel"] = "#elsewhere" },
+		"a webhook inline":  func(c map[string]any) { c["api_url"] = "x" },
+	} {
+		got := jsonForm(t, want).(map[string]any)
+		mutate(got["slack_configs"].([]any)[0].(map[string]any))
+		if reflect.DeepEqual(got, want) {
+			t.Errorf("%s: the comparison does not see it", name)
+		}
+	}
+}
+
+// alertConfig is the sandbox's Alertmanager configuration, as much of it as the tests read.
+type alertConfig struct {
+	Route struct {
+		Receiver       string   `json:"receiver"`
+		GroupBy        []string `json:"group_by"`
+		RepeatInterval string   `json:"repeat_interval"`
+		Routes         []struct {
+			Receiver string   `json:"receiver"`
+			Matchers []string `json:"matchers"`
+			Continue bool     `json:"continue"`
+		} `json:"routes"`
+	} `json:"route"`
+	Receivers []struct {
+		Name         string           `json:"name"`
+		SlackConfigs []map[string]any `json:"slack_configs"`
+	} `json:"receivers"`
+}
+
+func loadAlertConfig(t *testing.T) alertConfig {
+	t.Helper()
+	raw, err := os.ReadFile(alertDir + "config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg alertConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// TestAlertRouting: every synthetic alert (severity critical, which every preset has) reaches slack-critical-kind, through
+// a route in the base configuration, which the operator adds no namespace matcher to; the route continues, so that the
+// sink, whose route the operator puts first, and any route after it see the alert too; the group and the repeat interval are
+// the owner's; and title_link is not overridden, so Alertmanager's own default, which carries `receiver=<name>`, stands.
+func TestAlertRouting(t *testing.T) {
+	cfg := loadAlertConfig(t)
+	if cfg.Route.Receiver != "null" || !reflect.DeepEqual(cfg.Route.GroupBy, []string{"alertname", "namespace"}) || cfg.Route.RepeatInterval != "4h" {
+		t.Errorf("the root route is %+v; want receiver null, group_by [alertname namespace], repeat_interval 4h as the owner's", cfg.Route)
+	}
+	if len(cfg.Route.Routes) != 1 {
+		t.Fatalf("routes %+v; want the one for slack-critical-kind", cfg.Route.Routes)
+	}
+	r := cfg.Route.Routes[0]
+	if r.Receiver != "slack-critical-kind" || !reflect.DeepEqual(r.Matchers, []string{`severity="critical"`}) || !r.Continue {
+		t.Errorf("the route is %+v; want slack-critical-kind for severity=\"critical\", with continue", r)
+	}
+	for _, rc := range cfg.Receivers {
+		for _, sc := range rc.SlackConfigs {
+			if _, ok := sc["title_link"]; ok {
+				t.Errorf("receiver %s sets title_link: the default, which carries the receiver's name, must stand", rc.Name)
+			}
+		}
+	}
+	var overlay struct {
+		Spec struct {
+			ConfigSecret string   `json:"configSecret"`
+			Secrets      []string `json:"secrets"`
+			ExternalURL  string   `json:"externalUrl"`
+		} `json:"spec"`
+	}
+	load(t, alertDir+"overlay.yaml", "Alertmanager", &overlay)
+	if overlay.Spec.ExternalURL != "http://alertmanager.kind.local" {
+		t.Errorf("externalUrl %q; want one that is plainly kind's, http://alertmanager.kind.local", overlay.Spec.ExternalURL)
+	}
+	if overlay.Spec.ConfigSecret != "alertmanager-kind-config" || !reflect.DeepEqual(overlay.Spec.Secrets, []string{"alertmanager-slack-secret"}) {
+		t.Errorf("the overlay names configSecret %q and secrets %v", overlay.Spec.ConfigSecret, overlay.Spec.Secrets)
+	}
+}
+
+// TestAlertSourceHoldsNoWebhookURL: no file of the alert source, and no other manifest of the sandbox, holds a webhook URL or
+// declares a Secret; the receiver reads the URL by api_url_file from the path where the overlay's `secrets` mount it; and up.sh
+// makes both Secrets through apply_secret (stdin, server-side apply, never argv), under the names the overlay and the file say.
+func TestAlertSourceHoldsNoWebhookURL(t *testing.T) {
+	files, err := filepath.Glob(alertDir + "*")
+	if err != nil || len(files) < 3 {
+		t.Fatalf("files %v, %v", files, err)
+	}
+	more, _ := filepath.Glob(sandboxDir + "*.yaml")
+	for _, file := range append(files, more...) {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "hooks.slack.com/services") && !strings.HasSuffix(file, "webhook.sh") {
+			t.Errorf("%s holds an incoming-webhook URL", file)
+		}
+		if strings.HasSuffix(file, ".yaml") && !strings.HasSuffix(file, "slack-app-manifest.yaml") {
+			for _, doc := range objects(t, file) {
+				if doc["kind"] == "Secret" {
+					t.Errorf("%s declares a Secret: they are made by up.sh through apply_secret", file)
+				}
+			}
+		}
+	}
+	cfg := loadAlertConfig(t)
+	var found int
+	for _, rc := range cfg.Receivers {
+		for _, sc := range rc.SlackConfigs {
+			found++
+			if _, inline := sc["api_url"]; inline || sc["api_url_file"] != "/etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url" {
+				t.Errorf("receiver %s: api_url_file %v, api_url %v; want the mounted Secret's key and no inline URL", rc.Name, sc["api_url_file"], sc["api_url"])
+			}
+		}
+	}
+	if found == 0 {
+		t.Error("no slack_configs")
+	}
+	up, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"apply_secret monitoring alertmanager-slack-secret webhook-url=ALERTMANAGER_WEBHOOK_URL\n",
+		"apply_secret monitoring alertmanager-kind-config alertmanager.yaml=ALERTMANAGER_CONFIG\n",
+		`webhook_url_load "${ALERTMANAGER_WEBHOOK_FILE}"`,
+		`apply --server-side --force-conflicts --field-manager=courier-sandbox -f "${SBX}/alertmanager/overlay.yaml"`,
+	} {
+		if !strings.Contains(string(up), want) {
+			t.Errorf("up.sh lacks %q", want)
+		}
+	}
+}
+
+// TestWebhookVariableIsOnlyEverNamedForApplySecret: the variable that holds the URL is never expanded in up.sh and down.sh, only
+// named in apply_secret's argument; in webhook.sh it is only assigned and unset.
+func TestWebhookVariableIsOnlyEverNamedForApplySecret(t *testing.T) {
+	for _, name := range []string{"up.sh", "down.sh", "alert.sh", "webhook.sh"} {
+		raw, err := os.ReadFile(sandboxDir + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(raw)
+		if regexp.MustCompile(`\$\{?!?ALERTMANAGER_WEBHOOK_URL\b`).MatchString(src) {
+			t.Errorf("%s expands the URL's variable", name)
+		}
+		for i, line := range strings.Split(src, "\n") {
+			trim := strings.TrimSpace(line)
+			if strings.HasPrefix(trim, "#") || !strings.Contains(trim, "ALERTMANAGER_WEBHOOK_URL") {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(trim, "apply_secret ") && strings.HasSuffix(trim, "=ALERTMANAGER_WEBHOOK_URL"):
+			case name == "webhook.sh" && (strings.HasPrefix(trim, "unset ALERTMANAGER_WEBHOOK_URL") || trim == "ALERTMANAGER_WEBHOOK_URL=${value}"):
+			default:
+				t.Errorf("%s:%d: %q names the URL's variable outside apply_secret's argument", name, i+1, trim)
+			}
+		}
+	}
+}
+
+// webhookCheck runs webhook_url_load on path, with env.sh sourced as up.sh has it, and returns the exit status and outputs.
+// The script goes on to show what the load left in the shell: the URL is in its variable, which a child does not inherit.
+func webhookCheck(t *testing.T, path string, env ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	script := `set -eu
+. "$1"
+. "$2"
+webhook_url_load "$3"
+[ "${ALERTMANAGER_WEBHOOK_URL}" = "$4" ] || { echo "variable not set" >&2; exit 9; }
+if env | grep -q -e LEAKCHECK -e FROMENV; then echo "exported" >&2; exit 8; fi
+echo loaded`
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", sandboxDir+"env.sh", sandboxDir+"webhook.sh", path, fakeWebhook)
+	cmd.Env = append(os.Environ(), env...)
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		code = exit.ExitCode()
+	default:
+		t.Fatal(err)
+	}
+	return code, out.String(), errOut.String()
+}
+
+// webhookFile writes content to a new file of the given mode in a fresh temp directory and returns its path.
+func webhookFile(t *testing.T, mode os.FileMode, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "alertmanager-webhook-url")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestWebhookFileAcceptsAGoodFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"a line":                  fakeWebhook + "\n",
+		"no final newline":        fakeWebhook,
+		"windows line ending":     fakeWebhook + "\r\n",
+		"trailing blanks":         fakeWebhook + "  \n",
+		"blank lines around it":   "\n" + fakeWebhook + "\n\n",
+		"the owner's usual shape": "https://hooks.slack.com/services/T0LEAKCHECK/B0LEAKCHECK/abcDEF123\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := strings.TrimSpace(content)
+			path := webhookFile(t, 0o600, content)
+			script := `set -eu
+. "$1"
+. "$2"
+webhook_url_load "$3"
+[ "${ALERTMANAGER_WEBHOOK_URL}" = "$4" ]`
+			out, err := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", sandboxDir+"env.sh", sandboxDir+"webhook.sh", path, want).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			if leak := strings.Contains(string(out), leakMarker); leak {
+				t.Errorf("the load printed the URL: %q", out)
+			}
+		})
+	}
+	// The URL is in the shell's variable and in no child's environment, and one that was in the environment before is not
+	// taken for the file's (and is gone from the children's, too).
+	for _, env := range [][]string{nil, {"ALERTMANAGER_WEBHOOK_URL=https://hooks.slack.com/services/TFROMENV/BFROMENV/fromenv"}} {
+		if code, stdout, stderr := webhookCheck(t, webhookFile(t, 0o600, fakeWebhook+"\n"), env...); code != 0 || stdout != "loaded\n" {
+			t.Errorf("env %v: exit %d, stdout %q, stderr %q; want it loaded, the file's URL in its variable and in no child's environment", env, code, stdout, stderr)
+		}
+	}
+}
+
+// TestWebhookFileRefuses: each way the file can be wrong is refused with a non-zero status and a message that names the file
+// and never holds any of the file's content.
+func TestWebhookFileRefuses(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(webhookFile(t, 0o600, fakeWebhook+"\n"), link); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		path string
+		want string
+	}{
+		"missing":                 {filepath.Join(dir, "nowhere"), "does not exist"},
+		"a symbolic link":         {link, "is a symbolic link"},
+		"a directory":             {dir, "is not a regular file"},
+		"readable by others":      {webhookFile(t, 0o644, fakeWebhook+"\n"), "has mode 644"},
+		"readable by the group":   {webhookFile(t, 0o640, fakeWebhook+"\n"), "has mode 640"},
+		"writable by the group":   {webhookFile(t, 0o620, fakeWebhook+"\n"), "has mode 620"},
+		"empty":                   {webhookFile(t, 0o600, ""), "is empty"},
+		"blank":                   {webhookFile(t, 0o600, "\n  \n"), "is empty"},
+		"two lines":               {webhookFile(t, 0o600, fakeWebhook+"\n"+fakeWebhook+"\n"), "more than one line"},
+		"a comment first":         {webhookFile(t, 0o600, "# the webhook\n"+fakeWebhook+"\n"), "more than one line"},
+		"http, not https":         {webhookFile(t, 0o600, strings.Replace(fakeWebhook, "https", "http", 1)+"\n"), "does not hold a Slack incoming-webhook URL"},
+		"another host":            {webhookFile(t, 0o600, strings.Replace(fakeWebhook, "hooks.slack.com", "hooks.example.com", 1)+"\n"), "does not hold a Slack incoming-webhook URL"},
+		"a host that ends in it":  {webhookFile(t, 0o600, strings.Replace(fakeWebhook, "hooks.slack.com", "hooks.slack.com.evil.test", 1)+"\n"), "does not hold a Slack incoming-webhook URL"},
+		"a user in front of host": {webhookFile(t, 0o600, strings.Replace(fakeWebhook, "hooks.slack.com", "evil.test@hooks.slack.com", 1)+"\n"), "does not hold a Slack incoming-webhook URL"},
+		"a bot token":             {webhookFile(t, 0o600, "xoxb-LEAKCHECK-0001-0002\n"), "does not hold a Slack incoming-webhook URL"},
+		"a missing secret part":   {webhookFile(t, 0o600, "https://hooks.slack.com/services/T0LEAKCHECK/B0LEAKCHECK/\n"), "does not hold a Slack incoming-webhook URL"},
+		"lower-case ids":          {webhookFile(t, 0o600, "https://hooks.slack.com/services/t0leakcheck/b0leakcheck/LEAKCHECKwebhook0007\n"), "does not hold a Slack incoming-webhook URL"},
+		"a query":                 {webhookFile(t, 0o600, fakeWebhook+"?x=1\n"), "does not hold a Slack incoming-webhook URL"},
+		"a path after":            {webhookFile(t, 0o600, fakeWebhook+"/more\n"), "does not hold a Slack incoming-webhook URL"},
+		"a space inside":          {webhookFile(t, 0o600, strings.Replace(fakeWebhook, "B0", "B 0", 1)+"\n"), "does not hold a Slack incoming-webhook URL"},
+		"quotes round it":         {webhookFile(t, 0o600, `"`+fakeWebhook+`"`+"\n"), "does not hold a Slack incoming-webhook URL"},
+		"a KEY= in front":         {webhookFile(t, 0o600, "WEBHOOK="+fakeWebhook+"\n"), "does not hold a Slack incoming-webhook URL"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, stdout, stderr := webhookCheck(t, tc.path)
+			if code != 1 {
+				t.Fatalf("exit %d, stdout %q, stderr %q; want it refused with 1", code, stdout, stderr)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("stderr %q does not say %q", stderr, tc.want)
+			}
+			if !strings.Contains(stderr, "error: "+tc.path+":") {
+				t.Errorf("stderr %q does not name the file %s", stderr, tc.path)
+			}
+			for what, out := range map[string]string{"stdout": stdout, "stderr": stderr} {
+				if strings.Contains(strings.ToLower(out), strings.ToLower(leakMarker)) {
+					t.Errorf("%s holds part of the file: %q", what, out)
+				}
+			}
+		})
+	}
+}
+
+// TestUpChecksTheWebhookFileBeforeTouchingAnything: with a good secrets file and a webhook file that is refused, up.sh stops
+// before it asks Docker, kind, kubectl or helm anything, and the message names the webhook file and no content.
+func TestUpChecksTheWebhookFileBeforeTouchingAnything(t *testing.T) {
+	bin := t.TempDir()
+	mark := filepath.Join(bin, "ran")
+	for _, tool := range []string{"docker", "kind", "kubectl", "helm", "jq"} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\necho "+tool+" >> "+mark+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, webhook := range map[string]string{
+		"missing":             filepath.Join(t.TempDir(), "nowhere"),
+		"world-readable":      webhookFile(t, 0o644, fakeWebhook+"\n"),
+		"not a webhook's URL": webhookFile(t, 0o600, "LEAKCHECK-not-a-url\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "bash", sandboxDir+"up.sh")
+			cmd.Env = append(os.Environ(), "SANDBOX_ENV="+envFile(t, 0o600, goodEnv()...), "ALERTMANAGER_WEBHOOK_FILE="+webhook,
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("up.sh accepted the webhook file:\n%s", out)
+			}
+			if !strings.Contains(string(out), "error: "+webhook+":") {
+				t.Errorf("up.sh said %q; want the webhook file named", out)
+			}
+			noLeak(t, "up.sh output", string(out))
+			if strings.Contains(string(out), leakMarker) {
+				t.Errorf("up.sh printed part of the webhook file: %q", out)
+			}
+			if _, err := os.Stat(mark); err == nil {
+				t.Error("up.sh ran a tool before the webhook file was accepted")
+			}
+		})
+	}
+}
+
+// preset is one entry of alertmanager/alerts.json.
+type preset struct {
+	App         string            `json:"app"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+}
+
+func loadPresets(t *testing.T) map[string]preset {
+	t.Helper()
+	raw, err := os.ReadFile(alertDir + "alerts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var presets map[string]preset
+	if err := json.Unmarshal(raw, &presets); err != nil {
+		t.Fatal(err)
+	}
+	return presets
+}
+
+// TestAlertPresets: there is a preset for each seeded fault that has a pod or a Service of its own to name, and every one
+// carries the labels and annotations a kube-prometheus rule would, and the ones the route and the template read.
+func TestAlertPresets(t *testing.T) {
+	presets := loadPresets(t)
+	// The faults of faults.yaml: each preset names the app (or Service) its fault is seeded in.
+	want := map[string]string{
+		"KubePodCrashLooping":    "checkout",
+		"KubePodNotReady":        "search",
+		"KubeContainerWaiting":   "catalog",
+		"KubeContainerOOMKilled": "recommender",
+		"TargetDown":             "inventory",
+	}
+	if len(presets) != len(want) {
+		t.Errorf("%d presets; want %d", len(presets), len(want))
+	}
+	faults, err := os.ReadFile(sandboxDir + "faults.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, app := range want {
+		p, ok := presets[name]
+		if !ok {
+			t.Errorf("no preset %s", name)
+			continue
+		}
+		if p.Labels["alertname"] != name || p.Labels["severity"] != "critical" || p.Labels["namespace"] != "shop" {
+			t.Errorf("%s: labels %v; want its alertname, severity=critical and namespace=shop (the route matches on the severity)", name, p.Labels)
+		}
+		if p.Annotations["summary"] == "" || p.Annotations["description"] == "" {
+			t.Errorf("%s: annotations %v; want a summary and a description, which the receiver's text prints", name, p.Annotations)
+		}
+		// What the alert is about: a pod (named at fire time from the app's live pod) or, for a target, the job and Service.
+		switch {
+		case p.Labels["pod"] != "":
+			if p.Labels["pod"] != "__POD__" || p.App != app || !strings.Contains(p.Annotations["description"], "__POD__") {
+				t.Errorf("%s: pod %q, app %q; want the placeholder __POD__ and app %s", name, p.Labels["pod"], p.App, app)
+			}
+		case p.Labels["service"] != "" && p.Labels["job"] != "":
+			if p.Labels["service"] != app || p.App != "" {
+				t.Errorf("%s: service %q, app %q; want the Service %s and no app", name, p.Labels["service"], p.App, app)
+			}
+		default:
+			t.Errorf("%s: labels %v name neither a pod nor a job and Service", name, p.Labels)
+		}
+		if !strings.Contains(string(faults), "metadata: {name: "+app+", namespace: shop") {
+			t.Errorf("%s: %s is not a Deployment of faults.yaml", name, app)
+		}
+		for k, v := range p.Labels {
+			if v == "" || strings.Contains(strings.ReplaceAll(v, "__POD__", ""), "__") {
+				t.Errorf("%s: label %s is %q", name, k, v)
+			}
+		}
+		if len(p.Labels["alertname"]) == 0 || regexp.MustCompile(`[^A-Za-z0-9]`).MatchString(p.Labels["alertname"]) {
+			t.Errorf("%s: an alertname that is not a plain name", name)
+		}
+	}
+}
+
+// alertStubs makes a PATH of stand-ins for kubectl and kind and returns it with the directory of their records. The kubectl
+// answers each question alert.sh asks the way a full tier with the sandbox up does, records every command line, and keeps what
+// the probe pod is given on its stdin.
+func alertStubs(t *testing.T, configSecret string) (bin, logs string) {
+	t.Helper()
+	bin, logs = t.TempDir(), t.TempDir()
+	kubectl := `#!/bin/sh
+printf '%s\n' "$*" | tr '\n' ' ' >> ` + logs + `/kubectl.argv
+echo >> ` + logs + `/kubectl.argv
+case "$*" in
+  *"contexts[0].name"*) echo kind-courier-full ;;
+  *"clusters[0].cluster.server"*) echo https://127.0.0.1:6443 ;;
+  *"get alertmanager courier"*) printf %s '` + configSecret + `' ;;
+  *"get pods -l app=checkout"*) echo checkout-7d9f8c6b5-abcde ;;
+  *"get pods -l app=search"*) echo search-5f6b9d-xyz12 ;;
+  *"get pods -l app=catalog"*) echo catalog-6c7d8e-qwert ;;
+  *"get pods -l app=recommender"*) echo recommender-8b9c-mnbvc ;;
+  *" run "*) cat >> ` + logs + `/kubectl.stdin; printf 200 ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(kubectl), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "kind"), []byte("#!/bin/sh\necho 'apiVersion: v1'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return bin, logs
+}
+
+// fireAlert runs alert.sh with the stand-ins and returns its exit status and outputs.
+func fireAlert(t *testing.T, bin string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "bash", append([]string{sandboxDir + "alert.sh"}, args...)...)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		code = exit.ExitCode()
+	default:
+		t.Fatal(err)
+	}
+	return code, out.String(), errOut.String()
+}
+
+// postedAlert is what the probe pod was given for Alertmanager.
+type postedAlert struct {
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	StartsAt    time.Time         `json:"startsAt"`
+	EndsAt      time.Time         `json:"endsAt"`
+}
+
+// TestAlertShFiresEachPreset: each preset is posted to Alertmanager's v2 API from a probe pod in the cluster, as one alert
+// with its labels, the live pod's name in place of the placeholder, a start that is not in the future and an end an hour on,
+// and the script prints the alertname and the state, and nothing else.
+func TestAlertShFiresEachPreset(t *testing.T) {
+	pods := map[string]string{"KubePodCrashLooping": "checkout-7d9f8c6b5-abcde", "KubePodNotReady": "search-5f6b9d-xyz12",
+		"KubeContainerWaiting": "catalog-6c7d8e-qwert", "KubeContainerOOMKilled": "recommender-8b9c-mnbvc", "TargetDown": ""}
+	presets := loadPresets(t)
+	for name, pod := range pods {
+		for _, args := range [][]string{{name}, {name, "firing"}} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				bin, logs := alertStubs(t, "alertmanager-kind-config")
+				before := time.Now().Add(-2 * time.Second)
+				code, stdout, stderr := fireAlert(t, bin, args...)
+				if code != 0 || stdout != "sent: "+name+" firing\n" || stderr != "" {
+					t.Fatalf("exit %d, stdout %q, stderr %q; want 0 and the alertname and the state only", code, stdout, stderr)
+				}
+				var posted []postedAlert
+				if err := json.Unmarshal([]byte(readLog(t, logs, "kubectl.stdin")), &posted); err != nil || len(posted) != 1 {
+					t.Fatalf("the probe pod was given %q: %d alerts, %v; want one", readLog(t, logs, "kubectl.stdin"), len(posted), err)
+				}
+				a := posted[0]
+				wantLabels := map[string]string{}
+				for k, v := range presets[name].Labels {
+					wantLabels[k] = strings.ReplaceAll(v, "__POD__", pod)
+				}
+				if !reflect.DeepEqual(a.Labels, wantLabels) {
+					t.Errorf("labels %v; want %v", a.Labels, wantLabels)
+				}
+				if a.Annotations["summary"] == "" || strings.Contains(a.Annotations["description"], "__POD__") || (pod != "" && !strings.Contains(a.Annotations["description"], pod)) {
+					t.Errorf("annotations %v", a.Annotations)
+				}
+				if a.StartsAt.Before(before) || a.StartsAt.After(time.Now().Add(2*time.Second)) {
+					t.Errorf("startsAt %v is not now", a.StartsAt)
+				}
+				if d := a.EndsAt.Sub(a.StartsAt); d < 59*time.Minute || d > 61*time.Minute {
+					t.Errorf("endsAt %v is %v after startsAt; want an hour, so that a fired alert resolves itself", a.EndsAt, d)
+				}
+			})
+		}
+	}
+}
+
+// TestAlertShResolves: the same alert, with an end in the past, so that Alertmanager resolves it.
+func TestAlertShResolves(t *testing.T) {
+	bin, logs := alertStubs(t, "alertmanager-kind-config")
+	code, stdout, stderr := fireAlert(t, bin, "KubePodCrashLooping", "resolved")
+	if code != 0 || stdout != "sent: KubePodCrashLooping resolved\n" || stderr != "" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	var posted []postedAlert
+	if err := json.Unmarshal([]byte(readLog(t, logs, "kubectl.stdin")), &posted); err != nil || len(posted) != 1 {
+		t.Fatalf("the probe pod was given %q: %v", readLog(t, logs, "kubectl.stdin"), err)
+	}
+	a := posted[0]
+	if !a.EndsAt.Before(time.Now()) || !a.StartsAt.Before(a.EndsAt) {
+		t.Errorf("startsAt %v, endsAt %v; want an end in the past and after the start", a.StartsAt, a.EndsAt)
+	}
+	if a.Labels["pod"] != "checkout-7d9f8c6b5-abcde" || a.Labels["alertname"] != "KubePodCrashLooping" {
+		t.Errorf("labels %v: a resolve must carry the labels of the firing alert", a.Labels)
+	}
+}
+
+// TestAlertShNamesTheContextAndTheProbe: every kubectl call names --context kind-courier-full; the probe pod runs the pinned
+// curl image, in namespace monitoring, and reaches Alertmanager's v2 API by its Service name; the body is on the pod's
+// stdin and on no argument list.
+func TestAlertShNamesTheContextAndTheProbe(t *testing.T) {
+	bin, logs := alertStubs(t, "alertmanager-kind-config")
+	if code, _, stderr := fireAlert(t, bin, "TargetDown"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	argv := readLog(t, logs, "kubectl.argv")
+	var runs int
+	for _, line := range strings.Split(strings.TrimSpace(argv), "\n") {
+		if strings.HasPrefix(line, "config view --kubeconfig ") {
+			continue // the check of kind's own server, which names no context by design (lib.sh's assert_context)
+		}
+		if !strings.Contains(line, "--context kind-courier-full") {
+			t.Errorf("kubectl was run without the context: %q", line)
+		}
+		if strings.Contains(line, " run ") {
+			runs++
+			for _, want := range []string{"-n monitoring run ", "--rm", "-i", "--restart=Never", "--image=curlimages/curl:8.11.1@sha256:", "http://alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts", "Content-Type: application/json", "@-"} {
+				if !strings.Contains(line, want) {
+					t.Errorf("the probe pod's command %q lacks %q", line, want)
+				}
+			}
+			if strings.Contains(line, "TargetDown") || strings.Contains(line, "labels") {
+				t.Errorf("the alert is on the argument list: %q", line)
+			}
+		}
+	}
+	if runs != 1 {
+		t.Errorf("%d probe pods; want one", runs)
+	}
+}
+
+// TestAlertShRefuses: what is not a preset, not a state, or not the sandbox's Alertmanager posts nothing and says why.
+func TestAlertShRefuses(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args         []string
+		configSecret string
+		want         string
+		askedCluster bool // whether kubectl may have been run at all
+	}{
+		"no alert":              {nil, "alertmanager-kind-config", "usage: make sandbox-alert ALERT=", false},
+		"an empty alert":        {[]string{""}, "alertmanager-kind-config", "usage: make sandbox-alert ALERT=", false},
+		"an unknown alert":      {[]string{"NodeFilesystemAlmostOutOfSpace"}, "alertmanager-kind-config", "KubePodCrashLooping", false},
+		"a near miss":           {[]string{"kubepodcrashlooping"}, "alertmanager-kind-config", "not a preset", false},
+		"a JSON key's cousin":   {[]string{`KubePodCrashLooping" or true or "`}, "alertmanager-kind-config", "not a preset", false},
+		"an unknown state":      {[]string{"TargetDown", "pending"}, "alertmanager-kind-config", "STATE must be firing or resolved", false},
+		"not the sandbox's one": {[]string{"TargetDown"}, "", "make sandbox-up", true},
+		"the tier's own one":    {[]string{"TargetDown"}, "alertmanager-courier", "make sandbox-up", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bin, logs := alertStubs(t, tc.configSecret)
+			code, stdout, stderr := fireAlert(t, bin, tc.args...)
+			if code != 1 || stdout != "" || !strings.Contains(stderr, tc.want) {
+				t.Errorf("exit %d, stdout %q, stderr %q; want 1, nothing on stdout and %q on stderr", code, stdout, stderr, tc.want)
+			}
+			if readLog(t, logs, "kubectl.stdin") != "" || strings.Contains(readLog(t, logs, "kubectl.argv"), " run ") {
+				t.Error("an alert was posted")
+			}
+			if !tc.askedCluster && readLog(t, logs, "kubectl.argv") != "" {
+				t.Errorf("kubectl was run (%q) before the arguments were accepted", readLog(t, logs, "kubectl.argv"))
+			}
+		})
+	}
+}
+
+// TestAlertShFailsWhenAlertmanagerRefuses: a status other than 200 is a failure that says the status and not the body.
+func TestAlertShFailsWhenAlertmanagerRefuses(t *testing.T) {
+	bin, _ := alertStubs(t, "alertmanager-kind-config")
+	raw, err := os.ReadFile(filepath.Join(bin, "kubectl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(strings.Replace(string(raw), "printf 200", "printf 400", 1)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := fireAlert(t, bin, "TargetDown")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "HTTP 400") {
+		t.Errorf("exit %d, stdout %q, stderr %q; want 1 and the status", code, stdout, stderr)
+	}
+}
+
+// TestDownRemovesTheAlertSource: down.sh takes the three fields off the Alertmanager first, so that it is never left pointing at
+// a Secret that is gone, and then deletes the two Secrets.
+func TestDownRemovesTheAlertSource(t *testing.T) {
+	raw, err := os.ReadFile(sandboxDir + "down.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	patch := strings.Index(s, `patch alertmanager courier --type=merge -p '{"spec":{"configSecret":null,"secrets":null,"externalUrl":null}}'`)
+	del := strings.Index(s, "delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found")
+	guard := strings.Index(s, "get alertmanager courier --ignore-not-found")
+	if guard < 0 || patch < guard || del < patch {
+		t.Errorf("down.sh: the guard at %d, the patch at %d, the delete at %d; want them in that order (the patch is only made when the Alertmanager is there)", guard, patch, del)
+	}
+}
+
+// TestSandboxAlertTarget: the Makefile target, with its help line and in .PHONY, and the README's section.
+func TestSandboxAlertTarget(t *testing.T) {
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^sandbox-alert: .*## \S`).Match(mk) || !regexp.MustCompile(`(?m)^\.PHONY:.*\bsandbox-alert\b`).Match(mk) ||
+		!strings.Contains(string(mk), `hack/kind/sandbox/alert.sh "$(ALERT)" "$(STATE)"`) || !regexp.MustCompile(`(?m)^STATE\s+\?= firing$`).Match(mk) {
+		t.Error("the Makefile has no complete sandbox-alert target (help line, .PHONY, STATE defaulting to firing, the script with ALERT and STATE)")
+	}
+	if info, err := os.Stat(sandboxDir + "alert.sh"); err != nil || info.Mode()&0o111 != 0o111 {
+		t.Errorf("alert.sh is not executable (%v, %v), and make runs it directly", info, err)
+	}
+	readme, err := os.ReadFile(sandboxDir + "README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := string(readme)
+	i := strings.Index(section, "\n## Alert trial\n")
+	if i < 0 {
+		t.Fatal("the README has no \"Alert trial\" section")
+	}
+	section = section[i+1:]
+	if j := strings.Index(section[3:], "\n## "); j >= 0 {
+		section = section[:j+3]
+	}
+	for _, want := range []string{
+		"real alert channel", "[kind]", "#alerts-critical", "make sandbox-alert ALERT=", "STATE=resolved",
+		"receiver=slack-critical-kind", "make sandbox-up", "api/v2/status", "alertmanager-webhook-url", "chmod 600",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("the Alert trial section does not mention %q", want)
+		}
+	}
+	for name := range loadPresets(t) {
+		if !strings.Contains(section, name) {
+			t.Errorf("the Alert trial section does not list the preset %s", name)
+		}
+	}
+}
+
+// TestSandboxScriptsPassShellcheck: shellcheck is clean on every sandbox script. It skips when shellcheck is not installed.
+func TestSandboxScriptsPassShellcheck(t *testing.T) {
+	path, err := exec.LookPath("shellcheck")
+	if err != nil {
+		t.Skip("shellcheck is not installed")
+	}
+	scripts, err := filepath.Glob(sandboxDir + "*.sh")
+	if err != nil || len(scripts) < 6 {
+		t.Fatalf("scripts %v, %v", scripts, err)
+	}
+	out, err := exec.CommandContext(t.Context(), path, append([]string{"-x"}, scripts...)...).CombinedOutput()
+	if err != nil {
+		t.Errorf("shellcheck:\n%s", out)
+	}
+}

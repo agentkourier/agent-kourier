@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Fire or resolve one synthetic alert in the full tier's Alertmanager: alert.sh ALERT [firing|resolved], or
+# `make sandbox-alert ALERT=<name> [STATE=firing|resolved]`.
+#
+# There is no Prometheus in the tier, so the alert is posted straight to Alertmanager's v2 API, from a probe pod in the cluster,
+# with the labels and annotations a kube-prometheus rule would give it for one of the faults seeded in namespace shop
+# (alertmanager/alerts.json, the presets). With the sandbox up, Alertmanager sends it to the owner's REAL alert channel,
+# tagged [kind], through the receiver slack-critical-kind (alertmanager/config.yaml); hack/kind/sandbox/README.md, Alert trial.
+# ALERT must be a preset: nothing else is ever posted.
+#
+# A firing alert carries an end an hour away, so that one that is forgotten resolves itself; resolved posts the same alert,
+# with the same labels, with an end in the past. Pod names are read from the live pod, so a pod that was replaced between a
+# fire and its resolve makes the resolve a different alert: resolve before the pod is replaced, or let the hour pass.
+# Prints "sent: <alertname> <state>" and nothing else of the alert. Every kubectl call names --context kind-courier-full.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) # hack/kind, which lib.sh's functions expect
+SBX=${HERE}/sandbox
+# shellcheck source-path=SCRIPTDIR source=../lib.sh
+. "${HERE}/lib.sh"
+CTX=kind-${CLUSTER}
+K=(kubectl --context "${CTX}")
+PRESETS=${SBX}/alertmanager/alerts.json
+CONFIG_SECRET=alertmanager-kind-config # the Alertmanager's configSecret when sandbox-up has made it the alert source
+ALERTMANAGER_API=http://alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts
+FIRING_FOR=3600 # seconds a fired alert stays firing without a resolve
+
+command -v jq >/dev/null || die "jq is required"
+alert=${1:-}
+state=${2:-firing}
+[ -n "${alert}" ] || die "usage: make sandbox-alert ALERT=<name> [STATE=firing|resolved]; ALERT is one of: $(jq -r 'keys | join(" ")' "${PRESETS}")"
+jq -e --arg a "${alert}" 'has($a)' "${PRESETS}" >/dev/null || die "'${alert}' is not a preset; ALERT is one of: $(jq -r 'keys | join(" ")' "${PRESETS}")"
+case "${state}" in firing | resolved) ;; *) die "STATE must be firing or resolved" ;; esac
+
+for tool in kubectl kind; do
+  command -v "${tool}" >/dev/null || die "${tool} is required"
+done
+assert_context full
+[ "$("${K[@]}" -n monitoring get alertmanager courier -o 'jsonpath={.spec.configSecret}' 2>/dev/null || true)" = "${CONFIG_SECRET}" ] ||
+  die "the full tier's Alertmanager is not the sandbox's alert source (its configSecret is not ${CONFIG_SECRET}); run: make sandbox-up"
+
+# The pod the alert is about, for the presets that name one: the live pod of the fault's app, which the agent can then look at.
+pod=
+app=$(jq -r --arg a "${alert}" '.[$a].app // empty' "${PRESETS}")
+if [ -n "${app}" ]; then
+  pods=$("${K[@]}" -n shop get pods -l "app=${app}" -o 'jsonpath={.items[?(@.metadata.deletionTimestamp==null)].metadata.name}') ||
+    die "could not list the ${app} pods in namespace shop"
+  pod=${pods%% *}
+  [ -n "${pod}" ] || die "there is no ${app} pod in namespace shop; bring the sandbox up first: make sandbox-up"
+fi
+
+body=$(jq -c --arg a "${alert}" --arg pod "${pod}" --arg state "${state}" --argjson ttl "${FIRING_FOR}" '
+  .[$a] | walk(if type == "string" then gsub("__POD__"; $pod) else . end) as $p
+  | (now | floor) as $now
+  | [{labels: $p.labels, annotations: $p.annotations,
+      startsAt: (if $state == "resolved" then $now - 120 else $now end | todate),
+      endsAt: (if $state == "resolved" then $now - 1 else $now + $ttl end | todate)}]' "${PRESETS}")
+
+# From a pod in the cluster, where Alertmanager is. The body goes on the pod's stdin; the answer is the HTTP status. The post is
+# idempotent (the same labels are the same alert), so a try that came to nothing is made again.
+probe=
+trap '[ -z "${probe}" ] || "${K[@]}" -n monitoring delete pod "${probe}" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+code=
+for _ in 1 2 3; do
+  probe=sandbox-alert-${RANDOM}
+  code=$("${K[@]}" -n monitoring run "${probe}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    curl -s -m 20 -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" --data-binary @- '"${ALERTMANAGER_API}" \
+    <<<"${body}" 2>/dev/null) || code=
+  code=${code: -3}
+  [ -z "${code}" ] || break # an answer, even a refusal, is final; no answer is tried again
+done
+[ "${code}" = 200 ] || die "Alertmanager did not accept the alert (HTTP ${code:-none}); is it running? kubectl --context ${CTX} -n monitoring get pods"
+echo "sent: ${alert} ${state}"

@@ -1,0 +1,77 @@
+{
+  "KubePodCrashLooping": {
+    "app": "checkout",
+    "labels": {
+      "alertname": "KubePodCrashLooping",
+      "severity": "critical",
+      "namespace": "shop",
+      "pod": "__POD__",
+      "container": "checkout",
+      "job": "kube-state-metrics",
+      "reason": "CrashLoopBackOff"
+    },
+    "annotations": {
+      "summary": "Pod is crash looping.",
+      "description": "Pod shop/__POD__ (checkout) is in waiting state (reason: \"CrashLoopBackOff\")."
+    }
+  },
+  "KubePodNotReady": {
+    "app": "search",
+    "labels": {
+      "alertname": "KubePodNotReady",
+      "severity": "critical",
+      "namespace": "shop",
+      "pod": "__POD__",
+      "job": "kube-state-metrics"
+    },
+    "annotations": {
+      "summary": "Pod has been in a non-ready state for more than 15 minutes.",
+      "description": "Pod shop/__POD__ has been in a non-ready state for longer than 15 minutes."
+    }
+  },
+  "KubeContainerWaiting": {
+    "app": "catalog",
+    "labels": {
+      "alertname": "KubeContainerWaiting",
+      "severity": "critical",
+      "namespace": "shop",
+      "pod": "__POD__",
+      "container": "catalog",
+      "job": "kube-state-metrics",
+      "reason": "ImagePullBackOff"
+    },
+    "annotations": {
+      "summary": "Pod container waiting longer than 1 hour",
+      "description": "pod/__POD__ in namespace shop on container catalog has been in waiting state for longer than 1 hour. (reason: \"ImagePullBackOff\")."
+    }
+  },
+  "KubeContainerOOMKilled": {
+    "app": "recommender",
+    "labels": {
+      "alertname": "KubeContainerOOMKilled",
+      "severity": "critical",
+      "namespace": "shop",
+      "pod": "__POD__",
+      "container": "recommender",
+      "job": "kube-state-metrics",
+      "reason": "OOMKilled"
+    },
+    "annotations": {
+      "summary": "Container was OOMKilled.",
+      "description": "Container recommender in pod shop/__POD__ was last terminated with reason OOMKilled and has restarted."
+    }
+  },
+  "TargetDown": {
+    "labels": {
+      "alertname": "TargetDown",
+      "severity": "critical",
+      "namespace": "shop",
+      "job": "inventory",
+      "service": "inventory"
+    },
+    "annotations": {
+      "summary": "One or more targets are unreachable.",
+      "description": "100% of the inventory/inventory targets in shop namespace are down."
+    }
+  }
+}

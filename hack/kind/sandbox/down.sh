@@ -2,7 +2,8 @@
 # Take the sandbox tier away and give the full tier its own courier back (the testhooks image on the fake Slack), so that
 # `make e2e-full` works again: the sandbox courier, its volume, config and Slack Secret; the token refresh; the agent, its
 # model Secret and its tool server; the seeded faults (namespace shop). The full tier's cluster, and its Binding token
-# Secret, stay. Needs no secrets file. Safe to re-run, and to run when the sandbox was never up.
+# Secret, stay, and so does the full tier's Alertmanager, which is taken back off the alert source (alertmanager/): its overlay and the
+# two Secrets go. Needs no secrets file. Safe to re-run, and to run when the sandbox was never up.
 # Every call names --context kind-courier-full.
 set -eEuo pipefail
 
@@ -36,6 +37,20 @@ step "the sandbox courier, its volume, config and Slack Secret, and the token re
 "${K[@]}" -n courier delete pvc/courier-sandbox-data cm/courier-sandbox-config secret/sandbox-slack --ignore-not-found >/dev/null
 "${K[@]}" delete -f "${SBX}/token-refresh.yaml" --ignore-not-found >/dev/null
 "${K[@]}" -n courier delete jobs -l batch.kubernetes.io/cronjob-name=courier-token-refresh --ignore-not-found >/dev/null 2>&1 || true
+
+# The alert source: the three fields of the Alertmanager that up.sh added come off first (the operator rolls it back to the tier's own
+# configuration, whose sink the E2E tests need), so that it is never left naming a Secret that is gone; then the two Secrets go.
+step "the alert source (Alertmanager's receiver and its webhook Secret)"
+if [ -n "$("${K[@]}" -n monitoring get alertmanager courier --ignore-not-found -o name)" ]; then
+  "${K[@]}" -n monitoring patch alertmanager courier --type=merge -p '{"spec":{"configSecret":null,"secrets":null,"externalUrl":null}}' >/dev/null
+  deadline=$((SECONDS + 180))
+  until [[ $("${K[@]}" -n monitoring get pod alertmanager-courier-0 -o 'jsonpath={.spec.containers[*].args}' 2>/dev/null || echo unknown) != *--web.external-url* ]] &&
+    "${K[@]}" -n monitoring wait --for=condition=Ready pod/alertmanager-courier-0 --timeout=5s >/dev/null 2>&1; do
+    [ "${SECONDS}" -lt "${deadline}" ] || die "the full tier's Alertmanager did not come back to its own configuration in 180 s"
+    sleep 3
+  done
+fi
+"${K[@]}" -n monitoring delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found >/dev/null
 
 step "the agent, its model and Secret, and the tool server"
 "${K[@]}" delete -f "${SBX}/agent.yaml" --ignore-not-found >/dev/null

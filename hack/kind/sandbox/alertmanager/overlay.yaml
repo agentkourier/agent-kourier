@@ -1,0 +1,16 @@
+# What `make sandbox-up` adds to the full tier's Alertmanager (fast/alertmanager.yaml makes it), by a server-side apply under
+# its own field manager: only these three fields, so the tier's own are untouched, and `make sandbox-down` removes exactly
+# these. The operator rolls the Alertmanager's pod when they change.
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  name: courier
+  namespace: monitoring
+spec:
+  # The base configuration (config.yaml), made by up.sh from the file there.
+  configSecret: alertmanager-kind-config
+  # Mounted at /etc/alertmanager/secrets/alertmanager-slack-secret/: its key webhook-url is the file api_url_file reads.
+  secrets: [alertmanager-slack-secret]
+  # The Alertmanager's own idea of its address, which it puts in every title_link (`.ExternalURL`), and clearly not a real
+  # one: nobody who sees the link in the channel takes it for production's.
+  externalUrl: http://alertmanager.kind.local

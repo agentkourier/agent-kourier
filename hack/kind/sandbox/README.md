@@ -23,8 +23,9 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
 
 | Target | What it does |
 |---|---|
-| `make sandbox-up` | Checks the secrets file first (before it touches anything). Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
-| `make sandbox-down` | Removes the overlay and restores the full tier's own courier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
+| `make sandbox-up` | Checks the secrets file and the alert webhook file (see "Alert trial") first, before it touches anything. Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
+| `make sandbox-down` | Removes the overlay, takes the Alertmanager off the alert source, and restores the full tier's own courier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
+| `make sandbox-alert ALERT=<name> [STATE=firing\|resolved]` | Fires, or resolves, the alert of one seeded fault in the full tier's Alertmanager, which posts it to the owner's **real alert channel**, tagged `[kind]`. Needs `make sandbox-up` first. See "Alert trial". |
 | `make sandbox-heal` | Restarts the full tier's **egress gateway** (`deploy/atenet-egress`) and waits for it, if its pod is more than 20 hours old or a log holds `CertificateExpired`; otherwise it says `ok` and changes nothing. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the same before it verifies. Changes nothing else; needs no secrets file. |
 
 While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
@@ -32,7 +33,7 @@ While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
 its Service also select, so a test run would drive the sandbox's courier. `kubectl logs deploy/courier` is the tier's (scaled to zero);
 use `deploy/courier-sandbox`.
 
-`make` shows all three in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-courier/sandbox.env`:
+`make` shows all four in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-courier/sandbox.env`:
 `SANDBOX_ENV=/path/to/file make sandbox-up`. `hack/kind/sandbox/check-env.sh [FILE]` checks a file and nothing else.
 
 ## Setup (once)
@@ -192,6 +193,93 @@ The probe text for row 6 (paste it after `quote exactly, one item per line:`):
 `<!channel>`
 ```
 
+## Alert trial
+
+**Warning: this posts to the owner's real alert channel.** `make sandbox-up` makes the full tier's Alertmanager post, through the owner's
+own incoming webhook, to `#alerts-critical`, the channel where production's alerts also arrive. Nothing is posted until
+someone fires an alert (there is no Prometheus in the tier to do it), and everything the tier posts is tagged: the title begins `[kind] `, and the
+link under it says `receiver=slack-critical-kind` where production's says `receiver=slack-critical`. Fire alerts only for a trial, and
+resolve them when it is done.
+
+**What it is.** Alertmanager (`monitoring/courier`, run by prometheus-operator, pod `alertmanager-courier-0`) gets a second receiver,
+`slack-critical-kind`: a copy of the owner's `slack-critical` receiver (`cluster-apps`, `templates/prometheus-operator.yaml`) with the
+`[kind] ` prefix on the title and nothing else changed (same text template, `send_resolved: true`, `group_by [alertname, namespace]`, `repeat_interval 4h`).
+A test compares the two. One thing differs by design, outside the receiver: `group_interval` is 30s, not production's 5m, so that a resolve shows
+in the channel in under a minute and not in up to five. Its `externalUrl` is `http://alertmanager.kind.local`, which no one mistakes for production's, and it is what
+Alertmanager puts in every `title_link`.
+
+The configuration is the Alertmanager's base configuration (`alertmanager/config.yaml`), not an `AlertmanagerConfig` resource, for two reasons: that
+resource cannot say `api_url_file`, which is how production reads its webhook, and the operator adds a `namespace="monitoring"` matcher to a
+resource's routes (unless the Alertmanager says `alertmanagerConfigMatcherStrategy: None`, as the tier's does for its sink), which would turn
+away alerts for namespace `shop`. The route matches `severity="critical"`, as production's does, and continues, so the sink's own route, which the operator puts first, still gets every alert.
+
+**Setup (once).** The webhook URL goes in `~/.config/agent-courier/alertmanager-webhook-url`, on one line, alone:
+
+```
+mkdir -p ~/.config/agent-courier
+$EDITOR ~/.config/agent-courier/alertmanager-webhook-url   # https://hooks.slack.com/services/T.../B.../...
+chmod 600 ~/.config/agent-courier/alertmanager-webhook-url
+```
+
+`make sandbox-up` refuses the file, before it touches anything, if it is missing, a symbolic link, not yours, accessible to the group or others, empty,
+longer than one line, or not matching `^https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+$`. The error names the file and never the value.
+`ALERTMANAGER_WEBHOOK_FILE=/path make sandbox-up` reads another file. The URL goes into the Secret `alertmanager-slack-secret` in `monitoring`
+(on stdin to a server-side apply, like the other Secrets), which the Alertmanager mounts; the configuration reads it with `api_url_file`, as production does. It is in no
+manifest, on no command line and in no output. `make sandbox-down` removes the Secret and the receiver.
+
+**Fire and resolve** an alert, once the sandbox is up (each prints `sent: <alertname> <state>` and nothing else of the alert):
+
+```
+make sandbox-alert ALERT=KubePodCrashLooping                  # fires it (STATE=firing is the default)
+make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved   # the same alert, ended
+```
+
+| `ALERT` | The seeded fault it is about | Labels, besides `severity=critical` and `namespace=shop` |
+|---|---|---|
+| `KubePodCrashLooping` | `checkout`, which crash-loops | `pod` (the live pod's name), `container=checkout` |
+| `KubePodNotReady` | `search`, running and never Ready | `pod` |
+| `KubeContainerWaiting` | `catalog`, ImagePullBackOff | `pod`, `container=catalog`, `reason=ImagePullBackOff` |
+| `KubeContainerOOMKilled` | `recommender`, OOM killed | `pod`, `container=recommender`, `reason=OOMKilled` |
+| `TargetDown` | `inventory`, whose Service has no endpoints | `job=inventory`, `service=inventory` |
+
+Only these five can be fired. The alert is posted to Alertmanager's `/api/v2/alerts` from a probe pod in the cluster, with `summary` and `description`
+annotations like kube-prometheus's and the pod's real name, so what the agent finds with its read-only tools is true. How it plays out:
+- Alertmanager groups it for 30 seconds, then posts `[kind] FIRING (1) - KubePodCrashLooping` to the channel.
+- A fired alert ends by itself after an hour, which posts `[kind] RESOLVED - ...`; `STATE=resolved` ends it at once, and the post follows within
+  30 seconds. Resolve before the pod is replaced: the resolve must carry the firing alert's labels, the pod's name included.
+- Firing an alert that is already firing posts nothing: its next repeat is 4 hours on. To see the alert again, resolve it, wait for the resolved
+  post, and fire it again. A second alert of the same name and namespace joins the group and is posted as an update.
+
+**What courier should do.** The trial trigger is a `botMessage` trigger on the incoming webhook's bot ID (the same bot posts production's alerts, Grafana's and the heartbeat),
+matching only `receiver=slack-critical-kind` in the title link: production's messages (`receiver=slack-critical`), the heartbeat and Grafana's must stay ignored. For a fired alert
+courier starts an investigation in the alert's thread, and `sandbox-sre` answers there from the fault; the same alert again within the cooldown attaches to that thread; the resolved
+post gets a note and starts no turn; people follow up in the thread without a mention. What the message looks like, for the trigger's regexes (the attachment's fields; the title
+and its link are Alertmanager's, the fallback is its default):
+
+```
+title      [kind] FIRING (1) - KubePodCrashLooping    (the state is not at the start: allow the prefix, for example ^(\[kind\] )?(?P<state>FIRING|RESOLVED))
+title_link http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind
+fallback   [FIRING:1] KubePodCrashLooping shop (checkout-... critical) | http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind
+text       *KubePodCrashLooping* - critical  Pod is crash looping.  Pod shop/checkout-... (checkout) is in waiting state (reason: "CrashLoopBackOff").
+```
+
+(Read off Alertmanager v0.34.0, run locally on this configuration against a stand-in webhook, never the real one.) The receiver's name is in the title link, and so in the fallback, which ends with that
+link, and in no other field a trigger can read: match `titleLink` on `receiver=slack-critical-kind`.
+
+**Check Alertmanager's own status:**
+
+```
+CTX=kind-courier-full
+kubectl --context $CTX -n monitoring get alertmanager courier -o jsonpath='{.spec.configSecret} {.spec.externalUrl}{"\n"}'   # alertmanager-kind-config http://alertmanager.kind.local
+kubectl --context $CTX -n monitoring exec alertmanager-courier-0 -c alertmanager -- wget -q -O - http://localhost:9093/api/v2/status | jq -r .config.original   # the receiver and its api_url_file path; never the URL
+kubectl --context $CTX -n monitoring exec alertmanager-courier-0 -c alertmanager -- wget -q -O - http://localhost:9093/api/v2/alerts | jq -c '.[] | {alertname: .labels.alertname, state: .status.state, receivers: [.receivers[].name]}'
+kubectl --context $CTX -n monitoring logs alertmanager-courier-0 -c alertmanager | grep -i -e notify -e slack   # a failed post says why; Alertmanager takes the URL out of its errors
+```
+
+A routed alert lists the receivers `monitoring/sink/sink` and `slack-critical-kind`. If nothing reaches Slack: the alert is not `severity=critical` (only the presets are fired, and they all are), the
+webhook was revoked (Slack answers an error, the log says so; put a new URL in the file and re-run `make sandbox-up`, which rewrites the Secret, and the next post uses it), or the pod has
+not come back after a `make sandbox-up` (`kubectl --context $CTX -n monitoring get pods`).
+
 ## Where to look
 
 ```
@@ -261,7 +349,8 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
 
 ## Taking it away
 
-`make sandbox-down` deletes the sandbox courier, its volume and config, the Slack and model Secrets, the token refresh, the agent, the
+`make sandbox-down` takes the full tier's Alertmanager off the alert source (the receiver and the webhook Secret go, and the operator rolls its pod back
+to the tier's own configuration), and deletes the sandbox courier, its volume and config, the Slack and model Secrets, the token refresh, the agent, the
 tool server release and its binding, and namespace `shop`; then it scales the full tier's own courier back to one and waits for it.
 The full tier's Binding token Secret stays, as it is the tier's. Then `make e2e-full` runs as before. Revoke the tokens in the Slack
 app (Install App, Reinstall or Uninstall) when you are done: the file outside the repository is yours to delete.
