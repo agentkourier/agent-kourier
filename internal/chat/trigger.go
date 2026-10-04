@@ -27,6 +27,9 @@ type TriggerMatch struct {
 	Fields map[string]string
 	// Thread is what the trigger says about threads: how a key maps to one, the cooldown, and what closes it.
 	Thread v1alpha1.TriggerThread
+	// Preset is the trigger's preset, empty if it has none, and PromptTemplate its template after defaulting: what
+	// the start renders the first prompt from.
+	Preset, PromptTemplate string
 	// Received is when the Intake took the message. The thread rules take it for now: the cooldown runs from
 	// it, and it is the time a note names.
 	Received time.Time
@@ -53,6 +56,7 @@ type botTrigger struct {
 	index          int // in the Binding's trigger list
 	botID          string
 	thread         v1alpha1.TriggerThread
+	preset, prompt string
 	match, exclude []fieldRegex
 	extract        []extractRegex
 }
@@ -60,7 +64,7 @@ type botTrigger struct {
 // compileTrigger compiles the regexes of a botMessage trigger, in the order of their field names, so that
 // what is tried first does not depend on the order of a map.
 func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
-	c := botTrigger{index: index, botID: t.From.BotID, thread: t.Thread}
+	c := botTrigger{index: index, botID: t.From.BotID, thread: t.Thread, preset: t.Preset, prompt: t.PromptTemplate}
 	compile := func(entries map[v1alpha1.MessageField]string) ([]fieldRegex, error) {
 		var out []fieldRegex
 		for _, f := range slices.Sorted(maps.Keys(entries)) {

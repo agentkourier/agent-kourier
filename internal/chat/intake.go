@@ -62,9 +62,6 @@ type IntakeConfig struct {
 	// redelivery asks again. A turn that is never asked for again leaves a reservation that a later message of
 	// the key takes over after a minute; until then the key's messages are notes in a thread with no
 	// investigation.
-	//
-	// STUB(CT-4): this is where the start goes onward, and CT-3 starts no session from it. CT-4 renders the
-	// prompt and starts the turn, and replaces this hook, which is for a test to see what started until then.
 	OnStart func(ctx context.Context, m TriggerMatch) error
 	// Now is the time the thread rules take for a bot message, which is when it arrives (time.Now if nil).
 	Now    func() time.Time
@@ -233,7 +230,7 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 		return "trigger_unmatched", nil
 	}
-	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Received: in.now(), Message: m}
+	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Preset: trigger.preset, PromptTemplate: trigger.prompt, Received: in.now(), Message: m}
 	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 	out, err := in.decide(ctx, match)
 	if out.decision != "" {
