@@ -25,6 +25,8 @@ func finishChat(ctx context.Context, op *telemetry.Operation, operation string, 
 			outcome = "channel_gone"
 		case "message_not_in_streaming_state":
 			outcome = "not_streaming"
+		case "invalid_chunks", "streaming_mode_mismatch", "cannot_provide_both_markdown_text_and_chunks":
+			outcome = "mode_refused" // Slack refused the chunks mode: the fallback to markdown_text follows
 		default:
 			outcome = "api_error"
 		}

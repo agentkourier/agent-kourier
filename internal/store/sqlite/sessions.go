@@ -29,7 +29,9 @@ func (s *Store) UpsertSession(ctx context.Context, sess store.Session) (telemetr
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET
 			context_id = excluded.context_id, task_id = excluded.task_id,
-			binding = excluded.binding, last_activity = excluded.last_activity, trace_parent = excluded.trace_parent, trace_state = excluded.trace_state`,
+			binding = excluded.binding, last_activity = excluded.last_activity,
+			trace_parent = CASE WHEN excluded.trace_parent = '' THEN trace_parent ELSE excluded.trace_parent END,
+			trace_state = CASE WHEN excluded.trace_parent = '' THEN trace_state ELSE excluded.trace_state END`,
 		sess.Key.Connection, sess.Key.Channel, sess.Key.Thread, sess.ContextID, sess.TaskID, sess.Binding, ts(sess.LastActivity), sess.TraceParent, sess.TraceState)
 	if err != nil {
 		return fmt.Errorf("upsert session %+v: %w", sess.Key, err)

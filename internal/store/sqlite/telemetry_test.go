@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,23 +57,23 @@ func TestPollingStoreSpansRequireParentAndKeepMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	series := 0
 	for _, f := range families {
-		if f.GetName() != "courier_store_operation_duration_seconds" {
+		if f.GetName() != "courier_operation_duration_seconds" {
 			continue
 		}
-		found = true
-		if len(f.Metric) != 3 {
-			t.Fatalf("store duration series = %d, want 3", len(f.Metric))
-		}
-		for _, series := range f.Metric {
-			if series.Histogram.GetSampleCount() != 3 {
-				t.Fatalf("store duration lost untraced call: %v", series)
+		for _, m := range f.Metric {
+			if !strings.HasPrefix(m.Label[0].GetValue(), "courier.store.") {
+				continue
+			}
+			series++
+			if m.Histogram.GetSampleCount() != 3 {
+				t.Fatalf("store duration lost untraced call: %v", m)
 			}
 		}
 	}
-	if !found {
-		t.Fatal("store duration metrics missing")
+	if series != 3 {
+		t.Fatalf("store duration series = %d, want 3", series)
 	}
 }
 
@@ -182,6 +183,51 @@ func TestTraceContextPersistsAcrossReopenAndDuplicate(t *testing.T) {
 		if c[0] == "" || trace.SpanContextFromContext(restored).TraceID() != traceID {
 			t.Fatalf("lost durable ancestry: %v", c)
 		}
+	}
+}
+
+func TestUpsertSessionWithoutASpanKeepsTheSavedTraceContext(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	obs, err := telemetry.New(prometheus.NewRegistry(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := telemetry.WithObserver(t.Context(), obs)
+	first, op := telemetry.Start(base, "courier.intake")
+	op.Finish(nil)
+	s := openTemp(t)
+	key := store.ConversationKey{Connection: "ns/conn", Channel: "C", Thread: "1.0"}
+	sess := store.Session{Key: key, Binding: "ns/b", LastActivity: t0}
+	if err := s.UpsertSession(first, sess); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.GetSession(t.Context(), key, time.Hour, t0)
+	if err != nil || saved.TraceParent == "" {
+		t.Fatalf("saved = %+v, %v", saved, err)
+	}
+	// A caller with no span (here, no observer at all) must not blank the carrier it did not write.
+	sess.LastActivity = t0.Add(time.Minute)
+	sess.TaskID = "task-2"
+	if err := s.UpsertSession(t.Context(), sess); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.GetSession(t.Context(), key, time.Hour, t0.Add(time.Minute))
+	if err != nil || after.TaskID != "task-2" {
+		t.Fatalf("the rest of the upsert was lost: %+v, %v", after, err)
+	}
+	if after.TraceParent != saved.TraceParent || after.TraceState != saved.TraceState {
+		t.Fatalf("upsert without a span blanked the trace context: %q -> %q", saved.TraceParent, after.TraceParent)
+	}
+	// One with a span still replaces it.
+	second, op := telemetry.Start(base, "courier.intake")
+	op.Finish(nil)
+	if err := s.UpsertSession(second, sess); err != nil {
+		t.Fatal(err)
+	}
+	if after, err = s.GetSession(t.Context(), key, time.Hour, t0.Add(time.Minute)); err != nil || after.TraceParent == saved.TraceParent || after.TraceParent == "" {
+		t.Fatalf("upsert with a span did not replace the trace context: %q, %v", after.TraceParent, err)
 	}
 }
 

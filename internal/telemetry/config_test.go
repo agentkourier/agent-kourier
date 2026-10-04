@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +33,21 @@ func TestLoadConfig(t *testing.T) {
 		{"nan", map[string]string{"OTEL_TRACES_SAMPLER_ARG": "NaN"}, "", true},
 		{"ratio", map[string]string{"OTEL_TRACES_SAMPLER_ARG": "1.1"}, "", true},
 		{"headers", map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "secret-header-no-equals-canary"}, "", true},
+		// The exporter parses both variables of a pair, so a bad one is refused even when the other wins.
+		{"bad base endpoint under a good specific one", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://user:canary@collector", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://specific/traces"}, "", true},
+		{"unparsable base endpoint", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://[canary", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://specific/traces"}, "", true},
+		{"bad specific endpoint under a good base one", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://base", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "ftp://canary/traces"}, "", true},
+		{"bad escape in general headers, specific set", map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer%zzcanary", "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "X-Key=ok"}, "", true},
+		{"bad escape in specific headers", map[string]string{"OTEL_EXPORTER_OTLP_TRACES_HEADERS": "Authorization=Bearer%zzcanary"}, "", true},
+		{"missing equals in general headers, specific set", map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "canary", "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "X-Key=ok"}, "", true},
+		{"header name that is not a token", map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "bad name canary=x"}, "", true},
+		{"http endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer%20fake"}, "", true},
+		{"http trace endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://collector/t", "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "Authorization=x"}, "", true},
+		{"http endpoint with headers, opted in", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "true"}, "http://collector:4318/v1/traces", false},
+		{"http endpoint with headers, opt-in false", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "false"}, "", true},
+		{"opt-in is not a boolean", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "canary"}, "", true},
+		{"http endpoint without headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}, "http://collector:4318/v1/traces", false},
+		{"https endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x"}, "https://collector/v1/traces", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, err := LoadConfig(func(k string) string { return tc.env[k] })
@@ -45,6 +61,21 @@ func TestLoadConfig(t *testing.T) {
 				t.Fatalf("endpoint=%s", c.Endpoint)
 			}
 		})
+	}
+}
+
+func TestLoadConfigHeaders(t *testing.T) {
+	env := map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector", "OTEL_EXPORTER_OTLP_HEADERS": "General=g", "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "Authorization=Bearer%20fake, X-Key = a%2Cb "}
+	c, err := LoadConfig(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Headers) != 2 || c.Headers["Authorization"] != "Bearer fake" || c.Headers["X-Key"] != "a,b" {
+		t.Fatalf("trace headers must win and be decoded: %v", c.Headers)
+	}
+	delete(env, "OTEL_EXPORTER_OTLP_TRACES_HEADERS")
+	if c, err = LoadConfig(func(k string) string { return env[k] }); err != nil || c.Headers["General"] != "g" || len(c.Headers) != 1 {
+		t.Fatalf("general headers = %v, err %v", c.Headers, err)
 	}
 }
 
@@ -69,7 +100,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 	}))
 	defer collector.Close()
 	c := Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "courier-test", Environment: "test", SampleRatio: 1, Headers: map[string]string{"Authorization": "Bearer fake"}}
-	provider, shutdown, err := c.Provider(t.Context(), "test-version")
+	provider, shutdown, err := c.Provider(t.Context(), "test-version", slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +135,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 func TestUnsampledRootsKeepMetricsAndRespectSampledParents(t *testing.T) {
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/x-protobuf") }))
 	defer collector.Close()
-	provider, shutdown, err := (Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "test", SampleRatio: 0}).Provider(t.Context(), "test")
+	provider, shutdown, err := (Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "test", SampleRatio: 0}).Provider(t.Context(), "test", slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

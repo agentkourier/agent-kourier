@@ -65,8 +65,6 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		labels     []string
 	}{
 		{"http_client_request_duration_seconds", "HTTP client duration through response EOF or close.", []string{"http_request_method", "server_address", "http_response_status_code", "error_type"}},
-		{"courier_agent_operation_duration_seconds", "A2A execution and unary operation durations, including failures.", []string{"operation", "outcome"}},
-		{"courier_store_operation_duration_seconds", "Domain store operation latency, including pool wait time.", []string{"operation", "outcome"}},
 		{"courier_slack_ack_duration_seconds", "Envelope receipt to acknowledgement attempt completion.", []string{"outcome"}},
 		{"courier_turn_queue_wait_seconds", "Enqueue to the first execution attempt in this process.", []string{"binding"}},
 		{"courier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
@@ -157,12 +155,6 @@ func (op *Operation) FinishOutcome(err error, outcome string) {
 		op.span.SetAttributes(attribute.String("courier.outcome", outcome))
 		if op.observer != nil {
 			op.observer.duration.WithLabelValues(op.name, outcome).Observe(time.Since(op.started).Seconds())
-			switch {
-			case strings.HasPrefix(op.name, "courier.agent."):
-				op.observer.histograms["courier_agent_operation_duration_seconds"].WithLabelValues(strings.TrimPrefix(op.name, "courier.agent."), outcome).Observe(time.Since(op.started).Seconds())
-			case strings.HasPrefix(op.name, "courier.store."):
-				op.observer.histograms["courier_store_operation_duration_seconds"].WithLabelValues(strings.TrimPrefix(op.name, "courier.store."), outcome).Observe(time.Since(op.started).Seconds())
-			}
 			if op.httpMethod != "" {
 				errorType := ""
 				if err != nil {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 )
 
 func TestAuthRequiredTaskTelemetry(t *testing.T) {
@@ -53,7 +54,7 @@ func TestAuthRequiredTaskTelemetry(t *testing.T) {
 			}
 			found := false
 			for _, f := range families {
-				if f.GetName() != "courier_agent_operation_duration_seconds" {
+				if f.GetName() != "courier_operation_duration_seconds" {
 					continue
 				}
 				found = true
@@ -134,5 +135,36 @@ func TestBackendReceivesTurnTraceWithoutPayloadTelemetry(t *testing.T) {
 	}
 	if !firstText {
 		t.Fatal("first text metric missing")
+	}
+}
+
+// TestObservedEventsNeverExportTheirContent feeds the handler every kind of event, with a canary
+// in each piece of content, one by one: a handler that records any chunk, call argument,
+// response or final message leaks it, even when no test looks for the whole text joined up.
+func TestObservedEventsNeverExportTheirContent(t *testing.T) {
+	h := telemetrytest.New(t)
+	ctx, op := telemetry.Start(h.Ctx, "courier.agent.send")
+	var final a2a.TaskState
+	var seen []Event
+	handler := observeHandler(ctx, "send", func(ev Event) { seen = append(seen, ev) }, &final)
+	answer := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("final-canary"))
+	events := []Event{
+		StateEvent{TaskID: "task-1", ContextID: "ctx-1", State: a2a.TaskStateWorking},
+		TextEvent{ArtifactID: "a1", Text: "chunk-canary-1"},
+		TextEvent{ArtifactID: "a1", Text: "chunk-canary-1 chunk-canary-2"},
+		ToolCallEvent{ArtifactID: "a1", CallID: "c1", Name: "search", Args: map[string]any{"q": "args-canary"}},
+		ToolResultEvent{ArtifactID: "a1", CallID: "c1", Name: "search", Response: map[string]any{"r": "response-canary"}},
+		FinalEvent{Task: &a2a.Task{ID: "task-1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateFailed, Message: answer}}},
+	}
+	for _, ev := range events {
+		handler(ev)
+	}
+	op.Finish(nil)
+	if len(seen) != len(events) || final != a2a.TaskStateFailed {
+		t.Fatalf("the wrapped handler saw %d of %d events, final state %q", len(seen), len(events), final)
+	}
+	h.RequireNone(t, "chunk-canary-1", "chunk-canary-2", "args-canary", "response-canary", "final-canary")
+	if got := h.Span(t, "courier.agent.send"); got.Status.Description != "task_failed" {
+		t.Fatalf("a failed task's status = %q; the test must also see the span it checks", got.Status.Description)
 	}
 }

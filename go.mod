@@ -6,6 +6,7 @@ tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.6.0
+	github.com/go-logr/logr v1.4.4
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/prometheus/client_golang v1.24.1
 	github.com/slack-go/slack v0.29.0
@@ -97,7 +98,6 @@ require (
 	github.com/fzipp/gocyclo v0.6.0 // indirect
 	github.com/ghostiam/protogetter v1.0.1 // indirect
 	github.com/go-critic/go-critic v0.15.0 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect

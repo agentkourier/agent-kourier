@@ -38,7 +38,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	provider := cfg.TracerProvider
 	if provider == nil {
 		var shutdown func(context.Context) error
-		provider, shutdown, err = cfg.Telemetry.Provider(ctx, cfg.ServiceVersion)
+		// Before the exporter exists: it reads and parses its own environment variables as it is built.
+		telemetry.InstallDiagnostics(log)
+		provider, shutdown, err = cfg.Telemetry.Provider(ctx, cfg.ServiceVersion, log)
 		if err != nil {
 			return fmt.Errorf("telemetry: %w", err)
 		}
