@@ -100,15 +100,21 @@ type inbound struct {
 }
 
 func (in inbound) Message(ctx context.Context, m Message) error {
+	return in.sink.Message(ctx, inboundOf(in.p.conn, m))
+}
+
+// inboundOf is m as the neutral model has it, on the connection conn ("namespace/name"). The live path and the
+// history (Client.History) both make an Inbound this way.
+func inboundOf(conn string, m Message) chat.Inbound {
 	msg := chat.Inbound{
-		At: in.p.ref(m.Channel, m.ThreadTS, m.TS), User: m.User, Text: m.Text,
-		Mentioned: m.Mentioned, Direct: m.ChannelType == "im",
+		At:   chat.Ref{Platform: PlatformName, Conn: conn, Channel: m.Channel, Thread: m.ThreadTS, ID: m.TS},
+		User: m.User, Text: m.Text, Mentioned: m.Mentioned, Direct: m.ChannelType == "im",
 	}
 	if m.Bot.ID != "" {
 		msg.Bot = &chat.BotMessage{BotID: m.Bot.ID, Title: m.Bot.Title, TitleLink: m.Bot.TitleLink, Fallback: m.Bot.Fallback,
 			Footer: m.Bot.Footer, AttachmentText: m.Bot.Text}
 	}
-	return in.sink.Message(ctx, msg)
+	return msg
 }
 
 // AcceptsBot is BotFilter: the neutral sink's answer, and no if it gives none (chat.BotFilter), so that a sink that

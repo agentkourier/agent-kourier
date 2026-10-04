@@ -100,17 +100,42 @@ func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
 // text, which may be empty if the group took part in the match; a group that took no part (an optional one) is
 // a miss, like a regex that does not match, so that no message gets an empty key by default.
 func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
+	fields, why := t.check(m)
+	return fields, why.kind == missNone
+}
+
+// missKind is the step of a trigger at which a message was turned away.
+type missKind int
+
+const (
+	missNone    missKind = iota // the trigger took the message
+	missBot                     // the message is not from the trigger's bot
+	missMatch                   // a match regex does not match
+	missExclude                 // an exclude regex matches
+	missExtract                 // an extract finds no group
+)
+
+// miss is why a trigger did not take a message: the step, and the field (match, exclude) or the entry's name
+// (extract) at which it failed.
+type miss struct {
+	kind   missKind
+	detail string
+}
+
+// check is evaluate with the reason for a miss, which the dry run shows (Replay). The steps run here and
+// nowhere else, so that what the dry run reports is what the intake does.
+func (t *botTrigger) check(m Inbound) (map[string]string, miss) {
 	if m.Bot == nil || m.Bot.BotID != t.botID {
-		return nil, false
+		return nil, miss{kind: missBot}
 	}
 	for _, f := range t.match {
 		if !f.re.MatchString(m.Field(f.field)) {
-			return nil, false
+			return nil, miss{missMatch, string(f.field)}
 		}
 	}
 	for _, f := range t.exclude {
 		if f.re.MatchString(m.Field(f.field)) {
-			return nil, false
+			return nil, miss{missExclude, string(f.field)}
 		}
 	}
 	fields := make(map[string]string, len(t.extract))
@@ -120,11 +145,11 @@ func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
 		// No match, or a match in which the entry's group took no part (an optional group): both are a miss.
 		// A group that took part and matched empty text is a match, with an empty value.
 		if loc == nil || loc[2*e.group] < 0 {
-			return nil, false
+			return nil, miss{missExtract, e.name}
 		}
 		fields[e.name] = text[loc[2*e.group]:loc[2*e.group+1]]
 	}
-	return fields, true
+	return fields, miss{}
 }
 
 // triggerTable is the botMessage triggers of one Binding, compiled, in the order of its list.

@@ -1,0 +1,25 @@
+# A dry-run Binding for production: the owner's alert channel, replayed through the trigger that production would run.
+# Same as trial.yaml, with the receiver anchored at slack-critical: it takes production's alerts and not the kind ones.
+# See trial.yaml for what loads it and why the $ matters.
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: production, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: agents}
+    namespace: kagent
+    name: sandbox-sre
+  identity:
+    userId: courier-sandbox
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: sandbox-slack}
+    channel: C0EXAMPLE01 # #alerts-critical
+    output: live
+    triggers:
+      - type: mention
+      - type: botMessage
+        from: {botId: B0EXAMPLE01} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical$'}
+        exclude: {title: '^Prometheus heartbeat$'}

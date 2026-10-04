@@ -1,6 +1,8 @@
 // Command courier is the agent-courier broker. See spec.md for the design.
 //
-// It is configured by environment variables, which the Deployment sets, and takes one flag, --version:
+// It is configured by environment variables, which the Deployment sets, and takes one flag, --version, and one
+// subcommand, dry-run (dryrun.go), which replays a channel's history through a Binding's chat triggers and
+// reads Slack with a bot token from a file or SLACK_BOT_TOKEN:
 //
 //	COURIER_CONFIG_DIR     the resource files (default /etc/courier)
 //	COURIER_DB_PATH        the SQLite file, on the volume (default /data/courier.db)
@@ -109,6 +111,9 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 
 // run executes the CLI and returns the process exit code.
 func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string) string) int {
+	if len(args) > 0 && args[0] == "dry-run" {
+		return dryRunCommand(args[1:], stdout, stderr, getenv)
+	}
 	fs := flag.NewFlagSet("courier", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print the version and exit")

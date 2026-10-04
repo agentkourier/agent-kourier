@@ -1,0 +1,29 @@
+# A dry-run Binding for the alert trial: the owner's alert channel, replayed through the trial trigger.
+# `courier dry-run` (hack/kind/sandbox/README.md, "Tune triggers with a dry run") loads it with the real loader, so
+# the defaults and the alertmanager preset apply as they do in production. Nothing here is applied to a cluster, and
+# the references (backend, connection, Secret) are never resolved: only the channel and the triggers are used.
+#
+# The trial narrows the preset to the kind receiver. The $ anchors it: without it, receiver=slack-critical would
+# also match receiver=slack-critical-kind.
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: trial, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: agents}
+    namespace: kagent
+    name: sandbox-sre
+  identity:
+    userId: courier-sandbox
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: sandbox-slack}
+    channel: C0EXAMPLE01 # #alerts-critical
+    output: live
+    triggers:
+      - type: mention
+      - type: botMessage
+        from: {botId: B0EXAMPLE01} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}
+        exclude: {title: '^Prometheus heartbeat$'}

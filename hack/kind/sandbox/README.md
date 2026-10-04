@@ -283,6 +283,74 @@ A routed alert lists the receivers `monitoring/sink/sink` and `slack-critical-ki
 webhook was revoked (Slack answers an error, the log says so; put a new URL in the file and re-run `make sandbox-up`, which rewrites the Secret, and the next post uses it), or the pod has
 not come back after a `make sandbox-up` (`kubectl --context $CTX -n monitoring get pods`).
 
+## Tune triggers with a dry run
+
+`courier dry-run` replays the history of a Binding's channel through the Binding's chat triggers and prints what each message would become: the
+outcome the intake would give it, the trigger, and what the trigger extracted. Use it to tune `match`, `exclude` and `extract` against real history
+before going live. It **only reads** Slack (`conversations.history`): it posts nothing, starts no session, writes nothing, and needs no cluster.
+
+**What it runs.** It loads the config directory with the same loader as the broker, so the defaults, the `alertmanager` preset and the validation apply as
+in production. It reads the channel with the bot token, decodes each message with the code that decodes a live event (the first attachment is flattened into
+`title`, `titleLink`, `fallback`, `footer` and `attachmentText`), and runs the intake's own matcher over it. The two Bindings below are in
+`hack/kind/sandbox/dryrun/`; they set the channel to `#alerts-critical` (`C0EXAMPLE01`) and the bot to the webhook's (`B0EXAMPLE01`), and differ in one line.
+
+**The token** is read from `--token-file`, else from `SLACK_BOT_TOKEN`; it is never an argument and never printed. The file holds the token alone or `SLACK_BOT_TOKEN=...`
+among other lines, so the sandbox's own secrets file works as it is. It is refused unless it is a regular file, not a link, that the group and others cannot read (`chmod 600`).
+The bot needs `channels:history` (`groups:history` for a private channel) and must be a member of the channel; the manifest has both scopes.
+
+**Run it, twice**, from the repo root, against the real channel. First with the trial overrides, which match only the kind receiver:
+
+```
+go run ./cmd/courier dry-run --config hack/kind/sandbox/dryrun --binding courier/trial \
+  --token-file ~/.config/agent-courier/sandbox.env
+```
+
+Then with production's anchoring, `receiver=slack-critical$`, which takes production's Alertmanager alerts and not the `[kind]` ones:
+
+```
+go run ./cmd/courier dry-run --config hack/kind/sandbox/dryrun --binding courier/production \
+  --token-file ~/.config/agent-courier/sandbox.env
+```
+
+The two Bindings differ only in `match: {titleLink: ...}`: `receiver=slack-critical-kind$` in `trial.yaml` and `receiver=slack-critical$` in `production.yaml`. Copy one and edit its
+`match`, `exclude` and `extract` to try a change; the preset's entries stay unless the file sets the same field. Options: `--channel C...` reads another channel, `--since 72h` only the newer
+messages, `--limit 50` only the newest 50 of what was read (reading is not cut short, so use `--since` to read less), and `--json` prints one JSON report for `jq`.
+
+**A line per message, oldest first:**
+
+```
+TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME            KEY                       TITLE
+1791104398.621498  B0EXAMPLE01  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
+1791104398.621757  B0EXAMPLE01  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
+1791104398.621854  person:U1    person     -        -         -                    -                         <@UFAKEBOT> is this real?
+```
+
+- **SENDER** is the bot ID, `person:<user ID>`, or `courier` for courier's own post. **TRIGGER** is the index in the Binding's `chat.triggers` (the `mention` trigger is 0, so the first `botMessage` one is 1).
+- **OUTCOME**, and what to do about it:
+  - `matched`: the trigger took it. STATE, ALERTNAME and KEY are what it extracted; the key is shortened with a hash when it is long, and `--json` has it whole.
+  - `unmatched`: the bot is named by a trigger, and no trigger took the message. The last column says where each trigger of the bot turned it away, at the first regex that failed (`match titleLink`, `extract key`). This is what courier counts as `courier_trigger_unmatched_total`.
+  - `excluded`: every `match` regex matched and an `exclude` regex turned it away. A message that fails a `match` first is `unmatched`, not `excluded`.
+  - `other_bot`: a bot that no `botMessage` trigger names. The adapter drops it before any trigger.
+  - `own`: courier's own post, which is never read. `person`: a person's message, which only a mention or a reply in a thread courier owns turns into a turn. `ignored`: something the intake leaves alone whoever sent it, such as a bot's reply in a thread, or an event the adapter drops.
+- The title is cut to 80 characters and shown on one line, and control characters are replaced by spaces; the alert text is your own channel's, read locally, and printed. The token is not.
+
+**The summary** follows the lines:
+
+```
+outcomes                     how many messages of each outcome
+matches per trigger          how many each trigger took
+keys: 41 distinct            each KEY that matched with its message count, most first: one key is one thread
+flapping: keys that fired and closed at least 3 times
+  27 cycles  KubeAPIErrorBudgetBurn kube-system  (68 FIRING, 27 RESOLVED)
+```
+
+Read it as a check on the triggers:
+- **The counts.** From the 2026-10-03 count of the channel (203 Alertmanager `slack-critical`, 91 heartbeat, 128 Grafana), the production run should match about 203 and leave the other 219 `unmatched`. A match count far from that means a regex is too loose or too tight; sort the `unmatched` lines by their reason, and by title with `--json | jq -r '.messages[] | select(.outcome=="unmatched") | .title' | sort | uniq -c`. The trial run should match only the `[kind]` messages of a trial, which is none if no alert was fired.
+- **The keys.** A key is the thread an alert will share. A good key is the same for repeats of one alert and different for different alerts. A key that has a pod name in it, or that is different on every line, means the `key` regex is too narrow and no repeat will ever find its thread; one key that covers unrelated alerts means it is too wide.
+- **The flapping hint.** A cycle is a closing state (the trigger's `thread.closeWhen.state`, `RESOLVED` by default) after an opening one for the same key. A key with several cycles is one the `cooldown` and the close rule are for; a `cooldown` shorter than the gap between its cycles starts a new investigation each time.
+
+`--render`, which would show whether each match's prompt would be refused (ref and reason), is not built yet: it waits for the prompt renderer (CT-4a).
+
 ## Where to look
 
 ```

@@ -40,23 +40,37 @@ func (c *Client) Find(ctx context.Context, channel, threadTS, outboxID string, s
 	if auth.UserID == "" {
 		return "", false, errors.New("slack auth.test: no bot user ID")
 	}
-	oldest := since.Add(-lookupSkew)
+	err = c.walk(ctx, channel, threadTS, since.Add(-lookupSkew), func(msgs []slackgo.Message) bool {
+		for _, m := range msgs {
+			if m.User == auth.UserID && m.Metadata.EventType == MetadataEventType && m.Metadata.EventPayload["outbox_id"] == outboxID {
+				ts, found = m.Timestamp, true
+				return true
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return ts, found, nil
+}
+
+// walk reads the pages of channel's history, or of threadTS's replies, from oldest to the end and gives each to
+// visit, which ends the walk by returning true. It fails, instead of ending early, when it cannot reach the end
+// (Slack promises more and gives no cursor, or repeats one): a caller that reads the whole window must not
+// mistake a part of it for the whole.
+func (c *Client) walk(ctx context.Context, channel, threadTS string, oldest time.Time, visit func([]slackgo.Message) (stop bool)) error {
 	seen := map[string]bool{}
 	for cursor := ""; ; {
 		msgs, next, err := c.page(ctx, channel, threadTS, oldest, cursor)
 		if err != nil {
-			return "", false, err
+			return err
 		}
-		for _, m := range msgs {
-			if m.User == auth.UserID && m.Metadata.EventType == MetadataEventType && m.Metadata.EventPayload["outbox_id"] == outboxID {
-				return m.Timestamp, true, nil
-			}
-		}
-		if next == "" {
-			return "", false, nil
+		if visit(msgs) || next == "" {
+			return nil
 		}
 		if seen[next] {
-			return "", false, fmt.Errorf("slack lookup in %s: cursor %q repeats", channel, next)
+			return fmt.Errorf("slack lookup in %s: cursor %q repeats", channel, next)
 		}
 		seen[next] = true
 		cursor = next
