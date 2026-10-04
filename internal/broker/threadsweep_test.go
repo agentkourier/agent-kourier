@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ func (p *recordingPurger) waitCalls(t *testing.T, n int) []struct{ now, idleBefo
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
 		p.mu.Lock()
-		got := append(p.calls[:0:0], p.calls...)
+		got := slices.Clone(p.calls)
 		p.mu.Unlock()
 		if len(got) >= n {
 			return got
