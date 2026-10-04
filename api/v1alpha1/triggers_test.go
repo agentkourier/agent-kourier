@@ -96,6 +96,40 @@ func TestAlertmanagerPreset(t *testing.T) {
 			want:  map[string]string{"state": "RESOLVED", "key": "KubeAPIErrorBudgetBurn kube-system", "alertname": "KubeAPIErrorBudgetBurn"},
 		},
 		{
+			name: "the trial's kind Alertmanager prefixes the title with [kind], firing",
+			msg: message{
+				FieldTitle:     "[kind] FIRING (1) - KubePodCrashLooping",
+				FieldTitleLink: slackCriticalLink + "-kind",
+				FieldFallback:  "[FIRING:1] KubePodCrashLooping default (critical kube-state-metrics) | " + slackCriticalLink + "-kind",
+			},
+			match: true,
+			want:  map[string]string{"state": "FIRING", "key": "KubePodCrashLooping default", "alertname": "KubePodCrashLooping"},
+		},
+		{
+			name: "the trial's kind Alertmanager prefixes the title with [kind], resolved",
+			msg: message{
+				FieldTitle:     "[kind] RESOLVED - KubePodCrashLooping",
+				FieldTitleLink: slackCriticalLink + "-kind",
+				FieldFallback:  "[RESOLVED] KubePodCrashLooping default (critical kube-state-metrics) | " + slackCriticalLink + "-kind",
+			},
+			match: true,
+			want:  map[string]string{"state": "RESOLVED", "key": "KubePodCrashLooping default", "alertname": "KubePodCrashLooping"},
+		},
+		{
+			name: "a bracketed tag on a Grafana title is still not an Alertmanager title",
+			msg: message{
+				FieldTitle:    "[kind] FIRING: HighRequestLatency (payments)",
+				FieldFallback: "[FIRING:1] HighRequestLatency (payments) | https://grafana.example.com/alerting/list",
+			},
+		},
+		{
+			name: "a title tag over 32 bytes is not a tag",
+			msg: message{
+				FieldTitle:    "[" + strings.Repeat("k", 33) + "] FIRING (1) - KubePodCrashLooping",
+				FieldFallback: "[FIRING:1] KubePodCrashLooping default (critical) | " + slackCriticalLink,
+			},
+		},
+		{
 			name: "no namespace group label leaves a double space that the key drops",
 			msg: message{
 				FieldTitle:    "FIRING (1) - NodeFilesystemSpaceFillingUp",
@@ -170,6 +204,36 @@ func TestAlertmanagerPreset(t *testing.T) {
 	}
 }
 
+// TestAnchoredReceiverSeparatesKindFromProduction shows why the docs anchor the receiver: the
+// production regex must not take the kind receiver's alerts, nor the reverse.
+func TestAnchoredReceiverSeparatesKindFromProduction(t *testing.T) {
+	alert := func(link string) message {
+		return message{
+			FieldTitle:     "FIRING (1) - KubePodCrashLooping",
+			FieldTitleLink: link,
+			FieldFallback:  "[FIRING:1] KubePodCrashLooping default (critical) | " + link,
+		}
+	}
+	prod, kind := alertmanagerTrigger(), alertmanagerTrigger()
+	prod.Match[FieldTitleLink] = `receiver=slack-critical$`
+	kind.Match[FieldTitleLink] = `receiver=slack-critical-kind$`
+	for _, tc := range []struct {
+		name    string
+		tr      Trigger
+		link    string
+		matches bool
+	}{
+		{"production trigger, production alert", prod, slackCriticalLink, true},
+		{"production trigger, kind alert", prod, slackCriticalLink + "-kind", false},
+		{"kind trigger, kind alert", kind, slackCriticalLink + "-kind", true},
+		{"kind trigger, production alert", kind, slackCriticalLink, false},
+	} {
+		if _, ok := evaluate(tc.tr, alert(tc.link)); ok != tc.matches {
+			t.Errorf("%s: matches = %v, want %v", tc.name, ok, tc.matches)
+		}
+	}
+}
+
 func TestAlertmanagerPresetIsValid(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
 	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}, Preset: PresetAlertmanager}}
@@ -226,6 +290,24 @@ func TestPresetOverridesFieldByField(t *testing.T) {
 	}
 	if tr.Thread.By != ThreadByKey {
 		t.Errorf("thread.by = %q, want the preset's key", tr.Thread.By)
+	}
+}
+
+// TestPresetCloseWhenIsReplacedWhole pins that a Binding's closeWhen replaces the preset's,
+// entry and all: it does not merge by key like match and extract do.
+func TestPresetCloseWhenIsReplacedWhole(t *testing.T) {
+	tr := Trigger{
+		Type:   TriggerBotMessage,
+		From:   &BotSource{BotID: "B0EXAMPLE01"},
+		Preset: PresetAlertmanager,
+		Extract: map[string]Extract{
+			"severity": {Field: FieldText, Regex: `(?P<severity>critical|info)`},
+		},
+		Thread: TriggerThread{CloseWhen: map[string]string{"severity": "info"}},
+	}
+	tr.applyPreset()
+	if want := map[string]string{"severity": "info"}; !maps.Equal(tr.Thread.CloseWhen, want) {
+		t.Errorf("closeWhen = %v, want %v: the preset's state entry must not be merged in", tr.Thread.CloseWhen, want)
 	}
 }
 
@@ -413,7 +495,25 @@ func TestTriggersValidate(t *testing.T) {
 		{"template calling an unknown function", func(o *Binding) { bot(o).PromptTemplate = "{{ shout .State }}" },
 			at + `.promptTemplate: invalid template: template: promptTemplate:1: function "shout" not defined`},
 
+		// The template runs once at load against a view with a value for each extract.
+		{"typo in a field name", func(o *Binding) { bot(o).PromptTemplate = "Alert {{ .Fields.alertnme }}" },
+			at + `.promptTemplate: invalid template: template: promptTemplate:1:16: executing "promptTemplate" at <.Fields.alertnme>: map has no entry for key "alertnme"`},
+		{"typo in a top-level field", func(o *Binding) { bot(o).PromptTemplate = "State {{ .Stat }}" },
+			at + `.promptTemplate: invalid template: template: promptTemplate:1:9: executing "promptTemplate" at <.Stat>: can't evaluate field Stat in type v1alpha1.PromptView`},
+		{"field of an extract this trigger lacks", func(o *Binding) {
+			bot(o).PromptTemplate = "Env {{ .Fields.env }}"
+		}, at + `.promptTemplate: invalid template: template: promptTemplate:1:14: executing "promptTemplate" at <.Fields.env>: map has no entry for key "env"`},
+		{"template reading every view field and every extract", func(o *Binding) {
+			bot(o).PromptTemplate = "{{ .Channel }} {{ .State }} {{ .Key }} {{ .Link }} {{ .Source }} {{ .Fields.state }} {{ .Fields.key }} {{ .Fields.alertname }}"
+		}, ""},
+
 		// Duplicates.
+		{"the same bot, match and exclude but a different extract is not a duplicate", func(o *Binding) {
+			other := *bot(o)
+			other.Extract = maps.Clone(other.Extract)
+			other.Extract["alertname"] = Extract{Field: FieldTitle, Regex: `^FIRING \(\d+\) - (?P<alertname>.+)$`}
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
+		}, ""},
 		{"two mention triggers", func(o *Binding) {
 			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, Trigger{Type: TriggerMention})
 		}, "spec.chat.triggers[2]: duplicate of spec.chat.triggers[0]"},

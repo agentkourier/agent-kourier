@@ -259,13 +259,14 @@ func (p *problems) triggers(path string, ts []Trigger) {
 		at := fmt.Sprintf("%s[%d]", path, i)
 		t := &ts[i]
 		p.trigger(at, t)
-		// A trigger with the same bot, match and exclude as an earlier one matches the same
-		// messages, so the later one would never run.
+		// A trigger with the same bot, match, exclude and extract as an earlier one matches the
+		// same messages, so the later one would never run. Extract counts because an extract
+		// that does not match means the trigger does not match.
 		var bot string
 		if t.From != nil {
 			bot = t.From.BotID
 		}
-		id := fmt.Sprintf("%q %q %q %q", t.Type, bot, t.Match, t.Exclude)
+		id := fmt.Sprintf("%q %q %q %q %q", t.Type, bot, t.Match, t.Exclude, t.Extract)
 		if first, dup := seen[id]; dup {
 			p.add(at, "duplicate of %s[%d]", path, first)
 		} else {
@@ -320,7 +321,7 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 	p.thread(path+".thread", &t.Thread, t.Extract)
 	if t.PromptTemplate == "" {
 		p.add(path+".promptTemplate", "required")
-	} else if _, err := ParsePromptTemplate("promptTemplate", t.PromptTemplate); err != nil {
+	} else if err := checkPromptTemplate("promptTemplate", t.PromptTemplate, t.Extract); err != nil {
 		p.add(path+".promptTemplate", "invalid template: %v", err)
 	}
 }

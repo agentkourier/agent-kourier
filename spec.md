@@ -413,7 +413,8 @@ spec:
       - type: botMessage             # alerts Alertmanager itself posts to this channel
         from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
         preset: alertmanager         # fills in match, extract, thread and promptTemplate
-        match: { titleLink: 'receiver=slack-critical' }
+        # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
+        match: { titleLink: 'receiver=slack-critical$' }
         exclude: { title: '^Prometheus heartbeat$' }
         thread: { cooldown: 2h }     # overrides the preset's 4h
   alerts:
@@ -547,12 +548,16 @@ from one bot, named by `from.botId` and never by display name, and then:
 - `thread.by: key` gives messages with the same extracted `key` one thread, anchored as for an
   @mention inside a thread courier doesn't own. `cooldown` (1m to 168h) allows no new turn for a
   key inside the window, and `closeWhen` (`{state: RESOLVED}`) posts a note and starts no turn.
-- `promptTemplate` is a Go template over the trigger's view of the message, parsed at load.
+- `promptTemplate` is a Go template over the trigger's view of the message. It is parsed and run
+  once at load against a placeholder view, so a mistyped field name rejects the Binding.
 - `preset: alertmanager` fills in `match`, `extract`, `thread` and `promptTemplate` for
   Alertmanager's Slack receiver (title `FIRING (n) - <alertname>` or `RESOLVED - <alertname>`,
   the default fallback with the group label values). Whatever the Binding sets overrides it per
   entry: a `match`, `exclude` or `extract` entry replaces the preset's entry of that name, and
   `thread.by`, `thread.cooldown`, `thread.closeWhen` and `promptTemplate` replace the preset's.
+  An empty value means unset, so in v1 a Binding cannot switch a preset entry off. To drop a
+  `match` entry, override it with a regex that always matches (`'.*'`); to change more than
+  that, leave `preset` out and write the trigger in full.
 
 Regexes are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups
 and the template: a Binding that fails any of them is rejected. A bot message that no trigger

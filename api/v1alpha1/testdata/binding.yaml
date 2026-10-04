@@ -18,7 +18,8 @@ spec:
       - type: botMessage             # alerts Alertmanager itself posts to this channel
         from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
         preset: alertmanager         # fills in match, extract, thread and promptTemplate
-        match: { titleLink: 'receiver=slack-critical' }
+        # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
+        match: { titleLink: 'receiver=slack-critical$' }
         exclude: { title: '^Prometheus heartbeat$' }
         thread: { cooldown: 2h }     # overrides the preset's 4h
   alerts:

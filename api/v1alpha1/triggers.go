@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"cmp"
+	"io"
 	"text/template"
 	"time"
 
@@ -172,24 +173,30 @@ func fillMissing[K comparable, V any](dst, defaults map[K]V) map[K]V {
 // Binding can leave out for that sender. It reports false for an unknown name.
 //
 // alertmanager covers a Slack receiver whose title reads "FIRING (n) - <alertname>" or
-// "RESOLVED - <alertname>" and whose fallback is Alertmanager's default,
+// "RESOLVED - <alertname>", optionally behind a bracketed tag such as "[kind] " (a receiver
+// can prefix its title to tell clusters apart), and whose fallback is Alertmanager's default,
 // "[FIRING:n] <group label values> (<other common labels>) | <link>". Both are required, and
 // the title is what keeps out Grafana's "FIRING: <rule> (<namespace>)" and the heartbeat. The
 // thread key is the group label values from the fallback, without the count, so the same
-// alert group shares a thread across repeats.
+// alert group shares a thread across repeats. The preset names no receiver: a Binding that
+// shares its channel with other receivers narrows it with match.titleLink.
 func presetTrigger(name string) (Trigger, bool) {
 	if name != PresetAlertmanager {
 		return Trigger{}, false
 	}
+	const (
+		tag   = `(?:\[[^\]]{1,32}\] )?` // an optional title prefix, at most 32 bytes
+		alert = `(?:FIRING \(\d+\)|RESOLVED)`
+	)
 	return Trigger{
 		Match: map[MessageField]string{
-			FieldTitle:    `^(?:FIRING \(\d+\)|RESOLVED) - `,
+			FieldTitle:    `^` + tag + alert + ` - `,
 			FieldFallback: `^\[(?:FIRING(?::\d+)?|RESOLVED)\] `,
 		},
 		Extract: map[string]Extract{
-			extractState: {Field: FieldTitle, Regex: `^(?P<state>FIRING|RESOLVED)`},
+			extractState: {Field: FieldTitle, Regex: `^` + tag + `(?P<state>FIRING|RESOLVED)`},
 			extractKey:   {Field: FieldFallback, Regex: `^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])`},
-			"alertname":  {Field: FieldTitle, Regex: `^(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$`},
+			"alertname":  {Field: FieldTitle, Regex: `^` + tag + alert + ` - (?P<alertname>.+)$`},
 		},
 		Thread: TriggerThread{
 			By:        ThreadByKey,
@@ -203,9 +210,45 @@ checked, and the next steps a person should take.
 	}, true
 }
 
+// PromptView is the data a trigger's prompt template runs over. Validate executes each
+// template once against a PromptView, so a mistyped field fails at load; the prompt renderer
+// (CT-4) must therefore render this same type, and a field added here is added for both.
+type PromptView struct {
+	// Channel is the channel the message arrived in.
+	Channel string
+	// State is the extracted "state" value, empty if the trigger extracts none.
+	State string
+	// Key is the extracted "key" value, empty if the trigger extracts none.
+	Key string
+	// Link is a link to the triggering message.
+	Link string
+	// Source names what sent the message, such as the preset.
+	Source string
+	// Fields holds one value per extract entry, by the entry's name.
+	Fields map[string]string
+}
+
 // ParsePromptTemplate parses a trigger's prompt template. Load-time validation and the prompt
 // renderer both use it, so a template that loads can be rendered with the same functions.
-// Missing map keys are errors at render time, so a typo in .Fields.name fails loudly.
+// Missing map keys are errors when it runs, so a typo in .Fields.name fails loudly.
 func ParsePromptTemplate(name, text string) (*template.Template, error) {
 	return template.New(name).Option("missingkey=error").Parse(text)
+}
+
+// checkPromptTemplate parses text and runs it once against a view whose Fields holds a
+// placeholder for each extract name, so a reference to a field the view or the trigger lacks
+// is an error here and not on the first alert.
+func checkPromptTemplate(name, text string, extract map[string]Extract) error {
+	tmpl, err := ParsePromptTemplate(name, text)
+	if err != nil {
+		return err
+	}
+	view := PromptView{
+		Channel: "C0123456789", State: "state", Key: "key", Link: "link", Source: "source",
+		Fields: make(map[string]string, len(extract)),
+	}
+	for n := range extract {
+		view.Fields[n] = "value"
+	}
+	return tmpl.Execute(io.Discard, view)
 }

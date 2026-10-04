@@ -73,13 +73,15 @@ func withTriggers(triggers string) string {
 // TestLoadAlertmanagerPresetWithTrialOverrides loads the owner's trial Binding: the
 // alertmanager preset for the channel's webhook bot, narrowed to the kind receiver, with the
 // heartbeat excluded. The preset supplies the rest, and a Binding without triggers loads as
-// before, with the mention trigger.
+// before, with the mention trigger. Receiver regexes end in $ because
+// receiver=slack-critical is a prefix of receiver=slack-critical-kind, so unanchored it would
+// match both; the preset itself names no receiver.
 func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
 	trial := withTriggers(`      - type: mention
       - type: botMessage
         from: { botId: B0EXAMPLE01 }
         preset: alertmanager
-        match: { titleLink: 'receiver=slack-critical-kind' }
+        match: { titleLink: 'receiver=slack-critical-kind$' }
         exclude: { title: '^Prometheus heartbeat$' }
 `)
 	set, err := Load(context.Background(), write(t, map[string]string{
@@ -104,7 +106,7 @@ func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
 	if tr.From.BotID != "B0EXAMPLE01" {
 		t.Errorf("botId = %q", tr.From.BotID)
 	}
-	if got := tr.Match[v1alpha1.FieldTitleLink]; got != "receiver=slack-critical-kind" {
+	if got := tr.Match[v1alpha1.FieldTitleLink]; got != "receiver=slack-critical-kind$" {
 		t.Errorf("match.titleLink = %q, want the Binding's receiver", got)
 	}
 	for _, f := range []v1alpha1.MessageField{v1alpha1.FieldTitle, v1alpha1.FieldFallback} {
