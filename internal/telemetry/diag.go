@@ -19,7 +19,7 @@ import (
 //
 // It sets two process-wide values, which is the only way to reach those messages: OpenTelemetry
 // keeps its logger and error handler as globals and offers no per-provider hook. They are the
-// one exception to "no global state" besides the version, set once at startup (broker.Run, with
+// one exception to "no global state" besides the version, set once at startup, when trace export is configured (broker.Run, with
 // RouteKlog, before the exporter is built), and never changed. Each kind of message logs at most
 // once a minute, so a stuck exporter cannot flood the log.
 func InstallDiagnostics(log *slog.Logger) {

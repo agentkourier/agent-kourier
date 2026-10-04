@@ -53,10 +53,18 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	// bad value is refused even where the other variable would have overridden it. (Checking both
 	// keeps the documented override rule; refusing to start when both are set would not.)
 	specific, base := getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"), getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	var urls []*url.URL
 	for _, e := range []string{base, specific} {
-		if err := checkEndpoint(e); err != nil {
+		u, err := checkEndpoint(e)
+		if err != nil {
 			return c, err
 		}
+		urls = append(urls, u)
+	}
+	// What the exporter will use, and so what decides its transport: the trace-specific URL if set.
+	used := urls[0]
+	if urls[1] != nil {
+		used = urls[1]
 	}
 	c.Endpoint = specific
 	if c.Endpoint == "" && base != "" {
@@ -90,7 +98,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if getenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS") == "" {
 		c.Headers = general
 	}
-	if len(c.Headers) > 0 && strings.HasPrefix(c.Endpoint, "http://") {
+	// The parsed scheme, which url.Parse lower-cases, as the exporter reads it: HTTP:// is cleartext too.
+	if len(c.Headers) > 0 && used != nil && used.Scheme == "http" {
 		if getenv("COURIER_OTLP_ALLOW_INSECURE_HEADERS") != "true" {
 			return c, errors.New("OTEL export headers would travel in cleartext to an http endpoint: use https, or set COURIER_OTLP_ALLOW_INSECURE_HEADERS=true")
 		}
@@ -98,17 +107,17 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	return c, nil
 }
 
-// checkEndpoint applies the endpoint rules to one variable's value; empty is unset. The error
-// never carries any of raw.
-func checkEndpoint(raw string) error {
+// checkEndpoint applies the endpoint rules to one variable's value and returns it parsed; empty
+// is unset, and nil. The error never carries any of raw.
+func checkEndpoint(raw string) (*url.URL, error) {
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("OTEL export endpoint must be an http(s) URL without credentials, query or fragment")
+		return nil, errors.New("OTEL export endpoint must be an http(s) URL without credentials, query or fragment")
 	}
-	return nil
+	return u, nil
 }
 
 // parseHeaders reads comma-separated key=value pairs and percent-decodes the values, by the
@@ -162,7 +171,7 @@ func (c Config) Provider(ctx context.Context, version string, log *slog.Logger) 
 	if c.Endpoint == "" {
 		return noop.NewTracerProvider(), func(context.Context) error { return nil }, nil
 	}
-	if err := checkEndpoint(c.Endpoint); err != nil {
+	if _, err := checkEndpoint(c.Endpoint); err != nil {
 		return nil, nil, err
 	}
 	if log == nil {

@@ -4,7 +4,7 @@ Courier exports Prometheus metrics at `/metrics` and optionally exports traces w
 OTLP over HTTP/protobuf. Metrics remain available when trace export is disabled.
 Each broker owns its registry and tracer provider. The application does not install
 a global OpenTelemetry provider. It does install OpenTelemetry's diagnostic logger and
-error handler, once at startup, because the SDK and the exporter reach them only
+error handler, once at startup and only when trace export is configured, because the SDK and the exporter reach them only
 through process-wide hooks; they log through courier's logger and carry no values
 (see "Exporter diagnostics").
 

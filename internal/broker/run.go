@@ -39,7 +39,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if provider == nil {
 		var shutdown func(context.Context) error
 		// Before the exporter exists: it reads and parses its own environment variables as it is built.
-		telemetry.InstallDiagnostics(log)
+		// With tracing off there is no exporter, and the process-wide hooks are left alone.
+		if cfg.Telemetry.Endpoint != "" {
+			telemetry.InstallDiagnostics(log)
+		}
 		provider, shutdown, err = cfg.Telemetry.Provider(ctx, cfg.ServiceVersion, log)
 		if err != nil {
 			return fmt.Errorf("telemetry: %w", err)
