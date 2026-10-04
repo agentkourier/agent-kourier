@@ -157,6 +157,10 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 		return "The agent's task was canceled before it finished.", true
 	case session.NoticeNoOutput:
 		return "The agent finished without any output.", true
+	case session.NoticeTriggerRepeat: // the Detail is the time, and ends the sentence
+		return "Fired again at", true
+	case session.NoticeTriggerClosed:
+		return "Resolved at", true
 	}
 	return "", false
 }

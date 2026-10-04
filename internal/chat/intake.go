@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -43,15 +44,22 @@ type IntakeConfig struct {
 	// delivers it again, and the message is not remembered, so the redelivery asks again. The same ID
 	// makes that safe. Nil only logs them.
 	Notice func(ctx context.Context, key session.Key, n session.Notice) error
-	// OnTrigger, if set, takes a bot message that a botMessage trigger matched, after the Intake has
-	// logged and counted it. Its error means it was not taken: Message returns it, so the platform leaves
-	// the event unacknowledged and delivers it again, and the message is not remembered.
+	// TriggerThreads keeps the thread of each key of a botMessage trigger that threads by key. Without it
+	// such a trigger's matches are errors, so Slack redelivers them, rather than a turn for every repeat of
+	// a flapping alert; a trigger with no thread rules needs none.
+	TriggerThreads store.TriggerThreads
+	// OnStart, if set, takes the match that starts a turn, anchored to the match's own message
+	// (TriggerMatch.Message.At.ID is the thread): a new investigation, or the redelivery of one, which asks
+	// again since the first ask may have been lost. It is called once the thread is recorded, and it is
+	// idempotent by that message's ID, as Submit is. Its error means it was not taken: Message returns it, so
+	// the platform leaves the event unacknowledged and delivers it again.
 	//
-	// STUB(CT-3, CT-4): this is where the match goes onward, and CT-2 starts no session from it. CT-3
-	// maps the key to its thread and applies the cooldown and the close rule; CT-4 renders the prompt and
-	// starts the turn. Both replace this hook, which is for a test to see what matched until then.
-	OnTrigger func(ctx context.Context, m TriggerMatch) error
-	Logger    *slog.Logger // slog.Default() if nil
+	// STUB(CT-4): this is where the start goes onward, and CT-3 starts no session from it. CT-4 renders the
+	// prompt and starts the turn, and replaces this hook, which is for a test to see what started until then.
+	OnStart func(ctx context.Context, m TriggerMatch) error
+	// Now is the time the thread rules take for a bot message, which is when it arrives (time.Now if nil).
+	Now    func() time.Time
+	Logger *slog.Logger // slog.Default() if nil
 }
 
 // Intake is the Sink that applies spec 8.2's trigger table, the same for every platform: it turns each
@@ -64,6 +72,9 @@ type Intake struct {
 	log    *slog.Logger
 	seen   recent
 	tables tableCache
+	// matched are the bot messages a trigger matched, so that a redelivery of one is a dedup decision and
+	// a redelivery of an unmatched one is not.
+	matched recent
 	// mentionless holds the Bindings that were said to have no mention trigger, so that it is said once.
 	mentionless sync.Map
 }
@@ -85,8 +96,9 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //     the session manager says NotOwned otherwise, and it is ignored.
 //   - A message outside a thread that does not start one is ignored without asking.
 //   - A bot's message (m.Bot set) is never a mention and is never submitted: it is tried against the
-//     botMessage triggers of its channel's Binding, in order (botMessage). A match is handed to
-//     IntakeConfig.OnTrigger, and a message no trigger matches is ignored and counted.
+//     botMessage triggers of its channel's Binding, in order (botMessage). A match is decided (see
+//     TriggerDecision) and may be handed to IntakeConfig.OnStart; a message no trigger matches is ignored
+//     and counted.
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -107,6 +119,9 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	seen := [2]string{m.At.Channel, m.At.ID}
 	if in.seen.has(seen) {
 		disposition = "duplicate"
+		if m.Bot != nil && in.matched.has(seen) {
+			in.countDecision(ctx, m.At.Channel, DecisionDedup)
+		}
 		return nil
 	}
 	if m.Bot != nil {
@@ -116,6 +131,9 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		}
 		if disposition = d; d != "ignored" {
 			in.seen.add(seen) // a redelivery is neither matched nor counted again
+		}
+		if d == "trigger_matched" {
+			in.matched.add(seen)
 		}
 		return nil
 	}
@@ -177,14 +195,16 @@ func (in *Intake) Interaction(ctx context.Context, i Interaction) (telemetryErr 
 }
 
 // botMessage tries a bot's message against the botMessage triggers of the Binding that owns its channel, and
-// returns the disposition for the intake metric. Nothing here starts a session (CT-2).
+// returns the disposition for the intake metric. Nothing here starts a session: a start goes to OnStart (CT-4).
 //   - A channel with no Binding, or a bot's reply inside a thread, is ignored and not counted: a trigger is about
 //     a message that opens its own, and a bot must not continue, or hijack, a thread of people or of courier's
 //     own. The adapter has already refused courier's own messages, and every bot no trigger names.
 //   - A message that no trigger matches is counted as courier_trigger_unmatched_total of the Binding, so that a
 //     changed template shows up as a rising count, and logged at DEBUG with where it was and which bot, and never
 //     what it said.
-//   - A match is counted, logged and handed to OnTrigger (the stub, see IntakeConfig.OnTrigger).
+//   - A match is counted and logged, and decided: what it does to the thread of its key (decide). The decision is
+//     counted as courier_trigger_decisions_total once it is made, whether or not what follows it succeeds; an
+//     error returns, and the redelivery is decided again (a dedup, for a start that was already recorded).
 func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string, err error) {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
@@ -196,21 +216,49 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 	}
 	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.binding", name))
-	index, fields, ok := in.tables.table(snap, rb.Binding, in.log).match(m)
+	trigger, fields, ok := in.tables.table(snap, rb.Binding, in.log).match(m)
 	if !ok {
 		telemetry.Count(ctx, "courier_trigger_unmatched_total", name)
 		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 		return "trigger_unmatched", nil
 	}
-	match := TriggerMatch{Binding: name, Index: index, Fields: fields, Message: m}
-	in.log.InfoContext(ctx, "chat: bot message matched a trigger; no turn is started yet", "binding", name, "trigger", index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
-	if in.cfg.OnTrigger != nil {
-		if err := in.cfg.OnTrigger(ctx, match); err != nil {
-			return "", fmt.Errorf("trigger %d of %s for %s: %w", index, name, MessageID(Ref{Platform: m.At.Platform, Conn: in.conn, Channel: m.At.Channel, ID: m.At.ID}), err)
-		}
+	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Received: in.now(), Message: m}
+	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
+	out, err := in.decide(ctx, match)
+	if out.decision != "" {
+		telemetry.Count(ctx, "courier_trigger_decisions_total", name, string(out.decision))
+		in.log.InfoContext(ctx, "chat: trigger decided", "binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread)
+	}
+	if err != nil {
+		return "", fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
 	}
 	telemetry.Count(ctx, "courier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
 	return "trigger_matched", nil
+}
+
+// now is the time of the thread rules.
+func (in *Intake) now() time.Time {
+	if in.cfg.Now != nil {
+		return in.cfg.Now()
+	}
+	return time.Now()
+}
+
+// messageID is the MessageID of a message the Intake took, as the turn and the notices of it are named.
+func (in *Intake) messageID(m Inbound) string {
+	return MessageID(Ref{Platform: m.At.Platform, Conn: in.conn, Channel: m.At.Channel, ID: m.At.ID})
+}
+
+// countDecision counts a decision for the Binding that owns channel, if there is one. It is not binding(): a
+// Binding without a mention trigger still has bot messages to count.
+func (in *Intake) countDecision(ctx context.Context, channel string, d TriggerDecision) {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return
+	}
+	if rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel); ok {
+		telemetry.Count(ctx, "courier_trigger_decisions_total", v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name), string(d))
+	}
 }
 
 // AcceptsBot implements BotFilter: it says whether a botMessage trigger of the Binding that owns channel

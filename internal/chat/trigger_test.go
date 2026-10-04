@@ -6,10 +6,12 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -98,6 +101,13 @@ func productionTrigger() v1alpha1.Trigger {
 	return tr
 }
 
+// startsEveryMatch is tr with a close rule that no message satisfies, so that every match of it, a resolve too,
+// starts a turn and the matcher's tests see its fields through the start hook.
+func startsEveryMatch(tr v1alpha1.Trigger) v1alpha1.Trigger {
+	tr.Thread.CloseWhen = map[string]string{"state": "NEVER"}
+	return tr
+}
+
 // lockedBuffer is a bytes.Buffer that the logger and the test may use at once.
 type lockedBuffer struct {
 	mu sync.Mutex
@@ -116,8 +126,30 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
+// clock is a test's time: it stands still until the test moves it.
+type clock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// noon is when a test's clock starts.
+var noon = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+
 // triggered is an Intake over a config in which C1 is bound to sre/sre-alerts with the given triggers, and G1
-// to payments/pay with none. It records what the trigger hook is given, and its metrics and log are readable.
+// to payments/pay with none. It keeps its threads in a real store, and records what the start hook is given
+// and the notices the Intake asks for; its metrics and log are readable.
 type triggered struct {
 	in      *chat.Intake
 	cfg     chat.IntakeConfig // what in was made from, for a test that wants another Intake over the same table
@@ -126,8 +158,12 @@ type triggered struct {
 	ctx     context.Context
 	reg     *prometheus.Registry
 	logs    *lockedBuffer
+	st      *sqlite.Store
+	dbPath  string
+	clk     *clock
+	notes   *notices
 	mu      sync.Mutex
-	matches []chat.TriggerMatch
+	matches []chat.TriggerMatch // what the start hook was given: the matches that start a turn
 	hookErr error
 }
 
@@ -164,6 +200,23 @@ func (h *triggered) counter(t *testing.T, name, binding string) float64 {
 		}
 	}
 	return 0
+}
+
+// reopenStore opens the test's database, closing the one that was open before: a restart. The Intake of a
+// config made before it holds the old store, so a test that restarts makes a new Intake (see restart).
+func (h *triggered) reopenStore(t *testing.T) {
+	t.Helper()
+	if h.st != nil {
+		if err := h.st.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := sqlite.Open(t.Context(), h.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	h.st = st
 }
 
 // snapshotOf is a routing table in which C1 is bound to sre/sre-alerts with the triggers, defaulted and checked as
@@ -214,11 +267,14 @@ func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &triggered{sub: &submitter{}, reg: reg, logs: &lockedBuffer{}, ctx: telemetry.WithObserver(t.Context(), obs)}
+	h := &triggered{sub: &submitter{}, reg: reg, logs: &lockedBuffer{}, ctx: telemetry.WithObserver(t.Context(), obs),
+		clk: &clock{now: noon}, notes: &notices{}, dbPath: filepath.Join(t.TempDir(), "courier.db")}
 	h.snap.Store(snapshotOf(t, triggers))
+	h.reopenStore(t)
 	h.cfg = chat.IntakeConfig{
 		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
-		Snapshot:   h.snap.Load, Submitter: h.sub, OnTrigger: h.hook,
+		Snapshot:   h.snap.Load, Submitter: h.sub, OnStart: h.hook,
+		TriggerThreads: h.st, Notice: h.notes.take, Now: h.clk.Now,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	h.in = chat.NewIntake(h.cfg)
 	return h
@@ -422,7 +478,7 @@ func TestAMatchCarriesTheBindingTheIndexTheFieldsAndTheMessage(t *testing.T) {
 		t.Errorf("courier_trigger_matched_total = %v, want 1", n)
 	}
 	if len(h.sub.submitted()) != 0 {
-		t.Errorf("a match started a session: %+v (CT-2 starts none)", h.sub.submitted())
+		t.Errorf("a match started a session: %+v (the Intake hands the start on, and CT-4 starts the session)", h.sub.submitted())
 	}
 }
 
@@ -444,7 +500,7 @@ func TestTheTrialTriggerTakesKindAlertsAndNothingElse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newTriggered(t, trialTrigger())
+			h := newTriggered(t, startsEveryMatch(trialTrigger()))
 			if err := h.in.Message(h.ctx, botInbound("C1", "9.9", tt.msg)); err != nil {
 				t.Fatal(err)
 			}
@@ -478,7 +534,7 @@ func TestTheProductionTriggerTakesProductionAlertsNotKindOnes(t *testing.T) {
 		{"heartbeat", heartbeat, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newTriggered(t, productionTrigger())
+			h := newTriggered(t, startsEveryMatch(productionTrigger()))
 			if err := h.in.Message(h.ctx, botInbound("C1", "9.9", tt.msg)); err != nil {
 				t.Fatal(err)
 			}
@@ -676,11 +732,11 @@ func TestAFailingHookLeavesTheEventToBeRedelivered(t *testing.T) {
 	}
 }
 
-// With no hook, a match is logged and counted, and that is all (the stub of CT-2).
+// With no start hook, a match is logged, counted and decided, and that is all.
 func TestAMatchWithNoHookIsLoggedAndCounted(t *testing.T) {
 	h := newTriggered(t, kindOnly())
 	cfg := h.cfg
-	cfg.OnTrigger = nil
+	cfg.OnStart = nil
 	in := chat.NewIntake(cfg)
 	if err := in.Message(h.ctx, botInbound("C1", "9.9", kindFiring)); err != nil {
 		t.Fatal(err)

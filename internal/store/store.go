@@ -34,6 +34,7 @@ type Store interface {
 	SessionTasks
 	Interactions
 	Presses
+	TriggerThreads
 	ReplyQueue
 	Audit
 	Recovery

@@ -383,6 +383,28 @@ func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
 	}
 }
 
+// The notes a trigger's thread gets for a repeat and for a close are courier's own words and the time it
+// fills in: nothing of the message that fired them is in them.
+func TestNoticesOfATriggerThreadAreFixedTextAndATime(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	thread := thread
+	thread.Thread = e.root
+	for kind, want := range map[session.NoticeKind]string{
+		session.NoticeTriggerRepeat: "Fired again at 2026-10-04 12:30 UTC.",
+		session.NoticeTriggerClosed: "Resolved at 2026-10-04 12:30 UTC.",
+	} {
+		n := session.Notice{ID: "slack:ns/conn:C1:5.5/" + string(kind), Kind: kind, MessageRef: "5.5", Detail: "2026-10-04 12:30 UTC."}
+		sink.Notice(t.Context(), thread, n)
+		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
+		var out chat.Outgoing
+		_ = json.Unmarshal([]byte(row.Payload), &out)
+		if err != nil || row.Thread != e.root || out.Message == nil || out.Message.Fallback != want {
+			t.Errorf("%s: row %+v, message %+v, %v; want a note in the thread that says %q", kind, row, out.Message, err, want)
+		}
+	}
+}
+
 // flaky is an Enqueuer whose first fails calls fail with err, and that then writes through to q.
 type flaky struct {
 	q     live.Enqueuer

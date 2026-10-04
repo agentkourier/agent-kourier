@@ -154,6 +154,12 @@ const (
 	NoticeTaskCanceled NoticeKind = "task_canceled"
 	// NoticeNoOutput says the agent's task completed with nothing to show.
 	NoticeNoOutput NoticeKind = "no_output"
+	// NoticeTriggerRepeat says a botMessage trigger's key fired again, in the thread that holds it, and starts
+	// no turn (spec 8.2). Detail is the time, which courier made.
+	NoticeTriggerRepeat NoticeKind = "trigger_repeat"
+	// NoticeTriggerClosed says a botMessage trigger's key closed, such as an alert that resolved, in the thread
+	// that holds it, and starts no turn. Detail is the time, which courier made.
+	NoticeTriggerClosed NoticeKind = "trigger_closed"
 )
 
 // Notice is something for the thread that no turn's output says. ID is stable, so a renderer

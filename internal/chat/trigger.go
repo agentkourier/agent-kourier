@@ -7,14 +7,15 @@ import (
 	"regexp"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
 // TriggerMatch is a bot message that a botMessage trigger of a Binding accepted (spec 8.2): which trigger, what
-// it extracted, and the message as it came. It is what the intake hands on. CT-3 gives each key its thread and
-// CT-4 starts the turn from it; for now the Intake only reports it (IntakeConfig.OnTrigger).
+// it extracted, and the message as it came. The Intake decides what it does to the thread of its key (see
+// TriggerDecision), and hands it to IntakeConfig.OnStart if it starts a turn.
 type TriggerMatch struct {
 	// Binding is the namespace/name of the Binding whose trigger matched.
 	Binding string
@@ -24,6 +25,11 @@ type TriggerMatch struct {
 	// Fields are the values the trigger's extract entries took out of the message, by entry name. It is
 	// the shape of v1alpha1.PromptView.Fields. Every value is untrusted text from the message (R2).
 	Fields map[string]string
+	// Thread is what the trigger says about threads: how a key maps to one, the cooldown, and what closes it.
+	Thread v1alpha1.TriggerThread
+	// Received is when the Intake took the message. The thread rules take it for now: the cooldown runs from
+	// it, and it is the time a note names.
+	Received time.Time
 	// Message is the message, whole.
 	Message Inbound
 }
@@ -46,6 +52,7 @@ type extractRegex struct {
 type botTrigger struct {
 	index          int // in the Binding's trigger list
 	botID          string
+	thread         v1alpha1.TriggerThread
 	match, exclude []fieldRegex
 	extract        []extractRegex
 }
@@ -53,7 +60,7 @@ type botTrigger struct {
 // compileTrigger compiles the regexes of a botMessage trigger, in the order of their field names, so that
 // what is tried first does not depend on the order of a map.
 func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
-	c := botTrigger{index: index, botID: t.From.BotID}
+	c := botTrigger{index: index, botID: t.From.BotID, thread: t.Thread}
 	compile := func(entries map[v1alpha1.MessageField]string) ([]fieldRegex, error) {
 		var out []fieldRegex
 		for _, f := range slices.Sorted(maps.Keys(entries)) {
@@ -123,15 +130,15 @@ func (t *botTrigger) evaluate(m Inbound) (map[string]string, bool) {
 // triggerTable is the botMessage triggers of one Binding, compiled, in the order of its list.
 type triggerTable []botTrigger
 
-// match returns the first trigger that matches m, in order: one that does not match (another bot, a filter, an
-// exclude, an extract that misses) lets the next try.
-func (tt triggerTable) match(m Inbound) (index int, fields map[string]string, ok bool) {
+// match returns the first trigger that matches m, in order, and what it extracted: one that does not match
+// (another bot, a filter, an exclude, an extract that misses) lets the next try.
+func (tt triggerTable) match(m Inbound) (t *botTrigger, fields map[string]string, ok bool) {
 	for i := range tt {
 		if fields, ok := tt[i].evaluate(m); ok {
-			return tt[i].index, fields, true
+			return &tt[i], fields, true
 		}
 	}
-	return 0, nil, false
+	return nil, nil, false
 }
 
 // tableCache holds the trigger tables of one routing table, compiled the first time a Binding needs its own.
