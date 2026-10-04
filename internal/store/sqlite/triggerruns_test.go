@@ -224,30 +224,6 @@ func TestAdmitTriggerRunChecksAStoppedMessageAgain(t *testing.T) {
 	}
 }
 
-func TestReleaseTriggerRunForgetsAStartThatDidNotHappen(t *testing.T) {
-	s := openTemp(t)
-	lim := store.TriggerRunLimits{MaxRuns: 1, Per: time.Hour, DigestWindow: time.Hour}
-	admit(t, s, runOf("1.1", t0), lim)
-	if got := admit(t, s, runOf("1.2", t0), lim); got.Admitted {
-		t.Fatal("the second start was admitted")
-	}
-	if rel, err := s.ReleaseTriggerRun(t.Context(), runOf("1.2", t0).Key); err != nil || rel {
-		t.Errorf("ReleaseTriggerRun of a stopped message = %v, %v; want nothing released", rel, err)
-	}
-	if rel, err := s.ReleaseTriggerRun(t.Context(), runOf("nope", t0).Key); err != nil || rel {
-		t.Errorf("ReleaseTriggerRun of an unknown message = %v, %v; want nothing released", rel, err)
-	}
-	if rel, err := s.ReleaseTriggerRun(t.Context(), runOf("1.1", t0).Key); err != nil || !rel {
-		t.Fatalf("ReleaseTriggerRun = %v, %v; want it released", rel, err)
-	}
-	if got := admit(t, s, runOf("1.3", t0), lim); !got.Admitted {
-		t.Errorf("a start after the first was released = %+v; want admitted", got)
-	}
-	if ds, err := s.ListTriggerDigests(t.Context(), t0.Add(24*time.Hour)); err != nil || len(ds) != 1 || ds[0].Counts[store.LimitRate] != 1 {
-		t.Errorf("digests = %+v, %v; want the one stopped start still counted", ds, err)
-	}
-}
-
 // The counts are the store's, not the process's: they hold after a restart.
 func TestTriggerRunLimitsSurviveAReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "courier.db")
@@ -375,9 +351,6 @@ func TestTriggerRunsRefuseWhatIsInvalid(t *testing.T) {
 	}
 	if _, err := s.AdmitTriggerRun(t.Context(), ok, store.TriggerRunLimits{}); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("AdmitTriggerRun with no digest window = %v; want ErrInvalid", err)
-	}
-	if _, err := s.ReleaseTriggerRun(t.Context(), store.ConversationKey{}); !errors.Is(err, store.ErrInvalid) {
-		t.Errorf("ReleaseTriggerRun with no key = %v; want ErrInvalid", err)
 	}
 	if err := s.MarkTriggerDigested(t.Context(), "", 1, t0); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("MarkTriggerDigested with no Binding = %v; want ErrInvalid", err)

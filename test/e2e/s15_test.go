@@ -36,7 +36,7 @@ func TestS15_AStormOfAlertsIsHeldToTheLimitsAndGetsOneDigest(t *testing.T) {
 		storm   = 6
 		started = 3
 		binding = "courier/fast-s15"
-		digest  = "3 alerts not investigated in the last 10s (rate limit)."
+		digest  = "3 alert messages not investigated in the last 10s (rate limit)."
 	)
 	decisions := func(decision string) float64 {
 		return s.counter("courier_trigger_decisions_total", map[string]string{"binding": binding, "decision": decision})

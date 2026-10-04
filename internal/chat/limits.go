@@ -68,16 +68,3 @@ func (in *Intake) countLimited(ctx context.Context, m TriggerMatch, limit store.
 	telemetry.Count(ctx, "courier_trigger_limited_total", m.Binding, strconv.Itoa(m.Index), string(limit))
 	in.log.InfoContext(ctx, "chat: a trigger's start was not made; a limit is reached", "binding", m.Binding, "trigger", m.Index, "limit", limit, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 }
-
-// releaseRun forgets the start the limits counted for a match whose turn then did not start (ErrNotStarted), so a
-// refusal does not use up a place. A failure is logged and not returned: the start stays counted until its window
-// passes, which is the safe side, and the refusal is handled already (its note, audit and count are made once).
-func (in *Intake) releaseRun(ctx context.Context, m TriggerMatch) {
-	if in.cfg.TriggerRuns == nil {
-		return
-	}
-	key := store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID}
-	if _, err := in.cfg.TriggerRuns.ReleaseTriggerRun(ctx, key); err != nil {
-		in.log.WarnContext(ctx, "chat: the start of a refused match stays counted against the trigger's limits", "binding", m.Binding, "trigger", m.Index, "channel", m.Message.At.Channel, "message", m.Message.At.ID, "err", err)
-	}
-}

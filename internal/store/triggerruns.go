@@ -88,10 +88,6 @@ type TriggerRuns interface {
 	// run.At: they slide. Concurrent counts the admitted starts whose session has an active task or an undelivered
 	// turn, which is how a start that was queued and has not begun is a running investigation too.
 	AdmitTriggerRun(ctx context.Context, run TriggerRun, limits TriggerRunLimits) (TriggerAdmission, error)
-	// ReleaseTriggerRun forgets the admitted start of the message, so that it counts against no limit: the start
-	// did not happen (its prompt was refused). It does nothing for a message with no row or a stopped one, and
-	// returns whether it removed one.
-	ReleaseTriggerRun(ctx context.Context, key ConversationKey) (released bool, err error)
 	// ListTriggerDigests returns the windows of stopped starts that ended at or before now and have not been
 	// digested, oldest first, with their counts by limit.
 	ListTriggerDigests(ctx context.Context, now time.Time) ([]TriggerDigest, error)

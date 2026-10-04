@@ -77,7 +77,7 @@ func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
 	}
 
 	// The window ends ten seconds after the first limited alert. One line says so, and no other is posted.
-	const want = "3 alerts not investigated in the last 10s (rate limit)."
+	const want = "3 alert messages not investigated in the last 10s (rate limit)."
 	var line fakeslack.Message
 	for deadline := time.Now().Add(30 * time.Second); line.TS == ""; time.Sleep(50 * time.Millisecond) {
 		for _, m := range a.topLevel() {
@@ -125,7 +125,7 @@ func TestRunPostsTheDigestOfAWindowThatEndedDuringARestart(t *testing.T) {
 			t.Fatalf("no digest after the restart: %+v", a.fake.Messages(alertChannel))
 		}
 	}
-	if got := a.topLevel(); len(got) != 1 || !strings.Contains(got[0].Text, "1 alert not investigated in the last 10s (rate limit).") {
+	if got := a.topLevel(); len(got) != 1 || !strings.Contains(got[0].Text, "1 alert message not investigated in the last 10s (rate limit).") {
 		t.Errorf("channel holds %+v; want the one digest", got)
 	}
 }

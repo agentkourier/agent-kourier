@@ -248,7 +248,6 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 	}
 	err := in.start(ctx, m)
 	if errors.Is(err, ErrNotStarted) {
-		in.releaseRun(ctx, m)
 		out.decision, err = DecisionNotStarted, nil
 	}
 	return out, err
@@ -265,8 +264,9 @@ func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
 // startThread starts the turn of the thread this match reserved, if the trigger's limits allow it, and once that is
 // taken marks the thread started, which is when the cooldown begins: a turn that could not start leaves none. If
 // a limit stops it the reservation is given back (stopThread) and the decision is limited. If OnStart says it will
-// not start (ErrNotStarted) the thread stays unmarked, the start no longer counts against the limits, and the
-// decision is not_started, with no error.
+// not start (ErrNotStarted) the thread stays unmarked and the decision is not_started, with no error; the start
+// stays counted against the rate and daily limits, because the refusal still posts a note, so a storm of refusals
+// is held to the limits too.
 func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
 	if limit, err := in.admit(ctx, m); err != nil {
 		return out, err
@@ -275,7 +275,6 @@ func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, 
 	}
 	switch err := in.start(ctx, m); {
 	case errors.Is(err, ErrNotStarted):
-		in.releaseRun(ctx, m)
 		out.decision = DecisionNotStarted
 		return out, nil
 	case err != nil:

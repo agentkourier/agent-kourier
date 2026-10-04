@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
@@ -153,7 +154,7 @@ func TestTheDigestIsOneLineInTheChannelWhenTheWindowEnds(t *testing.T) {
 	if p.Role != store.OutboxDigest || p.Channel != digestChannel || p.Thread != "" {
 		t.Errorf("post = %+v; want a digest at the top level of %s", p, digestChannel)
 	}
-	if want := "7 alerts not investigated in the last 10m (rate limit)."; p.Out.Message == nil || p.Out.Message.Fallback != want {
+	if want := "7 alert messages not investigated in the last 10m (rate limit)."; p.Out.Message == nil || p.Out.Message.Fallback != want {
 		t.Errorf("the line = %+v; want %q", p.Out.Message, want)
 	}
 	if err := p.Out.Validate(); err != nil {
@@ -211,9 +212,9 @@ func TestEachWindowAndTriggerHasItsOwnDigest(t *testing.T) {
 	}
 	slices.Sort(lines)
 	want := []string{
-		"1 alert not investigated in the last 10m (rate limit).",
-		"1 alert not investigated in the last 10m (rate limit).",
-		"2 alerts not investigated in the last 10m (rate limit).",
+		"1 alert message not investigated in the last 10m (rate limit).",
+		"1 alert message not investigated in the last 10m (rate limit).",
+		"2 alert messages not investigated in the last 10m (rate limit).",
 	}
 	if !slices.Equal(lines, want) || len(ids) != 3 {
 		t.Errorf("lines %q with IDs %v; want three digests with three IDs", lines, ids)
@@ -226,16 +227,16 @@ func TestTheDigestSaysWhyAndHowLong(t *testing.T) {
 		d    store.TriggerDigest
 		want string
 	}{
-		{"one alert", digestOf(10*time.Minute, store.LimitRate, 1), "1 alert not investigated in the last 10m (rate limit)."},
-		{"several", digestOf(10*time.Minute, store.LimitRate, 7), "7 alerts not investigated in the last 10m (rate limit)."},
-		{"concurrency", digestOf(10*time.Minute, store.LimitConcurrent, 2), "2 alerts not investigated in the last 10m (concurrency limit)."},
-		{"daily", digestOf(time.Hour, store.LimitDaily, 4), "4 alerts not investigated in the last 1h (daily cap)."},
-		{"hours and minutes", digestOf(90*time.Minute, store.LimitRate, 2), "2 alerts not investigated in the last 1h30m (rate limit)."},
-		{"seconds", digestOf(30*time.Second, store.LimitRate, 2), "2 alerts not investigated in the last 30s (rate limit)."},
-		{"a day", digestOf(24*time.Hour, store.LimitDaily, 2), "2 alerts not investigated in the last 24h (daily cap)."},
+		{"one alert", digestOf(10*time.Minute, store.LimitRate, 1), "1 alert message not investigated in the last 10m (rate limit)."},
+		{"several", digestOf(10*time.Minute, store.LimitRate, 7), "7 alert messages not investigated in the last 10m (rate limit)."},
+		{"concurrency", digestOf(10*time.Minute, store.LimitConcurrent, 2), "2 alert messages not investigated in the last 10m (concurrency limit)."},
+		{"daily", digestOf(time.Hour, store.LimitDaily, 4), "4 alert messages not investigated in the last 1h (daily cap)."},
+		{"hours and minutes", digestOf(90*time.Minute, store.LimitRate, 2), "2 alert messages not investigated in the last 1h30m (rate limit)."},
+		{"seconds", digestOf(30*time.Second, store.LimitRate, 2), "2 alert messages not investigated in the last 30s (rate limit)."},
+		{"a day", digestOf(24*time.Hour, store.LimitDaily, 2), "2 alert messages not investigated in the last 24h (daily cap)."},
 		{"two reasons, in a fixed order", store.TriggerDigest{Start: digestNow, End: digestNow.Add(10 * time.Minute),
 			Counts: map[store.TriggerLimit]int{store.LimitDaily: 1, store.LimitConcurrent: 2, store.LimitRate: 3}},
-			"6 alerts not investigated in the last 10m (rate limit: 3, concurrency limit: 2, daily cap: 1)."},
+			"6 alert messages not investigated in the last 10m (rate limit: 3, concurrency limit: 2, daily cap: 1)."},
 	} {
 		if got := digestText(tt.d); got != tt.want {
 			t.Errorf("%s: %q; want %q", tt.name, got, tt.want)
@@ -306,6 +307,10 @@ func TestTheDigestLoopPurgesRunsOlderThanADayOncePerHour(t *testing.T) {
 	if len(w.q.got()) != 1 {
 		t.Errorf("posts = %+v; want the digest of the window that ended a day ago, before its rows are purged", w.q.got())
 	}
+	// Each purge is asked to delete what is older than the longest window any limit counts, from the time of its own
+	// pass: not older than that, which would keep rows nothing counts, and not newer, which would delete starts that
+	// the daily cap and the concurrency still count.
+	wantCutoffs := []time.Time{w.now().Add(-v1alpha1.MaxLimitWindow)}
 	for _, step := range []struct {
 		after time.Duration
 		purge bool
@@ -316,14 +321,12 @@ func TestTheDigestLoopPurgesRunsOlderThanADayOncePerHour(t *testing.T) {
 		if purged := len(spy.cutoffs) > before; purged != step.purge {
 			t.Errorf("a pass %v after the last: purged = %v; want %v", step.after, purged, step.purge)
 		}
-	}
-	for _, c := range spy.cutoffs {
-		if d := w.now().Sub(c); d < 24*time.Hour {
-			t.Errorf("purged runs from %v, only %v old; want a day at least", c, d)
+		if step.purge {
+			wantCutoffs = append(wantCutoffs, w.now().Add(-v1alpha1.MaxLimitWindow))
 		}
 	}
-	if len(spy.cutoffs) != 2 {
-		t.Errorf("%d purges; want the first pass's and the one an hour later", len(spy.cutoffs))
+	if !slices.EqualFunc(spy.cutoffs, wantCutoffs, time.Time.Equal) {
+		t.Errorf("purged runs from before %v; want %v: a day before each pass", spy.cutoffs, wantCutoffs)
 	}
 }
 

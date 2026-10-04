@@ -21,5 +21,7 @@ CREATE TABLE trigger_runs (
     PRIMARY KEY (connection, channel, thread_ts)
 );
 CREATE INDEX trigger_runs_at ON trigger_runs (binding, trigger_index, at) WHERE limited = '';
-CREATE INDEX trigger_runs_undigested ON trigger_runs (window_end) WHERE limited <> '' AND digested = 0;
+-- The open window of a trigger is found, and a window is marked digested, by Binding and trigger among the few rows that
+-- are stopped and not yet digested; the digests due are read from the same small index.
+CREATE INDEX trigger_runs_undigested ON trigger_runs (binding, trigger_index, window_end) WHERE limited <> '' AND digested = 0;
 CREATE INDEX trigger_runs_purge ON trigger_runs (at);

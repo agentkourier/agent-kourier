@@ -22,6 +22,25 @@ const runningStarts = `SELECT COUNT(*) FROM trigger_runs r
 	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = r.thread_ts AND s.task_id <> '')
 	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = r.thread_ts AND q.delivered_at IS NULL))`
 
+// startsSince counts the admitted starts of a trigger after a time. Its arguments are the Binding, the trigger and the time.
+const startsSince = `SELECT COUNT(*) FROM trigger_runs WHERE binding = ? AND trigger_index = ? AND limited = '' AND at > ?`
+
+// openWindow finds the digest window that a stopped start of the trigger joins: the open one, which has not ended and
+// whose digest is not queued. Its arguments are the Binding, the trigger and the time of the start.
+const openWindow = `SELECT window_start, window_end FROM trigger_runs
+	WHERE binding = ? AND trigger_index = ? AND limited <> '' AND digested = 0 AND window_end > ? ORDER BY window_start LIMIT 1`
+
+// dueWindows lists the stopped starts of the windows that ended and are not digested, with their counts. Its argument
+// is now.
+const dueWindows = `SELECT binding, trigger_index, connection, channel, window_start, window_end, limited, COUNT(*)
+	FROM trigger_runs WHERE limited <> '' AND digested = 0 AND window_end <= ?
+	GROUP BY binding, trigger_index, connection, channel, window_start, window_end, limited
+	ORDER BY window_start, binding, trigger_index, limited`
+
+// markDigested marks a window digested. Its arguments are the Binding, the trigger and the start of the window.
+const markDigested = `UPDATE trigger_runs SET digested = 1
+	WHERE binding = ? AND trigger_index = ? AND window_start = ? AND limited <> '' AND digested = 0`
+
 // AdmitTriggerRun implements store.TriggerRuns. The checks, the window of a stopped start and the write are one
 // transaction on the write pool's single connection, so two starts cannot both pass the last free place.
 func (s *Store) AdmitTriggerRun(ctx context.Context, run store.TriggerRun, limits store.TriggerRunLimits) (telemetryResult0 store.TriggerAdmission, telemetryErr error) {
@@ -70,7 +89,7 @@ func (s *Store) AdmitTriggerRun(ctx context.Context, run store.TriggerRun, limit
 func reachedLimit(ctx context.Context, tx *sql.Tx, run store.TriggerRun, limits store.TriggerRunLimits) (store.TriggerLimit, error) {
 	now := ts(run.At)
 	started := func(since int64) (n int, err error) {
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM trigger_runs WHERE binding = ? AND trigger_index = ? AND limited = '' AND at > ?`,
+		err = tx.QueryRowContext(ctx, startsSince,
 			run.Binding, run.Trigger, since).Scan(&n)
 		return n, err
 	}
@@ -106,8 +125,7 @@ func recordStart(ctx context.Context, tx *sql.Tx, run store.TriggerRun, now int6
 // start opens. A window is open while it has not ended and its digest is not queued.
 func recordStopped(ctx context.Context, tx *sql.Tx, run store.TriggerRun, limit store.TriggerLimit, now, window int64) error {
 	start, end := now, now+window
-	err := tx.QueryRowContext(ctx, `SELECT window_start, window_end FROM trigger_runs
-		WHERE binding = ? AND trigger_index = ? AND limited <> '' AND digested = 0 AND window_end > ? ORDER BY window_start LIMIT 1`,
+	err := tx.QueryRowContext(ctx, openWindow,
 		run.Binding, run.Trigger, now).Scan(&start, &end)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -118,20 +136,6 @@ func recordStopped(ctx context.Context, tx *sql.Tx, run store.TriggerRun, limit 
 	return err
 }
 
-// ReleaseTriggerRun implements store.TriggerRuns.
-func (s *Store) ReleaseTriggerRun(ctx context.Context, key store.ConversationKey) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ReleaseTriggerRun")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !validKey(key) {
-		return false, fmt.Errorf("release trigger run %+v: the key is incomplete: %w", key, store.ErrInvalid)
-	}
-	n, err := s.exec(ctx, `DELETE FROM trigger_runs WHERE connection = ? AND channel = ? AND thread_ts = ? AND limited = ''`, key.Connection, key.Channel, key.Thread)
-	if err != nil {
-		return false, fmt.Errorf("release trigger run %+v: %w", key, err)
-	}
-	return n > 0, nil
-}
-
 // ListTriggerDigests implements store.TriggerRuns.
 func (s *Store) ListTriggerDigests(ctx context.Context, now time.Time) (telemetryResult0 []store.TriggerDigest, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.ListTriggerDigests")
@@ -139,10 +143,7 @@ func (s *Store) ListTriggerDigests(ctx context.Context, now time.Time) (telemetr
 	if !triggerTime(now) {
 		return nil, fmt.Errorf("list trigger digests: the time must be after the Unix epoch: %w", store.ErrInvalid)
 	}
-	rows, err := s.read.QueryContext(ctx, `SELECT binding, trigger_index, connection, channel, window_start, window_end, limited, COUNT(*)
-		FROM trigger_runs WHERE limited <> '' AND digested = 0 AND window_end <= ?
-		GROUP BY binding, trigger_index, connection, channel, window_start, window_end, limited
-		ORDER BY window_start, binding, trigger_index, limited`, ts(now))
+	rows, err := s.read.QueryContext(ctx, dueWindows, ts(now))
 	if err != nil {
 		return nil, fmt.Errorf("list trigger digests: %w", err)
 	}
@@ -177,7 +178,7 @@ func (s *Store) MarkTriggerDigested(ctx context.Context, binding string, trigger
 	if binding == "" || trigger < 0 || !triggerTime(start) {
 		return fmt.Errorf("mark trigger digested of %q: the Binding, trigger and a window start after the Unix epoch are required: %w", binding, store.ErrInvalid)
 	}
-	if _, err := s.exec(ctx, `UPDATE trigger_runs SET digested = 1 WHERE binding = ? AND trigger_index = ? AND window_start = ? AND limited <> ''`, binding, trigger, ts(start)); err != nil {
+	if _, err := s.exec(ctx, markDigested, binding, trigger, ts(start)); err != nil {
 		return fmt.Errorf("mark trigger digested of %q: %w", binding, err)
 	}
 	return nil

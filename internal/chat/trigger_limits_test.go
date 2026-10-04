@@ -317,17 +317,42 @@ func TestRepeatsAndClosesAreNeverLimited(t *testing.T) {
 	}
 }
 
-// A start that the prompt check refused started no investigation, so it uses no place: five refusals leave the five
-// places, and a transient failure that is asked for again counts once.
-func TestARefusedStartUsesNoPlaceAndARetriedStartCountsOnce(t *testing.T) {
+// A start that the prompt check refused still counts against the rate and the daily cap: the refusal posts a note of its
+// own, so a template that stops fitting during a storm must be held to the limits, not note every alert. The sixth
+// refusal in a window is limited, silent, and never reaches the hook that would note it.
+func TestARefusedStartCountsAgainstTheLimits(t *testing.T) {
 	h := newLimited(t, trialTrigger())
 	h.hookErr = chat.ErrNotStarted
-	for n := range 6 {
-		if got := h.fire(t, n, fmt.Sprintf("%d.1", 100+n)); got != "not_started" {
-			t.Fatalf("refused alert %d: %q; want not_started", n, got)
-		}
+	var decisions []string
+	for n := range 8 {
+		decisions = append(decisions, h.fire(t, n, fmt.Sprintf("%d.1", 100+n)))
 		h.clk.advance(time.Second)
 	}
+	want := []string{"not_started", "not_started", "not_started", "not_started", "not_started", "limited", "limited", "limited"}
+	if !slices.Equal(decisions, want) {
+		t.Errorf("decisions = %v; want %v", decisions, want)
+	}
+	if got := h.started(); len(got) != 5 {
+		t.Errorf("the start hook, which notes a refusal, was asked for %v; want the first five only", got)
+	}
+	if ds := h.digests(t); len(ds) != 1 || ds[0].Counts[store.LimitRate] != 3 {
+		t.Errorf("digests = %+v; want the three limited refusals in one window", ds)
+	}
+	// A refusal is no running investigation: with only refusals, no concurrency place is used.
+	tr := trialTrigger()
+	tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 100, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}}
+	h = newLimited(t, tr)
+	h.hookErr = chat.ErrNotStarted
+	for n := range 3 {
+		if got := h.fire(t, n, fmt.Sprintf("%d.1", 100+n)); got != "not_started" {
+			t.Errorf("refusal %d: %q; want not_started, since a refusal takes no concurrency place", n, got)
+		}
+	}
+}
+
+// A start that failed for a reason that will pass and is asked for again counts once, not once for each ask.
+func TestARetriedStartCountsOnce(t *testing.T) {
+	h := newLimited(t, trialTrigger())
 	h.hookErr = errors.New("the queue is down")
 	if err := h.in.Message(h.ctx, botInbound("C1", "200.1", alertN(10, "FIRING"))); err == nil {
 		t.Fatal("a start that failed returned no error; want the event redelivered")
@@ -341,7 +366,7 @@ func TestARefusedStartUsesNoPlaceAndARetriedStartCountsOnce(t *testing.T) {
 		decisions = append(decisions, h.fire(t, n, fmt.Sprintf("%d.1", 200+n)))
 	}
 	if want := []string{"started", "started", "started", "started", "limited"}; !slices.Equal(decisions, want) {
-		t.Errorf("decisions after the retried start = %v; want %v: it counted once, the refusals not at all", decisions, want)
+		t.Errorf("decisions after the retried start = %v; want %v: it counted once", decisions, want)
 	}
 }
 

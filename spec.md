@@ -655,8 +655,11 @@ there is a place, and no thread of the key says "fired again" about an alert nob
 The counts are durable (`trigger_runs`, section 9), so they hold across a restart. Rate and daily
 are sliding windows over the starts of the Binding's trigger (a start counts from the moment it
 is decided until the window passes it); a fixed window would let twice the limit through at a
-boundary. A start is one row for its message, so a redelivered event is counted once, and a start
-whose turn was refused (`not_started`) is taken back and uses no place. Concurrency counts the
+boundary. A start is one row for its message, so a redelivered event is counted once. A start whose turn
+was refused (`not_started`) stays counted for the rate and the daily cap, since the refusal posts a
+note of its own: a template that stops fitting during a storm is held to the limits like any other
+start, and its alerts past them are `limited`, silent and in the digest. It is no running
+investigation, so it uses no concurrency place. Concurrency counts the
 trigger's started investigations whose session has an active task (running, or paused for a
 person) or a turn that is queued and not yet delivered: a start that was taken has a place at
 once, not when the agent gets to it. An investigation that never ends is counted for at most 24
@@ -666,14 +669,15 @@ and write, as the acknowledgement path allows. A trigger with no thread rules is
 way.
 
 **The digest line (D26).** Once for each window and each trigger, courier posts one line at the top
-level of the Binding's channel through the outbox: "7 alerts not investigated in the last 10m
+level of the Binding's channel through the outbox: "7 alert messages not investigated in the last 10m
 (rate limit)." (more than one limit in a window: "(rate limit: 5, daily cap: 2)"). A window
 opens with the first stopped start after the last digest and lasts the trigger's `rateLimit.per`
 (an hour for a trigger with only a daily cap); the line is posted when it has ended, within
 15 seconds, so that it can count. The row it asks the outbox for is named after the connection,
 Binding, trigger and the start of the window, so a crash or a failed write between queueing it
 and recording that it was queued posts it once. The line holds a count, a length and a limit and
-never any text of an alert. A window that ended while courier was down is posted when it is up.
+never any text of an alert. It counts alert messages, not distinct alerts: a repeat of a stopped alert that is stopped
+again is another. A window that ended while courier was down is posted when it is up.
 
 **The first turn of a started thread.** The broker renders the trigger's `promptTemplate` over
 the trigger's view of the message (`.Channel`, `.State`, `.Key`, `.Fields`, `.Link`, `.Source`)
