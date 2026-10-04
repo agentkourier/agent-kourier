@@ -161,6 +161,8 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 		return "Fired again at", true
 	case session.NoticeTriggerClosed:
 		return "Resolved at", true
+	case session.NoticeTriggerRefused: // the Detail says which value failed
+		return "Not investigated:", true
 	}
 	return "", false
 }

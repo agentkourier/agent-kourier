@@ -160,6 +160,10 @@ const (
 	// NoticeTriggerClosed says a botMessage trigger's key closed, such as an alert that resolved, in the thread
 	// that holds it, and starts no turn. Detail is the time, which courier made.
 	NoticeTriggerClosed NoticeKind = "trigger_closed"
+	// NoticeTriggerRefused says a botMessage trigger's start was refused, so the alert's thread has no
+	// investigation. Detail names which value failed its check (".Fields.alertname failed the prompt check.")
+	// and never the value: the name is the Binding's own, and the value is the message's, untrusted.
+	NoticeTriggerRefused NoticeKind = "trigger_refused"
 )
 
 // Notice is something for the thread that no turn's output says. ID is stable, so a renderer

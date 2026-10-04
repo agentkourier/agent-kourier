@@ -405,6 +405,24 @@ func TestNoticesOfATriggerThreadAreFixedTextAndATime(t *testing.T) {
 	}
 }
 
+// The note of a start that was refused says so in courier's words, and what failed in the Detail's: the name of the
+// value, which the caller took from a closed set, and never the value.
+func TestNoticeOfARefusedTriggerStartIsFixedText(t *testing.T) {
+	e := setup(t)
+	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	thread := thread
+	thread.Thread = e.root
+	n := session.Notice{ID: "slack:ns/conn:C1:5.5/" + string(session.NoticeTriggerRefused), Kind: session.NoticeTriggerRefused, MessageRef: "5.5", Detail: ".Fields.alertname failed the prompt check."}
+	sink.Notice(t.Context(), thread, n)
+	row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
+	var out chat.Outgoing
+	_ = json.Unmarshal([]byte(row.Payload), &out)
+	want := "Not investigated: .Fields.alertname failed the prompt check."
+	if err != nil || row.Thread != e.root || out.Message == nil || out.Message.Fallback != want {
+		t.Errorf("row %+v, message %+v, %v; want a note in the thread that says %q", row, out.Message, err, want)
+	}
+}
+
 // flaky is an Enqueuer whose first fails calls fail with err, and that then writes through to q.
 type flaky struct {
 	q     live.Enqueuer

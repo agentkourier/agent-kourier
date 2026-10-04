@@ -50,6 +50,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"courier_trigger_matched_total", "Bot messages a botMessage trigger matched, by Binding.", []string{"binding"}},
 		{"courier_trigger_unmatched_total", "Bot messages the platform passed on that matched none of the Binding's triggers, by Binding.", []string{"binding"}},
 		{"courier_trigger_decisions_total", "What a matched bot message did to its key's thread, by Binding and decision (started, repeat, closed, close_unknown, dedup, empty_key, not_started).", []string{"binding", "decision"}},
+		{"courier_trigger_refused_total", "Trigger starts whose first prompt was refused, so no turn started, by Binding, trigger index, the value that failed its check (ref) and why (reason).", []string{"binding", "trigger", "ref", "reason"}},
 		{"courier_stream_reconnects_total", "Stream reconnect attempts by outcome.", []string{"outcome"}},
 		{"courier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
 		{"courier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},
