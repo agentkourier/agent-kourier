@@ -551,7 +551,9 @@ from one bot, named by `from.botId` and never by display name, and then:
   name. A message in which an extract does not match does not match the trigger.
 - `thread.by: key` gives messages with the same extracted `key` one thread, anchored as for an
   @mention inside a thread courier doesn't own. `cooldown` (1m to 168h) allows no new turn for a
-  key inside the window, and `closeWhen` (`{state: RESOLVED}`) posts a note and starts no turn.
+  key inside the window, `closeWhen` (`{state: RESOLVED}`) posts a note and starts no turn, and
+  `maxIdle` (twice the cooldown to 720h; default the larger of 24h and twice the cooldown) abandons
+  an open thread that has had no message of its key for that long.
 - `promptTemplate` is a Go template over the trigger's view of the message. It is parsed and run
   once at load against a placeholder view, so a mistyped field name rejects the Binding.
 - `preset: alertmanager` fills in `match`, `extract`, `thread` and `promptTemplate` for
@@ -592,18 +594,28 @@ equal `closeWhen`; any other match is a *fire*. The time is when courier took th
 
 | Message | The key has | Decision | What happens |
 |---|---|---|---|
-| fire | no thread, or a closed one whose cooldown has ended, or one whose turn never started and is over a minute old | `started` | Reserve the thread, anchored to this message. Hand the start to the session (CT-4); once that is taken, mark the thread started, which is when the cooldown begins. |
-| fire | an open thread, however old, or a closed one inside its cooldown | `repeat` | Note "Fired again at `<time>`." in that thread, and reopen it. No turn. |
+| fire | no thread, or a closed one whose cooldown has ended, or one whose turn never started and is over a minute old, or an open one idle past `maxIdle` | `started` | Reserve the thread, anchored to this message. Hand the start to the session (CT-4); once that is taken, mark the thread started, which is when the cooldown begins. |
+| fire | an open thread that is not idle past `maxIdle`, or a closed one inside its cooldown | `repeat` | Note "Fired again at `<time>`." in that thread, and reopen it. No turn. |
 | fire | this very message as its thread (a redelivery) | `dedup` | Nothing if its turn started; otherwise ask for the start again, since the first ask failed. |
 | fire, key empty | (no thread: the key came out empty) | `empty_key` | An investigation of its own, with no cooldown and no note. A warning, once for the trigger. |
 | close | an open thread whose turn started | `closed` | Note "Resolved at `<time>`." in that thread, and close it. No turn. The cooldown goes on. |
 | close | no thread, a closed one, or one whose turn never started | `close_unknown` | Ignored and counted. |
+| fire | the turn was refused: the session hook returned `chat.ErrNotStarted` | `not_started` | The event is acknowledged and not delivered again. The thread stays reserved and unmarked: no cooldown, and the key's next fire takes it over after a minute. |
 
 The cooldown runs from the message that started the turn, not from the last message, so a key
 starts at most one turn in each window however often it fires and resolves (a flapping alert is
-one investigation); a thread that never resolves stays the key's thread. It begins when the turn
-has started and not when the thread is reserved, so a turn that could not start, such as a
-refused prompt, holds no key: the next fire, a minute after the reservation, takes it over. The
+one investigation). An open thread takes its key's messages, so an alert that keeps repeating
+(Alertmanager's `repeat_interval`) stays one thread; but one with no message of its key for
+`thread.maxIdle` is abandoned, whatever the cooldown, and the next fire starts a new
+investigation. That is what mends a resolve that never registered: courier down past Slack's
+retry window, or a resolve that arrived before its fire. `maxIdle` is at least twice the
+cooldown (so that the 4h repeats of an alert land as notes), at most 720h, and unset it is the
+larger of 24h and twice the cooldown. The cooldown begins when the turn has started and not
+when the thread is reserved, so a turn that could not start holds no key. A session hook that
+fails for a reason that will pass (a store error) returns an ordinary error, and the redelivery
+asks again; one that will not start the turn (a refused prompt) returns `chat.ErrNotStarted`,
+which acknowledges the event and counts `not_started`. Either way the next fire, a minute after
+the reservation, takes the key over. The
 notes are fixed text and a time, never any of the message; each is one outbox row named after
 the message that caused it, so a redelivered event adds none. Each step is idempotent and a note
 is queued before the change it goes with, so an error returns to Slack as an unacknowledged

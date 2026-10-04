@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -427,7 +428,7 @@ type failingThreads struct {
 	err error
 }
 
-func (f failingThreads) OpenTriggerThread(context.Context, store.TriggerThread, time.Time) (store.TriggerThread, bool, error) {
+func (f failingThreads) OpenTriggerThread(context.Context, store.TriggerThread, store.TriggerStale) (store.TriggerThread, bool, error) {
 	return store.TriggerThread{}, false, f.err
 }
 
@@ -552,6 +553,158 @@ func TestAFailedMarkIsMendedByTheRedelivery(t *testing.T) {
 	}
 	if got := h.send(t, "101.1", kindResolved); got != "closed" {
 		t.Errorf("a close of the marked thread: %q; want closed", got)
+	}
+}
+
+// A resolve that never registers (courier was down past Slack's retry window) must not leave the key with a thread
+// that only takes notes for ever: an open thread that has had no message of its key for maxIdle (24h unless the
+// trigger says) is abandoned, and the next fire starts a new investigation. Every message of the key counts as
+// life, so an alert that Alertmanager keeps repeating stays one thread.
+func TestAThreadWhoseResolveWasLostIsAbandonedAfterMaxIdle(t *testing.T) {
+	short := trialTrigger()
+	short.Thread.MaxIdle = metav1.Duration{Duration: 8 * time.Hour}
+	for _, tc := range []struct {
+		name  string
+		tr    v1alpha1.Trigger
+		gaps  []time.Duration // the clock moves this far before each fire after the first
+		wants []string
+	}{
+		{"the default of 24h, fires inside it", trialTrigger(), []time.Duration{4 * time.Hour, 23 * time.Hour, 23 * time.Hour}, []string{"repeat", "repeat", "repeat"}},
+		{"the default, a fire after it", trialTrigger(), []time.Duration{20 * time.Hour, 25 * time.Hour, time.Hour}, []string{"repeat", "started", "repeat"}},
+		{"exactly the default", trialTrigger(), []time.Duration{24 * time.Hour}, []string{"repeat"}},
+		{"a maxIdle of 8h, a fire inside it", short, []time.Duration{7 * time.Hour}, []string{"repeat"}},
+		{"a maxIdle of 8h, a fire after it", short, []time.Duration{9 * time.Hour}, []string{"started"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTriggered(t, tc.tr)
+			if got := h.send(t, "100.1", kindFiring); got != "started" {
+				t.Fatalf("the first fire: %q", got)
+			}
+			for i, gap := range tc.gaps {
+				h.clk.advance(gap)
+				if got := h.send(t, "10"+string(rune('1'+i))+".1", kindFiring); got != tc.wants[i] {
+					t.Fatalf("fire %d, %v on: %q; want %q", i+2, gap, got, tc.wants[i])
+				}
+			}
+			var starts int
+			for _, w := range tc.wants {
+				if w == "started" {
+					starts++
+				}
+			}
+			if got := len(h.started()); got != 1+starts {
+				t.Errorf("turns started for %v; want %d", h.started(), 1+starts)
+			}
+		})
+	}
+}
+
+// The new thread after an abandoned one is the key's thread: its notes go there, and the abandoned thread's late
+// mark of a turn cannot take the key back.
+func TestAnAbandonedThreadIsReplacedByTheNewOne(t *testing.T) {
+	h := newTriggered(t, trialTrigger())
+	h.send(t, "100.1", kindFiring)
+	h.clk.advance(30 * time.Hour)
+	if got := h.send(t, "101.1", kindFiring); got != "started" {
+		t.Fatalf("a fire after maxIdle: %q; want started", got)
+	}
+	h.clk.advance(time.Hour)
+	if got := h.send(t, "102.1", kindFiring); got != "repeat" {
+		t.Fatalf("the next fire: %q; want repeat", got)
+	}
+	if got := h.send(t, "103.1", kindResolved); got != "closed" {
+		t.Fatalf("the resolve: %q; want closed", got)
+	}
+	if _, threads := h.noted(); !slices.Equal(threads, []string{"101.1", "101.1"}) {
+		t.Errorf("notes in %v; want both in the new thread", threads)
+	}
+}
+
+// A resolve that arrives before its fire (the fire's event failed and was redelivered after it) closes nothing,
+// and the fire then opens a thread whose resolve is already spent: it is open until maxIdle takes it.
+func TestAResolveBeforeItsFireIsLostAndMaxIdleMendsIt(t *testing.T) {
+	h := newTriggered(t, trialTrigger())
+	for _, s := range []struct {
+		after    time.Duration
+		id       string
+		msg      chat.BotMessage
+		decision string
+	}{
+		{0, "100.1", kindResolved, "close_unknown"},
+		{time.Minute, "101.1", kindFiring, "started"},
+		{time.Hour, "102.1", kindFiring, "repeat"}, // the alert repeats, and the thread is open
+		{23 * time.Hour, "103.1", kindFiring, "repeat"},
+		{25 * time.Hour, "104.1", kindFiring, "started"}, // days later, a real firing
+	} {
+		h.clk.advance(s.after)
+		if got := h.send(t, s.id, s.msg); got != s.decision {
+			t.Fatalf("message %s: %q; want %q", s.id, got, s.decision)
+		}
+	}
+}
+
+// OnStart has a third outcome. ErrNotStarted, wrapped as a hook would, is an event that is acknowledged and not
+// redelivered, with no cooldown, a thread left unmarked for the key's next fire to take over, and the decision
+// not_started; the hook's own error text is not in the log.
+func TestOnStartThatSaysNotStartedIsAcknowledgedAndHoldsNothing(t *testing.T) {
+	h := newTriggered(t, trialTrigger())
+	h.hookErr = fmt.Errorf("prompt refused, value SECRET-CANARY: %w", chat.ErrNotStarted)
+	if got := h.send(t, "100.1", kindFiring); got != "not_started" {
+		t.Fatalf("the refused fire: %q; want not_started", got)
+	}
+	if got := h.send(t, "100.1", kindFiring); got != "dedup" || len(h.got()) != 1 {
+		t.Errorf("the same event again: %q, hook asked %d times; want the Intake to remember it", got, len(h.got()))
+	}
+	if strings.Contains(h.logs.String(), "SECRET-CANARY") {
+		t.Errorf("the hook's error text is in the log:\n%s", h.logs.String())
+	}
+	h.hookErr = nil
+	h.clk.advance(10 * time.Second)
+	if got := h.send(t, "101.1", kindResolved); got != "close_unknown" {
+		t.Errorf("a close of a thread with no turn: %q; want close_unknown", got)
+	}
+	h.clk.advance(2 * time.Minute)
+	if got := h.send(t, "102.1", kindFiring); got != "started" {
+		t.Fatalf("the next fire, past the grace: %q; want started: no cooldown was begun", got)
+	}
+	if got, want := h.started(), []string{"100.1", "102.1"}; !slices.Equal(got, want) {
+		t.Errorf("turns asked for %v; want %v", got, want)
+	}
+	if got := h.send(t, "103.1", kindFiring); got != "repeat" {
+		t.Errorf("a fire after the one that started: %q; want repeat", got)
+	}
+}
+
+// ErrNotStarted means the same for a match with no thread to mark.
+func TestOnStartThatSaysNotStartedForAnUnthreadedMatch(t *testing.T) {
+	h := newTriggered(t, kindOnly())
+	h.hookErr = chat.ErrNotStarted
+	if got := h.send(t, "100.1", kindFiring); got != "not_started" {
+		t.Errorf("a refused fire: %q; want not_started", got)
+	}
+}
+
+// The note comes before the change it goes with: a repeat on a closed thread whose notice cannot be queued leaves
+// the thread closed, so that the next resolve is a close of nothing (close_unknown), not a second close, and the
+// redelivery of the fire reopens it.
+func TestAFailedNoticeOfARepeatLeavesAClosedThreadClosed(t *testing.T) {
+	h := newTriggered(t, trialTrigger())
+	h.send(t, "100.1", kindFiring)
+	if got := h.send(t, "101.1", kindResolved); got != "closed" {
+		t.Fatalf("the resolve: %q", got)
+	}
+	h.notes.fail = []error{errors.New("outbox unavailable")}
+	if err := h.in.Message(h.ctx, botInbound("C1", "102.1", kindFiring)); err == nil {
+		t.Fatal("the fire again: Message = nil; want the error of the notice")
+	}
+	if got := h.send(t, "103.1", kindResolved); got != "close_unknown" {
+		t.Errorf("a resolve while the thread is still closed: %q; want close_unknown: the failed repeat reopened nothing", got)
+	}
+	if got := h.send(t, "102.1", kindFiring); got != "repeat" {
+		t.Errorf("the fire's redelivery: %q; want repeat", got)
+	}
+	if got := h.send(t, "104.1", kindResolved); got != "closed" {
+		t.Errorf("a resolve of the reopened thread: %q; want closed", got)
 	}
 }
 

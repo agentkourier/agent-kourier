@@ -26,7 +26,7 @@ func opening(ts string, at time.Time) store.TriggerThread {
 // reserve is OpenTriggerThread with no stale takeover: a reservation whose turn never started stays.
 func reserve(t *testing.T, s *Store, th store.TriggerThread) (store.TriggerThread, bool, error) {
 	t.Helper()
-	return s.OpenTriggerThread(t.Context(), th, time.Time{})
+	return s.OpenTriggerThread(t.Context(), th, store.TriggerStale{})
 }
 
 // startAt reserves the key's thread for ts at at and marks its turn started, with the cooldown of tCool: what the
@@ -188,13 +188,13 @@ func TestOpenTriggerThreadTakesOverAReservationThatNeverStarted(t *testing.T) {
 		"another message, at the end of the grace":      {"200.2", t0.Add(grace)},
 		"another message, a tick before the grace ends": {"200.2", t0.Add(grace - time.Nanosecond)},
 	} {
-		got, opened, err := s.OpenTriggerThread(t.Context(), opening(tc.ts, tc.at), tc.at.Add(-grace))
+		got, opened, err := s.OpenTriggerThread(t.Context(), opening(tc.ts, tc.at), store.TriggerStale{Unstarted: tc.at.Add(-grace)})
 		if err != nil || opened || got.Thread != "100.1" || !got.Opened.Equal(t0) {
 			t.Errorf("%s: %+v, opened %v, %v; want the first reservation back", name, got, opened, err)
 		}
 	}
 	at := t0.Add(grace + time.Nanosecond)
-	got, opened, err := s.OpenTriggerThread(t.Context(), opening("200.2", at), at.Add(-grace))
+	got, opened, err := s.OpenTriggerThread(t.Context(), opening("200.2", at), store.TriggerStale{Unstarted: at.Add(-grace)})
 	if err != nil || !opened || got.Thread != "200.2" || !got.Opened.Equal(at) {
 		t.Fatalf("another message, past the grace: %+v, opened %v, %v; want the reservation taken over", got, opened, err)
 	}
@@ -204,7 +204,7 @@ func TestOpenTriggerThreadTakesOverAReservationThatNeverStarted(t *testing.T) {
 	if err := s.MarkTriggerStarted(t.Context(), tBinding, tKey, "200.2", at.Add(tCool)); err != nil {
 		t.Fatal(err)
 	}
-	if _, opened, err := s.OpenTriggerThread(t.Context(), opening("300.3", at.Add(24*time.Hour)), at.Add(23*time.Hour)); err != nil || opened {
+	if _, opened, err := s.OpenTriggerThread(t.Context(), opening("300.3", at.Add(24*time.Hour)), store.TriggerStale{Unstarted: at.Add(23 * time.Hour)}); err != nil || opened {
 		t.Errorf("a started thread, a day on, an open one: opened %v, %v; want it kept", opened, err)
 	}
 }
@@ -232,7 +232,7 @@ func TestOpenTriggerThreadHasOneWinnerUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ts := "100." + string(rune('a'+i))
-			if _, opened, err := s.OpenTriggerThread(t.Context(), opening(ts, t0), t0.Add(-time.Minute)); err != nil {
+			if _, opened, err := s.OpenTriggerThread(t.Context(), opening(ts, t0), store.TriggerStale{Unstarted: t0.Add(-time.Minute), Idle: t0.Add(-time.Minute)}); err != nil {
 				t.Error(err)
 			} else if opened {
 				wins.Add(1)
@@ -364,5 +364,95 @@ func TestTriggerThreadsSurviveARestart(t *testing.T) {
 	}
 	if _, opened, err := reserve(t, s, opening("200.2", t0.Add(time.Hour))); err != nil || opened {
 		t.Errorf("a start inside the cooldown after the restart: opened %v, %v; want the cooldown kept", opened, err)
+	}
+}
+
+// An open thread that started its turn and has had no message of its key since before the Idle cutoff is
+// abandoned, its resolve lost: the next fire takes the key over, whatever the cooldown. One seen at the cutoff or
+// later is not. A message of the key moves last seen, so a thread that keeps firing is never idle.
+func TestOpenTriggerThreadTakesOverAnOpenThreadThatWentIdle(t *testing.T) {
+	const maxIdle = 24 * time.Hour
+	s := openTemp(t)
+	startAt(t, s, "100.1", t0)
+	try := func(ts string, at time.Time) (store.TriggerThread, bool) {
+		t.Helper()
+		got, opened, err := s.OpenTriggerThread(t.Context(), opening(ts, at), store.TriggerStale{Idle: at.Add(-maxIdle)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, opened
+	}
+	if got, opened := try("200.2", t0.Add(maxIdle)); opened || got.Thread != "100.1" {
+		t.Errorf("idle for exactly maxIdle: %+v, opened %v; want the thread kept", got, opened)
+	}
+	if err := s.ReopenTriggerThread(t.Context(), tBinding, tKey, t0.Add(20*time.Hour)); err != nil { // a repeat
+		t.Fatal(err)
+	}
+	if got, opened := try("300.3", t0.Add(maxIdle+time.Hour)); opened || got.Thread != "100.1" {
+		t.Errorf("seen 5 h ago: %+v, opened %v; want the thread kept", got, opened)
+	}
+	at := t0.Add(20*time.Hour + maxIdle + time.Nanosecond)
+	got, opened := try("400.4", at)
+	if !opened || got.Thread != "400.4" || !got.Opened.Equal(at) || got.Started() || !got.ClosedAt.IsZero() {
+		t.Errorf("idle past maxIdle: %+v, opened %v; want a new reservation", got, opened)
+	}
+	if err := s.MarkTriggerStarted(t.Context(), tBinding, tKey, "100.1", at.Add(tCool)); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("the abandoned thread's late mark: %v; want ErrConflict", err)
+	}
+}
+
+// With no Idle cutoff an open thread is never abandoned, however old.
+func TestOpenTriggerThreadWithNoIdleCutoffKeepsAnOpenThread(t *testing.T) {
+	s := openTemp(t)
+	startAt(t, s, "100.1", t0)
+	if got, opened, err := s.OpenTriggerThread(t.Context(), opening("200.2", t0.Add(1000*time.Hour)), store.TriggerStale{}); err != nil || opened || got.Thread != "100.1" {
+		t.Errorf("OpenTriggerThread = %+v, %v, %v; want the thread kept", got, opened, err)
+	}
+}
+
+// Purging drops the rows that do nothing now: closed threads past their cooldown, and open ones idle past the
+// cutoff. A closed thread inside its cooldown still holds the key, and a recent open one is a thread.
+func TestPurgeTriggerThreads(t *testing.T) {
+	s := openTemp(t)
+	put := func(key string, at time.Time, closed bool) {
+		t.Helper()
+		in := opening("1."+key, at)
+		in.KeyHash = key
+		if _, opened, err := reserve(t, s, in); err != nil || !opened {
+			t.Fatalf("%s: %v, %v", key, opened, err)
+		}
+		if err := s.MarkTriggerStarted(t.Context(), tBinding, key, in.Thread, at.Add(tCool)); err != nil {
+			t.Fatal(err)
+		}
+		if closed {
+			if _, err := s.CloseTriggerThread(t.Context(), tBinding, key, at.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	now := t0.Add(48 * time.Hour)
+	put("closed-past-cooldown", t0, true)
+	put("closed-in-cooldown", now.Add(-time.Hour), true)
+	put("open-idle", t0, false)
+	put("open-recent", now.Add(-time.Hour), false)
+	if _, _, err := reserve(t, s, opening("2.1", t0)); err != nil { // a reservation that never started, long ago
+		t.Fatal(err)
+	}
+
+	n, err := s.PurgeTriggerThreads(t.Context(), now, time.Time{})
+	if err != nil || n != 1 {
+		t.Fatalf("PurgeTriggerThreads with no idle cutoff = %d, %v; want only the closed one past its cooldown", n, err)
+	}
+	n, err = s.PurgeTriggerThreads(t.Context(), now, now.Add(-24*time.Hour))
+	if err != nil || n != 2 {
+		t.Fatalf("PurgeTriggerThreads = %d, %v; want the idle open thread and the old reservation", n, err)
+	}
+	for key, want := range map[string]bool{"closed-past-cooldown": false, "open-idle": false, "closed-in-cooldown": true, "open-recent": true} {
+		if _, err := s.GetTriggerThread(t.Context(), tBinding, key); (err == nil) != want {
+			t.Errorf("%s kept: %v, want %v", key, err == nil, want)
+		}
+	}
+	if _, err := s.PurgeTriggerThreads(t.Context(), time.Time{}, time.Time{}); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("a purge with no time: %v; want ErrInvalid", err)
 	}
 }

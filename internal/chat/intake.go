@@ -55,10 +55,13 @@ type IntakeConfig struct {
 	// is. It runs on the platform's acknowledgement path, which has a budget of seconds, so it does local writes
 	// only, such as queueing the turn, and calls no agent. When it returns nil the thread is marked started and
 	// the key's cooldown begins; the cooldown is not recorded before, so a turn that could not start, such as a
-	// prompt that was refused, holds no key. Its error means it was not taken: Message returns it, so the
-	// platform leaves the event unacknowledged and delivers it again, and the redelivery asks again. A turn
-	// that is never asked for again leaves a reservation that a later message of the key takes over after a
-	// minute; until then the key's messages are notes in a thread with no investigation.
+	// prompt that was refused, holds no key. It has three outcomes. Nil: the turn started. ErrNotStarted,
+	// itself or wrapped: it will not start, so the event is acknowledged, the thread stays unmarked with no
+	// cooldown, and the decision is not_started; the hook logs its own reason. Any other error is transient:
+	// Message returns it, so the platform leaves the event unacknowledged and delivers it again, and the
+	// redelivery asks again. A turn that is never asked for again leaves a reservation that a later message of
+	// the key takes over after a minute; until then the key's messages are notes in a thread with no
+	// investigation.
 	//
 	// STUB(CT-4): this is where the start goes onward, and CT-3 starts no session from it. CT-4 renders the
 	// prompt and starts the turn, and replaces this hook, which is for a test to see what started until then.

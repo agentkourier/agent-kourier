@@ -401,6 +401,8 @@ func TestTriggersValidate(t *testing.T) {
 			"spec.chat.triggers[0].promptTemplate: not allowed with type: mention"},
 		{"mention with a thread rule", func(o *Binding) { o.Spec.Chat.Triggers[0].Thread.By = ThreadByKey },
 			"spec.chat.triggers[0].thread: not allowed with type: mention"},
+		{"mention with a maxIdle", func(o *Binding) { o.Spec.Chat.Triggers[0].Thread.MaxIdle = hr(48 * time.Hour) },
+			"spec.chat.triggers[0].thread: not allowed with type: mention"},
 		{"no source", func(o *Binding) { bot(o).From = nil }, at + ".from.botId: required"},
 		{"empty bot ID", func(o *Binding) { bot(o).From.BotID = "" }, at + ".from.botId: required"},
 		{"bot name instead of ID", func(o *Binding) { bot(o).From.BotID = "alertmanager" },
@@ -487,6 +489,18 @@ func TestTriggersValidate(t *testing.T) {
 		{"closeWhen without thread.by", func(o *Binding) {
 			bot(o).Thread = TriggerThread{CloseWhen: map[string]string{"state": "RESOLVED"}}
 		}, at + ".thread.closeWhen: requires thread.by"},
+		{"maxIdle without thread.by", func(o *Binding) {
+			bot(o).Thread = TriggerThread{MaxIdle: hr(48 * time.Hour)}
+		}, at + ".thread.maxIdle: requires thread.by"},
+		{"maxIdle at twice the cooldown", func(o *Binding) { bot(o).Thread.MaxIdle = hr(4 * time.Hour) }, ""}, // the test Binding's cooldown is 2h
+		{"maxIdle under twice the cooldown", func(o *Binding) { bot(o).Thread.MaxIdle = hr(4*time.Hour - time.Second) },
+			at + ".thread.maxIdle: 3h59m59s is out of range, must be between twice the cooldown (4h0m0s) and 720h0m0s"},
+		{"maxIdle at the ceiling", func(o *Binding) { bot(o).Thread.MaxIdle = hr(720 * time.Hour) }, ""},
+		{"maxIdle over the ceiling", func(o *Binding) { bot(o).Thread.MaxIdle = hr(721 * time.Hour) },
+			at + ".thread.maxIdle: 721h0m0s is out of range, must be between twice the cooldown (4h0m0s) and 720h0m0s"},
+		{"maxIdle negative", func(o *Binding) { bot(o).Thread.MaxIdle = hr(-time.Hour) },
+			at + ".thread.maxIdle: -1h0m0s is out of range, must be between twice the cooldown (4h0m0s) and 720h0m0s"},
+		{"the default maxIdle with the longest cooldown", func(o *Binding) { bot(o).Thread.Cooldown = hr(168 * time.Hour) }, ""},
 
 		// Prompt template.
 		{"no prompt template", func(o *Binding) { bot(o).PromptTemplate = "" }, at + ".promptTemplate: required"},
@@ -566,5 +580,25 @@ func TestTriggersValidateReportsEveryProblem(t *testing.T) {
 	}
 	if got := problemsOf(b.Validate()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Validate() problems = %q, want %q", got, want)
+	}
+}
+
+// An open thread is abandoned after maxIdle, which is 24h unless the trigger says, and never less than twice the
+// cooldown, so that the default of a long cooldown is still one that validation accepts.
+func TestEffectiveMaxIdle(t *testing.T) {
+	hr := func(d time.Duration) metav1.Duration { return metav1.Duration{Duration: d} }
+	for _, tt := range []struct {
+		name string
+		th   TriggerThread
+		want time.Duration
+	}{
+		{"the preset's cooldown", TriggerThread{Cooldown: hr(4 * time.Hour)}, 24 * time.Hour},
+		{"a cooldown of exactly half the default", TriggerThread{Cooldown: hr(12 * time.Hour)}, 24 * time.Hour},
+		{"a cooldown over half the default", TriggerThread{Cooldown: hr(168 * time.Hour)}, 336 * time.Hour},
+		{"set", TriggerThread{Cooldown: hr(4 * time.Hour), MaxIdle: hr(10 * time.Hour)}, 10 * time.Hour},
+	} {
+		if got := tt.th.EffectiveMaxIdle(); got != tt.want {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }

@@ -21,7 +21,8 @@ type TriggerDecision string
 // one that does.
 const (
 	// DecisionStarted: a fire, and the key has no thread, or its thread is closed and its cooldown has ended, or
-	// its turn never started and the reservation is stale. The message starts a new investigation, anchored to
+	// its turn never started and the reservation is stale, or it is open but has been idle past the trigger's
+	// maxIdle, which is a resolve that never came. The message starts a new investigation, anchored to
 	// itself: the Intake reserves the thread, asks for the turn (OnStart), and, once that is taken, marks the
 	// thread started, which is when its cooldown begins.
 	DecisionStarted TriggerDecision = "started"
@@ -44,7 +45,18 @@ const (
 	// thread. It is an investigation of its own each time, with no cooldown and no note, as a trigger with no
 	// thread rules is, and a warning says so, once for the trigger.
 	DecisionEmptyKey TriggerDecision = "empty_key"
+	// DecisionNotStarted: a fire that would have started a turn, and OnStart said it will not (ErrNotStarted),
+	// such as a prompt that was refused. The event is acknowledged, the thread is left unmarked with no
+	// cooldown, and the key's next fire takes it over once it is stale.
+	DecisionNotStarted TriggerDecision = "not_started"
 )
+
+// ErrNotStarted is what OnStart returns, itself or wrapped, when the match will not start a turn and asking again
+// would not change that, such as a prompt that was refused. The Intake acknowledges the event and does not have
+// it delivered again, it leaves the thread reserved but unmarked, so that no cooldown begins and a later fire of
+// the key may take the key over, and it counts the decision as not_started. The error's text is not logged: OnStart
+// logs its own reason. Any other error of OnStart is transient: it is returned, and the redelivery asks again.
+var ErrNotStarted = errors.New("chat: the trigger's turn was not started")
 
 // reservationGrace is how long a thread that reserved its key, and whose turn has not started, is left to start
 // before a later message of the key may take the key over. A turn that is starting takes milliseconds, and a
@@ -69,7 +81,8 @@ type decided struct {
 // decide applies the thread rules of a match to the store, and carries out what they say:
 //
 //	fire, no thread for the key, or a closed one past its cooldown,
-//	  or a reservation that never started and is stale               started: reserve, OnStart, mark started
+//	  or a reservation that never started and is stale,
+//	  or an open thread idle past thread.maxIdle                     started: reserve, OnStart, mark started
 //	fire, the message is the thread's own (a redelivery)             dedup: OnStart again if it never started
 //	fire, any other thread of the key                                repeat: note, then reopen it
 //	close, the key has an open thread whose turn started             closed: note, then close it
@@ -77,8 +90,9 @@ type decided struct {
 //
 // A trigger with no thread rules has no thread to apply them to: every fire starts a turn and every close is
 // unknown. So has a match whose key is empty, which is counted as such. The cooldown runs from the message that
-// started the turn, not from the last message, so a key starts at most one turn in each window; an open
-// thread takes its key's messages however old it is. The cooldown begins when the turn is marked started, so a
+// started the turn, not from the last message, so a key starts at most one turn in each window. An open thread
+// takes its key's messages until it has had none for thread.maxIdle, which counts it abandoned (its resolve was
+// lost), so the next fire starts afresh. The cooldown begins when the turn is marked started, so a
 // turn that OnStart refused, or never finished asking for, does not hold the key: the next message takes over.
 //
 // Each step is idempotent, and the note comes before the change it goes with, so an error at any point is
@@ -106,7 +120,8 @@ func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
 func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
 	at := m.Message.At.ID
 	th, opened, err := in.cfg.TriggerThreads.OpenTriggerThread(ctx,
-		store.TriggerThread{Binding: m.Binding, KeyHash: hash, Thread: at, Opened: m.Received}, m.Received.Add(-reservationGrace))
+		store.TriggerThread{Binding: m.Binding, KeyHash: hash, Thread: at, Opened: m.Received},
+		store.TriggerStale{Unstarted: m.Received.Add(-reservationGrace), Idle: m.Received.Add(-m.Thread.EffectiveMaxIdle())})
 	if err != nil {
 		return out, fmt.Errorf("open the thread of key %s: %w", out.keyHash, err)
 	}
@@ -114,13 +129,13 @@ func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, o
 	switch {
 	case opened:
 		out.decision = DecisionStarted
-		return out, in.startThread(ctx, m, hash)
+		return in.startThread(ctx, m, hash, out)
 	case th.Thread == at:
 		out.decision = DecisionDedup
 		if th.Started() {
 			return out, nil
 		}
-		return out, in.startThread(ctx, m, hash)
+		return in.startThread(ctx, m, hash, out)
 	}
 	if err := in.note(ctx, m, th.Thread, session.NoticeTriggerRepeat); err != nil {
 		return out, err
@@ -171,7 +186,11 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 				"binding", m.Binding, "trigger", m.Index, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 		}
 	}
-	return out, in.start(ctx, m)
+	err := in.start(ctx, m)
+	if errors.Is(err, ErrNotStarted) {
+		out.decision, err = DecisionNotStarted, nil
+	}
+	return out, err
 }
 
 // start hands the match on as a turn to start, if there is where to.
@@ -183,16 +202,21 @@ func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
 }
 
 // startThread starts the turn of the thread this match reserved, and once that is taken marks the thread
-// started, which is when the cooldown begins: a turn that could not start leaves none.
-func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string) error {
-	if err := in.start(ctx, m); err != nil {
-		return err
+// started, which is when the cooldown begins: a turn that could not start leaves none. If OnStart says it will
+// not start (ErrNotStarted) the thread stays unmarked and the decision is not_started, with no error.
+func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
+	switch err := in.start(ctx, m); {
+	case errors.Is(err, ErrNotStarted):
+		out.decision = DecisionNotStarted
+		return out, nil
+	case err != nil:
+		return out, err
 	}
 	until := m.Received.Add(m.Thread.Cooldown.Duration)
 	if err := in.cfg.TriggerThreads.MarkTriggerStarted(ctx, m.Binding, hash, m.Message.At.ID, until); err != nil {
-		return fmt.Errorf("mark the thread of key %s started: %w", hash[:8], err)
+		return out, fmt.Errorf("mark the thread of key %s started: %w", hash[:8], err)
 	}
-	return nil
+	return out, nil
 }
 
 // note asks for a short note of courier's own in the thread: its kind and the time of the match, and nothing the

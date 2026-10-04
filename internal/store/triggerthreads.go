@@ -31,6 +31,17 @@ type TriggerThread struct {
 // Started says whether the thread's turn started, so that its cooldown runs.
 func (t TriggerThread) Started() bool { return !t.CooldownUntil.IsZero() }
 
+// TriggerStale says when a thread that holds its key no longer does, so that the key's next fire may take it over.
+// Each is a cutoff, and the zero time takes over none of that kind.
+type TriggerStale struct {
+	// Unstarted: a reservation whose turn has not started, opened before this, never will. A turn that is
+	// starting takes milliseconds, so the cutoff tells it from one that failed.
+	Unstarted time.Time
+	// Idle: an open thread whose turn started, last seen before this, is abandoned: it has had no message of
+	// its key for as long as the trigger allows (thread.maxIdle), which is a resolve that never came.
+	Idle time.Time
+}
+
 // TriggerThreads persists the thread of each key of each Binding's botMessage triggers. A row is kept for
 // the key after its thread closes, so that the cooldown outlives the close.
 //
@@ -39,14 +50,14 @@ func (t TriggerThread) Started() bool { return !t.CooldownUntil.IsZero() }
 // reservation whose turn never started is taken over by a later message of the key, once it is stale.
 type TriggerThreads interface {
 	// OpenTriggerThread reserves the key's thread for t.Thread, if the key has none yet, or has one that is
-	// closed and past its cooldown (CooldownUntil is not after t.Opened), or has one that never started its
-	// turn, is another message's and was opened before staleBefore (the zero time takes over none); that is
-	// one atomic step, so two starts of one key cannot both win. The staleness is what tells a turn that is
-	// starting from one that never will. It reports whether t reserved the thread. If it did not it returns the
-	// row that is there, which may be t's own, put there by an earlier delivery of the same message. Binding,
-	// KeyHash, Thread and Opened are required (ErrInvalid otherwise). The row starts open, last seen at Opened,
-	// with no cooldown: the other fields of t are ignored.
-	OpenTriggerThread(ctx context.Context, t TriggerThread, staleBefore time.Time) (current TriggerThread, opened bool, err error)
+	// closed and past its cooldown (CooldownUntil is not after t.Opened), or has one that is stale (see
+	// TriggerStale): a reservation that never started its turn and is another message's, or an open started
+	// thread that has been idle too long. That is one atomic step, so two starts of one key cannot both win.
+	// It reports whether t reserved the thread. If it did not it returns the row that is there, which may be
+	// t's own, put there by an earlier delivery of the same message. Binding, KeyHash, Thread and Opened are
+	// required (ErrInvalid otherwise). The row starts open, last seen at Opened, with no cooldown: the other
+	// fields of t are ignored.
+	OpenTriggerThread(ctx context.Context, t TriggerThread, stale TriggerStale) (current TriggerThread, opened bool, err error)
 	// MarkTriggerStarted records that the turn of the key's thread started, and that the key starts no new
 	// turn until cooldownUntil. It is the same to mark a thread that is marked already. ErrNotFound if the key
 	// has no row, and ErrConflict if its thread is another message's, which took the key over: the turn is
@@ -60,4 +71,9 @@ type TriggerThreads interface {
 	// CloseTriggerThread closes the key's open thread at at, and reports whether it did: a thread that is
 	// closed already keeps its first time. ErrNotFound if the key has no row.
 	CloseTriggerThread(ctx context.Context, binding, keyHash string, at time.Time) (closed bool, err error)
+	// PurgeTriggerThreads deletes the rows that no longer do anything, and returns how many: closed threads
+	// whose cooldown ended before now, and open ones last seen before idleBefore (the zero time deletes none
+	// of those), which a fire would take over anyway. Pass an idleBefore older than any trigger's maxIdle. A key
+	// whose row is gone starts afresh, as one with no row does.
+	PurgeTriggerThreads(ctx context.Context, now, idleBefore time.Time) (int, error)
 }

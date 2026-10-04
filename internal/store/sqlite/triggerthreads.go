@@ -37,15 +37,18 @@ func scanTriggerThread(r interface{ Scan(...any) error }) (store.TriggerThread, 
 // OpenTriggerThread implements store.TriggerThreads. The upsert's WHERE is the rule for replacing a row, and
 // the write pool has one connection, so two starts of a key cannot both pass it. A new row has cooldown_until 0,
 // which is a turn that has not started (MarkTriggerStarted).
-func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread, staleBefore time.Time) (telemetryResult0 store.TriggerThread, telemetryResult1 bool, telemetryErr error) {
+func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread, stale store.TriggerStale) (telemetryResult0 store.TriggerThread, telemetryResult1 bool, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.OpenTriggerThread")
 	defer func() { finishStore(op, telemetryErr) }()
 	if t.Binding == "" || t.KeyHash == "" || t.Thread == "" || !triggerTime(t.Opened) {
 		return store.TriggerThread{}, false, fmt.Errorf("open trigger thread of %q: the Binding, key hash, thread and an opening time after the Unix epoch are required: %w", t.Binding, store.ErrInvalid)
 	}
-	var stale int64 // no row was opened before 0
-	if triggerTime(staleBefore) {
-		stale = ts(staleBefore)
+	var unstarted, idle int64 // no row was opened or seen before 0
+	if triggerTime(stale.Unstarted) {
+		unstarted = ts(stale.Unstarted)
+	}
+	if triggerTime(stale.Idle) {
+		idle = ts(stale.Idle)
 	}
 	var current store.TriggerThread
 	var opened bool
@@ -54,8 +57,9 @@ func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread, st
 			ON CONFLICT (binding, key_hash) DO UPDATE SET thread = excluded.thread, opened = excluded.opened,
 				last_seen = excluded.last_seen, closed_at = 0, cooldown_until = 0
 			WHERE (trigger_threads.closed_at <> 0 AND trigger_threads.cooldown_until <= excluded.opened)
-				OR (trigger_threads.cooldown_until = 0 AND trigger_threads.thread <> excluded.thread AND trigger_threads.opened < ?)`,
-			t.Binding, t.KeyHash, t.Thread, ts(t.Opened), ts(t.Opened), stale)
+				OR (trigger_threads.cooldown_until = 0 AND trigger_threads.thread <> excluded.thread AND trigger_threads.opened < ?)
+				OR (trigger_threads.closed_at = 0 AND trigger_threads.cooldown_until <> 0 AND trigger_threads.last_seen < ?)`,
+			t.Binding, t.KeyHash, t.Thread, ts(t.Opened), ts(t.Opened), unstarted, idle)
 		if err != nil {
 			return err
 		}
@@ -151,4 +155,22 @@ func (s *Store) CloseTriggerThread(ctx context.Context, binding, keyHash string,
 		return false, fmt.Errorf("close trigger thread of %q: %w", binding, err)
 	}
 	return closed, nil
+}
+
+// PurgeTriggerThreads implements store.TriggerThreads.
+func (s *Store) PurgeTriggerThreads(ctx context.Context, now, idleBefore time.Time) (telemetryResult0 int, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PurgeTriggerThreads")
+	defer func() { finishStore(op, telemetryErr) }()
+	if !triggerTime(now) {
+		return 0, fmt.Errorf("purge trigger threads: the time must be after the Unix epoch: %w", store.ErrInvalid)
+	}
+	var idle int64 // no row was seen before 0
+	if triggerTime(idleBefore) {
+		idle = ts(idleBefore)
+	}
+	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE (closed_at <> 0 AND cooldown_until < ?) OR (closed_at = 0 AND last_seen < ?)`, ts(now), idle)
+	if err != nil {
+		return 0, fmt.Errorf("purge trigger threads: %w", err)
+	}
+	return int(n), nil
 }

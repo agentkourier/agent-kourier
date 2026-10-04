@@ -115,10 +115,28 @@ type TriggerThread struct {
 	// and between 1m and 168h.
 	// +optional
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
+	// MaxIdle is how long an open thread may go without a message of its key before courier counts it
+	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
+	// resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
+	// means the larger of 24h and twice the cooldown (EffectiveMaxIdle).
+	// +optional
+	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
 	// CloseWhen maps an extracted field to the value that closes the thread: courier posts a
 	// note and starts no turn. Every entry must equal.
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
+}
+
+// DefaultMaxIdle is the idle time after which an open thread is abandoned, when the trigger does not say.
+const DefaultMaxIdle = 24 * time.Hour
+
+// EffectiveMaxIdle is MaxIdle, or, if it is unset, the larger of DefaultMaxIdle and twice the cooldown, so that
+// the default always satisfies the rule that validation puts on a MaxIdle that is set.
+func (t TriggerThread) EffectiveMaxIdle() time.Duration {
+	if t.MaxIdle.Duration != 0 {
+		return t.MaxIdle.Duration
+	}
+	return max(DefaultMaxIdle, 2*t.Cooldown.Duration)
 }
 
 // defaultTriggers makes an empty trigger list the mention trigger, which is how a Binding

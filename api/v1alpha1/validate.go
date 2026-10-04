@@ -32,6 +32,7 @@ const (
 	maxTriggerRegexLen = 512
 	minThreadCooldown  = time.Minute
 	maxThreadCooldown  = 7 * 24 * time.Hour
+	maxThreadMaxIdle   = 30 * 24 * time.Hour
 )
 
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
@@ -294,7 +295,7 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 	}{
 		{"from", t.From != nil}, {"preset", t.Preset != ""}, {"match", len(t.Match) > 0},
 		{"exclude", len(t.Exclude) > 0}, {"extract", len(t.Extract) > 0},
-		{"thread", t.Thread.By != "" || t.Thread.Cooldown.Duration != 0 || len(t.Thread.CloseWhen) > 0},
+		{"thread", t.Thread.By != "" || t.Thread.Cooldown.Duration != 0 || t.Thread.MaxIdle.Duration != 0 || len(t.Thread.CloseWhen) > 0},
 		{"promptTemplate", t.PromptTemplate != ""},
 	} {
 		if f.set {
@@ -346,6 +347,9 @@ func (p *problems) thread(path string, th *TriggerThread, extract map[string]Ext
 		if th.Cooldown.Duration != 0 {
 			p.add(path+".cooldown", "requires thread.by")
 		}
+		if th.MaxIdle.Duration != 0 {
+			p.add(path+".maxIdle", "requires thread.by")
+		}
 		if len(th.CloseWhen) > 0 {
 			p.add(path+".closeWhen", "requires thread.by")
 		}
@@ -359,6 +363,11 @@ func (p *problems) thread(path string, th *TriggerThread, extract map[string]Ext
 		p.add(path+".cooldown", "required with thread.by")
 	} else if d < minThreadCooldown || d > maxThreadCooldown {
 		p.add(path+".cooldown", "%s is out of range, must be between %s and %s", d, minThreadCooldown, maxThreadCooldown)
+	}
+	if d := th.MaxIdle.Duration; d != 0 {
+		if floor := 2 * th.Cooldown.Duration; d < floor || d > maxThreadMaxIdle {
+			p.add(path+".maxIdle", "%s is out of range, must be between twice the cooldown (%s) and %s", d, floor, maxThreadMaxIdle)
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {
 		at := path + ".closeWhen." + name
