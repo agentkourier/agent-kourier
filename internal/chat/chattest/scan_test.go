@@ -168,6 +168,19 @@ func TestScanCommonMarkReadsWhatCommonMarkMakesOfTheWire(t *testing.T) {
 	})
 }
 
+func TestScanCommonMarkLiteralCodeTakesLinksInCodeForInertAndNotTokens(t *testing.T) {
+	runScans(t, ScanCommonMarkLiteralCode, []scanCase{
+		{"a broadcast in a code span is reported", "`<!channel>`", "<!channel>", []Kind{KindCode, KindBroadcast}},
+		{"a mention and a channel in a fence are reported", "```\n<@U1> <#C1>\n```", "<@U1> <#C1>", []Kind{KindCode, KindMention, KindChannelLink}},
+		{"the escaped form is only code", "`&lt;!channel>`", "&lt;!channel>", []Kind{KindCode}},
+		{"a link and a URL in a fence are only code", "```\n[t](https://evil.test) https://evil.test <https://evil.test|x> <pod>\n```", "[t](https://evil.test) https://evil.test <https://evil.test|x> <pod>", []Kind{KindCode}},
+		{"entities and backslashes in code are shown as written", "`2&gt;&amp;1 a\\[0\\]`", "2&gt;&amp;1 a\\[0\\]", []Kind{KindCode}},
+		{"a token beside the code is still reported", "`x` <!channel>", "x !channel", []Kind{KindCode, KindBroadcast}},
+		{"a link in prose is still reported", "[t](https://evil.test)", "t", []Kind{KindLink}},
+		{"an indented block is code", "    <b>", "<b>", []Kind{KindCode}},
+	})
+}
+
 func TestStyleKindsAreExactlyTheCosmeticOnes(t *testing.T) {
 	for _, k := range []Kind{KindEmphasis, KindCode, KindHeading, KindQuote, KindList} {
 		if !k.Style() {

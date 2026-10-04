@@ -580,16 +580,32 @@ func (c *checker) stream(p placement, name, text string) {
 		_ = c.s.Inert()
 		c.verify(p, method, name, text, f())
 	}
-	do("Stream", func() error { _, err := c.s.Platform.Stream(c.ctx, c.target, "U1", text); return err })
+	// A platform may hold the end of a stream's text back until it knows what that text is (a code span is known
+	// at the end of its line), and writes it when the stream ends, so these two end the stream with no more text.
+	end := func(st chat.Stream) error { return st.Stop(c.ctx, "", chat.Message{}, "tag-1") }
+	do("Stream", func() error {
+		st, err := c.s.Platform.Stream(c.ctx, c.target, "U1", text)
+		if err != nil {
+			return err
+		}
+		return end(st)
+	})
+	// The text that follows starts a line, as it does after a paragraph: a stream is one document, in which a fence
+	// that does not start a line is not one, and a fence's info string is not shown.
 	open := func() (chat.Stream, bool) {
-		st, err := c.s.Platform.Stream(c.ctx, c.target, "U1", "start")
+		st, err := c.s.Platform.Stream(c.ctx, c.target, "U1", "start\n")
 		if err != nil {
 			c.add(RuleRejected, p.where, "Stream", name, "a stream of plain text was refused: %v", err)
 		}
 		return st, err == nil
 	}
 	if st, ok := open(); ok {
-		do("Append", func() error { return st.Append(c.ctx, text) })
+		do("Append", func() error {
+			if err := st.Append(c.ctx, text); err != nil {
+				return err
+			}
+			return end(st)
+		})
 	}
 	if st, ok := open(); ok {
 		do("Stop", func() error {

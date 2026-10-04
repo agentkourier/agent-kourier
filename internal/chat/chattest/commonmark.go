@@ -18,18 +18,29 @@ import (
 //
 // It errs towards finding a construct, and shows what a person sees: the text content of the tree, whose paragraphs
 // are separated by a blank line. The adapter's own tests, against its platform, are the last word.
-func ScanCommonMark(wire string) Shown {
+func ScanCommonMark(wire string) Shown { return scanCommonMark(wire, false) }
+
+// ScanCommonMarkLiteralCode is ScanCommonMark for a platform that has been measured to show code literally: what is in
+// a code span or block makes no link or URL, whatever it holds. A broadcast, mention, channel or date token ("<!", "<@",
+// "<#") is still reported there, since an adapter that writes code raw must keep those out of it. The
+// Slack adapter relies on it, as measured in a probe of the sandbox workspace on 2026-10-04 (a link, a user, a masked
+// link, "&" and "<" in a fence and in a span all showed as written: tasks/plans/slack-code-rendering.md, rows 04, 19,
+// 20). A platform that has not been measured uses ScanCommonMark, which does not take code for inert.
+func ScanCommonMarkLiteralCode(wire string) Shown { return scanCommonMark(wire, true) }
+
+func scanCommonMark(wire string, literalCode bool) Shown {
 	src := []byte(wire)
 	doc := goldmark.New().Parser().Parse(text.NewReader(src))
-	r := &cmReader{src: src}
+	r := &cmReader{src: src, literalCode: literalCode}
 	r.blocks(doc)
 	return Shown{Displayed: r.out.String(), Active: r.active}
 }
 
 type cmReader struct {
-	src    []byte
-	out    strings.Builder
-	active []Active
+	src         []byte
+	out         strings.Builder
+	active      []Active
+	literalCode bool // code is shown as written, and nothing in it acts (ScanCommonMarkLiteralCode)
 }
 
 // blocks reads the children of a block, which are blocks, separated in what is shown as a list's items are by a
@@ -161,13 +172,16 @@ func (r *cmReader) inline(n ast.Node) {
 // code reports a code span or a block, and what in it a platform might still act on. CommonMark's code is
 // literal, but whether Slack's markdown block leaves a token, a link or a URL alone inside code is not known
 // (UNCONFIRMED(WP-04)), so, as ScanSlack does, they are reported there too, and an adapter must not rely on code to
-// make its text inert. An indented block is code like a fenced one.
+// make its text inert, unless it reads with ScanCommonMarkLiteralCode, which says the platform was measured. An
+// indented block is code like a fenced one.
 func (r *cmReader) code(text string) {
 	r.active = append(r.active, Active{KindCode, text})
 	inner := &cmReader{src: r.src}
 	inner.leaf(text)
 	for _, a := range inner.active {
-		if !a.Kind.Style() {
+		// A literal reading keeps the tokens that notify ("<!", "<@", "<#"), which an adapter that writes code raw
+		// must still keep out of it (defence in depth), and drops the links and URLs that the probe showed inert.
+		if literal := a.Kind == KindMention || a.Kind == KindBroadcast || a.Kind == KindChannelLink || a.Kind == KindDate; !a.Kind.Style() && (!r.literalCode || literal) {
 			r.active = append(r.active, a)
 		}
 	}

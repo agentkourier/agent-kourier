@@ -170,7 +170,8 @@ func (p *Platform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) erro
 // mode shows no steps. A start with no text carries no mode and cannot be refused for it.
 func (p *Platform) Stream(ctx context.Context, t chat.Target, to, md string) (chat.Stream, error) {
 	mode := p.streamMode()
-	text := markdown(md, maxMarkdown)
+	var esc mdText // the stream is one document, read from its first text on
+	text := esc.text(md, maxMarkdown, false)
 	ts, err := p.c.StartStream(ctx, t.Channel, t.Thread, to, text, mode)
 	if err != nil && mode == ChunksMode && text != "" && refusesChunks(err) {
 		first := err
@@ -183,7 +184,7 @@ func (p *Platform) Stream(ctx context.Context, t chat.Target, to, md string) (ch
 	if err != nil {
 		return nil, err
 	}
-	s := &stream{p: p, ref: p.ref(t.Channel, t.Thread, ts)}
+	s := &stream{p: p, ref: p.ref(t.Channel, t.Thread, ts), esc: esc}
 	s.markdown.Store(mode == MarkdownMode)
 	return s, nil
 }
@@ -226,6 +227,11 @@ type stream struct {
 	p        *Platform
 	ref      chat.Ref
 	markdown atomic.Bool // the stream is in MarkdownMode, which a refusal of the chunks mode changes it to
+
+	// mu orders the texts of the stream: esc is the reading of the one document that Slack makes of them (mdText), so
+	// a text is read and sent before the next is read.
+	mu  sync.Mutex
+	esc mdText
 }
 
 func (s *stream) Ref() chat.Ref { return s.ref }
@@ -242,24 +248,59 @@ func (s *stream) streamMode() StreamMode {
 // yet, and the first text may be what Slack refuses in chunks: it is sent once more in markdown_text, and if that works
 // the stream, and the platform, are in that mode from then on. One that is refused in both is no mode's trouble, and
 // the first answer is kept.
-func (s *stream) text(ctx context.Context, md string, call func(StreamMode) error) error {
+//
+// It also says whether the text may have reached Slack although the caller is told of an error: a call of the two that
+// was lost on the way, with no answer from Slack, may have been applied (settle).
+func (s *stream) text(ctx context.Context, md string, call func(StreamMode) error) (unsure bool, err error) {
 	mode := s.streamMode()
-	err := call(mode)
+	err = call(mode)
+	unsure = err != nil && !refused(err)
 	if err != nil && mode == ChunksMode && md != "" && refusesChunks(err) {
-		if retry := call(MarkdownMode); retry == nil {
+		retry := call(MarkdownMode)
+		if retry == nil {
 			s.markdown.Store(true)
 			s.p.fallBack(ctx, err)
-			return nil
+			return false, nil
 		}
+		unsure = unsure || !refused(retry)
 	}
-	return err
+	return unsure, err
+}
+
+// refused says whether err is an answer of Slack that it did not apply the call: an error response, or a limit to wait
+// out. Any other error (a connection that broke, a timeout) leaves it unknown.
+func refused(err error) bool {
+	var resp slackgo.SlackErrorResponse
+	var limited *slackgo.RateLimitedError
+	return errors.As(err, &resp) || errors.As(err, &limited)
 }
 
 func (s *stream) Append(ctx context.Context, md string) error {
-	text := markdown(md, maxMarkdown)
-	return notStreaming(s.text(ctx, text, func(m StreamMode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	saved := s.esc
+	text := s.esc.text(md, maxMarkdown, false)
+	if text == "" { // all of it is held back until the rest of its line comes
+		return nil
+	}
+	unsure, err := s.text(ctx, text, func(m StreamMode) error {
 		return s.p.c.AppendStream(ctx, s.ref.Channel, s.ref.ID, text, m)
-	}))
+	})
+	s.settle(saved, unsure, err)
+	return notStreaming(err)
+}
+
+// settle keeps the reading of the stream as what Slack has, after a call that carried a text. If every call made was
+// answered with an error, the text was not applied, and the caller may send it again, so the reading goes back to before
+// it. If any call made was lost with no answer (unsure), the text may have been applied, and Slack may be in a block
+// that courier is not, or hold the text twice after a second try: the stream goes back to before the text too, and is
+// blind from then on, which escapes everything, held-back text included.
+func (s *stream) settle(saved mdText, unsure bool, err error) {
+	if err == nil {
+		return
+	}
+	s.esc = saved
+	s.esc.blind = saved.blind || unsure
 }
 
 // noResult is what the card of a step says when the stream ended with no result for it. Slack has no state for a
@@ -312,16 +353,22 @@ func (s *stream) Stop(ctx context.Context, md string, final chat.Message, tag st
 		}
 		blocks = c.Blocks
 	}
-	text := markdown(md, maxMarkdown)
-	return notStreaming(s.text(ctx, text, func(m StreamMode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	saved := s.esc
+	text := s.esc.text(md, maxMarkdown, true)
+	unsure, err := s.text(ctx, text, func(m StreamMode) error {
 		return s.p.c.StopStream(ctx, s.ref.Channel, s.ref.ID, text, blocks, tag, m)
-	}))
+	})
+	s.settle(saved, unsure, err)
+	return notStreaming(err)
 }
 
 // StreamAt is the stream that is the message at r. Its mode is the platform's, and if the stream of the earlier run
-// that started it was in the other, the first text it is sent finds out (stream.text).
+// that started it was in the other, the first text it is sent finds out (stream.text). Courier cannot know whether
+// Slack is inside a block of the earlier run's, so the stream is blind: it escapes everything, for good (mdText).
 func (p *Platform) StreamAt(r chat.Ref) chat.Stream {
-	s := &stream{p: p, ref: r}
+	s := &stream{p: p, ref: r, esc: mdText{blind: true}}
 	s.markdown.Store(p.streamMode() == MarkdownMode)
 	return s
 }

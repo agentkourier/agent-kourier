@@ -18,17 +18,32 @@ import (
 //     "<@U1>", "<https://x|y>" or "<b>" is a token; and in a markdown block "\", "[" and "]" are escaped
 //     with a backslash too, so no "[text](url)" or "![alt](url)" is a link or an image.
 //
+// Markdown has one more place, code, where Slack shows the text literally: no entity is decoded, no backslash is an
+// escape (it drops one before "[" or "]" in a span), and no link, image or token is made (probe of the sandbox
+// workspace, 2026-10-04; the rows are in tasks/plans/slack-code-rendering.md). Escaping there only shows as
+// "\[" and "&lt;" in a command that cannot be pasted. So the contract for markdown is that Slack sees only the code
+// that courier writes (mdtext.go):
+//
+//   - courier decides what is code, and writes every fence and every code span itself, in one form, so a fence the
+//     agent indented in a list item is a block, and a span is one pair of backticks;
+//   - every other backtick, and every tilde of a run of three or more, is escaped with a backslash, which Slack
+//     honours in prose, so it can never open code by itself, and courier's view of what is code and Slack's
+//     cannot differ, whatever the agent wrote;
+//   - code is raw, but for "<" before "!", "@" or "#", so that no broadcast, mention or channel token is in it even
+//     if some other path of Slack (a notification, the text fallback) parsed it;
+//   - a stream is one document to Slack, so the state of that reading is kept across Stream, Append and Stop; a
+//     stream that courier did not start in this process escapes everything, as prose is escaped.
+//
 // Literal places are plain_text objects, which carry no emphasis, code or list, and the only text that
 // is mrkdwn is what courier wrote itself (a status line built from a verified user ID and a time).
 // What Slack does that no escape stops is listed with the adapter's concessions in platform_test.go.
 //
 // UNCONFIRMED(WP-04): that Slack shows "&amp;", "&lt;" and "&gt;" in a plain_text object as the
-// characters, and that a plain_text object parses no mention, link or emphasis; that Slack honours
-// CommonMark backslash escapes in a markdown block and in markdown_text. The first two rest on the
+// characters, and that a plain_text object parses no mention, link or emphasis. The first rests on the
 // text being escaped as for mrkdwn anyway, so that if plain_text does parse tokens it still finds none.
 
-// escapeRune is r as it may appear in the text of a message: "&", "<" and ">" as entities, and, in a markdown
-// block and a stream's markdown_text, "\", "[" and "]" with a backslash too.
+// escapeRune is r as it may appear in the text of a message: "&", "<" and ">" as entities, and, in the prose of a markdown
+// block and of a stream's markdown_text, "\", "[" and "]" with a backslash too.
 func escapeRune(r rune, markdown bool) string {
 	switch r {
 	case '&':
@@ -51,8 +66,8 @@ func escapeRune(r rune, markdown bool) string {
 // place is one line.
 func text(s string, limit int, line bool) string { return fit(chat.Clean(s, line), limit, false) }
 
-// markdown is text for a markdown block or a stream's markdown_text.
-func markdown(s string, limit int) string { return fit(chat.Clean(s, false), limit, true) }
+// markdown is text for a markdown block: one document, read in one pass (mdText.text, which a stream calls piece by piece).
+func markdown(s string, limit int) string { return new(mdText).text(s, limit, true) }
 
 // fit escapes the cleaned text s and cuts the result to limit units.
 func fit(s string, limit int, md bool) string {

@@ -810,7 +810,12 @@ Binding was declared to point at a read-only agent.
    - **Nested:** rendered as its inner kind, labelled with the sub-agent that raised it.
    - All agent-originated text is untrusted (R2): escaped (`&`, `<`, `>`), stripped of
      control and format characters, rendered as `plain_text` where Slack allows, and
-     truncated to Slack's limits. Tool arguments go in an escaped code block, with
+     truncated to Slack's limits. The one exception is code in a markdown body: Slack shows
+     code literally (probe of 2026-10-04, `tasks/plans/slack-code-rendering.md`), so the
+     fences and code spans that courier itself writes carry their text raw, except `<`
+     before `!`, `@` or `#`, which is still written `&lt;`; every other backtick, and every
+     run of three or more `~`, is escaped, so Slack opens no code of its own. A stream that
+     courier resumes after a restart escapes everything, code included. Tool arguments go in an escaped code block, with
      secret-looking values redacted (by key name and by token shape) before display. A choice
      list over Slack's select limit falls back visibly; no choice is ever dropped.
    - Every courier post, update and stream is sent with `parse` unset (or `none`), no
