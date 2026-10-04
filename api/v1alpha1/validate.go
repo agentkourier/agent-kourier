@@ -3,11 +3,13 @@ package v1alpha1
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -15,6 +17,22 @@ import (
 
 // channelID matches Slack channel IDs; its literal must equal ChatBinding.Channel's Pattern marker.
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
+
+// botID matches Slack bot IDs; its literal must equal BotSource.BotID's Pattern marker.
+var botID = regexp.MustCompile(`^B[A-Z0-9]+$`)
+
+// extractName is what a template can reach as .Fields.<name>: a Go identifier that starts
+// with a lower-case letter. It is also the name of the regex group that supplies the value.
+var extractName = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*$`)
+
+// Limits on a trigger. A regex is capped because it is operator text compiled at load; the
+// cooldown is bounded so a typo (4 for 4h, 400h for 4h) cannot silence a key for weeks or
+// restart a turn on every message.
+const (
+	maxTriggerRegexLen = 512
+	minThreadCooldown  = time.Minute
+	maxThreadCooldown  = 7 * 24 * time.Hour
+)
 
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
 // so an AgentBackend must not set it. Dialects refuse it too. The kagent alpha5 headers
@@ -175,6 +193,7 @@ func (b *Binding) Validate() error {
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
+	p.triggers("spec.chat.triggers", s.Chat.Triggers)
 	if a := s.Alerts; a != nil {
 		p.oneOf("spec.alerts.type", a.Type, AlertAlertmanager)
 		p.secretRef("spec.alerts.tokenSecretRef", &a.TokenSecretRef)
@@ -191,4 +210,160 @@ func (b *Binding) Validate() error {
 	p.duration("spec.interactions.timeout", s.Interactions.Timeout)
 	p.duration("spec.session.threadTTL", s.Session.ThreadTTL)
 	return errors.Join(p...)
+}
+
+// regex checks that expr is a non-empty RE2 expression within the length cap, and returns it
+// compiled, or nil if it is not.
+func (p *problems) regex(path, expr string) *regexp.Regexp {
+	if expr == "" {
+		p.add(path, "required")
+		return nil
+	}
+	if len(expr) > maxTriggerRegexLen {
+		p.add(path, "regular expression is %d bytes, longer than the %d byte limit", len(expr), maxTriggerRegexLen)
+		return nil
+	}
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		p.add(path, "invalid regular expression: %v", err)
+		return nil
+	}
+	return re
+}
+
+// messageField checks that f names a field of a chat message.
+func (p *problems) messageField(path string, f MessageField) {
+	if !slices.Contains(messageFields(), f) {
+		names := make([]string, 0, len(messageFields()))
+		for _, n := range messageFields() {
+			names = append(names, string(n))
+		}
+		p.add(path, "unsupported message field %q, must be one of %s", f, strings.Join(names, ", "))
+	}
+}
+
+// fieldRegexes checks a match or exclude map: known fields, each with a valid regex.
+func (p *problems) fieldRegexes(path string, m map[MessageField]string) {
+	for _, f := range slices.Sorted(maps.Keys(m)) {
+		at := path + "." + string(f)
+		p.messageField(at, f)
+		p.regex(at, m[f])
+	}
+}
+
+// triggers validates the trigger list: each trigger on its own, then the list for triggers
+// that could never be reached. Defaulting has already filled the presets in.
+func (p *problems) triggers(path string, ts []Trigger) {
+	seen := map[string]int{}
+	for i := range ts {
+		at := fmt.Sprintf("%s[%d]", path, i)
+		t := &ts[i]
+		p.trigger(at, t)
+		// A trigger with the same bot, match and exclude as an earlier one matches the same
+		// messages, so the later one would never run.
+		var bot string
+		if t.From != nil {
+			bot = t.From.BotID
+		}
+		id := fmt.Sprintf("%q %q %q %q", t.Type, bot, t.Match, t.Exclude)
+		if first, dup := seen[id]; dup {
+			p.add(at, "duplicate of %s[%d]", path, first)
+		} else {
+			seen[id] = i
+		}
+	}
+}
+
+func (p *problems) trigger(path string, t *Trigger) {
+	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage))
+	switch t.Type {
+	case TriggerMention:
+		p.mentionTrigger(path, t)
+	case TriggerBotMessage:
+		p.botMessageTrigger(path, t)
+	}
+}
+
+// mentionTrigger rejects every field a mention trigger has no use for, so a field set by
+// mistake does not silently do nothing.
+func (p *problems) mentionTrigger(path string, t *Trigger) {
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"from", t.From != nil}, {"preset", t.Preset != ""}, {"match", len(t.Match) > 0},
+		{"exclude", len(t.Exclude) > 0}, {"extract", len(t.Extract) > 0},
+		{"thread", t.Thread.By != "" || t.Thread.Cooldown.Duration != 0 || len(t.Thread.CloseWhen) > 0},
+		{"promptTemplate", t.PromptTemplate != ""},
+	} {
+		if f.set {
+			p.add(path+"."+f.name, "not allowed with type: mention")
+		}
+	}
+}
+
+func (p *problems) botMessageTrigger(path string, t *Trigger) {
+	switch {
+	case t.From == nil || t.From.BotID == "":
+		p.add(path+".from.botId", "required")
+	case !botID.MatchString(t.From.BotID):
+		p.add(path+".from.botId", "invalid bot ID %q: must be a Slack bot ID such as B0123456789, not a name", t.From.BotID)
+	}
+	if t.Preset != "" {
+		p.oneOf(path+".preset", t.Preset, PresetAlertmanager)
+	}
+	p.fieldRegexes(path+".match", t.Match)
+	p.fieldRegexes(path+".exclude", t.Exclude)
+	for _, name := range slices.Sorted(maps.Keys(t.Extract)) {
+		p.extract(path+".extract."+name, name, t.Extract[name])
+	}
+	p.thread(path+".thread", &t.Thread, t.Extract)
+	if t.PromptTemplate == "" {
+		p.add(path+".promptTemplate", "required")
+	} else if _, err := ParsePromptTemplate("promptTemplate", t.PromptTemplate); err != nil {
+		p.add(path+".promptTemplate", "invalid template: %v", err)
+	}
+}
+
+// extract checks one extract entry: a known field and a regex with a group named like the
+// entry, which is where the value comes from.
+func (p *problems) extract(path, name string, e Extract) {
+	validName := extractName.MatchString(name)
+	if !validName {
+		p.add(path, "invalid extract name %q: must start with a lower-case letter and use only letters, digits and '_', so a template can read .Fields.%s", name, name)
+	}
+	p.messageField(path+".field", e.Field)
+	re := p.regex(path+".regex", e.Regex)
+	if re != nil && validName && !slices.Contains(re.SubexpNames(), name) {
+		p.add(path+".regex", "must have a named group (?P<%s>...) that supplies the value", name)
+	}
+}
+
+// thread checks the thread rules against the extracted fields they refer to.
+func (p *problems) thread(path string, th *TriggerThread, extract map[string]Extract) {
+	if th.By == "" {
+		if th.Cooldown.Duration != 0 {
+			p.add(path+".cooldown", "requires thread.by")
+		}
+		if len(th.CloseWhen) > 0 {
+			p.add(path+".closeWhen", "requires thread.by")
+		}
+		return
+	}
+	p.oneOf(path+".by", string(th.By), string(ThreadByKey))
+	if _, ok := extract[extractKey]; th.By == ThreadByKey && !ok {
+		p.add(path+".by", "key requires an extract named %q", extractKey)
+	}
+	if d := th.Cooldown.Duration; d == 0 {
+		p.add(path+".cooldown", "required with thread.by")
+	} else if d < minThreadCooldown || d > maxThreadCooldown {
+		p.add(path+".cooldown", "%s is out of range, must be between %s and %s", d, minThreadCooldown, maxThreadCooldown)
+	}
+	for _, name := range slices.Sorted(maps.Keys(th.CloseWhen)) {
+		at := path + ".closeWhen." + name
+		if _, ok := extract[name]; !ok {
+			p.add(at, "not an extracted field")
+		}
+		p.required(at, th.CloseWhen[name])
+	}
 }

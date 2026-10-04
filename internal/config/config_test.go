@@ -63,6 +63,116 @@ func TestLoadSpecExamples(t *testing.T) {
 	}
 }
 
+// withTriggers returns bindingDoc with the given triggers (YAML list items at six spaces) under
+// spec.chat.
+func withTriggers(triggers string) string {
+	return strings.Replace(bindingDoc, "  chat: { connectionRef: { name: slack-main }, channel: C0123456789 }\n",
+		"  chat:\n    connectionRef: { name: slack-main }\n    channel: C0123456789\n    triggers:\n"+triggers, 1)
+}
+
+// TestLoadAlertmanagerPresetWithTrialOverrides loads the owner's trial Binding: the
+// alertmanager preset for the channel's webhook bot, narrowed to the kind receiver, with the
+// heartbeat excluded. The preset supplies the rest, and a Binding without triggers loads as
+// before, with the mention trigger.
+func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
+	trial := withTriggers(`      - type: mention
+      - type: botMessage
+        from: { botId: B0EXAMPLE01 }
+        preset: alertmanager
+        match: { titleLink: 'receiver=slack-critical-kind' }
+        exclude: { title: '^Prometheus heartbeat$' }
+`)
+	set, err := Load(context.Background(), write(t, map[string]string{
+		"plain.yaml": strings.Replace(bindingDoc, "sre-alerts", "plain", 1), "trial.yaml": trial}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Bindings) != 2 {
+		t.Fatalf("loaded %d bindings, want 2", len(set.Bindings))
+	}
+
+	plain := set.Bindings[0].Spec.Chat.Triggers
+	if len(plain) != 1 || plain[0].Type != v1alpha1.TriggerMention {
+		t.Errorf("triggers of a Binding without any = %+v, want just the mention trigger", plain)
+	}
+
+	ts := set.Bindings[1].Spec.Chat.Triggers
+	if len(ts) != 2 {
+		t.Fatalf("loaded %d triggers, want 2: %+v", len(ts), ts)
+	}
+	tr := ts[1]
+	if tr.From.BotID != "B0EXAMPLE01" {
+		t.Errorf("botId = %q", tr.From.BotID)
+	}
+	if got := tr.Match[v1alpha1.FieldTitleLink]; got != "receiver=slack-critical-kind" {
+		t.Errorf("match.titleLink = %q, want the Binding's receiver", got)
+	}
+	for _, f := range []v1alpha1.MessageField{v1alpha1.FieldTitle, v1alpha1.FieldFallback} {
+		if tr.Match[f] == "" {
+			t.Errorf("match.%s is empty, want the preset's", f)
+		}
+	}
+	if got := tr.Exclude[v1alpha1.FieldTitle]; got != "^Prometheus heartbeat$" {
+		t.Errorf("exclude.title = %q, want the heartbeat", got)
+	}
+	if len(tr.Extract) != 3 || tr.Thread.By != v1alpha1.ThreadByKey || tr.Thread.Cooldown.Duration != 4*time.Hour ||
+		tr.Thread.CloseWhen["state"] != "RESOLVED" || tr.PromptTemplate == "" {
+		t.Errorf("preset not applied: %+v", tr)
+	}
+}
+
+// TestLoadPresetYieldsToTheBinding checks, through the loader, that what a Binding sets beats
+// the preset's value for the same field.
+func TestLoadPresetYieldsToTheBinding(t *testing.T) {
+	doc := withTriggers(`      - type: botMessage
+        from: { botId: B0EXAMPLE01 }
+        preset: alertmanager
+        match: { title: '^MyAlert' }
+        thread: { cooldown: 30m }
+        promptTemplate: "Look at {{ .Key }}."
+`)
+	set, err := Load(context.Background(), write(t, map[string]string{"b.yaml": doc}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := set.Bindings[0].Spec.Chat.Triggers[0]
+	if tr.Match[v1alpha1.FieldTitle] != "^MyAlert" || tr.Thread.Cooldown.Duration != 30*time.Minute ||
+		tr.PromptTemplate != "Look at {{ .Key }}." {
+		t.Errorf("the preset overrode the Binding: match.title %q, cooldown %v, prompt %q",
+			tr.Match[v1alpha1.FieldTitle], tr.Thread.Cooldown.Duration, tr.PromptTemplate)
+	}
+}
+
+func TestLoadRejectsBadTriggers(t *testing.T) {
+	tests := []struct{ name, triggers, want string }{
+		{
+			name:     "bare on, which YAML reads as true",
+			triggers: "      - on: mention\n",
+			want:     "b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].true: unknown field\nb.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage",
+		},
+		{
+			name:     "regex that does not compile",
+			triggers: "      - { type: botMessage, from: { botId: B0EXAMPLE01 }, preset: alertmanager, match: { title: '(' } }\n",
+			want:     "b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].match.title: invalid regular expression: error parsing regexp: missing closing ): `(`",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(context.Background(), write(t, map[string]string{"b.yaml": withTriggers(tc.triggers)}))
+			if err == nil {
+				t.Fatal("Load succeeded, want a problem")
+			}
+			var got []string
+			for _, e := range flatten(err) {
+				got = append(got, e.Error())
+			}
+			if strings.Join(got, "\n") != tc.want {
+				t.Errorf("problems:\n%s\nwant:\n%s", strings.Join(got, "\n"), tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadMultiDocument(t *testing.T) {
 	content := "---\n# leading comment\n" + backendDoc + "---\n---\n# only a comment\n---\n" + connectionDoc + "---\n" + bindingDoc
 	set, err := Load(context.Background(), write(t, map[string]string{"all.yml": content}))

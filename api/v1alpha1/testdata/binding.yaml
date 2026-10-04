@@ -13,6 +13,14 @@ spec:
     connectionRef: { namespace: courier-system, name: slack-main }
     channel: C0123456789             # investigation channel ID, not name
     output: live                     # live | final
+    triggers:                        # empty means [{type: mention}]; see spec 8.2
+      - type: mention
+      - type: botMessage             # alerts Alertmanager itself posts to this channel
+        from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
+        preset: alertmanager         # fills in match, extract, thread and promptTemplate
+        match: { titleLink: 'receiver=slack-critical' }
+        exclude: { title: '^Prometheus heartbeat$' }
+        thread: { cooldown: 2h }     # overrides the preset's 4h
   alerts:
     type: alertmanager
     tokenSecretRef: { name: courier-webhook-token }  # same namespace as the Binding

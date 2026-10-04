@@ -225,6 +225,11 @@ type ChatBinding struct {
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`
+	// Triggers decide which events in the channel start or continue a turn (spec 8.2).
+	// Empty means [{type: mention}], which is how a Binding behaved before triggers existed;
+	// Default fills it in.
+	// +optional
+	Triggers []Trigger `json:"triggers,omitempty"`
 }
 
 // Alerts configures the Binding's alert webhook.
@@ -306,6 +311,7 @@ func (b *Binding) Default() {
 	if b.Spec.Chat.Output == "" {
 		b.Spec.Chat.Output = OutputLive
 	}
+	b.Spec.Chat.defaultTriggers()
 	if b.Spec.Interactions.Timeout.Duration == 0 {
 		b.Spec.Interactions.Timeout.Duration = DefaultInteractionTimeout
 	}
