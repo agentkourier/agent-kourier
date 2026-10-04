@@ -34,6 +34,11 @@ func TestTemplateRefs(t *testing.T) {
 			want: PromptRefs{Fields: []string{"a", "b"}},
 		},
 		{
+			name: "index through $ with a constant name",
+			text: `{{ index $.Fields "a" }} {{ with .Key }}{{ index $.Fields "b" }}{{ end }}`,
+			want: PromptRefs{View: []string{"Key"}, Fields: []string{"a", "b"}},
+		},
+		{
 			name: "references from the root inside with",
 			text: `{{ with .Key }}{{ $.Fields.a }}{{ end }}{{ $.State }}`,
 			want: PromptRefs{View: []string{"Key", "State"}, Fields: []string{"a"}},

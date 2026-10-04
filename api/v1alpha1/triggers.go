@@ -218,19 +218,22 @@ checked, and the next steps a person should take.
 // load; the prompt renderer (internal/render, Prompt) renders this same type, and a field added
 // here must get a rule there (the renderer refuses a field that has none).
 //
-// Every value but Channel and Source, which courier sets, comes out of an attacker's message
-// (spec R2). The renderer writes a value into the instruction part only if the template reads it
-// and it passes its rule; a value that fails refuses the render with a *render.RefusedError and
-// nothing reaches the agent. A value the template does not read is not checked. The rules, which
-// internal/render enforces and its tests pin:
+// Fields, State and Key come out of an attacker's message (spec R2). Channel, Source and Link
+// are courier's own: the channel from the Binding, the source from the preset, and the link the
+// Slack permalink that courier builds from the channel and the ts of the triggering message. Link
+// is never a field of the message such as titleLink, which the sender wrote. The renderer checks
+// all of them anyway, as defence in depth. It writes a value into the instruction part only if
+// the template reads it and it passes its rule; a value that fails refuses the render with a
+// *render.RefusedError and nothing reaches the agent. A value the template does not read is not
+// checked. The rules, which internal/render enforces and its tests pin:
 //
 //   - Fields values, State, Channel and Source: the alert-name shape, which is ASCII letters
 //     and digits and "_", ".", "-" and ":", at most 128 bytes. The empty value passes.
 //   - Key: the same, and "/", at most 128 bytes. A key of group label values holds spaces
 //     (the alertmanager preset's does), so a template should read entries of .Fields, not .Key.
-//   - Link: at most 512 bytes of ASCII letters, digits and the URL characters
-//     -._~:/?#[]@!$&()*+,;=% (so no white space, quote, angle bracket, backtick or non-ASCII),
-//     an http or https scheme, a host and no credentials. The empty value passes.
+//   - Link: at most 256 bytes of ASCII letters, digits and "-._~:/?#=&" (so no "+" or "%",
+//     which could carry encoded prose, and no white space, quote, angle bracket, "@" or
+//     non-ASCII), an http or https scheme and a host. The empty value passes.
 //
 // A template may name values only as .Name, $.Name, .Fields.name, $.Fields.name or
 // index .Fields "name"; see TemplateRefs.
@@ -241,7 +244,8 @@ type PromptView struct {
 	State string
 	// Key is the extracted "key" value, empty if the trigger extracts none.
 	Key string
-	// Link is a link to the triggering message.
+	// Link is the Slack permalink of the triggering message, built by courier from the channel
+	// and the message's ts. It is not taken from the message: never a field such as titleLink.
 	Link string
 	// Source names what sent the message, such as the preset.
 	Source string
@@ -257,7 +261,10 @@ func ParsePromptTemplate(name, text string) (*template.Template, error) {
 }
 
 // placeholderLen is the length of the placeholder values checkPromptTemplate runs a template
-// against: long enough that {{ slice .Key 0 10 }} and the like load, as real values are longer.
+// against. It is long, so a template that slices a value ({{ slice .Key 0 10 }}) loads. The
+// trade-off is accepted: a slice longer than a real value ({{ slice .State 0 10 }} on
+// "FIRING") passes the load and fails when the first alert renders. The renderer returns that as
+// an error, and CT-4b surfaces render errors like refusals (audited, no turn).
 const placeholderLen = 64
 
 // checkPromptTemplate parses text, walks its parse trees so that every reference is checked in

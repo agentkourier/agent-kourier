@@ -7,15 +7,16 @@ import (
 
 // The rules a value of a PromptView must pass to reach a prompt's instruction part (spec R2).
 // The text of a message is attacker-influenced, and a value extracted from it is part of it, so
-// it may be written into the instructions only if it is too narrow to carry any: a name, a key
-// or a link, and never a sentence. A value that fails refuses the whole render.
+// it may be written into the instructions only if it is too narrow to carry any: a name or a
+// key, and never a sentence. Link is not from the message: courier builds it (see checkLink).
+// A value that fails refuses the whole render.
 const (
 	// maxNameBytes bounds a Fields value, State, Channel and Source.
 	maxNameBytes = 128
 	// maxKeyBytes bounds Key.
 	maxKeyBytes = 128
-	// maxLinkBytes bounds Link.
-	maxLinkBytes = 512
+	// maxLinkBytes bounds Link, a Slack permalink.
+	maxLinkBytes = 256
 )
 
 // Reason says why a value was refused.
@@ -83,14 +84,18 @@ func checkShape(s string, limit int, extra string) Reason {
 	return ""
 }
 
-// linkExtra is what a URL may hold besides letters and digits: the unreserved and reserved
-// characters of RFC 3986 and "%", without the apostrophe. No white space, quote, bracket-like
-// markup, backtick or non-ASCII character can be in it.
-const linkExtra = "-._~:/?#[]@!$&()*+,;=%"
+// linkExtra is what a permalink needs besides letters and digits: the characters of a path, a
+// query of name=value pairs and a fragment. It has no "+" or "%", which would let a link carry
+// encoded prose ("?Ignore+all+previous+instructions", or a percent-encoded tag), and no "@",
+// so a link holds no credentials.
+const linkExtra = "-._~:/?#=&"
 
-// checkLink is the rule of Link: a URL of at most 512 bytes in the characters of linkExtra and
-// letters and digits, with a scheme of http or https (in any case), a host and no credentials.
-// An empty link passes: the view may have none.
+// checkLink is the rule of Link, which is courier's own: the Slack permalink of the triggering
+// message, built from the channel and the message's ts. It is never a field of the message (not
+// titleLink, which the sender wrote), so the rule is a second line of defence, narrow enough
+// for a permalink and for little else. The link is at most 256 bytes of letters, digits and the
+// characters of linkExtra, with a scheme of http or https (in any case) and a host. An empty
+// link passes: the view may have none.
 func checkLink(s string) Reason {
 	if s == "" {
 		return ""
@@ -99,7 +104,7 @@ func checkLink(s string) Reason {
 		return r
 	}
 	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return ReasonNotLink
 	}
 	return ""
