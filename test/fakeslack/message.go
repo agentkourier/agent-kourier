@@ -29,16 +29,23 @@ type Edited struct {
 
 // Message is a stored message in the shape Slack returns it.
 type Message struct {
-	Type     string          `json:"type"`
-	User     string          `json:"user"`
-	BotID    string          `json:"bot_id,omitempty"`
-	AppID    string          `json:"app_id,omitempty"`
-	Text     string          `json:"text"`
-	TS       string          `json:"ts"`
-	ThreadTS string          `json:"thread_ts,omitempty"`
-	Blocks   json.RawMessage `json:"blocks,omitempty"`
-	Metadata *Metadata       `json:"metadata,omitempty"`
-	Edited   *Edited         `json:"edited,omitempty"`
+	Type string `json:"type"`
+	// Subtype is "bot_message" for an incoming webhook's post (Webhook) and empty for every other message.
+	Subtype string `json:"subtype,omitempty"`
+	// User is empty on an incoming webhook's post, which has no user.
+	User  string `json:"user,omitempty"`
+	BotID string `json:"bot_id,omitempty"`
+	AppID string `json:"app_id,omitempty"`
+	// Username is the name an incoming webhook posts under.
+	Username string `json:"username,omitempty"`
+	Text     string `json:"text"`
+	TS       string `json:"ts"`
+	ThreadTS string `json:"thread_ts,omitempty"`
+	// Attachments are the legacy attachments of an incoming webhook's post.
+	Attachments []Attachment    `json:"attachments,omitempty"`
+	Blocks      json.RawMessage `json:"blocks,omitempty"`
+	Metadata    *Metadata       `json:"metadata,omitempty"`
+	Edited      *Edited         `json:"edited,omitempty"`
 	// Reactions are the emoji added with reactions.add.
 	Reactions []Reaction `json:"reactions,omitempty"`
 
@@ -62,6 +69,7 @@ type Message struct {
 func (m *Message) clone() Message {
 	c := *m
 	c.Blocks = slices.Clone(m.Blocks)
+	c.Attachments = cloneAttachments(m.Attachments)
 	if m.Metadata != nil {
 		md := *m.Metadata
 		if m.Metadata.EventPayload != nil {

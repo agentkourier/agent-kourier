@@ -107,6 +107,7 @@ func (s *Server) newControlRoutes() controlRoutes {
 		return s.Reply(q.Channel, q.ThreadTS, q.User, q.Text)
 	}))
 	mux.HandleFunc("POST /_control/dm", post(func(q dmReq) (any, error) { return s.DM(q.User, q.Text) }))
+	mux.HandleFunc("POST /_control/webhook", post(func(q WebhookPost) (any, error) { return s.Webhook(q) }))
 	mux.HandleFunc("POST /_control/click", post(func(q clickReq) (any, error) {
 		return envelopeID(s.Click(q.User, q.MessageTS, q.ActionID, q.Value))
 	}))

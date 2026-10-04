@@ -37,6 +37,10 @@
 //     startStream, none at appendStream and a message_changed at stopStream;
 //     and no message_changed for a thread parent that gains a reply, where
 //     Slack sends one.
+//   - Incoming webhooks (webhook.go): the event for a webhook post, a message with subtype
+//     bot_message, a bot_id and username, the text (empty here), the legacy attachments with an id
+//     each and channel_type, and neither user nor app_id; shapes taken from the history of the
+//     owner's alert channel and not from a captured event; and the post being top-level only.
 //   - Interactions (interaction.go): Submit answering an inline ask-user with a
 //     block_actions press that carries state.values, not a view_submission
 //     (the fake has no views); the payload's fields, which are the ones courier
