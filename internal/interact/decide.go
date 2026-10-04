@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
@@ -134,7 +137,10 @@ const (
 //
 // The interaction is recorded as answered at PressedAt, so a press made before the deadline wins even if
 // it is decided after it. One made at or after the deadline is no decision: it is told so and not audited.
-func (d *Decider) Decide(ctx context.Context, pd PressDecision) error {
+func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.interaction.decide", attribute.String("courier.interaction.id", pd.Interaction.ID), attribute.String("courier.interaction.kind", string(pd.Interaction.Kind)), attribute.String("courier.binding", pd.BindingName))
+	telemetry.Link(ctx, pd.Interaction.TraceParent, pd.Interaction.TraceState)
+	defer func() { op.Finish(telemetryErr) }()
 	row := pd.Interaction
 	msg, err := AnswerMessage(pd.Binding.Dialect, row.ID, pd.In, pd.Answer, pd.User)
 	if err != nil {

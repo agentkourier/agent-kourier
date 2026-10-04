@@ -9,6 +9,8 @@ import (
 	"iter"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 )
 
@@ -102,7 +104,15 @@ func (a *Agent) Answer(ctx context.Context, msg *a2a.Message, h Handler) error {
 	return a.send(ctx, msg, h, true)
 }
 
-func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bool) error {
+func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bool) (telemetryErr error) {
+	operation := "send"
+	if answer {
+		operation = "answer"
+	}
+	ctx, op := telemetry.Start(ctx, "courier.agent."+operation)
+	var finalState a2a.TaskState
+	defer func() { finishAgentTask(op, telemetryErr, finalState) }()
+	h = observeHandler(ctx, operation, h, &finalState)
 	conn, err := a.source(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
@@ -160,10 +170,12 @@ func (a *Agent) reconnect(ctx context.Context, asm *assembler, err error) error 
 		}
 		conn, cerr := a.source(ctx) // resolves credentials again: the token may have rotated
 		if cerr != nil {
+			telemetry.Count(ctx, "courier_stream_reconnects_total", telemetry.ErrorClass(cerr))
 			return fmt.Errorf("reconnect to agent: %w", cerr)
 		}
 		before := asm.changes
 		err = a.resume(ctx, conn, asm)
+		telemetry.Count(ctx, "courier_stream_reconnects_total", telemetry.ErrorClass(err))
 		if asm.changes > before {
 			failures = 0
 		}
@@ -217,7 +229,9 @@ func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Cont
 
 // GetTask returns the task's current state. UnaryTimeout bounds it, resolving the
 // connection included.
-func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a2a.Task, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.agent.get")
+	defer func() { finishAgent(op, telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()
 	conn, err := a.source(ctx)
@@ -230,7 +244,9 @@ func (a *Agent) GetTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
 // CancelTask cancels the task and returns it as the agent left it. It backs the thread's
 // stop control, and Answer calls it for a wedged task (R17). UnaryTimeout bounds it,
 // resolving the connection included.
-func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (telemetryResult0 *a2a.Task, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.agent.cancel")
+	defer func() { finishAgent(op, telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()
 	conn, err := a.source(ctx)
@@ -244,7 +260,9 @@ func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error
 	return task, nil
 }
 
-func (a *Agent) getTask(ctx context.Context, conn Conn, id a2a.TaskID) (*a2a.Task, error) {
+func (a *Agent) getTask(ctx context.Context, conn Conn, id a2a.TaskID) (telemetryResult0 *a2a.Task, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.agent.get_rpc")
+	defer func() { finishAgent(op, telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()
 	task, err := conn.GetTask(ctx, &a2a.GetTaskRequest{ID: id})

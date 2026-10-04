@@ -23,6 +23,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -209,6 +213,25 @@ func (u *Run) Handle(ev agent.Event) {
 // run writes the state each time its window opens, until the final text is out.
 func (u *Run) run(ctx context.Context) {
 	defer close(u.done)
+	var finalOp *telemetry.Operation
+	finalCtx := ctx
+	writes := 0
+	finalOutcome := "cancelled"
+	defer func() {
+		if finalOp == nil && u.isFinal() {
+			finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "courier.render.finalize", attribute.String("courier.render.mode", string(u.turn.Mode)), attribute.String("courier.turn.id", u.turn.Source))
+		}
+		if finalOp != nil {
+			trace.SpanFromContext(finalCtx).SetAttributes(attribute.Int("courier.render.attempts", writes))
+			telemetry.Count(ctx, "courier_render_final_total", finalOutcome)
+			var failure error
+			switch finalOutcome {
+			case "deadline_exceeded", "permanent_failure", "retry_exhausted":
+				failure = errors.New(finalOutcome)
+			}
+			finalOp.FinishOutcome(failure, finalOutcome)
+		}
+	}()
 	var ref chat.Ref // the message, once there is one
 	var next time.Time
 	fails := 0
@@ -221,8 +244,12 @@ func (u *Run) run(ctx context.Context) {
 		case <-u.wake:
 		}
 		for {
+			if u.isFinal() && finalOp == nil {
+				finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "courier.render.finalize", attribute.String("courier.render.mode", string(u.turn.Mode)), attribute.String("courier.turn.id", u.turn.Source))
+			}
 			if d := next.Sub(u.cfg.Now()); d > 0 && !u.sleep(ctx, d) {
 				if u.isFinal() {
+					finalOutcome = "deadline_exceeded"
 					u.cfg.Logger.ErrorContext(ctx, "live: the final text was not written before its deadline", "channel", u.turn.Channel)
 				}
 				return
@@ -230,6 +257,7 @@ func (u *Run) run(ctx context.Context) {
 			m, body, final, ok := u.snapshot() // after the wait, so that what is sent is the latest
 			if !ok && final {                  // the turn ended with nothing to show
 				if ref.ID == "" {
+					finalOutcome = "empty_output"
 					return
 				}
 				m, body, ok = render.Nothing(), render.NoOutput, true // but a message stands: do not leave its tool line up
@@ -239,15 +267,22 @@ func (u *Run) run(ctx context.Context) {
 			}
 			if u.want(m, body, final) == u.sent {
 				if final {
+					finalOutcome = "delivered"
 					return
 				}
 				break
 			}
-			err := u.write(ctx, &ref, m, body, final)
+			writes++
+			writeCtx := ctx
+			if finalOp != nil {
+				writeCtx = finalCtx
+			}
+			err := u.write(writeCtx, &ref, m, body, final)
 			next = u.cfg.Now().Add(u.cfg.Throttle)
 			if err != nil {
 				switch verdict := u.cfg.Platform.Classify(chat.OpPost, err); {
 				case errors.Is(err, store.ErrInvalid), errors.Is(err, chat.ErrInvalid), errors.Is(err, outbox.ErrAbandoned): // retrying cannot mend them
+					finalOutcome = "permanent_failure"
 					u.cfg.Logger.ErrorContext(ctx, "live: the message cannot be sent; giving up", "channel", u.turn.Channel, "err", err)
 					return
 				case verdict.RetryAfter > 0:
@@ -259,6 +294,7 @@ func (u *Run) run(ctx context.Context) {
 				if fails++; fails >= u.cfg.Attempts {
 					u.cfg.Logger.ErrorContext(ctx, "live: giving up on a message", "channel", u.turn.Channel)
 					if final {
+						finalOutcome = "retry_exhausted"
 						return
 					}
 					fails = 0
@@ -272,6 +308,7 @@ func (u *Run) run(ctx context.Context) {
 				continue
 			}
 			if final {
+				finalOutcome = "delivered"
 				return
 			}
 			break
@@ -324,7 +361,9 @@ func (u *Run) want(m chat.Message, body string, final bool) string {
 
 // write posts the message the first time, through the outbox, and updates it after, or, on the
 // stream path, takes the next step of the stream.
-func (u *Run) write(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) error {
+func (u *Run) write(ctx context.Context, ref *chat.Ref, m chat.Message, body string, final bool) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.render.write", attribute.Bool("courier.render.final", final), attribute.Bool("courier.render.streaming", u.streaming))
+	defer func() { op.Finish(telemetryErr) }()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout) // see WriteTimeout
 	defer cancel()
 	if u.streaming {

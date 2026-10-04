@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // PressProcessor does the work on one press: *Pipeline.
@@ -192,7 +193,11 @@ func (w *Worker) work(ctx context.Context, l *lane) {
 	w.mu.Lock()
 	j := l.jobs[0]
 	w.mu.Unlock()
+	ctx = telemetry.Restore(ctx, j.press.TraceParent, j.press.TraceState)
+	ctx, op := telemetry.Start(ctx, "courier.interaction.process")
+	defer func() { op.Finish(nil) }()
 	res, err := w.cfg.Processor.Process(ctx, j.press)
+	op.Finish(err)
 	if ctx.Err() != nil { // cut off by shutdown: the press is not at fault, and is still recorded
 		return
 	}

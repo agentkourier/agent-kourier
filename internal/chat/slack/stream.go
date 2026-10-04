@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	slackgo "github.com/slack-go/slack"
 )
 
@@ -38,7 +40,9 @@ func (c *Client) TeamID(ctx context.Context) (string, error) {
 //
 // UNCONFIRMED(WP-04): that a channel needs both recipient_user_id and recipient_team_id, and
 // that the first text may be empty.
-func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string) (string, error) {
+func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string) (telemetryResult0 string, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.StartStream")
+	defer func() { finishChat(ctx, op, "StartStream", telemetryErr) }()
 	team, err := c.TeamID(ctx)
 	if err != nil {
 		return "", err
@@ -55,7 +59,9 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 }
 
 // AppendStream adds markdown to the end of the streaming message ts. The error holds no token.
-func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string) error {
+func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.AppendStream")
+	defer func() { finishChat(ctx, op, "AppendStream", telemetryErr) }()
 	if _, _, err := c.api.AppendStreamContext(ctx, channel, ts, append(inertOptions(), slackgo.MsgOptionMarkdownText(markdown))...); err != nil {
 		return c.scrub("chat.appendStream", err)
 	}
@@ -73,7 +79,9 @@ func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string)
 //
 // UNCONFIRMED(WP-04): that chat.stopStream accepts blocks and metadata, which chat.startStream
 // and chat.appendStream do not.
-func (c *Client) StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) error {
+func (c *Client) StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.StopStream")
+	defer func() { finishChat(ctx, op, "StopStream", telemetryErr) }()
 	tag, err := outboxTag(outboxID)
 	if err != nil {
 		return fmt.Errorf("slack stop stream: %w", err)

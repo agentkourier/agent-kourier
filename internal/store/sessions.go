@@ -14,7 +14,9 @@ type ConversationKey struct {
 
 // Session maps a conversation to its agent session (spec 9, table sessions).
 type Session struct {
-	Key ConversationKey
+	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
+	TraceParent, TraceState string
+	Key                     ConversationKey
 	// ContextID is empty until the agent assigns one in its first response.
 	ContextID string
 	// TaskID is the active task: the one that runs or waits for input. The session

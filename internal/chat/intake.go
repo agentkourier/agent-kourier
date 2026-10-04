@@ -8,6 +8,10 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -71,9 +75,20 @@ func NewIntake(cfg IntakeConfig) *Intake {
 // A message is remembered once a turn is queued for it, or a notice written for it (see
 // IntakeConfig.Notice), so the second event of a mention (a platform may deliver it twice) is skipped; an
 // event that queued nothing, or whose notice failed to write, may be tried again.
-func (in *Intake) Message(ctx context.Context, m Inbound) error {
+func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.intake", attribute.String("courier.source", "message"), attribute.String("courier.platform", m.At.Platform))
+	disposition := "ignored"
+	defer func() {
+		if telemetryErr != nil {
+			disposition = "error"
+		}
+		telemetry.Count(ctx, "courier_intake_total", "message", disposition)
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.intake.disposition", disposition))
+		op.Finish(telemetryErr)
+	}()
 	seen := [2]string{m.At.Channel, m.At.ID}
 	if in.seen.has(seen) {
+		disposition = "duplicate"
 		return nil
 	}
 	req := session.Inbound{
@@ -87,9 +102,14 @@ func (in *Intake) Message(ctx context.Context, m Inbound) error {
 	if !req.Create && m.At.Thread == "" {
 		return nil
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.binding", req.Binding))
 	res, err := in.cfg.Submitter.Submit(ctx, req)
+	if res.Disposition != "" {
+		disposition = string(res.Disposition)
+	}
 	switch {
 	case errors.Is(err, store.ErrInvalid):
+		disposition = "invalid"
 		in.log.WarnContext(ctx, "chat: message dropped as invalid", "channel", m.At.Channel, "message", m.At.ID, "err", err)
 		return nil
 	case err != nil:
@@ -115,7 +135,12 @@ func (in *Intake) Message(ctx context.Context, m Inbound) error {
 }
 
 // Interaction passes a press to IntakeConfig.Interactions, and returns its error.
-func (in *Intake) Interaction(ctx context.Context, i Interaction) error {
+func (in *Intake) Interaction(ctx context.Context, i Interaction) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.intake", attribute.String("courier.source", "interaction"))
+	defer func() {
+		telemetry.Count(ctx, "courier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr))
+		op.Finish(telemetryErr)
+	}()
 	if in.cfg.Interactions == nil {
 		in.log.WarnContext(ctx, "chat: press dropped; no handler", "channel", i.At.Channel, "message", i.At.ID)
 		return nil

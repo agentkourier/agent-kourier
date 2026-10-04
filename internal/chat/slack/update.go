@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	slackgo "github.com/slack-go/slack"
 )
 
@@ -17,7 +19,9 @@ import (
 // UNCONFIRMED(WP-04): that chat.update keeps the message's metadata (the outbox looks a message
 // up only before its ts is recorded, so courier does not need it to), and the error code for a
 // message still streaming (the fake says cant_update_message).
-func (c *Client) Update(ctx context.Context, channel, ts string, content Content) error {
+func (c *Client) Update(ctx context.Context, channel, ts string, content Content) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.Update")
+	defer func() { finishChat(ctx, op, "Update", telemetryErr) }()
 	opts, err := blockOptions(content.Blocks)
 	if err != nil {
 		return fmt.Errorf("slack update: %w", err)

@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/agentkourier/agent-kourier/internal/broker"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 )
@@ -69,6 +71,7 @@ type envConfig struct {
 	syncTimeout               time.Duration
 	klogV                     int
 	logLevel                  slog.Level
+	telemetry                 telemetry.Config
 }
 
 // loadEnv reads the environment through getenv. A value it cannot read is an error wrapping
@@ -97,6 +100,10 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		return c, bad("COURIER_LOG_LEVEL", "debug, info, warn or error", errors.New("unknown level"))
 	}
 	c.logLevel = level
+	c.telemetry, err = telemetry.LoadConfig(getenv)
+	if err != nil {
+		return c, fmt.Errorf("%w: %w", broker.ErrWiring, err)
+	}
 	return c, nil
 }
 
@@ -124,7 +131,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	defer func() { _ = ln.Close() }()
 
 	cfg := broker.RunConfig{
-		ConfigDir: env.configDir, DBPath: env.dbPath, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log,
+		ConfigDir: env.configDir, DBPath: env.dbPath, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

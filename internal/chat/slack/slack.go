@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+
 	slackgo "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
@@ -139,6 +142,13 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser str
 	if ev.Request == nil {
 		return
 	}
+	started := time.Now()
+	ctx, op := telemetry.Start(ctx, "courier.slack.envelope", attribute.String("courier.platform", "slack"))
+	outcome := "withheld"
+	defer func() {
+		telemetry.Observe(ctx, "courier_slack_ack_duration_seconds", time.Since(started), outcome)
+		op.FinishOutcome(nil, outcome)
+	}()
 	switch ev.Type {
 	case socketmode.EventTypeEventsAPI:
 		if outer, ok := ev.Data.(slackevents.EventsAPIEvent); ok {
@@ -166,7 +176,9 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, botUser str
 	// Bounded: slack-go queues the ack for a writer that is gone after a disconnect, and a full queue would block here.
 	ackCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	outcome = "acknowledged"
 	if err := smc.AckCtx(ackCtx, ev.Request.EnvelopeID, nil); err != nil {
+		outcome = "failed"
 		c.log.WarnContext(ctx, "slack: acknowledging an event failed", "err", err)
 	}
 }

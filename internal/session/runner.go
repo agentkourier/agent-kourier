@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -18,27 +22,27 @@ import (
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
 // Only the runner reads and writes tries and ttl; the Manager's mutex guards the rest.
 type convo struct {
-	again      bool              // a wake arrived while the runner was busy
-	tries      int               // sends of the head turn that failed in a way to retry, in a row
-	since      time.Time         // when the first of them failed, for SendGiveUp
-	notified   bool              // the thread was told courier is retrying, for this run of trouble
-	busyNoted  bool              // the thread was told the reply is queued behind a task nobody recorded
-	waitSince  time.Time         // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
-	waitNoted  bool              // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
-	lastSeen   time.Time         // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
-	life       life              // what courier already holds of that task, so a replayed snapshot is not life
-	cancelFrom time.Time         // when the first attempt to cancel a wedged task was made, for SendGiveUp
-	cancelNow  bool              // the task is known to be wedged: cancel it at once, without waiting for its age
-	patient    bool              // the turn is never given up on: the agent may have taken it
-	follow     *tstate           // the turn whose task is followed again, after its stream was lost
-	paused     *tstate           // the turn whose task waits for input, while it does
-	answers    chan *a2a.Message // answers to the paused task, for the parked runner to send
-	attach     *tstate           // a recovered task for the runner to take up; guarded by the Manager's mutex
-	ttl        time.Duration     // the Binding's threadTTL, for end
-	parked     a2a.TaskID        // the task the runner waits on, while it waits for input
-	driving    a2a.TaskID        // the task the runner streams or follows, between named and ended
-	released   bool              // the pause ended, and the runner has not yet moved on
-	resume     chan struct{}     // tells the parked runner that the pause ended
+	again      bool            // a wake arrived while the runner was busy
+	tries      int             // sends of the head turn that failed in a way to retry, in a row
+	since      time.Time       // when the first of them failed, for SendGiveUp
+	notified   bool            // the thread was told courier is retrying, for this run of trouble
+	busyNoted  bool            // the thread was told the reply is queued behind a task nobody recorded
+	waitSince  time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
+	waitNoted  bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
+	lastSeen   time.Time       // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
+	life       life            // what courier already holds of that task, so a replayed snapshot is not life
+	cancelFrom time.Time       // when the first attempt to cancel a wedged task was made, for SendGiveUp
+	cancelNow  bool            // the task is known to be wedged: cancel it at once, without waiting for its age
+	patient    bool            // the turn is never given up on: the agent may have taken it
+	follow     *tstate         // the turn whose task is followed again, after its stream was lost
+	paused     *tstate         // the turn whose task waits for input, while it does
+	answers    chan answerWork // answers to the paused task, for the parked runner to send
+	attach     *tstate         // a recovered task for the runner to take up; guarded by the Manager's mutex
+	ttl        time.Duration   // the Binding's threadTTL, for end
+	parked     a2a.TaskID      // the task the runner waits on, while it waits for input
+	driving    a2a.TaskID      // the task the runner streams or follows, between named and ended
+	released   bool            // the pause ended, and the runner has not yet moved on
+	resume     chan struct{}   // tells the parked runner that the pause ended
 }
 
 // outcome is how one turn left the conversation: nothing queued, the task ended, or the task
@@ -94,8 +98,9 @@ func (m *Manager) adopt(key Key, t *tstate) {
 
 // newConvo registers a conversation's state. The caller holds m.mu.
 func (m *Manager) newConvo(key Key) *convo {
-	c := &convo{resume: make(chan struct{}, 1), answers: make(chan *a2a.Message, 1)}
+	c := &convo{resume: make(chan struct{}, 1), answers: make(chan answerWork, 1)}
 	m.convos[key] = c
+	telemetry.AddGauge(m.ctx, "courier_sessions_active", 1)
 	return c
 }
 
@@ -173,6 +178,7 @@ func (m *Manager) backoff(tries int) time.Duration {
 // is blocked is retried after a backoff, and never dropped.
 func (m *Manager) run(key Key, c *convo) {
 	defer m.wg.Done()
+	defer telemetry.AddGauge(m.ctx, "courier_sessions_active", -1)
 	for m.ctx.Err() == nil {
 		out, err := m.turn(key, c)
 		for m.log(key, err); out == paused && m.ctx.Err() == nil; m.log(key, err) {
@@ -204,6 +210,8 @@ func (m *Manager) log(key Key, err error) {
 // pause ended (cancelled, timed out: see endPause), so the task is cleared and the held replies
 // go out; or an answer was sent, whose stream is followed to where it ends or pauses again.
 func (m *Manager) parked(key Key, c *convo) (outcome, error) {
+	telemetry.AddGauge(m.ctx, "courier_sessions_paused", 1)
+	defer telemetry.AddGauge(m.ctx, "courier_sessions_paused", -1)
 	select {
 	case <-c.resume:
 		// The park, and its release, stay until the record is cleared: a duplicate endPause in between
@@ -258,6 +266,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	} else if err != nil {
 		return idle, fmt.Errorf("read queue: %w", err)
 	}
+	sctx = telemetry.Restore(sctx, r.TraceParent, r.TraceState)
 	m.mu.Lock()
 	if _, fresh := m.fresh[r.ID]; !fresh { // an earlier process may have marked it queued, and nothing here knows
 		m.marked[r.ID] = struct{}{} // so it is taken off when the turn is sent or ends, which does no harm if it is not there
@@ -286,7 +295,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	}
 	c.ttl = backend.ThreadTTL
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
-	send := func(h agent.Handler) error { return backend.Agent.Send(m.ctx, m.message(r, sess, backend), h) }
+	send := func(ctx context.Context, h agent.Handler) error {
+		return backend.Agent.Send(ctx, m.message(r, sess, backend), h)
+	}
 	hold := m.held(key, r.ID, sess)
 	m.mu.Lock()
 	prev := m.attempted[key]
@@ -303,7 +314,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		// known, so nothing is sent (spec 8.2). A first turn has no context to look in, and its
 		// resend is deduplicated.
 		if sess.ContextID != "" {
-			task, holders, err := backend.Agent.FindTask(m.ctx, sess.ContextID, r.ID)
+			task, holders, err := backend.Agent.FindTask(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), sess.ContextID, r.ID)
 			switch {
 			case err != nil:
 				c.patient = c.patient || hold != nil // a turn the agent took is never failed
@@ -312,7 +323,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 				if len(holders) > 1 {
 					m.duplicates(t, holders)
 				}
-				send = func(h agent.Handler) error { return backend.Agent.Follow(m.ctx, task.ID, h) }
+				send = func(ctx context.Context, h agent.Handler) error { return backend.Agent.Follow(ctx, task.ID, h) }
 			case sess.TaskID != "": // absent, and a task of the session runs: this turn is behind it
 				return idle, hold
 			}
@@ -403,14 +414,15 @@ func (l *life) tool(key string) bool {
 
 // tstate is the turn being run: its queue row, the session it runs in, and its Binding.
 type tstate struct {
-	follow    bool       // the attempt follows a task instead of sending
-	answer    bool       // the attempt answers the paused task
-	nid       string     // what a notice of this attempt is named after, if not the turn
-	taskID    a2a.TaskID // the task the agent named, or the one followed or answered
-	op        audit.Op   // the call audit rows name, when not a send
-	system    bool       // courier made the call itself: no person, no turn
-	recovered bool       // the task was found again after a restart
-	texted    bool       // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
+	follow    bool            // the attempt follows a task instead of sending
+	answer    bool            // the attempt answers the paused task
+	nid       string          // what a notice of this attempt is named after, if not the turn
+	taskID    a2a.TaskID      // the task the agent named, or the one followed or answered
+	op        audit.Op        // the call audit rows name, when not a send
+	traceCtx  context.Context // current attempt, for correlated lifecycle logs
+	system    bool            // courier made the call itself: no person, no turn
+	recovered bool            // the task was found again after a restart
+	texted    bool            // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
 	key       Key
 	c         *convo
 	r         store.Reply
@@ -420,7 +432,7 @@ type tstate struct {
 
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
 // recording the task as soon as the agent names it.
-func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome, err error) {
+func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) error) (out outcome, err error) {
 	key, c, r := t.key, t.c, t.r
 	defer func() {
 		if out != paused { // the pause event may have parked the runner before the stream failed
@@ -430,13 +442,38 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 			m.drives(c, "")
 		}
 	}()
-	sctx := context.WithoutCancel(m.ctx)
+	parentCtx := telemetry.Restore(m.ctx, r.TraceParent, r.TraceState)
+	if t.recovered && !t.answer {
+		parentCtx = m.ctx
+	}
+	parentCtx, op := telemetry.Start(parentCtx, "courier.turn.attempt", attribute.String("courier.binding", t.sess.Binding), attribute.String("courier.turn.id", r.ID), attribute.Bool("courier.recovered", t.recovered && !t.answer), attribute.Int("courier.retry.count", c.tries), attribute.String("courier.backend", t.b.Name), attribute.String("courier.agent.name", t.b.AgentName), attribute.String("courier.dialect", t.b.Dialect))
+	if t.recovered && !t.answer {
+		telemetry.Link(parentCtx, t.sess.TraceParent, t.sess.TraceState)
+	}
+	t.traceCtx = parentCtx
+	defer func() {
+		switch {
+		case errors.Is(err, errHeld):
+			op.FinishOutcome(nil, "held")
+		case errors.Is(err, agent.ErrBusy):
+			op.FinishOutcome(nil, "busy")
+		default:
+			op.FinishOutcome(err, turnAttemptOutcome(out, err))
+		}
+	}()
+	sctx := context.WithoutCancel(parentCtx)
+	m.mu.Lock()
+	_, begun := m.begun[r.ID]
+	m.mu.Unlock()
+	if !begun && !r.EnqueuedAt.IsZero() {
+		telemetry.Observe(m.ctx, "courier_turn_queue_wait_seconds", m.cfg.Now().Sub(r.EnqueuedAt), t.sess.Binding)
+	}
 	m.begin(t)
 	h := func(agent.Event) {}
 	// The sink's context ends when the send returns, not with the manager: a turn that ends with
 	// no FinalEvent frees what the sink started for it. A sink that must settle a finished turn
 	// does so on a context of its own (the renderer's bounded flush).
-	tctx, endTurn := context.WithCancel(m.ctx)
+	tctx, endTurn := context.WithCancel(parentCtx)
 	defer endTurn()
 	if m.cfg.Sink != nil {
 		// An answer's output is a message of its own, named after the answer: it must not overwrite
@@ -450,12 +487,13 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	var final *a2a.Task
 	var recordErr error
 	named := false // the agent named the task
-	err = send(func(e agent.Event) {
+	err = send(tctx, func(e agent.Event) {
 		if c.life.renews(e) { // only what is new counts: a follow replays the snapshot it began with
 			c.lastSeen = m.cfg.Now()
 		}
 		switch ev := e.(type) {
 		case agent.StateEvent:
+			trace.SpanFromContext(tctx).SetAttributes(attribute.String("courier.task.id", string(ev.TaskID)), attribute.String("courier.context.id", ev.ContextID), attribute.String("courier.task.state", string(ev.State)))
 			t.taskID = ev.TaskID
 			m.drives(c, ev.TaskID)
 			if !named { // the agent has named the task: record it before anyone renders it
@@ -502,6 +540,7 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 	}
 	switch {
 	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
+		telemetry.Count(parentCtx, "courier_session_recovery_total", "record_failed")
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
 	case err != nil && t.answer && errors.Is(err, agent.ErrAnswerRejected): // it says so after the task is named again
@@ -531,17 +570,24 @@ func (m *Manager) drive(t *tstate, send func(agent.Handler) error) (out outcome,
 // answer sends an answer to the paused task and streams what follows to the sink, under the
 // turn that paused (the renderer shows one message). The pause is over while it runs, so a
 // second answer, or an endPause for the task, is dropped.
-func (m *Manager) answer(c *convo, msg *a2a.Message) (outcome, error) {
+type answerWork struct {
+	msg           *a2a.Message
+	parent, state string
+}
+
+func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
+	msg := work.msg
 	t := *c.paused
 	m.mu.Lock()
 	c.parked, c.released, c.paused, c.driving = "", false, nil, msg.TaskID // no gap between parked and driving
 	m.mu.Unlock()
 	t.answer, t.nid, t.taskID, t.follow = true, msg.ID, msg.TaskID, false
+	t.r.TraceParent, t.r.TraceState = work.parent, work.state
 	t.texted = false // the answer's output is a message of its own: what the question said is not part of it
 	if msg.ContextID == "" {
 		msg.ContextID = t.sess.ContextID
 	}
-	return m.drive(&t, func(h agent.Handler) error { return t.b.Agent.Answer(m.ctx, msg, h) })
+	return m.drive(&t, func(ctx context.Context, h agent.Handler) error { return t.b.Agent.Answer(ctx, msg, h) })
 }
 
 // unanswered handles an answer that failed before the agent named a task again. A rejected one
@@ -720,7 +766,7 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 		return blocked, fmt.Errorf("get task %s: %w", t.taskID, err)
 	}
 	// Follow reads the task again (a second unary call, cheap) and then subscribes to it.
-	return m.drive(t, func(h agent.Handler) error { return t.b.Agent.Follow(m.ctx, t.taskID, h) })
+	return m.drive(t, func(ctx context.Context, h agent.Handler) error { return t.b.Agent.Follow(ctx, t.taskID, h) })
 }
 
 // wedgedByAge reports whether a WORKING task has gone too long without life (R17): it counts
@@ -781,7 +827,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case kind == cancelEnded: // it ended in the meantime: show how
 		m.audit(t, t.call(err))
 		c.cancelFrom = time.Time{}
-		return m.drive(t, func(h agent.Handler) error { return t.b.Agent.Follow(m.ctx, t.taskID, h) })
+		return m.drive(t, func(ctx context.Context, h agent.Handler) error { return t.b.Agent.Follow(ctx, t.taskID, h) })
 	case kind == cancelCredentials:
 		return m.lost(t, err) // the identity Source writes the row
 	case kind == cancelForbidden, m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
@@ -902,6 +948,10 @@ func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (o
 }
 
 func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
+	switch kind {
+	case NoticeWedged, NoticeDuplicateRun, NoticeRetrying:
+		telemetry.Count(m.ctx, "courier_session_recovery_total", string(kind))
+	}
 	if m.cfg.Sink != nil {
 		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
 	}
@@ -1070,5 +1120,21 @@ func (m *Manager) Close(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("close session manager: %w", ctx.Err())
+	}
+}
+
+func turnAttemptOutcome(out outcome, err error) string {
+	if err != nil {
+		return telemetry.ErrorClass(err)
+	}
+	switch out {
+	case paused:
+		return "input_required"
+	case blocked:
+		return "blocked"
+	case idle:
+		return "idle"
+	default:
+		return "ended"
 	}
 }

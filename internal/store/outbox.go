@@ -30,6 +30,8 @@ func (r OutboxRole) Valid() bool {
 
 // OutboxEntry is one intended chat post (spec 8.6).
 type OutboxEntry struct {
+	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
+	TraceParent, TraceState string
 	// ID is deterministic, derived from the source ID and the role.
 	ID string
 	// EventID is the source ID: the event ID, or for a digest (D26) the

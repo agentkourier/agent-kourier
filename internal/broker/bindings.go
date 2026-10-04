@@ -118,6 +118,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		return session.Backend{}, fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
 	return session.Backend{
+		Name: v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), AgentName: v1alpha1.NamespacedName(rb.Binding.Spec.Agent.Namespace, rb.Binding.Spec.Agent.Name), Dialect: string(rb.Backend.Spec.Dialect),
 		ThreadTTL: rb.Binding.Spec.Session.ThreadTTL.Duration,
 		Agent:     k.pool.Agent(src.Target()),
 		Attribute: k.attribute,

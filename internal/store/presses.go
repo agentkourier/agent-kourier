@@ -8,6 +8,8 @@ import (
 // Press is a button press recorded before it is processed: what Slack sent, kept so that a crash
 // between the acknowledgement and the work loses nothing (spec 8.4).
 type Press struct {
+	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
+	TraceParent, TraceState string
 	// Seq orders presses by when they were recorded; the store assigns it.
 	Seq int64
 	// InteractionID is the pressed button's value, which names the interaction it answers.

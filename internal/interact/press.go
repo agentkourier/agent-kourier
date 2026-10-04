@@ -16,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // PressAuthzTimeout is the bound that the Slack client's membership and bot checks get when a press is
@@ -115,6 +116,7 @@ func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 		return fmt.Errorf("interact: encode a press: %w", err)
 	}
 	press := store.Press{InteractionID: i.PromptID, User: i.User, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: answers, PressedAt: p.cfg.Now()}
+	press.TraceParent, press.TraceState = telemetry.Capture(ctx)
 	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
 		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
 	}

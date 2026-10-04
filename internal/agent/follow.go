@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 )
 
@@ -29,7 +31,11 @@ import (
 //     the task ID.
 //
 // h may be nil. A task ID is required.
-func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) error {
+func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.agent.follow")
+	var finalState a2a.TaskState
+	defer func() { finishAgentTask(op, telemetryErr, finalState) }()
+	h = observeHandler(ctx, "follow", h, &finalState)
 	if id == "" {
 		return errors.New("follow task: a task ID is required")
 	}

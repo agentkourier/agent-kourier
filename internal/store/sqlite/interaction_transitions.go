@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -27,11 +29,20 @@ func (s *Store) transition(ctx context.Context, id, update string, args ...any) 
 		}
 		return err
 	})
+	if applied && err == nil && telemetry.Enabled(ctx) {
+		var kind, outcome string
+		var created, decided int64
+		if e := s.read.QueryRowContext(ctx, `SELECT kind,state,created_at,decided_at FROM interactions WHERE id = ?`, id).Scan(&kind, &outcome, &created, &decided); e == nil {
+			telemetry.Observe(ctx, "courier_interaction_wait_seconds", time.Duration(decided-created), kind, outcome)
+		}
+	}
 	return applied, state, decider, err
 }
 
 // SubmitInteraction implements store.Interactions.
-func (s *Store) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
+func (s *Store) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.SubmitInteraction")
+	defer func() { finishStore(op, telemetryErr) }()
 	if id == "" || len(answer) == 0 || decider == "" || now.IsZero() {
 		return fmt.Errorf("submit interaction %q: ID, answer, decider and now are required: %w", id, store.ErrInvalid)
 	}
@@ -51,7 +62,9 @@ func (s *Store) SubmitInteraction(ctx context.Context, id string, answer []byte,
 }
 
 // ResolveInteraction implements store.Interactions.
-func (s *Store) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) error {
+func (s *Store) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.ResolveInteraction")
+	defer func() { finishStore(op, telemetryErr) }()
 	if id == "" || now.IsZero() || (state != store.InteractionTimedOut && state != store.InteractionCancelled) {
 		return fmt.Errorf("resolve interaction %q to %q: ID, now and a timed_out or cancelled state are required: %w", id, state, store.ErrInvalid)
 	}
@@ -69,7 +82,9 @@ func (s *Store) ResolveInteraction(ctx context.Context, id string, state store.I
 }
 
 // SetInteractionMessageRef implements store.Interactions.
-func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) error {
+func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.SetInteractionMessageRef")
+	defer func() { finishStore(op, telemetryErr) }()
 	if id == "" || ref == "" {
 		return fmt.Errorf("set message ref for interaction %q: ID and ref are required: %w", id, store.ErrInvalid)
 	}
@@ -80,7 +95,9 @@ func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) er
 }
 
 // MarkInteractionDelivered implements store.Interactions.
-func (s *Store) MarkInteractionDelivered(ctx context.Context, id string, at time.Time) error {
+func (s *Store) MarkInteractionDelivered(ctx context.Context, id string, at time.Time) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.MarkInteractionDelivered")
+	defer func() { finishStore(op, telemetryErr) }()
 	if id == "" || at.IsZero() {
 		return fmt.Errorf("mark interaction %q delivered: an ID and a time are required: %w", id, store.ErrInvalid)
 	}

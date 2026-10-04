@@ -46,6 +46,8 @@ type AgentAPI interface {
 
 // Backend is what the manager needs to know about one Binding.
 type Backend struct {
+	// Name, AgentName and Dialect identify configured backend resources for spans.
+	Name, AgentName, Dialect string
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.
@@ -175,6 +177,8 @@ type Sink interface {
 // Config configures a Manager. Store and Bindings are required. A nil Users attributes a turn
 // by the user's ID alone, and a nil Sink drops the output.
 type Config struct {
+	// Context supplies tracing and other values. Cancellation belongs to Close.
+	Context  context.Context
 	Store    Store
 	Bindings Bindings
 	Users    Users
@@ -276,7 +280,11 @@ func New(cfg Config) (*Manager, error) {
 		cfg.SendGiveUp = 15 * time.Minute
 	}
 	m := &Manager{cfg: cfg, convos: map[Key]*convo{}, unrecorded: map[Key]string{}, attempted: map[Key]attempt{}, begun: map[string]time.Time{}, fresh: map[string]struct{}{}, marked: map[string]struct{}{}}
-	m.ctx, m.stop = context.WithCancel(context.Background())
+	base := cfg.Context
+	if base == nil {
+		base = context.Background()
+	}
+	m.ctx, m.stop = context.WithCancel(context.WithoutCancel(base))
 	m.wake = m.start
 	return m, nil
 }

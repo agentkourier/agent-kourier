@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -165,7 +167,7 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 // means the conversation is not paused on that task, or it was already answered. How the send
 // ends, a rejection or a busy task included, reaches the thread as a notice, and the queued
 // replies go on when the task ends.
-func (m *Manager) Answer(_ context.Context, key Key, msg *a2a.Message) error {
+func (m *Manager) Answer(ctx context.Context, key Key, msg *a2a.Message) error {
 	if msg == nil || msg.TaskID == "" || msg.ID == "" {
 		return fmt.Errorf("answer: a message with an ID and a task is required: %w", store.ErrInvalid)
 	}
@@ -176,6 +178,7 @@ func (m *Manager) Answer(_ context.Context, key Key, msg *a2a.Message) error {
 		return ErrNotPaused
 	}
 	c.released = true
-	c.answers <- msg // one per park, and the channel holds one: never blocks
+	parent, state := telemetry.Capture(ctx)
+	c.answers <- answerWork{msg: msg, parent: parent, state: state} // one per park, and the channel holds one: never blocks
 	return nil
 }

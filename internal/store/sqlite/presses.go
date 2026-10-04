@@ -7,11 +7,17 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // RecordPress implements store.Presses. The counts and the insert are one transaction on the
 // single write connection, so the limits hold under concurrent presses.
-func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
+func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (telemetryResult0 int64, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.RecordPress")
+	defer func() { finishStore(op, telemetryErr) }()
+	if p.TraceParent == "" {
+		p.TraceParent, p.TraceState = telemetry.Capture(ctx)
+	}
 	if p.InteractionID == "" || p.User == "" || p.Channel == "" || p.MessageRef == "" || p.PressedAt.IsZero() || limits.Total < 1 || limits.PerUser < 1 {
 		return 0, fmt.Errorf("record press: the interaction, user, message, time and positive limits are required: %w", store.ErrInvalid)
 	}
@@ -27,8 +33,8 @@ func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.Pre
 		if total >= limits.Total || user >= limits.PerUser {
 			return fmt.Errorf("%d presses wait, %d from %s: %w", total, user, p.User, store.ErrLimit)
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, p.InteractionID, p.User, p.Channel, p.MessageRef, p.Inputs, ts(p.PressedAt))
+		res, err := tx.ExecContext(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, p.InteractionID, p.User, p.Channel, p.MessageRef, p.Inputs, ts(p.PressedAt), p.TraceParent, p.TraceState)
 		if err != nil {
 			return err
 		}
@@ -42,8 +48,10 @@ func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.Pre
 }
 
 // ListPresses implements store.Presses.
-func (s *Store) ListPresses(ctx context.Context) ([]store.Press, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT seq, interaction_id, user_id, channel, message_ts, inputs, pressed_at
+func (s *Store) ListPresses(ctx context.Context) (telemetryResult0 []store.Press, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.ListPresses")
+	defer func() { finishStore(op, telemetryErr) }()
+	rows, err := s.read.QueryContext(ctx, `SELECT seq, interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
 		FROM interaction_presses ORDER BY seq`)
 	if err != nil {
 		return nil, fmt.Errorf("list presses: %w", err)
@@ -53,7 +61,7 @@ func (s *Store) ListPresses(ctx context.Context) ([]store.Press, error) {
 	for rows.Next() {
 		var p store.Press
 		var at int64
-		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Channel, &p.MessageRef, &p.Inputs, &at); err != nil {
+		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
 			return nil, fmt.Errorf("list presses: %w", err)
 		}
 		p.PressedAt = fromTS(at)
@@ -66,7 +74,9 @@ func (s *Store) ListPresses(ctx context.Context) ([]store.Press, error) {
 }
 
 // DeletePress implements store.Presses.
-func (s *Store) DeletePress(ctx context.Context, seq int64) error {
+func (s *Store) DeletePress(ctx context.Context, seq int64) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.DeletePress")
+	defer func() { finishStore(op, telemetryErr) }()
 	if _, err := s.exec(ctx, `DELETE FROM interaction_presses WHERE seq = ?`, seq); err != nil {
 		return fmt.Errorf("delete press %d: %w", seq, err)
 	}
@@ -74,7 +84,9 @@ func (s *Store) DeletePress(ctx context.Context, seq int64) error {
 }
 
 // PurgePresses implements store.Presses.
-func (s *Store) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (int, error) {
+func (s *Store) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (telemetryResult0 int, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PurgePresses")
+	defer func() { finishStore(op, telemetryErr) }()
 	if now.IsZero() || grace < 0 {
 		return 0, fmt.Errorf("purge presses: now and a grace of at least zero are required: %w", store.ErrInvalid)
 	}
@@ -88,7 +100,9 @@ func (s *Store) PurgePresses(ctx context.Context, now time.Time, grace time.Dura
 }
 
 // PendingPresses implements store.Presses.
-func (s *Store) PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error) {
+func (s *Store) PendingPresses(ctx context.Context, interactionID string, before time.Time) (telemetryResult0 bool, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PendingPresses")
+	defer func() { finishStore(op, telemetryErr) }()
 	if interactionID == "" || before.IsZero() {
 		return false, fmt.Errorf("pending presses: an interaction and a time are required: %w", store.ErrInvalid)
 	}

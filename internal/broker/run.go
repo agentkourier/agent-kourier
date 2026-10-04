@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
@@ -30,7 +34,22 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
-	log := cfg.logger()
+	log := slog.New(telemetry.LogHandler{Handler: cfg.logger().Handler()})
+	provider := cfg.TracerProvider
+	if provider == nil {
+		var shutdown func(context.Context) error
+		provider, shutdown, err = cfg.Telemetry.Provider(ctx, cfg.ServiceVersion)
+		if err != nil {
+			return fmt.Errorf("telemetry: %w", err)
+		}
+		defer func() {
+			flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer cancel()
+			if ferr := shutdown(flush); ferr != nil {
+				log.Warn("trace export flush failed", "error_type", telemetry.ErrorClass(ferr))
+			}
+		}()
+	}
 	defer func() { // a signal during startup makes some step fail with the context's error: a clean stop
 		// A rejected token that was reported first stays a failure whatever signal follows it.
 		if err != nil && ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) {
@@ -56,7 +75,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	defer cancel()
 	sd := newShutdown(log)
 	sd.trace = cfg.shutdownTrace
-	defer sd.run(ctx)
+	defer func() { sd.run(runCtx) }()
 
 	// replaced in 35f2b4 for the hooks; the stale gauge already reads the Config once Bootstrap has made it.
 	var current atomic.Pointer[Config]
@@ -65,6 +84,11 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
+	obs, err := telemetry.New(metrics.reg, provider)
+	if err != nil {
+		return fmt.Errorf("telemetry metrics: %w", err)
+	}
+	runCtx = telemetry.WithObserver(runCtx, obs)
 	ready := &Readiness{}
 	served, servedDone := make(chan error, 1), make(chan struct{})
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
@@ -90,6 +114,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	st, err := sqlite.Open(runCtx, cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
+	}
+	if err := st.RegisterMetrics(metrics.reg); err != nil {
+		_ = st.Close()
+		return fmt.Errorf("store metrics: %w", err)
 	}
 	sd.add(stepStore, func(context.Context) {
 		if err := st.Close(); err != nil {
@@ -155,7 +183,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err != nil {
 		return err
 	}
-	mgr, err := session.New(session.Config{Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}

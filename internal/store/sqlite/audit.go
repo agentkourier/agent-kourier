@@ -6,11 +6,15 @@ import (
 	"math"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // AppendAudit implements store.Audit.
-func (s *Store) AppendAudit(ctx context.Context, e store.AuditEntry) error {
+func (s *Store) AppendAudit(ctx context.Context, e store.AuditEntry) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.AppendAudit")
+	defer func() { finishStore(op, telemetryErr) }()
 	e = e.Redacted()
 	if !e.Kind.Valid() || e.At.IsZero() || e.Subject == "" || e.Outcome == "" || len(e.Outcome) > store.MaxAuditOutcome {
 		return fmt.Errorf("append audit %q: valid Kind, At, Subject and an Outcome of 1 to %d bytes are required: %w",
@@ -24,7 +28,9 @@ func (s *Store) AppendAudit(ctx context.Context, e store.AuditEntry) error {
 }
 
 // ListAudit implements store.Audit.
-func (s *Store) ListAudit(ctx context.Context, since time.Time, afterSeq int64, limit int) ([]store.AuditEntry, error) {
+func (s *Store) ListAudit(ctx context.Context, since time.Time, afterSeq int64, limit int) (telemetryResult0 []store.AuditEntry, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.ListAudit")
+	defer func() { finishStore(op, telemetryErr) }()
 	if limit < 1 || limit > 1000 {
 		return nil, fmt.Errorf("list audit: limit %d outside 1 to 1000: %w", limit, store.ErrInvalid)
 	}

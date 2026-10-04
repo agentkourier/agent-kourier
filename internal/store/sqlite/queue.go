@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -16,7 +18,9 @@ import (
 // so selecting the candidate and marking it processing cannot interleave with
 // another claimer. While an event is processing, next_attempt_at holds its
 // lease deadline, which lets one predicate cover both due and expired events.
-func (s *Store) ClaimEvent(ctx context.Context, now time.Time, lease time.Duration) (store.Event, error) {
+func (s *Store) ClaimEvent(ctx context.Context, now time.Time, lease time.Duration) (telemetryResult0 store.Event, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.ClaimEvent")
+	defer func() { finishStore(op, telemetryErr) }()
 	if now.IsZero() || lease <= 0 {
 		return store.Event{}, fmt.Errorf("claim event: now must be set and lease positive: %w", store.ErrInvalid)
 	}
@@ -27,9 +31,9 @@ func (s *Store) ClaimEvent(ctx context.Context, now time.Time, lease time.Durati
 		WHERE id = (SELECT id FROM events
 			WHERE status IN ('pending', 'processing') AND next_attempt_at <= ?
 			ORDER BY next_attempt_at, received_at LIMIT 1)
-		RETURNING id, kind, binding_key, payload, received_at, status, attempts, next_attempt_at, last_error`,
+		RETURNING id, kind, binding_key, payload, received_at, status, attempts, next_attempt_at, last_error, trace_parent, trace_state`,
 		ts(now.Add(lease)), ts(now)).
-		Scan(&e.ID, &e.Kind, &e.BindingKey, &e.Payload, &received, &e.Status, &e.Attempts, &next, &e.LastError)
+		Scan(&e.ID, &e.Kind, &e.BindingKey, &e.Payload, &received, &e.Status, &e.Attempts, &next, &e.LastError, &e.TraceParent, &e.TraceState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Event{}, fmt.Errorf("claim event: %w", store.ErrNotFound)
 	}
@@ -41,7 +45,9 @@ func (s *Store) ClaimEvent(ctx context.Context, now time.Time, lease time.Durati
 }
 
 // CompleteEvent implements store.Queue.
-func (s *Store) CompleteEvent(ctx context.Context, id string, attempt int) error {
+func (s *Store) CompleteEvent(ctx context.Context, id string, attempt int) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.CompleteEvent")
+	defer func() { finishStore(op, telemetryErr) }()
 	if id == "" || attempt < 1 {
 		return fmt.Errorf("complete event %q: ID and attempt are required: %w", id, store.ErrInvalid)
 	}
@@ -52,7 +58,9 @@ func (s *Store) CompleteEvent(ctx context.Context, id string, attempt int) error
 
 // FailEvent implements store.Queue. The fence pins the row's attempts to
 // attempt, so the attempts >= ? test compares the caller's own attempt.
-func (s *Store) FailEvent(ctx context.Context, id string, attempt int, retryAt time.Time, maxAttempts int, errText string) error {
+func (s *Store) FailEvent(ctx context.Context, id string, attempt int, retryAt time.Time, maxAttempts int, errText string) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.FailEvent")
+	defer func() { finishStore(op, telemetryErr) }()
 	if id == "" || attempt < 1 || retryAt.IsZero() || maxAttempts < 1 {
 		return fmt.Errorf("fail event %q: ID and retryAt are required and attempt and maxAttempts must be at least 1: %w",
 			id, store.ErrInvalid)

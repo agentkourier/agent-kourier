@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -123,16 +125,21 @@ func errIfUnchanged(n int64, err error, what string) error {
 }
 
 // AppendEvent implements store.Events.
-func (s *Store) AppendEvent(ctx context.Context, e store.Event) (bool, error) {
+func (s *Store) AppendEvent(ctx context.Context, e store.Event) (telemetryResult0 bool, telemetryErr error) {
+	if e.TraceParent == "" {
+		e.TraceParent, e.TraceState = telemetry.Capture(ctx)
+	}
+	ctx, op := telemetry.Start(ctx, "courier.store.AppendEvent")
+	defer func() { finishStore(op, telemetryErr) }()
 	if e.ID == "" || e.ReceivedAt.IsZero() {
 		return false, fmt.Errorf("append event %q: ID and ReceivedAt are required: %w", e.ID, store.ErrInvalid)
 	}
 	if e.Payload == nil {
 		e.Payload = []byte{} // a nil slice would bind as NULL
 	}
-	n, err := s.exec(ctx, `INSERT INTO events (id, kind, binding_key, payload, received_at, next_attempt_at)
-		VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-		e.ID, e.Kind, e.BindingKey, e.Payload, ts(e.ReceivedAt), ts(e.ReceivedAt))
+	n, err := s.exec(ctx, `INSERT INTO events (id, kind, binding_key, payload, received_at, next_attempt_at, trace_parent, trace_state)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		e.ID, e.Kind, e.BindingKey, e.Payload, ts(e.ReceivedAt), ts(e.ReceivedAt), e.TraceParent, e.TraceState)
 	if err != nil {
 		return false, fmt.Errorf("append event %q: %w", e.ID, err)
 	}
@@ -140,12 +147,14 @@ func (s *Store) AppendEvent(ctx context.Context, e store.Event) (bool, error) {
 }
 
 // GetEvent implements store.Events.
-func (s *Store) GetEvent(ctx context.Context, id string) (store.Event, error) {
+func (s *Store) GetEvent(ctx context.Context, id string) (telemetryResult0 store.Event, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.GetEvent")
+	defer func() { finishStore(op, telemetryErr) }()
 	var e store.Event
 	var received, next int64
 	err := s.read.QueryRowContext(ctx, `SELECT id, kind, binding_key, payload, received_at, status, attempts,
-		next_attempt_at, last_error FROM events WHERE id = ?`, id).
-		Scan(&e.ID, &e.Kind, &e.BindingKey, &e.Payload, &received, &e.Status, &e.Attempts, &next, &e.LastError)
+		next_attempt_at, last_error, trace_parent, trace_state FROM events WHERE id = ?`, id).
+		Scan(&e.ID, &e.Kind, &e.BindingKey, &e.Payload, &received, &e.Status, &e.Attempts, &next, &e.LastError, &e.TraceParent, &e.TraceState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Event{}, fmt.Errorf("get event %q: %w", id, store.ErrNotFound)
 	}
@@ -157,7 +166,9 @@ func (s *Store) GetEvent(ctx context.Context, id string) (store.Event, error) {
 }
 
 // SetEventStatus implements store.Events.
-func (s *Store) SetEventStatus(ctx context.Context, id string, status store.EventStatus, lastError string) error {
+func (s *Store) SetEventStatus(ctx context.Context, id string, status store.EventStatus, lastError string) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.SetEventStatus")
+	defer func() { finishStore(op, telemetryErr) }()
 	if !status.Valid() {
 		return fmt.Errorf("set event %q status %q: %w", id, status, store.ErrInvalid)
 	}

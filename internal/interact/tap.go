@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // PauseHandler takes up a pause: *Intake.
@@ -85,7 +86,7 @@ func (t *Tap) Turn(ctx context.Context, ref session.TurnRef) agent.Handler {
 			inner(e)
 		}
 		if f, ok := e.(agent.FinalEvent); ok && f.Task != nil && f.Task.Status.State == a2a.TaskStateInputRequired {
-			t.handOff(ref, *f.Task)
+			t.handOff(ctx, ref, *f.Task)
 		}
 	}
 }
@@ -115,7 +116,7 @@ func (t *Tap) Close(ctx context.Context) error {
 
 // handOff starts the hand-off of a pause, unless it is over or the same pause is in progress. A pause is
 // the task's and the message that asked: the same task paused again is another pause.
-func (t *Tap) handOff(ref session.TurnRef, task a2a.Task) {
+func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task) {
 	id := string(task.ID) + "|"
 	if m := task.Status.Message; m != nil {
 		id += m.ID
@@ -130,7 +131,7 @@ func (t *Tap) handOff(ref session.TurnRef, task a2a.Task) {
 	}
 	t.flying[id] = struct{}{}
 	t.wg.Add(1)
-	go t.run(id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task})
+	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task})
 }
 
 // deadline is when the pause can no longer be answered: as the interaction's own, the task's time plus
@@ -147,12 +148,18 @@ func (t *Tap) deadline(binding string, task a2a.Task) time.Time {
 	return pausedAt(task, t.cfg.Now()).Add(timeout)
 }
 
-func (t *Tap) run(id string, p Pause) {
+func (t *Tap) run(caller context.Context, id string, p Pause) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(caller))
+	defer cancel()
+	defer context.AfterFunc(t.ctx, cancel)() //nolint:contextcheck // join the tap lifetime to detached turn values
+
 	defer t.wg.Done()
 	defer func() { t.mu.Lock(); delete(t.flying, id); t.mu.Unlock() }()
 	deadline := t.deadline(p.Binding, p.Task)
 	for tries := 1; ; tries++ {
-		err := t.cfg.Handler.Paused(t.ctx, p)
+		attemptCtx, op := telemetry.Start(ctx, "courier.interaction.pause")
+		err := t.cfg.Handler.Paused(attemptCtx, p)
+		op.Finish(err)
 		switch {
 		case err == nil || t.ctx.Err() != nil: // done, or cut off by Close: the next start finds the pause again
 			return

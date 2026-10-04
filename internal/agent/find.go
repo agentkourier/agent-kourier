@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 )
 
@@ -29,7 +31,9 @@ const maxListPages = 100
 // page is a unary call under UnaryTimeout. A page token seen before fails the lookup at
 // once. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
 // kagent's page size of 50 is not measured.
-func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (*a2a.Task, []a2a.TaskID, error) {
+func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (telemetryResult0 *a2a.Task, telemetryResult1 []a2a.TaskID, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.agent.find")
+	defer func() { finishAgent(op, telemetryErr) }()
 	if contextID == "" || messageID == "" {
 		return nil, nil, errors.New("find task: a contextId and a messageId are both required")
 	}
@@ -92,7 +96,9 @@ func preferred(holders []*a2a.Task) (*a2a.Task, []a2a.TaskID, error) {
 	return holders[0], ids, nil
 }
 
-func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (telemetryResult0 *a2a.ListTasksResponse, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.agent.list")
+	defer func() { finishAgent(op, telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()
 	page, err := conn.ListTasks(ctx, req)

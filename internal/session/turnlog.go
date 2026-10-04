@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"slices"
 	"unicode"
 	"unicode/utf8"
@@ -89,7 +90,7 @@ func (m *Manager) begin(t *tstate) {
 	}
 	m.mu.Unlock()
 	if !begun {
-		m.cfg.Logger.Info("session turn started", m.turnAttrs(t)...)
+		m.cfg.Logger.InfoContext(m.turnContext(t), "session turn started", m.turnAttrs(t)...)
 	}
 }
 
@@ -108,7 +109,7 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	if m.cfg.OnTurnEnd != nil {
 		m.cfg.OnTurnEnd(t.sess.Binding, outcome)
 	}
-	m.cfg.Logger.Info("session turn ended", append(attrs, extra...)...) // after the report: whoever sees the line finds it counted
+	m.cfg.Logger.InfoContext(m.turnContext(t), "session turn ended", append(attrs, extra...)...) // after the report: whoever sees the line finds it counted
 }
 
 // turnAttrs says where the turn t runs. It names ids and places only, never what anyone wrote.
@@ -165,4 +166,11 @@ func visible(s string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Manager) turnContext(t *tstate) context.Context {
+	if t.traceCtx != nil {
+		return t.traceCtx
+	}
+	return m.ctx
 }

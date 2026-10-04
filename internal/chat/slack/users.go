@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -24,7 +26,9 @@ type cachedUser struct {
 // the TTL. Name is the display name, else the real name, else the handle. Email is empty
 // unless the app holds users:read.email. A failure is not cached, and its error holds no
 // token. It satisfies session.Users.
-func (c *Client) ResolveUser(ctx context.Context, id string) (dialect.User, error) {
+func (c *Client) ResolveUser(ctx context.Context, id string) (telemetryResult0 dialect.User, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.ResolveUser")
+	defer func() { finishChat(ctx, op, "ResolveUser", telemetryErr) }()
 	now := c.now()
 	c.mu.Lock()
 	e, ok := c.users[id]

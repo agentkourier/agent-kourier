@@ -47,10 +47,12 @@ func (s InteractionState) Valid() bool {
 // Interaction is one pause waiting on a person (spec 9, table interactions).
 // Request and Answer are opaque to the store: the dialect owns their shape.
 type Interaction struct {
-	ID     string
-	Key    ConversationKey
-	TaskID string
-	Kind   InteractionKind
+	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
+	TraceParent, TraceState string
+	ID                      string
+	Key                     ConversationKey
+	TaskID                  string
+	Kind                    InteractionKind
 	// State is always pending on creation; CreateInteraction ignores it.
 	State   InteractionState
 	Request []byte

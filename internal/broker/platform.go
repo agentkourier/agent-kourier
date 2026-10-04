@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -62,7 +64,7 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one more entry in platformKeys
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc := slackConfig(conn, log)
-		sc.HTTPClient = &http.Client{Transport: transport}
+		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false)}
 		sc.OnConnection = onConnection
 		var api slack.API
 		if c.newSlack != nil {
@@ -81,7 +83,7 @@ func buildSlack(c RunConfig, conn Connection, log *slog.Logger) (builtPlatform, 
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	sc := slackConfig(conn, log)
-	sc.HTTPClient = &http.Client{Transport: transport}
+	sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false)}
 	var api slack.API
 	if c.newSlack != nil {
 		api = c.newSlack(sc)

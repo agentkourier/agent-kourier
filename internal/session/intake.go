@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // recoveredPrefix starts the message ID recovery gives a task whose turn it cannot name: no turn
@@ -117,9 +118,13 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		user = SystemUser
 	}
 	// A duplicate, or a turn already delivered, is not queued again, and still wakes the runner.
-	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: now})
+	parent, state := telemetry.Capture(ctx)
+	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
 	if err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
+	}
+	if !enqueued {
+		telemetry.Count(ctx, "courier_intake_total", "reply_queue", "duplicate")
 	}
 	if enqueued { // this process made the row, so nothing has sent the turn yet
 		m.mu.Lock()

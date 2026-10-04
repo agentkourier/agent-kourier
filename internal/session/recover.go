@@ -8,6 +8,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // Recover reconciles the conversations a restart found in the store (spec 8.2, 8.3): every
@@ -112,5 +113,6 @@ func (m *Manager) recoverKey(key Key) {
 	}
 	t := &tstate{key: key, r: turnRow, sess: sess, b: backend,
 		follow: true, taskID: a2a.TaskID(sess.TaskID), recovered: true}
+	telemetry.Count(m.ctx, "courier_session_recovery_total", "adopted")
 	m.adopt(key, t)
 }

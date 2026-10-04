@@ -66,11 +66,13 @@ func (s EventStatus) Valid() bool {
 
 // Event is one durable inbound event (spec 9, table events).
 type Event struct {
-	ID         string
-	Kind       string
-	BindingKey string
-	Payload    []byte
-	ReceivedAt time.Time
+	// TraceParent and TraceState preserve the producer trace through durable queueing.
+	TraceParent, TraceState string
+	ID                      string
+	Kind                    string
+	BindingKey              string
+	Payload                 []byte
+	ReceivedAt              time.Time
 
 	// The fields below are owned by the store and queue: AppendEvent ignores
 	// them and stores the event as pending with NextAttemptAt = ReceivedAt.

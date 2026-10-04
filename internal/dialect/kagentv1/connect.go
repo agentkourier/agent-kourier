@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
@@ -138,7 +140,7 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := t.dialect.Authenticate(req, t.creds); err != nil {
 		return refuse(err)
 	}
-	resp, err := t.next.RoundTrip(req)
+	resp, err := telemetry.Transport(t.next, true).RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
 	slackgo "github.com/slack-go/slack"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -27,7 +29,9 @@ const (
 //
 // UNCONFIRMED(WP-04): that chat.postEphemeral accepts the unfurl and parse options and thread_ts, and
 // the error code for a recipient outside the channel (the fake says user_not_in_channel).
-func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user string, content Content) error {
+func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user string, content Content) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.PostEphemeral")
+	defer func() { finishChat(ctx, op, "PostEphemeral", telemetryErr) }()
 	opts, err := blockOptions(content.Blocks)
 	if err != nil {
 		return fmt.Errorf("slack ephemeral: %w: %w", store.ErrInvalid, err)
@@ -53,7 +57,9 @@ func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user stri
 // members as courier assumes (a bot or a deactivated user is told apart by IsBot, not here); that a
 // private channel lists its members only to a bot that is in it; and that its pages follow
 // next_cursor to an empty one.
-func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (bool, error) {
+func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (telemetryResult0 bool, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.IsChannelMember")
+	defer func() { finishChat(ctx, op, "IsChannelMember", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	cursor := ""
@@ -81,7 +87,9 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (boo
 //
 // UNCONFIRMED(WP-04): that is_bot is set for every kind of bot user, workflow and app bots included,
 // and what users.info says of a deactivated user.
-func (c *Client) IsBot(ctx context.Context, user string) (bool, error) {
+func (c *Client) IsBot(ctx context.Context, user string) (telemetryResult0 bool, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.chat.IsBot")
+	defer func() { finishChat(ctx, op, "IsBot", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
 	u, err := c.api.GetUserInfoContext(ctx, user)

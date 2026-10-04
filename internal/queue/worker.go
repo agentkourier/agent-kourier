@@ -14,6 +14,9 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -151,7 +154,10 @@ func (w *Worker) Run(ctx context.Context) error {
 // crashes) is dead-lettered without running the handler. Outcomes are written
 // with a context that outlives ctx's cancellation, so a handler that finishes
 // during the drain is still recorded.
-func (w *Worker) settle(ctx context.Context, e store.Event) error {
+func (w *Worker) settle(ctx context.Context, e store.Event) (telemetryErr error) {
+	ctx = telemetry.Restore(ctx, e.TraceParent, e.TraceState)
+	ctx, op := telemetry.Start(ctx, "courier.queue.process", attribute.String("courier.event.id", e.ID), attribute.Int("courier.attempt", e.Attempts))
+	defer func() { op.Finish(telemetryErr) }()
 	log := w.cfg.Logger.With("event", e.ID, "attempt", e.Attempts)
 	q, maxAttempts := w.cfg.Queue, w.cfg.MaxAttempts
 	wctx := context.WithoutCancel(ctx)
@@ -219,6 +225,8 @@ func (w *Worker) runHandler(ctx context.Context, e store.Event, log *slog.Logger
 // handle calls the handler, converting a panic into an error so that a buggy
 // handler dead-letters its event instead of taking down the process.
 func (w *Worker) handle(ctx context.Context, e store.Event, log *slog.Logger) (err error) {
+	ctx, op := telemetry.Start(ctx, "courier.queue.handle")
+	defer func() { op.Finish(err) }()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("handler panicked", "panic", r, "stack", string(debug.Stack()))

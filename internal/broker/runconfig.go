@@ -8,6 +8,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -27,8 +30,11 @@ type RunConfig struct {
 	// SyncTimeout bounds the wait for the Secret caches; zero means Bootstrap's default.
 	SyncTimeout time.Duration
 	// KlogVerbosity is the verbosity requested for klog; RouteKlog holds it below 8.
-	KlogVerbosity int
-	Logger        *slog.Logger // slog.Default() if nil
+	KlogVerbosity  int
+	Telemetry      telemetry.Config
+	TracerProvider trace.TracerProvider // test or embedding override; caller owns its shutdown
+	ServiceVersion string
+	Logger         *slog.Logger // slog.Default() if nil
 
 	// The renderer and the interactions are not here: Run builds them, from its own store, outbox and
 	// Slack client, so that no config can run a broker without them.

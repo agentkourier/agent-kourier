@@ -8,6 +8,8 @@ import (
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).
 type Reply struct {
+	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
+	TraceParent, TraceState string
 	// ID is the turn's messageId, derived from the chat message (spec 8.2), not the event
 	// ID: an @mention arrives as two events with different IDs, and both must be one turn.
 	// It makes enqueueing idempotent, and the agent sees it as the A2A messageId.

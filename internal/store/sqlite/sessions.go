@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 func validKey(k store.ConversationKey) bool {
@@ -15,16 +16,21 @@ func validKey(k store.ConversationKey) bool {
 }
 
 // UpsertSession implements store.Sessions.
-func (s *Store) UpsertSession(ctx context.Context, sess store.Session) error {
+func (s *Store) UpsertSession(ctx context.Context, sess store.Session) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.UpsertSession")
+	defer func() { finishStore(op, telemetryErr) }()
+	if sess.TraceParent == "" {
+		sess.TraceParent, sess.TraceState = telemetry.Capture(ctx)
+	}
 	if !validKey(sess.Key) || sess.Binding == "" || sess.LastActivity.IsZero() {
 		return fmt.Errorf("upsert session %+v: key, Binding and LastActivity are required: %w", sess.Key, store.ErrInvalid)
 	}
-	_, err := s.exec(ctx, `INSERT INTO sessions (connection, channel, thread_ts, context_id, task_id, binding, last_activity)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+	_, err := s.exec(ctx, `INSERT INTO sessions (connection, channel, thread_ts, context_id, task_id, binding, last_activity, trace_parent, trace_state)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET
 			context_id = excluded.context_id, task_id = excluded.task_id,
-			binding = excluded.binding, last_activity = excluded.last_activity`,
-		sess.Key.Connection, sess.Key.Channel, sess.Key.Thread, sess.ContextID, sess.TaskID, sess.Binding, ts(sess.LastActivity))
+			binding = excluded.binding, last_activity = excluded.last_activity, trace_parent = excluded.trace_parent, trace_state = excluded.trace_state`,
+		sess.Key.Connection, sess.Key.Channel, sess.Key.Thread, sess.ContextID, sess.TaskID, sess.Binding, ts(sess.LastActivity), sess.TraceParent, sess.TraceState)
 	if err != nil {
 		return fmt.Errorf("upsert session %+v: %w", sess.Key, err)
 	}
@@ -32,15 +38,17 @@ func (s *Store) UpsertSession(ctx context.Context, sess store.Session) error {
 }
 
 // GetSession implements store.Sessions.
-func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (store.Session, error) {
+func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (telemetryResult0 store.Session, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.GetSession")
+	defer func() { finishStore(op, telemetryErr) }()
 	if !validKey(key) || ttl <= 0 || now.IsZero() {
 		return store.Session{}, fmt.Errorf("get session %+v: key, positive ttl and now are required: %w", key, store.ErrInvalid)
 	}
 	sess := store.Session{Key: key}
 	var last int64
-	err := s.read.QueryRowContext(ctx, `SELECT context_id, task_id, binding, last_activity FROM sessions
+	err := s.read.QueryRowContext(ctx, `SELECT context_id, task_id, binding, last_activity, trace_parent, trace_state FROM sessions
 		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.Thread).
-		Scan(&sess.ContextID, &sess.TaskID, &sess.Binding, &last)
+		Scan(&sess.ContextID, &sess.TaskID, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Session{}, fmt.Errorf("get session %+v: %w", key, store.ErrNotFound)
 	}
@@ -55,7 +63,9 @@ func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl t
 }
 
 // TouchSession implements store.Sessions.
-func (s *Store) TouchSession(ctx context.Context, key store.ConversationKey, at time.Time) error {
+func (s *Store) TouchSession(ctx context.Context, key store.ConversationKey, at time.Time) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.TouchSession")
+	defer func() { finishStore(op, telemetryErr) }()
 	if !validKey(key) || at.IsZero() {
 		return fmt.Errorf("touch session %+v: key and time are required: %w", key, store.ErrInvalid)
 	}

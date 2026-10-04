@@ -37,6 +37,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
@@ -452,7 +456,7 @@ func decode(payload string) (chat.Outgoing, error) {
 // deliver posts the row id unless it already has a ref, which it returns. With lookup it first
 // asks the platform for the message, and adopts it if it is there. The caller holds o.mu. The row is read
 // again here, so a delivery that finished while the caller waited for the lock is seen.
-func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (chat.Ref, error) {
+func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetryRef chat.Ref, telemetryErr error) {
 	row, err := o.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
 		return chat.Ref{}, err
@@ -460,6 +464,16 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (chat.Ref,
 	if row.MessageRef != "" {
 		return o.cfg.Platform.RefAt(row.Channel, row.Thread, row.MessageRef), nil
 	}
+	ctx = telemetry.Restore(ctx, row.TraceParent, row.TraceState)
+	ctx, op := telemetry.Start(ctx, "courier.outbox.deliver", attribute.String("courier.outbox.id", id), attribute.String("courier.outbox.role", string(row.Role)))
+	mode := "posted"
+	defer func() {
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.delivery.mode", mode))
+		if telemetryErr == nil && telemetryRef.ID != "" {
+			telemetry.Observe(ctx, "courier_outbox_delivery_duration_seconds", o.cfg.Now().Sub(row.CreatedAt), string(row.Role), mode)
+		}
+		op.Finish(telemetryErr)
+	}()
 	if !row.AbandonedAt.IsZero() {
 		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, ErrAbandoned)
 	}
@@ -488,6 +502,8 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (chat.Ref,
 			return chat.Ref{}, fmt.Errorf("deliver %s: looking for the message before posting it: %w", id, err)
 		}
 		if found {
+			mode = "adopted"
+			trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("courier.delivery.adopted", true))
 			o.cfg.Logger.InfoContext(ctx, "outbox: adopted a message posted before a crash", "outbox_id", id, "channel", row.Channel, "ts", ref.ID)
 			return o.record(ctx, id, ref)
 		}
