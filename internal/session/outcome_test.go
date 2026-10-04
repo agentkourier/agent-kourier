@@ -58,6 +58,106 @@ func TestNotSentIsRetriedWithOneNotice(t *testing.T) {
 	}
 }
 
+// The first failed send of a turn is retried silently, after the usual backoff: the first call of a
+// new pod can fail and the next one work, and the thread need not hear of it. The notice that
+// courier is retrying goes out once, when the second send in a row has failed too (spec 11), for a
+// send that never left and for one of unknown outcome alike.
+func TestFirstFailedSendIsRetriedSilently(t *testing.T) {
+	notSent := func() error { return fmt.Errorf("%w: the agent is down", agent.ErrNotSent) }
+	unknown := func() error { return fmt.Errorf("%w: the stream ended", agent.ErrOutcomeUnknown) }
+	for _, tc := range []struct {
+		name     string
+		failures []func() error // the first sends fail like this, and the one after them works
+		notices  int
+	}{
+		{"one not-sent", []func() error{notSent}, 0},
+		{"two not-sent", []func() error{notSent, notSent}, 1},
+		{"five not-sent", []func() error{notSent, notSent, notSent, notSent, notSent}, 1},
+		{"one unknown outcome", []func() error{unknown}, 0},
+		{"two unknown outcomes", []func() error{unknown, unknown}, 1},
+		{"five unknown outcomes", []func() error{unknown, unknown, unknown, unknown, unknown}, 1},
+		{"unknown outcome, then not-sent", []func() error{unknown, notSent}, 1},
+		{"not-sent, then unknown outcome", []func() error{notSent, unknown}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+				// The notice follows the second failure and no other: none before send 2, one from it on.
+				if got, want := len(sink.noticesOf(NoticeRetrying)), min(n/2, 1); got != want {
+					t.Errorf("%d retrying notices before send %d; want %d", got, n, want)
+				}
+				if n < len(tc.failures) {
+					return tc.failures[n]()
+				}
+				return turn(h, n, a2a.TaskStateCompleted)
+			}
+			in := inbound("1")
+			if _, err := f.submit(in); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			f.agent.mu.Lock()
+			sends := len(f.agent.msgs)
+			f.agent.mu.Unlock()
+			if sends != len(tc.failures)+1 {
+				t.Errorf("%d sends; want %d: every failure retried, the turn never dropped", sends, len(tc.failures)+1)
+			}
+			got := sink.noticesOf(NoticeRetrying)
+			if len(got) != tc.notices || (tc.notices == 1 && got[0].ID != in.MessageID+"/retrying") {
+				t.Errorf("retrying notices = %+v; want %d", got, tc.notices)
+			}
+			if failed := sink.noticesOf(NoticeFailed); len(failed) != 0 {
+				t.Errorf("failed notices = %+v; want none: the agent answered", failed)
+			}
+		})
+	}
+}
+
+// A busy answer shows the agent is reachable, so it cancels a silent retry that is pending: one
+// failed send, then -32004, then one more failed send is not "twice in a row", and the thread is
+// not told. Once the notice has gone out, a busy answer does not bring a second one.
+func TestBusyAnswerCancelsAPendingSilentRetry(t *testing.T) {
+	const (
+		down = iota // ErrNotSent
+		busy
+		ok
+	)
+	for _, tc := range []struct {
+		name    string
+		seq     []int
+		notices int
+	}{
+		{"not-sent, busy, not-sent", []int{down, busy, down, ok}, 0},
+		{"not-sent, not-sent, busy, not-sent", []int{down, down, busy, down, ok}, 1},
+		{"not-sent, busy, not-sent, not-sent", []int{down, busy, down, down, ok}, 1},
+		{"not-sent, not-sent, busy, not-sent, not-sent", []int{down, down, busy, down, down, ok}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, time.Millisecond
+			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+				switch tc.seq[n] {
+				case down:
+					return fmt.Errorf("%w: the agent is down", agent.ErrNotSent)
+				case busy:
+					return fmt.Errorf("send message: %w", agent.ErrBusy)
+				}
+				return turn(h, n, a2a.TaskStateCompleted)
+			}
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			waitFinal(t, sink)
+			if got := sink.noticesOf(NoticeRetrying); len(got) != tc.notices {
+				t.Errorf("retrying notices = %+v; want %d", got, tc.notices)
+			}
+		})
+	}
+}
+
 // Past sendGiveUp the turn fails, with a notice, and the queue goes on.
 func TestNotSentGivesUp(t *testing.T) {
 	f := newFixture(t)
@@ -81,6 +181,9 @@ func TestNotSentGivesUp(t *testing.T) {
 	failed := sink.noticesOf(NoticeFailed)
 	if len(failed) != 1 || failed[0].ID != inbound("1").MessageID+"/failed" || failed[0].Detail == "" {
 		t.Errorf("failed notices = %+v; want one for turn 1, with a reason", failed)
+	}
+	if got := sink.noticesOf(NoticeRetrying); len(got) != 1 || got[0].MessageRef != "1" {
+		t.Errorf("retrying notices = %+v; want one, for turn 1, before it was given up on", got)
 	}
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()
@@ -501,7 +604,8 @@ func TestBusyResetsTheGiveUpClock(t *testing.T) {
 }
 
 // The thread is told once that courier is retrying, whatever failed first: a busy session, then
-// two not-sent, is one run of trouble with one notice; a later turn's trouble gets its own.
+// two not-sent, is one run of trouble with one notice; a later turn's trouble gets its own. The
+// busy answer is no failed send to retry: the notice still waits for the second not-sent.
 func TestRetryingNoticeIsSentOncePerTurn(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
@@ -510,7 +614,7 @@ func TestRetryingNoticeIsSentOncePerTurn(t *testing.T) {
 		switch n {
 		case 0:
 			return fmt.Errorf("send message: %w", agent.ErrBusy)
-		case 1, 2, 4: // turn 1 twice, then turn 2 once
+		case 1, 2, 4, 5: // turn 1 twice, then turn 2 twice
 			return fmt.Errorf("%w: down", agent.ErrNotSent)
 		}
 		return turn(h, n, a2a.TaskStateCompleted)

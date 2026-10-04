@@ -121,7 +121,8 @@ const (
 	// NoticeNotReady says the same of a turn the agent answered, for that long, that its session cannot take
 	// input yet (agent.ErrNotReady): it is starting, or in a lifecycle operation.
 	NoticeNotReady NoticeKind = "not_ready"
-	// NoticeRetrying says the agent cannot be reached and courier is trying again (spec 11).
+	// NoticeRetrying says the agent cannot be reached and courier is trying again (spec 11). It follows the
+	// second failed send in a row: the first is retried silently.
 	NoticeRetrying NoticeKind = "retrying"
 	// NoticeFailed says the turn failed and will not be sent; Detail says why.
 	NoticeFailed NoticeKind = "failed"

@@ -25,7 +25,7 @@ type convo struct {
 	again      bool            // a wake arrived while the runner was busy
 	tries      int             // sends of the head turn that failed in a way to retry, in a row
 	since      time.Time       // when the first of them failed, for SendGiveUp
-	notified   bool            // the thread was told courier is retrying, for this run of trouble
+	unreached  int             // sends or lookups of the head turn that failed to reach the agent, in a row: the second tells the thread
 	busyNoted  bool            // the thread was told the reply is queued behind a task nobody recorded
 	waitSince  time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
 	waitNoted  bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
@@ -354,7 +354,7 @@ func (m *Manager) superseded(t *tstate) bool {
 
 // settle forgets the retry state of the head turn: it was taken, failed for good, or ended.
 func (c *convo) settle() {
-	c.tries, c.since, c.patient, c.notified, c.busyNoted, c.cancelFrom, c.cancelNow = 0, time.Time{}, false, false, false, time.Time{}, false
+	c.tries, c.since, c.patient, c.unreached, c.busyNoted, c.cancelFrom, c.cancelNow = 0, time.Time{}, false, 0, false, time.Time{}, false
 	c.waitSince, c.waitNoted = time.Time{}, false
 }
 
@@ -888,6 +888,9 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 			m.waiting(t, NoticeStillBusy)
 		}
 		t.c.tries++
+		if t.c.unreached < 2 { // the agent answered, so a silent retry pending is no longer a second failure in a row; once told, the run keeps its one notice
+			t.c.unreached = 0
+		}
 		t.c.since = time.Time{} // the agent answered: its unreachable time starts over, and a turn that then fails to send is given up on as usual
 		return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 	case errors.Is(err, agent.ErrOutcomeUnknown): // the agent may have taken it: looked up before any resend
@@ -928,7 +931,10 @@ func (m *Manager) waiting(t *tstate, kind NoticeKind) {
 }
 
 // retry waits and tries the head turn again. It gives up, failing the turn, after SendGiveUp of
-// failures, unless the turn is one never to give up on. The first time, it tells the thread.
+// failures, unless the turn is one never to give up on. The first failure is retried silently, for the
+// first call of a new pod can fail where the next one works; when the second fails too, it tells the
+// thread, once for the run of trouble (spec 11). The count is in memory, so a restart starts it over:
+// at most one more silent retry, and a notice named after the turn, which the sink posts once.
 func (m *Manager) retry(t *tstate, err error) (outcome, error) {
 	c := t.c
 	if c.since.IsZero() {
@@ -938,8 +944,7 @@ func (m *Manager) retry(t *tstate, err error) (outcome, error) {
 		return m.fail(t, TurnUnreachable, "the agent could not be reached", err)
 	}
 	c.tries++
-	if !c.notified {
-		c.notified = true
+	if c.unreached++; c.unreached == 2 {
 		m.notice(t, NoticeRetrying, "")
 	}
 	return blocked, fmt.Errorf("send turn %s: %w", t.r.ID, err)

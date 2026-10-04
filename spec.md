@@ -964,8 +964,9 @@ this with an outbox:
   controller, RBAC, and an optional NetworkPolicy.
 - **Network path.** Production Alertmanager must reach courier's webhook endpoint over
   TLS. During the pilot courier runs alongside the kagent 1.0 alpha install.
-- **Failure behavior.** If the backend is unreachable, courier retries with backoff and
-  posts a visible notice in the thread. After 15 minutes (`sendGiveUp`) the turn fails with
+- **Failure behavior.** If the backend is unreachable, courier retries with backoff; the
+  first failed send is retried silently (the first call of a new pod can fail where the next
+  works), and if the retry fails too it posts a visible notice in the thread. After 15 minutes (`sendGiveUp`) the turn fails with
   a notice and the queue moves on. Events are never dropped silently.
 
 ## 12. Phases
