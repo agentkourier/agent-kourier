@@ -49,6 +49,10 @@ type IntakeConfig struct {
 	// such a trigger's matches are errors, so Slack redelivers them, rather than a turn for every repeat of
 	// a flapping alert; a trigger with no thread rules needs none.
 	TriggerThreads store.TriggerThreads
+	// TriggerRuns counts the starts of each botMessage trigger and holds them to the trigger's limits (spec 8.2,
+	// D26, D31). A start that would pass a limit becomes the decision limited: no turn, no key held, no note. Nil
+	// enforces no limits; the broker always sets it.
+	TriggerRuns store.TriggerRuns
 	// OnStart, if set, takes the match that starts a turn, anchored to the match's own message
 	// (TriggerMatch.Message.At.ID is the thread): a new investigation, or the redelivery of one whose first ask
 	// failed. It is called once the thread is reserved, and it is idempotent by that message's ID, as Submit
@@ -238,7 +242,7 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 		return "trigger_unmatched", nil
 	}
-	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Preset: trigger.preset, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m}
+	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, Preset: trigger.preset, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m}
 	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 	out, err := in.decide(ctx, match)
 	if out.decision != "" {

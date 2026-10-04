@@ -33,6 +33,10 @@ type TriggerMatch struct {
 	// MessageID is the ID of the turn this match starts and of the notes it causes (MessageID of the message), set
 	// by the Intake so that the hook queues, and the Intake later asks about, one ID.
 	MessageID string
+	// Limits are what the trigger allows to start: rate, concurrency and a daily cap. They are what the trigger
+	// says after defaulting; the Intake checks a start against them (IntakeConfig.TriggerRuns) before it asks for
+	// the turn, so a start that reaches OnStart is one they allowed.
+	Limits v1alpha1.TriggerLimits
 	// Received is when the Intake took the message. The thread rules take it for now: the cooldown runs from
 	// it, and it is the time a note names.
 	Received time.Time
@@ -59,6 +63,7 @@ type botTrigger struct {
 	index          int // in the Binding's trigger list
 	botID          string
 	thread         v1alpha1.TriggerThread
+	limits         v1alpha1.TriggerLimits
 	preset, prompt string
 	match, exclude []fieldRegex
 	extract        []extractRegex
@@ -67,7 +72,7 @@ type botTrigger struct {
 // compileTrigger compiles the regexes of a botMessage trigger, in the order of their field names, so that
 // what is tried first does not depend on the order of a map.
 func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
-	c := botTrigger{index: index, botID: t.From.BotID, thread: t.Thread, preset: t.Preset, prompt: t.PromptTemplate}
+	c := botTrigger{index: index, botID: t.From.BotID, thread: t.Thread, limits: t.Limits, preset: t.Preset, prompt: t.PromptTemplate}
 	compile := func(entries map[v1alpha1.MessageField]string) ([]fieldRegex, error) {
 		var out []fieldRegex
 		for _, f := range slices.Sorted(maps.Keys(entries)) {

@@ -45,6 +45,12 @@ const (
 	// thread. It is an investigation of its own each time, with no cooldown and no note, as a trigger with no
 	// thread rules is, and a warning says so, once for the trigger.
 	DecisionEmptyKey TriggerDecision = "empty_key"
+	// DecisionLimited: a fire that would have started a turn, and a limit of the trigger stopped it (rate,
+	// concurrency or the daily cap: v1alpha1.TriggerLimits). No turn starts and nothing is posted in the alert's
+	// thread: the alert reached people through its own receiver, and a digest line says how many were not
+	// investigated. The key's reservation is given back and holds nothing, so a later fire of the key starts once
+	// there is capacity. Only a start is limited: a repeat, a close and a note never are.
+	DecisionLimited TriggerDecision = "limited"
 	// DecisionNotStarted: a fire that would have started a turn, and OnStart said it will not (ErrNotStarted),
 	// such as a prompt that was refused. The event is acknowledged, the thread is left unmarked with no
 	// cooldown, and the key's next fire takes it over once it is stale.
@@ -82,7 +88,8 @@ type decided struct {
 //
 //	fire, no thread for the key, or a closed one past its cooldown,
 //	  or a reservation that never started and is stale,
-//	  or an open thread idle past thread.maxIdle                     started: reserve, OnStart, mark started
+//	  or an open thread idle past thread.maxIdle                     started: reserve, check the limits, OnStart, mark started
+//	  ... and a limit of the trigger is reached                      limited: give the reservation back
 //	fire, the message is the thread's own (a redelivery)             dedup: OnStart again if it never started
 //	fire, any other thread of the key                                repeat: note, then reopen it
 //	close, the key has an open thread whose turn started             closed: note, then close it
@@ -232,8 +239,16 @@ func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) 
 				"binding", m.Binding, "trigger", m.Index, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 		}
 	}
+	if limit, err := in.admit(ctx, m); err != nil {
+		return out, err
+	} else if limit != "" {
+		in.countLimited(ctx, m, limit)
+		out.decision = DecisionLimited
+		return out, nil
+	}
 	err := in.start(ctx, m)
 	if errors.Is(err, ErrNotStarted) {
+		in.releaseRun(ctx, m)
 		out.decision, err = DecisionNotStarted, nil
 	}
 	return out, err
@@ -247,12 +262,20 @@ func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
 	return in.cfg.OnStart(ctx, m)
 }
 
-// startThread starts the turn of the thread this match reserved, and once that is taken marks the thread
-// started, which is when the cooldown begins: a turn that could not start leaves none. If OnStart says it will
-// not start (ErrNotStarted) the thread stays unmarked and the decision is not_started, with no error.
+// startThread starts the turn of the thread this match reserved, if the trigger's limits allow it, and once that is
+// taken marks the thread started, which is when the cooldown begins: a turn that could not start leaves none. If
+// a limit stops it the reservation is given back (stopThread) and the decision is limited. If OnStart says it will
+// not start (ErrNotStarted) the thread stays unmarked, the start no longer counts against the limits, and the
+// decision is not_started, with no error.
 func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
+	if limit, err := in.admit(ctx, m); err != nil {
+		return out, err
+	} else if limit != "" {
+		return in.stopThread(ctx, m, hash, out, limit)
+	}
 	switch err := in.start(ctx, m); {
 	case errors.Is(err, ErrNotStarted):
+		in.releaseRun(ctx, m)
 		out.decision = DecisionNotStarted
 		return out, nil
 	case err != nil:
