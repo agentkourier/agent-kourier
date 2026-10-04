@@ -37,7 +37,7 @@ for tool in kubectl kind; do
 done
 assert_context full
 [ "$("${K[@]}" -n monitoring get alertmanager courier -o 'jsonpath={.spec.configSecret}' 2>/dev/null || true)" = "${CONFIG_SECRET}" ] ||
-  die "the full tier's Alertmanager is not the sandbox's alert source (its configSecret is not ${CONFIG_SECRET}); run: make sandbox-up"
+  die "the alert source is not configured: the full tier's Alertmanager is not the sandbox's (its configSecret is not ${CONFIG_SECRET}). Put the webhook URL in ~/.config/agent-courier/alertmanager-webhook-url and run: make sandbox-up (README, Alert trial)"
 
 # The pod the alert is about, for the presets that name one: the live pod of the fault's app, which the agent can then look at.
 pod=

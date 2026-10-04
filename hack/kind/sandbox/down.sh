@@ -41,7 +41,8 @@ step "the sandbox courier, its volume, config and Slack Secret, and the token re
 # The alert source: the three fields of the Alertmanager that up.sh added come off first (the operator rolls it back to the tier's own
 # configuration, whose sink the E2E tests need), so that it is never left naming a Secret that is gone; then the two Secrets go.
 step "the alert source (Alertmanager's receiver and its webhook Secret)"
-if [ -n "$("${K[@]}" -n monitoring get alertmanager courier --ignore-not-found -o name)" ]; then
+# Only when the Alertmanager is there and is the alert source (an optional part of up.sh): nothing is patched or waited for otherwise.
+if [ "$("${K[@]}" -n monitoring get alertmanager courier --ignore-not-found -o 'jsonpath={.spec.configSecret}')" = alertmanager-kind-config ]; then
   "${K[@]}" -n monitoring patch alertmanager courier --type=merge -p '{"spec":{"configSecret":null,"secrets":null,"externalUrl":null}}' >/dev/null
   deadline=$((SECONDS + 180))
   until [[ $("${K[@]}" -n monitoring get pod alertmanager-courier-0 -o 'jsonpath={.spec.containers[*].args}' 2>/dev/null || echo unknown) != *--web.external-url* ]] &&

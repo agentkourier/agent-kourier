@@ -23,7 +23,7 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
 
 | Target | What it does |
 |---|---|
-| `make sandbox-up` | Checks the secrets file and the alert webhook file (see "Alert trial") first, before it touches anything. Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
+| `make sandbox-up` | Checks the secrets file, and the alert webhook file if there is one (optional; see "Alert trial"), first, before it touches anything. Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `courier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, courier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; courier crash-loops until the file is fixed). |
 | `make sandbox-down` | Removes the overlay, takes the Alertmanager off the alert source, and restores the full tier's own courier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
 | `make sandbox-alert ALERT=<name> [STATE=firing\|resolved]` | Fires, or resolves, the alert of one seeded fault in the full tier's Alertmanager, which posts it to the owner's **real alert channel**, tagged `[kind]`. Needs `make sandbox-up` first. See "Alert trial". |
 | `make sandbox-heal` | Restarts the full tier's **egress gateway** (`deploy/atenet-egress`) and waits for it, if its pod is more than 20 hours old or a log holds `CertificateExpired`; otherwise it says `ok` and changes nothing. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the same before it verifies. Changes nothing else; needs no secrets file. |
@@ -195,8 +195,8 @@ The probe text for row 6 (paste it after `quote exactly, one item per line:`):
 
 ## Alert trial
 
-**Warning: this posts to the owner's real alert channel.** `make sandbox-up` makes the full tier's Alertmanager post, through the owner's
-own incoming webhook, to `#alerts-critical`, the channel where production's alerts also arrive. Nothing is posted until
+**Warning: this posts to the owner's real alert channel.** The alert source is optional: it exists only if the webhook file below is there. When it is,
+`make sandbox-up` makes the full tier's Alertmanager post, through the owner's own incoming webhook, to `#alerts-critical`, the channel where production's alerts also arrive. Nothing is posted until
 someone fires an alert (there is no Prometheus in the tier to do it), and everything the tier posts is tagged: the title begins `[kind] `, and the
 link under it says `receiver=slack-critical-kind` where production's says `receiver=slack-critical`. Fire alerts only for a trial, and
 resolve them when it is done.
@@ -213,7 +213,8 @@ resource cannot say `api_url_file`, which is how production reads its webhook, a
 resource's routes (unless the Alertmanager says `alertmanagerConfigMatcherStrategy: None`, as the tier's does for its sink), which would turn
 away alerts for namespace `shop`. The route matches `severity="critical"`, as production's does, and continues, so the sink's own route, which the operator puts first, still gets every alert.
 
-**Setup (once).** The webhook URL goes in `~/.config/agent-courier/alertmanager-webhook-url`, on one line, alone:
+**Setup (once, optional).** Without the file, `make sandbox-up` skips the alert source and says `alert source: not configured; see README Alert trial`,
+and `make sandbox-alert` refuses and says the same. (Taking the file away later does not remove an alert source that is already up: `make sandbox-down` does.) The webhook URL goes in `~/.config/agent-courier/alertmanager-webhook-url`, on one line, alone:
 
 ```
 mkdir -p ~/.config/agent-courier
@@ -221,7 +222,7 @@ $EDITOR ~/.config/agent-courier/alertmanager-webhook-url   # https://hooks.slack
 chmod 600 ~/.config/agent-courier/alertmanager-webhook-url
 ```
 
-`make sandbox-up` refuses the file, before it touches anything, if it is missing, a symbolic link, not yours, accessible to the group or others, empty,
+A file that is there is checked right after the secrets file, before `make sandbox-up` touches anything, and **stops the run** (it is not skipped) if it is a symbolic link, not yours, accessible to the group or others, empty,
 longer than one line, or not matching `^https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+$`. The error names the file and never the value.
 `ALERTMANAGER_WEBHOOK_FILE=/path make sandbox-up` reads another file. The URL goes into the Secret `alertmanager-slack-secret` in `monitoring`
 (on stdin to a server-side apply, like the other Secrets), which the Alertmanager mounts; the configuration reads it with `api_url_file`, as production does. It is in no

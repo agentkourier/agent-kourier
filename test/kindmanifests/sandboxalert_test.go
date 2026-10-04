@@ -2,6 +2,7 @@ package kindmanifests_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -489,40 +490,179 @@ func TestWebhookFileRefuses(t *testing.T) {
 	}
 }
 
-// TestUpChecksTheWebhookFileBeforeTouchingAnything: with a good secrets file and a webhook file that is refused, up.sh stops
-// before it asks Docker, kind, kubectl or helm anything, and the message names the webhook file and no content.
-func TestUpChecksTheWebhookFileBeforeTouchingAnything(t *testing.T) {
+// upWithWebhook runs up.sh with a good secrets file, the given webhook file, and stand-ins for the tools, whose docker says the
+// daemon is not reachable (up.sh's first step after its file checks), so that the run stops there. It returns the output, whether
+// the run succeeded, and the tools that ran.
+func upWithWebhook(t *testing.T, webhook string) (out string, ok bool, ran string) {
+	t.Helper()
 	bin := t.TempDir()
 	mark := filepath.Join(bin, "ran")
 	for _, tool := range []string{"docker", "kind", "kubectl", "helm", "jq"} {
-		if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\necho "+tool+" >> "+mark+"\n"), 0o700); err != nil {
+		stub := "#!/bin/sh\necho " + tool + " >> " + mark + "\n"
+		if tool == "docker" {
+			stub += "exit 1\n"
+		}
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte(stub), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
+	cmd := exec.CommandContext(t.Context(), "bash", sandboxDir+"up.sh")
+	cmd.Env = append(os.Environ(), "SANDBOX_ENV="+envFile(t, 0o600, goodEnv()...), "ALERTMANAGER_WEBHOOK_FILE="+webhook,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	raw, err := cmd.CombinedOutput()
+	marks, _ := os.ReadFile(mark)
+	return string(raw), err == nil, string(marks)
+}
+
+// TestUpRefusesAWebhookFileThatIsThereAndBad: the alert source is optional, but a webhook file that exists is held to every check,
+// and one that fails stops up.sh before it asks Docker, kind, kubectl or helm anything. The message names the file and no content.
+func TestUpRefusesAWebhookFileThatIsThereAndBad(t *testing.T) {
+	good := webhookFile(t, 0o600, fakeWebhook+"\n")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(t.TempDir(), "dangling")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "nowhere"), dangling); err != nil {
+		t.Fatal(err)
+	}
 	for name, webhook := range map[string]string{
-		"missing":             filepath.Join(t.TempDir(), "nowhere"),
 		"world-readable":      webhookFile(t, 0o644, fakeWebhook+"\n"),
+		"group-readable":      webhookFile(t, 0o640, fakeWebhook+"\n"),
 		"not a webhook's URL": webhookFile(t, 0o600, "LEAKCHECK-not-a-url\n"),
+		"empty":               webhookFile(t, 0o600, ""),
+		"a symbolic link":     link,
+		"a dangling link":     dangling,
 	} {
 		t.Run(name, func(t *testing.T) {
-			cmd := exec.CommandContext(t.Context(), "bash", sandboxDir+"up.sh")
-			cmd.Env = append(os.Environ(), "SANDBOX_ENV="+envFile(t, 0o600, goodEnv()...), "ALERTMANAGER_WEBHOOK_FILE="+webhook,
-				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-			out, err := cmd.CombinedOutput()
-			if err == nil {
+			out, ok, ran := upWithWebhook(t, webhook)
+			if ok {
 				t.Fatalf("up.sh accepted the webhook file:\n%s", out)
 			}
-			if !strings.Contains(string(out), "error: "+webhook+":") {
+			if !strings.Contains(out, "error: "+webhook+":") {
 				t.Errorf("up.sh said %q; want the webhook file named", out)
 			}
-			noLeak(t, "up.sh output", string(out))
-			if strings.Contains(string(out), leakMarker) {
-				t.Errorf("up.sh printed part of the webhook file: %q", out)
+			noLeak(t, "up.sh output", out)
+			if strings.Contains(out, leakMarker) || strings.Contains(out, "not configured") {
+				t.Errorf("up.sh printed part of the webhook file, or called a file that is there not configured: %q", out)
 			}
-			if _, err := os.Stat(mark); err == nil {
-				t.Error("up.sh ran a tool before the webhook file was accepted")
+			if ran != "" {
+				t.Errorf("up.sh ran %q before the webhook file was accepted", ran)
 			}
 		})
+	}
+}
+
+// TestUpSkipsTheAlertSourceWithoutTheWebhookFile: with no webhook file, up.sh says so in one line, does not stop, and goes on to its
+// next step (here Docker, which refuses, which is how the test stops it).
+func TestUpSkipsTheAlertSourceWithoutTheWebhookFile(t *testing.T) {
+	webhook := filepath.Join(t.TempDir(), "nowhere")
+	out, ok, ran := upWithWebhook(t, webhook)
+	if ok {
+		t.Fatalf("up.sh succeeded with a docker that refuses:\n%s", out)
+	}
+	if n := strings.Count(out, "alert source: not configured; see README Alert trial\n"); n != 1 {
+		t.Errorf("up.sh said the alert source is not configured %d times: %q", n, out)
+	}
+	if strings.Contains(out, "error: "+webhook) || !strings.Contains(out, "the Docker daemon is not reachable") || !strings.HasPrefix(ran, "docker") {
+		t.Errorf("up.sh did not go on past the webhook file (ran %q): %q", ran, out)
+	}
+}
+
+// alertSourceBlock is the step of up.sh that makes the alert source, which runs only when ALERT_SOURCE is 1.
+func alertSourceBlock(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	start := strings.Index(s, "if [ \"${ALERT_SOURCE}\" = 1 ]; then\n  step \"alert source:")
+	if start < 0 {
+		t.Fatal("up.sh has no guarded alert-source step")
+	}
+	end := strings.Index(s[start:], "\nfi\n")
+	if end < 0 {
+		t.Fatal("the alert-source step has no fi")
+	}
+	return s[start : start+end+len("\nfi\n")]
+}
+
+// base64Of is the base64 of v, as apply_secret writes it.
+func base64Of(v string) string { return base64.StdEncoding.EncodeToString([]byte(v)) }
+
+// TestUpAlertSourceStepOnlyRunsWhenConfigured: the step, run as up.sh has it with stand-ins for kubectl, base64 and tr, makes nothing
+// when the alert source is not configured, and when it is makes the two Secrets through apply_secret (the webhook as base64 on stdin,
+// never on an argument list or in the environment) and applies the Alertmanager overlay, all by server-side apply. The verification
+// is guarded the same way.
+func TestUpAlertSourceStepOnlyRunsWhenConfigured(t *testing.T) {
+	block := alertSourceBlock(t)
+	overlay := strings.TrimSuffix(sandboxDir, "/") + "/alertmanager/overlay.yaml"
+	for name, tc := range map[string]struct {
+		alertSource string
+		configured  bool
+	}{"not configured": {"0", false}, "configured": {"1", true}} {
+		t.Run(name, func(t *testing.T) {
+			bin, logs := recorders(t)
+			script := `set -eu
+K=(kubectl --context kind-courier-full)
+SBX=$1
+step() { :; }
+. "$2"
+ALERT_SOURCE=$3
+ALERTMANAGER_WEBHOOK_URL=$4
+` + block
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", strings.TrimSuffix(sandboxDir, "/"), sandboxDir+"env.sh", tc.alertSource, fakeWebhook)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			var out, errOut bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &errOut
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("%v\nstdout %q\nstderr %q", err, out.String(), errOut.String())
+			}
+			argv := strings.TrimSpace(readLog(t, logs, "kubectl.argv"))
+			if !tc.configured {
+				if argv != "" || readLog(t, logs, "kubectl.stdin") != "" {
+					t.Errorf("kubectl was run (%q) with no alert source configured", argv)
+				}
+				return
+			}
+			lines := strings.Split(argv, "\n")
+			onStdin := "--context kind-courier-full apply --server-side --force-conflicts --field-manager=courier-sandbox -f -"
+			if len(lines) != 3 || lines[0] != onStdin || lines[1] != onStdin ||
+				lines[2] != "--context kind-courier-full apply --server-side --force-conflicts --field-manager=courier-sandbox -f "+overlay {
+				t.Errorf("kubectl was run as %q; want two applies on stdin and then the overlay's", lines)
+			}
+			stdin := readLog(t, logs, "kubectl.stdin")
+			for _, want := range []string{"  name: alertmanager-slack-secret\n  namespace: monitoring\n", "  webhook-url: " + base64Of(fakeWebhook) + "\n", "  name: alertmanager-kind-config\n", "  alertmanager.yaml: "} {
+				if !strings.Contains(stdin, want) {
+					t.Errorf("kubectl's stdin lacks %q:\n%s", want, redactBase64(stdin))
+				}
+			}
+			for _, log := range []string{"kubectl.argv", "base64.argv", "tr.argv", "kubectl.env"} {
+				if v := readLog(t, logs, log); strings.Contains(v, leakMarker) || strings.Contains(v, base64Of(fakeWebhook)) {
+					t.Errorf("%s holds the webhook URL", log)
+				}
+			}
+			if strings.Contains(stdin, leakMarker) || strings.Contains(out.String()+errOut.String(), leakMarker) {
+				t.Error("the webhook URL is raw on stdin or in the output")
+			}
+		})
+	}
+	raw, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	verify := strings.Index(s, "check \"Alertmanager is the alert source:")
+	if verify < 0 {
+		t.Fatal("up.sh does not check the alert source")
+	}
+	guard := strings.LastIndex(s[:verify], "if [ \"${ALERT_SOURCE}\" = 1 ]; then")
+	if guard < 0 || strings.Contains(s[guard:verify], "\nfi\n") {
+		t.Error("up.sh's check of the alert source is not inside an `if ALERT_SOURCE = 1`")
+	}
+	if n := strings.Count(s, "ALERT_SOURCE=0") + strings.Count(s, "ALERT_SOURCE=1"); n != 2 {
+		t.Errorf("up.sh sets ALERT_SOURCE %d times; want twice, 1 with the file and 0 without it", n)
 	}
 }
 
@@ -771,8 +911,8 @@ func TestAlertShRefuses(t *testing.T) {
 		"a near miss":           {[]string{"kubepodcrashlooping"}, "alertmanager-kind-config", "not a preset", false},
 		"a JSON key's cousin":   {[]string{`KubePodCrashLooping" or true or "`}, "alertmanager-kind-config", "not a preset", false},
 		"an unknown state":      {[]string{"TargetDown", "pending"}, "alertmanager-kind-config", "STATE must be firing or resolved", false},
-		"not the sandbox's one": {[]string{"TargetDown"}, "", "make sandbox-up", true},
-		"the tier's own one":    {[]string{"TargetDown"}, "alertmanager-courier", "make sandbox-up", true},
+		"not the sandbox's one": {[]string{"TargetDown"}, "", "the alert source is not configured", true},
+		"the tier's own one":    {[]string{"TargetDown"}, "alertmanager-courier", "the alert source is not configured", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bin, logs := alertStubs(t, tc.configSecret)
@@ -819,6 +959,53 @@ func TestDownRemovesTheAlertSource(t *testing.T) {
 	guard := strings.Index(s, "get alertmanager courier --ignore-not-found")
 	if guard < 0 || patch < guard || del < patch {
 		t.Errorf("down.sh: the guard at %d, the patch at %d, the delete at %d; want them in that order (the patch is only made when the Alertmanager is there)", guard, patch, del)
+	}
+	// Run as down.sh has it, with a kubectl that answers what the Alertmanager's configSecret is: the Alertmanager is patched only when
+	// it is the alert source, the Secrets are deleted either way (and ignore-not-found makes that safe to repeat), and nothing is
+	// asked of a cluster that has no Alertmanager at all.
+	start := strings.Index(s, "if [ \"$(\"${K[@]}\" -n monitoring get alertmanager courier")
+	endMarker := `delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found >/dev/null` + "\n"
+	end := strings.Index(s, endMarker)
+	if start < 0 || end < start {
+		t.Fatalf("down.sh: the alert-source step is at %d..%d", start, end)
+	}
+	block := s[start : end+len(endMarker)]
+	for name, tc := range map[string]struct {
+		configSecret string
+		patched      bool
+	}{
+		"the alert source is up":         {"alertmanager-kind-config", true},
+		"the Alertmanager is the tier's": {"", false},
+		"another configuration":          {"alertmanager-other", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bin, logs := t.TempDir(), t.TempDir()
+			stub := "#!/bin/sh\necho \"$*\" >> " + logs + "/argv\ncase \"$*\" in\n  *\"get alertmanager courier\"*) printf %s \"$CONFIG_SECRET\" ;;\nesac\n"
+			if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(stub), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			script := "set -eu\nK=(kubectl --context kind-courier-full)\ndie() { echo \"error: $*\" >&2; exit 1; }\n" + block
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", script)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "CONFIG_SECRET="+tc.configSecret)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			argv := readLog(t, logs, "argv")
+			if got := strings.Contains(argv, " patch alertmanager courier "); got != tc.patched {
+				t.Errorf("patched: %t, want %t\n%s", got, tc.patched, argv)
+			}
+			if got := strings.Contains(argv, " wait "); got != tc.patched {
+				t.Errorf("waited for the Alertmanager: %t, want %t\n%s", got, tc.patched, argv)
+			}
+			if !strings.Contains(argv, "-n monitoring delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found") {
+				t.Errorf("the Secrets were not deleted (with ignore-not-found):\n%s", argv)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(argv), "\n") {
+				if !strings.HasPrefix(line, "--context kind-courier-full ") {
+					t.Errorf("kubectl was run without the context: %q", line)
+				}
+			}
+		})
 	}
 }
 

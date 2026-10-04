@@ -6,11 +6,11 @@
 # The secrets come from the file $SANDBOX_ENV (default ~/.config/agent-courier/sandbox.env), which is checked first, before
 # anything else is touched, and parsed, never sourced (env.sh). Their values go into Secret manifests that are piped to
 # `kubectl apply -f -`: on no command line, in no file, in no output.
-# It also makes the full tier's Alertmanager the sandbox's alert source: posting, through a copy of the owner's receiver, to the
-# owner's real alert channel, tagged [kind] (alertmanager/, alert.sh). Its webhook URL comes from the file
-# $ALERTMANAGER_WEBHOOK_FILE (default ~/.config/agent-courier/alertmanager-webhook-url), checked second, right after the secrets file
-# (webhook.sh), and handled as the secrets are: parsed, never printed, and only ever piped to `kubectl apply -f -`. Nothing posts
-# until `make sandbox-alert` fires an alert.
+# Optionally, it also makes the full tier's Alertmanager the sandbox's alert source: posting, through a copy of the owner's receiver, to
+# the owner's real alert channel, tagged [kind] (alertmanager/, alert.sh). Its webhook URL comes from the file
+# $ALERTMANAGER_WEBHOOK_FILE (default ~/.config/agent-courier/alertmanager-webhook-url). With no such file the alert source is skipped, and
+# the run says so; a file that is there is checked second, right after the secrets file (webhook.sh), refused as strictly, and handled as
+# the secrets are: parsed, never printed, and only ever piped to `kubectl apply -f -`. Nothing posts until `make sandbox-alert` fires an alert.
 # Brings the full tier up first if it is not (up-full.sh), replaces its courier with the sandbox's (down.sh puts it back),
 # and is safe to re-run. It also restarts the full tier's egress gateway if its certificate is stale (heal.sh; `make sandbox-heal`).
 # Exit 0: up, and courier is connected to Slack. 1: a refused secrets file, or something failed. 3: deployed and verified, but
@@ -53,9 +53,17 @@ trap '[ -z "${SCRATCH}" ] || rm -rf "${SCRATCH}"' EXIT
 step "secrets file ${SANDBOX_ENV}"
 sandbox_env_load "${SANDBOX_ENV}"
 echo "ok: ${SANDBOX_ENV_FOUND// /, } are there and well-formed (values are never printed)"
+# The alert source is optional: without the webhook file it is skipped. A file that is there, a dangling link included, is held to every
+# check, and one that fails stops the run here, as the secrets file does.
 step "alert webhook file ${ALERTMANAGER_WEBHOOK_FILE}"
-webhook_url_load "${ALERTMANAGER_WEBHOOK_FILE}"
-echo "ok: ${ALERTMANAGER_WEBHOOK_FILE} holds an incoming-webhook URL (never printed)"
+if [ -e "${ALERTMANAGER_WEBHOOK_FILE}" ] || [ -L "${ALERTMANAGER_WEBHOOK_FILE}" ]; then
+  webhook_url_load "${ALERTMANAGER_WEBHOOK_FILE}"
+  ALERT_SOURCE=1
+  echo "ok: ${ALERTMANAGER_WEBHOOK_FILE} holds an incoming-webhook URL (never printed)"
+else
+  ALERT_SOURCE=0
+  echo "alert source: not configured; see README Alert trial"
+fi
 
 for tool in docker kind kubectl helm jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
@@ -111,12 +119,14 @@ render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml" | "${K[@]}" apply -f - >/dev/
 # The alert source: Alertmanager's receiver slack-critical-kind, a copy of the owner's slack-critical with a [kind] title prefix, reading
 # the webhook URL by api_url_file from a Secret that the Alertmanager mounts. The Secrets first, so that the operator never rolls the
 # Alertmanager onto a Secret that is not there; then the three fields of the Alertmanager (overlay.yaml), which the operator rolls out.
-step "alert source: Alertmanager's receiver slack-critical-kind (posts to the real alert channel as [kind] once an alert is fired)"
-# shellcheck disable=SC2034 # read by apply_secret (env.sh), by name
-ALERTMANAGER_CONFIG=$(<"${SBX}/alertmanager/config.yaml")
-apply_secret monitoring alertmanager-slack-secret webhook-url=ALERTMANAGER_WEBHOOK_URL
-apply_secret monitoring alertmanager-kind-config alertmanager.yaml=ALERTMANAGER_CONFIG
-"${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f "${SBX}/alertmanager/overlay.yaml" >/dev/null
+if [ "${ALERT_SOURCE}" = 1 ]; then
+  step "alert source: Alertmanager's receiver slack-critical-kind (posts to the real alert channel as [kind] once an alert is fired)"
+  # shellcheck disable=SC2034 # read by apply_secret (env.sh), by name
+  ALERTMANAGER_CONFIG=$(<"${SBX}/alertmanager/config.yaml")
+  apply_secret monitoring alertmanager-slack-secret webhook-url=ALERTMANAGER_WEBHOOK_URL
+  apply_secret monitoring alertmanager-kind-config alertmanager.yaml=ALERTMANAGER_CONFIG
+  "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f "${SBX}/alertmanager/overlay.yaml" >/dev/null
+fi
 
 step "courier: Slack Secret, the Binding's Dex token and its refresh, config, Deployment"
 "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
@@ -210,12 +220,14 @@ alert_source_in_place() {
     jq -e '.config.original | contains("receiver: slack-critical-kind")' >/dev/null &&
     "${K[@]}" -n monitoring exec alertmanager-courier-0 -c alertmanager -- test -s /etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url
 }
-deadline=$((SECONDS + 240))
-until alert_source_in_place >/dev/null 2>&1; do
-  [ "${SECONDS}" -lt "${deadline}" ] || break
-  sleep 5
-done
-check "Alertmanager is the alert source: externalUrl http://alertmanager.kind.local, receiver slack-critical-kind, the webhook file mounted" alert_source_in_place
+if [ "${ALERT_SOURCE}" = 1 ]; then
+  deadline=$((SECONDS + 240))
+  until alert_source_in_place >/dev/null 2>&1; do
+    [ "${SECONDS}" -lt "${deadline}" ] || break
+    sleep 5
+  done
+  check "Alertmanager is the alert source: externalUrl http://alertmanager.kind.local, receiver slack-critical-kind, the webhook file mounted" alert_source_in_place
+fi
 
 check "the agent sandbox-sre is Accepted" "${K[@]}" -n kagent wait --for=condition=Accepted agent/sandbox-sre --timeout=5s
 check "the agent sandbox-sre is Ready" "${K[@]}" -n kagent wait --for=condition=Ready agent/sandbox-sre --timeout=5s
@@ -272,7 +284,8 @@ esac
 docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(kind get nodes --name "${CLUSTER}")"
 [ "${failed}" -eq 0 ] || die "the sandbox is not as it should be (see FAIL above)"
 if [ "${state}" = connected ]; then
-  echo "sandbox up in ${SECONDS}s (context ${CTX}): @-mention the bot in the channel, or fire an alert with make sandbox-alert; the dogfood checklist is hack/kind/sandbox/README.md"
+  echo "sandbox up in ${SECONDS}s (context ${CTX}): @-mention the bot in the channel; the dogfood checklist is hack/kind/sandbox/README.md"
+  [ "${ALERT_SOURCE}" != 1 ] || echo "alert source up: fire an alert with make sandbox-alert (README, Alert trial)"
 else
   # Exit 3 is "deployed, but Slack rejected the tokens": all else is up and verified, and courier crash-loops until the file is fixed.
   echo "sandbox deployed in ${SECONDS}s, but Slack rejected the tokens, so courier is NOT connected (exit 3; see the error above)" >&2
