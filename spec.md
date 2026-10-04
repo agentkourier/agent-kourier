@@ -535,7 +535,11 @@ them (below the table).
 | An edit or deletion of any message (`message_changed`, `message_deleted`), or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages |
 | DM | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. |
 
-**`chat.triggers` (D36).** An empty list is `[{type: mention}]`, the table above. A Binding adds
+**`chat.triggers` (D36).** An empty list is `[{type: mention}]`, the table above. A list that
+names triggers is the whole list: a Binding that lists only `botMessage` triggers starts no session
+from an @mention, in or out of a thread (the intake says so once, at info). The row for a reply in
+a thread courier owns is no trigger and holds either way, so people can follow up in the thread of
+an alert without a mention. A Binding adds
 triggers; v1 has two types, `mention` (the @mention rows) and `botMessage`. Triggers are tried in
 order and the first that matches handles the message. A `botMessage` trigger accepts messages
 from one bot, named by `from.botId` and never by display name, and then:
