@@ -35,6 +35,20 @@ func (e *env) assertInert(t *testing.T) {
 	}
 }
 
+// assertLastStopIsBare fails unless the last chat.stopStream request carried no blocks and no text. A run that
+// takes over the stream of an earlier run only ends it, and the update that follows writes the message: Slack
+// shows a stop's blocks under the streamed text, so blocks sent here would be shown as well as the update's.
+func (e *env) assertLastStopIsBare(t *testing.T) {
+	t.Helper()
+	stops := e.rec.sent("/chat.stopStream")
+	if len(stops) == 0 {
+		t.Fatal("no chat.stopStream request was sent")
+	}
+	if last := stops[len(stops)-1]; last.Has("blocks") || last.Has("markdown_text") {
+		t.Errorf("the stop of the earlier run's stream carried blocks %v and text %q; want neither", last["blocks"], last.Get("markdown_text"))
+	}
+}
+
 func TestStreamRecordsItsTsAtOnceAndAppendsOnlyTheSuffix(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
@@ -213,6 +227,7 @@ func TestRecoveredTurnWithItsTsStopsTheStreamAndUpdatesIt(t *testing.T) {
 			if len(th) != 2 || th[1].Streaming || th[1].Text != "the whole answer" || len(e.rec.sent("/chat.startStream")) != 1 || len(e.rec.sent("/chat.stopStream")) != tc.wantStopReqs {
 				t.Fatalf("thread %+v, %d starts, %d stops; want one message with the whole text, started once, stopped %d times", th, len(e.rec.sent("/chat.startStream")), len(e.rec.sent("/chat.stopStream")), tc.wantStopReqs)
 			}
+			e.assertLastStopIsBare(t)
 		})
 	}
 }
@@ -314,6 +329,7 @@ func TestRecoveredTurnTakesOverAMessageThatWasNeverAStream(t *testing.T) {
 		t.Fatalf("thread %+v, %d starts, %d stops, %d updates; want one message with the whole text, never started, one stop refused, one update",
 			th, len(e.rec.sent("/chat.startStream")), len(e.rec.sent("/chat.stopStream")), e.updates())
 	}
+	e.assertLastStopIsBare(t)
 }
 
 // TestNotStreamingIsMatchedByTypeNotByText: the refusal to stop a message that is not a stream is
