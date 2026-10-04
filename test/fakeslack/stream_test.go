@@ -28,7 +28,7 @@ func TestStreamLifecycle(t *testing.T) {
 	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-9"}}
 	section := slack.NewSectionBlock(mrkdwn("done"), nil, nil)
 
-	ts, err := startIn(api, "C1", parent, append(recipients(), slack.MsgOptionMarkdownText("Hel"))...)
+	ts, err := startIn(api, "C1", parent, append(recipients(), slack.MsgOptionChunks(slack.NewMarkdownTextChunk("Hel")))...)
 	if err != nil || ts == "" {
 		t.Fatalf("StartStream = %q, %v", ts, err)
 	}
@@ -43,24 +43,25 @@ func TestStreamLifecycle(t *testing.T) {
 		t.Fatalf("after start = %+v", m)
 	}
 
-	if _, _, err := api.AppendStream("C1", ts, slack.MsgOptionMarkdownText("lo ")); err != nil {
+	if _, _, err := api.AppendStream("C1", ts, slack.MsgOptionChunks(slack.NewMarkdownTextChunk("lo "))); err != nil {
 		t.Fatalf("AppendStream text: %v", err)
 	}
-	// Markdown chunks append to the text; every chunk is kept for assertions.
+	// Markdown chunks append to the text, and the stream is in chunks mode from its start; every chunk is kept for
+	// assertions.
 	if _, _, err := api.AppendStream("C1", ts, slack.MsgOptionChunks(
 		slack.NewMarkdownTextChunk("wor"), slack.NewTaskUpdateChunk("t1", "Tool call"))); err != nil {
 		t.Fatalf("AppendStream chunks: %v", err)
 	}
 	m := stream()
-	if m.Text != "Hello wor" || !m.Streaming || len(m.Chunks) != 2 {
+	if m.Text != "Hello wor" || !m.Streaming || len(m.Chunks) != 4 {
 		t.Fatalf("mid-stream = %+v", m)
 	}
 	var task struct{ Type, ID, Title string }
-	if err := json.Unmarshal(m.Chunks[1], &task); err != nil || task.Type != "task_update" || task.Title != "Tool call" {
-		t.Fatalf("chunk 1 = %s, %v; want the task_update", m.Chunks[1], err)
+	if err := json.Unmarshal(m.Chunks[3], &task); err != nil || task.Type != "task_update" || task.Title != "Tool call" {
+		t.Fatalf("chunk 3 = %s, %v; want the task_update", m.Chunks[3], err)
 	}
 
-	if _, _, err := api.StopStream("C1", ts, slack.MsgOptionMarkdownText("ld"), slack.MsgOptionBlocks(section),
+	if _, _, err := api.StopStream("C1", ts, slack.MsgOptionChunks(slack.NewMarkdownTextChunk("ld")), slack.MsgOptionBlocks(section),
 		slack.MsgOptionMetadata(meta)); err != nil {
 		t.Fatalf("StopStream: %v", err)
 	}
@@ -79,8 +80,11 @@ func TestStreamLifecycle(t *testing.T) {
 		t.Fatalf("replies after stop = %+v, %v", msgs, err)
 	}
 	for name, err := range map[string]error{
-		"append after stop": func() error { _, _, err := api.AppendStream("C1", ts, slack.MsgOptionMarkdownText("x")); return err }(),
-		"stop after stop":   func() error { _, _, err := api.StopStream("C1", ts); return err }(),
+		"append after stop": func() error {
+			_, _, err := api.AppendStream("C1", ts, slack.MsgOptionChunks(slack.NewMarkdownTextChunk("x")))
+			return err
+		}(),
+		"stop after stop": func() error { _, _, err := api.StopStream("C1", ts); return err }(),
 	} {
 		if err == nil || err.Error() != "message_not_in_streaming_state" {
 			t.Errorf("%s = %v; want message_not_in_streaming_state", name, err)

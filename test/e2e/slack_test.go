@@ -150,7 +150,7 @@ func TestSlackShowsAStreamingMessage(t *testing.T) {
 	f, ctx := newFixture(t), t.Context()
 	root := f.post(t, slack.MsgOptionText("question", false))
 	_, ts, err := f.bot.StartStream("C1", slack.MsgOptionTS(root), slack.MsgOptionRecipientUserID("U1"),
-		slack.MsgOptionRecipientTeamID("T1"), slack.MsgOptionMarkdownText("Hel"))
+		slack.MsgOptionRecipientTeamID("T1"), slack.MsgOptionChunks(slack.NewMarkdownTextChunk("Hel")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +158,8 @@ func TestSlackShowsAStreamingMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	thread, err := f.sl.Thread(ctx, "C1", root)
-	if err != nil || len(thread) != 2 || !thread[1].Streaming || len(thread[1].Chunks) != 1 || thread[1].Text != "Hel" {
-		t.Fatalf("Thread = %+v, %v; want a streaming reply with one chunk", thread, err)
+	if err != nil || len(thread) != 2 || !thread[1].Streaming || len(thread[1].Chunks) != 2 || thread[1].Text != "Hel" {
+		t.Fatalf("Thread = %+v, %v; want a streaming reply with a text chunk and a task chunk", thread, err)
 	}
 	if _, _, err := f.bot.StopStream("C1", ts); err != nil {
 		t.Fatal(err)

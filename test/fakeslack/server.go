@@ -88,7 +88,10 @@
 //   - Streaming: recipient_team_id being required in channels alongside
 //     recipient_user_id; the error codes invalid_arguments (no thread_ts, or an
 //     append with nothing to append), missing_recipient_user_id,
-//     missing_recipient_team_id, message_not_in_streaming_state and
+//     missing_recipient_team_id, message_not_in_streaming_state,
+//     streaming_mode_mismatch and cannot_provide_both_markdown_text_and_chunks
+//     (documented, with the rule that a stream keeps the mode it began in; that
+//     the first content sets it is not) and
 //     invalid_chunks (also for any chunk type but markdown_text, task_update,
 //     plan_update and blocks, and for a blocks chunk with no blocks);
 //     appendStream returning only ok; a running

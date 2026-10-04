@@ -1,6 +1,7 @@
 package fakeslack
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/url"
 	"strings"
@@ -46,11 +47,15 @@ func (s *Server) startStream(form url.Values) (response, string) {
 	if code != "" {
 		return nil, code
 	}
+	mode, code := requestMode(form)
+	if code != "" {
+		return nil, code
+	}
 	if runes(text) > maxMessageText {
 		return nil, "msg_too_long"
 	}
 	m := s.botMessage(text, form.Get("thread_ts"))
-	m.Chunks, m.Streaming = chunks, true
+	m.Chunks, m.Streaming, m.mode = chunks, true, mode
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,6 +94,10 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 	if code != "" {
 		return nil, code
 	}
+	mode, code := requestMode(form)
+	if code != "" {
+		return nil, code
+	}
 	if !stop && text == "" && len(chunks) == 0 {
 		return nil, "invalid_arguments"
 	}
@@ -109,10 +118,14 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 		if !m.Streaming {
 			return nil, "message_not_in_streaming_state"
 		}
+		if m.mode != "" && mode != "" && m.mode != mode {
+			return nil, "streaming_mode_mismatch"
+		}
 		if runes(m.Text)+runes(text) > maxMessageText {
 			return nil, "msg_too_long"
 		}
 		prev := m.clone()
+		m.mode = cmp.Or(m.mode, mode)
 		m.Text += text
 		m.Chunks = append(m.Chunks, chunks...)
 		if !stop {
@@ -129,6 +142,36 @@ func (s *Server) streamChunk(form url.Values, stop bool) (response, string) {
 		return response{"channel": channel, "ts": ts, "message": echo}, ""
 	}
 	return nil, "message_not_found"
+}
+
+// The two streaming modes. A request is in one of them by the parameter that carries its content: markdown_text, or
+// chunks.
+const (
+	modeMarkdown = "markdown_text"
+	modeChunks   = "chunks"
+)
+
+// requestMode is the streaming mode of a request, or "" if it carries no content, and a code if it carries both.
+//
+// Documented (https://docs.slack.dev/reference/methods/chat.startStream/ and chat.stopStream): "Cannot provide both
+// markdown_text and chunks in the same request", and "The streaming mode must be the same as the streaming mode
+// used to start the stream. If you started the stream with markdown_text, you must append with markdown_text", with
+// the error codes cannot_provide_both_markdown_text_and_chunks and streaming_mode_mismatch.
+//
+// UNCONFIRMED(WP-04): that the mode is set by the first request that carries content, so that a stream started with
+// none takes the mode of its first append (slack-go's own example starts a stream with no content and appends
+// markdown_text), and that a stop with no content is in no mode.
+func requestMode(form url.Values) (mode, code string) {
+	text, chunks := form.Get("markdown_text") != "", form.Get("chunks") != ""
+	switch {
+	case text && chunks:
+		return "", "cannot_provide_both_markdown_text_and_chunks"
+	case text:
+		return modeMarkdown, ""
+	case chunks:
+		return modeChunks, ""
+	}
+	return "", ""
 }
 
 // stoppedBlocks is the blocks of a message that chat.stopStream has ended: the

@@ -52,6 +52,9 @@ type Message struct {
 	// assertions and are not part of Slack's message shape.
 	Streaming bool              `json:"-"`
 	Chunks    []json.RawMessage `json:"-"`
+
+	// mode is the streaming mode of the message, modeMarkdown or modeChunks, once a request has set it.
+	mode string
 }
 
 // clone returns a deep copy of m, so callers can neither see later changes to
