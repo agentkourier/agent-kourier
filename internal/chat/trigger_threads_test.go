@@ -315,9 +315,9 @@ func TestARedeliveredMessageIsDedupedByTheIntake(t *testing.T) {
 }
 
 // After a restart nothing is remembered but the database. A redelivered fire again or resolve asks for the
-// same notice (the notice ID names the message), and a redelivered start asks for the same turn again: the
-// start hook is given the same anchor, which the session manager takes by message ID, once.
-func TestARedeliveryAfterARestartAsksForTheSameNoticeAndTheSameTurn(t *testing.T) {
+// same notice (the notice ID names the message), and a redelivered start, whose turn the store knows started,
+// asks for nothing.
+func TestARedeliveryAfterARestartAsksForTheSameNoticeAndNoNewTurn(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	h.send(t, "100.1", kindFiring)
 	h.send(t, "101.1", kindFiring)
@@ -327,8 +327,8 @@ func TestARedeliveryAfterARestartAsksForTheSameNoticeAndTheSameTurn(t *testing.T
 	if got := h.send(t, "100.1", kindFiring); got != "dedup" {
 		t.Errorf("redelivered start: %q; want dedup", got)
 	}
-	if got := h.started(); !slices.Equal(got, []string{"100.1", "100.1"}) {
-		t.Errorf("start hook given %v; want the same anchor again, so that a start that was lost is not", got)
+	if got := h.started(); !slices.Equal(got, []string{"100.1"}) {
+		t.Errorf("start hook given %v; want the one ask: the turn started", got)
 	}
 	h.restart(t)
 	if got := h.send(t, "101.1", kindFiring); got != "repeat" {
@@ -341,8 +341,8 @@ func TestARedeliveryAfterARestartAsksForTheSameNoticeAndTheSameTurn(t *testing.T
 	if len(ids) != 3 || ids[0] != ids[2] || ids[0] == ids[1] {
 		t.Errorf("notice IDs %v; want the fire again's asked for twice with one ID, and the close's its own", ids)
 	}
-	if got := h.started(); len(got) != 2 {
-		t.Errorf("turns started for %v; want only the start's replay", got)
+	if got := h.started(); len(got) != 1 {
+		t.Errorf("turns started for %v; want the one", got)
 	}
 }
 
@@ -427,7 +427,7 @@ type failingThreads struct {
 	err error
 }
 
-func (f failingThreads) OpenTriggerThread(context.Context, store.TriggerThread) (store.TriggerThread, bool, error) {
+func (f failingThreads) OpenTriggerThread(context.Context, store.TriggerThread, time.Time) (store.TriggerThread, bool, error) {
 	return store.TriggerThread{}, false, f.err
 }
 
@@ -436,21 +436,26 @@ func (f failingThreads) GetTriggerThread(context.Context, string, string) (store
 }
 
 // A trigger with no thread rules has no threads: every match starts a turn, and a close has no thread to close.
-// The same goes for a keyed trigger whose key came out empty, which must not tie all such messages to one thread.
+// The same goes for a keyed trigger whose key came out empty, which must not tie all such messages to one thread:
+// each is an investigation of its own, counted as empty_key, with a warning once for the trigger.
 func TestMatchesThatHaveNoKeyEachStartATurn(t *testing.T) {
 	emptyKey := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 		tr.Extract = map[string]v1alpha1.Extract{
-			"key":   {Field: v1alpha1.FieldTitle, Regex: `^(?P<key>)`},
-			"state": {Field: v1alpha1.FieldTitle, Regex: `(?P<state>RESOLVED)?`},
+			"key":   {Field: v1alpha1.FieldTitle, Regex: `^(?P<key>)`}, // takes part, and matches nothing
+			"state": {Field: v1alpha1.FieldTitle, Regex: `(?P<state>FIRING|RESOLVED)`},
 		}
 		tr.Thread = v1alpha1.TriggerThread{By: v1alpha1.ThreadByKey, Cooldown: metav1.Duration{Duration: time.Hour}, CloseWhen: map[string]string{"state": "RESOLVED"}}
 	})
-	for name, tr := range map[string]v1alpha1.Trigger{"no thread rules": kindOnly(), "an empty key": emptyKey} {
-		t.Run(name, func(t *testing.T) {
-			h := newTriggered(t, tr)
+	for _, tc := range []struct {
+		name     string
+		tr       v1alpha1.Trigger
+		decision string
+	}{{"no thread rules", kindOnly(), "started"}, {"an empty key", emptyKey, "empty_key"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTriggered(t, tc.tr)
 			for _, id := range []string{"100.1", "101.1"} {
-				if got := h.send(t, id, kindFiring); got != "started" {
-					t.Fatalf("message %s: %q; want started", id, got)
+				if got := h.send(t, id, kindFiring); got != tc.decision {
+					t.Fatalf("message %s: %q; want %q", id, got, tc.decision)
 				}
 			}
 			if got := h.started(); !slices.Equal(got, []string{"100.1", "101.1"}) {
@@ -459,7 +464,94 @@ func TestMatchesThatHaveNoKeyEachStartATurn(t *testing.T) {
 			if kinds, _ := h.noted(); len(kinds) != 0 {
 				t.Errorf("notes %v; want none", kinds)
 			}
+			if tc.decision == "empty_key" { // the other has no close rule, so a resolve is a fire like the rest
+				if got := h.send(t, "102.1", kindResolved); got != "close_unknown" {
+					t.Errorf("a close of a key with no thread: %q; want close_unknown", got)
+				}
+			}
+			if n := strings.Count(h.logs.String(), "extracted an empty key"); n != map[string]int{"started": 0, "empty_key": 1}[tc.decision] {
+				t.Errorf("the empty-key warning was logged %d times; want once for the trigger, and never without a key", n)
+			}
 		})
+	}
+}
+
+// A turn that could not start does not hold its key: no cooldown was recorded for it, so once the reservation is
+// stale the key's next fire starts a turn of its own, and the cooldown runs from that one. A fire inside the grace
+// is a note in the thread, which a turn that is starting would be; a close of a thread with no turn is unknown.
+func TestATurnThatNeverStartedDoesNotHoldItsKey(t *testing.T) {
+	h := newTriggered(t, trialTrigger())
+	h.hookErr = errors.New("prompt refused")
+	if err := h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring)); !errors.Is(err, h.hookErr) {
+		t.Fatalf("Message = %v; want the hook's error", err)
+	}
+	h.hookErr = nil // it is not redelivered
+	h.clk.advance(10 * time.Second)
+	if got := h.send(t, "101.1", kindFiring); got != "repeat" {
+		t.Errorf("a fire inside the grace: %q; want repeat", got)
+	}
+	if got := h.send(t, "102.1", kindResolved); got != "close_unknown" {
+		t.Errorf("a close of a thread with no turn: %q; want close_unknown", got)
+	}
+	h.clk.advance(2 * time.Minute)
+	if got := h.send(t, "103.1", kindFiring); got != "started" {
+		t.Fatalf("a fire past the grace: %q; want started", got)
+	}
+	if got := h.started(); !slices.Equal(got, []string{"100.1", "103.1"}) {
+		t.Errorf("turns asked for %v; want the refused one and the one that took over", got)
+	}
+	h.clk.advance(time.Hour)
+	if got := h.send(t, "104.1", kindFiring); got != "repeat" {
+		t.Errorf("a fire inside the new turn's cooldown: %q; want repeat", got)
+	}
+	if _, threads := h.noted(); !slices.Equal(threads, []string{"100.1", "103.1"}) {
+		t.Errorf("notes in %v; want the first inside the grace in the reserved thread, then one in the new", threads)
+	}
+	// The cooldown is the started turn's: it ends four hours after 103.1, at 16:02, and not after 100.1, at 16:00.
+	h.send(t, "105.1", kindResolved)
+	h.clk.advance(2*time.Hour + 59*time.Minute) // 16:01
+	if got := h.send(t, "106.1", kindFiring); got != "repeat" {
+		t.Errorf("a fire a minute before the cooldown of the turn that started: %q; want repeat", got)
+	}
+	h.send(t, "107.1", kindResolved)
+	h.clk.advance(2 * time.Minute) // 16:03
+	if got := h.send(t, "108.1", kindFiring); got != "started" {
+		t.Errorf("a fire after that cooldown: %q; want started", got)
+	}
+}
+
+// markFailsOnce is a TriggerThreads whose first MarkTriggerStarted fails.
+type markFailsOnce struct {
+	store.TriggerThreads
+	failed bool
+}
+
+func (m *markFailsOnce) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, until time.Time) error {
+	if !m.failed {
+		m.failed = true
+		return errors.New("disk full")
+	}
+	return m.TriggerThreads.MarkTriggerStarted(ctx, binding, keyHash, thread, until)
+}
+
+// A turn asked for whose mark did not get written is asked for again by the redelivery, which is idempotent, and
+// marked then.
+func TestAFailedMarkIsMendedByTheRedelivery(t *testing.T) {
+	h := newTriggered(t, trialTrigger())
+	cfg := h.cfg
+	cfg.TriggerThreads = &markFailsOnce{TriggerThreads: h.st}
+	h.in = chat.NewIntake(cfg)
+	if err := h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring)); err == nil {
+		t.Fatal("Message = nil; want the mark's error, so that Slack sends it again")
+	}
+	if got := h.send(t, "100.1", kindFiring); got != "dedup" {
+		t.Errorf("redelivery: %q; want dedup", got)
+	}
+	if got := h.started(); !slices.Equal(got, []string{"100.1", "100.1"}) {
+		t.Errorf("turns asked for %v; want the same anchor twice", got)
+	}
+	if got := h.send(t, "101.1", kindResolved); got != "closed" {
+		t.Errorf("a close of the marked thread: %q; want closed", got)
 	}
 }
 

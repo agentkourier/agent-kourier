@@ -28,25 +28,34 @@ func scanTriggerThread(r interface{ Scan(...any) error }) (store.TriggerThread, 
 	if closed != 0 {
 		t.ClosedAt = fromTS(closed)
 	}
+	if cooldown == 0 {
+		t.CooldownUntil = time.Time{}
+	}
 	return t, nil
 }
 
 // OpenTriggerThread implements store.TriggerThreads. The upsert's WHERE is the rule for replacing a row, and
-// the write pool has one connection, so two starts of a key cannot both pass it.
-func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread) (telemetryResult0 store.TriggerThread, telemetryResult1 bool, telemetryErr error) {
+// the write pool has one connection, so two starts of a key cannot both pass it. A new row has cooldown_until 0,
+// which is a turn that has not started (MarkTriggerStarted).
+func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread, staleBefore time.Time) (telemetryResult0 store.TriggerThread, telemetryResult1 bool, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.OpenTriggerThread")
 	defer func() { finishStore(op, telemetryErr) }()
-	if t.Binding == "" || t.KeyHash == "" || t.Thread == "" || !triggerTime(t.Opened) || t.CooldownUntil.Before(t.Opened) {
-		return store.TriggerThread{}, false, fmt.Errorf("open trigger thread of %q: the Binding, key hash, thread and opening time are required, and the cooldown may not end before it: %w", t.Binding, store.ErrInvalid)
+	if t.Binding == "" || t.KeyHash == "" || t.Thread == "" || !triggerTime(t.Opened) {
+		return store.TriggerThread{}, false, fmt.Errorf("open trigger thread of %q: the Binding, key hash, thread and an opening time after the Unix epoch are required: %w", t.Binding, store.ErrInvalid)
+	}
+	var stale int64 // no row was opened before 0
+	if triggerTime(staleBefore) {
+		stale = ts(staleBefore)
 	}
 	var current store.TriggerThread
 	var opened bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `INSERT INTO trigger_threads (`+triggerThreadColumns+`) VALUES (?, ?, ?, ?, ?, 0, ?)
+		n, err := execRows(ctx, tx, `INSERT INTO trigger_threads (`+triggerThreadColumns+`) VALUES (?, ?, ?, ?, ?, 0, 0)
 			ON CONFLICT (binding, key_hash) DO UPDATE SET thread = excluded.thread, opened = excluded.opened,
-				last_seen = excluded.last_seen, closed_at = 0, cooldown_until = excluded.cooldown_until
-			WHERE trigger_threads.closed_at <> 0 AND trigger_threads.cooldown_until <= excluded.opened`,
-			t.Binding, t.KeyHash, t.Thread, ts(t.Opened), ts(t.Opened), ts(t.CooldownUntil))
+				last_seen = excluded.last_seen, closed_at = 0, cooldown_until = 0
+			WHERE (trigger_threads.closed_at <> 0 AND trigger_threads.cooldown_until <= excluded.opened)
+				OR (trigger_threads.cooldown_until = 0 AND trigger_threads.thread <> excluded.thread AND trigger_threads.opened < ?)`,
+			t.Binding, t.KeyHash, t.Thread, ts(t.Opened), ts(t.Opened), stale)
 		if err != nil {
 			return err
 		}
@@ -58,6 +67,33 @@ func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread) (t
 		return store.TriggerThread{}, false, fmt.Errorf("open trigger thread of %q: %w", t.Binding, err)
 	}
 	return current, opened, nil
+}
+
+// MarkTriggerStarted implements store.TriggerThreads.
+func (s *Store) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, cooldownUntil time.Time) (telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.MarkTriggerStarted")
+	defer func() { finishStore(op, telemetryErr) }()
+	if binding == "" || keyHash == "" || thread == "" || !triggerTime(cooldownUntil) {
+		return fmt.Errorf("mark trigger thread of %q started: the Binding, key hash, thread and a cooldown end after the Unix epoch are required: %w", binding, store.ErrInvalid)
+	}
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		n, err := execRows(ctx, tx, `UPDATE trigger_threads SET cooldown_until = ? WHERE binding = ? AND key_hash = ? AND thread = ?`, ts(cooldownUntil), binding, keyHash, thread)
+		if err != nil || n > 0 {
+			return err
+		}
+		var exists bool // no change: the row is missing, or another message's
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM trigger_threads WHERE binding = ? AND key_hash = ?)`, binding, keyHash).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return store.ErrNotFound
+		}
+		return fmt.Errorf("the key's thread is not %s: %w", thread, store.ErrConflict)
+	})
+	if err != nil {
+		return fmt.Errorf("mark trigger thread of %q started: %w", binding, err)
+	}
+	return nil
 }
 
 // GetTriggerThread implements store.TriggerThreads.

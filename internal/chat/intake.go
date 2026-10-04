@@ -50,10 +50,15 @@ type IntakeConfig struct {
 	// a flapping alert; a trigger with no thread rules needs none.
 	TriggerThreads store.TriggerThreads
 	// OnStart, if set, takes the match that starts a turn, anchored to the match's own message
-	// (TriggerMatch.Message.At.ID is the thread): a new investigation, or the redelivery of one, which asks
-	// again since the first ask may have been lost. It is called once the thread is recorded, and it is
-	// idempotent by that message's ID, as Submit is. Its error means it was not taken: Message returns it, so
-	// the platform leaves the event unacknowledged and delivers it again.
+	// (TriggerMatch.Message.At.ID is the thread): a new investigation, or the redelivery of one whose first ask
+	// failed. It is called once the thread is reserved, and it is idempotent by that message's ID, as Submit
+	// is. It runs on the platform's acknowledgement path, which has a budget of seconds, so it does local writes
+	// only, such as queueing the turn, and calls no agent. When it returns nil the thread is marked started and
+	// the key's cooldown begins; the cooldown is not recorded before, so a turn that could not start, such as a
+	// prompt that was refused, holds no key. Its error means it was not taken: Message returns it, so the
+	// platform leaves the event unacknowledged and delivers it again, and the redelivery asks again. A turn
+	// that is never asked for again leaves a reservation that a later message of the key takes over after a
+	// minute; until then the key's messages are notes in a thread with no investigation.
 	//
 	// STUB(CT-4): this is where the start goes onward, and CT-3 starts no session from it. CT-4 renders the
 	// prompt and starts the turn, and replaces this hook, which is for a test to see what started until then.
@@ -78,6 +83,8 @@ type Intake struct {
 	matched recent
 	// mentionless holds the Bindings that were said to have no mention trigger, so that it is said once.
 	mentionless sync.Map
+	// emptyKeyWarned are the triggers (namespace/name#index) that were warned of for an empty key.
+	emptyKeyWarned sync.Map
 }
 
 var (

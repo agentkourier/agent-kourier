@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -19,24 +20,36 @@ type TriggerDecision string
 // The decisions. A fire is a message whose extracted fields do not satisfy the trigger's closeWhen; a close is
 // one that does.
 const (
-	// DecisionStarted: a fire, and the key has no thread, or its thread is closed and its cooldown has ended.
-	// The message starts a new investigation, anchored to itself, and the Intake records the thread first.
+	// DecisionStarted: a fire, and the key has no thread, or its thread is closed and its cooldown has ended, or
+	// its turn never started and the reservation is stale. The message starts a new investigation, anchored to
+	// itself: the Intake reserves the thread, asks for the turn (OnStart), and, once that is taken, marks the
+	// thread started, which is when its cooldown begins.
 	DecisionStarted TriggerDecision = "started"
 	// DecisionRepeat: a fire, and the key has a thread that is open or inside its cooldown. A note in that
 	// thread says it fired again, a closed thread is open again, and no turn starts.
 	DecisionRepeat TriggerDecision = "repeat"
-	// DecisionClosed: a close, and the key has an open thread. A note in it says it closed, the thread is
-	// closed, and no turn starts. The cooldown, which runs from the start, goes on.
+	// DecisionClosed: a close, and the key has an open thread whose turn started. A note in it says it
+	// closed, the thread is closed, and no turn starts. The cooldown, which runs from the start, goes on.
 	DecisionClosed TriggerDecision = "closed"
 	// DecisionCloseUnknown: a close, and no open thread of the key to close: it has none, or it is closed
-	// already. It is ignored. A redelivery of a close whose first delivery was taken, after a restart made the
-	// Intake forget it, is this too.
+	// already, or its turn never started so there is no investigation to note. It is ignored. A redelivery of
+	// a close whose first delivery was taken, after a restart made the Intake forget it, is this too.
 	DecisionCloseUnknown TriggerDecision = "close_unknown"
 	// DecisionDedup: Slack delivered a message again that was taken already. An Intake that remembers it does
-	// nothing. One that does not, after a restart, finds in the store that the message started the thread,
-	// and asks for the start again (OnStart), since the first ask may have been lost.
+	// nothing. One that does not, after a restart, finds in the store that the message reserved the thread:
+	// if its turn started that is all, and if not the start is asked for again (OnStart), since the first ask
+	// failed.
 	DecisionDedup TriggerDecision = "dedup"
+	// DecisionEmptyKey: a fire of a trigger that threads by key whose key came out empty, which names no
+	// thread. It is an investigation of its own each time, with no cooldown and no note, as a trigger with no
+	// thread rules is, and a warning says so, once for the trigger.
+	DecisionEmptyKey TriggerDecision = "empty_key"
 )
+
+// reservationGrace is how long a thread that reserved its key, and whose turn has not started, is left to start
+// before a later message of the key may take the key over. A turn that is starting takes milliseconds, and a
+// failed one is asked for again by its redelivery within seconds, so a minute tells the two apart.
+const reservationGrace = time.Minute
 
 // threadKeyField is the extract that names the thread of a message (v1alpha1.ThreadByKey).
 const threadKeyField = "key"
@@ -55,31 +68,28 @@ type decided struct {
 
 // decide applies the thread rules of a match to the store, and carries out what they say:
 //
-//	fire, no thread for the key, or a closed one past its cooldown   started: record the thread, then OnStart
-//	fire, the message is the thread's own (a redelivery)             dedup: OnStart again
+//	fire, no thread for the key, or a closed one past its cooldown,
+//	  or a reservation that never started and is stale               started: reserve, OnStart, mark started
+//	fire, the message is the thread's own (a redelivery)             dedup: OnStart again if it never started
 //	fire, any other thread of the key                                repeat: note, then reopen it
-//	close, the key has an open thread                                closed: note, then close it
+//	close, the key has an open thread whose turn started             closed: note, then close it
 //	close, otherwise                                                 close_unknown: nothing
 //
-// A trigger with no thread rules, or a match whose key is empty, has no thread to apply them to: every fire
-// starts a turn and every close is unknown. The cooldown runs from the start, not from the last message, so a
-// key starts at most one turn in each window; an open thread takes its key's messages however old it is.
+// A trigger with no thread rules has no thread to apply them to: every fire starts a turn and every close is
+// unknown. So has a match whose key is empty, which is counted as such. The cooldown runs from the message that
+// started the turn, not from the last message, so a key starts at most one turn in each window; an open
+// thread takes its key's messages however old it is. The cooldown begins when the turn is marked started, so a
+// turn that OnStart refused, or never finished asking for, does not hold the key: the next message takes over.
 //
 // Each step is idempotent, and the note comes before the change it goes with, so an error at any point is
 // mended by the redelivery: a note is one row of the outbox whatever its asks, and a redelivered start finds its
-// own thread. The decision is returned with the error when it was made already (the start was recorded, the
-// OnStart failed).
+// own reservation. The decision is returned with the error when it was made already (the thread was reserved,
+// the OnStart failed). Everything here is a local write, since it runs on the platform's acknowledgement path.
 func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
 	key := m.Fields[threadKeyField]
 	closing := closes(m.Thread.CloseWhen, m.Fields)
 	if m.Thread.By != v1alpha1.ThreadByKey || key == "" {
-		if m.Thread.By == v1alpha1.ThreadByKey {
-			in.log.WarnContext(ctx, "chat: a trigger that threads by key extracted an empty key, so the message has no thread", "binding", m.Binding, "trigger", m.Index, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
-		}
-		if closing {
-			return decided{decision: DecisionCloseUnknown}, nil
-		}
-		return decided{decision: DecisionStarted, thread: m.Message.At.ID}, in.start(ctx, m)
+		return in.unthreaded(ctx, m, closing)
 	}
 	if in.cfg.TriggerThreads == nil {
 		return decided{}, errNoThreadStore
@@ -95,8 +105,8 @@ func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
 // fireThread is decide for a fire of a key that has threads.
 func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, out decided) (decided, error) {
 	at := m.Message.At.ID
-	th, opened, err := in.cfg.TriggerThreads.OpenTriggerThread(ctx, store.TriggerThread{
-		Binding: m.Binding, KeyHash: hash, Thread: at, Opened: m.Received, CooldownUntil: m.Received.Add(m.Thread.Cooldown.Duration)})
+	th, opened, err := in.cfg.TriggerThreads.OpenTriggerThread(ctx,
+		store.TriggerThread{Binding: m.Binding, KeyHash: hash, Thread: at, Opened: m.Received}, m.Received.Add(-reservationGrace))
 	if err != nil {
 		return out, fmt.Errorf("open the thread of key %s: %w", out.keyHash, err)
 	}
@@ -104,10 +114,13 @@ func (in *Intake) fireThread(ctx context.Context, m TriggerMatch, hash string, o
 	switch {
 	case opened:
 		out.decision = DecisionStarted
-		return out, in.start(ctx, m)
+		return out, in.startThread(ctx, m, hash)
 	case th.Thread == at:
 		out.decision = DecisionDedup
-		return out, in.start(ctx, m)
+		if th.Started() {
+			return out, nil
+		}
+		return out, in.startThread(ctx, m, hash)
 	}
 	if err := in.note(ctx, m, th.Thread, session.NoticeTriggerRepeat); err != nil {
 		return out, err
@@ -130,7 +143,7 @@ func (in *Intake) closeThread(ctx context.Context, m TriggerMatch, hash string, 
 		return out, fmt.Errorf("get the thread of key %s: %w", out.keyHash, err)
 	}
 	out.thread = th.Thread
-	if !th.ClosedAt.IsZero() {
+	if !th.ClosedAt.IsZero() || !th.Started() {
 		out.decision = DecisionCloseUnknown
 		return out, nil
 	}
@@ -144,12 +157,42 @@ func (in *Intake) closeThread(ctx context.Context, m TriggerMatch, hash string, 
 	return out, nil
 }
 
+// unthreaded is decide for a match that has no thread to apply the rules to: its trigger threads by nothing, or
+// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown.
+func (in *Intake) unthreaded(ctx context.Context, m TriggerMatch, closing bool) (decided, error) {
+	out := decided{decision: DecisionStarted, thread: m.Message.At.ID}
+	switch {
+	case closing:
+		return decided{decision: DecisionCloseUnknown}, nil
+	case m.Thread.By == v1alpha1.ThreadByKey:
+		out.decision = DecisionEmptyKey
+		if _, warned := in.emptyKeyWarned.LoadOrStore(fmt.Sprintf("%s#%d", m.Binding, m.Index), true); !warned {
+			in.log.WarnContext(ctx, "chat: a trigger that threads by key extracted an empty key, so its message starts a turn of its own; this is logged once for the trigger",
+				"binding", m.Binding, "trigger", m.Index, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
+		}
+	}
+	return out, in.start(ctx, m)
+}
+
 // start hands the match on as a turn to start, if there is where to.
 func (in *Intake) start(ctx context.Context, m TriggerMatch) error {
 	if in.cfg.OnStart == nil {
 		return nil
 	}
 	return in.cfg.OnStart(ctx, m)
+}
+
+// startThread starts the turn of the thread this match reserved, and once that is taken marks the thread
+// started, which is when the cooldown begins: a turn that could not start leaves none.
+func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string) error {
+	if err := in.start(ctx, m); err != nil {
+		return err
+	}
+	until := m.Received.Add(m.Thread.Cooldown.Duration)
+	if err := in.cfg.TriggerThreads.MarkTriggerStarted(ctx, m.Binding, hash, m.Message.At.ID, until); err != nil {
+		return fmt.Errorf("mark the thread of key %s started: %w", hash[:8], err)
+	}
+	return nil
 }
 
 // note asks for a short note of courier's own in the thread: its kind and the time of the match, and nothing the
