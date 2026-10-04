@@ -54,6 +54,9 @@ type RunConfig struct {
 	// threadSweepEvery is how often the rows of old trigger threads are purged (an hour if zero): a seam for this
 	// package's tests, which cannot wait for it.
 	threadSweepEvery time.Duration
+	// digestEvery is how often the digest lines of stopped alerts are looked for (15 seconds if zero): a seam for this
+	// package's tests, which cannot wait for it.
+	digestEvery time.Duration
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
 	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see

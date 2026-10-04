@@ -25,11 +25,14 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	s := newStarter(t)
 	cfg := newIntakeConfig(intakeParts{
 		conn: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, submitter: s.sub, notice: s.notes.take,
-		starter: s.triggerStarter, threads: st, replies: st, log: s.log,
+		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
 	})
 
 	if cfg.TriggerThreads != store.TriggerThreads(st) {
 		t.Errorf("TriggerThreads = %v; want the store", cfg.TriggerThreads)
+	}
+	if cfg.TriggerRuns != store.TriggerRuns(st) {
+		t.Errorf("TriggerRuns = %v; want the store: without it no limit holds", cfg.TriggerRuns)
 	}
 	if cfg.Notice == nil || cfg.Submitter == nil {
 		t.Errorf("Notice %t, Submitter %t; want both set", cfg.Notice != nil, cfg.Submitter != nil)

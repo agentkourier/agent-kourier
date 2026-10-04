@@ -213,6 +213,13 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		return fmt.Errorf("trigger thread sweep: %w", err)
 	}
 	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
+	// The digest line of the alerts that a trigger's limits stopped is queued on the outbox, one for each window: the
+	// outbox posts it. The loop stops with the interactions' loops, before the outbox drain and the store.
+	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, Logger: log})
+	if err != nil {
+		return fmt.Errorf("trigger digest: %w", err)
+	}
+	stops.add("trigger-digest", startLoop(runCtx, digest.Run))
 	interactions, err := parts.start(runCtx, mgr, tap, &stops)
 	if err != nil {
 		return err
@@ -224,7 +231,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	starter := &triggerStarter{conn: connName, submit: mgr, notice: sink.QueueNotice, audit: auditor, link: permalinks(platform.Platform), log: log}
 	intake := chat.NewIntake(newIntakeConfig(intakeParts{
 		conn: conn.Ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
-		notice: sink.QueueNotice, starter: starter, threads: st, replies: st,
+		notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
 	}))
 	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
 	parts.traced("open-intake")
