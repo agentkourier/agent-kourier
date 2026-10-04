@@ -16,9 +16,10 @@ lint: ## Run golangci-lint (also over the e2e, image and testhooks tagged code)
 	$(LINT) run --build-tags e2e,image ./...
 	$(LINT) run --build-tags testhooks ./...
 
-test: ## Run unit tests with the race detector, then the testhooks-tagged ones
+test: ## Run unit tests with the race detector, then the testhooks-tagged ones, then the kind scripts' own (no cluster)
 	go test -race ./...
 	go test -race -tags testhooks ./internal/...
+	hack/kind/netpol_test.sh
 
 build: ## Build bin/courier
 	go build -ldflags "$(LDFLAGS)" -o bin/courier ./cmd/courier
@@ -50,7 +51,7 @@ e2e-fast-down: ## Tear down the fast E2E tier only
 e2e-full-up: ## Bring up the full E2E tier (kind, Substrate, kagent, Dex, mockllm, and the fast tier's doubles)
 	hack/kind/up-full.sh
 
-e2e-full: ## Run the E2E tests in the full tier, as a Job (the tier must be up)
+e2e-full: ## Run the E2E tests in the full tier, as a Job (the tier must be up, with its network policy live)
 	hack/kind/e2e-run.sh full
 
 e2e-full-down: ## Tear down the full E2E tier only
@@ -65,7 +66,7 @@ sandbox-up: ## Dogfood tier on the full tier: courier on a real Slack, a read-on
 sandbox-down: ## Remove the sandbox and put the full tier's own courier back, so that e2e-full works again
 	hack/kind/sandbox/down.sh
 
-sandbox-heal: ## Restart the full tier's egress gateway if its certificate is stale (about a day old); for a long session, sandbox-up does it too
+sandbox-heal: ## Restart the full tier's kindnet if NetworkPolicy is not applied, and its egress gateway if its certificate is stale (about a day old)
 	hack/kind/sandbox/heal.sh
 
 sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a seeded fault's alert, e.g. ALERT=KubePodCrashLooping: it posts to the real alert channel as [kind]

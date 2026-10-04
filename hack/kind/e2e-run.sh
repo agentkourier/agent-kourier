@@ -34,14 +34,23 @@ cluster_exists || die "kind cluster ${CLUSTER} does not exist; bring it up with:
 assert_owned
 assert_context "${tier}"
 refuse_while_sandbox_up
+# On any exit: the scratch build directory (made below), the Job and any probe or token pod (the cluster itself is never torn down
+# here). Set before the network policy check, whose probe pod a Ctrl-C would otherwise leave behind.
+BUILD=
+trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_courier_pod "${DEX_TOKEN_POD:-}"; delete_netpol_probes' EXIT
+trap 'exit 130' INT TERM
+# The full tier's tests lean on its NetworkPolicy, which kindnet stops applying when it loses the API server (lib.sh): refuse
+# a run on a tier where it is not live. The fast tier has no kagent and no NetworkPolicy, so there is nothing to check.
+if [ "${tier}" = full ]; then
+  require_network_policy
+else
+  echo "skip: the ${tier} tier has no kagent and no NetworkPolicy; no network policy to check"
+fi
 # The full tier's agents are reached with the Binding's Dex ID token, which lasts 24 hours: make a fresh one for
 # the run, so that a tier that has been up a day does not fail on a token that expired.
 [ "${tier}" != full ] || refresh_dex_token
 
 BUILD=$(mktemp -d)
-# On any exit: the scratch build directory and the Job (the cluster itself is never torn down here).
-trap 'rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_courier_pod "${DEX_TOKEN_POD:-}"' EXIT
-trap 'exit 130' INT TERM
 
 echo "==> build the test binary"
 case "$(docker info --format '{{.Architecture}}')" in

@@ -358,8 +358,153 @@ settle_full_tier() {
     fi
     [ "${attempt}" -lt 3 ] || break
     echo "the front door did not answer by its Service name (try ${attempt}); restarting kindnet" >&2
-    "${K[@]}" -n kube-system rollout restart ds/kindnet >/dev/null
-    "${K[@]}" -n kube-system rollout status ds/kindnet --timeout=120s >/dev/null
+    restart_kindnet
   done
   die "the front door never answered by its Service name, even after restarting kindnet"
+}
+
+# The full tier's network policy is enforced by kindnet (the node image's CNI, which also runs kube-network-policies), and it can
+# go stale without a sign: when it loses the API server (a host under load: `"Failed to watch" ... TLS handshake timeout`,
+# `http2: client connection lost`), its pod cache freezes and NetworkPolicy stops applying to pods made after that. A courier-labelled
+# pod then reaches the kagent controller on 8083, which controller-admit-frontdoor-only must refuse, and every test that leans on the
+# policy is wrong with nothing saying so (seen 2026-10-03; found 36 hours later). The fast tier has no kagent and no NetworkPolicy,
+# so none of this applies there.
+KINDNET_LOG_SINCE=10m
+NETPOL_PROBE_URL=http://kagent-controller.kagent.svc.cluster.local:8083
+# The control of the probe: a path the policy lets a courier-labelled pod take (the front door's), asked first. A pod that cannot
+# take it either has not been learned by kindnet yet (it logs "netlink receive: no such file or directory" in bursts under load, and a
+# pod it does not know is dropped), and its timeout on the controller would show nothing.
+NETPOL_CONTROL_URL=http://kagent-frontdoor.kagent.svc.cluster.local:4180/ping
+# Seconds between the re-probes after a restart (a restarted kindnet takes a few seconds to learn the pods); tests set it to 0.
+NETPOL_RETRY_SLEEP=5
+
+# kindnet_log_recent: kindnet's own log for the last KINDNET_LOG_SINCE (what a restarted kindnet has not yet written is not here,
+# so a restart clears it). Empty when it cannot be read. Needs K.
+kindnet_log_recent() {
+  "${K[@]}" -n kube-system logs -l app=kindnet --since="${KINDNET_LOG_SINCE}" --tail=2000 2>/dev/null || true
+}
+
+# kindnet_log_failing TEXT: whether a kindnet log shows it has lost the API server.
+kindnet_log_failing() {
+  grep -q -E 'Failed to watch|TLS handshake timeout|http2: client connection lost' <<<"$1"
+}
+
+# NETPOL_PROBE_LABEL marks the probe pods of policy_probe, so that delete_netpol_probes finds them. The probe runs inside command
+# substitutions, which cannot hand a pod name back to the caller's trap, and the pod carries the courier label (a leftover one fails
+# the next e2e-full, which wants exactly one such pod): so the traps delete by this label.
+NETPOL_PROBE_LABEL=courier.agent-courier.dev/probe=netpol
+
+# NETPOL_PROBE_SCRIPT: what the probe pod runs, with the control's URL as $1 and the controller's as $2. It prints one line,
+# PROBE:<door>:<controller>:<connect>, where door and controller are curl's exit statuses (the door's is 0 once an attempt in up to
+# five has been answered, else 1) and connect is the controller request's time_connect, 0.000000 when no connection was made.
+# --connect-timeout is under -m so that a drop is seen as a connection that never started, not as a slow answer.
+# shellcheck disable=SC2016 # it runs in the pod, where its variables are
+NETPOL_PROBE_SCRIPT='
+door=1
+for _ in 1 2 3 4 5; do
+  if curl -sf -m 5 -o /dev/null "$1"; then door=0; break; fi
+  sleep 2
+done
+connect=$(curl -s --connect-timeout 6 -m 8 -o /dev/null -w "%{time_connect}" "$2")
+echo "PROBE:${door}:$?:${connect}"'
+
+# policy_probe_parse: from what the probe pod printed, on stdin, "DOOR CONTROLLER CONNECT" for the first line that is wholly a PROBE
+# line, else nothing. kubectl, when it cannot attach under load, falls back to the pod's logs and can print them twice or cut a copy
+# short and glue it to the next, as with the Dex token (dex_token_from): a line that is not wholly good is no verdict.
+policy_probe_parse() {
+  sed -n 's/^PROBE:\([0-9]\{1,\}\):\([0-9]\{1,\}\):\([0-9.]\{1,\}\)$/\1 \2 \3/p' | head -n 1
+}
+
+# NETPOL_PROBING is set by the callers of network_policy_verdict, in their own shell (not in its command substitution), so that
+# delete_netpol_probes asks the cluster nothing when no probe could have run (a refusal before the check, say).
+NETPOL_PROBING=
+
+# delete_netpol_probes: delete the probe pods, for an EXIT trap (a Ctrl-C skips policy_probe's own delete). Needs K.
+delete_netpol_probes() {
+  [ -n "${NETPOL_PROBING}" ] || return 0
+  "${K[@]}" -n courier delete pod -l "${NETPOL_PROBE_LABEL}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+}
+
+# policy_probe: from a throwaway pod labelled as courier, in namespace courier, "DOOR CONTROLLER CONNECT" (NETPOL_PROBE_SCRIPT): the
+# front door's /ping, the control; then the kagent controller on 8083 for anything: curl exit 28 with no connection made (a drop, the
+# policy working), 0 (an answer of any kind: the policy is not applied), or another (no verdict). Empty if the pod gave none; it is
+# tried three times for that. About ten seconds when the policy works. Callers' EXIT traps run delete_netpol_probes. Needs K.
+policy_probe() {
+  local pod out="" attempt
+  "${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null 2>&1 || true
+  for attempt in 1 2 3; do
+    pod=probe-netpol-$$-${RANDOM}
+    out=$("${K[@]}" -n courier run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" \
+      --labels="app.kubernetes.io/name=courier,${NETPOL_PROBE_LABEL}" --command -- \
+      sh -c "${NETPOL_PROBE_SCRIPT}" sh "${NETPOL_CONTROL_URL}" "${NETPOL_PROBE_URL}" 2>/dev/null | policy_probe_parse) || out=
+    delete_courier_pod "${pod}"
+    [ -z "${out}" ] || break
+  done
+  printf %s "${out}"
+}
+
+# policy_verdict DOOR CONTROLLER CONNECT: what the probe's three numbers say: enforced (the controller was never connected to, and the
+# front door answered, so the pod was known), stale (the controller answered, or accepted the connection and only was slow: a policy
+# that works does not let it that far), or unknown.
+policy_verdict() {
+  case "$2" in
+    28)
+      if [[ $3 =~ ^0(\.0+)?$ ]]; then # no connection was made
+        [ "$1" = 0 ] && echo enforced || echo unknown
+      else
+        echo stale
+      fi
+      ;;
+    0) echo stale ;;
+    *) echo unknown ;;
+  esac
+}
+
+# restart_kindnet: restart ds/kindnet in kube-system and wait for it (120 s). Needs K.
+restart_kindnet() {
+  "${K[@]}" -n kube-system rollout restart ds/kindnet >/dev/null &&
+    "${K[@]}" -n kube-system rollout status ds/kindnet --timeout=120s >/dev/null
+}
+
+# network_policy_verdict: whether the tier's network policy is live, as one line, "enforced: ...", "stale: ..." or "unknown: ...".
+# The probe is the proof, and it always runs: the log is only a cheap sign, and not a sufficient one (the watches that failed in
+# the incident logged about once in three minutes, so a quiet ten is no clean bill, and a frozen cache logs nothing at all).
+# The probe costs about ten seconds (a drop is only ever a timeout). The log names the cause when there is one, tips a probe that
+# gave no verdict (a DNS or connect error while kindnet is failing) to stale, and is only a note beside a policy that does drop.
+# Needs K.
+network_policy_verdict() {
+  local sign="" door ctrl connect
+  if kindnet_log_failing "$(kindnet_log_recent)"; then
+    sign="kindnet's log shows failed watches or TLS handshake timeouts in the last ${KINDNET_LOG_SINCE}: it has lost the API server"
+  fi
+  read -r door ctrl connect <<<"$(policy_probe)" || true # no line: all stay empty
+  case "$(policy_verdict "${door}" "${ctrl}" "${connect}")" in
+    enforced)
+      echo "enforced: a courier-labelled pod reached the front door but got no answer from the kagent controller on 8083, so NetworkPolicy applies${sign:+ (note: ${sign})}"
+      return 0
+      ;;
+    stale)
+      echo "stale: a courier-labelled pod's connection to the kagent controller on 8083 was accepted (curl exit ${ctrl}), which controller-admit-frontdoor-only must refuse: kindnet is not applying NetworkPolicy${sign:+; ${sign}}"
+      return 0
+      ;;
+  esac
+  if [ -n "${sign}" ]; then
+    echo "stale: the probe of the kagent controller on 8083 gave no verdict (curl exit ${ctrl:-none}, front door ${door:-none}), and ${sign}"
+  else
+    echo "unknown: the probe of the kagent controller on 8083 gave no verdict (curl exit ${ctrl:-none}; the front door, its control, gave ${door:-none}); is kagent up, and is kindnet learning new pods?"
+  fi
+}
+
+# require_network_policy: die unless the full tier's network policy is live, saying why and what to run. Needs K.
+require_network_policy() {
+  local line
+  NETPOL_PROBING=1
+  line=$(network_policy_verdict)
+  case "${line%%:*}" in
+    enforced) echo "ok: ${line#*: }" ;;
+    stale) die "the network policy is not live in ${CLUSTER}: ${line#*: }
+  Run: make sandbox-heal (it restarts kindnet), or: ${K[*]} -n kube-system rollout restart ds/kindnet" ;;
+    *) die "cannot tell whether the network policy is live in ${CLUSTER}: ${line#*: }
+  Look at: ${K[*]} -n kagent get pods; then run make sandbox-heal again" ;;
+  esac
 }

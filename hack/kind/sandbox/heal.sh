@@ -9,6 +9,9 @@
 # could not tell, or the restart did not finish. Every call names --context kind-courier-full.
 # Other ate-system pods carry the same 24-hour pod certificates but show no sign of the expiry (see the README); they are not
 # restarted here.
+# It also heals kindnet (ds/kindnet in kube-system), the tier's network plugin: when it has lost the API server, NetworkPolicy stops
+# applying to new pods (lib.sh, "The full tier's network policy"). heal_network_policy restarts it if a courier-labelled pod reaches
+# the kagent controller, which the policy must refuse, and then proves the policy again. up.sh does not heal this one: it refuses.
 
 # EGRESS_MAX_AGE_SECONDS: how old the gateway's pod may be before it is restarted whatever its logs say. Its pod certificates
 # live 24 hours (maxExpirationSeconds 86400 on its PodCertificateRequests) and are read once, at start, so the pod's age is the
@@ -57,6 +60,35 @@ heal_egress_gateway() {
   echo "ok: the egress gateway was restarted and has a new certificate"
 }
 
+# heal_network_policy: restart kindnet in kube-system of the full tier, and wait for it, if its network policy is not live
+# (network_policy_verdict in lib.sh says stale); then probe again, up to three times five seconds apart, since a kindnet that has
+# only just started takes a moment to learn the pods, and die if it still is not. Nothing is restarted for a verdict of unknown:
+# a restart would not help a controller that is down. Needs K, die and network_policy_verdict (lib.sh).
+heal_network_policy() {
+  local line attempt
+  NETPOL_PROBING=1
+  line=$(network_policy_verdict)
+  case "${line%%:*}" in
+    enforced)
+      echo "ok: ${line#*: }"
+      return 0
+      ;;
+    stale) echo "kindnet needs a restart: ${line#*: }" ;;
+    *) die "cannot tell whether the network policy is live in ${CLUSTER}: ${line#*: }; nothing was restarted" ;;
+  esac
+  restart_kindnet ||
+    die "kindnet's restart did not finish in 120 s; look at it: ${K[*]} -n kube-system get pods -l app=kindnet"
+  for attempt in 1 2 3; do
+    line=$(network_policy_verdict)
+    if [ "${line%%:*}" = enforced ]; then
+      echo "ok: kindnet was restarted and the network policy applies again"
+      return 0
+    fi
+    [ "${attempt}" -eq 3 ] || sleep "${NETPOL_RETRY_SLEEP}"
+  done
+  die "kindnet was restarted but the network policy is still not live: ${line#*: }"
+}
+
 # Run, not sourced: what `make sandbox-heal` does.
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   set -eEuo pipefail
@@ -68,8 +100,12 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   for tool in kind kubectl jq; do
     command -v "${tool}" >/dev/null || die "${tool} is required"
   done
+  trap delete_netpol_probes EXIT
+  trap 'exit 130' INT TERM
   cluster_exists || die "kind cluster ${CLUSTER} does not exist; there is no egress gateway to heal (make e2e-full-up)"
   assert_owned
   assert_context full
+  # The gateway first: a kindnet that cannot be healed dies here, and the gateway has been healed all the same.
   heal_egress_gateway
+  heal_network_policy
 fi

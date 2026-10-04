@@ -14,7 +14,7 @@
 # With the alert source, courier's config also gets the alert trial's Binding (courier/alert-trial): it watches that real channel for the [kind]
 # alerts, and only them (README, Run the alert trial). Without the webhook file the config is the dogfood Binding's alone, as it was.
 # Brings the full tier up first if it is not (up-full.sh), replaces its courier with the sandbox's (down.sh puts it back),
-# and is safe to re-run. It also restarts the full tier's egress gateway if its certificate is stale (heal.sh; `make sandbox-heal`).
+# and is safe to re-run. It also restarts the full tier's egress gateway if its certificate is stale, and refuses a tier whose network plugin has stopped applying NetworkPolicy (heal.sh; `make sandbox-heal` heals both).
 # Exit 0: up, and courier is connected to Slack. 1: a refused secrets file, or something failed. 3: deployed and verified, but
 # Slack rejected the tokens (courier exited 1, fatal auth), so courier is not connected.
 set -eEuo pipefail
@@ -49,7 +49,8 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 SCRATCH=
-trap '[ -z "${SCRATCH}" ] || rm -rf "${SCRATCH}"' EXIT
+trap '[ -z "${SCRATCH}" ] || rm -rf "${SCRATCH}"; delete_netpol_probes' EXIT # the probe of the network policy check leaves no pod
+trap 'exit 130' INT TERM
 
 # The secrets file comes first: a wrong one is refused before the cluster, Docker or any tool is asked anything.
 step "secrets file ${SANDBOX_ENV}"
@@ -85,6 +86,11 @@ assert_context full
 "${K[@]}" -n kagent get deploy kagent-controller >/dev/null 2>&1 ||
   die "the full tier is not complete (no kagent controller in ${CTX}); bring it up with: make e2e-full-up"
 "${K[@]}" -n kagent rollout status deploy/kagent-controller --timeout=120s >/dev/null
+
+# kindnet stops applying NetworkPolicy when it loses the API server, which the verify below would only notice late and obscurely; refuse
+# here, saying why (lib.sh). `make sandbox-heal` heals it.
+step "the network policy"
+require_network_policy
 
 # The egress gateway reads its 24-hour certificate once, so a tier that has been up a day turns every actor away (heal.sh).
 step "the egress gateway's certificate"
