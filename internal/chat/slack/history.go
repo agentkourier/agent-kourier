@@ -35,9 +35,6 @@ func (c *Client) History(ctx context.Context, conn, channel string, since time.T
 		return nil, errors.New("slack auth.test: no bot user ID")
 	}
 	me := self{user: auth.UserID, bot: auth.BotID}
-	if since.IsZero() {
-		since = time.Unix(0, 0)
-	}
 	var raw []slackgo.Message
 	if err := c.walk(ctx, channel, "", since, func(msgs []slackgo.Message) bool {
 		raw = append(raw, msgs...)

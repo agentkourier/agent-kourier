@@ -78,9 +78,14 @@ func (c *Client) walk(ctx context.Context, channel, threadTS string, oldest time
 }
 
 // page reads one page of messages and the cursor of the next, empty at the end. It fails when
-// Slack says there is more and gives no cursor.
+// Slack says there is more and gives no cursor. A zero oldest reads from the start of the channel.
 func (c *Client) page(ctx context.Context, channel, threadTS string, oldest time.Time, cursor string) (msgs []slackgo.Message, next string, err error) {
-	from := fmt.Sprintf("%d.%06d", oldest.Unix(), oldest.Nanosecond()/1000)
+	// No lower bound is no oldest parameter: Slack refuses a ts that is not after the epoch (invalid_ts_oldest), which
+	// is what the zero time and the epoch itself format as.
+	from := ""
+	if oldest.Unix() > 0 {
+		from = fmt.Sprintf("%d.%06d", oldest.Unix(), oldest.Nanosecond()/1000)
+	}
 	var more bool
 	if threadTS == "" {
 		var r *slackgo.GetConversationHistoryResponse

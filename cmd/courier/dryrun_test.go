@@ -375,6 +375,15 @@ func TestDryRunShowsHostileAndLongTextSafely(t *testing.T) {
 	}
 }
 
+// With no --since the whole channel is read. Real Slack refuses an oldest that is not after the epoch
+// (invalid_ts_oldest, as the fake now does), so the request must carry none.
+func TestDryRunWithoutSinceReadsTheWholeChannel(t *testing.T) {
+	fake, ts := ownersChannel(t)
+	if r := replay(t, fake, "trial"); len(r.Messages) != len(ts) {
+		t.Errorf("a dry run with no --since read %d messages; want all %d", len(r.Messages), len(ts))
+	}
+}
+
 // --limit keeps the newest messages, --since bounds the reading, and the channel defaults to the Binding's and can be
 // overridden.
 func TestDryRunLimitSinceAndChannel(t *testing.T) {

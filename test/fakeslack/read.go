@@ -3,6 +3,7 @@ package fakeslack
 import (
 	"encoding/base64"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -105,7 +106,10 @@ func tsFilter(form url.Values) (keep func(ts string) bool, code string) {
 	oldest, latest := int64(0), int64(1<<62)
 	var ok bool
 	if v := form.Get("oldest"); v != "" {
-		if oldest, ok = parseTS(v); !ok {
+		// Confirmed in the dogfood of 2026-10-04: Slack refuses an oldest that is not a ts after the epoch, such as
+		// "0.000000" (what the dry run sent for "from the start") with invalid_ts_oldest; the way to ask for the
+		// start of a channel is to send no oldest.
+		if oldest, ok = parseTS(v); !ok || oldest <= 0 || !tsShape.MatchString(v) {
 			return nil, "invalid_ts_oldest"
 		}
 	}
@@ -123,6 +127,9 @@ func tsFilter(form url.Values) (keep func(ts string) bool, code string) {
 		return t > oldest && t < latest
 	}, ""
 }
+
+// tsShape is a Slack ts: seconds, and optionally up to six digits of fraction.
+var tsShape = regexp.MustCompile(`^[0-9]+(\.[0-9]{1,6})?$`)
 
 // parseTS converts "seconds.fraction" to microseconds.
 func parseTS(ts string) (micros int64, ok bool) {

@@ -158,6 +158,18 @@ func TestOldestLatestAndInclusive(t *testing.T) {
 			t.Errorf("history with %+v = %v; want %s", p, err, want)
 		}
 	}
+	// Confirmed in the dogfood of 2026-10-04: an oldest that is not a ts after the epoch is refused, whatever it is
+	// wrong with. "0.000000" is what the dry run sent for "from the start", and the zero time.Time formats as the
+	// negative one; sending no oldest is the way to read it all.
+	for _, oldest := range []string{"0", "0.000000", "-1", "-62135596800.000000", "1.2.3", "1e9", "1.1234567", ".5", " 1"} {
+		p := slack.GetConversationHistoryParameters{ChannelID: "C1", Oldest: oldest}
+		if _, err := api.GetConversationHistory(&p); err == nil || err.Error() != "invalid_ts_oldest" {
+			t.Errorf("history with oldest %q = %v; want invalid_ts_oldest", oldest, err)
+		}
+	}
+	if r := history(t, api, slack.GetConversationHistoryParameters{ChannelID: "C1"}); len(r.Messages) == 0 {
+		t.Errorf("history with no oldest returned nothing; want the whole channel")
+	}
 	for want, p := range map[string]slack.GetConversationRepliesParameters{
 		"invalid_ts_oldest": {ChannelID: "C1", Timestamp: b, Oldest: "soon"},
 		"invalid_ts_latest": {ChannelID: "C1", Timestamp: b, Latest: "later"},
