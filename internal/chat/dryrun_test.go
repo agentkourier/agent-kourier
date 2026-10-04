@@ -131,7 +131,10 @@ func TestReplayAgreesWithTheIntake(t *testing.T) {
 			intakeMatched := h.counter(t, "courier_trigger_matched_total", binding)-matched == 1
 			intakeUnmatched := h.counter(t, "courier_trigger_unmatched_total", binding)-unmatched == 1
 			got := r.Classify(history(id, &m))
-			if want := got.Outcome == chat.ReplayMatched; want != intakeMatched || want == intakeUnmatched {
+			// Both ways: what replay calls matched is what the intake matched, and what it calls unmatched or excluded is
+			// what the intake counted as unmatched, so that a message cannot be lost to some other outcome.
+			replayUnmatched := got.Outcome == chat.ReplayUnmatched || got.Outcome == chat.ReplayExcluded
+			if (got.Outcome == chat.ReplayMatched) != intakeMatched || replayUnmatched != intakeUnmatched {
 				t.Fatalf("%q: replay says %q; the intake matched %t and counted it unmatched %t", m.Title, got.Outcome, intakeMatched, intakeUnmatched)
 			}
 			if began := h.got()[started:]; len(began) == 1 && (began[0].Index != got.Trigger || !maps.Equal(began[0].Fields, got.Fields)) {

@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // canaryToken is a fake bot token that the tests look for in every output and error.
@@ -88,5 +90,27 @@ func TestLoadBotTokenRefusals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A FIFO is refused and does not hang: opening one for reading with no writer blocks until there is one, and nothing
+// watches a context there, so a regression would wait for ever. The test gives it a second.
+func TestLoadBotTokenRefusesAFIFOWithoutHanging(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "token")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := loadBotToken(fifo, env{}.get)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Errorf("loadBotToken = %v; want a refusal that says it is not a regular file", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("loadBotToken hangs on a FIFO")
 	}
 }

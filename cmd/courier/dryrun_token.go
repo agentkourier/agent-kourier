@@ -56,8 +56,12 @@ func readTokenFile(path string) (string, error) {
 		return "", fmt.Errorf("token file: %w", err)
 	} else if fi.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("token file %s is a symbolic link; name the file itself", path)
+	} else if !fi.Mode().IsRegular() { // before the open: a FIFO with no writer would block it for ever
+		return "", fmt.Errorf("token file %s is not a regular file", path)
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // the operator names the token file
+	// O_NONBLOCK: a FIFO put in its place after the Lstat must not block the open either; the check of the open file
+	// below then refuses it. It has no effect on reading a regular file.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // the operator names the token file
 	if errors.Is(err, syscall.ELOOP) {
 		return "", fmt.Errorf("token file %s is a symbolic link; name the file itself", path)
 	}
