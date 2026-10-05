@@ -14,6 +14,8 @@ type (
 	ChatMode string
 	// OutputMode selects how an agent's output is rendered into a thread.
 	OutputMode string
+	// ThreadReplies selects which replies in a thread courier owns are turns (spec 8.2).
+	ThreadReplies string
 )
 
 // Values of the enumerations, plus the only platform and alert source type in v1.
@@ -26,6 +28,9 @@ const (
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
+
+	ThreadRepliesAll     ThreadReplies = "all"
+	ThreadRepliesMention ThreadReplies = "mention"
 
 	PlatformSlack     = "slack"
 	AlertAlertmanager = "alertmanager"
@@ -226,6 +231,15 @@ type ChatBinding struct {
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`
+	// ThreadReplies defaults to all: any person's reply in a thread courier owns is a turn.
+	// With mention, only a reply that mentions courier is a turn, whether a mention or a
+	// trigger started the thread; the next mentioned turn carries the other replies as
+	// context. A typed answer to a pending question that takes text replies (spec 8.4)
+	// needs no mention, and neither does a direct message.
+	// +kubebuilder:validation:Enum=all;mention
+	// +kubebuilder:default=all
+	// +optional
+	ThreadReplies ThreadReplies `json:"threadReplies"`
 	// Triggers decide which events in the channel start or continue a turn (spec 8.2).
 	// Empty means [{type: mention}], which is how a Binding behaved before triggers existed;
 	// Default fills it in.
@@ -311,6 +325,9 @@ func (c *ChatConnection) Default() {
 func (b *Binding) Default() {
 	if b.Spec.Chat.Output == "" {
 		b.Spec.Chat.Output = OutputLive
+	}
+	if b.Spec.Chat.ThreadReplies == "" {
+		b.Spec.Chat.ThreadReplies = ThreadRepliesAll
 	}
 	b.Spec.Chat.defaultTriggers()
 	if b.Spec.Interactions.Timeout.Duration == 0 {

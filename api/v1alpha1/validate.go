@@ -193,6 +193,7 @@ func (b *Binding) Validate() error {
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
+	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
 	p.triggers("spec.chat.triggers", s.Chat.Triggers)
 	if a := s.Alerts; a != nil {
 		p.oneOf("spec.alerts.type", a.Type, AlertAlertmanager)

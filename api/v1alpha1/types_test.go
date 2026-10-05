@@ -55,6 +55,25 @@ func TestSpecExamplesDecode(t *testing.T) {
 	}
 }
 
+func TestDefaultThreadReplies(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in, want ThreadReplies
+	}{
+		{"omitted", "", ThreadRepliesAll},
+		{"all kept", ThreadRepliesAll, ThreadRepliesAll},
+		{"mention kept", ThreadRepliesMention, ThreadRepliesMention},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Binding{Spec: BindingSpec{Chat: ChatBinding{ThreadReplies: tc.in}}}
+			b.Default()
+			if got := b.Spec.Chat.ThreadReplies; got != tc.want {
+				t.Errorf("ThreadReplies after Default = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
 	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute ||
