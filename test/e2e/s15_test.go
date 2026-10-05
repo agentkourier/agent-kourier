@@ -25,12 +25,12 @@ func stormAlert(name, group string) fakeslack.WebhookPost {
 // channel, at the top level, says that three alerts were not investigated, once. The decisions and the limited counter say
 // the same, and the line names no alert.
 //
-// The fast tier only, as S14: the full tier's kagent has no scenario-alert agent. The window slides, so a run within 10
+// The fast tier only, as S14: the full tier's kagent and the AX tier have no scenario-alert agent. The window slides, so a run within 10
 // seconds of an earlier one on the same cluster would meet that run's starts; runs are further apart than that.
 func TestS15_AStormOfAlertsIsHeldToTheLimitsAndGetsOneDigest(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier != "fast" {
-		t.Skip("scenario-alert is a stub agent of the fast tier; the full tier's kagent does not have it")
+		t.Skipf("scenario-alert is a stub agent of the fast tier; the %s tier has no such agent", s.env.Tier)
 	}
 	const (
 		storm   = 6

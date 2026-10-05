@@ -40,12 +40,13 @@ BUILD=
 trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_courier_pod "${DEX_TOKEN_POD:-}"; delete_netpol_probes' EXIT
 trap 'exit 130' INT TERM
 # The full tier's tests lean on its NetworkPolicy, which kindnet stops applying when it loses the API server (lib.sh): refuse
-# a run on a tier where it is not live. The fast tier has no kagent and no NetworkPolicy, so there is nothing to check.
-if [ "${tier}" = full ]; then
-  require_network_policy
-else
-  echo "skip: the ${tier} tier has no kagent and no NetworkPolicy; no network policy to check"
-fi
+# a run on a tier where it is not live. The fast tier has no kagent and no NetworkPolicy, and the AX tier has no kagent
+# controller to fence (its only NetworkPolicy is Substrate's own, which no test relies on), so there is nothing to check.
+case "${tier}" in
+  full) require_network_policy ;;
+  fast) echo "skip: the fast tier has no kagent and no NetworkPolicy; no network policy to check" ;;
+  *) echo "skip: the ${tier} tier has no kagent controller to fence; no network policy to check" ;;
+esac
 # The full tier's agents are reached with the Binding's Dex ID token, which lasts 24 hours: make a fresh one for
 # the run, so that a tier that has been up a day does not fail on a token that expired.
 [ "${tier}" = fast ] || refresh_dex_token

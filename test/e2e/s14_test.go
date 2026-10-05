@@ -34,11 +34,11 @@ func alertPost(state, name, group string) fakeslack.WebhookPost {
 // scenario agent says it saw. The alert firing again is a note in that thread and starts no second turn, and the
 // resolve is a note, "Resolved at". The decisions are counted.
 //
-// The fast tier only: the full tier's kagent has no scenario-alert agent.
+// The fast tier only: the full tier's kagent and the AX tier have no scenario-alert agent.
 func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier != "fast" {
-		t.Skip("scenario-alert is a stub agent of the fast tier; the full tier's kagent does not have it")
+		t.Skipf("scenario-alert is a stub agent of the fast tier; the %s tier has no such agent", s.env.Tier)
 	}
 	// The channel, the stub and courier's database outlive a run, and a key holds its thread for the cooldown, so the
 	// alert is one no earlier run posted.
