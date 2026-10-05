@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Isolated AX/Substrate tier. Never changes courier-full or its live Slack sandbox.
 set -eEuo pipefail
-# shellcheck source-path=SCRIPTDIR
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "${HERE}/../.." && pwd)
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "${HERE}/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=substrate.sh
 . "${HERE}/substrate.sh"
 use_tier ax
 CTX=kind-${CLUSTER}
@@ -17,6 +18,7 @@ BUILD=
 trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; delete_courier_pod "${DEX_TOKEN_POD:-}"' EXIT
 for tool in docker kind kubectl helm curl openssl jq go; do command -v "${tool}" >/dev/null || die "${tool} is required"; done
 docker info >/dev/null 2>&1 || die "Docker is not reachable"
+require_helm4
 if cluster_exists; then
   assert_owned
 else
@@ -79,12 +81,10 @@ load_courier_image
 "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
   --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 "${K[@]}" -n courier create configmap courier-config --from-file="${HERE}/ax/courier/config" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-# Keep pre-main development fixture databases intact: their experimental migration
-# 12 predates main's trace migration. This tier gets a separate database file.
-for manifest in "${HERE}/fast/courier"/*.yaml; do
-  sed 's|/data/courier.db|/data/courier-ax.db|g' "${manifest}" | "${K[@]}" apply -f - >/dev/null
-done
-"${K[@]}" -n courier rollout restart deploy/courier >/dev/null
+# The chart (ci/ax-values.yaml) gives this tier a database file of its own, courier-ax.db, so that a development cluster's older
+# fixture database, whose experimental migration 12 predates main's trace migration, stays intact in the volume. A cluster
+# brought up before the chart has a hand-made Deployment, which install_courier replaces (its volume stays).
+install_courier "${ROOT}/charts/courier/ci/ax-values.yaml"
 "${K[@]}" -n courier rollout status deploy/courier --timeout=180s
 NODE=$(kind get nodes --name "${CLUSTER}")
 assert_never_published

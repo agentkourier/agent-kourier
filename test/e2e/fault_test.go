@@ -14,7 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 )
 
-// Courier's container and the label of its pod (hack/kind/fast/courier/deployment.yaml); its namespace
+// Courier's container and the label of its pod (charts/courier, as the tiers install it); its namespace
 // and Deployment are kube.CourierNamespace and kube.CourierDeployment.
 const (
 	courierContainer = "courier"

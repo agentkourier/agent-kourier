@@ -29,8 +29,8 @@ Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, produc
 | `make sandbox-heal` | Heals two things in the full tier, each only if it needs it, and otherwise says `ok` and changes nothing. First **kindnet** (`ds/kindnet` in `kube-system`, the network plugin): if a courier-labelled probe pod reaches the kagent controller on 8083, which `controller-admit-frontdoor-only` must refuse, it restarts kindnet, waits, and probes again (about 13 s when healthy). Then the **egress gateway** (`deploy/atenet-egress`): if its pod is more than 20 hours old or a log holds `CertificateExpired`, it restarts it and waits. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the gateway's check before it verifies, and **refuses** (does not heal) a stale kindnet. Changes nothing else; needs no secrets file. |
 
 While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
-(`Run: make sandbox-down first`): the sandbox's pod carries the label the front door trusts, which the tier's own courier Deployment and
-its Service also select, so a test run would drive the sandbox's courier. `kubectl logs deploy/courier` is the tier's (scaled to zero);
+(`Run: make sandbox-down first`): the sandbox's pod carries the label the front door trusts (`app.kubernetes.io/name=courier`, which the
+tests find courier's pods by; the tier's Service selects the tier's release alone), so a test run would drive the sandbox's courier. `kubectl logs deploy/courier` is the tier's (scaled to zero);
 use `deploy/courier-sandbox`.
 
 `make` shows all four in its help. The secrets file is `$SANDBOX_ENV`, default `~/.config/agent-courier/sandbox.env`:
@@ -131,8 +131,8 @@ manifest. Direct messages are not enabled (no `im:` scopes or events), so the ap
 | Faults | Namespace `shop`: six small Deployments (below). |
 | Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
 | Agent | `sandbox-sre` (`agent.yaml`), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
-| Courier | `courier-sandbox` in namespace `courier`, the production image `courier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on (and, only with the alert webhook file, a second one on the alert channel; see "Run the alert trial"), through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=courier` label the front door's NetworkPolicy trusts. Its own SQLite volume. The full tier's `courier` goes to zero replicas meanwhile. |
-| Token refresh | A CronJob, `courier-token-refresh`, every hour (below). |
+| Courier | `courier-sandbox` in namespace `courier`, a Helm release of the chart (`charts/courier` with `ci/sandbox-values.yaml`, as release `courier-sandbox`: its Deployment, ServiceAccount, Role and volume), the production image `courier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on (and, only with the alert webhook file, a second one on the alert channel; see "Run the alert trial"), through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=courier` label the front door's NetworkPolicy trusts, and `app.kubernetes.io/instance=courier-sandbox`, which the full tier's courier (release `courier`) does not. Its own SQLite volume. Its config is a ConfigMap `up.sh` makes (`courier-sandbox-config`, with your channel IDs); its Slack tokens and the Dex client's credentials are Secrets in `courier`. The full tier's `courier` goes to zero replicas meanwhile. |
+| Token refresh | A CronJob, `courier-sandbox-token-refresh` (the chart's `tokenRefresh`), every hour (below). |
 
 **The seeded faults**, in `shop`: `checkout` crash-loops after logging `FATAL: cannot resolve payments-db...`; `catalog` has a
 bad image tag (ImagePullBackOff); `recommender` is OOM killed at its 48Mi limit; `inventory`'s Service selects pods that
@@ -163,7 +163,7 @@ sleep, and over lib.sh's `refresh_dex_token` run by hand because that is a manua
 A sleeping laptop can still swallow runs: one that wakes late and then hits its 180 s deadline is over for good (the deadline counts wall time), and a
 run missed asleep starts on wake only if that is within the hour. Hourly keeps the token fresh through any ordinary sleep, but after a closed-lid
 stretch of a day or more the token can have expired (see the first row of "If it does not come up").
-To force one: `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-token-refresh refresh-now`.
+To force one: `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-sandbox-token-refresh refresh-now`.
 
 ## The dogfood checklist
 
@@ -177,7 +177,7 @@ Courier answers in the one channel. Watch it while you try each row (where to lo
 | 4 | **A reply while a turn is running**: send a long question (`check every deployment in shop and tell me about each`), and answer or add to it before it finishes | Courier queues it: a notice says it is queued, and the answer follows when the first turn ends, in order. Never two answers at once, never a lost message. |
 | 5 | **The agent asks the user a question**: `ask me which app to look at, then look at it` (the agent's `ask_user` tool) | A prompt with the question and its choices, as input blocks, and a **Submit** button. Submitting posts the answer back and the agent carries on. Only a channel member can submit, the first press wins, and an incomplete answer gets an ephemeral "answer every question", not a changed prompt. Leave one unanswered: after 30 minutes it times out and says so. If the model will not call `ask_user`, say so here: that is the model, not courier. |
 | 6 | **Inert text, which gates the pilot (WP-04 item (b))**: ask the agent to quote the probe text below, one item per line | Every one stays **inert**: **no** `@channel` or `@here` notification (check with a second account, or the sandbox's notification log), no mention chip, no link rendered, no channel link. The text shows as typed (or escaped) and notifies nobody. Try it three ways: in the streamed reply, in a tool line (ask it to look up a resource named `<!channel>`: the call fails, and the tool line shows the name), and in the Submit prompt (ask it to ask you a question whose text and choices hold `<!channel>`). Also in inline code and a code block. A single notification or live link is a pilot-blocker: record where it came from. |
-| 7 | **Delete the courier pod mid-turn**: send the long question, and once it is streaming, `kubectl --context kind-courier-full -n courier delete pod -l app.kubernetes.io/instance=sandbox` | A new pod starts (the volume survives). Courier **recovers** the turn from its outbox: the thread is completed or ends with an honest notice, and **there is no double post**: no duplicate of a message that was already sent, and no orphaned half-streamed message. Read the new pod's log for the `recover:` lines. |
+| 7 | **Delete the courier pod mid-turn**: send the long question, and once it is streaming, `kubectl --context kind-courier-full -n courier delete pod -l app.kubernetes.io/instance=courier-sandbox` | A new pod starts (the volume survives). Courier **recovers** the turn from its outbox: the thread is completed or ends with an honest notice, and **there is no double post**: no duplicate of a message that was already sent, and no orphaned half-streamed message. Read the new pod's log for the `recover:` lines. |
 | 8 | **Long output**: `list every resource in shop with its full YAML, then describe each pod` | The answer is split or cut cleanly, within Slack's limits, with no truncated markdown or code fence, no error from Slack in the log, and nothing lost without a notice. |
 | 9 | Refusals: `delete the checkout deployment`, `scale checkout to 3`, `show me the Secrets in courier` | The agent says it cannot, says what a person would run, and nothing in `shop` changes. |
 
@@ -495,7 +495,7 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
 
 - **The thread says `the agent's front door refused the Binding's credentials`**, and `courier_credential_rejections_total{binding="sandbox"}` keeps rising:
   the Binding's Dex token expired (after a long sleep or closed lid). Mint a new one with
-  `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-token-refresh refresh-now` (then `kubectl --context kind-courier-full -n courier delete job refresh-now`),
+  `kubectl --context kind-courier-full -n courier create job --from=cronjob/courier-sandbox-token-refresh refresh-now` (then `kubectl --context kind-courier-full -n courier delete job refresh-now`),
   or re-run `make sandbox-up`. Courier reads the Secret on every request, so the next message works.
 - **A thread says the agent "isn't ready to take this message yet" and the notice never clears**, and `kubectl --context kind-courier-full -n kagent logs deploy/kagent-default | grep CertificateExpired`
   finds `atunnel failed to open egress tunnel ... egress gateway rejected CONNECT with 403 Forbidden: actor identity check denied ... CertificateExpired`
@@ -520,7 +520,7 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
 ## Taking it away
 
 `make sandbox-down` takes the full tier's Alertmanager off the alert source (the receiver and the webhook Secret go, and the operator rolls its pod back
-to the tier's own configuration), and deletes the sandbox courier, its volume and config, the Slack and model Secrets, the token refresh, the agent, the
+to the tier's own configuration), and deletes the sandbox courier (its Helm release: the Deployment, volume and token refresh) and its config, the Slack, Dex client and model Secrets, the agent, the
 tool server release and its binding, and namespace `shop`; then it scales the full tier's own courier back to one and waits for it.
 The full tier's Binding token Secret stays, as it is the tier's. Then `make e2e-full` runs as before. Revoke the tokens in the Slack
 app (Install App, Reinstall or Uninstall) when you are done: the file outside the repository is yours to delete.

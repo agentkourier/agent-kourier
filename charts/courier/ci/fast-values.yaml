@@ -1,7 +1,8 @@
-# What the fast kind tier's courier is (hack/kind/fast/courier), as chart values: install it as release "courier" in
-# namespace "courier". The config is the tier's own ConfigMap, made by hack/kind/lib.sh's deploy_courier from the tier's
-# files, and its Secrets are in namespace courier. test/chart proves the rendered Deployment, ServiceAccount, Role,
-# PersistentVolumeClaim and Service match the tier's manifests, and the config it renders from the tier's files loads the same.
+# Courier in the fast and full kind tiers (hack/kind), as chart values: hack/kind/lib.sh's install_courier installs it as
+# release "courier" in namespace "courier". The two tiers run the same courier; they differ in the AgentBackend of the config
+# (the stub agent's in the fast tier, kagent's front door in the full one). The config is the tier's own ConfigMap, made by
+# lib.sh's deploy_courier from the tier's files, and its Secrets are in namespace courier. test/chart pins the objects this
+# renders (the names and labels the tier's scripts and the E2E tests rely on), and loads the config it renders like the tier's.
 image:
   repository: courier-e2e/courier-testhooks # the test image: it has COURIER_SLACK_API_URL, the production one does not
   tag: dev

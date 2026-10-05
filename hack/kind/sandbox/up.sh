@@ -36,6 +36,9 @@ H=(helm --kube-context "${CTX}")
 TOOLS_OCI=oci://ghcr.io/kagent-dev/tools/helm/kagent-tools
 TOOLS_VERSION=0.3.0 # the version kagent 1.0.0-alpha5 depends on; the image is pinned in tools-values.yaml
 TOOLS_SA=system:serviceaccount:kagent:sandbox-tools
+# The sandbox's courier is the chart (charts/courier, ci/sandbox-values.yaml) as this Helm release, in namespace courier: the release name
+# makes the Deployment, the volume and the CronJob's names, and the pod label app.kubernetes.io/instance, which tells it from the tier's courier.
+SANDBOX_RELEASE=courier-sandbox
 SANDBOX_ENV=${SANDBOX_ENV:-${HOME:?HOME is not set}/.config/agent-courier/sandbox.env}
 ALERTMANAGER_WEBHOOK_FILE=${ALERTMANAGER_WEBHOOK_FILE:-${HOME}/.config/agent-courier/alertmanager-webhook-url}
 
@@ -73,6 +76,7 @@ for tool in docker kind kubectl helm jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+require_helm4
 
 # ---------------------------------------------------------------------------------------------------------------------
 step "the full tier (kind cluster ${CLUSTER})"
@@ -137,29 +141,49 @@ if [ "${ALERT_SOURCE}" = 1 ]; then
   "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f "${SBX}/alertmanager/overlay.yaml" >/dev/null
 fi
 
-step "courier: Slack Secret, the Binding's Dex token and its refresh, config, Deployment"
+step "courier: Slack Secret, the Dex client, config, chart, the Binding's Dex token"
 "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 apply_secret courier sandbox-slack botToken=SLACK_BOT_TOKEN appToken=SLACK_APP_TOKEN
-"${K[@]}" apply -f "${SBX}/token-refresh.yaml" >/dev/null
+# The token refresh's credentials for Dex: the fake client and user of full/dex.yaml (which are public, and the same ones the full tier's
+# token exchange and the CronJob always used), in a Secret that the chart's CronJob reads into its environment.
+"${K[@]}" apply -f - >/dev/null <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata: {name: courier-dex-client, namespace: courier}
+stringData: {clientSecret: fake-courier-binding-secret, username: "binding-test@example.test", password: password}
+EOF
+SCRATCH=$(mktemp -d)
+render_courier_config "${SCRATCH}" # the Binding, the connection and the verifying front door; with the alert source, the alert trial's Binding too
+"${K[@]}" -n courier create configmap courier-sandbox-config --from-file="${SCRATCH}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+# A sandbox brought up before the chart has a hand-made Deployment (its pod carries instance=sandbox), its own token refresh (which the chart's
+# replaces, under another name) and the volume, which the chart's release takes over. The Deployment goes first: nothing below waits for a pod
+# that it would otherwise leave running.
+replace_unowned_deployment "${SANDBOX_RELEASE}"
+adopt_into_release "${SANDBOX_RELEASE}" "pvc/${SANDBOX_RELEASE}-data"
+"${K[@]}" -n courier delete cronjob/courier-token-refresh serviceaccount/courier-token-refresh role/courier-token-refresh rolebinding/courier-token-refresh --ignore-not-found >/dev/null
+# The release goes in with its replicas at zero (the chart's kill switch): the CronJob is in place, and nothing is started on the real Slack
+# or taken from the full tier's courier until the Binding's token is proved to be made.
+helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml" --set replicaCount=0
 # The first token is made by the CronJob's own script, as a Job from it, so that the one path that keeps the token fresh is
 # the one that made it and is proved now, not hours into a session; and no throwaway pod is left with the token in its log.
+# (The Secret courier-agent-token is the full tier's, with a token that may be stale; courier reads it on every request, so the Job's
+# is what it sends from the next one.)
 "${K[@]}" -n courier delete job courier-token-refresh-bringup --ignore-not-found >/dev/null
-"${K[@]}" -n courier create job courier-token-refresh-bringup --from=cronjob/courier-token-refresh >/dev/null
+"${K[@]}" -n courier create job courier-token-refresh-bringup --from="cronjob/${SANDBOX_RELEASE}-token-refresh" >/dev/null
 if ! "${K[@]}" -n courier wait --for=condition=Complete job/courier-token-refresh-bringup --timeout=120s >/dev/null; then
-  echo "error: the token refresh Job did not complete (is Dex up? does the Secret courier-agent-token exist?). Its log:" >&2
+  echo "error: the token refresh Job did not complete (is Dex up? do the Secrets courier-agent-token and courier-dex-client exist?). Its log:" >&2
   "${K[@]}" -n courier logs job/courier-token-refresh-bringup --tail=10 >&2 || true
   "${K[@]}" -n courier delete job courier-token-refresh-bringup --ignore-not-found --wait=false >/dev/null || true
   die "no Binding token"
 fi
 "${K[@]}" -n courier delete job courier-token-refresh-bringup >/dev/null
-SCRATCH=$(mktemp -d)
-render_courier_config "${SCRATCH}" # the Binding, the connection and the verifying front door; with the alert source, the alert trial's Binding too
-"${K[@]}" -n courier create configmap courier-sandbox-config --from-file="${SCRATCH}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-# One courier at a time: the full tier's own goes to zero (down.sh puts it back), and the sandbox's starts.
+# One courier at a time: the full tier's own goes to zero (down.sh puts it back), and the sandbox's starts. The tier's pod is the one that does not
+# carry this release's instance label: the hand-made one of a tier brought up before the chart has none at all.
 "${K[@]}" -n courier scale deploy/courier --replicas=0 >/dev/null
-"${K[@]}" -n courier wait --for=delete pod -l 'app.kubernetes.io/name=courier,!app.kubernetes.io/instance' --timeout=90s >/dev/null
-"${K[@]}" apply -f "${SBX}/courier/deployment.yaml" >/dev/null
-"${K[@]}" -n courier rollout restart deploy/courier-sandbox >/dev/null
+"${K[@]}" -n courier wait --for=delete pod -l "app.kubernetes.io/name=courier,app.kubernetes.io/instance!=${SANDBOX_RELEASE}" --timeout=90s >/dev/null
+helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml"
+# The restart picks up a rebuilt image (same tag) or a changed ConfigMap, for which Helm rolls nothing.
+"${K[@]}" -n courier rollout restart "deploy/${SANDBOX_RELEASE}" >/dev/null
 
 # ---------------------------------------------------------------------------------------------------------------------
 step "verify"
@@ -247,7 +271,7 @@ check "the agent sandbox-sre is Ready" "${K[@]}" -n kagent wait --for=condition=
 # again, so the pod crash-loops and says so); any other exit is a failure of the tier.
 SLACK_CONNECTED='slack: socket mode connected'
 courier_state() { # ready | fatal-auth | exit <code> | starting
-  "${K[@]}" -n courier get pods -l app.kubernetes.io/instance=sandbox -o json | jq -r '
+  "${K[@]}" -n courier get pods -l "app.kubernetes.io/instance=${SANDBOX_RELEASE}" -o json | jq -r '
     [.items[] | select(.metadata.deletionTimestamp == null)] | sort_by(.metadata.creationTimestamp) | last // empty
     | .status.containerStatuses[0] // empty
     | if .ready then "ready"
@@ -256,7 +280,7 @@ courier_state() { # ready | fatal-auth | exit <code> | starting
 }
 slack_connected() { # whether the current container has logged that Socket Mode connected
   local log
-  log=$("${K[@]}" -n courier logs deploy/courier-sandbox --tail=1000 2>/dev/null || true)
+  log=$("${K[@]}" -n courier logs deploy/"${SANDBOX_RELEASE}" --tail=1000 2>/dev/null || true)
   [[ ${log} == *"${SLACK_CONNECTED}"* ]]
 }
 deadline=$((SECONDS + 150))
@@ -274,17 +298,17 @@ case "${state}" in
   fatal-auth)
     echo "error: courier exited 1, which is fatal auth: Slack rejected the tokens, and a restart would be rejected again." >&2
     echo "         Fix SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ${SANDBOX_ENV} and re-run make sandbox-up. Its log:" >&2
-    "${K[@]}" -n courier logs deploy/courier-sandbox --tail=6 2>&1 | sed 's/^/         /' >&2 || true
+    "${K[@]}" -n courier logs deploy/"${SANDBOX_RELEASE}" --tail=6 2>&1 | sed 's/^/         /' >&2 || true
     ;;
   ready)
     echo "FAIL: courier is Ready but never connected to Slack (no \"${SLACK_CONNECTED}\" line in 150 s). Its Slack lines:" >&2
-    "${K[@]}" -n courier logs deploy/courier-sandbox --tail=1000 2>&1 | grep 'slack' | tail -10 | sed 's/^/         /' >&2 || true
+    "${K[@]}" -n courier logs deploy/"${SANDBOX_RELEASE}" --tail=1000 2>&1 | grep 'slack' | tail -10 | sed 's/^/         /' >&2 || true
     echo "         'connection attempt failed' lines mean courier cannot reach Slack (egress, DNS or a proxy); see 'Where to look' in hack/kind/sandbox/README.md." >&2
     failed=1
     ;;
   *)
     echo "FAIL: courier is not up (${state}). Its log:" >&2
-    "${K[@]}" -n courier logs deploy/courier-sandbox --tail=10 2>&1 | sed 's/^/         /' >&2 || true
+    "${K[@]}" -n courier logs deploy/"${SANDBOX_RELEASE}" --tail=10 2>&1 | sed 's/^/         /' >&2 || true
     failed=1
     ;;
 esac

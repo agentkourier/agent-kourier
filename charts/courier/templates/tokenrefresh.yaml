@@ -22,7 +22,7 @@
 {{- fail (printf "tokenRefresh patches Secret %s/%s key %q, but no Binding in namespace %s has identity.tokenSecretRef naming it: the token would be refreshed where nothing reads it. Set tokenRefresh.targetNamespace, targetSecret and targetKey to the Binding's" $targetNs $target $targetKey $targetNs) }}
 {{- end }}
 {{- end }}
-# Keeps the Binding's Dex ID token fresh (hack/kind/sandbox/token-refresh.yaml is the same job). It asks Dex for a token and
+# Keeps the Binding's Dex ID token fresh (the sandbox tier installs it: ci/sandbox-values.yaml). It asks Dex for a token and
 # patches it into one Secret (the Binding's, in the Binding's namespace) through the API with its own ServiceAccount, whose
 # Role there allows `patch` on that Secret and nothing else. The Dex credentials come from a Secret into the environment and into curl through --variable, so neither
 # they nor the tokens are on an argument list, in a file of ours, or in anything the Job prints (curl -f drops an error

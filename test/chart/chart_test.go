@@ -1,7 +1,7 @@
 // Package chart_test checks the courier Helm chart (charts/courier) by rendering it with `helm template`: golden files for
-// four values files, the failures a values file must not get past, the properties that make the install safe, and parity with
-// the fast kind tier's manifests (hack/kind/fast/courier), so a chart that drifts from what the tiers run fails `make test`
-// and not an install.
+// five values files, the failures a values file must not get past, the properties that make the install safe, and what the
+// kind tiers' values (ci/fast, ax and sandbox) render, which hack/kind's scripts and the E2E tests rely on, so a chart that
+// drifts from what the tiers run fails `make test` and not an install.
 //
 // The tests need the helm binary, which the kind scripts need too (they find it on PATH, as these do). Without it they skip
 // with a message that says so, so `make test` stays runnable on a machine that has only Go; set COURIER_REQUIRE_HELM=1 and a
@@ -19,9 +19,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -40,10 +42,7 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files from the chart's current output")
 
-const (
-	chartDir = "../../charts/courier"
-	fastDir  = "../../hack/kind/fast/courier/"
-)
+const chartDir = "../../charts/courier"
 
 // helmPath returns the helm binary, or skips the test (fails it with COURIER_REQUIRE_HELM=1) when there is none.
 func helmPath(t *testing.T) string {
@@ -154,7 +153,7 @@ func values(name string) string { return filepath.Join(chartDir, "ci", name+"-va
 func TestLint(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, name := range []string{"minimal", "fast", "sandbox", "full"} {
+	for _, name := range []string{"minimal", "fast", "ax", "sandbox", "full"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if out, err := helm(t.Context(), t, "lint", "--strict", chartDir, "-f", values(name)); err != nil {
@@ -169,6 +168,7 @@ func TestLint(t *testing.T) {
 var goldenCases = []struct{ name, release, namespace string }{
 	{"minimal", "courier", "courier"},
 	{"fast", "courier", "courier"},
+	{"ax", "courier", "courier"},
 	{"sandbox", "courier-sandbox", "courier"},
 	{"full", "courier", "courier-system"},
 }
@@ -257,6 +257,7 @@ func TestRefusals(t *testing.T) {
 		{"a Slack bot token in the values", []string{"--set", image, "--set-json", `config.chatConnections={"c":{"spec":{"platform":"slack","note":"xoxb-0-fake"}}}`}, "looks like a Slack token"},
 		{"a Slack app token in the values", []string{"--set", image, "--set-json", `extraEnv=[{"name":"X","value":"xapp-1-fake"}]`}, "looks like a Slack token"},
 		{"a percentage budget that rounds up to the only pod", []string{"--set", image, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=50%"}, "rounds up to every pod"},
+		{"a database file in another directory", []string{"--set", image, "--set", "persistence.dbFile=../etc/courier.db"}, "persistence.dbFile"},
 		{"a resource with no spec", []string{"--set", image, "--set", "config.bindings.b.namespace=x"}, "spec"},
 	}
 	for _, tc := range tests {
@@ -316,6 +317,9 @@ func TestDeploymentIsSafe(t *testing.T) {
 		t.Errorf("probes %s, %s, %s; want /healthz for startup and liveness and /readyz for readiness (never a Slack check: ready does not mean connected)",
 			c.StartupProbe.HTTPGet.Path, c.LivenessProbe.HTTPGet.Path, c.ReadinessProbe.HTTPGet.Path)
 	}
+	if *pod.TerminationGracePeriodSeconds != 40 || pod.HostNetwork {
+		t.Errorf("grace %d s, hostNetwork %v; want 40 s (past courier's 25 s ordered shutdown) and no host network", *pod.TerminationGracePeriodSeconds, pod.HostNetwork)
+	}
 	if c.Resources.Limits.Memory().IsZero() || c.Resources.Requests.Memory().IsZero() {
 		t.Errorf("resources %+v; want memory requests and limits", c.Resources)
 	}
@@ -341,6 +345,27 @@ func TestKillSwitchAndImageDigest(t *testing.T) {
 	}
 	if got, want := d.Spec.Template.Spec.Containers[0].Image, "registry.example.test/courier@"+digest; got != want {
 		t.Errorf("image %q; want %q: a digest wins over the tag", got, want)
+	}
+}
+
+func TestDatabaseFileIsInTheVolume(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	dbPath := func(args ...string) string {
+		var d appsv1.Deployment
+		find(t, mustRender(t, "courier", "courier", append([]string{"-f", values("minimal")}, args...)...), "Deployment", "courier", &d)
+		for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "COURIER_DB_PATH" {
+				return e.Value
+			}
+		}
+		return ""
+	}
+	if got := dbPath(); got != "/data/courier.db" {
+		t.Errorf("COURIER_DB_PATH %q; want /data/courier.db by default", got)
+	}
+	if got := dbPath("--set", "persistence.dbFile=other.db"); got != "/data/other.db" {
+		t.Errorf("COURIER_DB_PATH %q; want /data/other.db with persistence.dbFile set", got)
 	}
 }
 
@@ -437,8 +462,80 @@ func TestTokenRefreshIsLeastPrivilege(t *testing.T) {
 	if sc := pod.Spec.Containers[0].SecurityContext; sc == nil || !*sc.ReadOnlyRootFilesystem || *sc.AllowPrivilegeEscalation {
 		t.Errorf("refresh container security context %+v; want read-only root and no escalation", sc)
 	}
+	// Hourly (the token lasts 24 hours, and a sleeping laptop swallows runs), no overlap, a bounded run; for the sandbox's Dex, which
+	// patches the Secret the Binding reads.
+	if cj.Spec.Schedule != "0 * * * *" || cj.Spec.ConcurrencyPolicy != batchv1.ForbidConcurrent || cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds == nil {
+		t.Errorf("schedule %q, concurrency %s; want hourly, Forbid, and a deadline", cj.Spec.Schedule, cj.Spec.ConcurrencyPolicy)
+	}
+	refreshEnv := map[string]string{}
+	for _, e := range pod.Spec.Containers[0].Env {
+		refreshEnv[e.Name] = e.Value
+	}
+	for name, want := range map[string]string{
+		"DEX_TOKEN_URL": "http://dex.dex.svc.cluster.local:5556/dex/token", "DEX_CLIENT_ID": "courier-binding",
+		"TARGET_URL": "https://kubernetes.default.svc/api/v1/namespaces/courier/secrets/courier-agent-token", "TARGET_KEY": "token",
+	} {
+		if refreshEnv[name] != want {
+			t.Errorf("env %s = %q; want %q", name, refreshEnv[name], want)
+		}
+	}
 	if without := mustRender(t, "courier", "courier", "-f", values("minimal")); slices.ContainsFunc(without, func(o object) bool { return o.kind() == "CronJob" }) {
 		t.Error("the default install has a token-refresh CronJob; it is for an AgentBackend with a Dex identity only")
+	}
+}
+
+// TestTokenRefreshScriptNeverPrintsTheToken: the script that mints the Binding's token and patches it into the Secret says
+// nothing that holds it. Every line that mentions the token is one of three (the assignment from Dex, the shape check, and
+// the encoding into the pipe to the PATCH), and every line that writes anywhere is one of three: the two fixed messages and
+// that pipe. So nothing else can print, log or file the token, whatever it is written as.
+func TestTokenRefreshScriptNeverPrintsTheToken(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	var cj batchv1.CronJob
+	find(t, mustRender(t, "courier", "courier", "-f", values("sandbox")), "CronJob", "courier-token-refresh", &cj)
+	script := strings.Join(cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Command, "\n")
+	mentionsToken := regexp.MustCompile(`\$\{?tok\b|\btok=`)
+	writes := regexp.MustCompile(`\becho\b|\bprintf\b|\bcat\b|\btee\b|>&|/dev/(stdout|stderr|tty)|\s>\s|>>`)
+	const (
+		assign = `tok=$(curl -sf -m 20 -d grant_type=password -d "client_id=${DEX_CLIENT_ID}" --data-urlencode "scope=${DEX_SCOPE}" \`
+		check  = `case "${tok}" in`
+		encode = `printf '{"data":{"%s":"%s"}}' "${TARGET_KEY}" "$(printf %s "${tok}" | base64 | tr -d '\n')" |`
+		fail   = `*) echo "Dex gave no ID token" >&2; exit 1 ;;`
+		done   = `echo "refreshed the Binding's Dex token"`
+	)
+	seenToken, seenWrites := map[string]bool{}, map[string]bool{}
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if mentionsToken.MatchString(line) {
+			if !slices.Contains([]string{assign, check, encode}, line) {
+				t.Errorf("the refresh script mentions the token in %q; only the assignment, the shape check and the encoding into the PATCH may", line)
+			}
+			seenToken[line] = true
+		}
+		if writes.MatchString(line) {
+			if !slices.Contains([]string{encode, fail, done}, line) {
+				t.Errorf("the refresh script writes in %q; only the two fixed messages and the pipe into the PATCH may", line)
+			}
+			seenWrites[line] = true
+		}
+	}
+	if len(seenToken) != 3 || len(seenWrites) != 3 {
+		t.Errorf("the script mentions the token in %d lines and writes in %d; want 3 and 3 (the allowed lines have changed: update this test with them)", len(seenToken), len(seenWrites))
+	}
+	// curl says nothing it was not asked to: no verbose or trace output, no headers dumped.
+	for _, flag := range []string{"--verbose", "--trace", "--dump-header", " -v ", " -i ", "set -x", "set -o xtrace"} {
+		if strings.Contains(script, flag) {
+			t.Errorf("the refresh script uses %q", flag)
+		}
+	}
+	// The ServiceAccount's token is read from its file by curl, and is on no argument list.
+	for _, want := range []string{"--variable SA@/var/run/secrets/kubernetes.io/serviceaccount/token", `--expand-header "Authorization: Bearer {{SA:trim}}"`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the refresh script lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`Authorization[^\n]*[$]|\$\(cat |serviceaccount/token\)`).MatchString(script) {
+		t.Error("the ServiceAccount's token is put on an argument list")
 	}
 }
 
@@ -549,91 +646,113 @@ func TestExistingClaimAndConfigMapAreNotRendered(t *testing.T) {
 	}
 }
 
-// TestFastTierParity renders the chart with the values that stand for the fast tier's courier and compares what it makes
-// with that tier's manifests, object by object, as typed Kubernetes objects. What differs is listed here, and nothing else may:
-//
-//   - every chart object carries the standard labels (helm.sh/chart, app.kubernetes.io/instance, version, managed-by);
-//   - the Deployment's selector and pod, and the Service's selector, carry app.kubernetes.io/instance as well as
-//     app.kubernetes.io/name, which both tiers' NetworkPolicies trust alone and the pod still has.
-//
-// The tier's config comes from its ConfigMap (existingConfigMap), which TestRenderedConfigLoadsLikeTheTiers covers.
-func TestFastTierParity(t *testing.T) {
+// tierCases are the kind tiers' courier as hack/kind's scripts install it and the E2E tests find it: the values, the release the
+// script names, and what the chart must make of them. Everything here is something a script or a test relies on: the object
+// names (kubectl -n courier get deploy courier, the runner's Role for the Deployment courier), the pod label
+// app.kubernetes.io/name=courier (NetworkPolicies trust it) and app.kubernetes.io/instance=<release> (lib.sh tells the tier's
+// courier from the sandbox's by it), the container name, the image the scripts load, the ConfigMap the scripts make, and
+// the volume.
+var tierCases = []struct {
+	name, values, release string
+	image, pullPolicy     string
+	configMap, claim      string
+	dbPath                string
+	slackAPIOverride      bool     // the testhooks image's COURIER_SLACK_API_URL: the fake Slack
+	objects               []string // Kind/namespace/name of every object
+}{
+	{"fast", "fast", "courier", "courier-e2e/courier-testhooks:dev", "Never", "courier-config", "courier-data", "/data/courier.db", true, []string{
+		"Deployment/courier/courier", "PersistentVolumeClaim/courier/courier-data", "Role/courier/courier-secrets",
+		"RoleBinding/courier/courier-secrets", "Service/courier/courier", "ServiceAccount/courier/courier"}},
+	{"ax", "ax", "courier", "courier-e2e/courier-testhooks:dev", "Never", "courier-config", "courier-data", "/data/courier-ax.db", true, []string{
+		"Deployment/courier/courier", "PersistentVolumeClaim/courier/courier-data", "Role/courier/courier-secrets",
+		"RoleBinding/courier/courier-secrets", "Service/courier/courier", "ServiceAccount/courier/courier"}},
+	{"sandbox", "sandbox", "courier-sandbox", "courier:dev", "Never", "courier-sandbox-config", "courier-sandbox-data", "/data/courier.db", false, []string{
+		"CronJob/courier/courier-sandbox-token-refresh", "Deployment/courier/courier-sandbox", "PersistentVolumeClaim/courier/courier-sandbox-data",
+		"Role/courier/courier-sandbox-secrets", "Role/courier/courier-sandbox-token-refresh", "RoleBinding/courier/courier-sandbox-secrets",
+		"RoleBinding/courier/courier-sandbox-token-refresh", "ServiceAccount/courier/courier-sandbox", "ServiceAccount/courier/courier-sandbox-token-refresh"}},
+}
+
+// TestTierValuesRenderWhatTheScriptsAndTestsRely: each tier's values make the objects the tier's scripts and tests name, and
+// no more (the tier's ConfigMap is its own, made by the script, and so is its Slack Secret). The full tier runs the fast
+// tier's values: they differ in the config the script makes, not in the chart's output.
+func TestTierValuesRenderWhatTheScriptsAndTestsRely(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "courier", "courier", "-f", values("fast"))
-	if want := []string{
-		"Deployment/courier/courier", "PersistentVolumeClaim/courier/courier-data", "Role/courier/courier-secrets",
-		"RoleBinding/courier/courier-secrets", "Service/courier/courier", "ServiceAccount/courier/courier",
-	}; !slices.Equal(kinds(objs), want) {
-		t.Fatalf("the chart rendered %v; want %v, the tier's own objects and no more", kinds(objs), want)
-	}
-
-	// dropInstance removes the one label the chart adds to the selectors, in the typed copy of the chart's object.
-	dropInstance := func(m map[string]string) { delete(m, "app.kubernetes.io/instance") }
-
-	var gotD, wantD appsv1.Deployment
-	find(t, objs, "Deployment", "courier", &gotD)
-	loadFast(t, "deployment.yaml", "Deployment", "courier", &wantD)
-	dropInstance(gotD.Spec.Selector.MatchLabels)
-	dropInstance(gotD.Spec.Template.Labels)
-	if !equality.Semantic.DeepEqual(gotD.Spec, wantD.Spec) {
-		t.Errorf("Deployment spec differs from hack/kind/fast/courier/deployment.yaml:\n%s", diff(t, wantD.Spec, gotD.Spec))
-	}
-
-	var gotS, wantS corev1.ServiceAccount
-	find(t, objs, "ServiceAccount", "courier", &gotS)
-	loadFast(t, "rbac.yaml", "ServiceAccount", "courier", &wantS)
-	if *gotS.AutomountServiceAccountToken != *wantS.AutomountServiceAccountToken {
-		t.Errorf("ServiceAccount automount %v; the tier's is %v", *gotS.AutomountServiceAccountToken, *wantS.AutomountServiceAccountToken)
-	}
-
-	var gotR, wantR rbacv1.Role
-	find(t, objs, "Role", "courier-secrets", &gotR)
-	loadFast(t, "rbac.yaml", "Role", "courier-secrets", &wantR)
-	if !equality.Semantic.DeepEqual(gotR.Rules, wantR.Rules) {
-		t.Errorf("Role rules differ:\n%s", diff(t, wantR.Rules, gotR.Rules))
-	}
-
-	var gotB, wantB rbacv1.RoleBinding
-	find(t, objs, "RoleBinding", "courier-secrets", &gotB)
-	loadFast(t, "rbac.yaml", "RoleBinding", "courier-secrets", &wantB)
-	if !equality.Semantic.DeepEqual(gotB.RoleRef, wantB.RoleRef) || !equality.Semantic.DeepEqual(gotB.Subjects, wantB.Subjects) {
-		t.Errorf("RoleBinding differs:\n%s", diff(t, wantB, gotB))
-	}
-
-	var gotP, wantP corev1.PersistentVolumeClaim
-	find(t, objs, "PersistentVolumeClaim", "courier-data", &gotP)
-	loadFast(t, "pvc.yaml", "PersistentVolumeClaim", "courier-data", &wantP)
-	if !equality.Semantic.DeepEqual(gotP.Spec, wantP.Spec) {
-		t.Errorf("PersistentVolumeClaim spec differs:\n%s", diff(t, wantP.Spec, gotP.Spec))
-	}
-	if _, kept := gotP.Annotations["helm.sh/resource-policy"]; kept {
-		t.Error("the fast tier's volume is kept on uninstall; its values turn that off")
-	}
-
-	var gotV, wantV corev1.Service
-	find(t, objs, "Service", "courier", &gotV)
-	loadFast(t, "service.yaml", "Service", "courier", &wantV)
-	dropInstance(gotV.Spec.Selector)
-	if !equality.Semantic.DeepEqual(gotV.Spec, wantV.Spec) {
-		t.Errorf("Service spec differs:\n%s", diff(t, wantV.Spec, gotV.Spec))
+	for _, tc := range tierCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			objs := mustRender(t, tc.release, "courier", "-f", values(tc.values))
+			if got := kinds(objs); !slices.Equal(got, tc.objects) {
+				t.Fatalf("the chart rendered %v; want %v", got, tc.objects)
+			}
+			deployment := strings.TrimPrefix(tc.objects[slices.IndexFunc(tc.objects, func(o string) bool { return strings.HasPrefix(o, "Deployment/") })], "Deployment/courier/")
+			var d appsv1.Deployment
+			find(t, objs, "Deployment", deployment, &d)
+			pod := d.Spec.Template.Spec
+			wantLabels := map[string]string{"app.kubernetes.io/name": "courier", "app.kubernetes.io/instance": tc.release}
+			if !maps.Equal(d.Spec.Selector.MatchLabels, wantLabels) || !maps.Equal(d.Spec.Template.Labels, wantLabels) {
+				t.Errorf("selector %v, pod labels %v; want %v on both", d.Spec.Selector.MatchLabels, d.Spec.Template.Labels, wantLabels)
+			}
+			if len(pod.Containers) != 1 || pod.Containers[0].Name != "courier" {
+				t.Fatalf("containers %+v; want the one, named courier (the E2E tests arm faults on it)", pod.Containers)
+			}
+			c := pod.Containers[0]
+			if c.Image != tc.image || string(c.ImagePullPolicy) != tc.pullPolicy {
+				t.Errorf("image %q with pull policy %s; want %q, %s (loaded into the cluster by the script, never pulled)", c.Image, c.ImagePullPolicy, tc.image, tc.pullPolicy)
+			}
+			env := map[string]string{}
+			for _, e := range c.Env {
+				env[e.Name] = e.Value
+			}
+			if env["COURIER_DB_PATH"] != tc.dbPath {
+				t.Errorf("COURIER_DB_PATH %q; want %q", env["COURIER_DB_PATH"], tc.dbPath)
+			}
+			if _, has := env["COURIER_SLACK_API_URL"]; has != tc.slackAPIOverride || tc.slackAPIOverride && env["COURIER_SLACK_API_URL"] != "http://fakeslack.e2e.svc.cluster.local:8080/" {
+				t.Errorf("COURIER_SLACK_API_URL %q (set: %v); want it set to the fake Slack only where the tier runs the testhooks image: %v", env["COURIER_SLACK_API_URL"], has, tc.slackAPIOverride)
+			}
+			vols := map[string]corev1.Volume{}
+			for _, v := range pod.Volumes {
+				vols[v.Name] = v
+			}
+			if vols["config"].ConfigMap == nil || vols["config"].ConfigMap.Name != tc.configMap || vols["data"].PersistentVolumeClaim == nil || vols["data"].PersistentVolumeClaim.ClaimName != tc.claim {
+				t.Errorf("volumes %+v; want the ConfigMap %s and the claim %s", vols, tc.configMap, tc.claim)
+			}
+			var pvc corev1.PersistentVolumeClaim
+			find(t, objs, "PersistentVolumeClaim", tc.claim, &pvc)
+			if _, kept := pvc.Annotations["helm.sh/resource-policy"]; kept || pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "standard" {
+				t.Errorf("PVC annotations %v, class %v; want a volume that goes with the tier (not kept on uninstall) on kind's local-path class, standard", pvc.Annotations, pvc.Spec.StorageClassName)
+			}
+		})
 	}
 }
 
-// loadFast reads the object of the kind and name from one of the fast tier's manifest files into into.
-func loadFast(t *testing.T, file, kind, name string, into any) {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(fastDir, file))
-	if err != nil {
-		t.Fatal(err)
+// TestFastTiersServiceIsTheHealthPortAndNothingPublished: the E2E runner reaches courier's health and metrics port through a
+// ClusterIP Service, selecting the tier's release alone, and the Service has that one port: the Alertmanager receiver is not
+// served yet, and its port must not reach the Service until it is.
+func TestFastTiersServiceIsTheHealthPortAndNothingPublished(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	for _, tier := range []string{"fast", "ax"} {
+		t.Run(tier, func(t *testing.T) {
+			t.Parallel()
+			objs := mustRender(t, "courier", "courier", "-f", values(tier))
+			var svc corev1.Service
+			find(t, objs, "Service", "courier", &svc)
+			var d appsv1.Deployment
+			find(t, objs, "Deployment", "courier", &d)
+			c := d.Spec.Template.Spec.Containers[0]
+			if svc.Spec.Type != corev1.ServiceTypeClusterIP || len(svc.Spec.ExternalIPs) != 0 || svc.Spec.LoadBalancerIP != "" ||
+				len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Name != "http" || svc.Spec.Ports[0].Port != 8080 || svc.Spec.Ports[0].NodePort != 0 || svc.Spec.Ports[0].TargetPort.String() != "http" {
+				t.Errorf("Service %+v; want ClusterIP, nothing published, the one port http 8080 to the pod's http", svc.Spec)
+			}
+			if !maps.Equal(svc.Spec.Selector, d.Spec.Selector.MatchLabels) {
+				t.Errorf("Service selector %v; want the Deployment's %v", svc.Spec.Selector, d.Spec.Selector.MatchLabels)
+			}
+			if len(c.Ports) != 1 || c.Ports[0].Name != "http" || c.Ports[0].ContainerPort != 8080 || c.Ports[0].HostPort != 0 || d.Spec.Template.Spec.HostNetwork {
+				t.Errorf("container ports %+v, hostNetwork %v; want only http on 8080, never on the host", c.Ports, d.Spec.Template.Spec.HostNetwork)
+			}
+		})
 	}
-	for _, o := range decode(t, string(raw)) {
-		if o.kind() == kind && o.name() == name {
-			find(t, []object{o}, kind, name, into)
-			return
-		}
-	}
-	t.Fatalf("%s has no %s %s", file, kind, name)
 }
 
 // diff renders two values as YAML for a failure message.

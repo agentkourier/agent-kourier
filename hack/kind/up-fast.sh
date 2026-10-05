@@ -14,9 +14,10 @@
 # change OPERATOR_CHART_VERSION (in lib.sh), run `hack/kind/down.sh fast` first.
 #
 # Courier's testhooks image (courier-e2e/courier-testhooks:dev, built from the repo's Dockerfile) is
-# built and loaded into the cluster, after a check that it carries its label, and run by the Deployment in
-# hack/kind/fast/courier, which the full tier uses too (lib.sh's deploy_courier). The tier is up only when
-# courier is ready and connected to the fake Slack.
+# built and loaded into the cluster, after a check that it carries its label, and run by courier's chart
+# (charts/courier, with ci/fast-values.yaml, which the full tier uses too: lib.sh's deploy_courier and install_courier). On a
+# cluster that still has the hand-made Deployment this tier used to have, re-running this replaces it, keeping the volume.
+# The tier is up only when courier is ready and connected to the fake Slack.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -45,6 +46,7 @@ for tool in docker kind kubectl helm go; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+require_helm4
 
 step "kind cluster ${CLUSTER}"
 if cluster_exists; then
@@ -69,7 +71,7 @@ apply_doubles
 step "courier image ${TESTHOOKS_IMAGE}"
 load_courier_image
 
-step "courier: namespace, config, Secrets, Deployment"
+step "courier: namespace, config, Secrets, chart"
 # Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
 # here and never committed: the Slack tokens carry the prefixes the fake Slack checks, and the agent token
 # is an unsigned JWT with an email claim, which is all the stub agent (-require-auth) asks of a bearer.
@@ -77,7 +79,7 @@ step "courier: namespace, config, Secrets, Deployment"
 b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
 "${K[@]}" -n courier create secret generic courier-agent-token \
   --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"courier-fast@example.test"}')." --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-# The rollout restart in deploy_courier picks up a rebuilt image (same tag) or a changed ConfigMap; verify.sh
+# The rollout restart in install_courier picks up a rebuilt image (same tag) or a changed ConfigMap; verify.sh
 # waits for the rollout and shows courier's log if it does not become ready.
 deploy_courier "${FAST}/courier/config/agentbackend.yaml"
 

@@ -267,24 +267,83 @@ func TestTheTierScriptsRefuseWhileSandboxUp(t *testing.T) {
 	}
 }
 
-// TestUpMakesTheFirstTokenWithTheCronJob: one path makes a token: up.sh runs the CronJob as a Job, waits for it, and deletes it,
-// and does not use lib.sh's refresh_dex_token, whose throwaway pod leaves the token in its log.
+// TestUpMakesTheFirstTokenWithTheCronJob: one path makes a token: up.sh installs the chart (whose CronJob it is) with no replicas, runs the
+// CronJob as a Job, waits for it, and deletes it, and only then takes the full tier's courier down and starts the sandbox's on the real
+// Slack: on a first run, a Job that fails leaves both couriers as they were; on a re-run the sandbox's is at zero until the next run or
+// sandbox-down. It does not use lib.sh's refresh_dex_token, whose throwaway pod leaves the
+// token in its log.
 func TestUpMakesTheFirstTokenWithTheCronJob(t *testing.T) {
 	raw, err := os.ReadFile(sandboxDir + "up.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	create := strings.Index(s, `create job courier-token-refresh-bringup --from=cronjob/courier-token-refresh`)
+	install := strings.Index(s, `helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml" --set replicaCount=0`)
+	create := strings.Index(s, `create job courier-token-refresh-bringup --from="cronjob/${SANDBOX_RELEASE}-token-refresh"`)
 	wait := strings.Index(s, `wait --for=condition=Complete job/courier-token-refresh-bringup`)
 	del := strings.Index(s, `delete job courier-token-refresh-bringup >/dev/null`)
-	apply := strings.Index(s, `apply -f "${SBX}/token-refresh.yaml"`)
-	deploy := strings.Index(s, `apply -f "${SBX}/courier/deployment.yaml"`)
-	if apply <= 0 || apply >= create || create >= wait || wait >= del || del >= deploy {
-		t.Errorf("up.sh: apply the CronJob %d, create the Job %d, wait %d, delete %d, courier's Deployment %d; want that order", apply, create, wait, del, deploy)
+	scale := strings.Index(s, `scale deploy/courier --replicas=0`)
+	start := strings.Index(s, `helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml"
+`)
+	if install <= 0 || install >= create || create >= wait || wait >= del || del >= scale || scale >= start {
+		t.Errorf("up.sh: install with no replicas %d, create the Job %d, wait %d, delete %d, scale the tier's courier down %d, start the sandbox's %d; want that order", install, create, wait, del, scale, start)
 	}
 	if strings.Contains(s, "refresh_dex_token") {
 		t.Error("up.sh uses refresh_dex_token: the CronJob's script is the one path that makes the token")
+	}
+}
+
+// TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod: a sandbox brought up before the chart has a pod that is not the release's
+// (instance=sandbox), which the wait for the tier's own pod to go would never see go; so the hand-made Deployment is replaced first, and
+// the wait for the tier's courier comes after every step that deletes the sandbox's.
+func TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod(t *testing.T) {
+	raw, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	replace := strings.Index(s, `replace_unowned_deployment "${SANDBOX_RELEASE}"`)
+	wait := strings.Index(s, `wait --for=delete pod -l "app.kubernetes.io/name=courier,app.kubernetes.io/instance!=${SANDBOX_RELEASE}"`)
+	if replace <= 0 || wait <= replace {
+		t.Errorf("up.sh: replace the hand-made Deployment %d, wait for the tier's pod to go %d; want that order", replace, wait)
+	}
+}
+
+// TestEveryUpScriptRequiresHelm4: helm_install_courier needs --force-conflicts, which Helm 3 lacks, and it would fail only after the
+// hand-made Deployment was deleted; so each script checks the version in its preflight, before it changes anything.
+func TestEveryUpScriptRequiresHelm4(t *testing.T) {
+	for _, tc := range []struct{ script, after, before string }{
+		{"up-fast.sh", `die "the Docker daemon is not reachable"`, "kind create cluster"},
+		{"up-full.sh", `die "the Docker daemon is not reachable"`, "kind create cluster"},
+		{"up-ax.sh", `die "Docker is not reachable"`, "kind create cluster"},
+		{"sandbox/up.sh", `die "the Docker daemon is not reachable"`, `"${HERE}/up-full.sh"`},
+	} {
+		raw, err := os.ReadFile("../../hack/kind/" + tc.script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(raw)
+		a, r, b := strings.Index(s, tc.after), strings.Index(s, "\nrequire_helm4\n"), strings.Index(s, tc.before)
+		if a < 0 || r < a || b < r {
+			t.Errorf("%s: preflight %d, require_helm4 %d, first change %d; want the check between them", tc.script, a, r, b)
+		}
+	}
+	for version, ok := range map[string]bool{"v4.3.0": true, "v4.0.0-rc.1": true, "v3.17.2": false, "": false} {
+		bin := t.TempDir()
+		stub := "#!/bin/sh\n"
+		if version == "" {
+			stub += "exit 1\n"
+		} else {
+			stub += "echo " + version + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(bin, "helm"), []byte(stub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.CommandContext(t.Context(), "bash", "-c", `. ../../hack/kind/lib.sh; require_helm4`)
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		if err := cmd.Run(); (err == nil) != ok {
+			t.Errorf("helm %q: require_helm4 err %v; want it to pass: %t", version, err, ok)
+		}
 	}
 }
 

@@ -1,60 +1,4 @@
 ---
-apiVersion: v1
-data:
-  agentbackend-agents.yaml: |
-    apiVersion: agentcourier.dev/v1alpha1
-    kind: AgentBackend
-    metadata:
-      name: agents
-      namespace: courier
-    spec:
-      dialect: kagent-v1
-      url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
-  binding-sandbox.yaml: |
-    apiVersion: agentcourier.dev/v1alpha1
-    kind: Binding
-    metadata:
-      name: sandbox
-      namespace: courier
-    spec:
-      agent:
-        backendRef:
-          name: agents
-        name: sandbox-sre
-        namespace: kagent
-      chat:
-        channel: C0SANDBOX01
-        connectionRef:
-          name: sandbox-slack
-        output: live
-      identity:
-        tokenSecretRef:
-          name: courier-agent-token
-        userId: courier-sandbox
-      interactions:
-        askUser: true
-  chatconnection-sandbox-slack.yaml: |
-    apiVersion: agentcourier.dev/v1alpha1
-    kind: ChatConnection
-    metadata:
-      name: sandbox-slack
-      namespace: courier
-    spec:
-      credentialsSecretRef:
-        name: sandbox-slack
-      mode: socket
-      platform: slack
-kind: ConfigMap
-metadata:
-  labels:
-    app.kubernetes.io/instance: courier-sandbox
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
-    app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier-sandbox-config
-  namespace: courier
----
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -174,8 +118,6 @@ spec:
     type: Recreate
   template:
     metadata:
-      annotations:
-        checksum/config: 86cb366f70563c69f276f4c178e8f5089876b3f71c6f8d7e83ae803634f0e484
       labels:
         app.kubernetes.io/instance: courier-sandbox
         app.kubernetes.io/name: courier
@@ -256,8 +198,6 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  annotations:
-    helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: courier-sandbox
     app.kubernetes.io/managed-by: Helm
@@ -272,6 +212,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
+  storageClassName: standard
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

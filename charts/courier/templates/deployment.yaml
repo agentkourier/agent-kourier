@@ -48,7 +48,7 @@ spec:
           # cmd/courier takes no arguments: it is configured by this environment.
           env:
             - {name: COURIER_CONFIG_DIR, value: /etc/courier}
-            - {name: COURIER_DB_PATH, value: /data/courier.db}
+            - {name: COURIER_DB_PATH, value: {{ printf "/data/%s" .Values.persistence.dbFile | quote }}}
             - {name: COURIER_LISTEN, value: {{ printf ":%d" (int .Values.listen.port) | quote }}}
             - {name: COURIER_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
             - {name: COURIER_KLOG_V, value: {{ .Values.klogVerbosity | quote }}}

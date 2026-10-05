@@ -14,8 +14,9 @@ helm install courier ./charts/courier -n courier-system --create-namespace -f my
 
 From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a
 ChatConnection. Check any values file with `helm lint --strict -f my-values.yaml charts/courier` and
-`helm template` before installing. `ci/` holds the values the tests render: `minimal`, `sandbox` (the sandbox tier's courier
-with the token-refresh CronJob), `full` (everything switched on) and `fast` (the fast kind tier's courier).
+`helm template` before installing. `ci/` holds the values the tests render: `minimal`, `full` (everything switched on), and the kind tiers' courier, which
+`hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `ax` (the AX tier's, with a database file of its own)
+and `sandbox` (the sandbox tier's, with the token-refresh CronJob).
 
 ## What it installs
 
@@ -94,7 +95,7 @@ it, and queued alerts post later. Watch `courier_chat_connected`.
 
 ## Token refresh
 
-For an AgentBackend whose front door verifies Dex ID tokens (the sandbox tier's, hack/kind/sandbox/token-refresh.yaml),
+For an AgentBackend whose front door verifies Dex ID tokens (the sandbox tier's, `ci/sandbox-values.yaml`),
 `tokenRefresh.enabled` adds an hourly CronJob that asks Dex for a token (the password grant) and patches it into the Secret named
 by `targetSecret` and `targetKey` in `targetNamespace` (default: the release's): the Binding's `identity.tokenSecretRef` and the
 Binding's namespace. With the config inline the render fails unless some Binding in that namespace names that Secret and key, so
@@ -108,25 +109,31 @@ kubectl -n <ns> create job --from=cronjob/<fullname>-token-refresh first-token
 
 ## Moving from hand-made manifests
 
-The kind tiers (`hack/kind/*/courier`) and any hand-made Deployment select pods by `app.kubernetes.io/name` alone; the chart's
-selector adds `app.kubernetes.io/instance`, and a Deployment's selector cannot change. So delete the old Deployment first
-(courier stops; sessions and the outbox are on the volume), then install the chart pointing at the volume you have:
+The kind tiers used to apply hand-made manifests (a Deployment that selected pods by `app.kubernetes.io/name` alone). The chart's
+selector adds `app.kubernetes.io/instance`, and a Deployment's selector cannot change, so the old Deployment is deleted first (courier
+stops; sessions and the outbox are on the volume), and the chart is installed over the rest. Helm refuses to manage an object it did
+not create unless it is marked as the release's, so the objects the chart also makes (the ServiceAccount, Role, RoleBinding, Service
+and volume claim) are marked, not deleted. `hack/kind/lib.sh` does exactly this (`replace_unowned_deployment`, `adopt_into_release`), so that
+re-running a tier's bring-up is how a running tier moves over. By hand, for release `courier` in namespace `courier`:
 
 ```sh
-kubectl -n courier delete deploy courier
-helm install courier ./charts/courier -n courier -f my-values.yaml --set persistence.existingClaim=courier-data
+kubectl -n courier delete deploy courier --cascade=foreground
+for obj in serviceaccount/courier role/courier-secrets rolebinding/courier-secrets service/courier pvc/courier-data; do
+  kubectl -n courier annotate --overwrite "$obj" meta.helm.sh/release-name=courier meta.helm.sh/release-namespace=courier
+  kubectl -n courier label --overwrite "$obj" app.kubernetes.io/managed-by=Helm
+done
+helm install courier ./charts/courier -n courier -f my-values.yaml
 ```
 
-Leave `courier-data` (or yours) out of the chart that way and nothing it manages can delete it. Keep the old ServiceAccount, Role and
-ConfigMap names out of the way too, or let the chart take them over by deleting them first; helm refuses to adopt objects it did not make. A
-ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces` naming where its Secrets are.
+Or leave the volume out of the release: `--set persistence.existingClaim=courier-data`, and nothing the chart manages can delete it.
+A ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces` naming where its Secrets are.
 
 ## Tests
 
-`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for the four `ci/` values files, the
+`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for the five `ci/` values files, the
 refusals (replicas above 1, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
-properties above, and parity with the fast tier's manifests (`hack/kind/fast/courier`) and with its config, which is loaded
-through courier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;
+properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
+on), and the fast and AX tiers' config, which is loaded through courier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;
 set `COURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping. After a deliberate chart change:
 `go test ./test/chart -update`, and read the diff.
 

@@ -43,7 +43,9 @@ for tool in docker kind kubectl helm curl openssl jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+require_helm4
 
+# shellcheck source-path=SCRIPTDIR source=substrate.sh
 . "${HERE}/substrate.sh"
 
 step "kind cluster ${CLUSTER}"
@@ -129,11 +131,12 @@ apply_doubles
 step "scenario agents: the scenario model, its tool server, one kagent agent per scenario"
 deploy_scenario_agents
 
-step "courier: image, the Binding's Dex token, config, Deployment"
-# Courier is the fast tier's Deployment (hack/kind/fast/courier), running the testhooks image against the fake
+step "courier: image, the Binding's Dex token, config, chart"
+# Courier is the chart (charts/courier, ci/fast-values.yaml, as the fast tier has it), running the testhooks image against the fake
 # Slack in e2e, with the fast tier's Bindings and an AgentBackend for kagent's front door. Its pod carries the
 # label that frontdoor-admit-courier-only trusts, which no other pod has. The Binding's token is an ID token from
-# Dex, which expires after 24 hours (refresh_dex_token; e2e-run.sh refreshes it before each run).
+# Dex, which expires after 24 hours (refresh_dex_token; e2e-run.sh refreshes it before each run). A tier brought up before the
+# chart has a hand-made Deployment, which deploy_courier replaces, keeping the volume.
 load_courier_image
 refresh_dex_token
 deploy_courier "${FULL}/courier/agentbackend.yaml"

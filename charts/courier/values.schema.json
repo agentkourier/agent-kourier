@@ -47,6 +47,7 @@
       "additionalProperties": false,
       "properties": {
         "existingClaim": {"type": "string"},
+        "dbFile": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
         "size": {"type": "string"},
         "storageClassName": {"type": "string"},
         "accessModes": {"type": "array", "items": {"type": "string"}},

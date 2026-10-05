@@ -1,7 +1,7 @@
 # The one Binding of the sandbox: the channel the bot was invited to (up.sh replaces __SLACK_CHANNEL_ID__ with
 # SLACK_CHANNEL_ID, which it checked against ^[CG][A-Z0-9]+$ first) answered by sandbox-sre, through the full tier's
 # verifying front door (the AgentBackend `agents`, hack/kind/full/courier/agentbackend.yaml, which up.sh adds to this
-# config) with the Binding identity's Dex ID token (the Secret courier-agent-token, kept fresh by token-refresh.yaml).
+# config) with the Binding identity's Dex ID token (the Secret courier-agent-token, kept fresh by the chart's tokenRefresh CronJob, ci/sandbox-values.yaml).
 # Output is live: the reply streams into the thread. askUser lets the agent ask the person a question (the Submit button);
 # tool approvals stay off, as in Phase 1: the agent has no tool that needs one.
 apiVersion: agentcourier.dev/v1alpha1

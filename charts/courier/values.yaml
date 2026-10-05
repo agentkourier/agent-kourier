@@ -82,6 +82,8 @@ config:
 persistence:
   # Use a claim you manage instead of creating one.
   existingClaim: ""
+  # The SQLite file in the volume (COURIER_DB_PATH is /data/<dbFile>). Change it to start a fresh database beside an old one.
+  dbFile: courier.db
   size: 1Gi
   # Empty is the cluster's default class; "-" is an explicitly empty one.
   storageClassName: ""
@@ -182,7 +184,7 @@ podDisruptionBudget:
   maxUnavailable: null
 
 # Keeps a Binding's identity token fresh when the AgentBackend sits behind a verifying front door that takes Dex ID tokens
-# (the sandbox tier does this, hack/kind/sandbox/token-refresh.yaml). An hourly CronJob asks Dex for a token with the
+# (the sandbox tier does this, with ci/sandbox-values.yaml). An hourly CronJob asks Dex for a token with the
 # password grant and patches it into one Secret through the API, with its own ServiceAccount, whose Role allows `patch` on
 # that Secret and nothing else. The Dex credentials are read from a Secret into the Job's environment; they never pass
 # through an argument list or this file.

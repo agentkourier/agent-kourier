@@ -10,6 +10,10 @@ refused despite ready pods, recreate this test tier with `make e2e-ax-down` foll
 by `make e2e-ax-up`. This is separate from the actor suspend/resume and DATA
 cold-boot operations covered by S2.
 
+Courier is installed by its Helm chart (`charts/courier`, `ci/ax-values.yaml`: the testhooks image on the fake Slack, the config of
+`hack/kind/ax/courier/config` in a ConfigMap that `up-ax.sh` makes, and a database file of its own, `courier-ax.db`). Re-running
+`make e2e-ax-up` on a cluster brought up before the chart replaces its hand-made Deployment and keeps its volume.
+
 The tier runs the unmodified AX revision pinned in `examples/ax/go.mod`, Redis,
 Substrate, Dex, and the same persistent ADK/A2A server as the Bedrock reference.
 A separate test binary supplies deterministic model responses. The production

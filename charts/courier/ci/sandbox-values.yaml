@@ -1,43 +1,26 @@
 # The sandbox tier's courier (hack/kind/sandbox): the production image against a real Slack, answered by an agent behind the
-# full tier's verifying front door with a Dex ID token that an hourly CronJob keeps fresh. Placeholders stand in for the
-# channel and for anything that is the operator's.
+# full tier's verifying front door with a Dex ID token that an hourly CronJob keeps fresh. Installed as release
+# "courier-sandbox" in namespace "courier", on the full tier's cluster, beside (never with) the full tier's own courier.
+# The config is the sandbox's own ConfigMap, which up.sh makes from the files of hack/kind/sandbox/courier with the operator's
+# channel IDs filled in, so none is in this file; its Secrets (the Slack tokens, the Dex client) are in namespace courier too.
 image:
-  repository: courier
+  repository: courier # what `make image` builds: the production image, which up.sh loads into the cluster
   tag: dev
   pullPolicy: Never
 
 config:
-  chatConnections:
-    sandbox-slack:
-      spec:
-        platform: slack
-        mode: socket
-        credentialsSecretRef: {name: sandbox-slack} # botToken and appToken
-  agentBackends:
-    agents:
-      spec:
-        dialect: kagent-v1
-        url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
-  bindings:
-    sandbox:
-      spec:
-        agent:
-          backendRef: {name: agents}
-          namespace: kagent
-          name: sandbox-sre
-        identity:
-          userId: courier-sandbox
-          tokenSecretRef: {name: courier-agent-token}
-        chat:
-          connectionRef: {name: sandbox-slack}
-          channel: C0SANDBOX01
-          output: live
-        interactions: {askUser: true}
+  existingConfigMap: courier-sandbox-config
+rbac:
+  secretNamespaces: [courier]
+
+persistence:
+  storageClassName: standard
+  retainOnUninstall: false # the sandbox's sessions and outbox go with it (down.sh)
 
 tokenRefresh:
   enabled: true
-  targetSecret: courier-agent-token
+  targetSecret: courier-agent-token # the Binding's identity.tokenSecretRef, made by the full tier; the namespace is the release's
   dex:
     tokenURL: http://dex.dex.svc.cluster.local:5556/dex/token
     clientId: courier-binding
-    credentialsSecret: courier-dex-client # clientSecret, username, password
+    credentialsSecret: courier-dex-client # clientSecret, username, password: made by up.sh (the full tier's fake Dex client)

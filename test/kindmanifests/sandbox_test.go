@@ -2,7 +2,6 @@ package kindmanifests_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/yaml"
@@ -27,7 +25,7 @@ import (
 // courier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go.
 
 // manifestFiles are the Kubernetes manifests of the sandbox, which must parse; some carry a placeholder that up.sh fills in.
-var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent.yaml", "token-refresh.yaml", "courier/deployment.yaml",
+var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent.yaml",
 	"courier/config/chatconnection.yaml", "courier/config/binding.yaml", "courier/alert-trial/alert-binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
 
 // sandboxObjects returns every object of the given kind in the sandbox's file, as a map of its name.
@@ -173,57 +171,6 @@ func TestSandboxBindingAndConnection(t *testing.T) {
 	// Without the Secrets, as before they are made, the config does not resolve.
 	if _, err := config.Resolve(t.Context(), set, secrets{"courier/courier-agent-token": {"token"}}); err == nil {
 		t.Error("config resolved without the Slack Secret")
-	}
-}
-
-// TestSandboxCourier: the production image, not the testhooks one; no test hook; the pod label the front door trusts;
-// a Deployment and a volume of its own, so that the full tier's courier and the sandbox's never share one.
-func TestSandboxCourier(t *testing.T) {
-	d := sandboxObjects[appsv1.Deployment](t, "courier/deployment.yaml", "Deployment")["courier-sandbox"]
-	pod := d.Spec.Template.Spec
-	if len(pod.Containers) != 1 {
-		t.Fatalf("%d containers, want 1", len(pod.Containers))
-	}
-	c := pod.Containers[0]
-	if c.Image != "courier:dev" || c.ImagePullPolicy != corev1.PullNever || strings.Contains(c.Image, "testhooks") {
-		t.Errorf("image %q with pull policy %s; want the production image courier:dev, loaded and never pulled", c.Image, c.ImagePullPolicy)
-	}
-	for _, e := range c.Env {
-		if strings.Contains(e.Name, "SLACK") || e.ValueFrom != nil || strings.Contains(e.Value, "fakeslack") {
-			t.Errorf("env %s: the production image has no Slack API override, and nothing comes from a Secret by env", e.Name)
-		}
-	}
-	if d.Spec.Template.Labels["app.kubernetes.io/name"] != "courier" || d.Spec.Selector.MatchLabels["app.kubernetes.io/instance"] != "sandbox" ||
-		d.Spec.Template.Labels["app.kubernetes.io/instance"] != "sandbox" {
-		t.Errorf("labels %v, selector %v; want app.kubernetes.io/name=courier (the front door's NetworkPolicy trusts it) and instance=sandbox, which the full tier's courier lacks",
-			d.Spec.Template.Labels, d.Spec.Selector.MatchLabels)
-	}
-	if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType || *d.Spec.Replicas != 1 {
-		t.Errorf("strategy %s, %d replicas; want Recreate and one: two pods must never share the SQLite volume", d.Spec.Strategy.Type, *d.Spec.Replicas)
-	}
-	if pod.ServiceAccountName != "courier" {
-		t.Errorf("ServiceAccount %q; want courier, whose Role lists and watches Secrets in its namespace", pod.ServiceAccountName)
-	}
-	sc := c.SecurityContext
-	if sc == nil || *sc.AllowPrivilegeEscalation || !*sc.ReadOnlyRootFilesystem || pod.SecurityContext == nil || !*pod.SecurityContext.RunAsNonRoot || *pod.SecurityContext.RunAsUser != 65532 {
-		t.Errorf("security contexts %+v and %+v; want non-root 65532, a read-only root, no escalation", pod.SecurityContext, sc)
-	}
-	vols := map[string]corev1.VolumeSource{}
-	for _, v := range pod.Volumes {
-		vols[v.Name] = v.VolumeSource
-	}
-	if vols["config"].ConfigMap == nil || vols["config"].ConfigMap.Name != "courier-sandbox-config" || vols["data"].PersistentVolumeClaim == nil || vols["data"].PersistentVolumeClaim.ClaimName != "courier-sandbox-data" {
-		t.Errorf("volumes %+v; want the sandbox's own ConfigMap and PVC, never the full tier's courier-config and courier-data", vols)
-	}
-	pvc := sandboxObjects[corev1.PersistentVolumeClaim](t, "courier/deployment.yaml", "PersistentVolumeClaim")["courier-sandbox-data"]
-	if pvc.Namespace != "courier" || *pvc.Spec.StorageClassName != "standard" {
-		t.Errorf("PVC %s on %v; want courier-sandbox-data in courier on the standard class", pvc.Name, pvc.Spec.StorageClassName)
-	}
-	// The same listen address, port and probes as the full tier's, so that the metrics port is the same.
-	fast := appsv1.Deployment{}
-	load(t, courierDir+"deployment.yaml", "Deployment", &fast)
-	if c.StartupProbe.HTTPGet.Path != "/healthz" || c.ReadinessProbe.HTTPGet.Path != "/readyz" || c.Ports[0].ContainerPort != fast.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort {
-		t.Errorf("probes %+v, %+v on ports %+v; want the fast tier's", c.StartupProbe, c.ReadinessProbe, c.Ports)
 	}
 }
 
@@ -502,80 +449,6 @@ func TestSandboxImagesArePinned(t *testing.T) {
 		if !strings.Contains(img, "@sha256:") && name != "catalog" {
 			t.Errorf("%s runs %q, unpinned; only catalog's is allowed to be", name, img)
 		}
-	}
-}
-
-// TestSandboxTokenRefresh: a CronJob keeps the Binding's Dex token fresh from inside the cluster, with a ServiceAccount that can
-// patch that one Secret and nothing else, and a pod that does not carry the courier label the front door trusts.
-func TestSandboxTokenRefresh(t *testing.T) {
-	cj := sandboxObjects[batchv1.CronJob](t, "token-refresh.yaml", "CronJob")["courier-token-refresh"]
-	role := sandboxObjects[rbacv1.Role](t, "token-refresh.yaml", "Role")["courier-token-refresh"]
-	if len(role.Rules) != 1 || fmt.Sprint(role.Rules[0].Resources, role.Rules[0].Verbs, role.Rules[0].ResourceNames) != "[secrets] [patch] [courier-agent-token]" {
-		t.Errorf("rules %+v; want patch on the Secret courier-agent-token and nothing else", role.Rules)
-	}
-	rb := sandboxObjects[rbacv1.RoleBinding](t, "token-refresh.yaml", "RoleBinding")["courier-token-refresh"]
-	pod := cj.Spec.JobTemplate.Spec.Template
-	if rb.RoleRef.Name != role.Name || rb.Subjects[0].Name != pod.Spec.ServiceAccountName {
-		t.Errorf("the Role is bound to %v, and the pod runs as %s", rb.Subjects, pod.Spec.ServiceAccountName)
-	}
-	if _, ok := pod.Labels["app.kubernetes.io/name"]; ok {
-		t.Errorf("the pod carries labels %v; it must not carry the courier label the front door trusts", pod.Labels)
-	}
-	// Hourly (the token lasts 24 hours, and a sleeping laptop swallows runs), no overlap, a bounded run.
-	if cj.Spec.Schedule != "0 * * * *" || cj.Spec.ConcurrencyPolicy != batchv1.ForbidConcurrent || cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds == nil {
-		t.Errorf("schedule %q, concurrency %s; want hourly, Forbid, and a deadline", cj.Spec.Schedule, cj.Spec.ConcurrencyPolicy)
-	}
-	script := strings.Join(pod.Spec.Containers[0].Command, "\n")
-	for _, want := range []string{"http://dex.dex.svc.cluster.local:5556/dex/token", "client_id=courier-binding", "merge-patch+json", "secrets/courier-agent-token", "--data-binary @-", "-o /dev/null", "curl -sf"} {
-		if !strings.Contains(script, want) {
-			t.Errorf("the refresh script lacks %q", want)
-		}
-	}
-	// The token is never printed. Every line that mentions it is one of three (the assignment from Dex, the shape check, and
-	// the encoding into the pipe to the PATCH), and every line that writes anywhere is one of three: the two fixed
-	// messages and that pipe. So nothing else can print, log or file the token, whatever it is written as.
-	mentionsToken := regexp.MustCompile(`\$\{?tok\b|\btok=`)
-	writes := regexp.MustCompile(`\becho\b|\bprintf\b|\bcat\b|\btee\b|>&|/dev/(stdout|stderr|tty)|\s>\s|>>`)
-	const (
-		assign = `tok=$(curl -sf -m 20 -d grant_type=password -d client_id=courier-binding -d client_secret=fake-courier-binding-secret \`
-		check  = `case "${tok}" in`
-		encode = `printf '{"data":{"token":"%s"}}' "$(printf %s "${tok}" | base64 | tr -d '\n')" |`
-		fail   = `*) echo "Dex gave no ID token" >&2; exit 1 ;;`
-		done   = `echo "refreshed the Binding's Dex token"`
-	)
-	seenToken, seenWrites := map[string]bool{}, map[string]bool{}
-	for _, line := range strings.Split(script, "\n") {
-		line = strings.TrimSpace(line)
-		if mentionsToken.MatchString(line) {
-			if !slices.Contains([]string{assign, check, encode}, line) {
-				t.Errorf("the refresh script mentions the token in %q; only the assignment, the shape check and the encoding into the PATCH may", line)
-			}
-			seenToken[line] = true
-		}
-		if writes.MatchString(line) {
-			if !slices.Contains([]string{encode, fail, done}, line) {
-				t.Errorf("the refresh script writes in %q; only the two fixed messages and the pipe into the PATCH may", line)
-			}
-			seenWrites[line] = true
-		}
-	}
-	if len(seenToken) != 3 || len(seenWrites) != 3 {
-		t.Errorf("the script mentions the token in %d lines and writes in %d; want 3 and 3 (the allowed lines have changed: update this test with them)", len(seenToken), len(seenWrites))
-	}
-	// curl says nothing it was not asked to: no verbose or trace output, no headers dumped.
-	for _, flag := range []string{"--verbose", "--trace", "--dump-header", " -v ", " -i ", "set -x", "set -o xtrace"} {
-		if strings.Contains(script, flag) {
-			t.Errorf("the refresh script uses %q", flag)
-		}
-	}
-	// The ServiceAccount's token is read from its file by curl, and is on no argument list.
-	for _, want := range []string{"--variable SA@/var/run/secrets/kubernetes.io/serviceaccount/token", `--expand-header "Authorization: Bearer {{SA:trim}}"`} {
-		if !strings.Contains(script, want) {
-			t.Errorf("the refresh script lacks %q", want)
-		}
-	}
-	if regexp.MustCompile(`Authorization[^\n]*[$]|\$\(cat |serviceaccount/token\)`).MatchString(script) {
-		t.Error("the ServiceAccount's token is put on an argument list")
 	}
 }
 

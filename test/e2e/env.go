@@ -12,7 +12,7 @@ type Env struct {
 	StubURL         string // the stub agent: /agents/ and /_control/release/
 	AlertmanagerURL string // Alertmanager's API
 	// CourierURL is courier's health and metrics port: the fast tier's Service of that port alone
-	// (hack/kind/fast/courier/service.yaml). The Alertmanager receiver is not behind it.
+	// (the chart's Service, with charts/courier/ci/fast-values.yaml). The Alertmanager receiver is not behind it.
 	CourierURL string
 	// Tier is the tier the runner is in, "fast" or "full", from E2E_TIER (hack/kind/e2e-run.sh sets it). It
 	// has no default: a test that needs it must fail when it is missing, not guess.

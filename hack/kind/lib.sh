@@ -79,14 +79,14 @@ assert_owned() {
     die "kind cluster ${CLUSTER} exists but was not created by this script; refusing to touch it"
 }
 
-# refuse_while_sandbox_up: die while the sandbox tier's courier (hack/kind/sandbox) is in the cluster. Its pod carries the
-# label that the tier's own courier Deployment selects and its Service routes to (the front door's NetworkPolicy trusts that
-# label, so it must stay), so a run of the E2E tests would drive the sandbox's courier and a bring-up would start the tier's
-# beside it. An API error is not a refusal: only a Deployment that is there is. Needs K.
+# refuse_while_sandbox_up: die while the sandbox tier's courier (hack/kind/sandbox) is in the cluster. Its pod carries the label
+# app.kubernetes.io/name=courier that the front door's NetworkPolicy trusts (so it must), and the tests find courier's pods by it, so a run of
+# the E2E tests would drive the sandbox's courier and a bring-up would start the tier's beside it. An API error is not a refusal: only a
+# Deployment that is there is. Needs K.
 refuse_while_sandbox_up() {
   local found
   found=$("${K[@]}" -n courier get deploy courier-sandbox --ignore-not-found -o name 2>/dev/null) || found=
-  [ -z "${found}" ] || die "the sandbox tier is up (${found}); its courier shares the tier's label and Service. Run: make sandbox-down first"
+  [ -z "${found}" ] || die "the sandbox tier is up (${found}); its courier carries the tier's label. Run: make sandbox-down first"
 }
 
 # owner_checkout: the checkout path recorded on the node, or "unknown".
@@ -228,12 +228,77 @@ load_courier_image() {
   kind load docker-image "${TESTHOOKS_IMAGE}" --name "${CLUSTER}"
 }
 
-# deploy_courier AGENTBACKEND: courier's namespace, fake Slack Secret, config and manifests, which both tiers
-# share (fast/courier), and a rollout restart so a rebuilt image or a changed ConfigMap is picked up. The config
-# is the fast tier's Bindings and ChatConnection, with AGENTBACKEND, a file, in place of the fast tier's
-# AgentBackend: the Bindings name it `agents` in both tiers. The Secrets are fake constants made here and never
-# committed, and the agent token (Secret courier-agent-token) is the caller's to make: it differs by tier.
-# Needs HERE, K.
+# Courier is installed in every tier by `helm upgrade --install` of charts/courier, with the values file of the tier (charts/courier/ci:
+# fast-values.yaml for the fast and full tiers, ax-values.yaml for the AX tier, sandbox-values.yaml for the sandbox). What each tier makes
+# itself, and the chart does not, is the config (a ConfigMap built from the tier's files, named by config.existingConfigMap) and the
+# Secrets (fake constants made here, or the operator's in the sandbox); the values hold neither. The functions below expect the sourcing
+# script to have set ROOT, K and H (kubectl and helm, each naming the tier's context).
+
+# adopt_into_release RELEASE KIND/NAME...: let Helm take over the hand-made objects of namespace courier that the chart now makes (the
+# annotations and label Helm checks before it will manage an object it did not create). Objects that are not there, or that some release
+# already owns, are left alone: Helm refuses the second, saying which.
+adopt_into_release() {
+  local release=$1 obj owner
+  shift
+  for obj in "$@"; do
+    [ -n "$("${K[@]}" -n courier get "${obj}" --ignore-not-found -o name)" ] || continue
+    owner=$("${K[@]}" -n courier get "${obj}" -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}')
+    [ -z "${owner}" ] || continue
+    "${K[@]}" -n courier annotate --overwrite "${obj}" "meta.helm.sh/release-name=${release}" meta.helm.sh/release-namespace=courier >/dev/null
+    "${K[@]}" -n courier label --overwrite "${obj}" app.kubernetes.io/managed-by=Helm >/dev/null
+  done
+}
+
+# replace_unowned_deployment NAME: delete the Deployment NAME of namespace courier when no Helm release owns it, which is how a tier brought
+# up before the chart has it (hand-made manifests). The chart's Deployment selects pods by app.kubernetes.io/instance as well as by name, and
+# a Deployment's selector cannot change, so it cannot be upgraded in place: it is deleted, and its pods with it (foreground, so that the old
+# pod has released the SQLite volume before the new one starts), and the volume stays. One a release owns, or none, is left as it is.
+replace_unowned_deployment() {
+  local name=$1 owner
+  [ -n "$("${K[@]}" -n courier get "deploy/${name}" --ignore-not-found -o name)" ] || return 0
+  owner=$("${K[@]}" -n courier get "deploy/${name}" -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}')
+  [ -z "${owner}" ] || return 0
+  echo "replacing the hand-made Deployment ${name} with the chart's (a Deployment's selector cannot change); its volume stays"
+  "${K[@]}" -n courier delete "deploy/${name}" --cascade=foreground --wait --timeout=120s >/dev/null
+}
+
+# require_helm4: die unless helm is Helm 4. helm_install_courier needs --force-conflicts, which Helm 3 lacks, and it would be found out only
+# after replace_unowned_deployment had deleted a Deployment. Call it in each script's tool preflight, before anything is changed.
+require_helm4() {
+  local version
+  version=$(helm version --template '{{.Version}}' 2>/dev/null) || version=
+  case "${version}" in
+    v4.*) ;;
+    *) die "Helm 4 is required (the chart is installed with --force-conflicts); found '${version:-no helm}'" ;;
+  esac
+}
+
+# helm_install_courier RELEASE VALUES [HELM ARG...]: install or upgrade the chart as RELEASE in namespace courier with the values file VALUES
+# (and any more arguments, such as --set replicaCount=0). It does not wait: callers wait for the rollout, and show courier's log when it
+# does not finish. Output is dropped; an error is not. Helm applies server-side, which refuses to change a field that another manager set
+# (an adopted Service's selector, kubectl scale's replicas): the release is the owner of these objects, so it wins.
+helm_install_courier() {
+  local release=$1 values=$2
+  shift 2
+  "${H[@]}" upgrade --install "${release}" "${ROOT}/charts/courier" --namespace courier -f "${values}" --force-conflicts "$@" >/dev/null
+}
+
+# install_courier VALUES: the tier's courier, release "courier": a Deployment, ServiceAccount, Role, PersistentVolumeClaim and Service
+# from the chart (the config, which the caller has made as the ConfigMap courier-config, is not the chart's). On a cluster brought up before
+# the chart, its hand-made Deployment is replaced and its other objects adopted, so that re-running a bring-up is how a tier moves over, with
+# its volume. Then a rollout restart, so that a rebuilt image (same tag) or a changed ConfigMap is picked up: Helm rolls the pod for neither,
+# since the values did not change.
+install_courier() {
+  replace_unowned_deployment courier
+  adopt_into_release courier serviceaccount/courier role/courier-secrets rolebinding/courier-secrets service/courier pvc/courier-data
+  helm_install_courier courier "$1"
+  "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
+}
+
+# deploy_courier AGENTBACKEND: courier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share. The config
+# is the fast tier's Bindings and ChatConnection (fast/courier/config), with AGENTBACKEND, a file, in place of the fast tier's AgentBackend:
+# the Bindings name it `agents` in both tiers. The Secrets are fake constants made here and never committed, and the agent token (Secret
+# courier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_courier() {
   local config
   refuse_while_sandbox_up
@@ -245,8 +310,7 @@ deploy_courier() {
   "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n courier create configmap courier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  "${K[@]}" apply -f "${HERE}/fast/courier" >/dev/null
-  "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
+  install_courier "${ROOT}/charts/courier/ci/fast-values.yaml"
 }
 
 # The curl image the scripts' probe pods run, pinned; the same as the verify scripts'.
