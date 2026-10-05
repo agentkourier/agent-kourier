@@ -50,6 +50,9 @@ type Backend struct {
 	Name, AgentName, Dialect string
 	// TextReplies allows queued thread replies to answer plain-text pauses.
 	TextReplies bool
+	// ThreadReplies is the Binding's chat.threadReplies. Anything but mention, the empty value too,
+	// means every person's reply in a thread courier owns is a turn (spec 8.2, D38).
+	ThreadReplies v1alpha1.ThreadReplies
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.

@@ -318,6 +318,22 @@ func TestUnsupportedDialectIsRejected(t *testing.T) {
 	}
 }
 
+// The Binding's chat.threadReplies reaches the session manager's gate through Backend, and a reload changes it for the
+// next reply, as it does the threadTTL.
+func TestBackendCarriesThreadReplies(t *testing.T) {
+	f := newFixture(t)
+	for _, mode := range []v1alpha1.ThreadReplies{v1alpha1.ThreadRepliesMention, v1alpha1.ThreadRepliesAll, ""} {
+		snap := snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+		rb, _ := snap.Binding("sre", "oncall")
+		rb.Binding.Spec.Chat.ThreadReplies = mode
+		f.snaps.p.Store(snap)
+		be, err := f.b.Backend("sre/oncall")
+		if err != nil || be.ThreadReplies != mode {
+			t.Errorf("Backend with threadReplies %q = ThreadReplies %q, %v; want the Binding's", mode, be.ThreadReplies, err)
+		}
+	}
+}
+
 func TestReloadChangesWhatBackendReturns(t *testing.T) {
 	f := newFixture(t)
 	f.snaps.p.Store(snapshot(t, f.url, v1alpha1.DialectKagentV1, 48*time.Hour))

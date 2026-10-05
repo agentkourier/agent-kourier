@@ -87,7 +87,7 @@ func TestPairCollapses(t *testing.T) {
 	msg := message(map[string]any{"ts": "7.7", "event_ts": "8.2", "text": botMark + " hi"})
 	waitAck(t, fake, send(t, fake, mention), send(t, fake, msg))
 	want := []session.Inbound{{Key: session.Key{Connection: intakeConn, Channel: "C1", Thread: "7.7"}, Binding: "sre/sre-alerts",
-		MessageID: "slack:" + intakeConn + ":C1:7.7", MessageRef: "7.7", UserID: "U1", Text: botMark + " hi", Create: true}}
+		MessageID: "slack:" + intakeConn + ":C1:7.7", MessageRef: "7.7", UserID: "U1", Text: botMark + " hi", Mentioned: true, Create: true}}
 	if got := sub.submitted(); !slices.Equal(got, want) {
 		t.Fatalf("submitted\n%+v\nwant\n%+v", got, want)
 	}

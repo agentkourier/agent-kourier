@@ -122,14 +122,15 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	}
 	return session.Backend{
 		Name: v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), AgentName: v1alpha1.NamespacedName(rb.Binding.Spec.Agent.Namespace, rb.Binding.Spec.Agent.Name), Dialect: string(rb.Backend.Spec.Dialect),
-		ThreadTTL:   rb.Binding.Spec.Session.ThreadTTL.Duration,
-		Agent:       k.pool.Agent(src.Target()),
-		Attribute:   k.attribute,
-		Rejected:    src.Rejected,
-		Identity:    src.Identity(),
-		Output:      rb.Binding.Spec.Chat.Output,
-		TextReplies: rb.Backend.Spec.Dialect == v1alpha1.DialectA2A,
-		Feedback:    rb.Binding.Spec.Feedback.Enabled,
+		ThreadTTL:     rb.Binding.Spec.Session.ThreadTTL.Duration,
+		Agent:         k.pool.Agent(src.Target()),
+		Attribute:     k.attribute,
+		Rejected:      src.Rejected,
+		Identity:      src.Identity(),
+		Output:        rb.Binding.Spec.Chat.Output,
+		TextReplies:   rb.Backend.Spec.Dialect == v1alpha1.DialectA2A,
+		Feedback:      rb.Binding.Spec.Feedback.Enabled,
+		ThreadReplies: rb.Binding.Spec.Chat.ThreadReplies,
 	}, nil
 }
 

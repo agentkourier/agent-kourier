@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
@@ -154,6 +156,7 @@ type fixture struct {
 	textReplies      bool
 	feedback         bool // the Backend has feedback.enabled
 	output           v1alpha1.OutputMode
+	threadReplies    v1alpha1.ThreadReplies // the Binding's chat.threadReplies; empty is all
 }
 
 func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
@@ -187,7 +190,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", TextReplies: f.textReplies, ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback}
+	b := Backend{AgentName: "kagent/agent-1", TextReplies: f.textReplies, ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies}
 	if f.noRejected {
 		b.Rejected = nil
 	}
@@ -515,4 +518,150 @@ func TestSubmitTransientBindingErrorIsNotBindingGone(t *testing.T) {
 	if got, _ := f.session(); !errors.Is(err, reload) || res.Disposition == BindingGone || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
 		t.Errorf("Submit = %+v, %v; want the lookup's own error and nothing written", res, err)
 	}
+}
+
+// reply is a person's reply in the thread, as the chat intake submits one: it creates nothing.
+func reply(ts string, mentioned bool) Inbound {
+	in := inbound(ts)
+	in.Create, in.Mentioned = false, mentioned
+	return in
+}
+
+// TestSubmitThreadReplyGate is the intake gate (spec 8.2, D38) over the Binding's mode, whether the
+// reply mentions courier, and the state of the thread. In mention mode a reply that does not mention
+// courier is Unmentioned: nothing is written, queued, touched or woken, whether the thread is live or
+// expired (so no expiry notice either). Everything else is as it is in all mode.
+func TestSubmitThreadReplyGate(t *testing.T) {
+	const (
+		live    = 0 * time.Hour
+		expired = 2 * time.Hour // past ns/b1's threadTTL of 1 h
+	)
+	tests := []struct {
+		name      string
+		mode      v1alpha1.ThreadReplies
+		age       time.Duration
+		mentioned bool
+		want      Disposition
+	}{
+		{"mention: unmentioned in a live thread", v1alpha1.ThreadRepliesMention, live, false, Unmentioned},
+		{"mention: mentioned in a live thread", v1alpha1.ThreadRepliesMention, live, true, Accepted},
+		{"mention: unmentioned in an expired thread", v1alpha1.ThreadRepliesMention, expired, false, Unmentioned},
+		{"mention: mentioned in an expired thread", v1alpha1.ThreadRepliesMention, expired, true, Expired},
+		{"all: unmentioned in a live thread", v1alpha1.ThreadRepliesAll, live, false, Accepted},
+		{"all: mentioned in a live thread", v1alpha1.ThreadRepliesAll, live, true, Accepted},
+		{"all: unmentioned in an expired thread", v1alpha1.ThreadRepliesAll, expired, false, Expired},
+		{"all: mentioned in an expired thread", v1alpha1.ThreadRepliesAll, expired, true, Expired},
+		{"unset mode is all: unmentioned in a live thread", "", live, false, Accepted},
+		{"unset mode is all: unmentioned in an expired thread", "", expired, false, Expired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.threadReplies = tt.mode
+			seeded := f.seed("ns/b1", tt.age)
+			res, err := f.submitAny(reply("1700.02", tt.mentioned))
+			if err != nil || res.Disposition != tt.want {
+				t.Fatalf("Submit = %+v, %v; want %s", res, err, tt.want)
+			}
+			got, _ := f.session()
+			switch tt.want {
+			case Accepted:
+				if f.st.touches != 1 || !got.LastActivity.Equal(t0) || f.woke != 1 || len(f.drain()) != 1 {
+					t.Errorf("accepted: %d touches, LastActivity %v, woke %d; want one touch to %v, one wake and one queued turn", f.st.touches, got.LastActivity, f.woke, t0)
+				}
+			default:
+				if got != seeded || f.st.touches != 0 || f.st.upserts != 1 || f.woke != 0 || len(f.drain()) != 0 {
+					t.Errorf("%s: session %+v (seeded %+v), %d touches, %d upserts, woke %d; want nothing written, queued or woken", tt.want, got, seeded, f.st.touches, f.st.upserts, f.woke)
+				}
+			}
+		})
+	}
+}
+
+// The gate is for replies in a thread courier owns: whatever may create a session is not held to it, and a
+// reply in a thread nobody owns, or whose Binding left, is answered as it always was.
+func TestSubmitThreadReplyGateLeavesTheRestAlone(t *testing.T) {
+	t.Run("a mention in a thread courier does not own creates it", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies = v1alpha1.ThreadRepliesMention
+		in := inbound("1700.02")
+		in.Mentioned = true
+		if res, err := f.submitAny(in); err != nil || res.Disposition != Created {
+			t.Fatalf("Submit = %+v, %v; want Created", res, err)
+		}
+	})
+	t.Run("a trigger's start is no reply and needs no mention", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies = v1alpha1.ThreadRepliesMention
+		in := inbound("1700.02")
+		in.UserID = ""
+		if res, err := f.submitAny(in); err != nil || res.Disposition != Created || f.st.upserts != 1 {
+			t.Fatalf("Submit = %+v, %v, %d upserts; want Created", res, err, f.st.upserts)
+		}
+	})
+	t.Run("a turn that may create, in a live thread, is taken unmentioned", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies = v1alpha1.ThreadRepliesMention
+		f.seed("ns/b1", 0)
+		in := inbound("1700.02") // Create, not Mentioned: an alert's prompt into a thread it already has
+		in.UserID = ""
+		if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
+			t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
+		}
+	})
+	t.Run("an unmentioned reply in a thread nobody owns is not owned", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies = v1alpha1.ThreadRepliesMention
+		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != NotOwned {
+			t.Fatalf("Submit = %+v, %v; want NotOwned", res, err)
+		}
+	})
+	t.Run("an unmentioned reply whose Binding is gone is BindingGone, for the caller to judge", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies = v1alpha1.ThreadRepliesMention
+		f.seed("ns/gone", 100*time.Hour)
+		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != BindingGone {
+			t.Fatalf("Submit = %+v, %v; want BindingGone", res, err)
+		}
+	})
+}
+
+// The gate counts what it turns away, by the session's Binding: the engagement of a thread that people
+// are talking in without waking the agent.
+func TestSubmitCountsUnmentionedReplies(t *testing.T) {
+	f, ctx, _, reg := tracingFixture(t)
+	f.threadReplies = v1alpha1.ThreadRepliesMention
+	f.seed("ns/b1", 0)
+	for _, in := range []Inbound{reply("1700.02", false), reply("1700.03", false), reply("1700.04", true)} {
+		if _, err := f.m.Submit(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := counter(t, reg, "courier_thread_unmentioned_total", map[string]string{"binding": "ns/b1"}); got != 2 {
+		t.Errorf("courier_thread_unmentioned_total{binding=ns/b1} = %v; want 2: the mentioned reply is a turn, not counted", got)
+	}
+}
+
+// counter is the value of the counter name in reg with exactly these labels, and 0 if it has none.
+func counter(t *testing.T, reg *prometheus.Registry, name string, labels map[string]string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		for _, m := range fam.Metric {
+			got := map[string]string{}
+			for _, l := range m.Label {
+				got[l.GetName()] = l.GetValue()
+			}
+			if maps.Equal(got, labels) {
+				return m.Counter.GetValue()
+			}
+		}
+	}
+	return 0
 }

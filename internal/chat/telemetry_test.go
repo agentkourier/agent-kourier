@@ -21,6 +21,9 @@ func TestIntakeTelemetryExcludesMessageAndErrorText(t *testing.T) {
 		disposition string
 	}{
 		{"accepted", nil, false, "accepted"},
+		{"unmentioned", func(session.Inbound) (session.Result, error) {
+			return session.Result{Disposition: session.Unmentioned}, nil
+		}, false, "unmentioned"},
 		{"transient error", func(session.Inbound) (session.Result, error) { return session.Result{}, errors.New(failure) }, true, "error"},
 		{"invalid", func(session.Inbound) (session.Result, error) {
 			return session.Result{}, fmt.Errorf("%s: %w", failure, store.ErrInvalid)

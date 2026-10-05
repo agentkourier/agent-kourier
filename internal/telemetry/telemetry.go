@@ -47,6 +47,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		labels     []string
 	}{
 		{"courier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition"}},
+		{"courier_thread_unmentioned_total", "Replies in a thread courier owns that a mention-only Binding ignored because they did not mention courier, by Binding.", []string{"binding"}},
 		{"courier_trigger_matched_total", "Bot messages a botMessage trigger matched, by Binding.", []string{"binding"}},
 		{"courier_trigger_unmatched_total", "Bot messages the platform passed on that matched none of the Binding's triggers, by Binding.", []string{"binding"}},
 		{"courier_trigger_decisions_total", "What a matched bot message did to its key's thread, by Binding and decision (started, repeat, closed, close_unknown, dedup, empty_key, not_started, limited).", []string{"binding", "decision"}},

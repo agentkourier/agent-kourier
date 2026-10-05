@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -32,6 +33,10 @@ const (
 	NotOwned    Disposition = "not_owned"    // courier owns no such thread: ignore the turn (spec 8.2)
 	BindingGone Disposition = "binding_gone" // owned, but its Binding left the config: nothing written; the caller posts the notice
 	Expired     Disposition = "expired"      // owned but past threadTTL: nothing written; the caller posts the notice
+	// Unmentioned is a reply the Binding does not take: owned, but the Binding's threadReplies is mention
+	// and the reply does not mention courier (D38). Nothing is written or queued, the session is not
+	// touched (threadTTL is not extended), and nobody is told, whether the thread is live or expired.
+	Unmentioned Disposition = "unmentioned"
 )
 
 // Inbound is one turn from a person or an alert.
@@ -44,6 +49,10 @@ type Inbound struct {
 	MessageRef string // the platform's ID of the message, for the reaction on a queued reply
 	UserID     string // the platform's ID of the user who wrote the turn; empty when nobody did
 	Text       string
+	// Mentioned says the turn mentions courier, or is in a direct message, where no mention is needed:
+	// the adapter decides. A Binding whose threadReplies is mention takes a reply in a thread it owns
+	// only if this is set (or Create is).
+	Mentioned bool
 	// Create lets the turn make the session if there is none: an @mention, a DM, an alert's
 	// first prompt. A plain thread reply leaves it false.
 	Create bool
@@ -68,7 +77,8 @@ const readAll = 100 * 365 * 24 * time.Hour
 // the thread, writes the session row for a new one, and queues the turn (idempotently, by
 // MessageID), all before it wakes the runner, so a crash loses nothing and the redelivered
 // event repeats what is left. It does not wait for the agent. An expired session is
-// returned as Expired and left as it was.
+// returned as Expired and left as it was, and a reply that a mention-only Binding does not
+// take as Unmentioned, with nothing written.
 func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.Thread == "" || in.MessageID == "" || in.MessageRef == "" || in.Text == "" || in.UserID == SystemUser || strings.HasPrefix(in.MessageID, recoveredPrefix) || (in.Create && in.Binding == "") {
 		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageRef and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
@@ -144,7 +154,8 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 }
 
 // admit reads the session and, for a new thread that may be created, writes its row, or, for
-// a live one, touches it.
+// a live one, touches it. A reply the Binding does not take (threadReplies mention, no mention)
+// is returned Unmentioned without a touch.
 func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result, error) {
 	sess, err := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
 	switch {
@@ -170,15 +181,32 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 	} else if err != nil {
 		return Result{}, fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
 	}
+	// In mention mode a reply that does not mention courier is not taken (D38). A Create turn is no reply:
+	// a mention, a DM, a trigger's start and an alert's prompt are held to nothing.
+	gated := backend.ThreadReplies == v1alpha1.ThreadRepliesMention && !in.Mentioned && !in.Create
 	// The store owns the expiry rule: ask it again, with the session's own threadTTL.
 	switch _, err := m.cfg.Store.GetSession(ctx, in.Key, backend.ThreadTTL, now); {
+	case errors.Is(err, store.ErrExpired) && gated:
+		return m.unmentioned(ctx, sess.Binding), nil // no expiry notice for a reply that was not asking for anything
 	case errors.Is(err, store.ErrExpired):
 		return Result{Disposition: Expired}, nil
 	case err != nil:
 		return Result{}, fmt.Errorf("read session %+v: %w", in.Key, err)
 	}
+	if gated {
+		// The seam for a typed answer to a pending text question (TM-4): such a reply is admitted
+		// here, pinned to the question, without a mention. Until then every unmentioned reply is ignored.
+		return m.unmentioned(ctx, sess.Binding), nil
+	}
 	if err := m.cfg.Store.TouchSession(ctx, in.Key, now); err != nil {
 		return Result{}, fmt.Errorf("touch session %+v: %w", in.Key, err)
 	}
 	return Result{Disposition: Accepted}, nil
+}
+
+// unmentioned is the result for a reply the Binding's mention mode turns away. It writes nothing; it counts the
+// reply for the Binding, which is how a thread that people talk in without waking the agent shows up.
+func (m *Manager) unmentioned(ctx context.Context, binding string) Result {
+	telemetry.Count(ctx, "courier_thread_unmentioned_total", binding)
+	return Result{Disposition: Unmentioned}
 }

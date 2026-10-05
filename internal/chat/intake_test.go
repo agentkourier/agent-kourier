@@ -68,17 +68,23 @@ func newIntake(t *testing.T) (*chat.Intake, *submitter) { return newIntakeNotify
 // newIntakeNotifying is newIntake with the func that takes a notice for a thread courier cannot continue.
 func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*chat.Intake, *submitter) {
 	t.Helper()
+	return newIntakeModes(t, notice, "", "")
+}
+
+// newIntakeModes is newIntakeNotifying with the chat.threadReplies of the Binding of C1 and of G1.
+func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, session.Notice) error, c1, g1 v1alpha1.ThreadReplies) (*chat.Intake, *submitter) {
+	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
-	bind := func(ns, name, channel string) v1alpha1.Binding {
+	bind := func(ns, name, channel string, mode v1alpha1.ThreadReplies) v1alpha1.Binding {
 		return v1alpha1.Binding{ObjectMeta: meta(ns, name), Spec: v1alpha1.BindingSpec{
 			Agent: v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "kagent"}},
-			Chat:  v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: channel}}}
+			Chat:  v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: channel, ThreadReplies: mode}}}
 	}
 	allow := []string{"sre", "payments"}
 	snap, err := config.Resolve(t.Context(), &config.Set{
 		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
 		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
-		Bindings:        []v1alpha1.Binding{bind("sre", "sre-alerts", "C1"), bind("payments", "pay", "G1")},
+		Bindings:        []v1alpha1.Binding{bind("sre", "sre-alerts", "C1", c1), bind("payments", "pay", "G1", g1)},
 	}, allKeys{})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +123,7 @@ func TestTriggers(t *testing.T) {
 			var want []session.Inbound
 			if tt.submit {
 				want = []session.Inbound{{Key: session.Key{Connection: conn, Channel: tt.m.At.Channel, Thread: tt.thread}, Binding: tt.binding,
-					MessageID: chat.MessageID(chat.Ref{Platform: "slack", Conn: conn, Channel: tt.m.At.Channel, ID: "5.5"}), MessageRef: "5.5", UserID: "U1", Text: "hi", Create: tt.create}}
+					MessageID: chat.MessageID(chat.Ref{Platform: "slack", Conn: conn, Channel: tt.m.At.Channel, ID: "5.5"}), MessageRef: "5.5", UserID: "U1", Text: "hi", Mentioned: tt.m.Mentioned, Create: tt.create}}
 			}
 			if got := sub.submitted(); !slices.Equal(got, want) {
 				t.Fatalf("submitted\n%+v\nwant\n%+v", got, want)
@@ -327,5 +333,129 @@ func TestAFailedNoticeLeavesTheEventToBeRedelivered(t *testing.T) {
 	}
 	if len(got.got) != 2 || got.got[0] != got.got[1] || len(sub.submitted()) != 2 {
 		t.Fatalf("%d notices %+v and %d submits; want the same notice twice, then none, and Submit with it", len(got.got), got.got, len(sub.submitted()))
+	}
+}
+
+// The adapter decides what is a mention; the Intake passes it on with a direct message, which needs none, as
+// Inbound.Mentioned, for the session manager's gate (D38).
+func TestIntakeTellsTheSessionWhetherAReplyMentionsCourier(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		mentioned, direct bool
+		want              bool
+	}{
+		{"a plain reply", false, false, false},
+		{"a mention", true, false, true},
+		{"a direct message", false, true, true},
+		{"a mention in a direct message", true, true, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in, sub := newIntake(t)
+			m := inbound("C1", "5.5", "4.4", tt.mentioned)
+			m.Direct = tt.direct
+			if err := in.Message(t.Context(), m); err != nil {
+				t.Fatal(err)
+			}
+			if got := sub.submitted(); len(got) != 1 || got[0].Mentioned != tt.want {
+				t.Fatalf("submitted %+v; want one turn with Mentioned=%v", got, tt.want)
+			}
+		})
+	}
+}
+
+// An Unmentioned reply is not remembered and not noticed: the message event of a mention may come before its
+// app_mention, and the second is the one that counts. The same reply delivered again, still unmentioned, is
+// asked about again: the Binding's mode may have been reloaded to all in between.
+func TestAnUnmentionedReplyIsNeitherSeenNorNoticed(t *testing.T) {
+	var got notices
+	in, sub := newIntakeModes(t, got.take, v1alpha1.ThreadRepliesMention, "")
+	sub.fn = func(req session.Inbound) (session.Result, error) {
+		if req.Mentioned {
+			return session.Result{Disposition: session.Accepted}, nil
+		}
+		return session.Result{Disposition: session.Unmentioned}, nil
+	}
+	plain := inbound("C1", "5.5", "4.4", false)
+	for range 2 {
+		if err := in.Message(t.Context(), plain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(sub.submitted()); n != 2 {
+		t.Fatalf("an unmentioned reply delivered twice was submitted %d times; want 2: it is not remembered", n)
+	}
+	if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", true)); err != nil { // the app_mention of the same message
+		t.Fatal(err)
+	}
+	if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", true)); err != nil { // and a duplicate of it
+		t.Fatal(err)
+	}
+	if subs := sub.submitted(); len(subs) != 3 || !subs[2].Mentioned {
+		t.Fatalf("submitted %+v; want the mention taken after the unmentioned reply, and once", subs)
+	}
+	if len(got.got) != 0 {
+		t.Errorf("notices %+v; want none", got.got)
+	}
+}
+
+// A reply in a thread whose Binding left the config is answered with the Binding-gone notice if it mentions
+// courier, or if the Binding that now owns the channel takes all replies; otherwise it is ignored (spec 8.2).
+func TestBindingGoneNoticeFollowsTheModeOfTheBindingThatOwnsTheChannel(t *testing.T) {
+	tests := []struct {
+		name     string
+		channel  string // C1 is owned by a Binding in c1's mode; C9 by none
+		c1       v1alpha1.ThreadReplies
+		mentions bool
+		direct   bool
+		notice   bool
+	}{
+		{"mentioned, the owner takes all", "C1", v1alpha1.ThreadRepliesAll, true, false, true},
+		{"mentioned, the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, true, false, true},
+		{"mentioned, no owner", "C9", "", true, false, true},
+		{"direct message, the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, false, true, true},
+		{"unmentioned, the owner takes all", "C1", v1alpha1.ThreadRepliesAll, false, false, true},
+		{"unmentioned, the owner's mode is unset: all", "C1", "", false, false, true},
+		{"unmentioned, the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, false, false, false},
+		{"unmentioned, no owner: the default mode is all", "C9", "", false, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got notices
+			in, sub := newIntakeModes(t, got.take, tt.c1, "")
+			sub.fn = func(session.Inbound) (session.Result, error) {
+				return session.Result{Disposition: session.BindingGone}, nil
+			}
+			m := inbound(tt.channel, "5.5", "4.4", tt.mentions)
+			m.Direct = tt.direct
+			if err := in.Message(t.Context(), m); err != nil {
+				t.Fatal(err)
+			}
+			if (len(got.got) == 1) != tt.notice || len(got.got) > 1 {
+				t.Fatalf("notices %+v; want one: %v", got.got, tt.notice)
+			}
+			// A reply that was left alone is not remembered, so the mention that follows is noticed.
+			if !tt.notice {
+				mention := m
+				mention.Mentioned = true
+				if err := in.Message(t.Context(), mention); err != nil || len(got.got) != 1 || got.got[0].Kind != session.NoticeBindingGone {
+					t.Errorf("the mention of the same message: %v, notices %+v; want the Binding-gone notice", err, got.got)
+				}
+			}
+		})
+	}
+}
+
+// An expired thread is the session manager's to judge: it answers Expired only for a reply the Binding takes, and the
+// Intake notices every one it is told of, as it did.
+func TestExpiredIsNoticedInEveryMode(t *testing.T) {
+	for _, mode := range []v1alpha1.ThreadReplies{"", v1alpha1.ThreadRepliesAll, v1alpha1.ThreadRepliesMention} {
+		var got notices
+		in, sub := newIntakeModes(t, got.take, mode, "")
+		sub.fn = func(session.Inbound) (session.Result, error) {
+			return session.Result{Disposition: session.Expired}, nil
+		}
+		if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", true)); err != nil || len(got.got) != 1 || got.got[0].Kind != session.NoticeExpired {
+			t.Errorf("mode %q: %v, notices %+v; want one expiry notice", mode, err, got.got)
+		}
 	}
 }

@@ -112,8 +112,10 @@ func NewIntake(cfg IntakeConfig) *Intake {
 // Message submits m as a turn, unless the table says to ignore it:
 //   - A mention in a channel bound to a Binding may start a session: a new thread, or one
 //     anchored to the thread it is in (the session manager decides whether courier owns it).
-//   - Any other message in a thread continues the thread's session if courier owns it;
-//     the session manager says NotOwned otherwise, and it is ignored.
+//   - Any other message in a thread continues the thread's session if courier owns it, unless the
+//     Binding takes only mentioned replies (chat.threadReplies: mention): the session manager says
+//     Unmentioned then, and it is ignored. It says NotOwned if courier does not own the thread, and
+//     that too is ignored.
 //   - A message outside a thread that does not start one is ignored without asking.
 //   - A bot's message (m.Bot set) is never a mention and is never submitted: it is tried against the
 //     botMessage triggers of its channel's Binding, in order (botMessage). A match is decided (see
@@ -124,7 +126,8 @@ func NewIntake(cfg IntakeConfig) *Intake {
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
 // A message is remembered once a turn is queued for it, or a notice written for it (see
 // IntakeConfig.Notice), so the second event of a mention (a platform may deliver it twice) is skipped; an
-// event that queued nothing, or whose notice failed to write, may be tried again.
+// event that queued nothing, or whose notice failed to write, may be tried again. An unmentioned reply queued
+// nothing, so a later app_mention of the same message is still taken.
 func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.intake", attribute.String("courier.source", "message"), attribute.String("courier.platform", m.At.Platform))
 	disposition := "ignored"
@@ -161,6 +164,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		Key:        session.Key{Connection: in.conn, Channel: m.At.Channel, Thread: cmp.Or(m.At.Thread, m.At.ID)},
 		MessageID:  in.messageID(m),
 		MessageRef: m.At.ID, UserID: m.User, Text: m.Text,
+		Mentioned: m.Mentioned || m.Direct, // a direct message needs no mention
 	}
 	if m.Mentioned {
 		req.Binding, req.Create = in.binding(ctx, m.At.Channel)
@@ -184,9 +188,18 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	switch res.Disposition {
 	case session.Created, session.Accepted:
 		in.seen.add(seen)
+	case session.Unmentioned:
+		// Not remembered and not noticed: the message's app_mention may still come, and it counts.
 	case session.Expired, session.BindingGone:
-		in.log.WarnContext(ctx, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
-		if in.cfg.Notice != nil {
+		// The notice answers a reply that asked for something. In a thread whose Binding is gone, that is a
+		// reply that mentions courier, or any reply when the Binding that owns the channel now takes them all.
+		silent := res.Disposition == session.BindingGone && !req.Mentioned && !in.takesAllReplies(m.At.Channel)
+		level := slog.LevelWarn
+		if silent {
+			level = slog.LevelDebug // chatter in a thread nobody was asked into
+		}
+		in.log.Log(ctx, level, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
+		if in.cfg.Notice != nil && !silent {
 			kind, suffix := session.NoticeExpired, "/expired"
 			if res.Disposition == session.BindingGone {
 				kind, suffix = session.NoticeBindingGone, "/binding_gone"
@@ -300,7 +313,7 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 // binding returns the namespace/name of the Binding that owns channel on this connection and takes @mentions: a
 // Binding whose triggers are listed and leave out the mention one does not (spec 8.2), and says so, once. An empty
 // list is the mention trigger. It decides only whether a mention may create a session: a reply in a thread
-// courier owns continues it whatever the triggers say.
+// courier owns continues it whatever the triggers say (what it must mention is chat.threadReplies).
 func (in *Intake) binding(ctx context.Context, channel string) (name string, ok bool) {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
@@ -314,11 +327,27 @@ func (in *Intake) binding(ctx context.Context, channel string) (name string, ok 
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) > 0 && !slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerMention }) {
 		if _, told := in.mentionless.LoadOrStore(name, struct{}{}); !told {
-			in.log.InfoContext(ctx, "chat: the triggers of a Binding have no mention trigger, so an @mention in its channel starts no session; replies in a thread courier owns still continue it", "binding", name)
+			replies := "replies in a thread courier owns still continue it"
+			if rb.Binding.Spec.Chat.ThreadReplies == v1alpha1.ThreadRepliesMention {
+				replies = "in a thread courier owns only a reply that mentions courier continues it"
+			}
+			in.log.InfoContext(ctx, "chat: the triggers of a Binding have no mention trigger, so an @mention in its channel starts no session; "+replies, "binding", name)
 		}
 		return "", false
 	}
 	return name, true
+}
+
+// takesAllReplies says whether the Binding that owns channel now takes every person's reply in a thread it owns,
+// which is whether chat.threadReplies is not mention. A channel nobody owns is taken to: the default mode is all,
+// and the mode of a Binding that is gone is unknown, so where nobody chose mention the notice goes out as it always did.
+func (in *Intake) takesAllReplies(channel string) bool {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return true
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
+	return !ok || rb.Binding.Spec.Chat.ThreadReplies != v1alpha1.ThreadRepliesMention
 }
 
 // recentMax bounds each generation of recent.

@@ -64,3 +64,26 @@ func TestABindingWithoutAMentionTriggerSaysSoOnce(t *testing.T) {
 		t.Errorf("a Binding with a mention trigger was told off: %v %q", err, other.logs.String())
 	}
 }
+
+// The notice that a Binding has no mention trigger says that a reply in a thread courier owns still continues it,
+// which is true only when the Binding takes all replies: in mention mode it says that a reply needs a mention.
+func TestTheNoMentionTriggerNoticeTellsTheTruthAboutReplies(t *testing.T) {
+	for _, tt := range []struct {
+		mode        v1alpha1.ThreadReplies
+		want, avoid string
+	}{
+		{v1alpha1.ThreadRepliesAll, "replies in a thread courier owns still continue it", "only a reply that mentions courier"},
+		{"", "replies in a thread courier owns still continue it", "only a reply that mentions courier"},
+		{v1alpha1.ThreadRepliesMention, "only a reply that mentions courier continues it", "replies in a thread courier owns still continue it"},
+	} {
+		h := newTriggered(t, kindOnly())
+		rb, _ := h.snap.Load().Binding("sre", "sre-alerts")
+		rb.Binding.Spec.Chat.ThreadReplies = tt.mode
+		if err := h.in.Message(h.ctx, inbound("C1", "5.5", "", true)); err != nil {
+			t.Fatal(err)
+		}
+		if logs := h.logs.String(); !strings.Contains(logs, tt.want) || strings.Contains(logs, tt.avoid) {
+			t.Errorf("mode %q logged %q; want %q and not %q", tt.mode, logs, tt.want, tt.avoid)
+		}
+	}
+}
