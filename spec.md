@@ -943,10 +943,10 @@ this with an outbox:
 | `alert_groups` | dedup key | Session link, root message ref, firing or resolved |
 | `run_counters` | binding, window | Rate-limit and daily-cap counters, and skipped counts for the digest |
 | `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours. The alert Binding's `run_counters` (WP-43) is a separate counter for the webhook |
-| `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps |
-| `reply_queue` | session, sequence | Thread replies waiting for the active task to finish |
+| `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays. |
+| `reply_queue` | session, sequence | Thread replies waiting for the active task to finish. Text is cleared on delivery; a reply undelivered for 30 days whose session has no active task is dropped, text cleared. |
 | `feedback` | session, Slack user | Verdict, alert name, agent, binding, timestamps |
-| `audit` | sequence | Append-only record of events, agent calls, decisions |
+| `audit` | sequence | Append-only record of events, agent calls, decisions. Append-only except for a purge of entries older than `COURIER_AUDIT_RETENTION` (default `keep`: never purged; otherwise at least 24h). |
 
 - **SQLite** (default): single replica, PersistentVolume, WAL mode.
 - **Postgres**: required for more than one replica.
@@ -970,10 +970,10 @@ this with an outbox:
 | Slack authenticity | Signing secret verification with timestamp check for HTTP mode. Socket Mode uses the app token. |
 | Backend trust | kagent's controller port (8083) trusts identity without verifying it: in insecure mode via `X-User-Id`, and in OIDC mode by decoding the JWT without checking its signature (a forged `alg: none` token was accepted in WP-01). It also takes the acting user from `X-User-Id` or `?user_id=` whenever `X-Agent-Name` is present, even with a valid token (WP-03). Courier must therefore call a verifying front door (oauth2-proxy or agentgateway) that validates the Binding's token and strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`, never 8083 directly. The chart's UI nginx already strips both in trusted-proxy mode (source). A NetworkPolicy limits 8083 to that front door and kagent's own components (UI, Substrate egress for TaskStore traffic), and a second policy fences the UI (8080) to its own oauth2-proxy, because its nginx relays `/mcp` and `/api` to 8083 with `Authorization` intact. That UI proxy must not accept the Binding's audience; otherwise the Binding token is valid through a second, wider door (WP-01b removed `oidc-extra-audience: courier-binding` for this reason). |
 | Binding identity scope | Each Binding identity gets only the permissions every member of its channel is trusted with. Separate Bindings, not one shared identity, for channels with different trust levels. |
-| Secrets | Read from Kubernetes Secrets by reference. Never written to CRD status, logs, or the audit table. |
+| Secrets | Read from Kubernetes Secrets by reference. Never written to CRD status, logs, or the audit table. An agent's tool arguments, hint and question text are redacted before a request is stored; a question's choices and a person's answer are stored as given until the interaction is cleared. |
 | Tenancy | Namespaced Bindings with explicit `allowedNamespaces` on shared resources. |
 | Spend | Per-binding rate limit, concurrency cap, and daily cap on alert runs. |
-| Audit | Every event, agent call, and approval is recorded with identity. |
+| Audit | Every event, agent call, and approval is recorded with identity. Subject to retention (`COURIER_AUDIT_RETENTION`; kept for ever by default). |
 
 ## 11. Operations
 
