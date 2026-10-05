@@ -1,0 +1,586 @@
+---
+apiVersion: v1
+data:
+  agentbackend-agents.yaml: |
+    apiVersion: agentcourier.dev/v1alpha1
+    kind: AgentBackend
+    metadata:
+      name: agents
+      namespace: courier-system
+    spec:
+      allowedNamespaces:
+      - sre
+      dialect: kagent-v1
+      headers:
+      - name: X-Request-Source
+        valueSecretRef:
+          key: source
+          name: courier-source
+      url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
+  binding-sre-alerts.yaml: |
+    apiVersion: agentcourier.dev/v1alpha1
+    kind: Binding
+    metadata:
+      name: sre-alerts
+      namespace: sre
+    spec:
+      agent:
+        backendRef:
+          name: agents
+        name: k8s-agent
+        namespace: kagent
+      chat:
+        channel: C0123456789
+        connectionRef:
+          name: slack-main
+        output: live
+        triggers:
+        - from:
+            botId: B0123456789
+          match:
+            titleLink: receiver=slack-critical$
+          preset: alertmanager
+          type: botMessage
+      identity:
+        tokenSecretRef:
+          name: courier-agent-token
+        userId: courier-sre-alerts
+      interactions:
+        askUser: false
+  chatconnection-slack-main.yaml: |
+    apiVersion: agentcourier.dev/v1alpha1
+    kind: ChatConnection
+    metadata:
+      name: slack-main
+      namespace: courier-system
+    spec:
+      allowedNamespaces:
+      - sre
+      credentialsSecretRef:
+        name: slack-main
+      mode: socket
+      platform: slack
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-config
+  namespace: courier-system
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-token-refresh
+  namespace: courier-system
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 180
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/instance: courier
+            app.kubernetes.io/name: courier-token-refresh
+        spec:
+          containers:
+          - command:
+            - sh
+            - -c
+            - |
+              set -eu
+              tok=$(curl -sf -m 20 -d grant_type=password -d "client_id=${DEX_CLIENT_ID}" --data-urlencode "scope=${DEX_SCOPE}" \
+                --variable '%DEX_CLIENT_SECRET' --variable '%DEX_USERNAME' --variable '%DEX_PASSWORD' \
+                --expand-data 'client_secret={{DEX_CLIENT_SECRET:url}}' --expand-data 'username={{DEX_USERNAME:url}}' \
+                --expand-data 'password={{DEX_PASSWORD:url}}' \
+                "${DEX_TOKEN_URL}" | sed -n 's/.*"id_token":"\([^"]*\)".*/\1/p')
+              case "${tok}" in
+                [A-Za-z0-9_-]*.[A-Za-z0-9_-]*.[A-Za-z0-9_-]*) ;;
+                *) echo "Dex gave no ID token" >&2; exit 1 ;;
+              esac
+              printf '{"data":{"%s":"%s"}}' "${TARGET_KEY}" "$(printf %s "${tok}" | base64 | tr -d '\n')" |
+                curl -sf -m 20 -o /dev/null -X PATCH --data-binary @- \
+                  --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                  --variable SA@/var/run/secrets/kubernetes.io/serviceaccount/token \
+                  --expand-header "Authorization: Bearer {{SA:trim}}" \
+                  -H 'Content-Type: application/merge-patch+json' \
+                  "${TARGET_URL}"
+              echo "refreshed the Binding's Dex token"
+            env:
+            - name: DEX_TOKEN_URL
+              value: https://dex.example.test/dex/token
+            - name: DEX_CLIENT_ID
+              value: courier-binding
+            - name: DEX_SCOPE
+              value: openid email
+            - name: TARGET_URL
+              value: https://kubernetes.default.svc/api/v1/namespaces/sre/secrets/courier-agent-token
+            - name: TARGET_KEY
+              value: token
+            - name: DEX_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: clientSecret
+                  name: courier-dex-client
+            - name: DEX_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: username
+                  name: courier-dex-client
+            - name: DEX_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: courier-dex-client
+            image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+            name: refresh
+            resources:
+              limits:
+                memory: 64Mi
+              requests:
+                cpu: 10m
+                memory: 16Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            seccompProfile:
+              type: RuntimeDefault
+          serviceAccountName: courier-token-refresh
+  schedule: '*/30 * * * *'
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: courier
+      app.kubernetes.io/name: courier
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        checksum/config: cc365b130cffafe2a57d0b3c59e622e558550cf4fbe4f0a0dc892552047ec69e
+        example.test/scrape: "false"
+      labels:
+        app.kubernetes.io/instance: courier
+        app.kubernetes.io/name: courier
+        example.test/team: platform
+    spec:
+      containers:
+      - env:
+        - name: COURIER_CONFIG_DIR
+          value: /etc/courier
+        - name: COURIER_DB_PATH
+          value: /data/courier.db
+        - name: COURIER_LISTEN
+          value: :8080
+        - name: COURIER_LOG_LEVEL
+          value: debug
+        - name: COURIER_KLOG_V
+          value: "0"
+        - name: COURIER_SYNC_TIMEOUT
+          value: 45s
+        - name: COURIER_ENVIRONMENT
+          value: production
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: https://otel-collector.observability.svc.cluster.local:4318
+        - name: OTEL_EXPORTER_OTLP_HEADERS
+          valueFrom:
+            secretKeyRef:
+              key: headers
+              name: courier-otlp
+        image: registry.example.test/platform/courier@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+        name: courier
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 40
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 2
+        volumeMounts:
+        - mountPath: /etc/courier
+          name: config
+          readOnly: true
+        - mountPath: /data
+          name: data
+        - mountPath: /tmp
+          name: tmp
+      imagePullSecrets:
+      - name: registry-pull
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-cluster-critical
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: courier
+      terminationGracePeriodSeconds: 40
+      tolerations:
+      - effect: NoSchedule
+        key: dedicated
+        operator: Equal
+        value: platform
+      volumes:
+      - configMap:
+          name: courier-config
+        name: config
+      - name: data
+        persistentVolumeClaim:
+          claimName: courier-data
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier-system
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 6443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.100.0.10/32
+    - ipBlock:
+        cidr: 10.100.1.20/32
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+  - ports:
+    - port: 4180
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kagent
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kagent-frontdoor
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - port: 8080
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: courier
+      app.kubernetes.io/name: courier
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-data
+  namespace: courier-system
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: gp3
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-secrets
+  namespace: courier-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-secrets
+  namespace: sre
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-token-refresh
+  namespace: sre
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - courier-agent-token
+  resources:
+  - secrets
+  verbs:
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-secrets
+  namespace: courier-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: courier-secrets
+subjects:
+- kind: ServiceAccount
+  name: courier
+  namespace: courier-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-secrets
+  namespace: sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: courier-secrets
+subjects:
+- kind: ServiceAccount
+  name: courier
+  namespace: courier-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-token-refresh
+  namespace: sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: courier-token-refresh
+subjects:
+- kind: ServiceAccount
+  name: courier-token-refresh
+  namespace: courier-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier-system
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/name: courier
+  type: ClusterIP
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  annotations:
+    example.test/owner: platform
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier-system
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-token-refresh
+  namespace: courier-system
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+    release: kube-prometheus-stack
+  name: courier
+  namespace: monitoring
+spec:
+  endpoints:
+  - interval: 30s
+    path: /metrics
+    port: http
+    scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+    - courier-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: courier
+      app.kubernetes.io/name: courier

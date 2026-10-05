@@ -1,0 +1,9 @@
+apiVersion: v2
+name: courier
+description: agent-courier, a broker between Alertmanager, Slack and A2A agents (single replica, SQLite on a PVC)
+type: application
+# The chart is not released yet. H4-8 stamps version and appVersion with the release and pushes the chart; until then
+# the image tag defaults to appVersion, which is why image.repository has no default.
+version: 0.1.0
+appVersion: dev
+home: https://github.com/agentkourier/agent-kourier

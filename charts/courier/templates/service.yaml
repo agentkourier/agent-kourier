@@ -1,0 +1,20 @@
+{{- if .Values.service.enabled }}
+# Courier's health and metrics port, and nothing else: the Alertmanager receiver is not served yet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "courier.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "courier.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ int .Values.service.port }}, targetPort: http}
+{{- end }}

@@ -1,0 +1,30 @@
+{{- if .Values.rbac.create }}
+{{- /* The resolver caches the Secrets of each namespace its config refers to with an informer: list and watch, never get.
+       Those verbs cannot be limited by resourceName, so the Role reads every Secret in the namespace, and courier keeps
+       the Opaque ones in memory (internal/config/k8ssecrets). Keep those namespaces to ones that hold courier's. */ -}}
+{{- range $ns := include "courier.secretNamespaces" . | fromJsonArray }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "courier.fullname" $ }}-secrets
+  namespace: {{ $ns }}
+  labels:
+    {{- include "courier.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "courier.fullname" $ }}-secrets
+  namespace: {{ $ns }}
+  labels:
+    {{- include "courier.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "courier.fullname" $ }}-secrets}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "courier.serviceAccountName" $ }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- end }}

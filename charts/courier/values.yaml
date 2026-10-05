@@ -1,0 +1,212 @@
+# Defaults for the courier chart.
+#
+# This chart runs ONE replica with its state in SQLite on a PersistentVolumeClaim. That is a limit of courier today, not
+# a default to tune: the database file may be open in one pod, and the session manager keeps per-thread state in memory.
+# More than one replica waits for the Postgres store (H4-3) and leader election with fencing (H4-5), and the chart fails
+# the render for replicaCount > 1 until then. replicaCount 0 is the kill switch: courier stops, the volume stays.
+replicaCount: 1
+
+image:
+  # Required; there is no default registry until the release pipeline (H4-8) pushes one. Locally: courier (the image
+  # `make image` builds is courier:dev).
+  repository: ""
+  # A tag, which defaults to the chart's appVersion. Ignored when digest is set.
+  tag: ""
+  # Pin production to a digest (sha256:...), which wins over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Resource names are <release>-courier (or the release name when it contains "courier"). The label
+# app.kubernetes.io/name=courier is fixed either way: NetworkPolicies elsewhere trust pods by it.
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  # Defaults to the fullname. Courier reads Secrets through the API, so the token stays mounted.
+  name: ""
+  annotations: {}
+
+# Courier's process settings. These are the environment cmd/courier reads (its package comment lists all of them).
+listen:
+  # The port of /healthz, /readyz and /metrics (COURIER_LISTEN). The Alertmanager receiver is not served yet.
+  port: 8080
+logLevel: info # debug, info, warn or error (COURIER_LOG_LEVEL)
+# client-go's verbosity (COURIER_KLOG_V). Keep it 0: at 8 and above client-go logs response bodies, Secret lists included.
+klogVerbosity: 0
+# How long to wait for the Secret caches before startup fails (COURIER_SYNC_TIMEOUT). Empty is courier's default, 30s.
+syncTimeout: ""
+# Extra container environment, in Kubernetes' own form. This is where the OpenTelemetry settings go
+# (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_EXPORTER, ...); take a header or other credential from a Secret with
+# valueFrom.secretKeyRef, never as a value.
+extraEnv: []
+
+# What courier reads. Either the resources below, which the chart writes into a ConfigMap mounted at /etc/courier, or
+# existingConfigMap, the name of a ConfigMap you manage (one key per file, each ending .yaml). Not both.
+#
+# Each entry is keyed by its name and holds the resource's spec exactly as spec.md section 7 describes it (the chart does
+# not interpret it) and, optionally, the namespace (default: the release's). Secrets are referenced by name
+# (credentialsSecretRef, tokenSecretRef, valueSecretRef) and live in the cluster, made by you or Sealed Secrets:
+# no token value belongs in this file or in any values file (the render refuses a Slack token, and a header value whose name
+# looks like a credential).
+#
+# config:
+#   chatConnections:
+#     slack-main:
+#       spec:
+#         platform: slack
+#         mode: socket
+#         credentialsSecretRef: {name: slack-main}   # keys botToken and appToken
+#   agentBackends:
+#     agents:
+#       spec: {dialect: kagent-v1, url: "http://kagent-frontdoor.kagent.svc.cluster.local:4180"}
+#   bindings:
+#     sre-alerts:
+#       spec:
+#         agent: {backendRef: {name: agents}, namespace: kagent, name: k8s-agent}
+#         identity: {userId: courier-sre, tokenSecretRef: {name: courier-agent-token}}
+#         chat: {connectionRef: {name: slack-main}, channel: C0123456789, output: live}
+config:
+  existingConfigMap: ""
+  agentBackends: {}
+  chatConnections: {}
+  bindings: {}
+  # Roll the pod when the rendered ConfigMap changes. Courier reloads its files in place, but a reload that adds a
+  # Secret namespace fails until the process restarts. Has no effect with existingConfigMap.
+  rollOnChange: true
+
+# SQLite lives here. The claim is ReadWriteOnce and the Deployment's strategy is Recreate, so the old pod has released
+# the volume before the new one starts.
+persistence:
+  # Use a claim you manage instead of creating one.
+  existingClaim: ""
+  size: 1Gi
+  # Empty is the cluster's default class; "-" is an explicitly empty one.
+  storageClassName: ""
+  accessModes: [ReadWriteOnce]
+  # Keep the claim (helm.sh/resource-policy: keep) when the release is uninstalled: it holds sessions, the outbox and the
+  # dedup record. Delete it by hand when you mean to.
+  retainOnUninstall: true
+
+# Kubernetes gives courier up to this long after SIGTERM; its ordered shutdown takes up to 25 s.
+terminationGracePeriodSeconds: 40
+
+podAnnotations: {}
+# Added to the pod. app.kubernetes.io/name and /instance cannot be changed.
+podLabels: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile: {type: RuntimeDefault}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+
+# Courier reads the Secrets that its config names through the API (list and watch, in a namespace-scoped Role; it never
+# issues a get). Roles are made in each namespace that holds a referenced Secret, found from config.* above.
+rbac:
+  create: true
+  # More namespaces to grant that Role in. Needed with config.existingConfigMap, which the chart cannot read.
+  secretNamespaces: []
+
+# A ClusterIP Service on the metrics port (/metrics, and the health paths). Never published; there is nothing else to serve yet.
+service:
+  enabled: false
+  port: 8080
+  annotations: {}
+
+# A prometheus-operator ServiceMonitor for the Service (needs service.enabled).
+serviceMonitor:
+  enabled: false
+  # The namespace of the ServiceMonitor; default is the release's.
+  namespace: ""
+  # Labels your Prometheus selects ServiceMonitors by (for kube-prometheus-stack, release: <its release>).
+  labels: {}
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Fences courier's network. Egress is the Kubernetes API server, DNS, Slack on 443 and what extraEgress adds (the agent
+# backend, an OTLP collector); ingress is the metrics scrape and nothing else. Needs a CNI that enforces NetworkPolicy.
+networkPolicy:
+  enabled: false
+  kubeApiServer:
+    # The API server's addresses, as the pod sees them after the Service's translation: required when enabled. A NetworkPolicy
+    # cannot select the API server by pod. Where the control plane is yours (kind, kubeadm), the addresses of
+    # `kubectl get endpoints kubernetes`, as /32s. On EKS those are control-plane ENI addresses that change when AWS upgrades or
+    # replaces the control plane, so give the CIDRs of the control-plane subnets instead (`aws eks describe-cluster --name
+    # <cluster>`, resourcesVpcConfig.subnetIds, then each subnet's CIDR). The VPC CNI enforces NetworkPolicy only with
+    # enableNetworkPolicy=true on the vpc-cni add-on; without it this policy does nothing.
+    cidrs: []
+    ports: [443, 6443]
+  dns:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+    podSelector: {matchLabels: {k8s-app: kube-dns}}
+  slack:
+    # A NetworkPolicy cannot name a host, so Slack (slack.com, wss-*.slack.com, files.slack.com) is port 443 to anywhere
+    # outside the private ranges. Put an egress proxy's address in extraEgress and narrow this to [] to close it.
+    cidrs: ["0.0.0.0/0"]
+    except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+  # Who may scrape the metrics port: NetworkPolicyPeers, for example the Prometheus pods:
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+  #     podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}}
+  # Empty admits nobody. Kubelet's probes are node traffic, which the CNIs we know admit regardless.
+  metricsFrom: []
+  # More egress rules, in Kubernetes' own form. The agent backend goes here, for example the front door:
+  #   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app: kagent-frontdoor}}}]
+  #     ports: [{port: 4180}]
+  extraEgress: []
+
+# Off, and meaningful only with the standby (H4-5): at one replica a budget that keeps the pod (minAvailable 1 or 100%,
+# maxUnavailable 0) blocks every voluntary eviction, a node drain included, so the render refuses it. Set exactly one of
+# minAvailable and maxUnavailable; with one replica only maxUnavailable: 1 renders, and that permits what it was meant to stop.
+# A minAvailable that renders at replicaCount 0 (the kill switch) is refused again on scaling back to 1: switch the budget
+# off, or to maxUnavailable, before scaling to zero.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: null
+  maxUnavailable: null
+
+# Keeps a Binding's identity token fresh when the AgentBackend sits behind a verifying front door that takes Dex ID tokens
+# (the sandbox tier does this, hack/kind/sandbox/token-refresh.yaml). An hourly CronJob asks Dex for a token with the
+# password grant and patches it into one Secret through the API, with its own ServiceAccount, whose Role allows `patch` on
+# that Secret and nothing else. The Dex credentials are read from a Secret into the Job's environment; they never pass
+# through an argument list or this file.
+#
+# The target Secret is the Binding's identity.tokenSecretRef: its name, key and namespace (the Binding's), which the render
+# checks against the inline config. It must exist before courier starts. After install, run the first refresh by hand:
+#   kubectl -n <ns> create job --from=cronjob/<fullname>-token-refresh first-token
+tokenRefresh:
+  enabled: false
+  schedule: "0 * * * *"
+  # The Secret to patch, its key and its namespace (default: the release's), which are the Binding's identity.tokenSecretRef
+  # and the Binding's namespace. The Job's Role, in that namespace, allows `patch` on this one Secret.
+  targetSecret: ""
+  targetKey: token
+  targetNamespace: ""
+  dex:
+    tokenURL: "" # for example http://dex.dex.svc.cluster.local:5556/dex/token
+    clientId: ""
+    scope: openid email
+    # A Secret in the release namespace with the keys clientSecret, username and password.
+    credentialsSecret: ""
+  image:
+    repository: curlimages/curl
+    tag: "8.11.1"
+    digest: sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 64Mi}

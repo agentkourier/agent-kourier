@@ -1,0 +1,23 @@
+# What the fast kind tier's courier is (hack/kind/fast/courier), as chart values: install it as release "courier" in
+# namespace "courier". The config is the tier's own ConfigMap, made by hack/kind/lib.sh's deploy_courier from the tier's
+# files, and its Secrets are in namespace courier. test/chart proves the rendered Deployment, ServiceAccount, Role,
+# PersistentVolumeClaim and Service match the tier's manifests, and the config it renders from the tier's files loads the same.
+image:
+  repository: courier-e2e/courier-testhooks # the test image: it has COURIER_SLACK_API_URL, the production one does not
+  tag: dev
+  pullPolicy: Never # kind loads it; nothing pulls it
+
+extraEnv:
+  - {name: COURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
+
+config:
+  existingConfigMap: courier-config
+rbac:
+  secretNamespaces: [courier]
+
+persistence:
+  storageClassName: standard
+  retainOnUninstall: false # a tier's volume goes with it
+
+service:
+  enabled: true

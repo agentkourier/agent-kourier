@@ -1,0 +1,95 @@
+{{- include "courier.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "courier.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # The SQLite volume is never mounted by two pods: the old one is gone before the new one starts.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "courier.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "courier.selectorLabels" . | nindent 8 }}
+        {{- with omit .Values.podLabels "app.kubernetes.io/name" "app.kubernetes.io/instance" }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.podAnnotations (and .Values.config.rollOnChange (not .Values.config.existingConfigMap)) }}
+      annotations:
+        {{- if and .Values.config.rollOnChange (not .Values.config.existingConfigMap) }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "courier.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: courier
+          image: {{ include "courier.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # cmd/courier takes no arguments: it is configured by this environment.
+          env:
+            - {name: COURIER_CONFIG_DIR, value: /etc/courier}
+            - {name: COURIER_DB_PATH, value: /data/courier.db}
+            - {name: COURIER_LISTEN, value: {{ printf ":%d" (int .Values.listen.port) | quote }}}
+            - {name: COURIER_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
+            - {name: COURIER_KLOG_V, value: {{ .Values.klogVerbosity | quote }}}
+            {{- with .Values.syncTimeout }}
+            - {name: COURIER_SYNC_TIMEOUT, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports: [{name: http, containerPort: {{ int .Values.listen.port }}}]
+          # Bootstrap waits up to 30 s (COURIER_SYNC_TIMEOUT) for the Secret caches, so startup is allowed 80 s before
+          # the other probes begin. /healthz says the process is alive. /readyz says it is configured and its store and
+          # Secret caches answer; it does NOT say Slack is connected, by design (courier_chat_connected is the metric
+          # for that), so a Slack outage never takes courier out of its Service or restarts it.
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 40}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/courier, readOnly: true}
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "courier.configMapName" . }}}
+        - name: data
+          persistentVolumeClaim: {claimName: {{ include "courier.pvcName" . }}}
+        - name: tmp
+          emptyDir: {}

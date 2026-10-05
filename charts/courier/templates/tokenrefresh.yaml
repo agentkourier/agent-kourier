@@ -1,0 +1,130 @@
+{{- if .Values.tokenRefresh.enabled }}
+{{- $name := printf "%s-token-refresh" (include "courier.fullname" .) }}
+{{- $target := required "tokenRefresh.targetSecret is required: the Secret that holds the Binding's token" .Values.tokenRefresh.targetSecret }}
+{{- $dex := .Values.tokenRefresh.dex }}
+{{- $url := required "tokenRefresh.dex.tokenURL is required" $dex.tokenURL }}
+{{- $client := required "tokenRefresh.dex.clientId is required" $dex.clientId }}
+{{- $creds := required "tokenRefresh.dex.credentialsSecret is required: a Secret with the keys clientSecret, username and password" $dex.credentialsSecret }}
+{{- $image := .Values.tokenRefresh.image }}
+{{- $targetNs := default .Release.Namespace .Values.tokenRefresh.targetNamespace }}
+{{- $targetKey := .Values.tokenRefresh.targetKey }}
+{{- /* A token patched into a Secret no Binding reads expires unseen: with the config inline, some Binding in the target
+       namespace must name this Secret and key as its identity token. */ -}}
+{{- if not .Values.config.existingConfigMap }}
+{{- $reads := false }}
+{{- range $_, $r := .Values.config.bindings }}
+{{- $spec := default (dict) $r.spec }}
+{{- if and (eq (default $.Release.Namespace $r.namespace) $targetNs) (eq (dig "identity" "tokenSecretRef" "name" "" $spec) $target) (eq (dig "identity" "tokenSecretRef" "key" "token" $spec) $targetKey) }}
+{{- $reads = true }}
+{{- end }}
+{{- end }}
+{{- if not $reads }}
+{{- fail (printf "tokenRefresh patches Secret %s/%s key %q, but no Binding in namespace %s has identity.tokenSecretRef naming it: the token would be refreshed where nothing reads it. Set tokenRefresh.targetNamespace, targetSecret and targetKey to the Binding's" $targetNs $target $targetKey $targetNs) }}
+{{- end }}
+{{- end }}
+# Keeps the Binding's Dex ID token fresh (hack/kind/sandbox/token-refresh.yaml is the same job). It asks Dex for a token and
+# patches it into one Secret (the Binding's, in the Binding's namespace) through the API with its own ServiceAccount, whose
+# Role there allows `patch` on that Secret and nothing else. The Dex credentials come from a Secret into the environment and into curl through --variable, so neither
+# they nor the tokens are on an argument list, in a file of ours, or in anything the Job prints (curl -f drops an error
+# body, and a successful PATCH's reply, which is the Secret, goes to /dev/null). The pod does not carry the label
+# app.kubernetes.io/name=courier, which other NetworkPolicies trust.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $targetNs }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $target | quote }}]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $targetNs }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.tokenRefresh.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 180
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: courier-token-refresh
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          serviceAccountName: {{ $name }}
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          containers:
+            - name: refresh
+              image: {{ if $image.digest }}{{ printf "%s@%s" $image.repository $image.digest | quote }}{{ else }}{{ printf "%s:%s" $image.repository $image.tag | quote }}{{ end }}
+              env:
+                - {name: DEX_TOKEN_URL, value: {{ $url | quote }}}
+                - {name: DEX_CLIENT_ID, value: {{ $client | quote }}}
+                - {name: DEX_SCOPE, value: {{ $dex.scope | quote }}}
+                - {name: TARGET_URL, value: {{ printf "https://kubernetes.default.svc/api/v1/namespaces/%s/secrets/%s" $targetNs $target | quote }}}
+                - {name: TARGET_KEY, value: {{ $targetKey | quote }}}
+                - name: DEX_CLIENT_SECRET
+                  valueFrom: {secretKeyRef: {name: {{ $creds | quote }}, key: clientSecret}}
+                - name: DEX_USERNAME
+                  valueFrom: {secretKeyRef: {name: {{ $creds | quote }}, key: username}}
+                - name: DEX_PASSWORD
+                  valueFrom: {secretKeyRef: {name: {{ $creds | quote }}, key: password}}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  tok=$(curl -sf -m 20 -d grant_type=password -d "client_id=${DEX_CLIENT_ID}" --data-urlencode "scope=${DEX_SCOPE}" \
+                    --variable '%DEX_CLIENT_SECRET' --variable '%DEX_USERNAME' --variable '%DEX_PASSWORD' \
+                    --expand-data 'client_secret={{ "{{DEX_CLIENT_SECRET:url}}" }}' --expand-data 'username={{ "{{DEX_USERNAME:url}}" }}' \
+                    --expand-data 'password={{ "{{DEX_PASSWORD:url}}" }}' \
+                    "${DEX_TOKEN_URL}" | sed -n 's/.*"id_token":"\([^"]*\)".*/\1/p')
+                  case "${tok}" in
+                    [A-Za-z0-9_-]*.[A-Za-z0-9_-]*.[A-Za-z0-9_-]*) ;;
+                    *) echo "Dex gave no ID token" >&2; exit 1 ;;
+                  esac
+                  printf '{"data":{"%s":"%s"}}' "${TARGET_KEY}" "$(printf %s "${tok}" | base64 | tr -d '\n')" |
+                    curl -sf -m 20 -o /dev/null -X PATCH --data-binary @- \
+                      --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                      --variable SA@/var/run/secrets/kubernetes.io/serviceaccount/token \
+                      --expand-header "Authorization: Bearer {{ "{{SA:trim}}" }}" \
+                      -H 'Content-Type: application/merge-patch+json' \
+                      "${TARGET_URL}"
+                  echo "refreshed the Binding's Dex token"
+              resources:
+                {{- toYaml .Values.tokenRefresh.resources | nindent 16 }}
+              securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+{{- end }}
