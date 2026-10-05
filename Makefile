@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-postgres build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -20,6 +20,9 @@ test: ## Run unit tests with the race detector, then the testhooks-tagged ones, 
 	go test -race ./...
 	go test -race -tags testhooks ./internal/...
 	hack/kind/netpol_test.sh
+
+test-postgres: ## Run the Postgres store's tests and the store conformance suite against a throwaway Postgres container (Docker; hack/postgres/test.sh)
+	hack/postgres/test.sh
 
 build: ## Build bin/courier
 	go build -ldflags "$(LDFLAGS)" -o bin/courier ./cmd/courier

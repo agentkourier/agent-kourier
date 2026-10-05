@@ -1,0 +1,13 @@
+-- Persist only W3C trace context, without payloads, headers or baggage.
+ALTER TABLE reply_queue ADD COLUMN trace_parent text NOT NULL DEFAULT '';
+ALTER TABLE reply_queue ADD COLUMN trace_state text NOT NULL DEFAULT '';
+ALTER TABLE outbox ADD COLUMN trace_parent text NOT NULL DEFAULT '';
+ALTER TABLE outbox ADD COLUMN trace_state text NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN trace_parent text NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN trace_state text NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN trace_parent text NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN trace_state text NOT NULL DEFAULT '';
+ALTER TABLE interaction_presses ADD COLUMN trace_parent text NOT NULL DEFAULT '';
+ALTER TABLE interaction_presses ADD COLUMN trace_state text NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN trace_parent text NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN trace_state text NOT NULL DEFAULT '';

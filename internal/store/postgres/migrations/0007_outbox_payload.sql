@@ -1,0 +1,1 @@
+ALTER TABLE outbox ADD COLUMN payload text NOT NULL DEFAULT '';

@@ -109,7 +109,7 @@ func (su suite) sessions(t *testing.T) {
 			t.Fatalf("GetSession at the boundary = %v; want live", err)
 		}
 		for range 2 { // reading never deletes
-			got, err := s.GetSession(ctx, key, ttl, t0.Add(ttl+1))
+			got, err := s.GetSession(ctx, key, ttl, t0.Add(ttl+time.Microsecond))
 			isErr(t, err, store.ErrExpired, "GetSession a microsecond past the ttl")
 			if !sameSession(got, sess) {
 				t.Fatalf("expired session = %+v; want the row with the error", got)
