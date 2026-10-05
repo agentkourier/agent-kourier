@@ -11,12 +11,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
-	"github.com/agentkourier/agent-kourier/internal/audit"
-	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
-	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/postgres"
 )
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
@@ -27,9 +24,15 @@ import (
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
 // the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
 // config and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
-// a Secret: cfg.Store), the audit writer, the Bindings, and then readiness: /readyz says 503 "starting" until
-// the last of those is done. The connection comes before the store, so a config that v1 cannot serve leaves no
-// database behind.
+// a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
+// connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
+// replica runs, a standby included (spec 11).
+//
+// What only the leader runs follows, as leaderHalf.start has it: the audit writer, the Bindings, the chat platform,
+// the outbox, the session manager and its recovery, the sweeps, the interactions and the chat connection. With SQLite
+// it starts at once. With Postgres a replica first wins a Kubernetes Lease (cfg.Election) and is given the next epoch
+// by the store, which fences every write of a replica that is no longer the leader; a replica that loses the lease or
+// meets a stale epoch ends the process at once (ExitLeadershipLost).
 func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err := cfg.validate(); err != nil {
 		return err
@@ -61,8 +64,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			err = nil
 		}
 	}()
-	if err := RouteKlog(log, cfg.KlogVerbosity); err != nil {
-		return fmt.Errorf("route klog: %w", err)
+	if !cfg.leaveKlog {
+		if err := RouteKlog(log, cfg.KlogVerbosity); err != nil {
+			return fmt.Errorf("route klog: %w", err)
+		}
 	}
 	client := cfg.Client
 	if client == nil {
@@ -80,7 +85,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	defer cancel()
 	sd := newShutdown(log)
 	sd.trace = cfg.shutdownTrace
-	defer func() { sd.run(runCtx) }()
+	// The shutdown waits for a leader half that is starting (aborting it), refuses one that would start later, runs the
+	// steps in order, and only then lets go of the lease, which was renewed to the end: the other replica never starts
+	// beside a leader that is still draining.
+	gate := &startGate{}
+	var cand *candidacy
+	defer func() {
+		gate.close(cancel)
+		sd.run(runCtx)
+		cand.stop(ctx)
+	}()
 
 	// replaced in 35f2b4 for the hooks; the stale gauge already reads the Config once Bootstrap has made it.
 	var current atomic.Pointer[Config]
@@ -120,9 +134,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	log.InfoContext(ctx, "serving a ChatConnection", "connection", connName)
 
-	st, err := openStore(runCtx, cfg.Store, cfg.DBPath, boot.Secrets, log)
+	// A write that finds another replica has led since ends the process (spec D37): the error alone would be handled
+	// by whichever part made the write, and the part could carry on. SQLite never calls it.
+	fail := &failStop{log: log, exit: cfg.exitFunc()}
+	st, err := openStore(runCtx, cfg.Store, cfg.DBPath, boot.Secrets, log,
+		postgres.WithOnDeposed(func() { fail.now("a write found its epoch stale: another replica has led since") }))
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
+	}
+	if cfg.wrapStore != nil {
+		st = cfg.wrapStore(st)
 	}
 	log.InfoContext(ctx, "opened the store", "store", cfg.Store.kind()) // the kind only: a DSN is never logged
 	if err := st.RegisterMetrics(metrics.reg); err != nil {
@@ -134,130 +155,76 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			log.Warn("closing the store", "error", err)
 		}
 	})
-	var auditLog store.Audit = st
-	if cfg.auditStore != nil {
-		auditLog = cfg.auditStore(st)
+	// A store that fences (Postgres) means more than one replica may run, and one of them leads: the Lease picks it.
+	// SQLite is one replica's, which leads at once and has no Lease.
+	fenced, _ := st.(store.Fenced)
+	if fenced != nil {
+		if err := cfg.Election.validate(); err != nil {
+			return err
+		}
 	}
-	auditor := audit.New(auditLog, audit.Options{Logger: log, OnFailure: metrics.AuditFailure})
-	bindings := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
-	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
+	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
+	// lease, since nothing routes traffic to courier in Socket Mode, and a standby is healthy (spec 11).
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
 	log.InfoContext(ctx, "ready")
 
-	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
-	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
-	// courier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
-	metrics.ChatConnected(connName, false)
-	platform, err := cfg.newPlatform(conn, log, func(up bool) { metrics.ChatConnected(connName, up) })
-	if err != nil {
-		return err
-	}
-	chatCtx, report, stopChat := WithAuthFailure(runCtx)
-	ob := outbox.New(outbox.Config{
-		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
-	})
-	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
-		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
-	}
-	outboxCtx, stopOutbox := context.WithCancel(runCtx)
-	outboxDone := make(chan struct{})
-	go func() { defer close(outboxDone); _ = ob.Run(outboxCtx) }()
-	sd.add(stepDrain, func(c context.Context) { // stop the drain loop, then post what is pending one last time
-		stopOutbox()
-		waitFor(c, outboxDone)
-		if err := ob.Reconcile(c); err != nil && c.Err() == nil {
-			log.Warn("outbox: the final drain did not finish", "error", err)
+	// The leader half starts here with SQLite, and with a fencing store when the lease is won and the store has its
+	// epoch. Whatever ends it, or fails to start it, is sent to leaderDone.
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st}
+	leaderDone := make(chan error, 1)
+	runLeader := func() {
+		leave, ok := gate.enter()
+		if !ok {
+			return // a shutdown has begun
 		}
-		// Slack's connections close only now: the drain posts through them, and a connection that its
-		// calls opened after an earlier close would be one that nothing closes.
-		platform.closeIdle()
-	})
-
-	// The renderer posts a turn's first message through the outbox and edits or streams it through the
-	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
-	// acknowledgement path.
-	renderer := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
-	var sink renderSink = live.NewSink(renderer, ob, log)
-	if cfg.sink != nil {
-		sink = cfg.sink
-	}
-	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
-	// intake answers through the manager, so its session is bound once the manager is built (D2).
-	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
-	// them, and the manager, which they feed.
-	stops := stopList{trace: cfg.stopTrace}
-	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
-	tap, late, err := parts.newTap(sink)
-	if err != nil {
-		return err
-	}
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
-	if err != nil {
-		return fmt.Errorf("session manager: %w", err)
-	}
-	late.bind(mgr)
-	sd.add(stepManager, func(c context.Context) {
-		if err := mgr.Close(c); err != nil {
-			log.Warn("closing the session manager", "error", err)
+		if fenced != nil {
+			epoch, err := takeLeadership(runCtx, fenced, cfg.Election, log)
+			if err != nil {
+				leave()
+				leaderDone <- err
+				return
+			}
+			metrics.Takeover()
+			log.InfoContext(ctx, "leading", "epoch", epoch, "holder", cfg.Election.Identity)
 		}
-		// The renders that were writing a final text when their turns ended are waited for here, after the
-		// turns, and before the drain that stops the outbox they post through.
-		if err := renderer.Wait(c); err != nil {
-			log.Warn("waiting for the renders of the last turns", "error", err)
+		// The connection and its Secrets as they are now: the startup read above only checks that the config can be served.
+		// Everything else the leader half uses (the Bindings, the config snapshot, the Secrets) it reads live.
+		current, err := ChooseConnection(runCtx, boot.Reloader.Current(), boot.Secrets)
+		if err != nil {
+			leave()
+			leaderDone <- err
+			return
 		}
-	})
-	if err := parts.recovered("recover-sessions", func() error { return mgr.Recover(runCtx) }); err != nil {
-		return fmt.Errorf("recover sessions: %w", err)
+		metrics.Leader(true)
+		chatDone, err := leader.start(ctx, runCtx, current)
+		leave()
+		if err != nil {
+			leaderDone <- err
+			return
+		}
+		leaderDone <- <-chatDone
 	}
-	// The rows of old trigger threads are purged on a timer. It writes only to the store, so it stops with the
-	// interactions' loops, before the store closes; added first, it stops last, after the tap and the rest.
-	sweep, err := newThreadSweep(threadSweepConfig{Store: st, Interval: cfg.threadSweepEvery, Logger: log})
-	if err != nil {
-		return fmt.Errorf("trigger thread sweep: %w", err)
-	}
-	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
-	// The digest line of the alerts that a trigger's limits stopped is queued on the outbox, one for each window: the
-	// outbox posts it. The loop stops with the interactions' loops, before the outbox drain and the store.
-	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, Logger: log})
-	if err != nil {
-		return fmt.Errorf("trigger digest: %w", err)
-	}
-	stops.add("trigger-digest", startLoop(runCtx, digest.Run))
-	interactions, err := parts.start(runCtx, mgr, tap, &stops)
-	if err != nil {
-		return err
+	if fenced == nil {
+		go runLeader()
+	} else {
+		cand, err = startCandidacy(ctx, client, cfg.Election, log, candidacyCallbacks{
+			gained: func(context.Context) { runLeader() },
+			lost:   func() { fail.now("the lease was lost or could not be renewed") },
+		})
+		if err != nil {
+			return err
+		}
 	}
 
-	// A match of a botMessage trigger that starts a turn becomes a session through the manager's intake, the path a
-	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
-	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
-	starter := &triggerStarter{conn: connName, submit: mgr, notice: sink.QueueNotice, audit: auditor, link: permalinks(platform.Platform), log: log}
-	intake := chat.NewIntake(newIntakeConfig(intakeParts{
-		conn: conn.Ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
-		notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
-	}))
-	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
-	parts.traced("open-intake")
-	go func() {
-		chatDone <- RunPlatform(chatCtx, platform, intake, RunPolicy{Logger: log})
-		close(chatStopped)
-	}()
-	sd.add(stepIntake, func(c context.Context) { // the intake stops before the interactions and the manager it feeds
-		stopChat()
-		waitFor(c, chatStopped)
-	})
-
-	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal between
-	// ready.Set and this line still cancels everything at once: that window is accepted, because it is
-	// still startup, and the alternative is a Recover or Reconcile that ignores a signal and spends the grace period.
+	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal during the leader half's
+	// start also aborts it (the shutdown does, through the gate), so that a Recover or Reconcile cannot hold a signal
+	// for the length of the grace period.
 	stopStartupWatch()
 	select {
 	case <-ctx.Done():
 		return nil
-	case err := <-chatDone:
-		chatDone <- err
+	case err := <-leaderDone:
 		if ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) { // stopped by the signal, not by Slack
 			return nil
 		}
@@ -266,6 +233,18 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		served <- err // for the cleanup, which waits for it too
 		return fmt.Errorf("the health server stopped before the broker did: %w", err)
 	}
+}
+
+// takeLeadership gives the store its epoch, trying again until the time the leader is allowed to renew its lease has
+// passed: past that the lease is as good as lost, and the replica ends and lets the other one try.
+func takeLeadership(ctx context.Context, f store.Fenced, cfg ElectionConfig, log *slog.Logger) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, cfg.withDefaults().RenewDeadline)
+	defer cancel()
+	epoch, err := takeEpoch(ctx, f, cfg.Identity, takeRetryEvery, log)
+	if err != nil {
+		return 0, fmt.Errorf("take the leader's epoch: %w", err)
+	}
+	return epoch, nil
 }
 
 // renderSink is what Run needs of the renderer, which is *live.Sink: the session manager's Sink, and

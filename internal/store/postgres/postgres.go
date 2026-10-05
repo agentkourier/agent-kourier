@@ -75,11 +75,13 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -95,7 +97,7 @@ const defaultConnectTimeout = 10 * time.Second
 // defaultIdleInTxTimeout is how long a transaction may sit idle between statements before the server
 // ends it, unless WithIdleInTxTimeout says otherwise. Every locked write spans several round trips, so
 // a leader that stalls or is cut off from the server in the middle of one holds an advisory lock (the
-// log's, a session's) and, once H4-5 lands, a share lock on the epoch row that the next leader's epoch
+// log's, a session's) and a share lock on the epoch row that the next leader's epoch
 // update waits behind. Without a limit the server notices only when TCP gives up, about two hours
 // later. Ten seconds is under the 15 s lease of D37, so the zombie's locks are gone before a standby
 // may take over, and far above the milliseconds a healthy transaction idles.
@@ -117,6 +119,11 @@ const applicationName = "agent-courier"
 type Store struct {
 	pool *pgxpool.Pool
 	red  redactor
+	// epoch is the number Lead was given, 0 before it: a store with none refuses writes.
+	epoch atomic.Int64
+	// deposed counts the writes that found the epoch stale (courier_store_deposed_total), and onDeposed is told of each.
+	deposed   prometheus.Counter
+	onDeposed func()
 }
 
 var _ store.Store = (*Store)(nil)
@@ -129,6 +136,7 @@ type options struct {
 	idleInTx  time.Duration
 	statement time.Duration
 	logger    *slog.Logger
+	onDeposed func()
 }
 
 // WithMaxConns sets the size of the connection pool. A value below one is ignored.
@@ -161,6 +169,12 @@ func WithLogger(l *slog.Logger) Option {
 		}
 	}
 }
+
+// WithOnDeposed sets a function that the store calls when a write finds its epoch stale, that is, when another
+// replica has led since. It runs in the goroutine of the write, before the write returns store.ErrDeposed, and must
+// not call the store. Courier ends its process in it (spec D37): the error alone would be handled by whichever caller
+// the write happened to be made for. It is not called for a store that has no epoch yet.
+func WithOnDeposed(fn func()) Option { return func(o *options) { o.onDeposed = fn } }
 
 // Open connects to the database named by dsn, applies the migrations that are pending, and returns
 // the store. The DSN is a secret: it is never logged, and every error from Open and from the store
@@ -204,7 +218,8 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 	if err != nil {
 		return nil, red.scrub(fmt.Errorf("open postgres store: %w", err))
 	}
-	s := &Store{pool: pool, red: red}
+	s := &Store{pool: pool, red: red, onDeposed: o.onDeposed, deposed: prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "courier_store_deposed_total", Help: "Writes the store refused because another replica has led since: its epoch was stale."})}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, red.scrub(fmt.Errorf("open postgres store: connect: %w", err))
@@ -233,10 +248,10 @@ func (s *Store) Close() error {
 
 // inTx runs fn in a transaction, committing if fn returns nil and rolling back on an error or a
 // panic. It is the one path of every write: a statement that changes data never runs on the pool
-// directly. H4-5 puts the leader's epoch check at the top of the transaction, below, so that a deposed
-// leader's write fails before it does anything. It must come before any advisory lock that fn takes:
-// the new leader's epoch update waits for the writers that hold the epoch row, and a writer must not
-// hold that row while it waits for a lock.
+// directly. The leader's epoch check is the top of the transaction, so that a deposed leader's write
+// fails before it does anything (store.ErrDeposed, see Fencing above). It comes before any advisory lock that fn
+// takes, and lock_timeout is set right after it: the new leader's epoch update waits for the writers that
+// hold the epoch row, and a writer that waits for a lock while it holds that row gives up after writeLockTimeout.
 //
 // An error that means the data is not a legal value (text Postgres cannot store) is store.ErrInvalid.
 func (s *Store) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -244,7 +259,12 @@ func (s *Store) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 		return fmt.Errorf("begin: %w", err)
 	}
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// H4-5: the epoch check goes here, first in every write transaction.
+		if err := s.checkEpoch(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, writeLockTimeout.Milliseconds())); err != nil {
+			return fmt.Errorf("set lock_timeout: %w", err)
+		}
 		return fn(tx)
 	})
 	return classify(err)

@@ -53,6 +53,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if ne .Values.store.type "postgres" -}}true{{- end -}}
 {{- end -}}
 
+{{/* The Lease the replicas elect their leader with: one for the Deployment, in the release namespace. */}}
+{{- define "courier.leaseName" -}}
+{{- printf "%s-leader" (include "courier.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "courier.pvcName" -}}
 {{- default (printf "%s-data" (include "courier.fullname" .)) .Values.persistence.existingClaim -}}
 {{- end -}}
@@ -61,8 +66,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 Checks that no values file can get past. Included by the Deployment, which every install has.
 */}}
 {{- define "courier.validate" -}}
-{{- if gt (int .Values.replicaCount) 1 -}}
-{{- fail "replicaCount > 1 is not supported yet: more than one replica needs store.type postgres (SQLite is one file on a ReadWriteOnce volume, which one pod may use) AND leader election with fencing (H4-5), which has not landed: courier's session state is in memory, and two replicas would both work. replicaCount 0 is the kill switch." -}}
+{{- if and (gt (int .Values.replicaCount) 1) (include "courier.sqlite" .) -}}
+{{- fail "replicaCount > 1 needs store.type postgres: SQLite is one file on a ReadWriteOnce volume, which one pod may use, and courier's session state is in memory, so only one replica may work. With Postgres the replicas elect a leader (a Lease) and the standby waits. replicaCount 0 is the kill switch." -}}
+{{- end -}}
+{{- if and (include "courier.sqlite" .) (or .Values.leaderElection.leaseDuration .Values.leaderElection.renewDeadline .Values.leaderElection.retryPeriod) -}}
+{{- fail "leaderElection is for store.type postgres: with sqlite there is one replica and no election, and the settings would be ignored" -}}
 {{- end -}}
 {{- with .Values.store -}}
 {{- if eq .type "postgres" -}}

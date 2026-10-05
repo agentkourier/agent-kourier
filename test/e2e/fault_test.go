@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -39,10 +40,12 @@ func faultOf(t *testing.T, pod corev1.Pod) string {
 	return ""
 }
 
-// onePod is courier's only pod, which a Recreate rollout leaves once it has finished.
+// onePod is courier's only pod, which a rollout leaves once it has finished. A pod that is shutting down is not counted:
+// with Postgres the rollout has a surge, and the old pod, which hands its Lease over as it stops, may still be listed.
 func onePod(ctx context.Context, t *testing.T, pods *kube.Pods) corev1.Pod {
 	t.Helper()
 	list, err := pods.List(ctx, kube.CourierNamespace, courierPods)
+	list = slices.DeleteFunc(list, func(p corev1.Pod) bool { return p.DeletionTimestamp != nil })
 	if err != nil || len(list) != 1 {
 		t.Fatalf("courier's pods = %d, %v; want exactly one after a rollout", len(list), err)
 	}

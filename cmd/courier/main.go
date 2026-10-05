@@ -11,17 +11,26 @@
 //	                       Secret caches (its namespace needs the list and watch Role the config's do)
 //	COURIER_POSTGRES_TIMEOUTS     with postgres, courier (default: it sets the idle-in-transaction and statement
 //	                       timeouts) or role (the database role sets them; for a pooler that refuses startup parameters)
+//	COURIER_LEASE_NAMESPACE, COURIER_LEASE_NAME, COURIER_POD_NAME   with postgres, required: where the leader-election Lease
+//	                       is (courier's own namespace, one Lease for the Deployment) and the pod's name, which names the
+//	                       replica as the holder. The election runs with postgres and never with sqlite, whose replica works at once
+//	COURIER_LEASE_DURATION, COURIER_LEASE_RENEW_DEADLINE, COURIER_LEASE_RETRY_PERIOD   with postgres, optional: the election's
+//	                       timings (defaults 15s, 10s and 2s). A standby takes over about a lease duration after the leader's
+//	                       last renewal; the leader gives up renewing after the renew deadline
 //	COURIER_LISTEN         the address of /healthz, /readyz and /metrics (default :8080)
 //	COURIER_SYNC_TIMEOUT   how long to wait for the Secret caches (default 30s)
 //	COURIER_KLOG_V         client-go's verbosity, held below 8 (default 0)
 //	COURIER_LOG_LEVEL      debug, info, warn or error (default info)
 //
 // It exits 0 after a signal, 1 when Slack rejects the tokens, 2 for a wrong config or wiring (or an
-// unreadable variable), 3 when RBAC denies it the Secrets, and 4 for any other failure.
+// unreadable variable), 3 when RBAC denies it the Secrets, 4 for any other failure, and 5 when it was the leader and
+// lost the lease or met a stale epoch (spec D37): it ends at once, and Kubernetes restarts it as a standby.
 package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -77,6 +86,7 @@ func exitCode(err error) int {
 type envConfig struct {
 	configDir, dbPath, listen string
 	store                     broker.StoreConfig
+	election                  broker.ElectionConfig // with postgres only; its Identity is the pod's name, made unique by run
 	syncTimeout               time.Duration
 	klogV                     int
 	logLevel                  slog.Level
@@ -110,6 +120,9 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 	}
 	c.logLevel = level
 	if c.store, err = loadStoreEnv(getenv); err != nil {
+		return c, err
+	}
+	if c.election, err = loadElectionEnv(getenv, c.store.Kind); err != nil {
 		return c, err
 	}
 	c.telemetry, err = telemetry.LoadConfig(getenv)
@@ -164,6 +177,51 @@ func loadStoreEnv(getenv func(string) string) (broker.StoreConfig, error) {
 	return c, nil
 }
 
+// loadElectionEnv reads the election's variables. With postgres the Lease and the pod are required, and the timings are
+// optional (zero means the default); with sqlite there is no election, and a variable that asks for one is refused,
+// since ignoring it would run one replica where the person meant two.
+func loadElectionEnv(getenv func(string) string, kind broker.StoreKind) (broker.ElectionConfig, error) {
+	timings := map[string]*time.Duration{}
+	var c broker.ElectionConfig
+	timings["COURIER_LEASE_DURATION"], timings["COURIER_LEASE_RENEW_DEADLINE"], timings["COURIER_LEASE_RETRY_PERIOD"] = &c.LeaseDuration, &c.RenewDeadline, &c.RetryPeriod
+	if kind != broker.StorePostgres {
+		for _, key := range []string{"COURIER_LEASE_NAMESPACE", "COURIER_LEASE_NAME", "COURIER_LEASE_DURATION", "COURIER_LEASE_RENEW_DEADLINE", "COURIER_LEASE_RETRY_PERIOD"} {
+			if getenv(key) != "" {
+				return broker.ElectionConfig{}, fmt.Errorf("%w: %s is set with COURIER_STORE=sqlite, which has no leader election: unset it", broker.ErrWiring, key)
+			}
+		}
+		return c, nil
+	}
+	c.Namespace, c.Name, c.Identity = getenv("COURIER_LEASE_NAMESPACE"), getenv("COURIER_LEASE_NAME"), getenv("COURIER_POD_NAME")
+	for _, req := range []struct{ key, value string }{{"COURIER_LEASE_NAMESPACE", c.Namespace}, {"COURIER_LEASE_NAME", c.Name}, {"COURIER_POD_NAME", c.Identity}} {
+		if req.value == "" {
+			return c, fmt.Errorf("%w: %s is required with COURIER_STORE=postgres: more than one replica may run, and the Lease says which leads", broker.ErrWiring, req.key)
+		}
+	}
+	for _, key := range []string{"COURIER_LEASE_DURATION", "COURIER_LEASE_RENEW_DEADLINE", "COURIER_LEASE_RETRY_PERIOD"} {
+		v := getenv(key)
+		if v == "" {
+			continue
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return c, fmt.Errorf("%w: %s is %q, want a positive duration such as 15s", broker.ErrWiring, key, v)
+		}
+		*timings[key] = d
+	}
+	return c, nil
+}
+
+// uniqueIdentity makes the pod's name the name of this process: a container that restarts in the same pod is a new
+// process, and must not take the Lease its predecessor held for its own (broker.ElectionConfig.Identity).
+func uniqueIdentity(pod string) (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("make the replica's identity: %w", err)
+	}
+	return pod + "_" + hex.EncodeToString(b), nil
+}
+
 // run executes the CLI and returns the process exit code.
 func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string) string) int {
 	if len(args) > 0 && args[0] == "dry-run" {
@@ -197,8 +255,13 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	}
 	defer func() { _ = ln.Close() }()
 
+	if env.store.Kind == broker.StorePostgres {
+		if env.election.Identity, err = uniqueIdentity(env.election.Identity); err != nil {
+			return fail(stderr, err)
+		}
+	}
 	cfg := broker.RunConfig{
-		ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver,
+		ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

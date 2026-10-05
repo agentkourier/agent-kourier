@@ -4,11 +4,10 @@ Installs [agent-courier](../../spec.md), the broker between Alertmanager, Slack 
 production image, its state (a SQLite volume, or a Postgres database you run), the ConfigMap of its resources, and the read
 access to the Secrets they name.
 
-**One replica.** That is what courier supports today, and the chart enforces it: `replicaCount` above 1 fails the render. Two
-replicas need `store.type: postgres` (SQLite is one file on a volume that one pod may use, spec R7) and leader election with
-epoch fencing (H4-5); this chart gains a Lease Role and a standby that is Ready but idle with the latter, and not before.
-`replicaCount: 0` is the kill switch (courier stops, the volume or the database and the config stay); removing a Binding from
-the values is the other.
+**One replica with SQLite, or two with Postgres.** SQLite is one file on a volume that one pod may use (spec R7), so the
+chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `replicaCount: 2` is an active/passive pair (spec 11,
+D37): see High availability. `replicaCount: 0` is the kill switch (courier stops, the volume or the database and the config stay);
+removing a Binding from the values is the other.
 
 ```sh
 helm install courier ./charts/courier -n courier-system --create-namespace -f my-values.yaml
@@ -25,14 +24,16 @@ tier's, with the token-refresh CronJob).
 
 | Object | When | Notes |
 |---|---|---|
-| Deployment `<fullname>` | always | strategy Recreate, one container, config at `/etc/courier`, SQLite at `/data` (with `store.type: sqlite`), `/tmp` an emptyDir |
+| Deployment `<fullname>` | always | one container, config at `/etc/courier`, SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
 | ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names, and in the release namespace with Postgres (the DSN's Secret) |
+| Lease `<fullname>-leader` | `store.type: postgres` | empty; the replicas elect their leader with it. Kept on `helm uninstall` (`helm.sh/resource-policy: keep`), with its release annotations, so a reinstall under the same release name adopts it; only another release that renders the same name (`fullnameOverride`) would conflict. Do not delete it while courier runs: courier may not create a Lease, so leadership stops until `helm upgrade` recreates it |
+| Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
 | Service | `service.enabled` | ClusterIP on the health and metrics port; the Alertmanager receiver is not served yet |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
 | NetworkPolicy | `networkPolicy.enabled` | see below |
-| PodDisruptionBudget | `podDisruptionBudget.enabled` | off; the render refuses a budget that keeps the only pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
+| PodDisruptionBudget | `podDisruptionBudget.enabled` | off; `minAvailable: 1` keeps a drain from taking both replicas at `replicaCount: 2`; the render refuses a budget that keeps every pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
 | CronJob, ServiceAccount, Role, RoleBinding `<fullname>-token-refresh` | `tokenRefresh.enabled` | keeps a Binding's Dex ID token fresh |
 
 `<fullname>` is the release name, or `<release>-courier` when the name does not contain "courier" (`fullnameOverride` sets it).
@@ -47,6 +48,7 @@ tier's, with the token-refresh CronJob).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
+- `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
 - `logLevel`, `syncTimeout`, `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
 - `service`, `serviceMonitor`, `networkPolicy`, `podDisruptionBudget`, `tokenRefresh`: off until you switch them on.
 
@@ -56,8 +58,8 @@ namespace fails until restart, and the roll covers it. Turn it off with `config.
 ## Store
 
 `store.type: sqlite` (the default) keeps courier's state in one file on the volume, for **one replica**: a SQLite file may be open in one
-pod only (spec R7). Courier cannot see how many replicas run, so the chart is what refuses more than one (`replicaCount` above 1
-fails the render, whatever the store: more than one replica needs Postgres **and** leader election, H4-5).
+pod only (spec R7). Courier cannot see how many replicas run, so the chart is what refuses more than one with it (`replicaCount`
+above 1 fails the render with SQLite).
 
 `store.type: postgres` keeps it in a database you run (the chart installs none). Name the Secret that holds the DSN, in the release
 namespace, and the key in it:
@@ -91,6 +93,28 @@ ALTER ROLE courier SET statement_timeout = '30s';
 ```
 
 and set `store.postgres.timeouts: role`.
+
+## High availability
+
+With `store.type: postgres` courier elects a leader with a Kubernetes Lease, named `<fullname>-leader` in the release namespace, which the chart
+makes; the Role above is all the access that needs. The leader runs all of courier's work (Socket Mode, the session runners, the outbox, the
+sweeps and digests). The other replica is **Ready and idle**: it serves `/healthz`, `/readyz` and `/metrics`, keeps its config and Secret caches
+fresh, and waits. Readiness never depends on the lease (nothing routes traffic to courier in Socket Mode, and a standby is healthy), so
+find the leader with the metric `courier_leader` (1 on the leader; `courier_leader_takeovers_total` counts takeovers) or the
+`leadership` table's `holder`. Postgres elects at one replica too: that replica leads at once, and a rolling update starts the new pod
+as a standby beside the old one.
+
+`leaderElection.leaseDuration` (default 15s), `renewDeadline` (10s) and `retryPeriod` (2s) set the timings: the leader gives up
+renewing after the renew deadline and **exits at once**, 5 s before a standby may take the lease with the defaults, and the standby
+takes it a lease duration after the leader's last renewal. After a crash, a deleted pod or a lost node, work resumes in about 15 s plus
+courier's start-up. A leader that stops on a signal (a rolling update, a drain) finishes its ordered shutdown and hands the lease over, so
+the standby takes it within a retry period. Every write is also fenced by an epoch in the database, so a leader that was paused past its
+lease cannot write when it wakes: the write fails and the process exits (exit code 5). What fencing cannot cover is a Slack post or an
+agent send that the paused leader had already begun, which can happen once more (spec 11, D37; the design is in
+`tasks/plans/h4-4-ha-design.md`).
+
+Set `affinity` (a `podAntiAffinity` on `app.kubernetes.io/name: courier`) so the two replicas do not share a node, which the chart does not
+do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain cannot take both.
 
 ## Secrets
 
@@ -175,7 +199,7 @@ A ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces`
 ## Tests
 
 `go test ./test/chart` renders the chart with `helm template` and checks it: golden files for the seven `ci/` values files, the
-refusals (replicas above 1, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
+refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
 properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
 on), and the fast and AX tiers' config, which is loaded through courier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;
 set `COURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping. After a deliberate chart change:
@@ -183,5 +207,4 @@ set `COURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping.
 
 ## What comes next
 
-- **H4-5** (leader election and fencing): replicas above 1 (with Postgres), a Role for the Lease, the standby Ready but idle, a meaningful PodDisruptionBudget.
 - The Alertmanager receiver (WP-47) adds its port, a Service and an Ingress or route when it is served.

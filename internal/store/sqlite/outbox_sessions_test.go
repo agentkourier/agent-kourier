@@ -41,8 +41,8 @@ func TestMigrationsAreRecordedOnceAcrossReopens(t *testing.T) {
 	openAt(t, path)
 	s := openAt(t, path)
 	var n int
-	if err := s.read.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 16 {
-		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 16", n, err)
+	if err := s.read.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 17 {
+		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 17", n, err)
 	}
 }
 

@@ -145,7 +145,7 @@ func TestNewerSchemaIsWarnedAbout(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	openAt(t, dsn, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
-	for _, want := range []string{"level=WARN", "newest_in_database=9999", "newest_known_migration=16"} {
+	for _, want := range []string{"level=WARN", "newest_in_database=9999", "newest_known_migration=17"} {
 		if !bytes.Contains(buf.Bytes(), []byte(want)) {
 			t.Errorf("log = %q; want it to hold %q", buf.String(), want)
 		}

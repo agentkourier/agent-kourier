@@ -4,7 +4,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "replicaCount": {"type": "integer", "minimum": 0, "description": "0 (the kill switch) or 1; more fails the render until H4-5 (leader election) lands, and then needs store.type postgres"},
+    "replicaCount": {"type": "integer", "minimum": 0, "description": "0 (the kill switch), 1, or 2 or more with store.type postgres: the replicas elect a leader and the others stand by; SQLite is one replica"},
     "image": {
       "type": "object",
       "additionalProperties": false,
@@ -62,6 +62,15 @@
             "timeouts": {"enum": ["courier", "role"]}
           }
         }
+      }
+    },
+    "leaderElection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "leaseDuration": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+        "renewDeadline": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+        "retryPeriod": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"}
       }
     },
     "persistence": {

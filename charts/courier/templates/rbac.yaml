@@ -28,3 +28,31 @@ subjects:
   - {kind: ServiceAccount, name: {{ include "courier.serviceAccountName" $ }}, namespace: {{ $.Release.Namespace }}}
 {{- end }}
 {{- end }}
+{{- /* The leader election's Lease is made by the chart (lease.yaml), so courier only reads and renews it: get and update on the
+       one Lease. No create, which cannot be limited by name. */}}
+{{- if and .Values.rbac.create (not (include "courier.sqlite" .)) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "courier.fullname" . }}-leader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ include "courier.leaseName" . }}]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "courier.fullname" . }}-leader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "courier.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "courier.fullname" . }}-leader}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "courier.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
+{{- end }}

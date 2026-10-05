@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,7 +18,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/postgres"
 )
 
 // postgresDSNEnv names the variable that holds the DSN of the database these tests run against: the one the Postgres
@@ -34,6 +39,7 @@ func postgresConfig(t *testing.T, dsn string) RunConfig {
 		t.Fatal(err)
 	}
 	c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}
+	c.Election = testElection
 	return c
 }
 
@@ -147,5 +153,108 @@ func TestRunRefusesAPostgresDSNSecretThatCannotBeUsed(t *testing.T) {
 				t.Errorf("a SQLite file was made on the Postgres store: %v", statErr)
 			}
 		})
+	}
+}
+
+// leadershipRow reads the one row of the leadership table in schema: the epoch and who holds it.
+func leadershipRow(t *testing.T, schema string) (epoch int64, holder string) {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), os.Getenv(postgresDSNEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(t.Context())) }()
+	if err := conn.QueryRow(t.Context(), `SELECT epoch, holder FROM `+schema+`.leadership`).Scan(&epoch, &holder); err != nil {
+		t.Fatalf("read leadership: %v", err)
+	}
+	return epoch, holder
+}
+
+// postgresReplica is postgresConfig for one of two replicas that share a cluster and a database: the Lease, the DSN's
+// Secret and the schema are the same, the identity, port and files are its own.
+func postgresReplica(t *testing.T, first RunConfig, identity string) (RunConfig, *replica) {
+	t.Helper()
+	c := startConfig(t)
+	c.Client = first.Client
+	c.Store, c.Election = first.Store, first.Election
+	c.Election.Identity = identity
+	rep := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
+	c.Logger = slog.New(slog.NewTextHandler(rep.logs, nil))
+	c.newSlack = func(slack.Config) slackAPI { rep.built.Add(1); return idleSlack{} }
+	c.exit = func(code int) { rep.exits <- code }
+	c.leaveKlog = true // two Runs in one process
+	return c, rep
+}
+
+// On Postgres the replica wins the Lease, is given epoch 1, and records who it is; and the standby of the pair, which
+// is ready, writes nothing and builds nothing, takes over with epoch 2 when the leader stops.
+func TestRunOnPostgresLeadsWithTheEpochAndAStandbyTakesOver(t *testing.T) {
+	dsn, schema := freshSchema(t)
+	ca := postgresConfig(t, dsn)
+	ca.leaveKlog = true
+	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
+	ca.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }
+	a.running = start(t, ca)
+	eventually(t, 20*time.Second, "the first replica did not lead", func() bool { return a.built.Load() == 1 })
+	if epoch, holder := leadershipRow(t, schema); epoch != 1 || holder != testElection.Identity {
+		t.Errorf("leadership = (%d, %q); want epoch 1 held by %q", epoch, holder, testElection.Identity)
+	}
+	cb, b := postgresReplica(t, ca, "pod-b_1")
+	b.running = start(t, cb)
+	b.until("/readyz", 200)
+	time.Sleep(5 * testElection.RetryPeriod)
+	if b.built.Load() != 0 || !b.metric("courier_leader 0") {
+		t.Errorf("the standby built %d platforms, or lacks courier_leader 0: it must do none of the leader's work", b.built.Load())
+	}
+
+	a.cancel()
+	if err := a.waitWithin(30 * time.Second); err != nil {
+		t.Fatalf("the leader's Run = %v after a signal", err)
+	}
+
+	eventually(t, 20*time.Second, "the standby did not take over", func() bool { return b.built.Load() == 1 })
+	if epoch, holder := leadershipRow(t, schema); epoch != 2 || holder != "pod-b_1" {
+		t.Errorf("leadership = (%d, %q); want epoch 2 held by pod-b_1", epoch, holder)
+	}
+}
+
+// A write of the leader that finds another replica has led since ends the process at once: one line, exit 5. Here the
+// other replica is a second store on the same database, which takes the next epoch behind the leader's back.
+func TestRunOnPostgresTheProcessExitsWhenAWriteFindsTheEpochStale(t *testing.T) {
+	dsn, _ := freshSchema(t)
+	c := postgresConfig(t, dsn)
+	c.leaveKlog = true
+	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
+	c.Logger = slog.New(slog.NewTextHandler(a.logs, nil))
+	c.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }
+	c.exit = func(code int) { a.exits <- code }
+	var captured atomic.Pointer[openedStore]
+	c.wrapStore = func(s openedStore) openedStore { captured.Store(&s); return s }
+	a.running = start(t, c)
+	eventually(t, 20*time.Second, "the replica did not lead", func() bool { return a.built.Load() == 1 })
+	rival, err := postgres.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rival.Close() })
+	if _, err := rival.Lead(t.Context(), "rival"); err != nil {
+		t.Fatalf("the rival's Lead: %v", err)
+	}
+
+	err = (*captured.Load()).AppendAudit(t.Context(), store.AuditEntry{At: time.Now(), Kind: store.AuditEvent, Subject: "after the takeover", Outcome: "accepted"})
+
+	if !errors.Is(err, store.ErrDeposed) {
+		t.Errorf("the deposed write = %v; want store.ErrDeposed", err)
+	}
+	select {
+	case code := <-a.exits:
+		if code != ExitLeadershipLost {
+			t.Errorf("exit code = %d; want %d", code, ExitLeadershipLost)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the process did not exit when a write found its epoch stale")
+	}
+	if n := strings.Count(a.logs.String(), "leadership lost"); n != 1 || !strings.Contains(a.logs.String(), "epoch stale") {
+		t.Errorf("log has %d leadership-lost lines; want one that names the stale epoch:\n%s", n, a.logs.String())
 	}
 }

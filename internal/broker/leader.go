@@ -1,0 +1,151 @@
+package broker
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render/live"
+	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+// leaderHalf is what courier runs only as the leader (spec 11, D37): the Binding pool and the chat platform, the
+// outbox, the session manager and its recovery, the sweeps and digests, the interactions' loops and the chat
+// connection (Socket Mode). With SQLite, or with Postgres once a replica holds the lease, Run starts it, in the
+// order a start-up has always had; what every replica runs (the health server, the config and the Secret caches,
+// the store) is Run's own and is already up. Each part registers its stop with the shutdown as it starts.
+type leaderHalf struct {
+	cfg     RunConfig
+	log     *slog.Logger
+	sd      *shutdown
+	metrics *Metrics
+	boot    *Config
+	st      openedStore
+}
+
+// start starts the leader half on conn, the ChatConnection and credentials as they are now (a standby that leads hours
+// after it started must not use the tokens it saw at start: a takeover is a restart to the new leader). Its parts run on
+// runCtx (the broker's own, which only the shutdown ends; ctx is Run's, the signal, which it only logs with). It returns the channel that says how the chat connection's run ended. An error
+// from a step is returned as it is; whatever started before it has registered its stop. It must not be called twice, or
+// once a shutdown has begun (Run's startGate sees to both).
+func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan error, error) {
+	cfg, log, sd, metrics, boot, st := h.cfg, h.log, h.sd, h.metrics, h.boot, h.st
+	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
+	var auditLog store.Audit = st
+	if cfg.auditStore != nil {
+		auditLog = cfg.auditStore(st)
+	}
+	auditor := audit.New(auditLog, audit.Options{Logger: log, OnFailure: metrics.AuditFailure})
+	bindings := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
+	sd.add(stepPool, func(context.Context) { bindings.Close() })
+
+	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
+	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
+	// courier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
+	metrics.ChatConnected(connName, false)
+	platform, err := cfg.newPlatform(conn, log, func(up bool) { metrics.ChatConnected(connName, up) })
+	if err != nil {
+		return nil, err
+	}
+	chatCtx, report, stopChat := WithAuthFailure(runCtx)
+	ob := outbox.New(outbox.Config{
+		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
+	})
+	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
+		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
+	}
+	outboxCtx, stopOutbox := context.WithCancel(runCtx)
+	outboxDone := make(chan struct{})
+	go func() { defer close(outboxDone); _ = ob.Run(outboxCtx) }()
+	sd.add(stepDrain, func(c context.Context) { // stop the drain loop, then post what is pending one last time
+		stopOutbox()
+		waitFor(c, outboxDone)
+		if err := ob.Reconcile(c); err != nil && c.Err() == nil {
+			log.Warn("outbox: the final drain did not finish", "error", err)
+		}
+		// Slack's connections close only now: the drain posts through them, and a connection that its
+		// calls opened after an earlier close would be one that nothing closes.
+		platform.closeIdle()
+	})
+
+	// The renderer posts a turn's first message through the outbox and edits or streams it through the
+	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
+	// acknowledgement path.
+	renderer := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
+	var sink renderSink = live.NewSink(renderer, ob, log)
+	if cfg.sink != nil {
+		sink = cfg.sink
+	}
+	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
+	// intake answers through the manager, so its session is bound once the manager is built (D2).
+	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
+	// them, and the manager, which they feed.
+	stops := stopList{trace: cfg.stopTrace}
+	sd.add(stepInteractions, stops.run)
+	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
+	tap, late, err := parts.newTap(sink)
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
+	if err != nil {
+		return nil, fmt.Errorf("session manager: %w", err)
+	}
+	late.bind(mgr)
+	sd.add(stepManager, func(c context.Context) {
+		if err := mgr.Close(c); err != nil {
+			log.Warn("closing the session manager", "error", err)
+		}
+		// The renders that were writing a final text when their turns ended are waited for here, after the
+		// turns, and before the drain that stops the outbox they post through.
+		if err := renderer.Wait(c); err != nil {
+			log.Warn("waiting for the renders of the last turns", "error", err)
+		}
+	})
+	if err := parts.recovered("recover-sessions", func() error { return mgr.Recover(runCtx) }); err != nil {
+		return nil, fmt.Errorf("recover sessions: %w", err)
+	}
+	// The rows of old trigger threads are purged on a timer. It writes only to the store, so it stops with the
+	// interactions' loops, before the store closes; added first, it stops last, after the tap and the rest.
+	sweep, err := newThreadSweep(threadSweepConfig{Store: st, Interval: cfg.threadSweepEvery, Logger: log})
+	if err != nil {
+		return nil, fmt.Errorf("trigger thread sweep: %w", err)
+	}
+	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
+	// The digest line of the alerts that a trigger's limits stopped is queued on the outbox, one for each window: the
+	// outbox posts it. The loop stops with the interactions' loops, before the outbox drain and the store.
+	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, Logger: log})
+	if err != nil {
+		return nil, fmt.Errorf("trigger digest: %w", err)
+	}
+	stops.add("trigger-digest", startLoop(runCtx, digest.Run))
+	interactions, err := parts.start(runCtx, mgr, tap, &stops)
+	if err != nil {
+		return nil, err
+	}
+
+	// A match of a botMessage trigger that starts a turn becomes a session through the manager's intake, the path a
+	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
+	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
+	starter := &triggerStarter{conn: connName, submit: mgr, notice: sink.QueueNotice, audit: auditor, link: permalinks(platform.Platform), log: log}
+	intake := chat.NewIntake(newIntakeConfig(intakeParts{
+		conn: conn.Ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+		notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
+	}))
+	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
+	parts.traced("open-intake")
+	go func() {
+		chatDone <- RunPlatform(chatCtx, platform, intake, RunPolicy{Logger: log})
+		close(chatStopped)
+	}()
+	sd.add(stepIntake, func(c context.Context) { // the intake stops before the interactions and the manager it feeds
+		stopChat()
+		waitFor(c, chatStopped)
+	})
+	return chatDone, nil
+}

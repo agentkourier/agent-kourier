@@ -86,14 +86,24 @@ func freshSchema(t *testing.T) (dsn, schema, application string) {
 	return u.String(), schema, application
 }
 
-// openAt opens a store on dsn and closes it when the test ends.
-func openAt(t *testing.T, dsn string, opts ...Option) *Store {
+// openStandbyAt opens a store on dsn that has no epoch, a standby's, and closes it when the test ends.
+func openStandbyAt(t *testing.T, dsn string, opts ...Option) *Store {
 	t.Helper()
 	s, err := Open(t.Context(), dsn, opts...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// openAt opens a store on dsn and makes it the leader, since only the leader may write, and closes it when the test ends.
+func openAt(t *testing.T, dsn string, opts ...Option) *Store {
+	t.Helper()
+	s := openStandbyAt(t, dsn, opts...)
+	if _, err := s.Lead(t.Context(), "test-"+randHex(t)); err != nil {
+		t.Fatalf("Lead: %v", err)
+	}
 	return s
 }
 

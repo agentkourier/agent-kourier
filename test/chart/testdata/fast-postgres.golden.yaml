@@ -17,7 +17,10 @@ spec:
       app.kubernetes.io/instance: courier
       app.kubernetes.io/name: courier
   strategy:
-    type: Recreate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
   template:
     metadata:
       labels:
@@ -34,6 +37,14 @@ spec:
           value: courier/courier-pg/dsn
         - name: COURIER_POSTGRES_TIMEOUTS
           value: courier
+        - name: COURIER_LEASE_NAMESPACE
+          value: courier
+        - name: COURIER_LEASE_NAME
+          value: courier-leader
+        - name: COURIER_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         - name: COURIER_LISTEN
           value: :8080
         - name: COURIER_LOG_LEVEL
@@ -98,6 +109,43 @@ spec:
       - emptyDir: {}
         name: tmp
 ---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-leader
+  namespace: courier
+spec: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-leader
+  namespace: courier
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - courier-leader
+  resources:
+  - leases
+  verbs:
+  - get
+  - update
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -117,6 +165,26 @@ rules:
   verbs:
   - list
   - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-leader
+  namespace: courier
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: courier-leader
+subjects:
+- kind: ServiceAccount
+  name: courier
+  namespace: courier
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

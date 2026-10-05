@@ -1,10 +1,13 @@
 # Defaults for the courier chart.
 #
-# This chart runs ONE replica, with its state in SQLite on a PersistentVolumeClaim (store.type sqlite, the default) or in
-# Postgres (store.type postgres). One replica is a limit of courier today, not a default to tune: a SQLite file may be open in
-# one pod, and the session manager keeps per-thread state in memory. More than one replica needs Postgres AND leader election
-# with fencing (H4-5), and the chart fails the render for replicaCount > 1 until that lands. replicaCount 0 is the kill
-# switch: courier stops, and the volume (or the database) stays.
+# This chart runs ONE replica by default, with its state in SQLite on a PersistentVolumeClaim (store.type sqlite, the default)
+# or in Postgres (store.type postgres). A SQLite file may be open in one pod, and the session manager keeps per-thread state in
+# memory, so SQLite is one replica: the render refuses replicaCount above 1 with it. With Postgres, replicaCount 2 gives an
+# active/passive pair (spec 11, D37): the replicas elect a leader with a Kubernetes Lease (leaderElection below), the leader
+# does all of courier's work, and the standby is Ready and idle until the leader's lease lapses or it stops. Every write is
+# fenced by an epoch in the database, so a leader that has been paused past its lease cannot write when it wakes. Postgres
+# at replicaCount 1 elects too, and is a standby-less leader. replicaCount 0 is the kill switch: courier stops, and the volume
+# (or the database) stays.
 replicaCount: 1
 
 image:
@@ -79,7 +82,7 @@ config:
   rollOnChange: true
 
 # Where courier keeps its state (spec D15). SQLite is one file on a volume (persistence below), for one replica. Postgres is
-# a database you run (the chart does not install one), for more than one replica once leader election (H4-5) lands.
+# a database you run (the chart does not install one), for more than one replica: they elect a leader (leaderElection below).
 store:
   type: sqlite # sqlite or postgres (COURIER_STORE)
   postgres:
@@ -100,6 +103,18 @@ store:
     # protection: there, set both on the database role (ALTER ROLE courier SET idle_in_transaction_session_timeout = '10s';
     # ALTER ROLE courier SET statement_timeout = '30s') and set this to "role", which turns courier's own off.
     timeouts: courier
+
+# Leader election, which runs with store.type postgres only (with sqlite none of this is allowed). The replicas hold one Lease,
+# named <fullname>-leader in the release namespace, which the chart's Role grants (rbac.create). The leader renews it every
+# retryPeriod. A standby takes it leaseDuration after the last renewal it saw, so the worst case before work resumes after a
+# crash or a lost node is the lease duration plus courier's start-up (a few seconds). A leader that cannot renew for
+# renewDeadline gives up and exits at once, which is 5 s before a standby may take over with the defaults. The leader hands
+# the lease over when it stops on a signal (a rolling update), so that takeover is quick. Empty is courier's default; each is a
+# Go duration, and leaseDuration > renewDeadline > 1.2 x retryPeriod.
+leaderElection:
+  leaseDuration: "" # 15s
+  renewDeadline: "" # 10s
+  retryPeriod: "" # 2s
 
 # SQLite lives here (store.type sqlite; with postgres none of this is used or rendered). The claim is ReadWriteOnce and the
 # Deployment's strategy is Recreate, so the old pod has released the volume before the new one starts.
@@ -205,9 +220,10 @@ networkPolicy:
   #     ports: [{port: 4180}]
   extraEgress: []
 
-# Off, and meaningful only with the standby (H4-5): at one replica a budget that keeps the pod (minAvailable 1 or 100%,
-# maxUnavailable 0) blocks every voluntary eviction, a node drain included, so the render refuses it. Set exactly one of
-# minAvailable and maxUnavailable; with one replica only maxUnavailable: 1 renders, and that permits what it was meant to stop.
+# Off, and meaningful with the standby (replicaCount 2 on Postgres): minAvailable: 1 keeps a drain from taking both replicas, and
+# renders there. At one replica a budget that keeps the pod (minAvailable 1 or 100%, maxUnavailable 0) blocks every voluntary
+# eviction, a node drain included, so the render refuses it. Set exactly one of minAvailable and maxUnavailable; with one
+# replica only maxUnavailable: 1 renders, and that permits what it was meant to stop.
 # A minAvailable that renders at replicaCount 0 (the kill switch) is refused again on scaling back to 1: switch the budget
 # off, or to maxUnavailable, before scaling to zero.
 podDisruptionBudget:

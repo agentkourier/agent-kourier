@@ -45,7 +45,9 @@ courier_fail() {
   exit 1
 }
 "${K[@]}" -n courier rollout status deploy/courier --timeout=180s || courier_fail "courier's rollout did not finish"
-pod=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o jsonpath='{.items[*].metadata.name}')
+# A pod that is shutting down does not count: on Postgres the Deployment rolls with a surge, and the old pod, which hands its Lease over as it
+# stops, may still be listed (Terminating) when the rollout has finished.
+pod=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
 [[ "${pod}" != *" "* && -n "${pod}" ]] || courier_fail "want exactly one courier pod, have: ${pod:-none}"
 echo "ok: one courier pod, ${pod}, rolled out"
 for path in healthz readyz; do

@@ -8,9 +8,16 @@ metadata:
     {{- include "courier.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # The SQLite volume is never mounted by two pods: the old one is gone before the new one starts. With Postgres there is one
-  # pod too, until leader election (H4-5) lets two run: a rolling update would run two active couriers.
+  {{- if include "courier.sqlite" . }}
+  # The SQLite volume is never mounted by two pods: the old one is gone before the new one starts.
   strategy: {type: Recreate}
+  {{- else }}
+  # With Postgres more than one pod may run, and a Lease says which works: the new pod starts as a standby beside the old one,
+  # and takes over when the old one stops. One pod is never taken away before its replacement is Ready.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "courier.selectorLabels" . | nindent 6 }}
@@ -56,6 +63,20 @@ spec:
             {{- /* A reference to the Secret, which courier reads through the API: the DSN is never in the pod spec. */}}
             - {name: COURIER_POSTGRES_DSN_SECRET, value: {{ printf "%s/%s/%s" .Release.Namespace .Values.store.postgres.dsnSecret.name .Values.store.postgres.dsnSecret.key | quote }}}
             - {name: COURIER_POSTGRES_TIMEOUTS, value: {{ .Values.store.postgres.timeouts | quote }}}
+            {{- /* The election: the Lease is in the release namespace, and the pod's name says who holds it. */}}
+            - {name: COURIER_LEASE_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+            - {name: COURIER_LEASE_NAME, value: {{ include "courier.leaseName" . | quote }}}
+            - name: COURIER_POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            {{- with .Values.leaderElection.leaseDuration }}
+            - {name: COURIER_LEASE_DURATION, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.leaderElection.renewDeadline }}
+            - {name: COURIER_LEASE_RENEW_DEADLINE, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.leaderElection.retryPeriod }}
+            - {name: COURIER_LEASE_RETRY_PERIOD, value: {{ . | quote }}}
+            {{- end }}
             {{- end }}
             - {name: COURIER_LISTEN, value: {{ printf ":%d" (int .Values.listen.port) | quote }}}
             - {name: COURIER_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
@@ -70,7 +91,8 @@ spec:
           # Bootstrap waits up to 30 s (COURIER_SYNC_TIMEOUT) for the Secret caches, so startup is allowed 80 s before
           # the other probes begin. /healthz says the process is alive. /readyz says it is configured and its store and
           # Secret caches answer; it does NOT say Slack is connected, by design (courier_chat_connected is the metric
-          # for that), so a Slack outage never takes courier out of its Service or restarts it.
+          # for that), so a Slack outage never takes courier out of its Service or restarts it. Nor does it depend on the
+          # lease: a standby is Ready, and idle until it leads.
           startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 40}
           livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10}
           readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5}

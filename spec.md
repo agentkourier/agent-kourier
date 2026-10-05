@@ -950,7 +950,10 @@ this with an outbox:
   `COURIER_POSTGRES_DSN_SECRET` is `namespace/name/key` of the Secret that holds the DSN, read through the same Secret caches as
   every other Secret (D15, section 10). The DSN is never logged, shown in an error, `/readyz` or a metric; an unreadable or empty
   Secret fails the start. Courier cannot see its replica count, so R7 is enforced by the Helm chart, which refuses more than one
-  replica with SQLite and, until leader election lands (D37), with Postgres too.
+  replica with SQLite. With Postgres the replicas elect a leader (section 11, D37): `COURIER_LEASE_NAMESPACE`,
+  `COURIER_LEASE_NAME` and `COURIER_POD_NAME` say where the Lease is and who the replica is, and
+  `COURIER_LEASE_DURATION`, `COURIER_LEASE_RENEW_DEADLINE` and `COURIER_LEASE_RETRY_PERIOD` set its timings (15 s, 10 s, 2 s).
+  There is no election with SQLite.
 
 ## 10. Security
 

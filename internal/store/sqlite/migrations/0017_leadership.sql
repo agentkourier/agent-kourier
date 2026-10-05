@@ -1,0 +1,2 @@
+-- Postgres adds the leadership table here (spec D37: epoch fencing for more than one replica). SQLite is the
+-- store of one replica (D15, R7): there is no other leader to fence off, so it has no epoch and nothing to migrate.

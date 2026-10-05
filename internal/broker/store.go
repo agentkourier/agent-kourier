@@ -21,7 +21,8 @@ type StoreKind string
 const (
 	// StoreSQLite is one file on a volume, for one replica (spec R7).
 	StoreSQLite StoreKind = "sqlite"
-	// StorePostgres is a PostgreSQL database, which more than one replica needs (spec D37).
+	// StorePostgres is a PostgreSQL database, which more than one replica needs, with leader election and epoch
+	// fencing (spec D37).
 	StorePostgres StoreKind = "postgres"
 )
 
@@ -88,10 +89,11 @@ type openedStore interface {
 }
 
 // openStore opens the store that c chooses: the SQLite file at dbPath, or the Postgres database whose DSN is in the
-// Secret that c names, read through secrets. An error wraps ErrWiring when the config is at fault, which includes a
+// Secret that c names, read through secrets. extra are more options for the Postgres store (SQLite takes none): Run
+// passes the one that ends the process when a write finds that another replica has led since (spec D37). An error wraps ErrWiring when the config is at fault, which includes a
 // Secret that cannot be read (it is missing, has no such key, or is empty), and none carries the DSN or the password
 // in it.
-func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secretValues, log *slog.Logger) (openedStore, error) {
+func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secretValues, log *slog.Logger, extra ...postgres.Option) (openedStore, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -114,7 +116,7 @@ func openStore(ctx context.Context, c StoreConfig, dbPath string, secrets secret
 		return nil, fmt.Errorf("%w: the Postgres DSN: %w", ErrWiring, err)
 	}
 	// The errors of Open and of the store carry neither the DSN nor its password (internal/store/postgres).
-	st, err := postgres.Open(ctx, dsn.Reveal(), postgresOptions(c, log)...)
+	st, err := postgres.Open(ctx, dsn.Reveal(), append(postgresOptions(c, log), extra...)...)
 	if err != nil {
 		return nil, fmt.Errorf("open the postgres store: %w", err)
 	}

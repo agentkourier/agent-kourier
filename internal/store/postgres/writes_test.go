@@ -58,6 +58,7 @@ func TestWritesGoThroughInTx(t *testing.T) {
 	pgxBegins := map[string]bool{"BeginFunc": true, "BeginTxFunc": true}
 	allowed := map[string]bool{
 		"inTx":           true, // the one path of every write
+		"Lead":           true, // takes the epoch, so it cannot go through inTx, which refuses a store that has none
 		"applyMigration": true, // runs before there is a store, under its own lock
 	}
 	// Calls that run SQL on the pool, and which argument holds it. listInteractions passes its argument on, so

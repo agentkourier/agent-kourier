@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/rest"
 )
@@ -78,10 +79,21 @@ func TestValidateTheStore(t *testing.T) {
 		mutate func(*RunConfig)
 		want   string // "" is accepted; otherwise a piece of the wiring error
 	}{
-		"sqlite is the default":     {func(*RunConfig) {}, ""},
-		"sqlite, named":             {func(c *RunConfig) { c.Store.Kind = StoreSQLite }, ""},
-		"sqlite needs its path":     {func(c *RunConfig) { c.DBPath = "" }, "DBPath"},
-		"postgres with its Secret":  {func(c *RunConfig) { c.DBPath = ""; c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: pg} }, ""},
+		"sqlite is the default": {func(*RunConfig) {}, ""},
+		"sqlite, named":         {func(c *RunConfig) { c.Store.Kind = StoreSQLite }, ""},
+		"sqlite needs its path": {func(c *RunConfig) { c.DBPath = "" }, "DBPath"},
+		"postgres with its Secret": {func(c *RunConfig) {
+			c.DBPath = ""
+			c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: pg}
+			c.Election = testElection
+		}, ""},
+		"postgres needs the election": {func(c *RunConfig) { c.DBPath = ""; c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: pg} }, "the election lacks [Identity Name Namespace]"},
+		"the election's timings must be ordered": {func(c *RunConfig) {
+			c.DBPath = ""
+			c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: pg}
+			c.Election = testElection
+			c.Election.LeaseDuration, c.Election.RenewDeadline = 5*time.Second, 5*time.Second
+		}, "lease duration"},
 		"postgres needs the Secret": {func(c *RunConfig) { c.Store.Kind = StorePostgres }, "Secret that holds its DSN"},
 		"postgres needs the whole key": {func(c *RunConfig) {
 			c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: SecretKey{Namespace: "courier", Name: "x"}}

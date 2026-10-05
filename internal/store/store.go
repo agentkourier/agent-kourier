@@ -34,6 +34,10 @@ var (
 	ErrConflict = errors.New("store: conflict")
 	// ErrLimit is returned when a bound on what the store holds would be passed.
 	ErrLimit = errors.New("store: limit reached")
+	// ErrDeposed is returned by a write of a fenced store (Fenced) that is not the leader: it has been given
+	// no epoch yet (a standby), or its epoch is stale because another replica has led since. The write changed
+	// nothing. A caller does not retry it: a deposed leader's process ends (spec D37).
+	ErrDeposed = errors.New("store: deposed")
 )
 
 // Store is the full persistence surface, composed of one interface per concern. It is safe for

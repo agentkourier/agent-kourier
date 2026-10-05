@@ -32,6 +32,8 @@ type Metrics struct {
 	decisions     *prometheus.CounterVec
 	chatUp        *prometheus.GaugeVec
 	turns         *prometheus.CounterVec
+	leader        prometheus.Gauge
+	takeovers     prometheus.Counter
 }
 
 // NewMetrics returns the metrics. stale is read at each scrape for courier_config_stale, and
@@ -57,6 +59,10 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
 		turns: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_turn_outcomes_total",
 			Help: "Turns that ended, by Binding and how: the terminal state of the task, or the class of what stopped it."}, []string{"binding", "outcome"}),
+		leader: prometheus.NewGauge(prometheus.GaugeOpts{Name: "courier_leader",
+			Help: "1 while this replica does courier's work (it leads, or it is the only replica: SQLite), 0 while it is a standby."}),
+		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_leader_takeovers_total",
+			Help: "Times this replica took the leadership: it won the lease and was given the next epoch."}),
 	}
 	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "courier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
@@ -66,7 +72,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.decisions, m.chatUp, m.turns, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -153,6 +159,18 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 	}
 	m.chatUp.WithLabelValues(connection).Set(v)
 }
+
+// Leader sets courier_leader: 1 once this replica does courier's work, 0 while it waits to.
+func (m *Metrics) Leader(leading bool) {
+	v := 0.0
+	if leading {
+		v = 1
+	}
+	m.leader.Set(v)
+}
+
+// Takeover counts a leadership taken: the lease won and the epoch bumped.
+func (m *Metrics) Takeover() { m.takeovers.Inc() }
 
 // Handler serves the registry in the Prometheus text format.
 func (m *Metrics) Handler() http.Handler {

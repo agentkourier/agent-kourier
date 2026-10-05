@@ -237,8 +237,10 @@ func TestRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"two replicas", []string{"--set", image, "--set", "replicaCount=2"}, "replicaCount > 1 is not supported"},
-		{"two replicas on Postgres", []string{"--set", image, "--set", "replicaCount=2,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn"}, "leader election"},
+		{"two replicas", []string{"--set", image, "--set", "replicaCount=2"}, "replicaCount > 1 needs store.type postgres"},
+		{"two replicas on SQLite, named", []string{"--set", image, "--set", "replicaCount=2,store.type=sqlite"}, "replicaCount > 1 needs store.type postgres"},
+		{"an election setting with SQLite", []string{"--set", image, "--set", "leaderElection.leaseDuration=20s"}, "leaderElection is for store.type postgres"},
+		{"an election timing that is no duration", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,leaderElection.retryPeriod=soon"}, "leaderElection"},
 		{"Postgres without a DSN Secret", []string{"--set", image, "--set", "store.type=postgres"}, "store.postgres.dsnSecret.name and store.postgres.dsnSecret.key"},
 		{"Postgres with a Secret and no key", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg"}, "store.postgres.dsnSecret.name and store.postgres.dsnSecret.key"},
 		{"a DSN Secret with SQLite", []string{"--set", image, "--set", "store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn"}, "store.postgres.dsnSecret is for store.type postgres"},
@@ -402,8 +404,10 @@ func TestPostgresStore(t *testing.T) {
 		env := map[string]string{}
 		for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 			env[e.Name] = e.Value
-			if e.ValueFrom != nil {
-				t.Errorf("env %s comes from a source: the DSN is read through the API, and nothing is mounted or injected", e.Name)
+			// The one value from a source is the pod's own name, which says who holds the Lease: the DSN is read through the
+			// API, and nothing of it is mounted or injected.
+			if e.ValueFrom != nil && (e.Name != "COURIER_POD_NAME" || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "metadata.name") {
+				t.Errorf("env %s comes from a source %+v; want only COURIER_POD_NAME, from the pod's name", e.Name, e.ValueFrom)
 			}
 		}
 		return d, objs, env
@@ -430,8 +434,8 @@ func TestPostgresStore(t *testing.T) {
 	if slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "PersistentVolumeClaim" }) {
 		t.Errorf("a PersistentVolumeClaim with Postgres: %v", kinds(objs))
 	}
-	if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
-		t.Errorf("strategy %s; want Recreate: one active courier until leader election lets two run", d.Spec.Strategy.Type)
+	if d.Spec.Strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+		t.Errorf("strategy %s; want RollingUpdate: with Postgres two pods may run, and the Lease says which works", d.Spec.Strategy.Type)
 	}
 	roles := map[string]rbacv1.Role{}
 	for _, o := range objs {
@@ -464,6 +468,105 @@ func TestPostgresStore(t *testing.T) {
 		t.Errorf("objects %v; want the claim, and a Role in sre only", kinds(objs))
 	}
 	_ = d
+}
+
+// TestLeaderElection: with Postgres the chart allows two replicas, rolls them one at a time with the new pod beside the old, tells
+// each pod the Lease and its own name, makes the Lease (kept on uninstall) and grants get and update on that one Lease and
+// nothing else, no create, in the release namespace. A PodDisruptionBudget that keeps one pod renders at two replicas. With SQLite none of it is there.
+func TestLeaderElection(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	pg := []string{"--set", "image.repository=courier,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,replicaCount=2"}
+	objs := mustRender(t, "courier", "courier-system", append(pg, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1")...)
+
+	var d appsv1.Deployment
+	find(t, objs, "Deployment", "courier", &d)
+	if *d.Spec.Replicas != 2 {
+		t.Errorf("replicas %d; want 2", *d.Spec.Replicas)
+	}
+	ru := d.Spec.Strategy.RollingUpdate
+	if d.Spec.Strategy.Type != appsv1.RollingUpdateDeploymentStrategyType || ru == nil || ru.MaxSurge.IntValue() != 1 || ru.MaxUnavailable.IntValue() != 0 {
+		t.Errorf("strategy %+v; want RollingUpdate, one surge and none unavailable: a pod is never taken away before its replacement is Ready", d.Spec.Strategy)
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e
+	}
+	if env["COURIER_LEASE_NAMESPACE"].Value != "courier-system" || env["COURIER_LEASE_NAME"].Value != "courier-leader" {
+		t.Errorf("the Lease is %q in %q; want courier-leader in the release namespace", env["COURIER_LEASE_NAME"].Value, env["COURIER_LEASE_NAMESPACE"].Value)
+	}
+	if pod := env["COURIER_POD_NAME"]; pod.ValueFrom == nil || pod.ValueFrom.FieldRef == nil || pod.ValueFrom.FieldRef.FieldPath != "metadata.name" {
+		t.Errorf("COURIER_POD_NAME = %+v; want the pod's name from the downward API", pod)
+	}
+	for _, name := range []string{"COURIER_LEASE_DURATION", "COURIER_LEASE_RENEW_DEADLINE", "COURIER_LEASE_RETRY_PERIOD"} {
+		if _, set := env[name]; set {
+			t.Errorf("%s is set by default; want courier's own default", name)
+		}
+	}
+
+	var role rbacv1.Role
+	find(t, objs, "Role", "courier-leader", &role)
+	if role.Namespace != "courier-system" || len(role.Rules) != 1 {
+		t.Fatalf("Role %s/%s with %d rules; want one, in the release namespace", role.Namespace, role.Name, len(role.Rules))
+	}
+	if r := role.Rules[0]; !slices.Equal(r.APIGroups, []string{"coordination.k8s.io"}) || !slices.Equal(r.Resources, []string{"leases"}) || !slices.Equal(r.ResourceNames, []string{"courier-leader"}) || !slices.Equal(r.Verbs, []string{"get", "update"}) {
+		t.Errorf("the rule %+v; want get and update on the one Lease courier-leader, and no create (it cannot be limited by name)", r)
+	}
+	var lease struct {
+		Metadata struct {
+			Namespace   string            `json:"namespace"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Spec map[string]any `json:"spec"`
+	}
+	find(t, objs, "Lease", "courier-leader", &lease)
+	if lease.Metadata.Namespace != "courier-system" || lease.Metadata.Annotations["helm.sh/resource-policy"] != "keep" || len(lease.Spec) != 0 {
+		t.Errorf("Lease %+v; want it in the release namespace, empty, and kept on uninstall", lease)
+	}
+	var binding rbacv1.RoleBinding
+	find(t, objs, "RoleBinding", "courier-leader", &binding)
+	if binding.RoleRef.Name != "courier-leader" || len(binding.Subjects) != 1 || binding.Subjects[0].Name != "courier" || binding.Subjects[0].Namespace != "courier-system" {
+		t.Errorf("RoleBinding %+v; want the Role bound to courier's ServiceAccount", binding)
+	}
+	var pdb struct {
+		Spec struct {
+			MinAvailable int `json:"minAvailable"`
+		} `json:"spec"`
+	}
+	find(t, objs, "PodDisruptionBudget", "courier", &pdb)
+	if pdb.Spec.MinAvailable != 1 {
+		t.Errorf("minAvailable %d; want 1: at two replicas a drain may take one", pdb.Spec.MinAvailable)
+	}
+
+	// The timings pass through.
+	objs = mustRender(t, "courier", "courier-system", append(pg, "--set", "leaderElection.leaseDuration=20s,leaderElection.renewDeadline=12s,leaderElection.retryPeriod=3s")...)
+	find(t, objs, "Deployment", "courier", &d)
+	got := map[string]string{}
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		got[e.Name] = e.Value
+	}
+	if got["COURIER_LEASE_DURATION"] != "20s" || got["COURIER_LEASE_RENEW_DEADLINE"] != "12s" || got["COURIER_LEASE_RETRY_PERIOD"] != "3s" {
+		t.Errorf("env %v; want the timings of the values", got)
+	}
+
+	// No Role without rbac.create (the Lease stays: it is not RBAC), nothing with SQLite, which has no election: one pod,
+	// Recreate, no Lease in its environment.
+	if objs := mustRender(t, "courier", "courier-system", append(pg, "--set", "rbac.create=false")...); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" || o.kind() == "RoleBinding" }) || !slices.Contains(kinds(objs), "Lease/courier-system/courier-leader") {
+		t.Errorf("rbac.create=false rendered %v; want the Lease and no Role", kinds(objs))
+	}
+	objs = mustRender(t, "courier", "courier-system", "--set", "image.repository=courier")
+	if slices.ContainsFunc(objs, func(o object) bool { return o.name() == "courier-leader" }) {
+		t.Errorf("SQLite rendered the Lease or its Role: %v", kinds(objs))
+	}
+	find(t, objs, "Deployment", "courier", &d)
+	if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("SQLite strategy %s; want Recreate", d.Spec.Strategy.Type)
+	}
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		if strings.HasPrefix(e.Name, "COURIER_LEASE") || e.Name == "COURIER_POD_NAME" {
+			t.Errorf("SQLite sets %s: there is no election", e.Name)
+		}
+	}
 }
 
 func TestPodLabelsCannotMoveTheSelector(t *testing.T) {

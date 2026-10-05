@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"slices"
 	"time"
 
@@ -26,6 +27,9 @@ type RunConfig struct {
 	ConfigDir, DBPath string
 	// Store chooses SQLite, the default, or Postgres, and where the Postgres DSN is.
 	Store StoreConfig
+	// Election is the leader election of a store that fences (Postgres; see store.Fenced), and is required with one.
+	// SQLite has no election: its replica does the work at once.
+	Election ElectionConfig
 	// Listener serves /healthz, /readyz and /metrics, from the start of Run to its end.
 	Listener net.Listener
 	// Client is the Kubernetes client the Secret informers use. Nil means InClusterClient.
@@ -65,6 +69,14 @@ type RunConfig struct {
 	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see
 	// the order inside the step, which shutdownTrace, which sees the steps, cannot.
 	stopTrace func(name string)
+	// leaveKlog leaves klog's process-wide logger alone: a test that runs two brokers in one process, which one
+	// process never does, would otherwise have the second set it while the first's informers read it.
+	leaveKlog bool
+	// exit ends the process when leadership is lost: os.Exit if nil. A test records the call instead.
+	exit func(code int)
+	// wrapStore replaces the store Run opened with one that wraps it, for this package's tests that need a store
+	// that fences (store.Fenced) over SQLite, which does not.
+	wrapStore func(openedStore) openedStore
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)
@@ -75,6 +87,11 @@ type RunConfig struct {
 func (c RunConfig) validate() error {
 	if err := c.Store.validate(); err != nil {
 		return err
+	}
+	if c.Store.kind() == StorePostgres {
+		if err := c.Election.validate(); err != nil {
+			return err
+		}
 	}
 	var missing []string
 	for name, ok := range map[string]bool{
@@ -89,6 +106,13 @@ func (c RunConfig) validate() error {
 		return fmt.Errorf("%w: RunConfig lacks %v", ErrWiring, missing)
 	}
 	return nil
+}
+
+func (c RunConfig) exitFunc() func(int) {
+	if c.exit != nil {
+		return c.exit
+	}
+	return os.Exit
 }
 
 func (c RunConfig) logger() *slog.Logger {

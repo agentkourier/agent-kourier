@@ -14,10 +14,10 @@ import (
 )
 
 // RegisterMetrics exposes the pool's statistics and the durable backlog gauges, under the names the
-// SQLite store gives the gauges, so one dashboard reads either. The queries use a short deadline and
+// SQLite store gives the gauges, so one dashboard reads either, and courier_store_deposed_total, which only this store has. The queries use a short deadline and
 // report invalid metrics on failure, rather than false zeros.
 func (s *Store) RegisterMetrics(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{&poolCollector{s: s}, &backlogCollector{s: s}} {
+	for _, c := range []prometheus.Collector{&poolCollector{s: s}, &backlogCollector{s: s}, s.deposed} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -132,6 +133,7 @@ func TestRunRefusesAnUnknownCommand(t *testing.T) {
 // The store is SQLite unless the environment says Postgres, and Postgres takes the reference to the Secret that holds its DSN.
 func TestEnvConfigChoosesTheStore(t *testing.T) {
 	ref := broker.SecretKey{Namespace: "courier", Name: "courier-pg", Key: "dsn"}
+	lease := env{"COURIER_LEASE_NAMESPACE": "courier", "COURIER_LEASE_NAME": "courier-leader", "COURIER_POD_NAME": "courier-0"}
 	for name, tc := range map[string]struct {
 		env  env
 		want broker.StoreConfig
@@ -144,11 +146,68 @@ func TestEnvConfigChoosesTheStore(t *testing.T) {
 		"postgres, the role":    {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier/courier-pg/dsn", "COURIER_POSTGRES_TIMEOUTS": "role"}, broker.StoreConfig{Kind: broker.StorePostgres, PostgresDSN: ref, PostgresRoleTimeouts: true}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if tc.want.Kind == broker.StorePostgres {
+				tc.env = maps.Clone(tc.env)
+				maps.Copy(tc.env, lease)
+			}
 			got, err := loadEnv(tc.env.get)
 			if err != nil || got.store != tc.want {
 				t.Errorf("store = %+v, %v; want %+v", got.store, err, tc.want)
 			}
 		})
+	}
+}
+
+// With Postgres the election is on: the Lease and the pod are required, the timings are optional, and the pod's name is
+// the identity (run makes it unique to the process). With SQLite there is no election and no variable asks for one.
+func TestEnvConfigReadsTheElection(t *testing.T) {
+	pg := env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier/courier-pg/dsn", "COURIER_POD_NAME": "courier-7d9f", "COURIER_LEASE_NAMESPACE": "courier", "COURIER_LEASE_NAME": "courier-leader"}
+	with := func(kv ...string) env {
+		e := maps.Clone(pg)
+		for i := 0; i < len(kv); i += 2 {
+			e[kv[i]] = kv[i+1]
+		}
+		return e
+	}
+	got, err := loadEnv(pg.get)
+	want := broker.ElectionConfig{Namespace: "courier", Name: "courier-leader", Identity: "courier-7d9f"}
+	if err != nil || got.election != want {
+		t.Errorf("election = %+v, %v; want %+v with the timings left to the default", got.election, err, want)
+	}
+	got, err = loadEnv(with("COURIER_LEASE_DURATION", "20s", "COURIER_LEASE_RENEW_DEADLINE", "12s", "COURIER_LEASE_RETRY_PERIOD", "3s").get)
+	if err != nil || got.election.LeaseDuration != 20*time.Second || got.election.RenewDeadline != 12*time.Second || got.election.RetryPeriod != 3*time.Second {
+		t.Errorf("timings = %+v, %v; want 20s, 12s and 3s", got.election, err)
+	}
+	if got, err = loadEnv(env{}.get); err != nil || got.election != (broker.ElectionConfig{}) {
+		t.Errorf("SQLite's election = %+v, %v; want none", got.election, err)
+	}
+
+	for name, tc := range map[string]struct {
+		env env
+		key string
+	}{
+		"no Lease namespace":       {with("COURIER_LEASE_NAMESPACE", ""), "COURIER_LEASE_NAMESPACE"},
+		"no Lease name":            {with("COURIER_LEASE_NAME", ""), "COURIER_LEASE_NAME"},
+		"no pod name":              {with("COURIER_POD_NAME", ""), "COURIER_POD_NAME"},
+		"a timing that is no time": {with("COURIER_LEASE_DURATION", "soon"), "COURIER_LEASE_DURATION"},
+		"a timing of zero":         {with("COURIER_LEASE_RENEW_DEADLINE", "0s"), "COURIER_LEASE_RENEW_DEADLINE"},
+		"a negative timing":        {with("COURIER_LEASE_RETRY_PERIOD", "-1s"), "COURIER_LEASE_RETRY_PERIOD"},
+		"a lease with sqlite":      {env{"COURIER_LEASE_NAME": "x"}, "COURIER_LEASE_NAME"},
+		"a timing with sqlite":     {env{"COURIER_LEASE_DURATION": "15s"}, "COURIER_LEASE_DURATION"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadEnv(tc.env.get); !errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("loadEnv = %v; want an ErrWiring naming %s", err, tc.key)
+			}
+		})
+	}
+}
+
+func TestUniqueIdentityIsThePodNameAndSomethingOfTheProcess(t *testing.T) {
+	a, errA := uniqueIdentity("courier-7d9f")
+	b, errB := uniqueIdentity("courier-7d9f")
+	if errA != nil || errB != nil || a == b || !strings.HasPrefix(a, "courier-7d9f_") || len(a) != len("courier-7d9f_")+8 {
+		t.Errorf("identities %q and %q (%v, %v); want the pod's name and 8 hex digits that differ between processes", a, b, errA, errB)
 	}
 }
 
