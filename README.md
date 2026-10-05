@@ -279,3 +279,7 @@ make fmt lint test build
 
 The build produces `bin/courier`. Kubernetes test environments and the real-Slack
 sandbox are available through the Makefile; run `make` to list the targets.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
