@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 var (
@@ -199,7 +199,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	s, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

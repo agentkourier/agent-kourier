@@ -202,9 +202,11 @@ func (r *recorder) Interaction(_ context.Context, i chat.Interaction) error {
 	return r.err
 }
 
+// wait polls done until it holds. The deadline is only how long a condition that will never hold is waited
+// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
 func (r *recorder) wait(t *testing.T, what string, done func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		r.mu.Lock()
 		ok := done()
 		r.mu.Unlock()

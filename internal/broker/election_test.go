@@ -242,7 +242,7 @@ func holder(t *testing.T, client *fake.Clientset) string {
 func TestCandidacyOnlyTheWinnerIsToldItLeads(t *testing.T) {
 	client := fake.NewClientset()
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 5*time.Second, "the first candidate was not told it leads", func() bool { return a.gained.Load() == 1 })
+	eventually(t, 20*time.Second, "the first candidate was not told it leads", func() bool { return a.gained.Load() == 1 })
 	b := standFor(t, client, "pod-b_1")
 
 	time.Sleep(testElection.LeaseDuration + time.Second) // longer than a lease: a leader that renews keeps it
@@ -264,7 +264,7 @@ func TestCandidacyTakesTheEmptyLeaseTheChartMade(t *testing.T) {
 
 	a := standFor(t, client, "pod-a_1")
 
-	eventually(t, 5*time.Second, "the candidate did not take the empty Lease", func() bool { return a.gained.Load() == 1 })
+	eventually(t, 20*time.Second, "the candidate did not take the empty Lease", func() bool { return a.gained.Load() == 1 })
 	if got := holder(t, client); got != "pod-a_1" {
 		t.Errorf("the Lease's holder = %q; want pod-a_1", got)
 	}
@@ -282,7 +282,7 @@ func TestCandidacyALeaderThatCannotRenewTheLeaseIsToldSo(t *testing.T) {
 		return false, nil, nil
 	})
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 5*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
+	eventually(t, 20*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
 
 	start := time.Now()
 	unreachable.Store(true)
@@ -317,7 +317,7 @@ func TestCandidacyTheLeaseClockFollowsTheLeadersAcceptedRenewals(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.stop(context.WithoutCancel(t.Context())) })
-	eventually(t, 5*time.Second, "not leading", func() bool { return gained.Load() == 1 })
+	eventually(t, 20*time.Second, "not leading", func() bool { return gained.Load() == 1 })
 	if _, ok := lease.since(); !ok {
 		t.Fatal("the leader was told it leads, and the lease clock knows of no renewal: the acquisition is one")
 	}
@@ -341,13 +341,13 @@ func TestCandidacyTheLeaseClockFollowsTheLeadersAcceptedRenewals(t *testing.T) {
 func TestCandidacyAStopHandsTheLeaseOverWithoutALossAndWithoutAWait(t *testing.T) {
 	client := fake.NewClientset()
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 5*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
+	eventually(t, 20*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
 	b := standFor(t, client, "pod-b_1")
 
 	start := time.Now()
 	a.c.stop(t.Context())
 
-	eventually(t, 5*time.Second, "the other replica did not take the lease over", func() bool { return b.gained.Load() == 1 })
+	eventually(t, 20*time.Second, "the other replica did not take the lease over", func() bool { return b.gained.Load() == 1 })
 	if took := time.Since(start); took > testElection.LeaseDuration {
 		t.Errorf("the hand-over took %s; want it quicker than the lease duration, %s", took, testElection.LeaseDuration)
 	}
@@ -362,7 +362,7 @@ func TestCandidacyAStopHandsTheLeaseOverWithoutALossAndWithoutAWait(t *testing.T
 func TestCandidacyAStandbyThatStopsIsNotALoss(t *testing.T) {
 	client := fake.NewClientset()
 	a := standFor(t, client, "pod-a_1")
-	eventually(t, 5*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
+	eventually(t, 20*time.Second, "not leading", func() bool { return a.gained.Load() == 1 })
 	b := standFor(t, client, "pod-b_1")
 	time.Sleep(500 * time.Millisecond)
 

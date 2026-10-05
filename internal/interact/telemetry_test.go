@@ -3,7 +3,6 @@ package interact_test
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 )
@@ -21,7 +21,7 @@ import (
 // context carries that trace, though the worker that takes it up has no span of its own.
 func TestPressProcessingContinuesTheTraceOfThePressAcrossARestart(t *testing.T) {
 	h := telemetrytest.New(t)
-	path := filepath.Join(t.TempDir(), "c.db")
+	path := sqlitetest.Path(t)
 	st, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)

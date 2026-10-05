@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // everyKey is a SecretResolver whose Secrets have every key.
@@ -74,7 +74,7 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

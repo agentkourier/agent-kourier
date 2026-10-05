@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // edits records the edits made to prompts, whole.
@@ -71,7 +71,7 @@ func newReplaceRig(t *testing.T) *replaceRig { return newReplaceRigWith(t, nil) 
 // newReplaceRigWith is newReplaceRig with the Replacer's configuration changed by mod.
 func newReplaceRigWith(t *testing.T, mod func(*interact.ReplacerConfig)) *replaceRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

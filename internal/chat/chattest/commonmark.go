@@ -2,9 +2,11 @@ package chattest
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -28,9 +30,15 @@ func ScanCommonMark(wire string) Shown { return scanCommonMark(wire, false) }
 // 20). A platform that has not been measured uses ScanCommonMark, which does not take code for inert.
 func ScanCommonMarkLiteralCode(wire string) Shown { return scanCommonMark(wire, true) }
 
+// cmParser is the one parser of every scan: goldmark builds its tables of block and inline parsers when it is made,
+// which cost more allocation than reading most of the texts, and a parser keeps nothing of what it reads (the
+// state of a parse is in the context that each Parse makes), so scans in parallel share it. It is a write-once memo in
+// test-support code, not state of the product.
+var cmParser = sync.OnceValue(func() parser.Parser { return goldmark.New().Parser() })
+
 func scanCommonMark(wire string, literalCode bool) Shown {
 	src := []byte(wire)
-	doc := goldmark.New().Parser().Parse(text.NewReader(src))
+	doc := cmParser().Parse(text.NewReader(src))
 	r := &cmReader{src: src, literalCode: literalCode}
 	r.blocks(doc)
 	return Shown{Displayed: r.out.String(), Active: r.active}
@@ -209,15 +217,13 @@ func (r *cmReader) leaf(s string) {
 			i += entity(s[i:], commonMarkDialect, &r.out)
 		case c == '<':
 			i += token(s[i:], &r.out, &r.active)
-		case wordStart(s, i) && (autolink.MatchString(s[i:]) || email.MatchString(s[i:])):
-			url := autolink.FindString(s[i:])
-			if url == "" {
-				url = email.FindString(s[i:])
-			}
-			r.active = append(r.active, Active{KindAutolink, url})
-			r.out.WriteString(url)
-			i += len(url)
 		default:
+			if url := autolinkAt(s, i); url != "" {
+				r.active = append(r.active, Active{KindAutolink, url})
+				r.out.WriteString(url)
+				i += len(url)
+				break
+			}
 			r.out.WriteByte(c)
 			i++
 		}

@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -12,7 +11,7 @@ import (
 // The tests of this package that follow are about SQLite itself: its migrations, pragmas and SQL.
 func TestConformance(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) storetest.Instance {
-		path := filepath.Join(t.TempDir(), "courier.db")
+		path := seededPath(t)
 		current := openAt(t, path)
 		return storetest.Instance{
 			Store: current,

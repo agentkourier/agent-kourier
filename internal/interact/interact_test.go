@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 var (
@@ -135,7 +135,7 @@ type rig struct {
 
 func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

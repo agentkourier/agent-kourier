@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 var t0 = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
@@ -48,7 +48,7 @@ type fixture struct {
 func newFixture(t *testing.T, h HandlerFunc, mod ...func(*Config)) *fixture {
 	t.Helper()
 	ctx := context.Background()
-	s, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "courier.db"))
+	s, err := sqlite.Open(ctx, sqlitetest.Path(t))
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}

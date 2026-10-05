@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // flakySessions fails the next reads of a session.
@@ -55,7 +55,7 @@ type backstopRig struct {
 
 func newBackstopRig(t *testing.T) *backstopRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

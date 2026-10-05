@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -14,6 +16,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/test/fakeslack"
+	"go.uber.org/goleak"
 )
 
 // wire is a RoundTripper that keeps the form of every Web API request that sends text, and forwards it.
@@ -51,6 +56,20 @@ func (w *wire) take() []sentRequest {
 	out := w.reqs
 	w.reqs = nil
 	return out
+}
+
+// handlerTransport is a RoundTripper that has an http.Handler answer, in the caller's goroutine.
+type handlerTransport struct{ h http.Handler }
+
+func (t handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Body != nil { // a RoundTripper closes the body it was given, whatever it does with it
+		defer func() { _ = r.Body.Close() }()
+	}
+	rec := httptest.NewRecorder()
+	t.h.ServeHTTP(rec, r)
+	res := rec.Result()
+	res.Request = r
+	return res, nil
 }
 
 // shownBy is what the person sees of the text of one request, and the constructs Slack acts on in it, read as
@@ -153,9 +172,16 @@ func walk(v any, out *[]chattest.Shown) {
 // Slack does to text that no escape stops, each with the reason; the adapter makes no others.
 func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 	t.Helper()
-	fake := newFake(t)
-	w := &wire{next: http.DefaultTransport}
-	cfg := clientConfig(fake)
+	// The fake answers in-process, with no socket: the checks make tens of thousands of requests, and each over loopback
+	// TCP costs the syscalls, the server's goroutines and the buffers of both ends. The client still sends, and reads, what
+	// it would over the wire.
+	before := goleak.IgnoreCurrent() // as newFake does: the adapter and the fake leave nothing running
+	t.Cleanup(func() { goleak.VerifyNone(t, before) })
+	fake := fakeslack.NewHandler()
+	t.Cleanup(fake.Close)
+	w := &wire{next: handlerTransport{fake}}
+	cfg := slack.Config{BotToken: secret.New(botToken), AppToken: secret.New(appToken), APIURL: "http://fakeslack.test/",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	cfg.HTTPClient = &http.Client{Transport: w}
 	c := slack.New(cfg)
 	const conn = "conformance/slack"

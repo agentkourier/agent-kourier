@@ -202,9 +202,11 @@ func (f *fixture) close() error {
 	return f.m.Close(ctx)
 }
 
+// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is waited
+// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}

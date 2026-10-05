@@ -52,10 +52,11 @@ func runClient(t *testing.T, baseURL string) *socketmode.Client {
 }
 
 // waitEvent returns the next client event of type typ, skipping the client's
-// own connection events.
+// own connection events. The deadline is only how long an event that never comes is waited for, and is long: a loaded
+// machine can starve the goroutine that sends it.
 func waitEvent(t *testing.T, smc *socketmode.Client, typ socketmode.EventType) socketmode.Event {
 	t.Helper()
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(30 * time.Second)
 	for {
 		select {
 		case ev := <-smc.Events:
@@ -63,7 +64,7 @@ func waitEvent(t *testing.T, smc *socketmode.Client, typ socketmode.EventType) s
 				return ev
 			}
 		case <-timeout:
-			t.Fatalf("no %q event within 5s", typ)
+			t.Fatalf("no %q event within 30s", typ)
 		}
 	}
 }
@@ -85,9 +86,11 @@ func dial(t *testing.T, fake *fakeslack.Server) *websocket.Conn {
 	return ws
 }
 
+// eventually polls cond until it holds. The deadline is only how long a condition that will never hold is waited
+// for before the test fails, and is long: a loaded machine can starve the goroutine that makes it hold.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}

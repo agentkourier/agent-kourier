@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 var (
@@ -27,7 +27,7 @@ var (
 
 func newWriter(t *testing.T) (*Writer, *sqlite.Store) {
 	t.Helper()
-	s, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "audit.db"))
+	s, err := sqlite.Open(context.Background(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

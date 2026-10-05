@@ -19,14 +19,16 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
 var t0 = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 
-// openStore returns a SQLite store at path.
+// openStore returns a SQLite store at path, which holds a migrated database already unless a test has put one there.
 func openStore(t *testing.T, path string) *sqlite.Store {
 	t.Helper()
+	sqlitetest.Seed(t, path)
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)

@@ -27,21 +27,28 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // startConfig is a RunConfig that would run: the example config in a temp dir, a fake cluster that
-// holds its Secrets, and a free port for the health server.
+// holds its Secrets, and a free port for the health server. Its database is
+// migrated already, as Run finds it on any start but the first: migrating an empty one costs a second of CPU under
+// the race detector, and most tests here are about something else. A test that shows Run never opened the store takes
+// its path from unmade instead.
 func startConfig(t *testing.T) RunConfig {
 	t.Helper()
 	c := valid(t)
 	c.ConfigDir = configDir(t)
-	c.DBPath = filepath.Join(t.TempDir(), "courier.db")
+	c.DBPath = sqlitetest.Path(t)
 	c.Client = cluster()
 	c.SyncTimeout = 30 * time.Second
 	c.newSlack = func(slack.Config) slackAPI { return idleSlack{} } // offline: the default build cannot reach a fake
 	return c
 }
+
+// unmade is the path of a database that does not exist, for a test that shows Run left it so.
+func unmade(t *testing.T) string { return filepath.Join(t.TempDir(), "courier.db") }
 
 // idleSlack is a Slack client that holds its connection until its context ends and calls nothing.
 type idleSlack struct{}
@@ -328,6 +335,7 @@ func TestRunReturnsNilWhenItsContextEndsAndLeavesNothingRunning(t *testing.T) {
 // serve leaves no database behind and never becomes ready.
 func TestRunRefusesTwoConnectionsBeforeItOpensTheStore(t *testing.T) {
 	c := startConfig(t)
+	c.DBPath = unmade(t)
 	second := `apiVersion: agentcourier.dev/v1alpha1
 kind: ChatConnection
 metadata: { name: slack-two, namespace: courier-system }
@@ -350,6 +358,7 @@ spec: { platform: slack, mode: socket, credentialsSecretRef: { name: slack-two }
 
 func TestRunPassesAnRBACDenialThroughAsAccessDenied(t *testing.T) {
 	c := startConfig(t)
+	c.DBPath = unmade(t)
 	c.Client.(*fake.Clientset).PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("RBAC: no list"))
 	})
@@ -367,6 +376,7 @@ func TestRunPassesAnRBACDenialThroughAsAccessDenied(t *testing.T) {
 
 func TestRunRefusesAnIncompleteConfigBeforeStartingAnything(t *testing.T) {
 	c := startConfig(t)
+	c.DBPath = unmade(t)
 	c.ConfigDir = ""
 	r := start(t, c)
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 var sweepNow = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
@@ -113,7 +113,7 @@ func TestThreadSweepNeedsAStore(t *testing.T) {
 // maxIdle, and keeps a closed one inside its cooldown and an open one idle for less, which a trigger with a long
 // maxIdle (30 days at most) still counts as live.
 func TestThreadSweepDeletesOnlyWhatNoTriggerStillCountsLive(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

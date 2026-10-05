@@ -149,6 +149,18 @@ func (s *Server) Thread(channel, ts string) []Message {
 	return s.threadLocked(channel, ts)
 }
 
+// threadExistsLocked is whether threadLocked finds the thread, for callers holding s.mu that need no copy of it: a
+// post to a thread asks, and copying the thread of every message in it made the posts of a long one cost as many
+// copies as there are messages.
+func (s *Server) threadExistsLocked(channel, ts string) bool {
+	for _, m := range s.channels[channel] {
+		if m.TS == ts && (m.ThreadTS == "" || m.ThreadTS == ts) {
+			return true
+		}
+	}
+	return false
+}
+
 // threadLocked is Thread for callers holding s.mu. Messages are stored in ts
 // order, so the parent precedes its replies.
 func (s *Server) threadLocked(channel, ts string) []Message {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 const (
@@ -82,7 +82,7 @@ func (m *markFails) MarkTriggerDigested(ctx context.Context, binding string, tri
 
 func newDigestWorld(t *testing.T, wrap func(digestStore) digestStore) *digestWorld {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

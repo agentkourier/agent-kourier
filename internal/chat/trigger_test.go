@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -268,7 +268,7 @@ func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 		t.Fatal(err)
 	}
 	h := &triggered{sub: &submitter{}, reg: reg, logs: &lockedBuffer{}, ctx: telemetry.WithObserver(t.Context(), obs),
-		clk: &clock{now: noon}, notes: &notices{}, dbPath: filepath.Join(t.TempDir(), "courier.db")}
+		clk: &clock{now: noon}, notes: &notices{}, dbPath: sqlitetest.Path(t)}
 	h.snap.Store(snapshotOf(t, triggers))
 	h.reopenStore(t)
 	h.cfg = chat.IntakeConfig{

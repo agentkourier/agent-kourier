@@ -346,6 +346,7 @@ func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
 // is not caught is a hole in the suite. The last group is the escapers that an earlier suite passed: each
 // escapes for a dialect that does not honour the escape.
 func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		dialect dialectKind
@@ -407,6 +408,7 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 // nothing inside emphasis is told by the case that is a mention in it. The rows of the table above are met by any case
 // of the corpus that the leak turns live, so they do not hold the reader to it.
 func TestAMentionInsideEmphasisIsFoundByName(t *testing.T) {
+	t.Parallel()
 	for name, d := range map[string]dialectKind{"Slack": slackPlainText, "CommonMark": commonMark} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -426,6 +428,7 @@ func TestAMentionInsideEmphasisIsFoundByName(t *testing.T) {
 // way a renderer that builds one text of the mention and the words fails is the "words beside" leak: the
 // adapter passed the suite once, since its harmless words never held a "<!here>" next to a live mention.
 func TestAValidMentionIsTheOnlyConstructBesideHostileWords(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		dialect dialectKind
 		leaks   leaks

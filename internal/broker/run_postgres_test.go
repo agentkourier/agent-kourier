@@ -33,6 +33,7 @@ const postgresDSNEnv = "COURIER_POSTGRES_DSN"
 func postgresConfig(t *testing.T, dsn string) RunConfig {
 	t.Helper()
 	c := startConfig(t)
+	c.DBPath = unmade(t)
 	s := secretOf("courier", "courier-pg", "dsn")
 	s.Data["dsn"] = []byte(dsn)
 	if _, err := c.Client.(*fake.Clientset).CoreV1().Secrets("courier").Create(t.Context(), s, metav1.CreateOptions{}); err != nil {

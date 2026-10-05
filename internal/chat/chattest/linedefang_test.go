@@ -116,6 +116,7 @@ func (s *lineDefangStream) Stop(ctx context.Context, md string, f chat.Message, 
 // TestALineBasedLinkDefangerIsCaught: the scanner sees a link whose text runs over two lines, and the
 // suite, run on an adapter that defangs links a line at a time, finds links and an image on the wire.
 func TestALineBasedLinkDefangerIsCaught(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{"[your\nbank](https://evil.test/login)", "[your\nbank](javascript:alert(1))", "![a\nb](https://evil.test/p.png)"} {
 		sh := ScanCommonMark(lineDefang(in))
 		if len(sh.Active) == 0 {
@@ -168,6 +169,7 @@ func colonDefang(s string) string {
 // so the link "[x\n]" that it defines is seen, and the suite, run on an adapter whose escaping works a line at a
 // time and leaves ":" raw, finds the live link on the wire.
 func TestALabelOverTwoLinesIsALinkReferenceDefinition(t *testing.T) {
+	t.Parallel()
 	const in = "[x\n]\n\n[x\n]: https://evil.test"
 	if sh := ScanCommonMark(colonDefang(in)); len(sh.Active) == 0 {
 		t.Errorf("%q goes out as %q, and the scanner finds nothing active in it", in, colonDefang(in))
@@ -211,6 +213,7 @@ func spanDefang(s string) string {
 // stand inside it, so the scanner sees the live link that spanDefang leaves, on one line and over two, and the
 // suite finds it.
 func TestAnEscapedBracketDoesNotEndALabel(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{"[A [b] c]\n\n[a [b] c]: https://evil.test", "[Verify [your]\naccount]\n\n[verify [your]\naccount]: https://evil.test"} {
 		if sh := ScanCommonMark(spanDefang(in)); len(sh.Active) == 0 {
 			t.Errorf("%q goes out as %q, and the scanner finds nothing active in it", in, spanDefang(in))
@@ -237,6 +240,7 @@ func fenceRaw(s string) string { return "```\n" + s + "\n```" }
 // TestAnAdapterThatFencesTextAndLeavesTokensRawIsCaught: the scanner reports a token inside a fenced block, a code
 // span and an indented block, and the suite, run on an adapter that fences every text raw, finds them.
 func TestAnAdapterThatFencesTextAndLeavesTokensRawIsCaught(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{fenceRaw("<@U1>"), "`<!channel>`", "    <@U1>"} {
 		var kinds []Kind
 		for _, a := range ScanCommonMark(in).Active {

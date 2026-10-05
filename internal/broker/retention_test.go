@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // fakeRetentionStore records what the loop asks for. purged is what each PurgeAudit returns, in turn (the last one
@@ -218,7 +218,7 @@ func TestNewRetentionRefusesWhatIsNotLegal(t *testing.T) {
 // Against the real store, with the entries it holds: those older than the retention go, those inside it stay, and the
 // log is as append-only as before.
 func TestRetentionPurgesOnlyAuditEntriesPastTheRetention(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,15 +335,18 @@ func TestRetentionCountsWhatItRemoves(t *testing.T) {
 	}
 	r.abandonReplies(t.Context())
 	r.purgeAudit(t.Context())
-	mu.Lock()
-	defer mu.Unlock()
-	if got[RemovedStrandedReplies] != 2 || got[RemovedAuditEntries] != 10 || len(got) != 2 {
+	counted := func() map[string]int { // not held across the passes: the next one counts under the same lock
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(got)
+	}
+	if got := counted(); got[RemovedStrandedReplies] != 2 || got[RemovedAuditEntries] != 10 || len(got) != 2 {
 		t.Errorf("counted %v; want 2 stranded replies and 10 audit entries, and nothing else", got)
 	}
 	f.dropped, f.failAudit = 0, true
 	r.abandonReplies(t.Context())
 	r.purgeAudit(t.Context())
-	if got[RemovedStrandedReplies] != 2 || got[RemovedAuditEntries] != 10 {
+	if got := counted(); got[RemovedStrandedReplies] != 2 || got[RemovedAuditEntries] != 10 {
 		t.Errorf("counted %v after a pass that removed nothing and one that failed; want no change", got)
 	}
 }
@@ -477,7 +480,7 @@ func TestRetentionLogsASessionPurgeFailureAndGoesOn(t *testing.T) {
 // Against the real store, through the loop: the sessions past their Binding's horizon go with what belongs to them, the
 // one inside it stays, and a session with a task that has not ended stays whatever its age.
 func TestRetentionDeletesOnlySessionsPastTheirHorizon(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

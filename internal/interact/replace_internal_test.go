@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // failsOn is an Editor that fails for the messages in bad and succeeds for the rest.
@@ -38,7 +38,7 @@ func (failsOn) Classify(op chat.Op, err error) chat.Verdict {
 // the interaction can still be listed; otherwise both would grow by one entry per interaction for as long
 // as the process runs.
 func TestWhatLeftTheHorizonIsForgotten(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

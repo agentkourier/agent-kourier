@@ -108,18 +108,18 @@ func scanText(wire string, d dialect, atLineStart bool) Shown {
 		}
 		atLineStart = false
 		r, size := utf8.DecodeRuneInString(wire[i:])
-		switch {
-		case r == '\n':
+		switch r {
+		case '\n':
 			out.WriteByte('\n')
 			atLineStart = true
 			i += size
-		case r == '&':
+		case '&':
 			i += entity(wire[i:], d, &out)
-		case r == '<':
+		case '<':
 			i += token(wire[i:], &out, &active)
-		case r == '`':
+		case '`':
 			i += code(wire[i:], d, &out, &active)
-		case r == '*' || r == '_' || r == '~':
+		case '*', '_', '~':
 			if n, inner := emphasis(wire, i); n > 0 {
 				active = append(active, Active{KindEmphasis, wire[i : i+n]})
 				in := scanText(inner, d, false)
@@ -130,15 +130,13 @@ func scanText(wire string, d dialect, atLineStart bool) Shown {
 				out.WriteRune(r)
 				i += size
 			}
-		case wordStart(wire, i) && (autolink.MatchString(wire[i:]) || email.MatchString(wire[i:])):
-			url := autolink.FindString(wire[i:])
-			if url == "" {
-				url = email.FindString(wire[i:])
-			}
-			active = append(active, Active{KindAutolink, url})
-			out.WriteString(url)
-			i += len(url)
 		default:
+			if url := autolinkAt(wire, i); url != "" {
+				active = append(active, Active{KindAutolink, url})
+				out.WriteString(url)
+				i += len(url)
+				break
+			}
 			out.WriteRune(r)
 			i += size
 		}
@@ -151,6 +149,40 @@ var (
 	email         = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+`)
 	numericEntity = regexp.MustCompile(`^&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));`)
 )
+
+// autolinkAt returns the bare URL or email address that starts at s[i], or "" if none does: one starts at the start of a
+// word. Neither can hold white space, so only the word at i is matched, and only when it could be one. A regexp run on
+// all that follows i, at every word, costs time and memory in proportion to the length of the text, and under the race
+// detector (whose sync.Pool drops what it is given, so every run allocates its own) that made the checks of a long text
+// the longest of the whole suite.
+func autolinkAt(s string, i int) string {
+	if !wordStart(s, i) {
+		return ""
+	}
+	rest := s[i:]
+	if strings.IndexByte("hHfFwW", rest[0]) >= 0 { // https, http, ftp and www, in any case
+		if url := autolink.FindString(wordOf(rest)); url != "" {
+			return url
+		}
+	}
+	if emailStart(rest[0]) && strings.IndexByte(rest, '@') >= 0 {
+		return email.FindString(wordOf(rest))
+	}
+	return ""
+}
+
+// wordOf is s up to its first white space (the characters of the regexp class \s).
+func wordOf(s string) string {
+	if n := strings.IndexAny(s, " \t\n\f\r"); n >= 0 {
+		return s[:n]
+	}
+	return s
+}
+
+// emailStart says whether b can start the local part of an email address, as email has it.
+func emailStart(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || strings.IndexByte("._%+-", b) >= 0
+}
 
 func isPunct(b byte) bool {
 	return b < utf8.RuneSelf && (unicode.IsPunct(rune(b)) || unicode.IsSymbol(rune(b)))

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -30,6 +29,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -273,7 +273,7 @@ func setup(t *testing.T) *env {
 	e.root = root
 	client := slack.New(slack.Config{BotToken: secret.New("xoxb-fake"), AppToken: secret.New("xapp-fake"), APIURL: e.fake.URL() + "/", HTTPClient: &http.Client{Transport: e.rec}})
 	e.client = client
-	if e.store, err = sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "live.db")); err != nil {
+	if e.store, err = sqlite.Open(t.Context(), sqlitetest.Path(t)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = e.store.Close() })

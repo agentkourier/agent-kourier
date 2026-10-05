@@ -2,7 +2,6 @@ package broker
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // Every part of the botMessage triggers' path is connected in the Intake Run builds, and each is the store's or the
@@ -17,7 +17,7 @@ import (
 // starter; and the check that a stale reservation's turn was queued reads the store's reply queue, which is what
 // closes the window between queueing a turn and marking its thread.
 func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

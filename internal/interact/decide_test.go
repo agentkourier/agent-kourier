@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // These tests run far in the past, so that the real clock is always past every deadline: a decision
@@ -202,7 +202,7 @@ type decideRig struct {
 
 func newDecideRig(t *testing.T) *decideRig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

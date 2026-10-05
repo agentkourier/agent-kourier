@@ -37,10 +37,11 @@ func start(t *testing.T, o *outbox.Outbox) {
 	})
 }
 
-// eventually fails the test if cond does not hold within five seconds.
+// eventually fails the test if cond does not hold within thirty seconds: the deadline is only how long a condition that
+// will never hold is waited for, and is long, since a loaded machine can starve the goroutine that makes it hold.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}

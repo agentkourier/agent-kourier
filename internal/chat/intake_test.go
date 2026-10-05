@@ -35,10 +35,11 @@ type submitter struct {
 
 func (s *submitter) Submit(_ context.Context, in session.Inbound) (session.Result, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.got = append(s.got, in)
-	if s.fn != nil {
-		return s.fn(in)
+	fn := s.fn
+	s.mu.Unlock() // not held while fn runs: a fn that waits must not stop submitted() from answering
+	if fn != nil {
+		return fn(in)
 	}
 	return session.Result{Disposition: session.Accepted}, nil
 }

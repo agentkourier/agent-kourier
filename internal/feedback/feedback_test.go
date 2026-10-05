@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 )
 
@@ -114,7 +114,7 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

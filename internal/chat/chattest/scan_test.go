@@ -193,3 +193,77 @@ func TestStyleKindsAreExactlyTheCosmeticOnes(t *testing.T) {
 		}
 	}
 }
+
+// autolinkOnTheRest is what autolinkAt replaced: the regexps run on everything that follows i. Neither can hold white
+// space, so autolinkAt gives them the word alone, and must find just what they found.
+func autolinkOnTheRest(s string, i int) string {
+	if !wordStart(s, i) {
+		return ""
+	}
+	if url := autolink.FindString(s[i:]); url != "" {
+		return url
+	}
+	return email.FindString(s[i:])
+}
+
+// TestAutolinkAtFindsWhatTheRegexpsFindOnTheWholeRest: every position of every case of the corpus, of the pieces the
+// scans read, and of texts that are hard on the two regexps (case, white space of every kind, an "@" past a space, a
+// scheme and an address in one word).
+func TestAutolinkAtFindsWhatTheRegexpsFindOnTheWholeRest(t *testing.T) {
+	texts := []string{
+		"", " ", "https://x.test/a?b=c", "HTTPS://X.TEST", "Ftp://h/p", "www.example.com", "WWW.example.com/x y",
+		"see https://x.test, then ftp://y.test.", "a.b@c.test", "a.b@c", "a@b.c.d", "x @ y.test", "a b@c.test", "a\tb@c.test",
+		"https://x.test\nb@c.test", "mail me: ada+tag@example.co.uk now", "[l](https://x.test)", "<https://x.test>", "wwwx.test", "hxxp://x",
+		"ſtp://x", "https://é.test", "-a@b.test", "%@x.y", "a@@b.c", "@b.c", "user@host.test/path", "http://", "www.", "x@y.",
+		"\U0001F389\U0001F389 a@b.test", "..........@b.test", "a\f@b.test\r", "ftp://a b@c.test",
+	}
+	for _, c := range Corpus {
+		texts = append(texts, c.Text, canary+c.Text, c.Text+canary, canary+"\n"+c.Text+"\n"+canary)
+	}
+	for _, s := range texts {
+		for i := range len(s) {
+			if got, want := autolinkAt(s, i), autolinkOnTheRest(s, i); got != want {
+				t.Errorf("autolinkAt(%q, %d) = %q, want %q", s, i, got, want)
+			}
+		}
+	}
+}
+
+// TestAutolinkAtDecidesOnEveryFirstByte: autolinkAt looks at the first byte of a word before it runs a regexp, so the
+// prefilter must let through every byte the regexps would start a match with, and the table of texts above cannot show
+// that for each of 256. Each byte starts an address, a scheme and a "www", at the start of a text and after a space, as the
+// byte alone and as the rune of that number, and the answer is the one the regexps give on the whole rest.
+func TestAutolinkAtDecidesOnEveryFirstByte(t *testing.T) {
+	found := map[byte]bool{}
+	for b := range 256 {
+		for _, first := range []string{string([]byte{byte(b)}), string(rune(b))} {
+			for _, tail := range []string{"a@b.test", "ttp://x", "ww.x", "tp://x", "@b.test"} {
+				for _, text := range []string{first + tail, " " + first + tail} {
+					i := len(text) - len(first+tail)
+					got, want := autolinkAt(text, i), autolinkOnTheRest(text, i)
+					if got != want {
+						t.Errorf("autolinkAt(%q, %d) = %q, want %q", text, i, got, want)
+					}
+					if got != "" {
+						found[byte(b)] = true
+					}
+				}
+			}
+		}
+	}
+	// The suite must see the bytes that do start one, or it holds nothing to a prefilter that lets none through.
+	for _, b := range []byte("aZ0+_-.%hHfFwW") {
+		if !found[b] {
+			t.Errorf("no text that starts with %q is an autolink; the check above shows nothing about it", b)
+		}
+	}
+}
+
+// TestAnUnderscoreStartsAnAddressInTheTextBetweenConstructs: scanText reads "_" as emphasis first, so an address that
+// starts with one is met in the text that goldmark leaves between constructs, which cmReader.leaf reads.
+func TestAnUnderscoreStartsAnAddressInTheTextBetweenConstructs(t *testing.T) {
+	got := ScanCommonMark("x _a@b.test")
+	if len(got.Active) != 1 || got.Active[0] != (Active{KindAutolink, "_a@b.test"}) {
+		t.Errorf("ScanCommonMark found %v; want the one address, _a@b.test", got.Active)
+	}
+}

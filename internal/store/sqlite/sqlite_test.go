@@ -2,7 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -33,9 +37,53 @@ func newInteraction(id string, d time.Duration) store.Interaction {
 	}
 }
 
+// migrated is an empty database with every migration applied, as the bytes of its file, made once for the package's
+// tests: opening an empty one runs the migrations, which under the race detector is about a second of CPU, and most
+// tests need a store and not that. (Package sqlitetest does the same for other packages; this package's own tests
+// cannot import it, since it imports this one.) The tests of the migrations open an empty database with openAt.
+// A write-once memo in test code, not state of the product. It is sqlitetest's template, made the same way: keep the two
+// alike (internal/store/sqlite/sqlitetest/sqlitetest.go).
+var migrated = sync.OnceValues(func() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "sqlite-migrated-")
+	if err != nil {
+		return nil, fmt.Errorf("make the directory of the template: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	path := filepath.Join(dir, "template.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		return nil, fmt.Errorf("migrate the template: %w", err)
+	}
+	if err := s.Close(); err != nil { // the last connection to close folds the write-ahead log into the file
+		return nil, fmt.Errorf("close the template: %w", err)
+	}
+	if _, err := os.Stat(path + "-wal"); err == nil {
+		return nil, errors.New("the template left a write-ahead log: its file is not the whole database")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read the template: %w", err)
+	}
+	return raw, nil
+})
+
+// seededPath returns a path, in the test's temporary directory, of a database that is migrated already.
+func seededPath(t *testing.T) string {
+	t.Helper()
+	raw, err := migrated()
+	if err != nil {
+		t.Fatalf("migrate the template: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "courier.db")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func openTemp(t *testing.T) *Store {
 	t.Helper()
-	return openAt(t, filepath.Join(t.TempDir(), "courier.db"))
+	return openAt(t, seededPath(t))
 }
 
 // Every connection of both pools runs in WAL mode with foreign keys on, which the rest of the package takes for

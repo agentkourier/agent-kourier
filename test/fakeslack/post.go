@@ -46,7 +46,7 @@ func (s *Server) postMessage(form url.Values) (response, string) {
 // set) must target an existing thread parent.
 func (s *Server) addLocked(channel string, m *Message) (code string) {
 	if m.ThreadTS != "" {
-		if s.threadLocked(channel, m.ThreadTS) == nil {
+		if !s.threadExistsLocked(channel, m.ThreadTS) {
 			return "thread_not_found"
 		}
 		s.markParentLocked(channel, m.ThreadTS)
