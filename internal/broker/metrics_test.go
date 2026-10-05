@@ -56,6 +56,7 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `courier_credential_rejections_total{binding=sre/sre-alerts} 1`},
 		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `courier_config_reload_errors_total{} 1`},
 		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `courier_outbox_abandoned_total{reason=channel_gone} 1`},
+		{"retention removal", func(m *Metrics) { m.RetentionRemoved(RemovedStrandedReplies, 1) }, `courier_retention_removed_total{what=stranded_replies} 1`},
 		{"turn outcome", func(m *Metrics) { m.TurnOutcome("sre/sre-alerts", session.TurnFailed) }, `courier_turn_outcomes_total{binding=sre/sre-alerts,outcome=failed} 1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

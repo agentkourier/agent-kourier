@@ -30,6 +30,7 @@
     "logLevel": {"enum": ["debug", "info", "warn", "error"]},
     "klogVerbosity": {"type": "integer", "minimum": 0, "maximum": 7, "description": "client-go logs response bodies, Secret lists included, at 8 and above"},
     "syncTimeout": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+    "auditRetention": {"type": "string", "pattern": "^(keep|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)?$", "description": "empty or keep: audit entries are never purged; else a duration of at least 24h"},
     "extraEnv": {"type": "array"},
     "config": {
       "type": "object",

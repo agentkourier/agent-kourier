@@ -21,8 +21,12 @@ type Session interface {
 
 // resend sends the stored answer of an answered interaction whose pause has come again. The answer is
 // built from the stored request, the question the person saw, never from the pause just parsed. A task
-// that has moved on is not paused, and the answer is dropped.
+// that has moved on is not paused, and the answer is dropped. An answer that retention has cleared cannot be sent: the
+// task is cancelled (refuseCleared).
 func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Interaction) error {
+	if len(row.Request) == 0 || len(row.Answer) == 0 { // cleared by retention: there is no answer left to send
+		return i.refuseCleared(ctx, p, b, row)
+	}
 	var in dialect.Interaction
 	var answer dialect.Answer
 	if err := errors.Join(json.Unmarshal(row.Request, &in), json.Unmarshal(row.Answer, &answer)); err != nil {

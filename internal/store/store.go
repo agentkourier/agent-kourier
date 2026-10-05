@@ -54,6 +54,7 @@ type Store interface {
 	TriggerRuns
 	ReplyQueue
 	Audit
+	AuditRetention
 	Recovery
 	io.Closer
 }

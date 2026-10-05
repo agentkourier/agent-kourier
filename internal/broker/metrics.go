@@ -29,6 +29,7 @@ type Metrics struct {
 	reloadErrors  prometheus.Counter
 	approvals     *prometheus.CounterVec
 	timeouts      prometheus.Counter
+	removed       *prometheus.CounterVec
 	decisions     *prometheus.CounterVec
 	chatUp        *prometheus.GaugeVec
 	turns         *prometheus.CounterVec
@@ -53,6 +54,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Pauses a Binding's policy turned away, by Binding and outcome."}, []string{"binding", "outcome"}),
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
+		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_retention_removed_total",
+			Help: "Stored content removed by retention, by what: stranded_replies, cleared_interactions or audit_entries."}, []string{"what"}),
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_interaction_decisions_total",
 			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
 		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "courier_chat_connected",
@@ -72,7 +75,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -132,6 +135,11 @@ func (m *Metrics) TurnOutcome(binding string, outcome session.TurnOutcome) {
 // InteractionTimeout counts an interaction that timed out: interact's SweepConfig.OnTimeout. The ID is
 // not a label.
 func (m *Metrics) InteractionTimeout(string) { m.timeouts.Inc() }
+
+// RetentionRemoved counts n items that retention removed: what is one of the Removed constants, a closed set.
+func (m *Metrics) RetentionRemoved(what string, n int) {
+	m.removed.WithLabelValues(what).Add(float64(n))
+}
 
 // OutboxAbandoned counts an abandoned post: outbox.Config.OnAbandon. The row's ID is not a label.
 func (m *Metrics) OutboxAbandoned(_, reason string) {

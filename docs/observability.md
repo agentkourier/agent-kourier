@@ -188,6 +188,7 @@ terminal turn outcome metrics retain their names and hooks.
 | `courier_outbox_pending` / `courier_outbox_oldest_age_seconds` | Unposted, nonabandoned rows and oldest age; includes incomplete stream rows |
 | `courier_outbox_delivery_duration_seconds` | Row creation to successful delivery/adoption attempt; replay after a crash can produce another observation |
 | `courier_render_final_total` | Final rendering outcomes: delivered, empty output, permanent failure, retry exhaustion, deadline exceeded or cancelled |
+| `courier_retention_removed_total` | Stored content that retention removed, by `what`: `stranded_replies` (undelivered replies dropped after 30 days, a turn that was never sent: worth an alert on any increase), `cleared_interactions` (settled interactions whose request and answer were emptied) and `audit_entries` (purged past `COURIER_AUDIT_RETENTION`; an increase with the setting at `keep` is a fault). See [data.md](data.md) |
 | `courier_interactions_pending` | Durable pending interactions |
 | `courier_interaction_wait_seconds` | Creation to first committed resolution, by kind/state; retries do not add another observation |
 | `courier_chat_api_calls_total` | Slack adapter operations and results, including logical API errors over HTTP 200; cached user lookups are adapter operations too. Outcomes include `rate_limited`, `auth_rejected`, `channel_gone`, `not_streaming`, `api_error`, and `mode_refused` (Slack refused the chunks mode of a stream, which makes courier fall back to `markdown_text` and show no more steps) |

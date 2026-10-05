@@ -69,7 +69,8 @@ func (e AuditEntry) Redacted() AuditEntry {
 	return e
 }
 
-// Audit is an append-only log. There is no update or delete.
+// Audit is an append-only log. There is no update or delete; the one way entries leave it is the
+// retention purge (AuditRetention).
 type Audit interface {
 	// AppendAudit adds e to the log. Kind, At, Subject and Outcome are
 	// required, and Outcome must fit MaxAuditOutcome (ErrInvalid otherwise), measured after
@@ -82,4 +83,16 @@ type Audit interface {
 	// them (1 to 1000, ErrInvalid otherwise). To page, pass the last returned
 	// Sequence as afterSeq.
 	ListAudit(ctx context.Context, since time.Time, afterSeq int64, limit int) ([]AuditEntry, error)
+}
+
+// AuditRetention removes audit entries that are past the operator's retention. It is a separate interface
+// from Audit so that the writer of the log, which only appends, cannot reach it.
+type AuditRetention interface {
+	// PurgeAudit deletes at most limit of the oldest entries whose At is before the cutoff, oldest first, and
+	// returns how many it deleted; a count below limit means nothing older is left. The caller runs it
+	// again while it returns limit, so that no single call holds the log for long (Postgres's statement
+	// timeout, SQLite's one writer). It is the only way an entry is removed: the log stays append-only
+	// to every other path of the application. before must not be zero and limit must be positive
+	// (ErrInvalid otherwise). It writes no entry of its own.
+	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
 }

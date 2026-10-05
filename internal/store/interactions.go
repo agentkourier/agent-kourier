@@ -45,7 +45,8 @@ func (s InteractionState) Valid() bool {
 }
 
 // Interaction is one pause waiting on a person (spec 9, table interactions).
-// Request and Answer are opaque to the store: the dialect owns their shape.
+// Request and Answer are opaque to the store: the dialect owns their shape. Both are empty once
+// ClearSettledInteractions has cleared a settled interaction; the rest of the row stays.
 type Interaction struct {
 	// TextReplies marks questions whose durable queue can contain answers.
 	TextReplies bool
@@ -119,4 +120,12 @@ type Interactions interface {
 	// ErrConflict, a missing interaction ErrNotFound, and an empty id or ref
 	// ErrInvalid.
 	SetInteractionMessageRef(ctx context.Context, id, ref string) error
+	// ClearSettledInteractions empties Request and Answer of the interactions that are settled (answered,
+	// timed out or cancelled) and were decided at least grace before now, and returns how many it
+	// cleared. What the agent wrote and what a person typed is not kept past its use; the row stays, with
+	// its IDs, kind, state, times and decider. A pending interaction is never touched. An answered
+	// interaction whose answer was never marked delivered is the only copy of an answer the session may
+	// still take, so it waits for undeliveredGrace instead (at least grace). A row already cleared is not
+	// counted again. now must not be zero and neither grace may be negative (ErrInvalid otherwise).
+	ClearSettledInteractions(ctx context.Context, now time.Time, grace, undeliveredGrace time.Duration) (int, error)
 }

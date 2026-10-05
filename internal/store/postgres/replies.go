@@ -111,3 +111,22 @@ func (s *Store) ClaimReplyInteraction(ctx context.Context, id, interaction strin
 	n, err := s.exec(ctx, `UPDATE reply_queue SET interaction_id = $1 WHERE id = $2 AND (interaction_id = '' OR interaction_id = $1)`, interaction, id)
 	return errIfUnchanged(n, err, "claim reply interaction")
 }
+
+// AbandonStrandedReplies implements store.ReplyQueue. The session test is on the thread's row: a thread
+// with no session has no runner that will ever send the reply, and one whose session records a task keeps
+// the reply behind that task.
+func (s *Store) AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (abandoned int, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.AbandonStrandedReplies")
+	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+	if now.IsZero() || age <= 0 {
+		return 0, fmt.Errorf("abandon stranded replies: a time and a positive age are required: %w", store.ErrInvalid)
+	}
+	n, err := s.exec(ctx, `UPDATE reply_queue SET delivered_at = $1, text = ''
+		WHERE delivered_at IS NULL AND enqueued_at <= $2
+		AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel
+			AND s.thread_ts = reply_queue.thread_ts AND s.task_id <> '')`, now, now.Add(-age))
+	if err != nil {
+		return 0, fmt.Errorf("abandon stranded replies: %w", err)
+	}
+	return int(n), nil
+}

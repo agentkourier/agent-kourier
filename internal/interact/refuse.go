@@ -36,6 +36,7 @@ const (
 const (
 	noticeUnusable = "The agent paused for input in a way courier cannot use, so courier is cancelling the task."
 	noticeAskUser  = "The agent asked a question, but this Binding does not allow questions, so courier is cancelling the task."
+	noticeCleared  = "The answer to this question was not sent before it was cleared, so courier is cancelling the task."
 	noticeDenied   = "The agent asked to run a tool that needs approval, but this Binding does not allow approvals, so courier is denying the request."
 	denyReason     = "denied by courier: this Binding does not allow tool approvals"
 	autoDecider    = "courier" // who the interaction records as having decided
@@ -69,6 +70,22 @@ func (i *Intake) refuseUnusable(ctx context.Context, p Pause, b Binding, cause e
 	}
 	return errors.Join(i.cfg.Audit.UnusablePause(ctx, a, p.Task.ID, p.Task.ContextID, cause),
 		i.cfg.Audit.UnusablePauseCancel(ctx, a, p.Task.ID, p.Task.ContextID, nil))
+}
+
+// refuseCleared cancels the task of an answered interaction whose pause has come again after retention cleared the
+// answer, which was therefore never taken by the task: the thread is told, in words of their own, and the cancel is
+// audited as the answer's being cleared, since nothing was wrong with the pause. Once only, by the rule of
+// refuseUnusable: the cancel is what ends the pause, so the call that cancels is the one that audits.
+func (i *Intake) refuseCleared(ctx context.Context, p Pause, b Binding, row store.Interaction) error {
+	handled, err := i.cancel(ctx, p, "the answer was cleared", noticeCleared, row.ID+"/cleared")
+	switch {
+	case handled:
+		return nil
+	case err != nil:
+		return fmt.Errorf("interact: cancel the task of %s, whose answer was cleared: %w", row.ID, err)
+	}
+	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
+	return i.cfg.Audit.Decision(ctx, a, audit.Decision{InteractionID: row.ID, TaskID: a2a.TaskID(row.TaskID), Result: audit.DecisionAnswerCleared})
 }
 
 // refuseTooLarge turns away a pause whose prompt does not fit in one message, which no retry mends: it

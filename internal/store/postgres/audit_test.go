@@ -95,3 +95,35 @@ func TestAuditIsAppendOnly(t *testing.T) {
 		t.Errorf("entries = %+v; want the recent one and the new one, with a sequence above all three of the first", l)
 	}
 }
+
+// PurgeAudit deletes in batches through courier_audit_purge(cutoff, batch) (migration 0020), and like the
+// unbatched function leaves the table as strict as it was: the setting that lets the trigger through is gone
+// when the call returns, and the call gives no way to change an entry.
+func TestAuditPurgeInBatchesLeavesTheLogAppendOnly(t *testing.T) {
+	s, _ := openFresh(t)
+	ctx := t.Context()
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 5 {
+		if err := s.AppendAudit(ctx, auditEntry(string(rune('a'+i)), old.Add(time.Duration(i)*time.Hour))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for want, limit := range []int{2, 2, 1, 0} { // the oldest first, a batch at a time, then nothing left
+		n, err := s.PurgeAudit(ctx, old.Add(24*time.Hour), 2)
+		if err != nil || n != limit {
+			t.Fatalf("batch %d purged %d, %v; want %d", want, n, err, limit)
+		}
+	}
+	if n := countAudit(t, s); n != 0 {
+		t.Fatalf("%d entries after the purge; want none", n)
+	}
+	if err := s.AppendAudit(ctx, auditEntry("f", old)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM audit`); !refused(err) {
+		t.Errorf("delete after the batched purge = %v; want the trigger's refusal", err)
+	}
+	if _, err := s.PurgeAudit(ctx, time.Time{}, 1); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("a purge with no cutoff = %v; want ErrInvalid", err)
+	}
+}

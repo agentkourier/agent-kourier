@@ -42,6 +42,29 @@ func TestValidateAcceptsAWholeConfig(t *testing.T) {
 	}
 }
 
+// The audit retention is checked before anything starts: a standby would otherwise find a value it cannot use only
+// when it leads, hours later.
+func TestValidateChecksTheAuditRetention(t *testing.T) {
+	for name, tc := range map[string]struct {
+		retention time.Duration
+		ok        bool
+	}{
+		"keep":                {0, true},
+		"the least":           {MinAuditRetention, true},
+		"ninety days":         {90 * 24 * time.Hour, true},
+		"an hour":             {time.Hour, false},
+		"a day less a moment": {MinAuditRetention - time.Second, false},
+		"negative":            {-time.Hour, false},
+	} {
+		c := valid(t)
+		c.AuditRetention = tc.retention
+		err := c.validate()
+		if tc.ok && err != nil || !tc.ok && !errors.Is(err, ErrWiring) {
+			t.Errorf("%s: validate = %v; want ok=%v (an ErrWiring when not)", name, err, tc.ok)
+		}
+	}
+}
+
 func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mutate func(*RunConfig)

@@ -55,6 +55,7 @@ func Run(t *testing.T, open func(t *testing.T) Instance) {
 		{"Interactions", su.interactions},
 		{"Presses", su.presses},
 		{"Audit", su.audit},
+		{"Retention", su.retention},
 		{"TriggerThreads", su.triggerThreads},
 		{"TriggerRuns", su.triggerRuns},
 		{"Fidelity", su.fidelity},

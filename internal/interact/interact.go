@@ -174,12 +174,15 @@ func pausedAt(task a2a.Task, now time.Time) time.Time {
 //
 // The ID names a pause by its task and request ID, which is UNCONFIRMED(WP-02) to be unique: kagent's
 // ID is the model's tool call ID, which a model may repeat. So the stored request must be the one just
-// parsed; if it is not, this is another question under a seen ID, and it is refused as unusable.
+// parsed; if it is not, this is another question under a seen ID, and it is refused as unusable. (A row that
+// retention has cleared is the exception: see below.)
 func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Interaction) (store.Interaction, error) {
 	if b.Timeout <= 0 { // config forbids it, but a Lookup is another's code, and a zero would expire every submit
 		return store.Interaction{}, fmt.Errorf("interact: Binding %q has no interaction timeout", p.Binding)
 	}
-	request, err := json.Marshal(in) // the dialect reads it back unchanged to build the answer
+	// What is stored has the agent's secrets taken out (storable); the answer is built from the IDs and choices,
+	// which that leaves as they were.
+	request, err := json.Marshal(storable(in))
 	if err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: encode the pause: %w", err)
 	}
@@ -199,7 +202,10 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 	if row, err = i.cfg.Store.GetInteraction(ctx, id); err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: read %s: %w", id, err)
 	}
-	if !samePause(row.Request, request) {
+	// A settled row whose request retention has cleared cannot be compared, and needs no comparison: the ID names
+	// the pause (its task, request and tool IDs), and what is done with a settled row (cancel the task again, or
+	// resend the answer) reads nothing of the request. Taking it for a different pause would blame the agent.
+	if (row.State == store.InteractionPending || len(row.Request) > 0) && !samePause(row.Request, request) {
 		return store.Interaction{}, fmt.Errorf("%w: a second, different pause under the ID of %s", dialect.ErrUnusablePause, id)
 	}
 	return row, nil
@@ -221,15 +227,18 @@ type toolKey struct {
 	Args     map[string]any
 }
 
-// samePause reports whether the stored request and the one just made are the same pause, by their
-// decoded fields and not their bytes, so that a row written by an older version, with another hint or a
-// field since added, is still the pause it was. A request that cannot be read is not the same.
+// samePause reports whether the stored request and the one just made (as it is stored: storable) are the same
+// pause, by their decoded fields and not their bytes, so that a row written by an older version, with another
+// hint or a field since added, is still the pause it was. A row an older version wrote before secrets were taken
+// out is the same pause too, once they are taken out of it. A request that cannot be read, such as one that has
+// been cleared, is not the same.
 func samePause(stored, fresh []byte) bool {
 	var a, b dialect.Interaction
 	if json.Unmarshal(stored, &a) != nil || json.Unmarshal(fresh, &b) != nil {
 		return false
 	}
-	return reflect.DeepEqual(keyOf(a), keyOf(b))
+	want := keyOf(b)
+	return reflect.DeepEqual(keyOf(a), want) || reflect.DeepEqual(keyOf(storable(a)), want)
 }
 
 func keyOf(in dialect.Interaction) pauseKey {

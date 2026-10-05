@@ -141,6 +141,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, fmt.Errorf("trigger digest: %w", err)
 	}
 	stops.add("trigger-digest", startLoop(runCtx, digest.Run))
+	// The retention of what no other loop owns (data protection): reply text that was never delivered, and audit entries
+	// past the operator's retention, if one is set. It writes only to the store, so it stops with the other loops.
+	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, OnRemoved: metrics.RetentionRemoved, Logger: log})
+	if err != nil {
+		return nil, fmt.Errorf("store retention: %w", err)
+	}
+	stops.add("store-retention", startLoop(runCtx, retain.Run))
 	interactions, err := parts.start(runCtx, mgr, tap, &stops)
 	if err != nil {
 		return nil, err

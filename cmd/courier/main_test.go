@@ -84,6 +84,24 @@ func TestEnvConfigDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+// COURIER_AUDIT_RETENTION is "keep" until an operator sets a duration: unset or "keep" mean the audit log is never
+// purged, and a duration is read as written, not less than a day. "0" is no way to say keep, and is refused with the
+// rest: it would read as either.
+func TestEnvConfigAuditRetention(t *testing.T) {
+	for value, want := range map[string]time.Duration{"": 0, "keep": 0, "KEEP": 0, "2160h": 2160 * time.Hour, "24h": 24 * time.Hour, "8760h30m": 8760*time.Hour + 30*time.Minute} {
+		c, err := loadEnv(env{"COURIER_AUDIT_RETENTION": value}.get)
+		if err != nil || c.auditRetention != want {
+			t.Errorf("COURIER_AUDIT_RETENTION=%q: retention %v, %v; want %v", value, c.auditRetention, err, want)
+		}
+	}
+	for _, value := range []string{"0", "soon", "90d", "-24h", "23h59m", "1h"} {
+		_, err := loadEnv(env{"COURIER_AUDIT_RETENTION": value}.get)
+		if !errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), "COURIER_AUDIT_RETENTION") {
+			t.Errorf("COURIER_AUDIT_RETENTION=%q: loadEnv = %v, want an ErrWiring naming it", value, err)
+		}
+	}
+}
+
 // A value that cannot be read is a usage error that names the variable and, for a number or a
 // duration, says what it expects: nothing is guessed.
 func TestEnvConfigRefusesWhatItCannotRead(t *testing.T) {

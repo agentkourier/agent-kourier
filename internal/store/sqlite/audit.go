@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"time"
@@ -58,4 +59,31 @@ func (s *Store) ListAudit(ctx context.Context, since time.Time, afterSeq int64, 
 		return nil, fmt.Errorf("list audit: %w", err)
 	}
 	return out, nil
+}
+
+// PurgeAudit implements store.AuditRetention. The delete trigger of the audit table (migration 0020) lets a
+// DELETE through only while audit_purge has a row for it, so the marker goes in, the batch out and the marker
+// away again in one transaction; the single write connection keeps every other writer from seeing it.
+func (s *Store) PurgeAudit(ctx context.Context, before time.Time, limit int) (telemetryResult0 int, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PurgeAudit")
+	defer func() { finishStore(op, telemetryErr) }()
+	if before.IsZero() || limit < 1 {
+		return 0, fmt.Errorf("purge audit: a cutoff and a positive limit are required: %w", store.ErrInvalid)
+	}
+	var purged int64
+	err := s.inTx(ctx, func(tx *sql.Tx) (err error) {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO audit_purge (cutoff) VALUES (?)`, ts(before)); err != nil {
+			return err
+		}
+		if purged, err = execRows(ctx, tx, `DELETE FROM audit WHERE sequence IN
+			(SELECT sequence FROM audit WHERE at < ? ORDER BY at, sequence LIMIT ?)`, ts(before), limit); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM audit_purge`)
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("purge audit: %w", err)
+	}
+	return int(purged), nil
 }

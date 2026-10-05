@@ -124,3 +124,21 @@ func (s *Store) ListDecidedInteractions(ctx context.Context, since time.Time) (t
 	}
 	return out, nil
 }
+
+// ClearSettledInteractions implements store.Interactions. A cleared row has empty blobs, so the
+// length test is what keeps a second sweep from counting it again.
+func (s *Store) ClearSettledInteractions(ctx context.Context, now time.Time, grace, undeliveredGrace time.Duration) (telemetryResult0 int, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.ClearSettledInteractions")
+	defer func() { finishStore(op, telemetryErr) }()
+	if now.IsZero() || grace < 0 || undeliveredGrace < grace {
+		return 0, fmt.Errorf("clear settled interactions: now, a grace of at least zero and an undelivered grace of at least the grace are required: %w", store.ErrInvalid)
+	}
+	n, err := s.exec(ctx, `UPDATE interactions SET request = x'', answer = x''
+		WHERE state <> 'pending' AND decided_at > 0 AND (length(request) > 0 OR length(answer) > 0)
+		AND decided_at <= ? AND (state <> 'answered' OR delivered_at > 0 OR decided_at <= ?)`,
+		ts(now.Add(-grace)), ts(now.Add(-undeliveredGrace)))
+	if err != nil {
+		return 0, fmt.Errorf("clear settled interactions: %w", err)
+	}
+	return int(n), nil
+}

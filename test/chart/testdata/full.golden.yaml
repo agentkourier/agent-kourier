@@ -214,6 +214,8 @@ spec:
           value: "0"
         - name: COURIER_SYNC_TIMEOUT
           value: 45s
+        - name: COURIER_AUDIT_RETENTION
+          value: 8760h
         - name: COURIER_ENVIRONMENT
           value: production
         - name: OTEL_EXPORTER_OTLP_ENDPOINT

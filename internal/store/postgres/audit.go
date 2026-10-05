@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -63,4 +64,23 @@ func (s *Store) ListAudit(ctx context.Context, since time.Time, afterSeq int64, 
 		return nil, fmt.Errorf("list audit: %w", err)
 	}
 	return out, nil
+}
+
+// PurgeAudit implements store.AuditRetention through courier_audit_purge (migrations 0006 and 0020), which
+// alone sets the setting that lets the audit table's delete trigger through, local to its transaction. It is a
+// write like any other: the epoch is checked first, so only the leader purges.
+func (s *Store) PurgeAudit(ctx context.Context, before time.Time, limit int) (purged int, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PurgeAudit")
+	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+	if before.IsZero() || limit < 1 || limit > math.MaxInt32 {
+		return 0, fmt.Errorf("purge audit: a cutoff and a limit of 1 to %d are required: %w", math.MaxInt32, store.ErrInvalid)
+	}
+	var n int64
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT courier_audit_purge($1, $2::integer)`, before, limit).Scan(&n)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("purge audit: %w", err)
+	}
+	return int(n), nil
 }

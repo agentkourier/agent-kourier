@@ -9,6 +9,16 @@ import (
 
 const redacted = redact.Redacted
 
+// RedactArgs returns a tool call's arguments with the secrets taken out, in the way Tool does for display (see
+// redactArgs), for what is stored instead of shown: a request kept for later holds no more of the arguments
+// than the status line would. The result is a new map; args is not changed.
+func RedactArgs(args map[string]any) map[string]any {
+	if args == nil {
+		return nil
+	}
+	return redactArgs(args).(map[string]any)
+}
+
 // redactArgs returns v with secret values replaced, in nested maps and lists too: the value of a
 // key whose name redact.SecretName accepts, the "value" of a map whose "name" or "key" names a secret (which is how
 // Kubernetes writes an env var, {"name": "DB_PASSWORD", "value": "..."}), the second of a

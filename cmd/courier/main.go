@@ -21,6 +21,8 @@
 //	COURIER_SYNC_TIMEOUT   how long to wait for the Secret caches (default 30s)
 //	COURIER_KLOG_V         client-go's verbosity, held below 8 (default 0)
 //	COURIER_LOG_LEVEL      debug, info, warn or error (default info)
+//	COURIER_AUDIT_RETENTION   how long audit entries are kept: "keep" (the default: nothing is purged) or a duration of at
+//	                       least 24h, such as 8760h, after which an entry is purged
 //
 // It exits 0 after a signal, 1 when Slack rejects the tokens, 2 for a wrong config or wiring (or an
 // unreadable variable), 3 when RBAC denies it the Secrets, 4 for any other failure, and 5 when it was the leader and
@@ -90,6 +92,7 @@ type envConfig struct {
 	syncTimeout               time.Duration
 	klogV                     int
 	logLevel                  slog.Level
+	auditRetention            time.Duration // zero keeps the audit log for ever
 	telemetry                 telemetry.Config
 }
 
@@ -119,6 +122,11 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		return c, bad("COURIER_LOG_LEVEL", "debug, info, warn or error", errors.New("unknown level"))
 	}
 	c.logLevel = level
+	if v := get("COURIER_AUDIT_RETENTION", "keep"); !strings.EqualFold(v, "keep") {
+		if c.auditRetention, err = time.ParseDuration(v); err != nil || c.auditRetention < broker.MinAuditRetention {
+			return c, bad("COURIER_AUDIT_RETENTION", "keep, or a duration of at least "+broker.MinAuditRetention.String()+" such as 8760h", errors.Join(err, errors.New("too short or not a duration")))
+		}
+	}
 	if c.store, err = loadStoreEnv(getenv); err != nil {
 		return c, err
 	}
@@ -264,7 +272,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		}
 	}
 	cfg := broker.RunConfig{
-		ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver,
+		ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

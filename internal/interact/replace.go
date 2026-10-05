@@ -16,6 +16,11 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
+// RepairHorizon is how far back the repair of ended prompts, and the backstop of undelivered answers, look for
+// interactions that ended (their default Horizon). Retention keeps the request and answer of a settled interaction
+// for longer than this (RetentionConfig.ClearGrace), since the repair builds its edit from them.
+const RepairHorizon = 24 * time.Hour
+
 // maxEditFailures is how many failed edits of a prompt the repair makes before it leaves the prompt, so
 // that one whose message is gone is not tried for ever.
 const maxEditFailures = 10
@@ -32,7 +37,7 @@ type ReplacerConfig struct {
 	Updater Editor
 	Now     func() time.Time // time.Now if nil
 	Logger  *slog.Logger     // slog.Default() if nil
-	// Horizon is how far back the repair looks for interactions that ended (default 24 hours): the
+	// Horizon is how far back the repair looks for interactions that ended (default RepairHorizon): the
 	// prompt of an older one that was never replaced stays as it is.
 	Horizon time.Duration
 	// EditTimeout bounds each edit (default 30 seconds), so that one that never answers does not hold up
@@ -75,7 +80,7 @@ func NewReplacer(cfg ReplacerConfig) (*Replacer, error) {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Horizon <= 0 {
-		cfg.Horizon = 24 * time.Hour
+		cfg.Horizon = RepairHorizon
 	}
 	if cfg.EditTimeout <= 0 {
 		cfg.EditTimeout = 30 * time.Second
@@ -105,6 +110,8 @@ func (r *Replacer) Replace(ctx context.Context, id string) error {
 	case err != nil:
 		return fmt.Errorf("interact: read %s: %w", id, err)
 	case row.State == store.InteractionPending || row.MessageRef == "":
+		return nil
+	case len(row.Request) == 0: // cleared by retention, which waits out RepairHorizon: the ending cannot be built, and is no longer wanted
 		return nil
 	}
 	out, err := ReplacementOutgoing(row)

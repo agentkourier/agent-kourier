@@ -84,6 +84,9 @@ spec:
             {{- with .Values.syncTimeout }}
             - {name: COURIER_SYNC_TIMEOUT, value: {{ . | quote }}}
             {{- end }}
+            {{- with .Values.auditRetention }}
+            - {name: COURIER_AUDIT_RETENTION, value: {{ . | quote }}}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

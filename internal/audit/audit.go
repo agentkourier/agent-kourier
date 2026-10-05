@@ -117,6 +117,9 @@ const (
 	DecisionSuperseded DecisionResult = "superseded"
 	DecisionTimedOut   DecisionResult = "timed_out"
 	DecisionAutoDenied DecisionResult = "auto_denied" // tool approval on a read-only Binding
+	// DecisionAnswerCleared is an answered interaction whose pause came again after retention had cleared the
+	// answer: it cannot be sent again, and the task is cancelled.
+	DecisionAnswerCleared DecisionResult = "answer_cleared"
 )
 
 // Decision is a person's (or the timeout's) decision on an interaction.
@@ -254,7 +257,7 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 // Decision records who decided an interaction, when, and the shape of the answer.
 func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 	switch d.Result {
-	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied:
+	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared:
 	default:
 		return fail(store.ErrInvalid, "audit decision %q: unknown result %q", d.InteractionID, d.Result)
 	}

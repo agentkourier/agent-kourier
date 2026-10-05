@@ -209,6 +209,9 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	} else if bot {
 		return refuse(audit.DecisionDenied, nil, "")
 	}
+	if len(row.Request) == 0 { // cleared by retention once the interaction was settled long enough: no question to answer
+		return p.finish(ctx, press, &row, textGone)
+	}
 	var in dialect.Interaction
 	if err := json.Unmarshal(row.Request, &in); err != nil {
 		p.cfg.Logger.ErrorContext(ctx, "interact: the request of an interaction cannot be read", "interaction", row.ID, "err", err)

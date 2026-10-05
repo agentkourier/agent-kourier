@@ -143,7 +143,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the sweeper: %w", err)
 	}
-	retention, err := interact.NewRetention(interact.RetentionConfig{Store: d.st, Logger: d.log})
+	retention, err := interact.NewRetention(interact.RetentionConfig{Store: d.st, OnCleared: func(n int) { d.metrics.RetentionRemoved(RemovedClearedInteractions, n) }, Logger: d.log})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the retention loop: %w", err)
 	}

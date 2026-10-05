@@ -50,7 +50,7 @@ tier's, with the token-refresh CronJob).
   its Secrets are. Not both.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
-- `logLevel`, `syncTimeout`, `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
+- `logLevel`, `syncTimeout`, `auditRetention` (empty keeps the audit log for ever; a duration of at least 24h purges older entries), `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
 - `service`, `serviceMonitor`, `networkPolicy`, `podDisruptionBudget`, `tokenRefresh`: off until you switch them on.
 
 A config change rolls the pod (a `checksum/config` annotation): courier reloads its files, but a reload that adds a Secret

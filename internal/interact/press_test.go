@@ -520,3 +520,34 @@ func TestGivingUpTellsThePersonToPressAgainAndDeletesThePress(t *testing.T) {
 		t.Errorf("told %q, %d presses waiting; want both told to press again, both presses deleted, nothing decided or sent", got, r.waiting(t))
 	}
 }
+
+// TestAPressOnAnInteractionThatRetentionClearedIsToldItIsGone: a settled interaction's request and answer are
+// cleared once their use is over. A press that still reaches one (the winner pressing a prompt whose edit never
+// went through, long after) has nothing to read an answer against: the person is told the question is gone, the
+// press is finished, and nothing is logged as an error, which a request that cannot be read is.
+func TestAPressOnAnInteractionThatRetentionClearedIsToldItIsGone(t *testing.T) {
+	r := newPressRig(t)
+	r.open(t)
+	if _, err := r.process(t, r.submit(t, "UALICE1", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := r.st.ClearSettledInteractions(t.Context(), r.now.Add(1000*time.Hour), time.Hour, time.Hour); err != nil || n != 1 {
+		t.Fatalf("cleared %d, %v; want the answered interaction", n, err)
+	}
+	pl, logs := r.loggedPipeline(t)
+	if err := pl.Press(t.Context(), r.submit(t, "UALICE1", 0)); err != nil {
+		t.Fatal(err)
+	}
+	presses, _ := r.st.ListPresses(t.Context())
+	sent := len(r.sess.answers())
+	res, err := pl.Process(t.Context(), presses[len(presses)-1])
+	if err != nil || res != interact.Done || r.waiting(t) != 0 || len(r.sess.answers()) != sent {
+		t.Fatalf("Process = %v, %v, %d waiting, %d sends (was %d); want it done, nothing sent", res, err, r.waiting(t), len(r.sess.answers()), sent)
+	}
+	if got := r.eph.list(); len(got) == 0 || got[len(got)-1] != "UALICE1: This question is no longer available." {
+		t.Errorf("told %q; want the person told the question is gone", got)
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("log = %q; want no error for a request that was cleared on purpose", logs.String())
+	}
+}

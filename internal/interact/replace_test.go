@@ -272,3 +272,20 @@ func TestNewReplacerNeedsItsParts(t *testing.T) {
 		t.Error("NewReplacer accepted no Store or Updater")
 	}
 }
+
+// TestAClearedInteractionHasNothingToReplace: retention clears a settled interaction's request and answer after the
+// repair's horizon, so the ending cannot be built from the row. That is no failure to count against the prompt (ten
+// of them are given up on with an error): there is nothing to edit.
+func TestAClearedInteractionHasNothingToReplace(t *testing.T) {
+	r := newReplaceRig(t)
+	r.decided(t, "ix-1", asked, r.answer("UALICE1", [][]string{{"beta"}, {"x"}}))
+	if n, err := r.st.ClearSettledInteractions(t.Context(), d0.Add(1000*time.Hour), time.Hour, time.Hour); err != nil || n != 1 {
+		t.Fatalf("cleared %d, %v; want the answered interaction", n, err)
+	}
+	if err := r.r.Replace(t.Context(), "ix-1"); err != nil {
+		t.Errorf("Replace = %v; want nothing to do", err)
+	}
+	if got := r.up.list(); len(got) != 0 {
+		t.Errorf("edits %+v; want none", got)
+	}
+}

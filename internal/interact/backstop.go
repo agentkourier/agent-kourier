@@ -22,7 +22,7 @@ type BackstopConfig struct {
 	Outbox   Enqueuer
 	Now      func() time.Time // time.Now if nil
 	Logger   *slog.Logger     // slog.Default() if nil
-	// Horizon is how far back it looks for answers (default 24 hours), Grace how long an answer is
+	// Horizon is how far back it looks for answers (default RepairHorizon), Grace how long an answer is
 	// given to arrive before it is taken for lost (default 2 minutes), and Interval how often Run looks
 	// (default 1 minute).
 	Horizon, Grace, Interval time.Duration
@@ -59,7 +59,7 @@ func NewBackstop(cfg BackstopConfig) (*Backstop, error) {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Horizon <= 0 {
-		cfg.Horizon = 24 * time.Hour
+		cfg.Horizon = RepairHorizon
 	}
 	if cfg.Grace <= 0 {
 		cfg.Grace = 2 * time.Minute

@@ -248,6 +248,7 @@ func TestRefusals(t *testing.T) {
 		{"Postgres timeouts with SQLite", []string{"--set", image, "--set", "store.postgres.timeouts=role"}, "store.postgres.timeouts is for store.type postgres"},
 		{"a claim with Postgres", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,persistence.existingClaim=mine"}, "persistence.existingClaim is for store.type sqlite"},
 		{"a NetworkPolicy with Postgres and no database", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,networkPolicy.enabled=true,networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"}, "networkPolicy.postgres.to"},
+		{"an audit retention that is no duration", []string{"--set", image, "--set", "auditRetention=forever"}, "auditRetention"},
 		{"an unknown store", []string{"--set", image, "--set", "store.type=mysql"}, "store.type"},
 		{"unknown Postgres timeouts", []string{"--set", image, "--set", "store.type=postgres,store.postgres.timeouts=never"}, "store.postgres.timeouts"},
 		{"a Secret name with a slash", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=a/b,store.postgres.dsnSecret.key=dsn"}, "store.postgres.dsnSecret.name"},

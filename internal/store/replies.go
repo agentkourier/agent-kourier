@@ -65,4 +65,11 @@ type ReplyQueue interface {
 	// discards its text. Marking again is a no-op. It returns ErrNotFound for
 	// an unknown ID and ErrInvalid for an empty ID or zero time.
 	MarkReplyDelivered(ctx context.Context, id string, at time.Time) error
+	// AbandonStrandedReplies is the time backstop for a reply that is never drained: it drops every
+	// undelivered reply enqueued at least age before now, in the way a turn is dropped when its Binding
+	// has left (the text is cleared and the row is marked delivered at now, so it stays a tombstone and
+	// is never sent), and returns how many. A reply whose session has an active task is left alone
+	// however old: it waits behind that task by design. age must be positive and now not zero
+	// (ErrInvalid otherwise).
+	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
 }

@@ -12,6 +12,7 @@ imagePullSecrets:
 
 logLevel: debug
 syncTimeout: 45s
+auditRetention: 8760h
 extraEnv:
   - {name: COURIER_ENVIRONMENT, value: production}
   - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "https://otel-collector.observability.svc.cluster.local:4318"}

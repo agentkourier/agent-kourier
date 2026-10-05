@@ -37,8 +37,11 @@ type RunConfig struct {
 	// SyncTimeout bounds the wait for the Secret caches; zero means Bootstrap's default.
 	SyncTimeout time.Duration
 	// KlogVerbosity is the verbosity requested for klog; RouteKlog holds it below 8.
-	KlogVerbosity  int
-	Telemetry      telemetry.Config
+	KlogVerbosity int
+	Telemetry     telemetry.Config
+	// AuditRetention is how long audit entries are kept; zero keeps them for ever, which is what runs until an
+	// operator sets one (COURIER_AUDIT_RETENTION). A value below MinAuditRetention is refused when the broker starts.
+	AuditRetention time.Duration
 	TracerProvider trace.TracerProvider // test or embedding override; caller owns its shutdown
 	ServiceVersion string
 	Logger         *slog.Logger // slog.Default() if nil
@@ -61,6 +64,9 @@ type RunConfig struct {
 	// threadSweepEvery is how often the rows of old trigger threads are purged (an hour if zero): a seam for this
 	// package's tests, which cannot wait for it.
 	threadSweepEvery time.Duration
+	// retentionEvery is how often the store retention loop runs (an hour if zero): a seam for this package's tests, which
+	// cannot wait for it.
+	retentionEvery time.Duration
 	// digestEvery is how often the digest lines of stopped alerts are looked for (15 seconds if zero): a seam for this
 	// package's tests, which cannot wait for it.
 	digestEvery time.Duration
@@ -95,6 +101,9 @@ func (c RunConfig) validate() error {
 		if err := c.Election.validate(); err != nil {
 			return err
 		}
+	}
+	if c.AuditRetention < 0 || (c.AuditRetention > 0 && c.AuditRetention < MinAuditRetention) {
+		return fmt.Errorf("%w: AuditRetention is %v; want 0 (keep) or at least %v", ErrWiring, c.AuditRetention, MinAuditRetention)
 	}
 	var missing []string
 	for name, ok := range map[string]bool{
