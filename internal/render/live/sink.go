@@ -77,10 +77,28 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 		mode = v1alpha1.OutputLive
 	}
 	turn := Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Recipient: recipient, Recovered: t.Recovered}
-	if t.Feedback != "" { // the buttons say what they rate by the value alone, so that a press after a restart finds it
-		turn.Footer = feedback.Parts(t.Feedback, t.Key.Thread, t.MessageID)
-	}
+	turn.Footer = footerOf(t)
 	return s.runs.Start(ctx, turn).Handle
+}
+
+// FollowUpHint is the line that ends the final message of a turn in a Binding whose chat.threadReplies is mention (D38): there, a
+// reply that does not mention courier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
+// mention syntax of any platform: the neutral model has no way to name courier, and a line that said who to mention could not
+// be wrong about it.
+const FollowUpHint = "Mention me in this thread to ask a follow-up."
+
+// footerOf is what the final message of the turn t ends with, in the order it is read: the follow-up hint, a context line, and
+// then the feedback question and its buttons, which are the last thing in the message. The Run puts it on the messages that
+// end a turn with something to show, and on no other.
+func footerOf(t session.TurnRef) []chat.Part {
+	var parts []chat.Part
+	if t.ThreadReplies == v1alpha1.ThreadRepliesMention {
+		parts = append(parts, chat.Context{Text: FollowUpHint})
+	}
+	if t.Feedback != "" { // the buttons say what they rate by the value alone, so that a press after a restart finds it
+		parts = append(parts, feedback.Parts(t.Feedback, t.Key.Thread, t.MessageID)...)
+	}
+	return parts
 }
 
 // Notice is QueueNotice for the session manager's Sink: it has no way to retry, so a notice that could

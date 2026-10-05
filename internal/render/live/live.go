@@ -148,9 +148,10 @@ type Turn struct {
 	// UNCONFIRMED(WP-04): whether Slack ends an orphaned stream, and what it answers to a stop of a
 	// stream that has ended.
 	Recovered bool
-	// Footer is what the final message ends with, under its text: the parts of the feedback buttons (spec 8.7). It is
-	// added once, to the message the turn ends with, and to no message before it, and not at all to a turn that ended
-	// with nothing to show. The renderer does not look into it.
+	// Footer is what the final message ends with, under its text: the follow-up hint of a mention Binding (D38) and the parts of
+	// the feedback buttons (spec 8.7). It is added once, to the message the turn ends with, and to no message before it, and not
+	// at all to a turn that ended with nothing to show, or with a question for the person to answer. The renderer does not look
+	// into it.
 	Footer []chat.Part
 }
 

@@ -3,6 +3,7 @@ package session
 import (
 	"testing"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -81,5 +82,50 @@ func TestRecoveredTurnCarriesTheFeedbackOfItsRecordedTurn(t *testing.T) {
 				t.Errorf("turn refs = %+v; want one with feedback %q", sink.refs, tc.want)
 			}
 		})
+	}
+}
+
+// The renderer is told the Binding's chat.threadReplies on every turn, which is how it knows to end the final message with the
+// follow-up hint (D38): the same for an alert's first prompt as for a person's turn, and for a task found again after a restart.
+func TestTurnRefCarriesTheBindingsThreadReplies(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode v1alpha1.ThreadReplies
+		user string
+	}{
+		{"mention, a person's turn", v1alpha1.ThreadRepliesMention, "U1"},
+		{"mention, an alert's first prompt", v1alpha1.ThreadRepliesMention, ""},
+		{"all", v1alpha1.ThreadRepliesAll, "U1"},
+		{"unset", "", "U1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.threadReplies = tc.mode
+			in := inbound("1")
+			in.UserID = tc.user
+			if _, err := f.submit(in); err != nil {
+				t.Fatal(err)
+			}
+			<-sink.finals
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if len(sink.refs) != 1 || sink.refs[0].ThreadReplies != tc.mode {
+				t.Errorf("turn refs = %+v; want one with thread replies %q", sink.refs, tc.mode)
+			}
+		})
+	}
+}
+
+func TestRecoveredTurnCarriesTheBindingsThreadReplies(t *testing.T) {
+	f, sink := restarted(t)
+	f.threadReplies = v1alpha1.ThreadRepliesMention
+	recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: "U1"})
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || sink.refs[0].ThreadReplies != v1alpha1.ThreadRepliesMention {
+		t.Errorf("turn refs = %+v; want one with thread replies mention", sink.refs)
 	}
 }

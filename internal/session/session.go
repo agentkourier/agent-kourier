@@ -122,6 +122,9 @@ type TurnRef struct {
 	// zero value, those of an investigation for a turn that nobody wrote (an alert's first prompt: its user is
 	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
+	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
+	// courier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
+	ThreadReplies v1alpha1.ThreadReplies
 }
 
 // NoticeKind is what a Notice tells the thread.
