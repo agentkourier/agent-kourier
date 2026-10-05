@@ -1,9 +1,10 @@
 # The E2E runner: the test binary as a Job in namespace e2e, so it reaches the test doubles by their
 # ClusterIP Service names and nothing is published to the host (the fake Slack's /_control/ has no
 # authentication). Its service account may list and delete pods in e2e only, to restart a double. In
-# courier's namespace it may only read pods and get and patch the Deployment named courier, to set a fault
-# through the environment (kube.Pods.SetFault) or restart it (kube.Pods.RolloutRestart); never delete a
-# pod there, which would bypass strategy: Recreate, and never patch another Deployment.
+# courier's namespace it may only read pods and their logs (S16 reads the log of a replica that exited) and get and patch the
+# Deployment named courier, to set a fault through the environment (kube.Pods.SetFault) or restart it (kube.Pods.RolloutRestart);
+# never delete a pod there, which would bypass strategy: Recreate, and never patch another Deployment. S16 ends and freezes a
+# courier replica through the container signaler (hack/kind/fast/signaler.yaml), not through this Role.
 # The pod must never carry the label app.kubernetes.io/name=courier: the full tier's NetworkPolicy
 # admits that label to the kagent front door.
 apiVersion: v1
@@ -40,6 +41,9 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
   - apiGroups: [apps]
     resources: [deployments]
     resourceNames: [courier]

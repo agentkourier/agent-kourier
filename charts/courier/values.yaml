@@ -116,6 +116,13 @@ leaderElection:
   renewDeadline: "" # 10s
   retryPeriod: "" # 2s
 
+# How often the kubelet asks /healthz, and how many misses in a row make it restart the container. The defaults restart a process that
+# does not answer for about 30 seconds. A process that is frozen answers nothing, so this is also how long a paused pod is left before
+# it is restarted.
+livenessProbe:
+  periodSeconds: 10
+  failureThreshold: 3
+
 # SQLite lives here (store.type sqlite; with postgres none of this is used or rendered). The claim is ReadWriteOnce and the
 # Deployment's strategy is Recreate, so the old pod has released the volume before the new one starts.
 persistence:

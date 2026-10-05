@@ -94,7 +94,7 @@ spec:
           # for that), so a Slack outage never takes courier out of its Service or restarts it. Nor does it depend on the
           # lease: a standby is Ready, and idle until it leads.
           startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 40}
-          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: {{ int .Values.livenessProbe.periodSeconds }}, failureThreshold: {{ int .Values.livenessProbe.failureThreshold }}}
           readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

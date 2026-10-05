@@ -1,0 +1,17 @@
+# Two courier replicas in the fast kind tier on Postgres, for the failover scenario S16 (E2E_STORE=postgres E2E_REPLICAS=2 make
+# e2e-fast-up): an overlay on fast-postgres-values.yaml, which hack/kind/lib.sh's install_courier layers over it (helm -f twice).
+# The election is faster than the chart's defaults (15s, 10s, 2s), because S16 freezes the leader's process, and a frozen process also
+# fails its liveness probe. The standby must take over, and the test resume the old leader, before the kubelet restarts it: with a lease
+# of 9 seconds the standby leads about 10 to 14 seconds after the freeze, and the probe here tolerates six misses ten seconds apart, so the
+# kubelet restarts a frozen leader 50 to 60 seconds after the freeze (the default of three would be 20 to 30). The order that matters is the
+# chart's own: the lease outlasts the renew deadline, so a leader that cannot renew gives up before a standby may take over.
+replicaCount: 2
+
+leaderElection:
+  leaseDuration: 9s
+  renewDeadline: 6s
+  retryPeriod: 2s
+
+livenessProbe:
+  periodSeconds: 10
+  failureThreshold: 6

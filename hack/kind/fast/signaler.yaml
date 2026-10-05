@@ -1,0 +1,60 @@
+# The container signaler (test/signaler), for S16, the failover scenario: it freezes, resumes or kills the processes of one courier container,
+# by container ID, as a paused node and a crash do. The fast tier runs it only with two courier replicas (E2E_STORE=postgres E2E_REPLICAS=2
+# make e2e-fast-up; lib.sh's apply_signaler), and takes it away again with one.
+#
+# From inside the cluster there is no other way to do it: courier is PID 1 of its own PID namespace, where the kernel drops a SIGSTOP or
+# SIGKILL that its own namespace sends. So this pod shares the node's PID namespace (hostPID) and runs as root with the one capability that
+# signalling another user's process needs (KILL), and nothing else: not privileged, a read-only root filesystem, no service account token.
+# It has no authentication and can end any process of the node. Its Service is ClusterIP and stays that way, like every double's, and
+# verify.sh checks that no Service for it is published; it exists in this test cluster for a test to call. Its NetworkPolicy admits the
+# E2E runner's pod (the label of hack/kind/e2e/runner.yaml's Job) and nothing else, so that no other pod can ask it to freeze a container
+# of the node, the control plane's included. (The kubelet's own readiness probe comes from the node, which a policy does not stop.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signaler
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: signaler}
+  template:
+    metadata:
+      labels: {app: signaler}
+    spec:
+      automountServiceAccountToken: false
+      hostPID: true
+      securityContext: {runAsUser: 0, runAsGroup: 0, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: signaler
+          image: courier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command: ["/signaler", "-addr", "0.0.0.0:8080"]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [KILL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: signaler
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: signaler}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: signaler
+  namespace: e2e
+spec:
+  podSelector:
+    matchLabels: {app: signaler}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: e2e-runner}
+      ports: [{port: 8080, protocol: TCP}]

@@ -111,7 +111,7 @@ install_operator() {
     --namespace monitoring --create-namespace -f "${HERE}/fast/operator-values.yaml" --wait --timeout 4m >/dev/null
 }
 
-# build_doubles_image: cross-compile the doubles on the host for the Docker daemon's architecture,
+# build_doubles_image: cross-compile the doubles (the signaler too, which only the fast tier on two replicas runs) on the host for the Docker daemon's architecture,
 # copy them into the pinned distroless image (fast/Dockerfile; no Go image to pull) and load it into
 # the tier's cluster. BUILD is the scratch directory; the caller's EXIT trap removes it.
 build_doubles_image() {
@@ -122,7 +122,7 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink; do
+  for double in fakeslack stubagent sink signaler; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
@@ -283,19 +283,22 @@ helm_install_courier() {
   "${H[@]}" upgrade --install "${release}" "${ROOT}/charts/courier" --namespace courier -f "${values}" --force-conflicts "$@" >/dev/null
 }
 
-# install_courier VALUES: the tier's courier, release "courier": a Deployment, ServiceAccount, Role, PersistentVolumeClaim and Service
-# from the chart (the config, which the caller has made as the ConfigMap courier-config, is not the chart's). On a cluster brought up before
-# the chart, its hand-made Deployment is replaced and its other objects adopted, so that re-running a bring-up is how a tier moves over, with
-# its volume. Then a rollout restart, so that a rebuilt image (same tag) or a changed ConfigMap is picked up: Helm rolls the pod for neither,
-# since the values did not change.
+# install_courier VALUES [HELM ARG...]: the tier's courier, release "courier": a Deployment, ServiceAccount, Role, PersistentVolumeClaim and
+# Service from the chart (the config, which the caller has made as the ConfigMap courier-config, is not the chart's). Further arguments go to
+# helm, such as -f OVERLAY. On a cluster brought up before the chart, its hand-made Deployment is replaced and its other objects adopted, so
+# that re-running a bring-up is how a tier moves over, with its volume. Then a rollout restart, so that a rebuilt image (same tag) or a changed
+# ConfigMap is picked up: Helm rolls the pod for neither, since the values did not change.
 install_courier() {
+  local values=$1
+  shift
   replace_unowned_deployment courier
   adopt_into_release courier serviceaccount/courier role/courier-secrets rolebinding/courier-secrets service/courier pvc/courier-data
-  helm_install_courier courier "$1"
+  helm_install_courier courier "${values}" "$@"
   "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
 }
 
-# deploy_courier AGENTBACKEND: courier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share. The config
+# deploy_courier AGENTBACKEND: courier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share. COURIER_VALUES
+# is the values file (the fast tier's by default) and the array COURIER_HELM_ARGS, if the caller set it, holds more helm arguments. The config
 # is the fast tier's Bindings and ChatConnection (fast/courier/config), with AGENTBACKEND, a file, in place of the fast tier's AgentBackend:
 # the Bindings name it `agents` in both tiers. The Secrets are fake constants made here and never committed, and the agent token (Secret
 # courier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
@@ -310,7 +313,21 @@ deploy_courier() {
   "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n courier create configmap courier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  install_courier "${COURIER_VALUES:-${ROOT}/charts/courier/ci/fast-values.yaml}"
+  install_courier "${COURIER_VALUES:-${ROOT}/charts/courier/ci/fast-values.yaml}" ${COURIER_HELM_ARGS[@]+"${COURIER_HELM_ARGS[@]}"} # (an empty array is unset to bash 3.2)
+}
+
+# apply_signaler: the container signaler (fast/signaler.yaml, in namespace e2e), which S16 uses to freeze or kill a courier replica; the fast
+# tier on two replicas only. It shares the node's PID namespace and is published nowhere. Restarted so that a rebuilt image (same tag) is
+# picked up. Needs K, HERE.
+apply_signaler() {
+  "${K[@]}" apply -f "${HERE}/fast/signaler.yaml" >/dev/null
+  "${K[@]}" -n e2e rollout restart deploy/signaler >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/signaler --timeout=180s
+}
+
+# remove_signaler: take the signaler away, which a tier that runs one replica has no use for. Nothing if it is not there. Needs K, HERE.
+remove_signaler() {
+  "${K[@]}" delete -f "${HERE}/fast/signaler.yaml" --ignore-not-found >/dev/null
 }
 
 # deploy_postgres: the fast tier's Postgres (fast/postgres.yaml, in namespace e2e) and the two Secrets that carry its password: postgres-auth

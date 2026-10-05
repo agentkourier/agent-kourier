@@ -226,6 +226,7 @@ spec:
         image: registry.example.test/platform/courier@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         imagePullPolicy: IfNotPresent
         livenessProbe:
+          failureThreshold: 3
           httpGet:
             path: /healthz
             port: http

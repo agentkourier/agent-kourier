@@ -139,6 +139,7 @@ spec:
         image: courier:dev
         imagePullPolicy: Never
         livenessProbe:
+          failureThreshold: 3
           httpGet:
             path: /healthz
             port: http

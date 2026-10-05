@@ -36,6 +36,7 @@ type scenario struct {
 	stub    *Stub
 	courier *Courier
 	pods    *kube.Pods
+	reps    *Replicas
 }
 
 // newScenario returns what a scenario needs, once courier is ready and connected to the fake. Both tiers
@@ -50,17 +51,39 @@ func newScenario(t *testing.T) *scenario {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &scenario{t: t, ctx: t.Context(), env: env, slack: NewSlack(env.SlackURL), stub: NewStub(env.StubURL), courier: NewCourier(env.CourierURL), pods: pods}
+	s := &scenario{t: t, ctx: t.Context(), env: env, slack: NewSlack(env.SlackURL), stub: NewStub(env.StubURL), courier: NewCourier(env.CourierURL), pods: pods, reps: NewReplicas(pods)}
 	s.connected()
 	return s
 }
 
+// replicated says whether courier runs more than one pod now: with two replicas on Postgres one leads and holds the Socket Mode
+// connection, and the standby does nothing, so what only the leader has (its counters, its connection) is looked for there.
+func (s *scenario) replicated(ctx context.Context) (bool, error) {
+	list, err := s.pods.List(ctx, kube.CourierNamespace, courierPods)
+	n := 0
+	for _, p := range list {
+		if p.DeletionTimestamp == nil {
+			n++
+		}
+	}
+	return n > 1, err
+}
+
 // connected waits for courier to be ready and to hold a Socket Mode connection to the fake, which a mention
-// needs (the fake answers 409 with no client). Call it again after anything that restarts courier.
+// needs (the fake answers 409 with no client). Call it again after anything that restarts courier. With two replicas it
+// waits for exactly one of them to lead and be connected too: ready is true of a standby, and the connection the fake
+// counts may be the one of a leader that is on its way out.
 func (s *scenario) connected() {
 	s.t.Helper()
 	if err := s.courier.WaitReady(s.ctx, 2*time.Minute); err != nil {
 		s.t.Fatal(err)
+	}
+	if many, err := s.replicated(s.ctx); err != nil {
+		s.t.Fatal(err)
+	} else if many {
+		if _, err := s.reps.WaitLeader(s.ctx, 2*time.Minute); err != nil {
+			s.t.Fatal(err)
+		}
 	}
 	err := Wait(s.ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
 		n, err := s.slack.Connections(ctx)
@@ -143,10 +166,29 @@ func describe(thread []fakeslack.MessageView) string {
 	return b.String()
 }
 
-// counter reads one of courier's counters, which is 0 until it has been incremented: it is not exposed before.
+// leaderCounter reads one of courier's samples from the process that does its work: the Service's pod when there is one
+// replica, and the leader's own pod when there are two (the Service would answer from either, and a standby has none of
+// the counters of the work).
+func (s *scenario) leaderCounter(ctx context.Context, name string, labels map[string]string) (float64, error) {
+	many, err := s.replicated(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !many {
+		return s.courier.Counter(ctx, name, labels)
+	}
+	leader, err := s.reps.WaitLeader(ctx, 2*time.Minute)
+	if err != nil {
+		return 0, err
+	}
+	return s.reps.Counter(ctx, leader, name, labels)
+}
+
+// counter reads one of the leader's counters (see leaderCounter), which is 0 until it has been incremented: it is not
+// exposed before.
 func (s *scenario) counter(name string, labels map[string]string) float64 {
 	s.t.Helper()
-	v, err := s.courier.Counter(s.ctx, name, labels)
+	v, err := s.leaderCounter(s.ctx, name, labels)
 	if errors.Is(err, ErrNoSample) {
 		return 0
 	}

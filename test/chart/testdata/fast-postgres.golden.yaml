@@ -56,6 +56,7 @@ spec:
         image: courier-e2e/courier-testhooks:dev
         imagePullPolicy: Never
         livenessProbe:
+          failureThreshold: 3
           httpGet:
             path: /healthz
             port: http

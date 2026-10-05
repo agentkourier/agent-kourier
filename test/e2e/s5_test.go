@@ -73,22 +73,7 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 		bots := BotMessages(th)
 		return len(bots) >= 2 && CompareTS(bots[len(bots)-1].TS, again.TS) > 0
 	})
-	checkOnce := func(th []fakeslack.MessageView) (bool, string) {
-		var before, after []fakeslack.MessageView
-		for _, b := range BotMessages(th) {
-			if CompareTS(b.TS, again.TS) < 0 {
-				before = append(before, b)
-			} else {
-				after = append(after, b)
-			}
-		}
-		ok := len(before) == 1 && len(after) == 1 && OutboxID(before[0]) != "" && OutboxID(after[0]) != "" && OutboxID(before[0]) != OutboxID(after[0])
-		// Each is the agent's answer. A message the crash hook reaches can be any outbox post, a notice that the
-		// turn failed included, so a scenario that checked only that something was posted once would pass on a
-		// courier whose agent turn never worked.
-		ok = ok && strings.Contains(before[0].Text, s5Answer) && strings.Contains(after[0].Text, s5Answer)
-		return ok, describe(th)
-	}
+	checkOnce := func(th []fakeslack.MessageView) (bool, string) { return answeredOnceBeforeAndAfter(th, again) }
 	if ok, got := checkOnce(th); !ok {
 		t.Fatalf("want one tagged message of the bot before the second message and one after, each its own and each the agent's answer: the first reply is not posted twice\nthe thread: %s", got)
 	}
@@ -101,6 +86,24 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 	if err != nil {
 		t.Errorf("%v\nthe thread: %s", err, s.describeNow(m.TS))
 	}
+}
+
+// answeredOnceBeforeAndAfter says whether the thread holds exactly one tagged message of the bot before again, and one after it, each its
+// own and each the agent's answer: the first reply was posted once, and the one the second message got is another. A message the crash
+// hook reaches can be any outbox post, a notice that the turn failed included, so a scenario that checked only that something was posted
+// once would pass on a courier whose agent turn never worked. The string is the thread, for a failure message.
+func answeredOnceBeforeAndAfter(th []fakeslack.MessageView, again fakeslack.UserMessage) (bool, string) {
+	var before, after []fakeslack.MessageView
+	for _, b := range BotMessages(th) {
+		if CompareTS(b.TS, again.TS) < 0 {
+			before = append(before, b)
+		} else {
+			after = append(after, b)
+		}
+	}
+	ok := len(before) == 1 && len(after) == 1 && OutboxID(before[0]) != "" && OutboxID(after[0]) != "" && OutboxID(before[0]) != OutboxID(after[0])
+	ok = ok && strings.Contains(before[0].Text, s5Answer) && strings.Contains(after[0].Text, s5Answer)
+	return ok, describe(th)
 }
 
 // describeNow is the thread at ts in S5's channel as text, for a failure message; a thread that cannot be

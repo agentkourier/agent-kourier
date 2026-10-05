@@ -44,8 +44,12 @@ var upFastSecrets = secrets{"courier/slack-fast": {"botToken", "appToken"}, "cou
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), courierDir+"config")
-	if err != nil || len(set.Bindings) != 11 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
-		t.Fatalf("Load = %+v, %v; want a Binding for the smoke test and one for each of ten scenarios, and one connection and backend", set, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Bindings) != 14 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of ten scenarios, three for S16's cases, and one connection and backend",
+			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
 	if err != nil {
@@ -133,6 +137,9 @@ func TestScenarioBindings(t *testing.T) {
 		{"S13", e2e.ChannelS13, "scenario-tools", false, v1alpha1.OutputLive},
 		{"S14", e2e.ChannelS14, "scenario-alert", false, v1alpha1.OutputLive},
 		{"S15", e2e.ChannelS15, "scenario-alert", false, v1alpha1.OutputLive},
+		{"S16", e2e.ChannelS16, "scenario-gated", false, v1alpha1.OutputLive},
+		{"S16b", e2e.ChannelS16B, "test-agent", false, v1alpha1.OutputFinal},
+		{"S16c", e2e.ChannelS16C, "scenario-gated", false, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("courier", "slack-fast", tc.channel)
 		if !ok {
@@ -205,6 +212,33 @@ func TestS15LimitsTheStormToThreeStartsInTenSeconds(t *testing.T) {
 	}
 	if triggers[0].Thread.Cooldown.Duration != 4*time.Hour {
 		t.Errorf("thread %+v; want the preset's", triggers[0].Thread)
+	}
+}
+
+// TestS16StormHasS15sLimitsAndTheAlertBotOfItsOwn: the failover scenario's storm channel has S15's trigger and limits (three starts in
+// 10 seconds, no daily cap, and room for twenty at once, so that the held investigations of a failed run do not limit the next) for the bot the scenario posts as, with a gated agent in place of the alert agent so that
+// the started investigations are still running when the leader is killed. The numbers are the ones the scenario asserts.
+func TestS16StormHasS15sLimitsAndTheAlertBotOfItsOwn(t *testing.T) {
+	set, err := config.Load(t.Context(), courierDir+"config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb, ok := snap.BindingForChannel("courier", "slack-fast", e2e.ChannelS16C)
+	if !ok {
+		t.Fatalf("channel %s resolves to no Binding", e2e.ChannelS16C)
+	}
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS16 ||
+		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Fatalf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS16)
+	}
+	l := triggers[0].Limits
+	if l.RateLimit == nil || l.RateLimit.MaxRuns != 3 || l.RateLimit.Per.Duration != 10*time.Second || l.RateLimit.MaxConcurrent != 20 || l.MaxRunsPerDay == nil || *l.MaxRunsPerDay != 0 {
+		t.Errorf("limits %+v (rate %+v); want 3 in 10s, 20 at once and no daily cap", l, l.RateLimit)
 	}
 }
 

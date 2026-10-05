@@ -17,7 +17,8 @@ From source, the chart needs `image.repository` (a released chart has it stamped
 ChatConnection. Check any values file with `helm lint --strict -f my-values.yaml charts/courier` and
 `helm template` before installing. `ci/` holds the values the tests render: `minimal`, `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' courier, which
 `hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `fast-postgres` (the fast tier's on Postgres:
-`E2E_STORE=postgres make e2e-fast-up`), `ax` (the AX tier's, with a database file of its own) and `sandbox` (the sandbox
+`E2E_STORE=postgres make e2e-fast-up`; `fast-postgres-ha` is an overlay on it, layered with a second `-f`, for two replicas and a shorter lease:
+`E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up`, which S16 runs on), `ax` (the AX tier's, with a database file of its own) and `sandbox` (the sandbox
 tier's, with the token-refresh CronJob).
 
 ## What it installs

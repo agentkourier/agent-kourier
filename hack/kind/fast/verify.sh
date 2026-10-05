@@ -7,9 +7,10 @@
 #     selects the fake Slack's or the stub agent's pods is ClusterIP with no nodePort, external IP
 #     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
 #     hostNetwork; the kind node publishes only the API server, on loopback;
-#  2. courier: one pod, ready (the Deployment's rollout has finished and the API server can reach
-#     /healthz and /readyz on the pod, through its proxy), and, on the Postgres store (E2E_STORE=postgres), a Postgres
-#     that is published nowhere;
+#  2. courier: its pods (one, or two with E2E_REPLICAS=2), ready (the Deployment's rollout has finished and the API server can reach
+#     /healthz and /readyz on each, through its proxy), exactly one of them the leader (courier_leader, which a lone replica says too), and,
+#     on the Postgres store (E2E_STORE=postgres), a Postgres that is published nowhere, and with two replicas a container signaler that
+#     is published nowhere either;
 #  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows courier
 #     connected over Socket Mode (at least one connection, waited for); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
@@ -47,13 +48,30 @@ courier_fail() {
 "${K[@]}" -n courier rollout status deploy/courier --timeout=180s || courier_fail "courier's rollout did not finish"
 # A pod that is shutting down does not count: on Postgres the Deployment rolls with a surge, and the old pod, which hands its Lease over as it
 # stops, may still be listed (Terminating) when the rollout has finished.
-pod=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
-[[ "${pod}" != *" "* && -n "${pod}" ]] || courier_fail "want exactly one courier pod, have: ${pod:-none}"
-echo "ok: one courier pod, ${pod}, rolled out"
-for path in healthz readyz; do
-  "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/${path}" >/dev/null || courier_fail "courier's /${path} does not answer 200"
-  echo "ok: courier's /${path} answers 200"
+want=$("${K[@]}" -n courier get deploy/courier -o 'jsonpath={.spec.replicas}')
+pods=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
+[ "$(wc -w <<<"${pods}")" -eq "${want}" ] || courier_fail "want ${want} courier pod(s), have: ${pods:-none}"
+echo "ok: ${want} courier pod(s), ${pods}, rolled out"
+for pod in ${pods}; do
+  for path in healthz readyz; do
+    "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/${path}" >/dev/null || courier_fail "${pod}'s /${path} does not answer 200"
+    echo "ok: ${pod}'s /${path} answers 200"
+  done
 done
+# Exactly one pod does courier's work: the one that holds the Lease (a lone replica leads at once). Waited for, since a standby that has
+# just taken over a Lease from a pod that was replaced is a few seconds behind the rollout.
+leaders=
+for _ in $(seq 60); do
+  leaders=
+  for pod in ${pods}; do
+    metrics=$("${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/metrics" 2>/dev/null || true) # not grep -q on the pipe: pipefail would see its SIGPIPE
+    ! grep -q '^courier_leader 1$' <<<"${metrics}" || leaders="${leaders} ${pod}"
+  done
+  [ "$(wc -w <<<"${leaders}")" -eq 1 ] && break
+  sleep 1
+done
+[ "$(wc -w <<<"${leaders}")" -eq 1 ] || courier_fail "want exactly one courier leader (courier_leader 1), have:${leaders:- none}"
+echo "ok: exactly one leader,${leaders}"
 
 # The store courier runs on (E2E_STORE of up-fast.sh), as the chart set it. Postgres is a credentialed database that nothing outside the
 # cluster may reach: like the doubles' control surfaces, it is published nowhere.
@@ -61,6 +79,10 @@ store=$("${K[@]}" -n courier get deploy/courier -o 'jsonpath={.spec.template.spe
 echo "ok: courier runs on the ${store:-unknown} store"
 if [ "${store}" = postgres ]; then
   assert_app_unpublished e2e postgres
+fi
+# The signaler can stop or kill any process of the node: with two replicas it is there, and it is published nowhere.
+if [ "${want}" -gt 1 ]; then
+  assert_app_unpublished e2e signaler
 fi
 
 echo "== in the cluster: each component answers"

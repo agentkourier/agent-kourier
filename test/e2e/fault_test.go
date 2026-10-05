@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
@@ -13,13 +12,6 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
-)
-
-// Courier's container and the label of its pod (charts/courier, as the tiers install it); its namespace
-// and Deployment are kube.CourierNamespace and kube.CourierDeployment.
-const (
-	courierContainer = "courier"
-	courierPods      = "app.kubernetes.io/name=courier"
 )
 
 // faultOf is the COURIER_FAULT the pod's courier container runs with ("" if unset).
@@ -40,22 +32,33 @@ func faultOf(t *testing.T, pod corev1.Pod) string {
 	return ""
 }
 
-// onePod is courier's only pod, which a rollout leaves once it has finished. A pod that is shutting down is not counted:
-// with Postgres the rollout has a surge, and the old pod, which hands its Lease over as it stops, may still be listed.
-func onePod(ctx context.Context, t *testing.T, pods *kube.Pods) corev1.Pod {
+// leaderPod is the pod of courier's leader, which a rollout leaves once it has finished: the one pod that says it leads
+// (courier_leader) and is connected to Slack. It does not count pods: with Postgres a rollout runs a surge, and the old
+// pod, which hands its Lease over as it stops, may still be listed, and with two replicas one of the two is the standby.
+func leaderPod(ctx context.Context, t *testing.T, pods *kube.Pods) corev1.Pod {
 	t.Helper()
-	list, err := pods.List(ctx, kube.CourierNamespace, courierPods)
-	list = slices.DeleteFunc(list, func(p corev1.Pod) bool { return p.DeletionTimestamp != nil })
-	if err != nil || len(list) != 1 {
-		t.Fatalf("courier's pods = %d, %v; want exactly one after a rollout", len(list), err)
+	leader, err := NewReplicas(pods).WaitLeader(ctx, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return list[0]
+	list, err := pods.List(ctx, kube.CourierNamespace, courierPods)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range list {
+		if p.Name == leader.Name {
+			return p
+		}
+	}
+	t.Fatalf("the leader %s is in none of courier's pods", leader.Name)
+	return corev1.Pod{}
 }
 
 // TestFaultArmsAndDisarmsOnTheRealDeployment arms COURIER_FAULT on courier's Deployment through the runner's
-// own Role, with SetFault, and disarms it: each is a rollout, which ends with one new pod that is ready,
-// that carries the variable (or not) and that is connected to the fake Slack. The fault armed is the one the
-// scenarios use, and it only acts at a post, so courier stays up while it is armed.
+// own Role, with SetFault, and disarms it: each is a rollout, which ends with new pods that are ready, with a leader
+// that is a new pod, that carries the variable (or not) and that is connected to the fake Slack (with two replicas
+// both pods are new, and the leader is the one looked at). The fault armed is the one the scenarios use, and it only
+// acts at a post, so courier stays up while it is armed.
 func TestFaultArmsAndDisarmsOnTheRealDeployment(t *testing.T) {
 	env, ctx := NewEnv(os.Getenv), t.Context()
 	pods, err := kube.NewInCluster()
@@ -85,9 +88,9 @@ func TestFaultArmsAndDisarmsOnTheRealDeployment(t *testing.T) {
 		if err := pods.SetFault(rollout, kube.CourierNamespace, kube.CourierDeployment, courierContainer, fault); err != nil {
 			t.Fatal(err)
 		}
-		return onePod(ctx, t, pods)
+		return leaderPod(ctx, t, pods)
 	}
-	before := onePod(ctx, t, pods)
+	before := leaderPod(ctx, t, pods)
 	armed := set(testhooks.CrashAfterPost)
 	if got := faultOf(t, armed); got != testhooks.CrashAfterPost || armed.Name == before.Name {
 		t.Errorf("armed pod %s (was %s) has %s=%q; want a new pod with %s", armed.Name, before.Name, testhooks.FaultEnv, got, testhooks.CrashAfterPost)

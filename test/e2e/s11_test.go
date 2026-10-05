@@ -42,7 +42,7 @@ func TestS11_AToolApprovalOnABindingThatDoesNotAllowThemIsDenied(t *testing.T) {
 		}
 	}
 	err := Wait(s.ctx, 30*time.Second, "the approval-outcome counter to go up", func(ctx context.Context) (bool, error) {
-		v, err := s.courier.Counter(ctx, metric, labels)
+		v, err := s.leaderCounter(ctx, metric, labels)
 		return v > before, err
 	})
 	if err != nil {

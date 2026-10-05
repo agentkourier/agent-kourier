@@ -22,6 +22,10 @@
 # E2E_STORE=postgres runs courier on Postgres instead of SQLite: a Postgres in namespace e2e (fast/postgres.yaml), its password
 # generated here and handed to the cluster through a pipe, and courier installed with ci/fast-postgres-values.yaml. The E2E suite is
 # the same on either. A tier keeps the store it was brought up with: to change it, run hack/kind/down.sh fast first.
+# E2E_REPLICAS=2 (with E2E_STORE=postgres) runs two courier replicas, a leader and a standby (spec 11, D37), with the election timings of
+# charts/courier/ci/fast-postgres-ha-values.yaml, and brings up the container signaler (fast/signaler.yaml) that the failover scenario S16
+# uses to freeze or kill the leader's process. The rest of the suite runs on two replicas too. Without it, or with 1, there is one replica and
+# no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -34,6 +38,12 @@ E2E_STORE=${E2E_STORE:-sqlite}
 case "${E2E_STORE}" in
   sqlite | postgres) ;;
   *) die "E2E_STORE must be sqlite or postgres" ;;
+esac
+E2E_REPLICAS=${E2E_REPLICAS:-1}
+case "${E2E_REPLICAS}" in
+  1) ;;
+  2) [ "${E2E_STORE}" = postgres ] || die "E2E_REPLICAS=2 needs E2E_STORE=postgres: SQLite is one replica (spec R7)" ;;
+  *) die "E2E_REPLICAS must be 1 or 2" ;;
 esac
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
@@ -77,6 +87,13 @@ build_doubles_image
 step "fake Slack, stub agent, sink, Alertmanager"
 apply_doubles
 
+if [ "${E2E_REPLICAS}" = 2 ]; then
+  step "container signaler, for S16"
+  apply_signaler
+else
+  remove_signaler
+fi
+
 step "courier image ${TESTHOOKS_IMAGE}"
 load_courier_image
 
@@ -84,6 +101,11 @@ if [ "${E2E_STORE}" = postgres ]; then
   step "postgres, and the Secret that holds courier's DSN"
   deploy_postgres
   COURIER_VALUES=${ROOT}/charts/courier/ci/fast-postgres-values.yaml
+fi
+
+COURIER_HELM_ARGS=()
+if [ "${E2E_REPLICAS}" = 2 ]; then
+  COURIER_HELM_ARGS=(-f "${ROOT}/charts/courier/ci/fast-postgres-ha-values.yaml")
 fi
 
 step "courier: namespace, config, Secrets, chart"
@@ -100,4 +122,4 @@ deploy_courier "${FAST}/courier/config/agentbackend.yaml"
 
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} courier replica(s))"

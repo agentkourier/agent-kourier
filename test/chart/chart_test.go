@@ -353,6 +353,27 @@ func TestDeploymentIsSafe(t *testing.T) {
 	}
 }
 
+// TestLivenessProbeDefaultsAndOverride: the liveness probe's period and misses are values; the defaults are the probe the chart has always had
+// (ten seconds, three misses), and a bad value is refused.
+func TestLivenessProbeDefaultsAndOverride(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	var d appsv1.Deployment
+	find(t, mustRender(t, "courier", "courier", "--set", "image.repository=courier"), "Deployment", "courier", &d)
+	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp.PeriodSeconds != 10 || lp.FailureThreshold != 3 {
+		t.Errorf("default liveness probe %+v; want ten seconds and three misses", lp)
+	}
+	find(t, mustRender(t, "courier", "courier", "--set", "image.repository=courier,livenessProbe.periodSeconds=5,livenessProbe.failureThreshold=8"), "Deployment", "courier", &d)
+	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp.PeriodSeconds != 5 || lp.FailureThreshold != 8 {
+		t.Errorf("liveness probe %+v; want the values' five seconds and eight misses", lp)
+	}
+	for _, bad := range []string{"livenessProbe.failureThreshold=0", "livenessProbe.periodSeconds=0", "livenessProbe.failureThreshold=x"} {
+		if _, err := render(t.Context(), t, "courier", "courier", "--set", "image.repository=courier,"+bad); err == nil {
+			t.Errorf("--set %s rendered; want it refused", bad)
+		}
+	}
+}
+
 func TestKillSwitchAndImageDigest(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
@@ -911,6 +932,37 @@ var tierCases = []struct {
 		"CronJob/courier/courier-sandbox-token-refresh", "Deployment/courier/courier-sandbox", "PersistentVolumeClaim/courier/courier-sandbox-data",
 		"Role/courier/courier-sandbox-secrets", "Role/courier/courier-sandbox-token-refresh", "RoleBinding/courier/courier-sandbox-secrets",
 		"RoleBinding/courier/courier-sandbox-token-refresh", "ServiceAccount/courier/courier-sandbox", "ServiceAccount/courier/courier-sandbox-token-refresh"}},
+}
+
+// TestFastPostgresHAOverlayRunsTwoReplicasWithAShorterLease: the overlay S16's tier layers over fast-postgres lints, and renders two
+// replicas on a rolling update with the election timings of the overlay, which keep the lease longer than the renew deadline, and a
+// liveness probe that tolerates a frozen process for a minute.
+func TestFastPostgresHAOverlayRunsTwoReplicasWithAShorterLease(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	layers := []string{"-f", values("fast-postgres"), "-f", values("fast-postgres-ha")}
+	if out, err := helm(t.Context(), t, append([]string{"lint", "--strict", chartDir}, layers...)...); err != nil {
+		t.Fatalf("helm lint --strict: %v\n%s", err, out)
+	}
+	objs := mustRender(t, "courier", "courier", layers...)
+	var d appsv1.Deployment
+	find(t, objs, "Deployment", "courier", &d)
+	if *d.Spec.Replicas != 2 || d.Spec.Strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+		t.Errorf("replicas %d, strategy %s; want two on a rolling update", *d.Spec.Replicas, d.Spec.Strategy.Type)
+	}
+	env := map[string]string{}
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	if env["COURIER_LEASE_DURATION"] != "9s" || env["COURIER_LEASE_RENEW_DEADLINE"] != "6s" || env["COURIER_LEASE_RETRY_PERIOD"] != "2s" {
+		t.Errorf("election timings %v; want 9s, 6s and 2s", env)
+	}
+	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp == nil || lp.FailureThreshold != 6 || lp.PeriodSeconds != 10 {
+		t.Errorf("liveness probe %+v; want six misses ten seconds apart: a frozen leader is resumed long before the kubelet restarts it", lp)
+	}
+	if env["COURIER_STORE"] != "postgres" || env["COURIER_SLACK_API_URL"] == "" {
+		t.Errorf("env %v; want the fast tier's Postgres values underneath", env)
+	}
 }
 
 // TestTierValuesRenderWhatTheScriptsAndTestsRely: each tier's values make the objects the tier's scripts and tests name, and

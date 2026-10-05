@@ -61,7 +61,7 @@ func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 				t.Error(err)
 			}
 			err = Wait(s.ctx, 30*time.Second, "the turn-outcome counter to go up", func(ctx context.Context) (bool, error) {
-				v, err := s.courier.Counter(ctx, metric, labels)
+				v, err := s.leaderCounter(ctx, metric, labels)
 				return v > before, err
 			})
 			if err != nil {

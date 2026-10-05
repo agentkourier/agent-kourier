@@ -36,3 +36,17 @@ const (
 	// BotS15 is the bot ID S15's alerts are posted as.
 	BotS15 = "B0S15ALERT1"
 )
+
+// The failover scenario's channels (S16, the fast tier on Postgres with two courier replicas only), one for each kind of Binding
+// its cases need.
+const (
+	// ChannelS16 is S16's cases 1 and 4: scenario-gated, live output, a mention.
+	ChannelS16 = "CS16"
+	// ChannelS16B is S16's case 2: test-agent, final output, for the crash-after-post fault.
+	ChannelS16B = "CS16B"
+	// ChannelS16C is S16's case 3: scenario-gated behind a botMessage trigger with the alertmanager preset for the bot BotS16,
+	// whose limits are three starts in 10 seconds.
+	ChannelS16C = "CS16C"
+	// BotS16 is the bot ID S16's alerts are posted as.
+	BotS16 = "B0S16ALERT1"
+)

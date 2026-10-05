@@ -1,0 +1,30 @@
+# S16 (failover), case 3: a storm of distinct Alertmanager alerts is posted to the channel through an incoming webhook, S15's, and the
+# leader of the two courier replicas is killed with the first three investigations running (the gated agent holds each on a gate that
+# its alert names). The standby takes over: each started investigation ends in its own thread, once, the others start nothing, and the
+# one digest line says how many were not investigated. The limits are S15's (three starts in 10 seconds, the shortest window, no daily
+# cap), with room for twenty investigations at once instead of five: a run that fails leaves its three held investigations running, and
+# five of them would make the next run's alerts limited by concurrency, which the scenario does not measure. A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel, the bot and the
+# agent are pinned by test/kindmanifests and test/e2e/scenarios.go. Fast tier on Postgres with two replicas only.
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s16c, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: courier-fast
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: CS16C
+    output: live
+    triggers:
+      - type: botMessage
+        from: {botId: B0S16ALERT1}
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}
+        limits:
+          rateLimit: {maxRuns: 3, per: 10s, maxConcurrent: 20}
+          maxRunsPerDay: 0

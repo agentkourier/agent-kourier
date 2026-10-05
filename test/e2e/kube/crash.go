@@ -17,6 +17,10 @@ type Termination struct {
 	FinishedAt time.Time
 	// Restarts is the container's restart count when it was read.
 	Restarts int32
+	// Previous is set by [Pods.WaitExit] when the run was read from the container's last state, which the kubelet shows once it has
+	// restarted the container: its log is then the previous container's. Otherwise the run is the container's current state, and its log is
+	// the current one's.
+	Previous bool
 }
 
 // Baseline is what a container's terminations looked like when a scenario began to watch it, so that
