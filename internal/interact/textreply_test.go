@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,5 +240,47 @@ func TestTextReplyGivesUpOnlyAfterFailedAttempt(t *testing.T) {
 	}
 	if len(r.sess.answers()) != 1 {
 		t.Fatal("aged reply was not attempted before giving up")
+	}
+}
+
+// A reply pinned to its question when it was enqueued (a typed answer without a mention, D38) whose question closed
+// before the runner reached it is consumed in the same call: the person is told why, nothing is decided, audited or
+// sent, and nothing is left to retry. It is never an ordinary turn, and never waits for the give-up limit.
+func TestTextReplyPinnedAtEnqueueToAClosedQuestionIsConsumedAndTold(t *testing.T) {
+	closers := map[string]func(*testing.T, *pressRig, string){
+		"timed out": func(t *testing.T, r *pressRig, id string) {
+			r.now = deadline
+			if err := r.st.ResolveInteraction(t.Context(), id, store.InteractionTimedOut, r.now); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"cancelled": func(t *testing.T, r *pressRig, id string) {
+			if err := r.st.ResolveInteraction(t.Context(), id, store.InteractionCancelled, r.now); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"answered by another person": func(t *testing.T, r *pressRig, id string) {
+			if err := r.st.SubmitInteraction(t.Context(), id, []byte(`[["x"]]`), "UBOBBY1", r.now); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, closeIt := range closers {
+		t.Run(name, func(t *testing.T) {
+			r := newPressRig(t)
+			task, reply, id := textQuestion(t, r)
+			reply.InteractionID = id // as EnqueueReply stores it
+			closeIt(t, r, id)
+			done, err := r.pl.TextReply(t.Context(), key, reply, task)
+			if !done || err != nil {
+				t.Fatalf("TextReply = %v, %v; want it consumed, with no error", done, err)
+			}
+			if len(r.eph.got) != 1 || !strings.HasPrefix(r.eph.got[0], reply.UserID+":") {
+				t.Errorf("told %v; want the person, once, why their answer did not count", r.eph.got)
+			}
+			if len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
+				t.Error("a typed answer to a closed question was sent or audited as a decision")
+			}
+		})
 	}
 }

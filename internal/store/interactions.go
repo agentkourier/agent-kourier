@@ -86,6 +86,12 @@ type Interactions interface {
 	CreateInteraction(ctx context.Context, i Interaction) (created bool, err error)
 	// GetInteraction returns the interaction with the given ID, or ErrNotFound.
 	GetInteraction(ctx context.Context, id string) (Interaction, error)
+	// PendingTextQuestion returns the pending interaction of the thread key that takes text replies (a
+	// typed answer in the thread decides it), or ErrNotFound if the thread has none: its interactions
+	// are all settled, or take buttons only, or it has no interactions. A session has one task and so
+	// one open question; if there are more, the newest is returned. ErrInvalid for an incomplete key. A
+	// pending interaction past its deadline is still pending until the timeout sweep settles it.
+	PendingTextQuestion(ctx context.Context, key ConversationKey) (Interaction, error)
 	// ListDueInteractions returns pending interactions whose deadline is at or
 	// before now, oldest deadline first (the same deadline in any order), for the
 	// timeout sweep.

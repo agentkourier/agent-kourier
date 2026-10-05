@@ -442,6 +442,55 @@ func (su suite) interactions(t *testing.T) {
 			t.Errorf("decided = %v; want early, then the four decided at one time in any order, then late", got)
 		}
 	})
+
+	su.run(t, "PendingTextQuestion finds the pending question of the thread that takes text replies, and no other", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		_, err := s.PendingTextQuestion(ctx, key)
+		isErr(t, err, store.ErrNotFound, "no interaction at all")
+		isErr(t, errOf(s.PendingTextQuestion(ctx, store.ConversationKey{Connection: "slack", Channel: "C1"})), store.ErrInvalid, "an incomplete key")
+
+		create := func(id string, k store.ConversationKey, text bool, after time.Duration) {
+			t.Helper()
+			i := newInteraction(id, time.Hour)
+			i.Key, i.TextReplies, i.CreatedAt = k, text, t0.Add(after)
+			i.Deadline = i.CreatedAt.Add(time.Hour)
+			if _, err := s.CreateInteraction(ctx, i); err != nil {
+				t.Fatalf("create %s: %v", id, err)
+			}
+		}
+		create("button", key, false, 0) // pending, but it takes no text reply
+		create("elsewhere", keyOf("2.2"), true, 0)
+		create("answered", key, true, 0)
+		create("timed-out", key, true, 0)
+		create("cancelled", key, true, 0)
+		noErr(t, s.SubmitInteraction(ctx, "answered", []byte("yes"), "U1", t0.Add(time.Minute)), "answer")
+		noErr(t, s.ResolveInteraction(ctx, "timed-out", store.InteractionTimedOut, t0.Add(2*time.Hour)), "time out")
+		noErr(t, s.ResolveInteraction(ctx, "cancelled", store.InteractionCancelled, t0.Add(time.Minute)), "cancel")
+		_, err = s.PendingTextQuestion(ctx, key)
+		isErr(t, err, store.ErrNotFound, "only a non-text, a settled and another thread's question")
+
+		create("text", key, true, time.Minute)
+		got, err := s.PendingTextQuestion(ctx, key)
+		if err != nil || got.ID != "text" || !got.TextReplies || got.State != store.InteractionPending || got.Key != key || got.TaskID != "task1" {
+			t.Fatalf("PendingTextQuestion = %+v, %v; want the pending text question text, whole", got, err)
+		}
+		if other, err := s.PendingTextQuestion(ctx, keyOf("2.2")); err != nil || other.ID != "elsewhere" {
+			t.Errorf("PendingTextQuestion of the other thread = %+v, %v; want elsewhere", other, err)
+		}
+
+		// Implicit: with two pending (a session has one task, so it should not happen) the newest is the one asked.
+		create("newer", key, true, 2*time.Minute)
+		if got, err := s.PendingTextQuestion(ctx, key); err != nil || got.ID != "newer" {
+			t.Errorf("PendingTextQuestion with two pending = %+v, %v; want the newest, newer", got, err)
+		}
+		noErr(t, s.ResolveInteraction(ctx, "newer", store.InteractionCancelled, t0.Add(3*time.Minute)), "cancel newer")
+		if got, err := s.PendingTextQuestion(ctx, key); err != nil || got.ID != "text" {
+			t.Errorf("PendingTextQuestion after newer closed = %+v, %v; want text", got, err)
+		}
+	})
 }
+
+// errOf drops the first of two results, for a call whose value the test does not look at.
+func errOf(_ store.Interaction, err error) error { return err }
 
 func isConflict(err error) bool { return errors.Is(err, store.ErrConflict) }

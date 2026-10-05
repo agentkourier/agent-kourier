@@ -411,6 +411,30 @@ func (su suite) replyQueue(t *testing.T) {
 		}
 	})
 
+	su.run(t, "a reply enqueued pinned to a question stays pinned, and a duplicate does not change it", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		plain, pinned := newReply("plain", key), newReply("pinned", key)
+		pinned.InteractionID = "q1"
+		for _, r := range []store.Reply{plain, pinned} {
+			if ok, err := s.EnqueueReply(ctx, r); err != nil || !ok {
+				t.Fatalf("enqueue %s = %v, %v", r.ID, ok, err)
+			}
+		}
+		again := pinned
+		again.InteractionID = "q2"
+		if ok, err := s.EnqueueReply(ctx, again); err != nil || ok {
+			t.Fatalf("duplicate enqueue = %v, %v; want false, nil", ok, err)
+		}
+		head, err := s.NextReply(ctx, key)
+		if err != nil || head.ID != "plain" || head.InteractionID != "" {
+			t.Fatalf("head = %+v, %v; want plain, unpinned", head, err)
+		}
+		got, err := s.NextReplyAfter(ctx, key, head.Sequence)
+		if err != nil || got.ID != "pinned" || got.InteractionID != "q1" {
+			t.Fatalf("after the head = %+v, %v; want pinned, still pinned to q1", got, err)
+		}
+	})
+
 	// Replies are queued by key and need no session row: intake enqueues before the session exists, and
 	// none of the tests above makes one.
 	su.run(t, "a long reply is stored whole", func(t *testing.T, s store.Store) {

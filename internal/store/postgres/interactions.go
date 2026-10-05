@@ -68,6 +68,25 @@ func (s *Store) GetInteraction(ctx context.Context, id string) (interaction stor
 	return i, nil
 }
 
+// PendingTextQuestion implements store.Interactions. interactions_thread serves the lookup.
+func (s *Store) PendingTextQuestion(ctx context.Context, key store.ConversationKey) (interaction store.Interaction, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PendingTextQuestion")
+	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+	if !validKey(key) {
+		return store.Interaction{}, fmt.Errorf("pending text question %+v: the key is required: %w", key, store.ErrInvalid)
+	}
+	i, err := scanInteraction(s.pool.QueryRow(ctx, `SELECT `+interactionCols+` FROM interactions
+		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND state = 'pending' AND text_replies
+		ORDER BY created_at DESC, id DESC LIMIT 1`, key.Connection, key.Channel, key.Thread))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Interaction{}, fmt.Errorf("pending text question %+v: %w", key, store.ErrNotFound)
+	}
+	if err != nil {
+		return store.Interaction{}, fmt.Errorf("pending text question %+v: %w", key, err)
+	}
+	return i, nil
+}
+
 // listInteractions runs a query that selects interactionCols.
 func (s *Store) listInteractions(ctx context.Context, what, query string, args ...any) ([]store.Interaction, error) {
 	rows, err := s.pool.Query(ctx, query, args...)

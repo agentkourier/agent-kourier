@@ -455,9 +455,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	} else if err != nil {
 		return idle, fmt.Errorf("session Binding %q: %w", sess.Binding, err)
 	}
-	// A claimed answer left by a crash must be reconciled with its original question,
-	// never sent as an ordinary turn after the task ends.
-	if r.InteractionID != "" && backend.TextReplies {
+	// A claimed answer left by a crash, or one queued pinned by the intake, must be reconciled with its
+	// question, never sent as an ordinary turn, whatever the Binding's dialect is by now.
+	if r.InteractionID != "" {
 		m.mu.Lock()
 		textReply := m.cfg.TextReply
 		m.mu.Unlock()

@@ -8,14 +8,23 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 func textPauseFixture(t *testing.T) (*fixture, *fakeSink) {
 	t.Helper()
+	return textPauseFixtureIn(t, "")
+}
+
+// textPauseFixtureIn is textPauseFixture for a Binding whose chat.threadReplies is mode. The first turn creates
+// the session, so it is the same in every mode.
+func textPauseFixtureIn(t *testing.T, mode v1alpha1.ThreadReplies) (*fixture, *fakeSink) {
+	t.Helper()
 	f := newFixture(t)
 	f.textReplies = true
+	f.threadReplies = mode
 	f.m.cfg.RetryBase = time.Millisecond
 	f.agent.script = pauseFirst
 	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
@@ -611,5 +620,164 @@ func TestSubmitAnswerInterruptsTextReplyBackoff(t *testing.T) {
 	defer f.agent.mu.Unlock()
 	if len(f.agent.answers) != 1 || f.agent.answers[0].ID != msg.ID || len(f.agent.msgs) != 2 {
 		t.Fatalf("answers=%v turns=%d", f.agent.answers, len(f.agent.msgs))
+	}
+}
+
+// In a mention-only Binding a reply that does not mention courier is, while the agent waits on a question that
+// takes text replies, that question's answer: it is enqueued pinned to the question, goes through the text-reply
+// handler (membership, bot checks, audit), and is never sent as a turn (D38, decision 3).
+func TestUnmentionedReplyDuringATextPauseIsPinnedAtEnqueueAndAnswers(t *testing.T) {
+	f, _ := textPauseFixtureIn(t, v1alpha1.ThreadRepliesMention)
+	f.question("q1", true)
+	var seen atomic.Value // the reply the handler was given
+	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (bool, error) {
+		seen.Store(r)
+		msg := answerMsg(r.ID)
+		msg.TaskID = task.ID
+		return true, f.m.Answer(ctx, k, msg)
+	})
+	in := reply("2", false)
+	if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
+		t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
+	}
+	f.retired(t)
+	got, _ := seen.Load().(store.Reply)
+	if got.ID != in.MessageID || got.InteractionID != "q1" {
+		t.Errorf("the handler was given %+v; want the reply, pinned to q1 when it was enqueued", got)
+	}
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if len(f.agent.answers) != 1 || f.agent.answers[0].ID != in.MessageID || len(f.agent.msgs) != 1 {
+		t.Errorf("answers=%v turns=%d; want the reply sent as the answer and no second turn", f.agent.answers, len(f.agent.msgs))
+	}
+}
+
+// A pause that takes buttons only, or a thread with no question, leaves an unmentioned reply unmentioned: it is
+// never offered to the handler, queued or sent.
+func TestUnmentionedReplyDuringANonTextPauseIsUnmentioned(t *testing.T) {
+	f, _ := textPauseFixtureIn(t, v1alpha1.ThreadRepliesMention)
+	f.question("q1", false)
+	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+		t.Error("a reply that is no answer reached the text-reply handler")
+		return false, nil
+	})
+	if res, err := f.submitAny(reply("2", false)); err != nil || res.Disposition != Unmentioned {
+		t.Fatalf("Submit = %+v, %v; want Unmentioned", res, err)
+	}
+	if err := f.m.Cancel(t.Context(), key, "t1", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	f.retired(t)
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if len(f.agent.answers) != 0 || len(f.agent.msgs) != 1 {
+		t.Errorf("answers=%v turns=%d; want the unmentioned reply neither answer nor turn", f.agent.answers, len(f.agent.msgs))
+	}
+}
+
+// A pinned reply whose question closed before the runner reached it (it timed out, or was cancelled or answered
+// meanwhile) is consumed at once by the handler, which tells the person, and is never sent as a turn. The turns
+// behind it go out without waiting for anything.
+func TestPinnedReplyToAClosedQuestionIsConsumedAndBlocksNothing(t *testing.T) {
+	// The runner is idle: the question closed, and its task ended, between the intake and the runner's first look
+	// at the queue.
+	t.Run("no pause", func(t *testing.T) {
+		f := newFixture(t)
+		f.textReplies, f.threadReplies = true, v1alpha1.ThreadRepliesMention
+		f.seed("ns/b1", 0) // the session records task t1, which the question belongs to
+		f.question("q1", true)
+		typed, mention := reply("2", false), reply("3", true)
+		for _, in := range []Inbound{typed, mention} {
+			if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
+				t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
+			}
+		}
+		if err := f.raw.ResolveInteraction(t.Context(), "q1", store.InteractionTimedOut, t0.Add(2*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		f.setTask("")
+		var consumed atomic.Int32
+		f.m.SetTextReplyHandler(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (bool, error) {
+			if r.ID != typed.MessageID || r.InteractionID != "q1" {
+				t.Errorf("the handler was given %+v; want only the pinned reply", r)
+			}
+			consumed.Add(1)
+			return true, nil // what the pipeline answers for a closed question: the person is told, the press is done
+		})
+		sink := f.live()
+		f.m.start(key)
+		waitFinal(t, sink)
+		f.retired(t)
+		if _, err := f.st.NextReply(t.Context(), key); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("the queue still holds a reply: %v", err)
+		}
+		f.agent.mu.Lock()
+		defer f.agent.mu.Unlock()
+		if consumed.Load() != 1 || len(f.agent.msgs) != 1 || f.agent.msgs[0].ID != mention.MessageID || len(f.agent.answers) != 0 {
+			t.Errorf("consumed=%d turns=%v answers=%v; want the pinned reply consumed, and only the mention sent", consumed.Load(), f.agent.msgs, f.agent.answers)
+		}
+	})
+	// The runner is parked on the question when it closes.
+	t.Run("a pause", func(t *testing.T) {
+		f, _ := textPauseFixtureIn(t, v1alpha1.ThreadRepliesMention)
+		f.question("q1", true)
+		typed, mention := reply("2", false), reply("3", true)
+		var consumed atomic.Int32
+		f.m.SetTextReplyHandler(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (bool, error) {
+			if r.InteractionID == "" {
+				return false, store.ErrReplyNotAnswer // the mention: not an answer to anything here
+			}
+			consumed.Add(1)
+			return true, nil
+		})
+		for _, in := range []Inbound{typed, mention} {
+			if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
+				t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
+			}
+		}
+		eventually(t, "the pinned reply to be consumed", func() bool { return consumed.Load() == 1 })
+		if err := f.m.Cancel(t.Context(), key, "t1", "the question timed out"); err != nil {
+			t.Fatal(err)
+		}
+		f.retired(t)
+		f.agent.mu.Lock()
+		defer f.agent.mu.Unlock()
+		if len(f.agent.msgs) != 2 || f.agent.msgs[1].ID != mention.MessageID || len(f.agent.answers) != 0 {
+			t.Errorf("turns=%v answers=%v; want the pinned reply never sent, and the mention sent after the pause", f.agent.msgs, f.agent.answers)
+		}
+	})
+}
+
+// A reply queued pinned is never sent as a turn, whatever the Binding's dialect is by the time the runner reaches it
+// (here the Binding was switched to one with no text questions): the handler resolves it by its question.
+func TestPinnedReplyIsNeverATurnWhateverTheDialectIs(t *testing.T) {
+	f := newFixture(t) // textReplies is false: the Binding's dialect takes no text replies
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b1", LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	pinned := store.Reply{ID: "pinned", Key: key, UserID: "U1", MessageRef: "2", InteractionID: "q1", Text: "typed answer", EnqueuedAt: t0}
+	if _, err := f.st.EnqueueReply(t.Context(), pinned); err != nil {
+		t.Fatal(err)
+	}
+	mention := inbound("3")
+	if _, err := f.submit(mention); err != nil {
+		t.Fatal(err)
+	}
+	var consumed atomic.Int32
+	f.m.SetTextReplyHandler(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (bool, error) {
+		if r.ID != pinned.ID || r.InteractionID != "q1" {
+			t.Errorf("the handler was given %+v; want only the pinned reply", r)
+		}
+		consumed.Add(1)
+		return true, nil
+	})
+	sink := f.live()
+	f.m.start(key)
+	waitFinal(t, sink)
+	f.retired(t)
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if consumed.Load() != 1 || len(f.agent.msgs) != 1 || f.agent.msgs[0].ID != mention.MessageID {
+		t.Errorf("consumed=%d turns=%v; want the pinned reply consumed and only the mention sent", consumed.Load(), f.agent.msgs)
 	}
 }

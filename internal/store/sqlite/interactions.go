@@ -71,6 +71,25 @@ func (s *Store) GetInteraction(ctx context.Context, id string) (telemetryResult0
 	return i, nil
 }
 
+// PendingTextQuestion implements store.Interactions. interactions_thread serves the lookup.
+func (s *Store) PendingTextQuestion(ctx context.Context, key store.ConversationKey) (telemetryResult0 store.Interaction, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PendingTextQuestion")
+	defer func() { finishStore(op, telemetryErr) }()
+	if !validKey(key) {
+		return store.Interaction{}, fmt.Errorf("pending text question %+v: the key is required: %w", key, store.ErrInvalid)
+	}
+	i, err := scanInteraction(s.read.QueryRowContext(ctx, `SELECT `+interactionCols+` FROM interactions
+		WHERE connection = ? AND channel = ? AND thread_ts = ? AND state = 'pending' AND text_replies = 1
+		ORDER BY created_at DESC, id DESC LIMIT 1`, key.Connection, key.Channel, key.Thread))
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.Interaction{}, fmt.Errorf("pending text question %+v: %w", key, store.ErrNotFound)
+	}
+	if err != nil {
+		return store.Interaction{}, fmt.Errorf("pending text question %+v: %w", key, err)
+	}
+	return i, nil
+}
+
 // ListDueInteractions implements store.Interactions.
 func (s *Store) ListDueInteractions(ctx context.Context, now time.Time) (telemetryResult0 []store.Interaction, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.ListDueInteractions")

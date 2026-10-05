@@ -21,9 +21,9 @@ func (s *Store) EnqueueReply(ctx context.Context, r store.Reply) (telemetryResul
 	if r.ID == "" || !validKey(r.Key) || r.UserID == "" || r.MessageRef == "" || r.EnqueuedAt.IsZero() {
 		return false, fmt.Errorf("enqueue reply %q: ID, key, UserID, MessageRef and EnqueuedAt are required: %w", r.ID, store.ErrInvalid)
 	}
-	n, err := s.exec(ctx, `INSERT INTO reply_queue (id, connection, channel, thread_ts, user_id, message_ts, text, enqueued_at, trace_parent, trace_state)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-		r.ID, r.Key.Connection, r.Key.Channel, r.Key.Thread, r.UserID, r.MessageRef, r.Text, ts(r.EnqueuedAt), r.TraceParent, r.TraceState)
+	n, err := s.exec(ctx, `INSERT INTO reply_queue (id, connection, channel, thread_ts, user_id, message_ts, text, enqueued_at, interaction_id, trace_parent, trace_state)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		r.ID, r.Key.Connection, r.Key.Channel, r.Key.Thread, r.UserID, r.MessageRef, r.Text, ts(r.EnqueuedAt), r.InteractionID, r.TraceParent, r.TraceState)
 	if err != nil {
 		return false, fmt.Errorf("enqueue reply %q: %w", r.ID, err)
 	}

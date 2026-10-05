@@ -32,9 +32,9 @@ func (s *Store) EnqueueReply(ctx context.Context, r store.Reply) (enqueued bool,
 		if err := lock(ctx, tx, lockReplyQueue, sessionLockKey(r.Key)); err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO reply_queue (id, connection, channel, thread_ts, user_id, message_ts, text, enqueued_at, trace_parent, trace_state)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING`,
-			r.ID, r.Key.Connection, r.Key.Channel, r.Key.Thread, r.UserID, r.MessageRef, r.Text, r.EnqueuedAt, r.TraceParent, r.TraceState)
+		tag, err := tx.Exec(ctx, `INSERT INTO reply_queue (id, connection, channel, thread_ts, user_id, message_ts, text, enqueued_at, interaction_id, trace_parent, trace_state)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (id) DO NOTHING`,
+			r.ID, r.Key.Connection, r.Key.Channel, r.Key.Thread, r.UserID, r.MessageRef, r.Text, r.EnqueuedAt, r.InteractionID, r.TraceParent, r.TraceState)
 		enqueued = tag.RowsAffected() > 0
 		return err
 	})

@@ -141,6 +141,8 @@ func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error
 type fixture struct {
 	t                *testing.T
 	st               *spyStore
+	raw              *sqlite.Store // the store under st, for what the manager does not write itself: interactions
+	qs               *spyQuestions // the manager's Questions
 	m                *Manager
 	woke             int
 	onWake           func()
@@ -204,15 +206,58 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, agent: newFakeAgent()}
+	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, raw: s, qs: &spyQuestions{Questions: s}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Bindings: f, Audit: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	f.m, err = New(Config{Store: f.st, Questions: f.qs, Bindings: f, Audit: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	f.m.wake = func(Key) { f.onWake(); f.woke++ }
 	f.onWake = func() {}
 	return f
+}
+
+// spyQuestions counts the reads of the manager's Questions and fails them when err is set (a store error on the
+// intake path).
+type spyQuestions struct {
+	Questions
+	mu    sync.Mutex
+	err   error
+	calls int
+}
+
+func (q *spyQuestions) PendingTextQuestion(ctx context.Context, k store.ConversationKey) (store.Interaction, error) {
+	q.mu.Lock()
+	q.calls++
+	err := q.err
+	q.mu.Unlock()
+	if err != nil {
+		return store.Interaction{}, err
+	}
+	return q.Questions.PendingTextQuestion(ctx, k)
+}
+
+// question makes the pending interaction id of the thread, which takes text replies when text is set, with its
+// prompt posted.
+func (f *fixture) question(id string, text bool) store.Interaction {
+	f.t.Helper()
+	i := f.unpostedQuestion(id, text)
+	if err := f.raw.SetInteractionMessageRef(f.t.Context(), id, "1700.50"); err != nil {
+		f.t.Fatal(err)
+	}
+	i.MessageRef = "1700.50"
+	return i
+}
+
+// unpostedQuestion is question for one whose prompt has not been posted: nobody has seen it yet.
+func (f *fixture) unpostedQuestion(id string, text bool) store.Interaction {
+	f.t.Helper()
+	i := store.Interaction{ID: id, Key: key, TaskID: "t1", Kind: store.InteractionAskUser, TextReplies: text, CreatedAt: t0, Deadline: t0.Add(time.Hour)}
+	if _, err := f.raw.CreateInteraction(f.t.Context(), i); err != nil {
+		f.t.Fatal(err)
+	}
+	i.State = store.InteractionPending
+	return i
 }
 
 // inbound is the mention in Slack message ts that may create the session under ns/b1.
@@ -622,6 +667,142 @@ func TestSubmitThreadReplyGateLeavesTheRestAlone(t *testing.T) {
 		f.seed("ns/gone", 100*time.Hour)
 		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != BindingGone {
 			t.Fatalf("Submit = %+v, %v; want BindingGone", res, err)
+		}
+	})
+}
+
+// A reply that does not mention courier is taken in mention mode when the thread has a pending question that takes
+// text replies: it is that question's answer, enqueued already pinned to it, so it is never an ordinary turn
+// (decision 3). Any other pending question, or none, leaves it Unmentioned.
+func TestSubmitUnmentionedReplyToATextQuestion(t *testing.T) {
+	const live, expired = 0 * time.Hour, 2 * time.Hour
+	tests := []struct {
+		name      string
+		mode      v1alpha1.ThreadReplies
+		age       time.Duration
+		question  string // "text", "buttons", "unposted" (a text question whose prompt is not posted) or "" for none
+		task      string // the session's recorded task: "" is the question's (t1), "none" or "other"
+		kagent    bool   // the Binding's dialect has no text questions
+		mentioned bool
+		want      Disposition
+		asked     bool // the manager read the question
+	}{
+		{"mention: a pending text question", v1alpha1.ThreadRepliesMention, live, "text", "", false, false, Accepted, true},
+		{"mention: a pending question that takes buttons only", v1alpha1.ThreadRepliesMention, live, "buttons", "", false, false, Unmentioned, true},
+		{"mention: a text question nobody has seen yet", v1alpha1.ThreadRepliesMention, live, "unposted", "", false, false, Unmentioned, true},
+		{"mention: a text question the session has no task for", v1alpha1.ThreadRepliesMention, live, "text", "none", false, false, Unmentioned, true},
+		{"mention: a text question of a task that is not the session's", v1alpha1.ThreadRepliesMention, live, "text", "other", false, false, Unmentioned, true},
+		{"mention: no question", v1alpha1.ThreadRepliesMention, live, "", "", false, false, Unmentioned, true},
+		{"mention: a dialect with no text questions is not asked", v1alpha1.ThreadRepliesMention, live, "text", "", true, false, Unmentioned, false},
+		{"mention: a pending text question in an expired thread", v1alpha1.ThreadRepliesMention, expired, "text", "", false, false, Unmentioned, false},
+		{"mention: a mentioned reply is no answer candidate here and is not pinned", v1alpha1.ThreadRepliesMention, live, "text", "", false, true, Accepted, false},
+		{"all: the question is not asked", v1alpha1.ThreadRepliesAll, live, "text", "", false, false, Accepted, false},
+		{"unset mode is all: the question is not asked", "", live, "text", "", false, false, Accepted, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.threadReplies, f.textReplies = tt.mode, !tt.kagent
+			f.seed("ns/b1", tt.age)
+			var q store.Interaction
+			switch tt.question {
+			case "text", "buttons":
+				q = f.question("q1", tt.question == "text")
+			case "unposted":
+				q = f.unpostedQuestion("q1", true)
+			}
+			switch tt.task {
+			case "none":
+				f.setTask("")
+			case "other":
+				f.setTask("t2")
+			}
+			res, err := f.submitAny(reply("1700.02", tt.mentioned))
+			if err != nil || res.Disposition != tt.want {
+				t.Fatalf("Submit = %+v, %v; want %s", res, err, tt.want)
+			}
+			if got := f.qs.calls > 0; got != tt.asked {
+				t.Errorf("the question was read = %v; want %v", got, tt.asked)
+			}
+			queued := f.drain()
+			if tt.want != Accepted {
+				if len(queued) != 0 || f.st.touches != 0 || f.woke != 0 {
+					t.Errorf("%d queued, %d touches, woke %d; want nothing written or woken", len(queued), f.st.touches, f.woke)
+				}
+				return
+			}
+			pinned := ""
+			if tt.mode == v1alpha1.ThreadRepliesMention && !tt.mentioned {
+				pinned = q.ID
+			}
+			if len(queued) != 1 || queued[0].InteractionID != pinned || f.st.touches != 1 || f.woke != 1 {
+				t.Errorf("queued %+v, %d touches, woke %d; want one reply pinned to %q, one touch and one wake", queued, f.st.touches, f.woke, pinned)
+			}
+		})
+	}
+}
+
+// setTask records task as the session's active task (empty: none), as the runner does when a task begins or ends.
+func (f *fixture) setTask(task string) {
+	f.t.Helper()
+	if err := f.raw.SetSessionTask(f.t.Context(), key, "c1", task, store.TaskTurn{}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestSubmitUnmentionedReplyToATextQuestionEdges(t *testing.T) {
+	t.Run("a question the store cannot read fails the submit, writing nothing, so that Slack redelivers", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies, f.textReplies = v1alpha1.ThreadRepliesMention, true
+		f.seed("ns/b1", 0)
+		f.question("q1", true)
+		boom := errors.New("database is locked")
+		f.qs.err = boom
+		if res, err := f.submitAny(reply("1700.02", false)); !errors.Is(err, boom) || res.Disposition != "" {
+			t.Fatalf("Submit = %+v, %v; want the store's error and no disposition", res, err)
+		}
+		if f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
+			t.Error("a failed read left a touch, a wake or a queued reply")
+		}
+		f.qs.err = nil // the redelivery
+		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != Accepted {
+			t.Fatalf("redelivered Submit = %+v, %v; want Accepted", res, err)
+		}
+	})
+	t.Run("no Questions: every unmentioned reply is ignored", func(t *testing.T) {
+		f := newFixture(t)
+		f.m.cfg.Questions = nil
+		f.threadReplies, f.textReplies = v1alpha1.ThreadRepliesMention, true
+		f.seed("ns/b1", 0)
+		f.question("q1", true)
+		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != Unmentioned {
+			t.Fatalf("Submit = %+v, %v; want Unmentioned", res, err)
+		}
+	})
+	t.Run("a pinned answer is not counted as unmentioned", func(t *testing.T) {
+		f, ctx, _, reg := tracingFixture(t)
+		f.threadReplies, f.textReplies = v1alpha1.ThreadRepliesMention, true
+		f.seed("ns/b1", 0)
+		f.question("q1", true)
+		if _, err := f.m.Submit(ctx, reply("1700.02", false)); err != nil {
+			t.Fatal(err)
+		}
+		if got := counter(t, reg, "courier_thread_unmentioned_total", map[string]string{"binding": "ns/b1"}); got != 0 {
+			t.Errorf("courier_thread_unmentioned_total = %v; want 0: a typed answer is a turn of the question", got)
+		}
+	})
+	t.Run("a redelivered answer is one reply, still pinned", func(t *testing.T) {
+		f := newFixture(t)
+		f.threadReplies, f.textReplies = v1alpha1.ThreadRepliesMention, true
+		f.seed("ns/b1", 0)
+		f.question("q1", true)
+		for range 2 {
+			if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != Accepted {
+				t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
+			}
+		}
+		if got := f.drain(); len(got) != 1 || got[0].InteractionID != "q1" {
+			t.Errorf("queued = %+v; want one reply pinned to q1", got)
 		}
 	})
 }

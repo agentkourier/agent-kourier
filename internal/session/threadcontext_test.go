@@ -143,7 +143,6 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		name     string
 		mode     v1alpha1.ThreadReplies
 		user     string
-		pinned   bool
 		previous bool
 		unset    bool // no hook is configured
 		want     bool // the hook is called, and its section appended
@@ -152,7 +151,6 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		{name: "all replies", mode: v1alpha1.ThreadRepliesAll, user: "U1", previous: true},
 		{name: "the mode is empty", mode: "", user: "U1", previous: true},
 		{name: "a turn nobody wrote", mode: v1alpha1.ThreadRepliesMention, user: SystemUser, previous: true},
-		{name: "a reply pinned to a question", mode: v1alpha1.ThreadRepliesMention, user: "U1", pinned: true, previous: true},
 		{name: "the first turn of the thread", mode: v1alpha1.ThreadRepliesMention, user: "U1"},
 		{name: "no hook configured", mode: v1alpha1.ThreadRepliesMention, user: "U1", previous: true, unset: true},
 	} {
@@ -162,17 +160,6 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 				f.m.cfg.ThreadContext = nil
 			}
 			f.enqueue(t, "turn", queuedRef, tc.user, false)
-			if tc.pinned {
-				claim, ok := f.st.Store.(interface {
-					ClaimReplyInteraction(ctx context.Context, id, interaction string) error
-				})
-				if !ok {
-					t.Fatal("the store cannot pin a reply")
-				}
-				if err := claim.ClaimReplyInteraction(t.Context(), "turn", "q1"); err != nil {
-					t.Fatal(err)
-				}
-			}
 			f.m.wake(key)
 			waitFinal(t, sink)
 			want, calls := "hello", 0
@@ -183,6 +170,19 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 				t.Errorf("sent %q after %d hook calls; want %q after %d", got, len(hook.seen()), want, calls)
 			}
 		})
+	}
+}
+
+// A reply pinned to a question is never sent as a turn (TestPinnedReplyIsNeverATurnWhateverTheDialectIs), so it never
+// reaches the send; it does not take the thread's context either, should it ever.
+func TestAPinnedReplyTakesNoThreadContext(t *testing.T) {
+	f, _, _ := thread(t, v1alpha1.ThreadRepliesMention, true)
+	b := Backend{ThreadReplies: v1alpha1.ThreadRepliesMention}
+	if !f.m.wantsThreadContext(store.Reply{UserID: "U1"}, b) {
+		t.Fatal("a person's turn in a mention-only Binding does not take the thread's context")
+	}
+	if f.m.wantsThreadContext(store.Reply{UserID: "U1", InteractionID: "q1"}, b) {
+		t.Error("a reply pinned to a question takes the thread's context")
 	}
 }
 

@@ -34,6 +34,15 @@ type Store interface {
 	store.Recovery
 }
 
+// Questions finds the question a thread is waiting on. The intake asks it, in a mention-only Binding, whether a reply
+// that does not mention courier is the answer to a question that takes text replies (D38). store.Interactions
+// satisfies it.
+type Questions interface {
+	// PendingTextQuestion returns the pending interaction of the thread that takes text replies, or
+	// store.ErrNotFound if there is none.
+	PendingTextQuestion(ctx context.Context, key store.ConversationKey) (store.Interaction, error)
+}
+
 // AgentAPI is the part of *agent.Agent the manager uses.
 type AgentAPI interface {
 	Send(ctx context.Context, msg *a2a.Message, h agent.Handler) error
@@ -209,6 +218,10 @@ type Config struct {
 	Now      func() time.Time
 	Logger   *slog.Logger
 	Audit    Auditor // required: a failure the manager must record is never dropped (spec 8.6 step 7)
+	// Questions is asked, in a Binding whose threadReplies is mention, whether a thread has a pending question that
+	// takes text replies, so that a typed answer needs no mention (D38). Nil means no thread has one: every
+	// unmentioned reply is then ignored.
+	Questions Questions
 	// TextReply durably decides a queued answer through the interaction policy and audit.
 	// False means the prompt is not ready; the queue remains intact.
 	// store.ErrReplyNotAnswer keeps the reply queued as an ordinary turn.

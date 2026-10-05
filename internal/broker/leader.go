@@ -109,7 +109,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
