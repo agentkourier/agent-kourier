@@ -46,7 +46,8 @@ Research on 2026-09-29 (sources in Appendix A) found:
   was closed as not planned on 2026-09-27.
 - **google/ax** is a sandbox orchestrator with a gRPC lifecycle API. It has no chat,
   webhook, or conversation concept. `TaskStatus.pending_approval` exists in its proto,
-  but no code uses it; approval policies are a roadmap item.
+  but no code uses it; approval policies are a roadmap item. Courier reaches ax through
+  an A2A server running as an ax task (6.3).
 
 ### 2.1 Prior art
 
@@ -90,7 +91,7 @@ Verified against source on 2026-09-29.
 | # | Benefit of courier | Evidence |
 |---|---|---|
 | U1 | **Upstream has declined chat in core.** On the Slack bot PR, a maintainer said it "should probably be in a separate repo, instead of having it in the main repository." The issue asking for a Slack bot (#475) was closed as not planned. The separate repo (kslack) was never adopted into the org and went stale. There is no in-core path to contribute to. | kagent PR #1017, issue #475 |
-| U2 | **Backend neutrality.** Code in kagent serves only kagent. Courier serves any A2A agent, which is the only route by which the ax side of the original goal can be served at all. | 6.3 |
+| U2 | **Backend neutrality.** Code in kagent serves only kagent. Courier serves any A2A agent, including one running as an ax task, which is the only route by which the ax side of the original goal can be served at all. | 6.3 |
 | U3 | **Independent lifecycle.** A broker has to stay up while agents are suspended. A kagent maintainer stated this needs "a 3rd party to act as a broker." | kagent issue #2261 |
 | U4 | **Delivery on our schedule.** kagent 1.0 shipped five alphas in nine days. Landing a large feature into that moving target means repeated rebases and maintainer review cycles. Internal-first delivery (D1) needs a shorter path. | kagent releases |
 
@@ -135,7 +136,7 @@ upstream webhook trigger stays compatible with courier.
 
 ## 4. Non-goals (v1)
 
-- A native google/ax adapter. ax is reached through an A2A agent (section 6.3).
+- A separate google/ax dialect or adapter. ax is a supported backend through the `a2a` dialect (section 6.3).
 - kagent 0.10.x support. The pilot uses a separate kagent 1.0 alpha environment (D24).
 - Replacing existing alert notifications or sitting in the paging path.
 - Tool approvals before a write-capable agent is bound (Phase 5).
@@ -154,7 +155,7 @@ upstream webhook trigger stays compatible with courier.
 |---|---|---|
 | D1 | Audience | Internal first, clean seams for later OSS release |
 | D2 | Backend coupling | Protocol-first, A2A only |
-| D3 | ax | Supported only through an A2A-speaking agent |
+| D3 | ax | Supported through the `a2a` dialect: an A2A server running as an ax task, reached via `atenet-router` |
 | D4 | kagent version | 1.0 alpha, A2A 1.0 (see D24 for where it runs) |
 | D5 | MVP scope | Thin slice of both ingress paths |
 | D6 | Deployment | Kubernetes-native; CRDs and controller arrive in hardening (see D30) |
@@ -345,18 +346,25 @@ a2a-go returns stored tasks unfiltered on `GetTask` too (source). So the `kagent
 dialect sends the header on every send, resend and answer, and a pause re-read after a
 restart (WP-33) has its payload only if the turn that made it carried the header.
 
-**google/ax.** ax has no message model, so courier does not call it. Two supported
-patterns, both of which look like a plain A2A backend to courier:
+**google/ax.** ax has no message model of its own, so courier does not call its
+lifecycle API. It is a supported backend through the `a2a` dialect:
 
-1. **Supported:** a kagent agent that delegates sandboxed work to ax. Users have
+1. **Supported:** an A2A-speaking agent packaged in an ax task image, reached through
+   `atenet-router` with a static `ate-target-actor` header from
+   `AgentBackend.spec.headers`. The card is served at the URL plus
+   `/.well-known/agent-card.json`. ax removed its own A2A agent (issue #128), so the
+   agent is ours to build and maintain; `examples/ax` is a reference (ADK on Bedrock
+   Haiku). Courier sends the Binding's bearer token and the agent verifies it; the
+   reference checks issuer, audience and service subject. The AX tier (12.1) covers S1
+   to S5, S12 and the question deadline: streaming, context across restarts and actor
+   suspend/resume, queued replies, plain-text questions answered in the thread,
+   crash-after-post adoption and safe failure notices.
+2. **Also supported:** a kagent agent that delegates sandboxed work to ax. Users have
    demonstrated this pattern (ax issue #394).
-2. **Unsupported upstream, possible in principle:** an A2A-speaking agent packaged in
-   an ax task image, reached through `atenet-router` with a static `ate-target-actor`
-   header from `AgentBackend.spec.headers`. ax removed its own A2A agent (issue #128),
-   so this image would be ours to build and maintain. Not in v1.
 
-In plain terms: v1 serves the "kagent or ax" intent for kagent, and for ax only
-through kagent. A native adapter is revisited if ax ships durable interactions
+Structured tool approvals (S11) and tool step cards (S13) are kagent-only. A generic
+A2A agent, on ax or elsewhere, asks questions as plain text and leaves other pause
+data opaque. A separate ax dialect is revisited if ax ships durable interactions
 (issue #430, an outside proposal with no maintainer response yet) or makes
 `pending_approval` functional.
 
@@ -986,7 +994,7 @@ this with an outbox:
 | 3. Pilot | Four weeks, one team plus the platform Binding. Feedback dashboard. Weekly review of not-useful investigations. | Go or no-go recorded against D33 (section 13) |
 | 4. Hardening (if go) | CRDs and controller, Postgres, HA, HTTP mode, DMs, Helm chart. Move the backend to production kagent at 1.0 GA and retire the pilot install. | Two replicas pass a failover test with no lost or duplicated events |
 | 5. Tool approvals | Bind the first write-capable agent. Decide R1 (`approverGroups`) first. Approval buttons, timeout, audit. | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
-| 6. OSS readiness | Docs, generic `a2a` dialect conformance tests, ax example | A non-kagent A2A agent works with no code changes |
+| 6. OSS readiness | Docs, generic `a2a` dialect conformance tests, ax example (reference agent and AX kind tier shipped) | A non-kagent A2A agent works with no code changes |
 
 ### 12.1 Testing strategy
 

@@ -5,7 +5,7 @@ runtime. The runtime hosts and executes the agents. Courier owns the messaging
 connection, conversation lifecycle, and delivery state.
 
 The [README](../README.md#how-it-works) shows the basic idea. This diagram expands
-the current broker and marks the Google ax integration target separately.
+the current broker and shows both supported runtime paths, kagent and Google ax.
 
 ```mermaid
 flowchart TB
@@ -33,10 +33,10 @@ flowchart TB
         DB[("SQLite on persistent storage<br/>Sessions · replies · interactions · presses<br/>Outbox · audit · trace context")]
 
         subgraph Runtime["Agent runtime · managed independently"]
-            Frontdoor["Authenticated A2A endpoint"]
-            Agent["kagent-hosted or other A2A agent"]
+            Frontdoor["Authenticated A2A endpoint<br/>kagent front door or Substrate router"]
+            Agent["kagent-hosted agent"]
             Tools["Model, tools, and execution environment"]
-            Ax["A2A-facing integration + Google ax<br/>Integration target; no native Courier adapter"]
+            Ax["Google ax task<br/>A2A agent behind atenet-router"]
         end
     end
 
@@ -46,7 +46,7 @@ flowchart TB
     GitOps --> Files
     GitOps --> Secrets
     GitOps -->|Runtime deployment| Agent
-    GitOps -.->|Future integration deployment| Ax
+    GitOps -->|Task deployment| Ax
     Files --> Config
     Secrets --> Identity
     Config -.->|Routing snapshot| Intake
@@ -61,7 +61,7 @@ flowchart TB
     Session <-->|Task lifecycle and events| A2A
     A2A <-->|A2A 1.0 JSON-RPC + streaming| Frontdoor
     Frontdoor <--> Agent
-    Frontdoor -.->|A2A integration required| Ax
+    Frontdoor <--> Ax
     Agent <--> Tools
 
     Session -->|Task output and pauses| Render
@@ -83,21 +83,19 @@ flowchart TB
     classDef core fill:#0f766e,stroke:#115e59,color:#ffffff
     classDef runtime fill:#ecfdf5,stroke:#059669,color:#064e3b
     classDef store fill:#f1f5f9,stroke:#475569,color:#0f172a
-    classDef planned fill:#fff7ed,stroke:#ea580c,color:#9a3412,stroke-dasharray:5 5
     class Git,GitOps,Files,Secrets,Config,Identity config
     class Chat,Intake,A2A,Interact,Render,Outbox,Telemetry broker
     class Session core
-    class Frontdoor,Agent,Tools runtime
+    class Frontdoor,Agent,Tools,Ax runtime
     class DB,Slack,Observability store
-    class Ax planned
 ```
 
 Solid arrows show the implemented configuration and conversation paths. Dotted
-arrows inside the broker show configuration or credential inputs; orange nodes
-and their dotted deployment/runtime paths show the ax integration target.
-Telemetry is shared across broker operations, rather than a required step in
-message delivery. Audit records are durable in SQLite; traces are exported only
-when configured.
+arrows inside the broker show configuration or credential inputs. The kagent and
+ax runtimes sit behind the same A2A client; they differ only in dialect and in
+what the backend exposes. Telemetry is shared across broker operations, rather
+than a required step in message delivery. Audit records are durable in SQLite;
+traces are exported only when configured.
 
 ## Configuration and deployment
 
@@ -129,9 +127,22 @@ manifests, operator, or deployment tooling handle that lifecycle.
    recovery and reconciliation. Saved trace context connects asynchronous work.
 
 Structured questions and approvals depend on the backend's interaction contract.
-The generic A2A dialect supports text continuation; the kagent dialect understands
-its structured HITL extension. Google ax needs an A2A-facing integration or an
-A2A agent that delegates work to it. The current broker has no native ax adapter.
+The generic A2A dialect supports text continuation: a plain-text `input-required`
+question is persisted and posted, and a thread reply is accepted under the same
+membership, audit and deadline checks as a button press before it is sent to the
+paused task. The kagent dialect additionally understands its structured HITL
+extension (tool approvals, tool step cards).
+
+Google ax is a supported backend. ax speaks A2A, so it uses the `a2a` dialect with
+no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
+the actor with a static `ate-target-actor` header from `spec.headers`; the agent is
+an A2A server running as an ax task. The reference agent verifies the Binding's
+bearer ID token itself. Chat, queued replies, restart recovery, actor suspend and resume, and
+in-thread text answers are tested in the AX kind tier. Structured tool approvals and
+tool step cards are kagent-only; the generic dialect leaves them opaque. ax's own
+lifecycle (task, template, egress policy) stays with the operator. See the
+[AX reference agent](../examples/ax/README.md) and the
+[AX kind tier](../hack/kind/ax/README.md).
 
 ## Source map
 

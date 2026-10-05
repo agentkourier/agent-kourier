@@ -26,34 +26,32 @@ flowchart LR
     subgraph K8s["Kubernetes"]
         Courier["agent-courier<br/>Bindings, conversations, delivery"]
         Kagent["kagent<br/>Your agent"]
-        Ax["A2A adapter + Google ax<br/>Integration target"]
+        Ax["Google ax<br/>Your agent as an ax task"]
     end
 
     Git --> GitOps
     GitOps -->|ConfigMap + Secrets| Courier
     GitOps -->|Agent manifests| Kagent
-    GitOps -.->|Future integration manifests| Ax
+    GitOps -->|Task manifests| Ax
     People <-->|Messages + answers| Slack
     Slack <-->|Messaging adapter| Courier
     Courier <-->|A2A| Kagent
-    Courier -.->|A2A integration required| Ax
+    Courier <-->|A2A| Ax
 
     classDef config fill:#eef2ff,stroke:#6366f1,color:#312e81
     classDef broker fill:#0f766e,stroke:#115e59,color:#ffffff
     classDef runtime fill:#ecfdf5,stroke:#059669,color:#064e3b
     classDef human fill:#f8fafc,stroke:#64748b,color:#0f172a
-    classDef planned fill:#fff7ed,stroke:#ea580c,color:#9a3412,stroke-dasharray:5 5
     class Git,GitOps config
     class Courier broker
-    class Kagent runtime
+    class Kagent,Ax runtime
     class People,Slack human
-    class Ax planned
 ```
 
-The ax path is an integration target, not a shipped native adapter. Runtime
-deployment belongs to the runtime's manifests or operator. Courier supplies the
-messaging wiring. See the [detailed architecture](docs/architecture.md) for the
-configuration, execution, persistence, and interaction paths.
+Both kagent and ax are supported backends. Runtime deployment belongs to the
+runtime's manifests or operator. Courier supplies the messaging wiring. See the
+[detailed architecture](docs/architecture.md) for the configuration, execution,
+persistence, and interaction paths.
 
 ## Configuration model
 
@@ -141,12 +139,30 @@ interface is A2A 1.0 over JSON-RPC, with dialects for backend-specific behavior.
 |---|---|
 | kagent 1.0 | `kagent-v1` dialect, including structured questions and approval interactions |
 | Other A2A 1.0 agents | `a2a` dialect, with text-based continuation when no structured interaction extension is recognized |
-| Google ax | Integration target through an A2A-facing adapter or an A2A agent that delegates work to ax; no native ax adapter is implemented |
+| Google ax | Supported: `a2a` dialect through ax's `atenet-router`, selecting the agent with an `ate-target-actor` header. Tested in `make e2e-ax`. Structured tool approvals and tool step cards are kagent-only |
+
+ax speaks A2A, so it needs no separate dialect. This `AgentBackend` reaches an
+agent running as an ax task; the header names the namespace and actor, and the
+agent card is served at the URL plus `/.well-known/agent-card.json`:
+
+```yaml
+apiVersion: agentcourier.dev/v1alpha1
+kind: AgentBackend
+metadata:
+  name: ax
+  namespace: courier-system
+spec:
+  dialect: a2a
+  url: http://atenet-router.ate-system.svc.cluster.local/a2a
+  headers:
+    - name: ate-target-actor
+      value: courier-ax/assistant
+```
 
 The intent is to let teams change or add agent runtimes while keeping the same
 messaging configuration model. Interaction capabilities still depend on what the
 backend exposes. See [backend design](spec.md#63-backends) for the current contract
-and ax integration boundaries.
+and ax boundaries.
 
 ## Current scope
 
@@ -164,6 +180,14 @@ The project is in an internal-first pilot. Start with the
 [sandbox deployment guide](hack/kind/sandbox/README.md) for the existing kagent and
 real-Slack setup. The [specification](spec.md) records the detailed behavior, and
 the [implementation plan](tasks/plans/agent-courier-pilot.md) tracks delivery.
+
+## Try it with AX
+
+[`examples/ax`](examples/ax/README.md) is an ADK agent on Bedrock Haiku that runs as
+an ax task, with a sample `AgentBackend` and `Binding`. It is experimental. The AX
+kind tier (`make e2e-ax-up`, `make e2e-ax`) runs the shared Slack scenarios against
+a real ax and Substrate install with a deterministic model, so it costs no tokens;
+see [its guide](hack/kind/ax/README.md) for the scenario table.
 
 ## Development
 
