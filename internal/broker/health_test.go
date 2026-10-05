@@ -1,9 +1,12 @@
 package broker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 func get(t *testing.T, h http.Handler, path string) (int, string) {
@@ -274,5 +278,21 @@ func TestHandlerHasNoReceiver(t *testing.T) {
 				t.Errorf("%s %s = %d; want 404: the receiver is not served here", method, path, rec.Code)
 			}
 		}
+	}
+}
+
+// net/http reports on the standard logger, which writes plain text to stderr unless it is given another: the
+// health server's goes through slog's default handler, as a warning.
+func TestHTTPServerErrorLogGoesThroughTheDefaultLogger(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	var out bytes.Buffer
+	slog.SetDefault(slog.New(telemetry.NewJSONHandler(&out, slog.LevelDebug)))
+
+	newHTTPServer(http.NotFoundHandler()).ErrorLog.Printf("http: a failure")
+
+	var line map[string]any
+	if err := json.Unmarshal(out.Bytes(), &line); err != nil || line["level"] != "WARN" || line["msg"] != "http: a failure" {
+		t.Errorf("log = %q (%v); want one JSON warning with net/http's text as the message", out.String(), err)
 	}
 }

@@ -212,7 +212,7 @@ func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Cont
 	err := error(io.ErrUnexpectedEOF)
 	for ev, streamErr := range open(sctx) {
 		if streamErr != nil {
-			err = streamErr
+			err = classOnly(streamErr)
 			break
 		}
 		watchdog.Reset(a.cfg.InactivityTimeout)
@@ -255,7 +255,7 @@ func (a *Agent) CancelTask(ctx context.Context, id a2a.TaskID) (telemetryResult0
 	}
 	task, err := conn.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id})
 	if err != nil {
-		return nil, fmt.Errorf("cancel task %s: %w", id, typed(err, false))
+		return nil, fmt.Errorf("cancel task %s: %w", id, typed(classOnly(err), false))
 	}
 	return task, nil
 }
@@ -267,7 +267,7 @@ func (a *Agent) getTask(ctx context.Context, conn Conn, id a2a.TaskID) (telemetr
 	defer cancel()
 	task, err := conn.GetTask(ctx, &a2a.GetTaskRequest{ID: id})
 	if err != nil {
-		return nil, fmt.Errorf("get task %s: %w", id, typed(err, false))
+		return nil, fmt.Errorf("get task %s: %w", id, typed(classOnly(err), false))
 	}
 	return task, nil
 }

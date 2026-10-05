@@ -87,6 +87,32 @@ func (e *StreamLostError) Error() string {
 // Unwrap lets errors.Is find ErrStreamLost and the cause.
 func (e *StreamLostError) Unwrap() []error { return []error{ErrStreamLost, e.Err} }
 
+// agentRPCError is an error the agent answered with, as courier says it: the class of the failure and nothing the
+// agent wrote. An a2a.Error's text is the agent's own message, which kagent fills with the exception of a failed model
+// call or tool, and so may quote model output, a tool's input or a credential; courier's errors reach its logs, so
+// they never carry it. It unwraps to the whole error it stands for, so errors.Is and errors.As still find the
+// a2a.Error, its sentinel and its details (typed, isProtocol and the dialects' NotReady rely on that). The agent's own
+// text is in the agent's logs, under the task and context IDs.
+type agentRPCError struct {
+	err error
+	rpc *a2a.Error
+}
+
+func (e *agentRPCError) Error() string { return "agent error: " + a2a.ErrorReason(e.rpc) }
+func (e *agentRPCError) Unwrap() error { return e.err }
+
+// classOnly returns err as an agentRPCError if the agent answered with a JSON-RPC error, and err itself otherwise.
+// It is applied where an error enters this package, from a stream or a unary call, so that every error it returns
+// is free of the agent's text.
+func classOnly(err error) error {
+	var rpc *a2a.Error
+	var done *agentRPCError
+	if err == nil || errors.As(err, &done) || !errors.As(err, &rpc) {
+		return err
+	}
+	return &agentRPCError{err: err, rpc: rpc}
+}
+
 // typed maps the agent's JSON-RPC errors to this package's; other errors pass through.
 // answer is true when the call was an answer to an interaction.
 func typed(err error, answer bool) error {

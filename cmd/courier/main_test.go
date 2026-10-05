@@ -103,6 +103,7 @@ func TestEnvConfigRefusesWhatItCannotRead(t *testing.T) {
 func TestStartSaysItRunsOnlyInACluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	t.Cleanup(restoreDefaultLogger())
 	var stdout, stderr bytes.Buffer
 
 	code := run(nil, "dev", &stdout, &stderr, env{"COURIER_LISTEN": "127.0.0.1:0"}.get)
@@ -242,5 +243,40 @@ func TestEnvConfigRefusesAStoreItCannotUse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// restoreDefaultLogger returns what puts slog's default logger back as it is now: run sets it, for the life of the process.
+func restoreDefaultLogger() func() {
+	prev := slog.Default()
+	return func() { slog.SetDefault(prev) }
+}
+
+// A component that falls back to slog.Default() logs through courier's redacting handler once run has built it, and
+// the error run exits with is redacted and capped as a log line's is.
+func TestRunMakesTheRedactingLoggerTheDefault(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	t.Cleanup(restoreDefaultLogger())
+	var stdout, stderr bytes.Buffer
+	run(nil, "dev", &stdout, &stderr, env{"COURIER_LISTEN": "127.0.0.1:0"}.get)
+	stderr.Reset()
+
+	slog.Default().Warn("a fallback logger", "error", errors.New("dial: Authorization: Bearer FAKE.bearer.credential password=hunter2-FAKE"))
+
+	if out := stderr.String(); strings.Contains(out, "hunter2") || strings.Contains(out, "FAKE.bearer") || !strings.Contains(out, `"error":"dial: Authorization: [redacted]`) {
+		t.Errorf("the default logger wrote %q; want a JSON line with the error redacted", out)
+	}
+}
+
+func TestFailPrintsARedactedCappedError(t *testing.T) {
+	var stderr bytes.Buffer
+	err := fmt.Errorf("%w: connect: %s password=hunter2-FAKE xoxb-1111-2222-FAKEFAKEFAKE TAIL-CANARY", broker.ErrWiring, strings.Repeat("a long agent message. ", 40))
+	if code := fail(&stderr, err); code != exitUsage {
+		t.Errorf("exit code = %d; want %d: the code follows the error, not its text", code, exitUsage)
+	}
+	out := stderr.String()
+	if strings.Contains(out, "hunter2") || strings.Contains(out, "xoxb-") || strings.Contains(out, "TAIL-CANARY") || !strings.HasPrefix(out, "courier: ") || len(out) > 400 {
+		t.Errorf("stderr = %q; want one line, redacted and capped", out)
 	}
 }

@@ -231,7 +231,8 @@ func askUserAnswer(in dialect.Interaction, a dialect.Answer) (map[string]any, st
 	return map[string]any{"type": "ask_user_response", "id": in.RequestID, "answers": answers}, strings.Join(flat, "; "), nil
 }
 
-// checkAnswer reports why vals does not answer q.
+// checkAnswer reports why vals does not answer q. The error is logged, and an answer is what a person typed:
+// it names the answer by its place, never its value.
 func checkAnswer(q dialect.Question, vals []string) error {
 	if len(vals) == 0 {
 		return errors.New("not answered")
@@ -244,9 +245,9 @@ func checkAnswer(q dialect.Question, vals []string) error {
 		case strings.TrimSpace(v) == "":
 			return errors.New("blank answer")
 		case len(q.Choices) > 0 && !slices.Contains(q.Choices, v):
-			return fmt.Errorf("%q is not one of the choices", v)
+			return fmt.Errorf("answer %d is not one of the choices", i+1)
 		case slices.Contains(vals[:i], v):
-			return fmt.Errorf("%q is chosen twice", v)
+			return fmt.Errorf("answer %d is chosen twice", i+1)
 		}
 	}
 	return nil

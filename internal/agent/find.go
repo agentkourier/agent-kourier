@@ -103,7 +103,7 @@ func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequ
 	defer cancel()
 	page, err := conn.ListTasks(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks of context %s: %w", req.ContextID, typed(err, false))
+		return nil, fmt.Errorf("list tasks of context %s: %w", req.ContextID, typed(classOnly(err), false))
 	}
 	return page, nil
 }

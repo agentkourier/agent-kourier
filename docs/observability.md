@@ -131,10 +131,42 @@ Important span attributes include:
 Task and turn IDs belong only to spans and logs. Metrics use configured Binding names
 and closed operation/outcome sets. Span attributes and metric labels exclude prompts,
 responses, tool arguments/results, user names, authentication headers, URL queries
-and raw errors. Existing application log messages retain their existing fields.
+and raw errors; logs do carry error text, redacted and capped (see "Logs"). Existing
+application log messages retain their existing fields.
 Contextual structured logs include `trace_id` and `span_id`. Trace export adds no
 LLM token or cost estimates; those belong to instrumentation in the backend that
 actually calls the model.
+
+## Logs
+
+Courier logs JSON lines to stderr, at the level `COURIER_LOG_LEVEL` sets. A line carries IDs
+(Binding, channel, thread, message, task, interaction, outbox row; `trace_id` and `span_id`
+where there is a trace), counts, durations, closed words such as a `reason` or an outcome, and
+error text. It never carries a message, an agent's output, status text or error message, a tool's
+arguments, an answer a person gave, a token or a Secret's value.
+
+Error text is the one place a line can quote someone, and courier keeps it to what its own code and
+its dependencies say. An error the agent answered with is logged as its class only
+(`agent error: INTERNAL_ERROR`): a backend such as kagent fills the JSON-RPC message with the exception
+of a failed model call or tool, which can quote model output or a tool's input, so courier does not
+log it. The agent's own text is in the agent's logs; find it there by the task or context ID of the
+line. A Slack response body that slack-go could not parse, a handler's error or panic, and the like
+may still quote someone, so courier's JSON handler, built in one place (`telemetry.NewJSONHandler`) and
+also the default `slog` logger, passes every attribute that holds an error, and every attribute
+named `err`, `error`, `cause`, `reason` or `panic`, through the redaction the audit log uses: tokens,
+credentials, URL userinfo, key blocks and the values of secret-named fields become `[redacted]`.
+It then cuts the text to 300 bytes (the audit log's cap for a returned error) and marks the cut
+with `… (truncated)`. Where the content has no diagnostic value, the line does not carry it at all: a
+refused answer logs which answer and why (`answer 2 is not one of the choices`), never the value.
+The error courier exits with is printed the same way, as one `courier: ...` line on stderr.
+
+Messages, level, time and attribute keys are not changed by this: an alert on a message or a
+`jq` on `.error` keeps working. Text that is not an error attribute is logged as the code gave it,
+which is why code logs IDs and classes there. Output written to the standard `log` package is not
+redacted: it arrives as a line's `msg`. Nothing in courier writes to it but net/http's error log for
+the health server, which courier routes there as a warning and which holds no content. The audit log is separate and
+stricter: it stores typed error tags and identifiers, never an agent's error text; its one free-text reason is the
+dialect's own, for an unusable pause, redacted and capped at 120 bytes.
 
 ## Metrics
 

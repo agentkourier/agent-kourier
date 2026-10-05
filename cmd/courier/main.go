@@ -248,7 +248,10 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	if err != nil {
 		return fail(stderr, err)
 	}
-	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: env.logLevel}))
+	log := slog.New(telemetry.NewJSONHandler(stderr, env.logLevel))
+	// A component that falls back to slog.Default() (the outbox, the sweeps, net/http's error log) goes through the
+	// same handler. The one process-wide setting; it is made here and nowhere else.
+	slog.SetDefault(log)
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", env.listen)
 	if err != nil {
 		return fail(stderr, fmt.Errorf("listen on %s: %w", env.listen, err))
@@ -273,7 +276,8 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 func fail(stderr io.Writer, err error) int {
 	code := exitCode(err)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "courier:", err)
+		// Run's error may quote an agent, Slack or a dependency: redacted and capped, as in a log line.
+		_, _ = fmt.Fprintln(stderr, "courier:", telemetry.LogText(err))
 	}
 	return code
 }

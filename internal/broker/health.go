@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -120,8 +121,11 @@ func NewHandler(m *Metrics, r *Readiness) http.Handler {
 const shutdownTimeout = 10 * time.Second
 
 func newHTTPServer(h http.Handler) *http.Server {
+	// net/http reports on the standard logger, which would write plain text to stderr: it goes through slog's default
+	// handler, courier's, as warnings.
 	return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn)}
 }
 
 // Serve serves h on ln until ctx ends, then shuts down gracefully. It returns nil after a

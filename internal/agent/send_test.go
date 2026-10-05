@@ -132,8 +132,12 @@ func TestNotReadyIsTypedWhenTheDialectSaysSo(t *testing.T) {
 			if !errors.Is(err, ErrBusy) || errors.Is(err, ErrNotReady) != tc.want {
 				t.Errorf("err = %v; want ErrBusy, and ErrNotReady %t", err, tc.want)
 			}
-			if tc.want && (strings.Contains(err.Error(), "active task") || !strings.Contains(err.Error(), tc.message) || !errors.Is(err, a2a.ErrUnsupportedOperation)) {
-				t.Errorf("err = %v; want it to name the agent's own words and no busy task, and still carry its -32004", err)
+			if tc.want && (strings.Contains(err.Error(), "active task") || !errors.Is(err, a2a.ErrUnsupportedOperation)) {
+				t.Errorf("err = %v; want no busy task, and still carry its -32004", err)
+			}
+			var rpcErr *a2a.Error // the agent's words are kept for the dialect, and never in the text
+			if strings.Contains(err.Error(), tc.message) || !errors.As(err, &rpcErr) || rpcErr.Message != tc.message {
+				t.Errorf("err = %v, rpc %+v; want the text without the agent's message, and the message still there to errors.As", err, rpcErr)
 			}
 		})
 	}
