@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -435,6 +437,55 @@ func TestChatFencePassesPermalinksOn(t *testing.T) {
 	}
 	if got, ok := permalinks(fenceChat(&recordingPlatform{}, f))(chat.Ref{ID: "1.2"}); ok || got != "" {
 		t.Errorf("Permalink of a platform that makes none = %q, %v; want none", got, ok)
+	}
+}
+
+// threadPlatform is a platform that reads threads, and notes what it was asked.
+type threadPlatform struct {
+	*recordingPlatform
+	asked []string
+}
+
+func (p *threadPlatform) ThreadBetween(_ context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	p.note("ThreadBetween")
+	p.asked = append(p.asked, strings.Join([]string{t.Channel, t.Thread, after, before, strconv.Itoa(limit)}, "|"))
+	return []chat.HistoryMessage{{Message: chat.Inbound{Text: "a reply"}}}, 3, errThreadRead
+}
+
+var errThreadRead = errors.New("the platform's own error")
+
+// A thread read is a read: it passes the fence whatever the lease says (this fence has never seen a renewal, which stops
+// the process for a write), and it gets the platform's answer as it is. A platform that cannot
+// read a thread is told of by the sentinel, from the wrapper that every platform is behind.
+func TestChatFencePassesThreadReadsOnAndSaysWhenThePlatformCannot(t *testing.T) {
+	var stops []string
+	fence := &chatFence{clock: newLeaseClock(nil), limit: time.Second, stop: func(reason string) { stops = append(stops, reason) }} // never renewed: a write is refused
+	inner := &threadPlatform{recordingPlatform: &recordingPlatform{}}
+	reader, ok := fenceChat(inner, fence).(chat.ThreadReader)
+	if !ok {
+		t.Fatal("the fenced platform is not a chat.ThreadReader")
+	}
+	msgs, dropped, err := reader.ThreadBetween(context.Background(), chat.Target{Channel: "C1", Thread: "1.1"}, "1.2", "1.9", 7)
+	if len(msgs) != 1 || msgs[0].Message.Text != "a reply" || dropped != 3 || !errors.Is(err, errThreadRead) {
+		t.Errorf("ThreadBetween = %+v, %d, %v; want the platform's answer unchanged", msgs, dropped, err)
+	}
+	if want := []string{"C1|1.1|1.2|1.9|7"}; !slices.Equal(inner.asked, want) {
+		t.Errorf("the platform was asked %v; want %v", inner.asked, want)
+	}
+
+	bare := &recordingPlatform{}
+	reader = fenceChat(bare, fence).(chat.ThreadReader)
+	if msgs, dropped, err := reader.ThreadBetween(context.Background(), chat.Target{}, "", "", 1); !errors.Is(err, chat.ErrNoThreadReads) || msgs != nil || dropped != 0 {
+		t.Errorf("ThreadBetween of a platform that cannot = %+v, %d, %v; want ErrNoThreadReads", msgs, dropped, err)
+	}
+	if n := len(bare.seen()); n != 0 {
+		t.Errorf("the platform that cannot was called %d times: %v", n, bare.seen())
+	}
+	if len(stops) != 0 {
+		t.Errorf("a read stopped the process: %v", stops)
+	}
+	if _, err := fenceChat(inner, fence).Post(context.Background(), chat.Target{}, chat.Outgoing{}, ""); !errors.Is(err, ErrChatFenced) {
+		t.Errorf("a write through the same fence = %v; want it refused, so that the read's passing says something", err)
 	}
 }
 

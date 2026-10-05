@@ -209,3 +209,33 @@ func TestRepliesParentFirstAndPaginated(t *testing.T) {
 		t.Fatalf("replies for an unknown ts = %v; want thread_not_found", err)
 	}
 }
+
+// Measured against Slack (2026-10-05, H-TM): the oldest and latest of conversations.replies are exclusive unless inclusive
+// is set, as they are for history. The parent is returned first whatever the bounds, as Slack documents, so a reader
+// that wants only the replies filters it by ts.
+func TestRepliesWindowIsExclusiveByDefault(t *testing.T) {
+	_, api := newFake(t)
+	parent := post(t, api, text("root"))
+	var r []string
+	for i := range 4 {
+		r = append(r, post(t, api, text(fmt.Sprint("r", i+1)), slack.MsgOptionTS(parent)))
+	}
+	for name, tc := range map[string]struct {
+		p    slack.GetConversationRepliesParameters
+		want []string
+	}{
+		"both bounds exclusive":   {slack.GetConversationRepliesParameters{Oldest: r[0], Latest: r[3]}, []string{parent, r[1], r[2]}},
+		"both bounds inclusive":   {slack.GetConversationRepliesParameters{Oldest: r[0], Latest: r[3], Inclusive: true}, []string{parent, r[0], r[1], r[2], r[3]}},
+		"latest exclusive":        {slack.GetConversationRepliesParameters{Latest: r[2]}, []string{parent, r[0], r[1]}},
+		"latest inclusive":        {slack.GetConversationRepliesParameters{Latest: r[2], Inclusive: true}, []string{parent, r[0], r[1], r[2]}},
+		"adjacent bounds":         {slack.GetConversationRepliesParameters{Oldest: r[1], Latest: r[2]}, []string{parent}},
+		"bounds past the replies": {slack.GetConversationRepliesParameters{Oldest: r[3]}, []string{parent}},
+	} {
+		tc.p.ChannelID, tc.p.Timestamp = "C1", parent
+		msgs, _, _, err := api.GetConversationReplies(&tc.p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		wantTS(t, name, msgs, tc.want...)
+	}
+}

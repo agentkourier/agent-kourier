@@ -195,6 +195,18 @@ func (p fencedPlatform) Permalink(r chat.Ref) (string, bool) {
 	return "", false
 }
 
+// ThreadBetween is chat.ThreadReader, which the platform may be: it reads a thread and changes nothing, so it is no write
+// and the fence does not check it. The method exists so that the fence does not hide the capability of the platform it
+// wraps, as it does not hide Permalink; a platform that cannot read a thread is chat.ErrNoThreadReads. The fence is only
+// there when the election is (with SQLite there is none), and the built platform hides the method too, so a caller asks the
+// built platform's inner Platform with a type assertion, as the trigger start does for chat.Permalinker.
+func (p fencedPlatform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	if r, ok := p.Platform.(chat.ThreadReader); ok {
+		return r.ThreadBetween(ctx, t, after, before, limit)
+	}
+	return nil, 0, chat.ErrNoThreadReads
+}
+
 type fencedStream struct {
 	chat.Stream
 	fence *chatFence

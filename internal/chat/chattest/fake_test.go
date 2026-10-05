@@ -317,3 +317,74 @@ func TestFieldsListsEveryPieceOfTextWithItsPlace(t *testing.T) {
 		}
 	}
 }
+
+func TestThreadBetweenReadsWhatWasPostedAndSaidInTheThread(t *testing.T) {
+	f := NewFake()
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = f.Run(run, &sinkRec{}) }()
+	at := func(id string) chat.Ref {
+		return chat.Ref{Platform: "fake", Conn: tgt.Conn, Channel: "C1", Thread: "1.1", ID: id}
+	}
+	own, err := f.Post(ctx, tgt, say("an answer"), "t1") // the fake numbers its posts "n.000": this is 1.000, in the thread of tgt
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []chat.Inbound{
+		{At: at("3.000001"), User: "U1", Text: "third"},
+		{At: at("2.000001"), User: "U1", Text: "second"},
+		{At: at("10.000001"), User: "U2", Text: "tenth"},
+		{At: chat.Ref{Platform: "fake", Channel: "C1", Thread: "9.9", ID: "5.000"}, User: "U1", Text: "another thread"},
+		{At: chat.Ref{Platform: "fake", Channel: "C2", Thread: "1.1", ID: "5.000"}, User: "U1", Text: "another channel"},
+		{At: at("1.1"), User: "U1", Text: "the root"},
+	} {
+		if err := f.Say(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	texts := func(after, before string, limit int) (out []string, dropped int, err error) {
+		msgs, dropped, err := f.ThreadBetween(ctx, tgt, after, before, limit)
+		for _, m := range msgs {
+			out = append(out, m.Message.Text)
+		}
+		return out, dropped, err
+	}
+	for name, tc := range map[string]struct {
+		after, before string
+		limit         int
+		want          []string
+		dropped       int
+	}{
+		"all, oldest first by ts, not by length": {"", "", 10, []string{"an answer", "second", "third", "tenth"}, 0},
+		"exclusive bounds":                       {own.ID, "10.000001", 10, []string{"second", "third"}, 0},
+		"after only":                             {"2.000001", "", 10, []string{"third", "tenth"}, 0},
+		"before only":                            {"", "2.000001", 10, []string{"an answer"}, 0},
+		"the newest, with the rest counted":      {"", "", 2, []string{"third", "tenth"}, 2},
+		"an empty window":                        {"3.000001", "3.000001", 10, nil, 0},
+		"an inverted window":                     {"10.000001", "2.000001", 10, nil, 0},
+		"a short fraction is read as six digits": {"2.1", "", 10, []string{"third", "tenth"}, 0},
+	} {
+		got, dropped, err := texts(tc.after, tc.before, tc.limit)
+		if err != nil || dropped != tc.dropped || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: ThreadBetween(%q, %q, %d) = %v, %d, %v; want %v, %d", name, tc.after, tc.before, tc.limit, got, dropped, err, tc.want, tc.dropped)
+		}
+	}
+	msgs, _, _ := f.ThreadBetween(ctx, tgt, "", "2.000001", 10)
+	if len(msgs) != 1 || !msgs[0].Own || msgs[0].Ignored || msgs[0].Message.At != own {
+		t.Errorf("a post of the fake's own = %+v; want Own, at %+v", msgs, own)
+	}
+	if msgs, _, _ = f.ThreadBetween(ctx, tgt, "2.000001", "3.000002", 10); len(msgs) != 1 || msgs[0].Own || msgs[0].Message.User != "U1" {
+		t.Errorf("a person's message = %+v; want theirs, not Own", msgs)
+	}
+
+	f.FailNext("ThreadBetween", &FakeError{Verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 3 * time.Second}, Msg: "limited"})
+	if _, _, err := f.ThreadBetween(ctx, tgt, "", "", 10); err == nil || f.Classify(chat.OpOther, err).RetryAfter != 3*time.Second {
+		t.Errorf("a queued failure = %v; want the error the test chose", err)
+	}
+	if _, _, err := f.ThreadBetween(ctx, chat.Target{Channel: "C1"}, "", "", 10); !errors.Is(err, chat.ErrInvalid) {
+		t.Errorf("ThreadBetween with no thread = %v; want ErrInvalid", err)
+	}
+	if _, _, err := f.ThreadBetween(ctx, tgt, "", "", 0); !errors.Is(err, chat.ErrInvalid) {
+		t.Errorf("ThreadBetween with no room = %v; want ErrInvalid", err)
+	}
+}

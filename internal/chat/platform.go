@@ -71,6 +71,25 @@ type Permalinker interface {
 	Permalink(r Ref) (string, bool)
 }
 
+// ThreadReader is an optional interface of a Platform: it reads the replies in a thread that people wrote between two
+// messages, which a mention-only Binding shows an agent as the context of the mention (spec 8.2). A platform that cannot
+// read a thread does not implement it, and one that does may still be unable to at the moment (ErrNoThreadReads), so a
+// caller asks and goes on without the context when it is told no.
+type ThreadReader interface {
+	// ThreadBetween returns the messages of the thread t.Thread whose IDs are strictly after after and strictly before
+	// before, oldest first, each decoded as the adapter decodes a live message: a message that Run would drop is Ignored,
+	// and courier's own post is Own. The thread's root is never among them. An empty bound is no bound on that side.
+	// A window that is empty or inverted (after is not before before) returns nothing and makes no call.
+	//
+	// At most limit messages come back, the newest of the window, and dropped says how many were left out: exactly the
+	// older ones over limit. Both count every message, courier's own, Ignored ones and other bots' included, so a caller
+	// that wants N eligible replies passes a larger limit and filters. A window the platform cannot read to its end in
+	// one call is no partial answer: it is an error wrapping ErrThreadTooLong, so a nil error always means the newest
+	// of the whole window. Check ErrThreadTooLong and ErrNoThreadReads with errors.Is before Classify, which does not
+	// know them; any other error classifies as the platform's (Classify, OpOther), a rate limit with its RetryAfter.
+	ThreadBetween(ctx context.Context, t Target, after, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
+}
+
 // Sink receives what Platform.Run decodes.
 type Sink interface {
 	// Message takes m. An error means it was not taken, and the platform delivers it again.
@@ -127,6 +146,14 @@ var (
 	// ErrTooLarge is returned by Fits for a prompt that does not fit in one message even in its
 	// plainest form. No retry mends it, and the caller reports the pause as unusable.
 	ErrTooLarge = errors.New("chat: the prompt does not fit in one message")
+	// ErrNoThreadReads is returned by ThreadBetween of a platform that cannot read a thread: it does not implement
+	// ThreadReader (the broker's wrapper says it for the platform it wraps), or the adapter has no way to. The caller
+	// goes on without the thread's earlier replies; no retry mends it.
+	ErrNoThreadReads = errors.New("chat: the platform cannot read the replies of a thread")
+	// ErrThreadTooLong is wrapped by the error of a ThreadBetween whose window is longer than the platform will read in
+	// one call. No retry mends it: the same window is as long the next time. The caller goes on without the replies, as
+	// for ErrNoThreadReads.
+	ErrThreadTooLong = errors.New("chat: the window of the thread is too long to read")
 )
 
 // Platform is a chat platform: Slack today. An adapter implements it, and nothing else in courier names

@@ -55,22 +55,51 @@ func (c *Client) Find(ctx context.Context, channel, threadTS, outboxID string, s
 	return ts, found, nil
 }
 
+// tsRange bounds what a read of history or of a thread asks Slack for, by its oldest and latest parameters. A bound that is
+// empty is no bound: Slack refuses an oldest that is not after the epoch (invalid_ts_oldest), which the zero time and
+// the epoch itself format as, so "from the start" is no parameter at all.
+type tsRange struct {
+	oldest, latest string
+	// inclusive keeps a message stamped exactly at a bound. Slack's own default is exclusive.
+	inclusive bool
+}
+
+// sinceRange is the range of everything from oldest on, the bound included, which Find and History read.
+func sinceRange(oldest time.Time) tsRange {
+	r := tsRange{inclusive: true}
+	if oldest.Unix() > 0 {
+		r.oldest = fmt.Sprintf("%d.%06d", oldest.Unix(), oldest.Nanosecond()/1000)
+	}
+	return r
+}
+
 // walk reads the pages of channel's history, or of threadTS's replies, from oldest to the end and gives each to
 // visit, which ends the walk by returning true. It fails, instead of ending early, when it cannot reach the end
 // (Slack promises more and gives no cursor, or repeats one): a caller that reads the whole window must not
 // mistake a part of it for the whole.
 func (c *Client) walk(ctx context.Context, channel, threadTS string, oldest time.Time, visit func([]slackgo.Message) (stop bool)) error {
+	_, err := c.walkRange(ctx, channel, threadTS, sinceRange(oldest), 0, visit)
+	return err
+}
+
+// walkRange is walk over r, and reads at most maxPages pages (all of them if it is 0). more says it stopped at that
+// bound with Slack still holding pages it was not asked for, so that the caller knows what it read is not the whole.
+func (c *Client) walkRange(ctx context.Context, channel, threadTS string, r tsRange, maxPages int, visit func([]slackgo.Message) (stop bool)) (more bool, err error) {
 	seen := map[string]bool{}
-	for cursor := ""; ; {
-		msgs, next, err := c.page(ctx, channel, threadTS, oldest, cursor)
+	cursor := ""
+	for pages := 1; ; pages++ {
+		msgs, next, err := c.page(ctx, channel, threadTS, r, cursor)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if visit(msgs) || next == "" {
-			return nil
+			return false, nil
+		}
+		if maxPages > 0 && pages >= maxPages {
+			return true, nil
 		}
 		if seen[next] {
-			return fmt.Errorf("slack lookup in %s: cursor %q repeats", channel, next)
+			return false, fmt.Errorf("slack lookup in %s: cursor %q repeats", channel, next)
 		}
 		seen[next] = true
 		cursor = next
@@ -78,26 +107,20 @@ func (c *Client) walk(ctx context.Context, channel, threadTS string, oldest time
 }
 
 // page reads one page of messages and the cursor of the next, empty at the end. It fails when
-// Slack says there is more and gives no cursor. A zero oldest reads from the start of the channel.
-func (c *Client) page(ctx context.Context, channel, threadTS string, oldest time.Time, cursor string) (msgs []slackgo.Message, next string, err error) {
-	// No lower bound is no oldest parameter: Slack refuses a ts that is not after the epoch (invalid_ts_oldest), which
-	// is what the zero time and the epoch itself format as.
-	from := ""
-	if oldest.Unix() > 0 {
-		from = fmt.Sprintf("%d.%06d", oldest.Unix(), oldest.Nanosecond()/1000)
-	}
+// Slack says there is more and gives no cursor.
+func (c *Client) page(ctx context.Context, channel, threadTS string, r tsRange, cursor string) (msgs []slackgo.Message, next string, err error) {
 	var more bool
 	if threadTS == "" {
-		var r *slackgo.GetConversationHistoryResponse
-		r, err = c.api.GetConversationHistoryContext(ctx, &slackgo.GetConversationHistoryParameters{
-			ChannelID: channel, Cursor: cursor, Oldest: from, Inclusive: true, Limit: c.pageSize, IncludeAllMetadata: true})
+		var resp *slackgo.GetConversationHistoryResponse
+		resp, err = c.api.GetConversationHistoryContext(ctx, &slackgo.GetConversationHistoryParameters{
+			ChannelID: channel, Cursor: cursor, Oldest: r.oldest, Latest: r.latest, Inclusive: r.inclusive, Limit: c.pageSize, IncludeAllMetadata: true})
 		if err != nil {
 			return nil, "", c.scrub("conversations.history", err)
 		}
-		msgs, more, next = r.Messages, r.HasMore, r.ResponseMetaData.NextCursor
+		msgs, more, next = resp.Messages, resp.HasMore, resp.ResponseMetaData.NextCursor
 	} else {
 		msgs, more, next, err = c.api.GetConversationRepliesContext(ctx, &slackgo.GetConversationRepliesParameters{
-			ChannelID: channel, Timestamp: threadTS, Cursor: cursor, Oldest: from, Inclusive: true, Limit: c.pageSize, IncludeAllMetadata: true})
+			ChannelID: channel, Timestamp: threadTS, Cursor: cursor, Oldest: r.oldest, Latest: r.latest, Inclusive: r.inclusive, Limit: c.pageSize, IncludeAllMetadata: true})
 		if err != nil {
 			return nil, "", c.scrub("conversations.replies", err)
 		}

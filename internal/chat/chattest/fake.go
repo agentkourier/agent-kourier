@@ -1,10 +1,12 @@
 package chattest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +70,8 @@ type FakePlatform struct {
 	sink       chat.Sink
 	ready      chan struct{}
 	runErr     error
-	sent       []Shown // what was received since Sent was last called
+	sent       []Shown        // what was received since Sent was last called
+	said       []chat.Inbound // what Say delivered, which ThreadBetween reads with what was posted
 }
 
 // NewFake returns a fake with every capability, and limits like a real platform's.
@@ -180,12 +183,16 @@ func (f *FakePlatform) Run(ctx context.Context, sink chat.Sink) error {
 	return ctx.Err()
 }
 
-// Say delivers a message from a person to the sink, once Run has started, and returns the sink's error.
+// Say delivers a message from a person to the sink, once Run has started, and returns the sink's error. The fake keeps it
+// in the conversation, whatever the sink says, as a platform does: ThreadBetween reads it.
 func (f *FakePlatform) Say(ctx context.Context, m chat.Inbound) error {
 	sink, err := f.running(ctx)
 	if err != nil {
 		return err
 	}
+	f.mu.Lock()
+	f.said = append(f.said, m)
+	f.mu.Unlock()
 	return sink.Message(ctx, m)
 }
 
@@ -413,6 +420,57 @@ func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error
 	}
 	m.Reactions = slices.DeleteFunc(m.Reactions, func(n string) bool { return n == name })
 	return nil
+}
+
+var _ chat.ThreadReader = (*FakePlatform)(nil)
+
+// ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (courier's own,
+// Own) and what Say delivered to it, by their IDs, which it compares as a platform's timestamps ("seconds.fraction"; the
+// IDs of its own posts are "n.000"). The window is exclusive on both sides, an empty bound is none, and the thread's root is
+// no reply. It has no page cap, so it never returns chat.ErrThreadTooLong. A message posted as a stream is its streamed text.
+func (f *FakePlatform) ThreadBetween(_ context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.fail("ThreadBetween"); err != nil {
+		return nil, 0, err
+	}
+	if t.Thread == "" || limit < 1 {
+		return nil, 0, fmt.Errorf("fake platform: %w: a thread to read and a count of at least 1", chat.ErrInvalid)
+	}
+	if after != "" && before != "" && cmpID(after, before) >= 0 {
+		return nil, 0, nil
+	}
+	in := func(r chat.Ref) bool {
+		return r.Channel == t.Channel && r.Thread == t.Thread && r.ID != t.Thread &&
+			(after == "" || cmpID(r.ID, after) > 0) && (before == "" || cmpID(r.ID, before) < 0)
+	}
+	var out []chat.HistoryMessage
+	for _, m := range f.messages {
+		if in(m.Ref) {
+			text := m.Out.Message.Fallback
+			if m.Streamed != "" {
+				text = m.Streamed
+			}
+			out = append(out, chat.HistoryMessage{Message: chat.Inbound{At: m.Ref, Text: text}, Own: true})
+		}
+	}
+	for _, m := range f.said {
+		if in(m.At) {
+			out = append(out, chat.HistoryMessage{Message: m})
+		}
+	}
+	slices.SortStableFunc(out, func(a, b chat.HistoryMessage) int { return cmpID(a.Message.At.ID, b.Message.At.ID) })
+	dropped := max(len(out)-limit, 0)
+	return slices.Clone(out[dropped:]), dropped, nil
+}
+
+// cmpID orders two message IDs of the form "seconds.fraction", as Slack orders its timestamps: by the length of the
+// seconds, then the digits, then the fraction.
+func cmpID(a, b string) int {
+	as, af, _ := strings.Cut(a, ".")
+	bs, bf, _ := strings.Cut(b, ".")
+	pad := func(f string) string { return f + strings.Repeat("0", max(6-len(f), 0)) }
+	return cmp.Or(cmp.Compare(len(as), len(bs)), strings.Compare(as, bs), strings.Compare(pad(af), pad(bf)))
 }
 
 // IsMember implements chat.Platform.

@@ -152,6 +152,23 @@ func (p *Platform) Find(ctx context.Context, t chat.Target, tag string, since ti
 	return p.ref(t.Channel, t.Thread, ts), true, nil
 }
 
+// threadReader is what ThreadBetween asks of the API: the *Client has it, and a double of it may not.
+type threadReader interface {
+	ThreadBetween(ctx context.Context, conn, channel, threadTS, after, before string, limit int) ([]chat.HistoryMessage, int, error)
+}
+
+var _ chat.ThreadReader = (*Platform)(nil)
+
+// ThreadBetween implements chat.ThreadReader over the Client's (Client.ThreadBetween). An API that cannot read a thread
+// is chat.ErrNoThreadReads. A target that names no thread is chat.ErrInvalid.
+func (p *Platform) ThreadBetween(ctx context.Context, t chat.Target, after, before string, limit int) ([]chat.HistoryMessage, int, error) {
+	r, ok := p.c.(threadReader)
+	if !ok {
+		return nil, 0, chat.ErrNoThreadReads
+	}
+	return r.ThreadBetween(ctx, p.conn, t.Channel, t.Thread, after, before, limit)
+}
+
 // Update replaces the message at r with o. Slack takes the blocks again with every update, so an update
 // always sends them.
 func (p *Platform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
