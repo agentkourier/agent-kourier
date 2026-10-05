@@ -1,58 +1,82 @@
 # agent-courier
 
-Declare the messaging connections for your Kubernetes agents as infrastructure as code.
+**Declarative chat gateway for Kubernetes agents.**
 
-agent-courier connects agents to Slack through declarative configuration. Teams can
-deploy an agent with their chosen runtime and keep its messaging wiring alongside
-their deployment manifests in Git. Courier handles conversations, queued replies,
-streamed output, and human interactions through a shared broker.
+agent-courier puts your A2A agents in Slack. A team commits a `Binding` next to its
+agent's manifests, and the agent answers mentions, follows up in threads, and
+investigates the alerts Alertmanager already posts to the channel. The broker holds
+the Slack connection, the reply queue and the delivery state, so a courier restart
+loses no message.
 
-The goal is to make deploying a conversational agent as straightforward as deploying
-its runtime and declaring which channel should reach it. Platform teams operate the
-broker and shared connections; application teams configure their agents' bindings.
+[Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
+[Architecture](docs/architecture.md) · [Roadmap](ROADMAP.md) ·
+[Specification](spec.md)
+
+## What it looks like
+
+An illustration of one alert thread, not captured output:
+
+```text
+#payments-alerts
+
+Alertmanager   FIRING (1) - PaymentsApiErrorRate
+  courier      The 5xx rate rose at 14:02, two minutes after the 14:00 rollout
+               of payments-api. The new pods fail their readiness probe and
+               restart. The last crash log ends with "pool size must be >= 5".
+  dana         what changed in that rollout?
+  courier      The ConfigMap payments-api-env changed DB_POOL_SIZE from 20 to 2.
+               Nothing else in the Deployment differs from the previous revision.
+```
+
+The alert's thread is the agent session. People in the channel reply in it without
+a mention. A repeat of the same alert attaches to the thread, and its resolve posts
+a note there.
+
+## Why a broker
+
+- **Conversations survive a restart.** Courier persists sessions, queued replies and
+  pending questions. After a restart it continues each conversation where it stopped.
+- **A crash does not repeat a post.** Posts go through a durable outbox. After a
+  crash between posting and recording, courier finds the message it already posted
+  and does not post it again. A streamed reply is the exception: if courier dies
+  between starting a stream and recording it, the partial stream stays and the
+  recovered turn posts the whole answer as a new message.
+- **Questions are answered in the thread.** With `interactions.askUser` set on the
+  `Binding`, courier renders the agent's question in the thread and resumes the same
+  agent task with the answer.
+- **Alerts become conversations.** A `botMessage` trigger reads the message
+  Alertmanager posts to Slack and starts an investigation in that alert's thread,
+  with a cooldown per alert, a rate limit and a daily cap. Courier reads what is
+  already posted, so it is never in the paging path.
+- **Any streaming A2A 1.0 backend.** A kagent 1.0 agent, an agent running in Google AX
+  and any other A2A 1.0 agent whose card advertises streaming use the same `Binding`.
+  Backend-specific behaviour lives in a dialect.
+- **Teams own their bindings.** A `Binding` is namespaced. The platform team runs the
+  broker and the shared Slack connection. An application team wires its own channel
+  to its own agent.
 
 ## How it works
 
-Commit the agent deployment and its messaging binding together. GitOps deploys the
-runtime and Courier configuration; people reach the agent through their channel.
-
 ```mermaid
 flowchart LR
-    Git["Git repository<br/>Agent deployment + messaging YAML"]
-    GitOps["GitOps deployment"]
-    People["Your team"]
-    Slack["Slack channel"]
+    Slack["Slack channel<br/>People and alert messages"]
+    Courier["agent-courier<br/>Bindings, sessions, delivery"]
+    Agents["A2A agents<br/>kagent, Google AX, any streaming A2A 1.0 agent"]
 
-    subgraph K8s["Kubernetes"]
-        Courier["agent-courier<br/>Bindings, conversations, delivery"]
-        Kagent["kagent<br/>Your agent"]
-        Ax["A2A adapter + Google ax<br/>Integration target"]
-    end
+    Slack <-->|Messages, answers| Courier
+    Courier <-->|A2A| Agents
 
-    Git --> GitOps
-    GitOps -->|ConfigMap + Secrets| Courier
-    GitOps -->|Agent manifests| Kagent
-    GitOps -.->|Future integration manifests| Ax
-    People <-->|Messages + answers| Slack
-    Slack <-->|Messaging adapter| Courier
-    Courier <-->|A2A| Kagent
-    Courier -.->|A2A integration required| Ax
-
-    classDef config fill:#eef2ff,stroke:#6366f1,color:#312e81
+    classDef human fill:#f8fafc,stroke:#64748b,color:#0f172a
     classDef broker fill:#0f766e,stroke:#115e59,color:#ffffff
     classDef runtime fill:#ecfdf5,stroke:#059669,color:#064e3b
-    classDef human fill:#f8fafc,stroke:#64748b,color:#0f172a
-    classDef planned fill:#fff7ed,stroke:#ea580c,color:#9a3412,stroke-dasharray:5 5
-    class Git,GitOps config
+    class Slack human
     class Courier broker
-    class Kagent runtime
-    class People,Slack human
-    class Ax planned
+    class Agents runtime
 ```
 
-The ax path is an integration target, not a shipped native adapter. Runtime
-deployment belongs to the runtime's manifests or operator. Courier supplies the
-messaging wiring. See the [detailed architecture](docs/architecture.md) for the
+Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
+The runtime's own manifests or operator deploy and run the agent. Courier supplies
+the messaging wiring. See the [detailed architecture](docs/architecture.md) for the
 configuration, execution, persistence, and interaction paths.
 
 ## Configuration model
@@ -126,44 +150,75 @@ keys; `payments-agent-token` belongs in `payments` with a `token` key. Each bind
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
 
+To have the agent investigate the alerts Alertmanager posts to that channel, list the
+triggers in the Binding's `chat` block. `botId` is the `bot_id` carried by the alert
+messages themselves, which starts with `B`. It is not the Slack app ID, which starts
+with `A`, and courier rejects a name. The dry run in the
+[sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is
+one way to read it. The `alertmanager` preset supplies the matching, the thread
+rules, the limits and the prompt, and the [trigger reference](spec.md#82-chat) has
+the fields a Binding can override.
+
+```yaml
+  chat:
+    connectionRef:
+      namespace: courier-system
+      name: slack
+    channel: C0123456789
+    output: live
+    triggers:
+      - type: mention
+      - type: botMessage
+        from:
+          botId: B0123456789
+        preset: alertmanager
+```
+
+The preset matches one message shape, and a message of another shape starts no
+investigation. It needs a title that reads `FIRING (1) - <alertname>` or
+`RESOLVED - <alertname>`, and Alertmanager's default fallback text, which begins
+`[FIRING:1]`. Alertmanager's default Slack title begins `[FIRING:1]` too, so a
+receiver that keeps the default title does not match. Either set the receiver's
+title to the shape above, or override the preset's `match` and `extract` entries for
+your own template.
+
 In the current pilot, these are **configuration files**, loaded from
 `COURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
 custom resources reconciled by a Courier controller. GitOps can manage the
 ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 
-## Pluggable agent runtimes
+## Integrations
 
-Runtime choice is part of the design. Courier supplies the messaging integration;
-the selected runtime manages agent deployment and execution. The current common
-interface is A2A 1.0 over JSON-RPC, with dialects for backend-specific behavior.
+| Kind | Integration | Status |
+|---|---|---|
+| Chat platform | Slack over Socket Mode: mentions, thread replies, streamed output, questions | Implemented |
+| Chat platform | Slack over the Events API (HTTP) | Planned |
+| Chat platform | Slack direct messages | Planned |
+| Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
+| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Courier refuses a tool approval request and posts a notice | Implemented |
+| Agent backend | Any A2A 1.0 agent whose card advertises streaming, `a2a` dialect. Questions arrive as text | Implemented |
+| Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
+| Agent backend | Tool approvals answered from Slack | Planned |
+| Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
+| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full | Implemented |
+| Alert source | Alertmanager webhook, received by courier directly | Planned |
 
-| Backend | Current integration |
-|---|---|
-| kagent 1.0 | `kagent-v1` dialect, including structured questions and approval interactions |
-| Other A2A 1.0 agents | `a2a` dialect, with text-based continuation when no structured interaction extension is recognized |
-| Google ax | Integration target through an A2A-facing adapter or an A2A agent that delegates work to ax; no native ax adapter is implemented |
+The common interface to an agent is streaming A2A 1.0 over JSON-RPC, and courier
+rejects an agent whose card does not advertise streaming. A team can change or add
+a runtime and keep the same messaging configuration. What a thread can do still
+depends on what the backend exposes. See [backend design](spec.md#63-backends) for
+the contract.
 
-The intent is to let teams change or add agent runtimes while keeping the same
-messaging configuration model. Interaction capabilities still depend on what the
-backend exposes. See [backend design](spec.md#63-backends) for the current contract
-and ax integration boundaries.
+## Status
 
-## Current scope
+The project is in an internal-first pilot and has no tagged release. It runs as one
+replica with a SQLite store. Courier writes an audit log, exports Prometheus metrics
+and can export OpenTelemetry traces. See [observability](docs/observability.md).
 
-The implemented chat path includes Slack Socket Mode, mentions, thread replies,
-direct messages, streamed output, durable reply queues, restart recovery, and
-human questions. Courier also provides audit logging, Prometheus metrics, and
-optional OpenTelemetry tracing. See [observability](docs/observability.md).
-
-Slack is the implemented messaging adapter. Additional messaging platforms are
-planned through the chat adapter interface. Alert investigation is one application
-of the wiring model: automatic chat triggers and direct Alertmanager ingress are
-planned, rather than prerequisites for using Courier with an agent.
-
-The project is in an internal-first pilot. Start with the
-[sandbox deployment guide](hack/kind/sandbox/README.md) for the existing kagent and
-real-Slack setup. The [specification](spec.md) records the detailed behavior, and
-the [implementation plan](tasks/plans/agent-courier-pilot.md) tracks delivery.
+Start with the [sandbox deployment guide](hack/kind/sandbox/README.md), which runs
+courier against a real Slack workspace and a kagent agent in kind. The
+[specification](spec.md) records the detailed behaviour, and the
+[roadmap](ROADMAP.md) lists what comes next.
 
 ## Development
 

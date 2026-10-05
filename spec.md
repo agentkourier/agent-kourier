@@ -12,8 +12,9 @@
 agent-courier is a Kubernetes-native broker that sits between the outside world and
 A2A-speaking agents. It does two things:
 
-1. Receives alert webhooks (Alertmanager first) and turns them into agent
-   investigations.
+1. Turns alerts (Alertmanager first) into agent investigations. The first source is
+   the message Alertmanager already posts to Slack, read by a `botMessage` trigger
+   (8.2). The webhook receiver (8.1) follows.
 2. Lets people talk to agents from a messaging app (Slack first), including answering
    the agent's questions.
 
