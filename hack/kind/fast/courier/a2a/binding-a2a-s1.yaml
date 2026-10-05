@@ -1,0 +1,19 @@
+# S1 over the a2a dialect: a mention streams its reply into a new thread, from the stub agent reached as a plain pod (see
+# agentbackend-a2a.yaml). The same scenario as binding-s1.yaml, the same gated agent, on a channel of its own on the fake Slack
+# so that the two never share a thread; the identity token is the same Secret as fast-chat's, sent as a static bearer token.
+# The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentcourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-a2a-s1, namespace: courier}
+spec:
+  agent:
+    backendRef: {namespace: courier, name: stub-a2a-gated}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: courier-fast
+    tokenSecretRef: {name: courier-agent-token}
+  chat:
+    connectionRef: {namespace: courier, name: slack-fast}
+    channel: CA2AS1
+    output: live

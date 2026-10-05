@@ -37,6 +37,22 @@ const (
 	BotS15 = "B0S15ALERT1"
 )
 
+// The channels of the scenarios run again through the generic a2a dialect against the stub agent in its plain pod (the fast tier
+// only, hack/kind/fast/courier/a2a/binding-a2a-*.yaml): the same agents as the kagent-v1 channels above, each reached at its
+// exact agent URL as an agent in a plain Deployment would be. Only the text scenarios run, since the stub's questions are
+// kagent's structured ones. test/kindmanifests pins the dialect and the URL of each.
+const (
+	// ChannelA2AS1 is S1's over a2a: scenario-gated, live output.
+	ChannelA2AS1 = "CA2AS1"
+	// ChannelA2AS4 is S4's over a2a: scenario-gated, a queued reply.
+	ChannelA2AS4 = "CA2AS4"
+	// ChannelA2AS5 is S5's over a2a: test-agent, final output, for the crash-after-post fault.
+	ChannelA2AS5 = "CA2AS5"
+	// ChannelA2AMemory is the channel of the scenario that restarts the stub agent between two turns: scenario-memory, which
+	// says what its context has had, so that a context the agent lost shows.
+	ChannelA2AMemory = "CA2AM"
+)
+
 // The failover scenario's channels (S16, the fast tier on Postgres with two courier replicas only), one for each kind of Binding
 // its cases need.
 const (

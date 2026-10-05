@@ -76,7 +76,7 @@ spec:
         - name: e2e
           image: courier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*)$", "-test.timeout=20m"]
+          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*)$", "-test.timeout=20m"]
           # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
           # that has courier from one that does not yet.
           env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}]

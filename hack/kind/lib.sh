@@ -297,11 +297,13 @@ install_courier() {
   "${K[@]}" -n courier rollout restart deploy/courier >/dev/null
 }
 
-# deploy_courier AGENTBACKEND: courier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share. COURIER_VALUES
-# is the values file (the fast tier's by default) and the array COURIER_HELM_ARGS, if the caller set it, holds more helm arguments. The config
-# is the fast tier's Bindings and ChatConnection (fast/courier/config), with AGENTBACKEND, a file, in place of the fast tier's AgentBackend:
-# the Bindings name it `agents` in both tiers. The Secrets are fake constants made here and never committed, and the agent token (Secret
-# courier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
+# deploy_courier AGENTBACKEND [EXTRA_CONFIG_DIR]: courier's namespace, fake Slack Secret, config and chart, which the fast and full tiers share.
+# COURIER_VALUES is the values file (the fast tier's by default) and the array COURIER_HELM_ARGS, if the caller set it, holds more helm
+# arguments. The config is the fast tier's Bindings and ChatConnection (fast/courier/config), with AGENTBACKEND, a file, in place of the fast
+# tier's AgentBackend: the Bindings name it `agents` in both tiers. EXTRA_CONFIG_DIR, if given, adds the YAML files of a directory: the fast
+# tier passes the Bindings that reach the stub agent through the a2a dialect, which the full tier, with no stub, must not load.
+# The Secrets are fake constants made here and never committed, and the agent token (Secret courier-agent-token) is the caller's to
+# make: it differs by tier. Needs HERE, ROOT, K, H.
 deploy_courier() {
   local config
   refuse_while_sandbox_up
@@ -309,6 +311,9 @@ deploy_courier() {
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
   cp "${HERE}"/fast/courier/config/*.yaml "${config}"
   cp "$1" "${config}/agentbackend.yaml"
+  if [ -n "${2:-}" ]; then
+    cp "$2"/*.yaml "${config}"
+  fi
   "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null

@@ -26,7 +26,18 @@ const s5Answer = "The answer is 4."
 // disarms too. The channel's Binding is output final, because only a post through the outbox reaches the
 // hook: a live reply to a person is streamed, which carries the same tag but no hook.
 func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
-	s := newScenario(t)
+	s5(t, newScenario(t), ChannelS5)
+}
+
+// TestS5_AReplyPostedBeforeACrashIsNotPostedAgainOverTheA2ADialect: S5 again, through the generic a2a dialect to the stub agent in
+// its plain pod (see TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect). The restarted courier finds the posted reply by its tag
+// and goes on with the thread, the second message reaching the agent through the same dialect.
+func TestS5_AReplyPostedBeforeACrashIsNotPostedAgainOverTheA2ADialect(t *testing.T) {
+	s5(t, a2aScenario(t), ChannelA2AS5)
+}
+
+// s5 is S5's body, for the channel whose Binding is bound to test-agent with final output.
+func s5(t *testing.T, s *scenario, channel string) {
 	arm := func(ctx context.Context, fault string) error {
 		rollout, cancel := context.WithTimeout(ctx, 3*time.Minute) // a stuck rollout fails here, with its reason
 		defer cancel()
@@ -50,12 +61,12 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 	}
 
 	tok := s.stub.Gate("S5")
-	m := s.mention(ChannelS5, "US5", "answer once "+tok)
+	m := s.mention(channel, "US5", "answer once "+tok)
 	crashCtx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
 	crash, err := s.pods.WaitCrash(crashCtx, kube.CourierNamespace, courierPods, courierContainer, base)
 	if err != nil {
-		t.Fatalf("courier never crashed after posting: %v\nthe thread: %s", err, s.describeNow(m.TS))
+		t.Fatalf("courier never crashed after posting: %v\nthe thread: %s", err, s.describeNow(channel, m.TS))
 	}
 	if crash.ExitCode != 137 {
 		t.Fatalf("courier ended with exit code %d (%s); want 137, the fault's", crash.ExitCode, crash.Reason)
@@ -68,8 +79,8 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 	// What shows that the restarted courier is done with the turn it found unfinished: a second message in
 	// the thread is answered only after it, because a reply waits for the thread's active task. So when
 	// that answer is there, a duplicate of the first reply, if the restart made one, is there too.
-	again := s.reply(ChannelS5, m.TS, "US5", "and again "+tok)
-	th := s.thread(ChannelS5, m.TS, "the answer to the second message", func(th []fakeslack.MessageView) bool {
+	again := s.reply(channel, m.TS, "US5", "and again "+tok)
+	th := s.thread(channel, m.TS, "the answer to the second message", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) >= 2 && CompareTS(bots[len(bots)-1].TS, again.TS) > 0
 	})
@@ -79,12 +90,12 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 	}
 	// And nothing more comes after that.
 	err = Consistently(s.ctx, 3*time.Second, "the thread keeps its two tagged messages of the bot", func(ctx context.Context) (bool, error) {
-		th, err := s.slack.Thread(ctx, ChannelS5, m.TS)
+		th, err := s.slack.Thread(ctx, channel, m.TS)
 		ok, _ := checkOnce(th)
 		return ok, err
 	})
 	if err != nil {
-		t.Errorf("%v\nthe thread: %s", err, s.describeNow(m.TS))
+		t.Errorf("%v\nthe thread: %s", err, s.describeNow(channel, m.TS))
 	}
 }
 
@@ -106,10 +117,10 @@ func answeredOnceBeforeAndAfter(th []fakeslack.MessageView, again fakeslack.User
 	return ok, describe(th)
 }
 
-// describeNow is the thread at ts in S5's channel as text, for a failure message; a thread that cannot be
+// describeNow is the thread at ts in channel as text, for a failure message; a thread that cannot be
 // read says so.
-func (s *scenario) describeNow(ts string) string {
-	th, err := s.slack.Thread(context.WithoutCancel(s.ctx), ChannelS5, ts)
+func (s *scenario) describeNow(channel, ts string) string {
+	th, err := s.slack.Thread(context.WithoutCancel(s.ctx), channel, ts)
 	if err != nil {
 		return "(unreadable: " + err.Error() + ")"
 	}

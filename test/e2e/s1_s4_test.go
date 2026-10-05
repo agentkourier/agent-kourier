@@ -20,12 +20,21 @@ import (
 // the fake's own record of the stream: Streaming is true from startStream to stopStream, and the text is
 // what was appended. The streamed text is compared by its words, not whole, since the renderer converts the
 // agent's markdown.
-func TestS1_AReplyStreamsIntoANewThread(t *testing.T) {
-	s := newScenario(t)
-	gate := s.stub.Gate("S1")
-	m := s.mention(ChannelS1, "US1", "stream it gate:"+gate)
+func TestS1_AReplyStreamsIntoANewThread(t *testing.T) { s1(t, newScenario(t), ChannelS1) }
 
-	held := s.thread(ChannelS1, m.TS, "the first chunk, while the task is held", func(th []fakeslack.MessageView) bool {
+// TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect: S1 again, through the generic a2a dialect to the stub agent in its plain pod,
+// the way a demo agent in a Deployment is reached: the exact agent URL, a static bearer token, no kagent in between. The stub
+// answers 401 without a token, so the thread getting its reply shows the token was sent.
+func TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect(t *testing.T) {
+	s1(t, a2aScenario(t), ChannelA2AS1)
+}
+
+// s1 is S1's body, for the channel whose Binding is bound to scenario-gated with live output.
+func s1(t *testing.T, s *scenario, channel string) {
+	gate := s.stub.Gate("S1")
+	m := s.mention(channel, "US1", "stream it gate:"+gate)
+
+	held := s.thread(channel, m.TS, "the first chunk, while the task is held", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) == 1 && bots[0].Streaming && strings.Contains(bots[0].Text, "Holding on gate "+gate)
 	})
@@ -39,7 +48,7 @@ func TestS1_AReplyStreamsIntoANewThread(t *testing.T) {
 	if err := s.stub.Release(s.ctx, gate); err != nil {
 		t.Fatal(err)
 	}
-	final := s.thread(ChannelS1, m.TS, "the end of the reply", func(th []fakeslack.MessageView) bool {
+	final := s.thread(channel, m.TS, "the end of the reply", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) == 1 && finished(bots[0]) && strings.Contains(bots[0].Text, "Released.")
 	})
@@ -52,7 +61,7 @@ func TestS1_AReplyStreamsIntoANewThread(t *testing.T) {
 	}
 	// One post: the stream's end is not a second message, and nothing else is said.
 	err := Consistently(s.ctx, 3*time.Second, "the thread holds the one message of the bot", func(ctx context.Context) (bool, error) {
-		th, err := s.slack.Thread(ctx, ChannelS1, m.TS)
+		th, err := s.slack.Thread(ctx, channel, m.TS)
 		return len(BotMessages(th)) == 1, err
 	})
 	if err != nil {
@@ -64,17 +73,27 @@ func TestS1_AReplyStreamsIntoANewThread(t *testing.T) {
 // not answered at once. It is marked as waiting, with a reaction on it, and is answered after the task
 // ends, once, in order. The agent holds each task on a gate, so neither depends on timing.
 func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
-	s := newScenario(t)
+	s4(t, newScenario(t), ChannelS4)
+}
+
+// TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterItOverTheA2ADialect: S4 again, through the generic a2a dialect to the stub
+// agent in its plain pod (see TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect).
+func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterItOverTheA2ADialect(t *testing.T) {
+	s4(t, a2aScenario(t), ChannelA2AS4)
+}
+
+// s4 is S4's body, for the channel whose Binding is bound to scenario-gated with live output.
+func s4(t *testing.T, s *scenario, channel string) {
 	first, second := s.stub.Gate("S4a"), s.stub.Gate("S4b")
-	m := s.mention(ChannelS4, "US4A", "one gate:"+first)
-	s.thread(ChannelS4, m.TS, "the first task, held", func(th []fakeslack.MessageView) bool {
+	m := s.mention(channel, "US4A", "one gate:"+first)
+	s.thread(channel, m.TS, "the first task, held", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) == 1 && bots[0].Streaming && strings.Contains(bots[0].Text, "Holding on gate "+first)
 	})
 
-	r := s.reply(ChannelS4, m.TS, "US4B", "two gate:"+second)
+	r := s.reply(channel, m.TS, "US4B", "two gate:"+second)
 	err := Wait(s.ctx, stepTimeout, "the reaction that marks the reply as waiting", func(ctx context.Context) (bool, error) {
-		rs, err := s.slack.Reactions(ctx, ChannelS4, r.TS)
+		rs, err := s.slack.Reactions(ctx, channel, r.TS)
 		for _, x := range rs {
 			if x.Name == queuedReaction {
 				return true, err
@@ -86,7 +105,7 @@ func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = Consistently(s.ctx, 2*time.Second, "the queued reply is not answered while the first task is held", func(ctx context.Context) (bool, error) {
-		th, err := s.slack.Thread(ctx, ChannelS4, m.TS)
+		th, err := s.slack.Thread(ctx, channel, m.TS)
 		return len(BotMessages(th)) == 1, err
 	})
 	if err != nil {
@@ -96,7 +115,7 @@ func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
 	if err := s.stub.Release(s.ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	th := s.thread(ChannelS4, m.TS, "the second task to start after the first has ended", func(th []fakeslack.MessageView) bool {
+	th := s.thread(channel, m.TS, "the second task to start after the first has ended", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) == 2 && finished(bots[0]) && strings.Contains(bots[0].Text, "Released.") && strings.Contains(bots[1].Text, "Holding on gate "+second)
 	})
@@ -105,7 +124,7 @@ func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
 	}
 	// The reply no longer waits: its turn was sent, so the marker comes off, while the second task still runs.
 	err = Wait(s.ctx, stepTimeout, "the reaction that marked the reply as waiting to be taken off", func(ctx context.Context) (bool, error) {
-		rs, err := s.slack.Reactions(ctx, ChannelS4, r.TS)
+		rs, err := s.slack.Reactions(ctx, channel, r.TS)
 		for _, x := range rs {
 			if x.Name == queuedReaction {
 				return false, err
@@ -119,7 +138,7 @@ func TestS4_AReplySentWhileATaskRunsIsQueuedAndAnsweredAfterIt(t *testing.T) {
 	if err := s.stub.Release(s.ctx, second); err != nil {
 		t.Fatal(err)
 	}
-	s.thread(ChannelS4, m.TS, "the second reply to end", func(th []fakeslack.MessageView) bool {
+	s.thread(channel, m.TS, "the second reply to end", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) == 2 && finished(bots[1]) && strings.Contains(bots[1].Text, "Released.")
 	})

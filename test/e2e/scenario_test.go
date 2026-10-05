@@ -56,6 +56,18 @@ func newScenario(t *testing.T) *scenario {
 	return s
 }
 
+// a2aScenario is newScenario for the scenarios run through the generic a2a dialect against the stub agent in its plain pod. Their
+// Bindings are the fast tier's (hack/kind/fast/courier/a2a/binding-a2a-*.yaml): the full tier has no stub agent, and the AX tier's
+// own Bindings are a2a already, on the channels of the kagent scenarios, through AX's router.
+func a2aScenario(t *testing.T) *scenario {
+	t.Helper()
+	s := newScenario(t)
+	if s.env.Tier != "fast" {
+		t.Skip("the a2a Bindings of the plain pod are the fast tier's: they reach the stub agent, which the " + s.env.Tier + " tier does not run")
+	}
+	return s
+}
+
 // replicated says whether courier runs more than one pod now: with two replicas on Postgres one leads and holds the Socket Mode
 // connection, and the standby does nothing, so what only the leader has (its counters, its connection) is looked for there.
 func (s *scenario) replicated(ctx context.Context) (bool, error) {
