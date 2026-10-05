@@ -12,7 +12,7 @@ switch (courier stops, the volume and the config stay); removing a Binding from 
 helm install courier ./charts/courier -n courier-system --create-namespace -f my-values.yaml
 ```
 
-The chart needs `image.repository` (there is no default registry until H4-8 pushes images) and, in practice, a
+From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a
 ChatConnection. Check any values file with `helm lint --strict -f my-values.yaml charts/courier` and
 `helm template` before installing. `ci/` holds the values the tests render: `minimal`, `sandbox` (the sandbox tier's courier
 with the token-refresh CronJob), `full` (everything switched on) and `fast` (the fast kind tier's courier).
@@ -135,5 +135,4 @@ set `COURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping.
 - **H4-3** (store selection): `store` values for SQLite or Postgres, the DSN from a Secret by reference. Until it lands the
   chart is SQLite only.
 - **H4-5** (leader election and fencing): replicas above 1, a Role for the Lease, the standby Ready but idle, a meaningful PodDisruptionBudget.
-- **H4-8** (release pipeline): the chart's version and appVersion, the image registry and a default for `image.repository`.
 - The Alertmanager receiver (WP-47) adds its port, a Service and an Ingress or route when it is served.

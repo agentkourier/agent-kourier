@@ -43,20 +43,11 @@ func TestImageHasNeitherHook(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(user)) != "65532:65532" {
 		t.Errorf("%s runs as %q, %v; want the non-root 65532:65532", image, user, err)
 	}
-	prod := imageBinary(t, image)
-	for what, present := range imageTraces(t, prod) {
-		if present {
-			t.Errorf("%s: %s is in the production image", image, what)
-		}
-	}
+	assertTraces(t, image, imageBinary(t, image), false)
 	// The control: the testhooks image (make image-testhooks) must show every trace, or the checks
 	// above prove nothing, as they would not if cmd/courier stopped linking the hooks at all.
 	const testImage = "courier-e2e/courier-testhooks:dev"
-	for what, present := range imageTraces(t, imageBinary(t, testImage)) {
-		if !present {
-			t.Errorf("%s: %s is missing, so the production image's lack of it proves nothing (make image-testhooks)", testImage, what)
-		}
-	}
+	assertTraces(t, testImage, imageBinary(t, testImage), true)
 }
 
 // imageTraces is traces plus the warning a testhooks build logs at start.

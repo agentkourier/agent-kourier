@@ -35,7 +35,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{/* The courier image: a digest wins over a tag, and the tag defaults to the chart's appVersion. */}}
 {{- define "courier.image" -}}
-{{- $repository := required "image.repository is required (the registry is chosen by the release pipeline, H4-8)" .Values.image.repository -}}
+{{- $repository := required "image.repository is required (a released chart has it; from source, set it)" .Values.image.repository -}}
 {{- if .Values.image.digest -}}
 {{- printf "%s@%s" $repository .Values.image.digest -}}
 {{- else -}}

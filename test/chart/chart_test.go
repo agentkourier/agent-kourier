@@ -5,8 +5,8 @@
 //
 // The tests need the helm binary, which the kind scripts need too (they find it on PATH, as these do). Without it they skip
 // with a message that says so, so `make test` stays runnable on a machine that has only Go; set COURIER_REQUIRE_HELM=1 and a
-// missing helm fails them instead, so a pipeline cannot pass by skipping. There is no pipeline yet: the release and CI work
-// (H4-8) is to set it. Refresh the golden files after a
+// missing helm fails them instead, so a pipeline cannot pass by skipping: .github/workflows/ci.yml sets it. Refresh the
+// golden files after a
 // deliberate chart change with: go test ./test/chart -update
 package chart_test
 

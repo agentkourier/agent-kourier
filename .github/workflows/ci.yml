@@ -1,0 +1,45 @@
+# Pull requests and pushes to main: the checks `make` runs locally, nothing else. The kind tiers (make
+# e2e-fast and the others) are not here; RELEASING.md says what they would need.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Go version is go.mod's; setup-go caches the module cache and the build cache, keyed on go.sum.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The chart tests (test/chart) render with helm and skip without it, so CI installs it and
+      # COURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          # The version test/chart passes with; release.yml pins the same one.
+          version: v4.3.0
+      - name: fmt leaves no diff
+        run: |
+          make fmt
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+      - run: make lint
+      - run: make test
+        env:
+          COURIER_REQUIRE_HELM: "1"
+      - run: make build

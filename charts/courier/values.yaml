@@ -7,10 +7,11 @@
 replicaCount: 1
 
 image:
-  # Required; there is no default registry until the release pipeline (H4-8) pushes one. Locally: courier (the image
-  # `make image` builds is courier:dev).
+  # Required. A released chart has it stamped (ghcr.io/agentkourier/agent-courier), with digest; in the source tree it
+  # is empty. Locally: courier (the image `make image` builds is courier:dev).
   repository: ""
-  # A tag, which defaults to the chart's appVersion. Ignored when digest is set.
+  # A tag, which defaults to the chart's appVersion. Ignored when digest is set: a released chart sets the digest, so to
+  # run another tag with it, set image.digest="" as well (or set image.digest to the other release's digest).
   tag: ""
   # Pin production to a digest (sha256:...), which wins over tag.
   digest: ""
