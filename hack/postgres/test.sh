@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run the Postgres store's tests, the store conformance suite among them, against a throwaway Postgres
-# container (make test-postgres). Needs Docker. Extra arguments go to go test, e.g. -run TestConformance/Audit.
+# Run the Postgres store's tests, the store conformance suite among them, and the broker's test that Run serves on
+# Postgres, against a throwaway Postgres container (make test-postgres). Needs Docker. Extra arguments go to go test of
+# the store's package, e.g. -run TestConformance/Audit.
 #
 # The container listens on a random port of the loopback interface only. Its password is made here, for this
 # run, and is never written anywhere that outlives the run: it goes to the container in a mode-0600 env
@@ -71,6 +72,10 @@ fi
 
 export COURIER_POSTGRES_DSN="postgres://courier:${password}@127.0.0.1:${port}/courier?sslmode=disable"
 cd "$root"
+# The broker's test: Run reads the DSN from a Secret and serves on the store it opens.
+go test -race -count=1 -timeout 5m ./internal/broker/ -run 'TestRunServesOnPostgres' &
+child=$!
+wait "$child"
 go test -race -count=1 -timeout 20m ./internal/store/postgres/ "$@" &
 child=$!
 wait "$child"

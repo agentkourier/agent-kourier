@@ -153,7 +153,7 @@ func values(name string) string { return filepath.Join(chartDir, "ci", name+"-va
 func TestLint(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, name := range []string{"minimal", "fast", "ax", "sandbox", "full"} {
+	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if out, err := helm(t.Context(), t, "lint", "--strict", chartDir, "-f", values(name)); err != nil {
@@ -168,6 +168,8 @@ func TestLint(t *testing.T) {
 var goldenCases = []struct{ name, release, namespace string }{
 	{"minimal", "courier", "courier"},
 	{"fast", "courier", "courier"},
+	{"fast-postgres", "courier", "courier"},
+	{"postgres", "courier", "courier"},
 	{"ax", "courier", "courier"},
 	{"sandbox", "courier-sandbox", "courier"},
 	{"full", "courier", "courier-system"},
@@ -236,6 +238,19 @@ func TestRefusals(t *testing.T) {
 		want string
 	}{
 		{"two replicas", []string{"--set", image, "--set", "replicaCount=2"}, "replicaCount > 1 is not supported"},
+		{"two replicas on Postgres", []string{"--set", image, "--set", "replicaCount=2,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn"}, "leader election"},
+		{"Postgres without a DSN Secret", []string{"--set", image, "--set", "store.type=postgres"}, "store.postgres.dsnSecret.name and store.postgres.dsnSecret.key"},
+		{"Postgres with a Secret and no key", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg"}, "store.postgres.dsnSecret.name and store.postgres.dsnSecret.key"},
+		{"a DSN Secret with SQLite", []string{"--set", image, "--set", "store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn"}, "store.postgres.dsnSecret is for store.type postgres"},
+		{"a DSN Secret with SQLite, named", []string{"--set", image, "--set", "store.type=sqlite,store.postgres.dsnSecret.name=pg"}, "store.postgres.dsnSecret is for store.type postgres"},
+		{"Postgres timeouts with SQLite", []string{"--set", image, "--set", "store.postgres.timeouts=role"}, "store.postgres.timeouts is for store.type postgres"},
+		{"a claim with Postgres", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,persistence.existingClaim=mine"}, "persistence.existingClaim is for store.type sqlite"},
+		{"a NetworkPolicy with Postgres and no database", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,networkPolicy.enabled=true,networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"}, "networkPolicy.postgres.to"},
+		{"an unknown store", []string{"--set", image, "--set", "store.type=mysql"}, "store.type"},
+		{"unknown Postgres timeouts", []string{"--set", image, "--set", "store.type=postgres,store.postgres.timeouts=never"}, "store.postgres.timeouts"},
+		{"a Secret name with a slash", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=a/b,store.postgres.dsnSecret.key=dsn"}, "store.postgres.dsnSecret.name"},
+		{"a DSN with a password in the values", []string{"--set", image, "--set-json", `extraEnv=[{"name":"X","value":"postgres://courier:hunter2@db:5432/courier"}]`}, "looks like a Postgres DSN with a password"},
+		{"a postgresql:// URL with a percent-encoded password", []string{"--set", image, "--set-json", `config.chatConnections={"c":{"spec":{"note":"postgresql://u:p%40ss@db/x"}}}`}, "looks like a Postgres DSN with a password"},
 		{"no image", nil, "image.repository is required"},
 		{"a config two ways", []string{"--set", image, "--set", "config.existingConfigMap=mine", "-f", values("minimal")}, "set one"},
 		{"a monitor without its Service", []string{"--set", image, "--set", "serviceMonitor.enabled=true"}, "serviceMonitor.enabled needs service.enabled"},
@@ -281,6 +296,9 @@ func TestLookalikeNamesRender(t *testing.T) {
 		{"a Secret named taxapp-slack", `config.chatConnections={"c":{"spec":{"platform":"slack","tokenSecretRef":{"name":"taxapp-slack"}}}}`},
 		{"a namespace named linuxapp-prod", `config.bindings={"b":{"namespace":"linuxapp-prod","spec":{"note":"xoxbox-prod"}}}`},
 		{"a header named X-Monkey-Id", `config.agentBackends={"b":{"spec":{"dialect":"a2a","url":"http://x","headers":[{"name":"X-Monkey-Id","value":"m1"}]}}}`},
+		{"a Postgres URL beside an email address", `extraEnv=[{"name":"X","value":"postgres://pg.db.svc:5432/app"},{"name":"Y","value":"oncall@example.com"}]`},
+		{"a Postgres URL, then a field with a colon and an at sign", `extraEnv=[{"name":"X","value":"postgres://pg.db.svc"},{"name":"Y","value":"a:b@c"}]`},
+		{"a Postgres URL with no password", `extraEnv=[{"name":"X","value":"postgres://db.example.test:5432/courier"}]`},
 		{"the Bedrock egress header", `config.agentBackends={"b":{"spec":{"dialect":"a2a","url":"http://x","headers":[{"name":"X-Courier-Egress-Host","value":"https://bedrock-runtime.us-east-1.amazonaws.com"}]}}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -367,6 +385,85 @@ func TestDatabaseFileIsInTheVolume(t *testing.T) {
 	if got := dbPath("--set", "persistence.dbFile=other.db"); got != "/data/other.db" {
 		t.Errorf("COURIER_DB_PATH %q; want /data/other.db with persistence.dbFile set", got)
 	}
+}
+
+// TestPostgresStore: with store.type postgres the pod is told where its DSN is and holds none, mounts no volume, and has no
+// claim; and the Role that lets courier read the DSN's Secret (list and watch, like the rest) is in the release namespace
+// whatever the config's namespaces are. With SQLite none of that changes but the pod says which store it runs.
+func TestPostgresStore(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	bindingInSRE := `config.bindings={"b":{"namespace":"sre","spec":{"identity":{"tokenSecretRef":{"name":"t"}}}}}`
+	postgres := []string{"--set", "store.type=postgres,store.postgres.dsnSecret.name=courier-pg,store.postgres.dsnSecret.key=dsn", "--set-json", bindingInSRE}
+	deployment := func(args ...string) (appsv1.Deployment, []object, map[string]string) {
+		objs := mustRender(t, "courier", "courier-system", append([]string{"--set", "image.repository=courier"}, args...)...)
+		var d appsv1.Deployment
+		find(t, objs, "Deployment", "courier", &d)
+		env := map[string]string{}
+		for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+			env[e.Name] = e.Value
+			if e.ValueFrom != nil {
+				t.Errorf("env %s comes from a source: the DSN is read through the API, and nothing is mounted or injected", e.Name)
+			}
+		}
+		return d, objs, env
+	}
+
+	d, objs, env := deployment(postgres...)
+	pod := d.Spec.Template.Spec
+	if env["COURIER_STORE"] != "postgres" || env["COURIER_POSTGRES_DSN_SECRET"] != "courier-system/courier-pg/dsn" || env["COURIER_POSTGRES_TIMEOUTS"] != "courier" {
+		t.Errorf("env %v; want the store, the DSN's Secret in the release namespace (namespace/name/key) and courier's own timeouts", env)
+	}
+	if _, has := env["COURIER_DB_PATH"]; has {
+		t.Errorf("COURIER_DB_PATH %q with Postgres", env["COURIER_DB_PATH"])
+	}
+	for _, v := range pod.Volumes {
+		if v.Name == "data" || v.PersistentVolumeClaim != nil {
+			t.Errorf("volume %+v with Postgres; the state is not on a volume", v)
+		}
+	}
+	for _, m := range pod.Containers[0].VolumeMounts {
+		if m.Name == "data" {
+			t.Errorf("mount %+v with Postgres", m)
+		}
+	}
+	if slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "PersistentVolumeClaim" }) {
+		t.Errorf("a PersistentVolumeClaim with Postgres: %v", kinds(objs))
+	}
+	if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("strategy %s; want Recreate: one active courier until leader election lets two run", d.Spec.Strategy.Type)
+	}
+	roles := map[string]rbacv1.Role{}
+	for _, o := range objs {
+		if o.kind() == "Role" && o.name() == "courier-secrets" {
+			var r rbacv1.Role
+			find(t, []object{o}, "Role", "courier-secrets", &r)
+			roles[r.Namespace] = r
+		}
+	}
+	if len(roles) != 2 || len(roles["sre"].Rules) != 1 || len(roles["courier-system"].Rules) != 1 {
+		t.Fatalf("Secret Roles in %v; want sre (the Binding's Secret) and courier-system (the DSN's)", slices.Sorted(maps.Keys(roles)))
+	}
+	if r := roles["courier-system"].Rules[0]; !slices.Equal(r.Resources, []string{"secrets"}) || !slices.Equal(r.Verbs, []string{"list", "watch"}) {
+		t.Errorf("the DSN Secret's Role rules %+v; want list and watch on secrets, as for every Secret courier reads", r)
+	}
+
+	if _, _, env := deployment(append(postgres, "--set", "store.postgres.timeouts=role")...); env["COURIER_POSTGRES_TIMEOUTS"] != "role" {
+		t.Errorf("COURIER_POSTGRES_TIMEOUTS %q with store.postgres.timeouts=role", env["COURIER_POSTGRES_TIMEOUTS"])
+	}
+	if _, objs, _ := deployment(append(postgres, "--set", "rbac.create=false")...); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" }) {
+		t.Errorf("rbac.create=false still rendered a Role with Postgres: %v", kinds(objs))
+	}
+
+	// SQLite: the same pod as before, which now says so, and no Role in a namespace the config does not name.
+	d, objs, env = deployment("--set-json", bindingInSRE)
+	if env["COURIER_STORE"] != "sqlite" || env["COURIER_DB_PATH"] != "/data/courier.db" || env["COURIER_POSTGRES_DSN_SECRET"] != "" {
+		t.Errorf("env %v with SQLite; want COURIER_STORE sqlite, the database file and no DSN Secret", env)
+	}
+	if !slices.Contains(kinds(objs), "PersistentVolumeClaim/courier-system/courier-data") || slices.Contains(kinds(objs), "Role/courier-system/courier-secrets") {
+		t.Errorf("objects %v; want the claim, and a Role in sre only", kinds(objs))
+	}
+	_ = d
 }
 
 func TestPodLabelsCannotMoveTheSelector(t *testing.T) {
@@ -623,6 +720,47 @@ func TestNetworkPolicyFencesEgress(t *testing.T) {
 	find(t, mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "networkPolicy.enabled=true", "--set", "networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"), "NetworkPolicy", "courier", &open)
 	if len(open.Spec.Ingress) != 0 {
 		t.Errorf("ingress %v with no metricsFrom; want none", open.Spec.Ingress)
+	}
+}
+
+// With Postgres the policy has an egress rule of its own for the database, on its port, and none without.
+func TestNetworkPolicyAllowsThePostgresDatabase(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	ports := func(args ...string) []int {
+		var np struct {
+			Spec struct {
+				Egress []struct {
+					To    []map[string]any `json:"to"`
+					Ports []struct {
+						Port int `json:"port"`
+					} `json:"ports"`
+				} `json:"egress"`
+			} `json:"spec"`
+		}
+		find(t, mustRender(t, "courier", "courier", append([]string{"-f", values("postgres")}, args...)...), "NetworkPolicy", "courier", &np)
+		var out []int
+		for _, e := range np.Spec.Egress {
+			if len(e.To) == 1 && e.To[0]["podSelector"] != nil && e.To[0]["namespaceSelector"] != nil && len(e.Ports) == 1 && e.Ports[0].Port != 53 {
+				out = append(out, e.Ports[0].Port)
+			}
+		}
+		return out
+	}
+	if got := ports(); !slices.Equal(got, []int{5432}) {
+		t.Errorf("database egress ports %v; want 5432", got)
+	}
+	if got := ports("--set", "networkPolicy.postgres.port=6432"); !slices.Equal(got, []int{6432}) {
+		t.Errorf("database egress ports %v with port 6432; want 6432", got)
+	}
+	var np struct {
+		Spec struct {
+			Egress []any `json:"egress"`
+		} `json:"spec"`
+	}
+	find(t, mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "networkPolicy.enabled=true,networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"), "NetworkPolicy", "courier", &np)
+	if len(np.Spec.Egress) != 3 {
+		t.Errorf("%d egress rules with SQLite; want 3 (DNS, the API server, Slack): no rule for a database", len(np.Spec.Egress))
 	}
 }
 

@@ -1,0 +1,269 @@
+---
+apiVersion: v1
+data:
+  agentbackend-agents.yaml: |
+    apiVersion: agentcourier.dev/v1alpha1
+    kind: AgentBackend
+    metadata:
+      name: agents
+      namespace: courier
+    spec:
+      dialect: kagent-v1
+      url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
+  binding-sre.yaml: |
+    apiVersion: agentcourier.dev/v1alpha1
+    kind: Binding
+    metadata:
+      name: sre
+      namespace: courier
+    spec:
+      agent:
+        backendRef:
+          name: agents
+        name: k8s-agent
+        namespace: kagent
+      chat:
+        channel: C0123456789
+        connectionRef:
+          name: slack-main
+        output: live
+      identity:
+        tokenSecretRef:
+          name: courier-agent-token
+        userId: courier-sre
+  chatconnection-slack-main.yaml: |
+    apiVersion: agentcourier.dev/v1alpha1
+    kind: ChatConnection
+    metadata:
+      name: slack-main
+      namespace: courier
+    spec:
+      credentialsSecretRef:
+        name: slack-main
+      mode: socket
+      platform: slack
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-config
+  namespace: courier
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: courier
+      app.kubernetes.io/name: courier
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        checksum/config: 705d678521ffe741bb9971610d7f9132c0e71a1e8bbd54f2fa49b339970abd61
+      labels:
+        app.kubernetes.io/instance: courier
+        app.kubernetes.io/name: courier
+    spec:
+      containers:
+      - env:
+        - name: COURIER_CONFIG_DIR
+          value: /etc/courier
+        - name: COURIER_STORE
+          value: postgres
+        - name: COURIER_POSTGRES_DSN_SECRET
+          value: courier/courier-pg/dsn
+        - name: COURIER_POSTGRES_TIMEOUTS
+          value: courier
+        - name: COURIER_LISTEN
+          value: :8080
+        - name: COURIER_LOG_LEVEL
+          value: info
+        - name: COURIER_KLOG_V
+          value: "0"
+        image: registry.example.test/courier:v0.1.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+        name: courier
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 40
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 2
+        volumeMounts:
+        - mountPath: /etc/courier
+          name: config
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: courier
+      terminationGracePeriodSeconds: 40
+      volumes:
+      - configMap:
+          name: courier-config
+        name: config
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 6443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.0.0.1/32
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: db
+      podSelector:
+        matchLabels:
+          app: postgres
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: courier
+      app.kubernetes.io/name: courier
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-secrets
+  namespace: courier
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier-secrets
+  namespace: courier
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: courier-secrets
+subjects:
+- kind: ServiceAccount
+  name: courier
+  namespace: courier
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: courier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: courier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: courier-0.1.0
+  name: courier
+  namespace: courier

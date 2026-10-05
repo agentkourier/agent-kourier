@@ -169,3 +169,30 @@ spec:
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// A Secret that no resource of the config refers to, such as the Postgres DSN's, is read through the same caches once its
+// namespace is asked for; otherwise the namespace is not watched.
+func TestBootstrapWatchesTheExtraNamespaces(t *testing.T) {
+	client := cluster()
+	if _, err := client.CoreV1().Secrets("courier").Create(t.Context(), secretOf("courier", "courier-pg", "dsn"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, extra := range map[string][]string{"asked": {"courier", "sre"}, "not asked": nil} {
+		t.Run(name, func(t *testing.T) {
+			o := options(configDir(t))
+			o.ExtraNamespaces = extra
+			c, err := Bootstrap(t.Context(), client, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(c.Stop)
+			_, err = c.Secrets.Value(t.Context(), "courier", "courier-pg", "dsn")
+			if (extra != nil) != (err == nil) || (extra == nil && !errors.Is(err, k8ssecrets.ErrNamespaceNotWatched)) {
+				t.Errorf("Value of the extra namespace's Secret = %v, with extra namespaces %v", err, extra)
+			}
+			if extra != nil && len(c.namespaces) != 3 { // courier-system and sre from the config, courier; sre once
+				t.Errorf("namespaces = %v, want the config's two and the extra one, each once", c.namespaces)
+			}
+		})
+	}
+}

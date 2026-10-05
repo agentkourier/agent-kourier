@@ -71,3 +71,35 @@ func TestInClusterClientRefusesOutsideACluster(t *testing.T) {
 		t.Errorf("InClusterClient = %v, %v; want no client and ErrWiring wrapping ErrNotInCluster", client, err)
 	}
 }
+
+func TestValidateTheStore(t *testing.T) {
+	pg := SecretKey{Namespace: "courier", Name: "courier-pg", Key: "dsn"}
+	for name, tc := range map[string]struct {
+		mutate func(*RunConfig)
+		want   string // "" is accepted; otherwise a piece of the wiring error
+	}{
+		"sqlite is the default":     {func(*RunConfig) {}, ""},
+		"sqlite, named":             {func(c *RunConfig) { c.Store.Kind = StoreSQLite }, ""},
+		"sqlite needs its path":     {func(c *RunConfig) { c.DBPath = "" }, "DBPath"},
+		"postgres with its Secret":  {func(c *RunConfig) { c.DBPath = ""; c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: pg} }, ""},
+		"postgres needs the Secret": {func(c *RunConfig) { c.Store.Kind = StorePostgres }, "Secret that holds its DSN"},
+		"postgres needs the whole key": {func(c *RunConfig) {
+			c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: SecretKey{Namespace: "courier", Name: "x"}}
+		}, "Secret that holds its DSN"},
+		"sqlite refuses a DSN Secret":  {func(c *RunConfig) { c.Store.PostgresDSN = pg }, "a Postgres setting"},
+		"sqlite refuses role timeouts": {func(c *RunConfig) { c.Store.PostgresRoleTimeouts = true }, "a Postgres setting"},
+		"an unknown store is refused":  {func(c *RunConfig) { c.Store.Kind = "mysql" }, `unknown store "mysql"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := valid(t)
+			tc.mutate(&c)
+			err := c.validate()
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("validate = %v, want nil", err)
+			case tc.want != "" && (!errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("validate = %v, want an ErrWiring saying %q", err, tc.want)
+			}
+		})
+	}
+}

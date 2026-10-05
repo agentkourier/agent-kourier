@@ -16,7 +16,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
 // errSessionNotReady is what a late-bound session answers until the session manager exists. A pause
@@ -53,7 +52,7 @@ func (l *lateSession) Cancel(ctx context.Context, key store.ConversationKey, id 
 
 // interactionDeps is what the interactions are built from: the parts of Run they share.
 type interactionDeps struct {
-	st       *sqlite.Store
+	st       store.Store
 	ob       *outbox.Outbox
 	platform builtPlatform // the chat platform: prompts, edits, who may answer, and what a person is told go through it
 	auditor  *audit.Writer

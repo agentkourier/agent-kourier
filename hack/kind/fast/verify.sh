@@ -8,7 +8,8 @@
 #     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
 #     hostNetwork; the kind node publishes only the API server, on loopback;
 #  2. courier: one pod, ready (the Deployment's rollout has finished and the API server can reach
-#     /healthz and /readyz on the pod, through its proxy);
+#     /healthz and /readyz on the pod, through its proxy), and, on the Postgres store (E2E_STORE=postgres), a Postgres
+#     that is published nowhere;
 #  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows courier
 #     connected over Socket Mode (at least one connection, waited for); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
@@ -51,6 +52,14 @@ for path in healthz readyz; do
   "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/${path}" >/dev/null || courier_fail "courier's /${path} does not answer 200"
   echo "ok: courier's /${path} answers 200"
 done
+
+# The store courier runs on (E2E_STORE of up-fast.sh), as the chart set it. Postgres is a credentialed database that nothing outside the
+# cluster may reach: like the doubles' control surfaces, it is published nowhere.
+store=$("${K[@]}" -n courier get deploy/courier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="COURIER_STORE")].value}')
+echo "ok: courier runs on the ${store:-unknown} store"
+if [ "${store}" = postgres ]; then
+  assert_app_unpublished e2e postgres
+fi
 
 echo "== in the cluster: each component answers"
 # --rm removes the probe when kubectl attaches and finishes; the trap covers a kubectl that fails

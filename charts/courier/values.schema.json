@@ -4,7 +4,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "replicaCount": {"type": "integer", "minimum": 0, "description": "0 (the kill switch) or 1; more fails the render until H4-3 and H4-5"},
+    "replicaCount": {"type": "integer", "minimum": 0, "description": "0 (the kill switch) or 1; more fails the render until H4-5 (leader election) lands, and then needs store.type postgres"},
     "image": {
       "type": "object",
       "additionalProperties": false,
@@ -40,6 +40,28 @@
         "chatConnections": {"$ref": "#/definitions/resources"},
         "bindings": {"$ref": "#/definitions/resources"},
         "rollOnChange": {"type": "boolean"}
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["sqlite", "postgres"]},
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dsnSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {"type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$", "maxLength": 253},
+                "key": {"type": "string", "pattern": "^[-._a-zA-Z0-9]*$", "maxLength": 253}
+              }
+            },
+            "timeouts": {"enum": ["courier", "role"]}
+          }
+        }
       }
     },
     "persistence": {
@@ -100,6 +122,11 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {"cidrs": {"type": "array", "items": {"type": "string"}}, "except": {"type": "array", "items": {"type": "string"}}}
+        },
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"to": {"type": "array"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}
         },
         "metricsFrom": {"type": "array"},
         "extraEgress": {"type": "array"}

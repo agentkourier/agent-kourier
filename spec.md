@@ -945,6 +945,12 @@ this with an outbox:
 
 - **SQLite** (default): single replica, PersistentVolume, WAL mode.
 - **Postgres**: required for more than one replica.
+- **Choosing.** The store is courier's own setting, not a resource: it is process-wide, and a reload cannot swap a database
+  under a running broker. `COURIER_STORE` is `sqlite` (default; `COURIER_DB_PATH`) or `postgres`, and with Postgres
+  `COURIER_POSTGRES_DSN_SECRET` is `namespace/name/key` of the Secret that holds the DSN, read through the same Secret caches as
+  every other Secret (D15, section 10). The DSN is never logged, shown in an error, `/readyz` or a metric; an unreadable or empty
+  Secret fails the start. Courier cannot see its replica count, so R7 is enforced by the Helm chart, which refuses more than one
+  replica with SQLite and, until leader election lands (D37), with Postgres too.
 
 ## 10. Security
 

@@ -8,7 +8,8 @@ metadata:
     {{- include "courier.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # The SQLite volume is never mounted by two pods: the old one is gone before the new one starts.
+  # The SQLite volume is never mounted by two pods: the old one is gone before the new one starts. With Postgres there is one
+  # pod too, until leader election (H4-5) lets two run: a rolling update would run two active couriers.
   strategy: {type: Recreate}
   selector:
     matchLabels:
@@ -48,7 +49,14 @@ spec:
           # cmd/courier takes no arguments: it is configured by this environment.
           env:
             - {name: COURIER_CONFIG_DIR, value: /etc/courier}
+            - {name: COURIER_STORE, value: {{ .Values.store.type | quote }}}
+            {{- if include "courier.sqlite" . }}
             - {name: COURIER_DB_PATH, value: {{ printf "/data/%s" .Values.persistence.dbFile | quote }}}
+            {{- else }}
+            {{- /* A reference to the Secret, which courier reads through the API: the DSN is never in the pod spec. */}}
+            - {name: COURIER_POSTGRES_DSN_SECRET, value: {{ printf "%s/%s/%s" .Release.Namespace .Values.store.postgres.dsnSecret.name .Values.store.postgres.dsnSecret.key | quote }}}
+            - {name: COURIER_POSTGRES_TIMEOUTS, value: {{ .Values.store.postgres.timeouts | quote }}}
+            {{- end }}
             - {name: COURIER_LISTEN, value: {{ printf ":%d" (int .Values.listen.port) | quote }}}
             - {name: COURIER_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
             - {name: COURIER_KLOG_V, value: {{ .Values.klogVerbosity | quote }}}
@@ -72,7 +80,9 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
             - {name: config, mountPath: /etc/courier, readOnly: true}
+            {{- if include "courier.sqlite" . }}
             - {name: data, mountPath: /data}
+            {{- end }}
             - {name: tmp, mountPath: /tmp}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -89,7 +99,9 @@ spec:
       volumes:
         - name: config
           configMap: {name: {{ include "courier.configMapName" . }}}
+        {{- if include "courier.sqlite" . }}
         - name: data
           persistentVolumeClaim: {claimName: {{ include "courier.pvcName" . }}}
+        {{- end }}
         - name: tmp
           emptyDir: {}

@@ -48,6 +48,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default (printf "%s-config" (include "courier.fullname" .)) .Values.config.existingConfigMap -}}
 {{- end -}}
 
+{{/* True (non-empty) when courier keeps its state in SQLite on a volume. */}}
+{{- define "courier.sqlite" -}}
+{{- if ne .Values.store.type "postgres" -}}true{{- end -}}
+{{- end -}}
+
 {{- define "courier.pvcName" -}}
 {{- default (printf "%s-data" (include "courier.fullname" .)) .Values.persistence.existingClaim -}}
 {{- end -}}
@@ -57,7 +62,28 @@ Checks that no values file can get past. Included by the Deployment, which every
 */}}
 {{- define "courier.validate" -}}
 {{- if gt (int .Values.replicaCount) 1 -}}
-{{- fail "replicaCount > 1 is not supported: courier keeps its state in SQLite on a ReadWriteOnce volume, which one pod may use, and its session state is in memory. Two replicas wait for Postgres (H4-3) and leader election with fencing (H4-5). replicaCount 0 is the kill switch." -}}
+{{- fail "replicaCount > 1 is not supported yet: more than one replica needs store.type postgres (SQLite is one file on a ReadWriteOnce volume, which one pod may use) AND leader election with fencing (H4-5), which has not landed: courier's session state is in memory, and two replicas would both work. replicaCount 0 is the kill switch." -}}
+{{- end -}}
+{{- with .Values.store -}}
+{{- if eq .type "postgres" -}}
+{{- if not (and .postgres.dsnSecret.name .postgres.dsnSecret.key) -}}
+{{- fail "store.type postgres needs store.postgres.dsnSecret.name and store.postgres.dsnSecret.key: the Secret, in the release namespace, that holds the DSN" -}}
+{{- end -}}
+{{- if $.Values.persistence.existingClaim -}}
+{{- fail "persistence.existingClaim is for store.type sqlite: with postgres no volume is mounted" -}}
+{{- end -}}
+{{- else -}}
+{{- if or .postgres.dsnSecret.name .postgres.dsnSecret.key -}}
+{{- fail "store.postgres.dsnSecret is for store.type postgres: with sqlite it would be ignored, and the state would be kept on the volume" -}}
+{{- end -}}
+{{- if ne .postgres.timeouts "courier" -}}
+{{- fail "store.postgres.timeouts is for store.type postgres: with sqlite it would be ignored" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* A DSN with a password: postgres://user:pass@host. A reference to a Secret never looks like this. */ -}}
+{{- if regexMatch `(?i)postgres(ql)?://[^/\s:@"]*:[^/\s@"]+@` (toJson .Values) -}}
+{{- fail "the values hold what looks like a Postgres DSN with a password: no DSN belongs in a values file. Put it in a Secret and name the Secret in store.postgres.dsnSecret" -}}
 {{- end -}}
 {{- if and .Values.config.existingConfigMap (or .Values.config.agentBackends .Values.config.chatConnections .Values.config.bindings) -}}
 {{- fail "config.existingConfigMap and config.agentBackends/chatConnections/bindings are two ways to supply the same files: set one" -}}
@@ -104,6 +130,11 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.networkPolicy.enabled (eq .Values.store.type "postgres") -}}
+{{- if not .Values.networkPolicy.postgres.to -}}
+{{- fail "networkPolicy.enabled with store.type postgres needs networkPolicy.postgres.to: the NetworkPolicyPeers (ipBlock, or namespaceSelector and podSelector) of the database. Without it courier cannot reach Postgres, and the Slack rule excludes private ranges" -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.kubeApiServer.cidrs) -}}
 {{- fail "networkPolicy.enabled needs networkPolicy.kubeApiServer.cidrs: courier reads Secrets through the API server, and a NetworkPolicy cannot select it by pod. On EKS use the control-plane subnet CIDRs (aws eks describe-cluster, then the subnets' CIDRs), not the endpoint IPs, which change on upgrades; elsewhere: kubectl get endpoints kubernetes" -}}
 {{- end -}}
@@ -112,8 +143,9 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{/*
 The namespaces holding Secrets that courier's config refers to, as a JSON list. A reference names a Secret in the
 namespace of the resource that holds it, so these are the namespaces of the ChatConnections, the Bindings with a
-tokenSecretRef and the AgentBackends with a header from a Secret; rbac.secretNamespaces adds to them (it is how a
-config supplied through config.existingConfigMap says where its Secrets are). With neither, the release namespace.
+tokenSecretRef and the AgentBackends with a header from a Secret, and the release namespace with store.type postgres (the
+DSN's Secret is there); rbac.secretNamespaces adds to them (it is how a config supplied through config.existingConfigMap
+says where its Secrets are). With none of these, the release namespace.
 */}}
 {{- define "courier.secretNamespaces" -}}
 {{- $found := dict -}}
@@ -134,6 +166,9 @@ config supplied through config.existingConfigMap says where its Secrets are). Wi
 {{- end -}}
 {{- range $ns := .Values.rbac.secretNamespaces -}}
 {{- $_ := set $found $ns true -}}
+{{- end -}}
+{{- if eq .Values.store.type "postgres" -}}
+{{- $_ := set $found $.Release.Namespace true -}}
 {{- end -}}
 {{- if not $found -}}
 {{- $_ := set $found $.Release.Namespace true -}}

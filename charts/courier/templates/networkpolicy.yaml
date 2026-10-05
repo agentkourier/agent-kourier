@@ -53,6 +53,13 @@ spec:
       ports:
         - {port: 443, protocol: TCP}
     {{- end }}
+    {{- if eq .Values.store.type "postgres" }}
+    # The Postgres database, on its own rule.
+    - to:
+        {{- toYaml .Values.networkPolicy.postgres.to | nindent 8 }}
+      ports:
+        - {port: {{ int .Values.networkPolicy.postgres.port }}, protocol: TCP}
+    {{- end }}
     {{- with .Values.networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

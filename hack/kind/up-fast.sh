@@ -18,6 +18,10 @@
 # (charts/courier, with ci/fast-values.yaml, which the full tier uses too: lib.sh's deploy_courier and install_courier). On a
 # cluster that still has the hand-made Deployment this tier used to have, re-running this replaces it, keeping the volume.
 # The tier is up only when courier is ready and connected to the fake Slack.
+#
+# E2E_STORE=postgres runs courier on Postgres instead of SQLite: a Postgres in namespace e2e (fast/postgres.yaml), its password
+# generated here and handed to the cluster through a pipe, and courier installed with ci/fast-postgres-values.yaml. The E2E suite is
+# the same on either. A tier keeps the store it was brought up with: to change it, run hack/kind/down.sh fast first.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -26,6 +30,11 @@ ROOT=$(cd "${HERE}/../.." && pwd)
 . "${HERE}/lib.sh"
 use_tier fast
 FAST=${HERE}/fast
+E2E_STORE=${E2E_STORE:-sqlite}
+case "${E2E_STORE}" in
+  sqlite | postgres) ;;
+  *) die "E2E_STORE must be sqlite or postgres" ;;
+esac
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 H=(helm --kube-context "${CTX}")
@@ -71,6 +80,12 @@ apply_doubles
 step "courier image ${TESTHOOKS_IMAGE}"
 load_courier_image
 
+if [ "${E2E_STORE}" = postgres ]; then
+  step "postgres, and the Secret that holds courier's DSN"
+  deploy_postgres
+  COURIER_VALUES=${ROOT}/charts/courier/ci/fast-postgres-values.yaml
+fi
+
 step "courier: namespace, config, Secrets, chart"
 # Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
 # here and never committed: the Slack tokens carry the prefixes the fake Slack checks, and the agent token
@@ -85,4 +100,4 @@ deploy_courier "${FAST}/courier/config/agentbackend.yaml"
 
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE})"

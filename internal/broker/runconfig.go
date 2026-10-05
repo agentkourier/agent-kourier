@@ -21,8 +21,11 @@ import (
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
 // variable, and cmd/courier is the one place that does.
 type RunConfig struct {
-	// ConfigDir is the directory of resource files, and DBPath the SQLite file on the volume.
+	// ConfigDir is the directory of resource files, and DBPath the SQLite file on the volume (read only with
+	// the SQLite store, and required then).
 	ConfigDir, DBPath string
+	// Store chooses SQLite, the default, or Postgres, and where the Postgres DSN is.
+	Store StoreConfig
 	// Listener serves /healthz, /readyz and /metrics, from the start of Run to its end.
 	Listener net.Listener
 	// Client is the Kubernetes client the Secret informers use. Nil means InClusterClient.
@@ -70,9 +73,12 @@ type RunConfig struct {
 // validate says whether c can run. A missing field is an error wrapping ErrWiring, which is a usage
 // error, so the process exits 2 and names it, rather than failing later in some other way.
 func (c RunConfig) validate() error {
+	if err := c.Store.validate(); err != nil {
+		return err
+	}
 	var missing []string
 	for name, ok := range map[string]bool{
-		"ConfigDir": c.ConfigDir != "", "DBPath": c.DBPath != "", "Listener": c.Listener != nil,
+		"ConfigDir": c.ConfigDir != "", "DBPath": c.DBPath != "" || c.Store.kind() != StoreSQLite, "Listener": c.Listener != nil,
 	} {
 		if !ok {
 			missing = append(missing, name)

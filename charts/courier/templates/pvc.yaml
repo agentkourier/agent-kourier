@@ -1,4 +1,4 @@
-{{- if not .Values.persistence.existingClaim }}
+{{- if and (include "courier.sqlite" .) (not .Values.persistence.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

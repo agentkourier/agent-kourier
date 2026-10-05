@@ -1,12 +1,14 @@
 # courier
 
 Installs [agent-courier](../../spec.md), the broker between Alertmanager, Slack and A2A agents: one Deployment of the
-production image, its SQLite volume, the ConfigMap of its resources, and the read access to the Secrets they name.
+production image, its state (a SQLite volume, or a Postgres database you run), the ConfigMap of its resources, and the read
+access to the Secrets they name.
 
-**One replica, SQLite on a volume.** That is what courier supports today, and the chart enforces it: `replicaCount` above 1
-fails the render. Two replicas need the Postgres store (H4-3) and leader election with epoch fencing (H4-5); this chart gains
-`store` values, a Lease Role and a standby that is Ready but idle with them, and not before. `replicaCount: 0` is the kill
-switch (courier stops, the volume and the config stay); removing a Binding from the values is the other.
+**One replica.** That is what courier supports today, and the chart enforces it: `replicaCount` above 1 fails the render. Two
+replicas need `store.type: postgres` (SQLite is one file on a volume that one pod may use, spec R7) and leader election with
+epoch fencing (H4-5); this chart gains a Lease Role and a standby that is Ready but idle with the latter, and not before.
+`replicaCount: 0` is the kill switch (courier stops, the volume or the database and the config stay); removing a Binding from
+the values is the other.
 
 ```sh
 helm install courier ./charts/courier -n courier-system --create-namespace -f my-values.yaml
@@ -14,18 +16,19 @@ helm install courier ./charts/courier -n courier-system --create-namespace -f my
 
 From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a
 ChatConnection. Check any values file with `helm lint --strict -f my-values.yaml charts/courier` and
-`helm template` before installing. `ci/` holds the values the tests render: `minimal`, `full` (everything switched on), and the kind tiers' courier, which
-`hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `ax` (the AX tier's, with a database file of its own)
-and `sandbox` (the sandbox tier's, with the token-refresh CronJob).
+`helm template` before installing. `ci/` holds the values the tests render: `minimal`, `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' courier, which
+`hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `fast-postgres` (the fast tier's on Postgres:
+`E2E_STORE=postgres make e2e-fast-up`), `ax` (the AX tier's, with a database file of its own) and `sandbox` (the sandbox
+tier's, with the token-refresh CronJob).
 
 ## What it installs
 
 | Object | When | Notes |
 |---|---|---|
-| Deployment `<fullname>` | always | strategy Recreate, one container, config at `/etc/courier`, SQLite at `/data`, `/tmp` an emptyDir |
-| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names |
+| Deployment `<fullname>` | always | strategy Recreate, one container, config at `/etc/courier`, SQLite at `/data` (with `store.type: sqlite`), `/tmp` an emptyDir |
+| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names, and in the release namespace with Postgres (the DSN's Secret) |
 | ConfigMap `<fullname>-config` | unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
-| PersistentVolumeClaim `<fullname>-data` | unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`) |
+| PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
 | Service | `service.enabled` | ClusterIP on the health and metrics port; the Alertmanager receiver is not served yet |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
 | NetworkPolicy | `networkPolicy.enabled` | see below |
@@ -43,11 +46,51 @@ and `sandbox` (the sandbox tier's, with the token-refresh CronJob).
   resource's spec exactly as in spec.md section 7 (the chart does not interpret it; courier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
-- `logLevel`, `syncTimeout`, `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*`.
+- `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
+- `logLevel`, `syncTimeout`, `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
 - `service`, `serviceMonitor`, `networkPolicy`, `podDisruptionBudget`, `tokenRefresh`: off until you switch them on.
 
 A config change rolls the pod (a `checksum/config` annotation): courier reloads its files, but a reload that adds a Secret
 namespace fails until restart, and the roll covers it. Turn it off with `config.rollOnChange: false`.
+
+## Store
+
+`store.type: sqlite` (the default) keeps courier's state in one file on the volume, for **one replica**: a SQLite file may be open in one
+pod only (spec R7). Courier cannot see how many replicas run, so the chart is what refuses more than one (`replicaCount` above 1
+fails the render, whatever the store: more than one replica needs Postgres **and** leader election, H4-5).
+
+`store.type: postgres` keeps it in a database you run (the chart installs none). Name the Secret that holds the DSN, in the release
+namespace, and the key in it:
+
+```yaml
+store:
+  type: postgres
+  postgres:
+    dsnSecret: {name: courier-pg, key: dsn}   # a postgres:// URL or a key/value string; never a value in the values
+```
+
+The render refuses `store.type: postgres` without the Secret, a `dsnSecret` (or `timeouts`) with SQLite, an `existingClaim` with
+Postgres, and a `postgres://` URL with a password anywhere in the values. With Postgres no volume is mounted and no claim is made.
+Courier reads the Secret through the API, like its others, so the Role below covers it: list and watch on every Secret of the
+release namespace. The DSN is read once at start; rotate the password by changing the Secret and the database role, then restart the
+pod. An unreadable or empty Secret fails the start with an error that names the Secret and the key, never the DSN. The role in the
+DSN needs the right to create tables in its schema, as courier applies its own migrations at start (under an advisory lock). With
+`networkPolicy.enabled`, `networkPolicy.postgres.to` (NetworkPolicyPeers: an ipBlock, or a namespaceSelector and podSelector) and
+`.port` (default 5432) say where the database is, and the render refuses Postgres without `to`: the Slack rule excludes private ranges,
+so without it courier could not reach the database.
+
+**Connection poolers.** Courier's idle-in-transaction and statement timeouts are sent as startup parameters on each connection:
+they are what ends a stalled leader's transaction and frees its locks (spec D37). So connect directly, or through a pooler in
+**session** mode. A pooler in **transaction** mode (PgBouncer's `pool_mode = transaction`) rejects startup parameters
+("unsupported startup parameter"), and listing them in `ignore_startup_parameters` silently drops the protection. There, set the
+timeouts on the role and turn courier's off:
+
+```sql
+ALTER ROLE courier SET idle_in_transaction_session_timeout = '10s';
+ALTER ROLE courier SET statement_timeout = '30s';
+```
+
+and set `store.postgres.timeouts: role`.
 
 ## Secrets
 
@@ -56,6 +99,7 @@ make them (by hand, Sealed Secrets, an external operator) before courier starts:
 
 - the ChatConnection's Secret, with `botToken` and `appToken`;
 - each Binding's `tokenSecretRef` Secret, with a `token` key (or the key the reference says);
+- with Postgres, the DSN Secret (`store.postgres.dsnSecret`), in the release namespace;
 - the Dex credentials Secret for `tokenRefresh`, with `clientSecret`, `username` and `password`.
 
 Courier reads them through the Kubernetes API, never from its environment or a mounted file. The render refuses what would put
@@ -72,7 +116,7 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - **Secrets RBAC is namespace-wide, not by name.** Courier caches Secrets with an informer, which needs `list` and `watch`, and
   Kubernetes cannot limit those verbs by `resourceNames`. Each Role therefore reads every Secret in its namespace, and courier
   keeps the Opaque ones in memory (internal/config/k8ssecrets documents it). The chart grants it only in namespaces that hold a
-  Secret the config names, and `get` is never granted. Give courier's Secrets a namespace of their own when the namespace is shared.
+  Secret the config names, and `get` is never granted. Give courier's Secrets a namespace of their own when the namespace is shared. With Postgres the DSN's Secret is in the release namespace, which therefore gets this Role too.
   Narrowing to named Secrets is a courier change (one informer per Secret), after the pilot.
 - `klogVerbosity` stays 0 (the schema caps it at 7): at 8 and above client-go logs response bodies, Secret lists included.
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it): egress to DNS, to the API server (you give
@@ -130,8 +174,8 @@ A ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces`
 
 ## Tests
 
-`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for the five `ci/` values files, the
-refusals (replicas above 1, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
+`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for the seven `ci/` values files, the
+refusals (replicas above 1, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
 properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
 on), and the fast and AX tiers' config, which is loaded through courier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;
 set `COURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping. After a deliberate chart change:
@@ -139,7 +183,5 @@ set `COURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping.
 
 ## What comes next
 
-- **H4-3** (store selection): `store` values for SQLite or Postgres, the DSN from a Secret by reference. Until it lands the
-  chart is SQLite only.
-- **H4-5** (leader election and fencing): replicas above 1, a Role for the Lease, the standby Ready but idle, a meaningful PodDisruptionBudget.
+- **H4-5** (leader election and fencing): replicas above 1 (with Postgres), a Role for the Lease, the standby Ready but idle, a meaningful PodDisruptionBudget.
 - The Alertmanager receiver (WP-47) adds its port, a Service and an Ingress or route when it is served.

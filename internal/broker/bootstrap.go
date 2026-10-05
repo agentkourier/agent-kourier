@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -20,6 +21,9 @@ const defaultSyncTimeout = 30 * time.Second
 type BootstrapOptions struct {
 	// Dir is the config directory.
 	Dir string
+	// ExtraNamespaces are namespaces whose Secrets are watched although no resource of the config refers to one: the
+	// namespace of the Postgres DSN's Secret, which belongs to courier and not to a resource.
+	ExtraNamespaces []string
 	// SyncTimeout bounds the wait for the Secret caches to sync; zero means 30 s.
 	SyncTimeout time.Duration
 	// PollInterval and SecretsInterval are the reloader's; zero means its defaults.
@@ -70,7 +74,7 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	namespaces := set.SecretNamespaces()
+	namespaces := slices.Compact(slices.Sorted(slices.Values(append(set.SecretNamespaces(), opts.ExtraNamespaces...))))
 	secrets := k8ssecrets.New(client, namespaces, k8ssecrets.WithLogger(log))
 	syncCtx, cancel := context.WithTimeout(ctx, cmp.Or(opts.SyncTimeout, defaultSyncTimeout))
 	defer cancel()

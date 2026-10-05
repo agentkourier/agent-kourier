@@ -6,6 +6,11 @@
 //
 //	COURIER_CONFIG_DIR     the resource files (default /etc/courier)
 //	COURIER_DB_PATH        the SQLite file, on the volume (default /data/courier.db)
+//	COURIER_STORE          sqlite (the default, one replica) or postgres
+//	COURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
+//	                       Secret caches (its namespace needs the list and watch Role the config's do)
+//	COURIER_POSTGRES_TIMEOUTS     with postgres, courier (default: it sets the idle-in-transaction and statement
+//	                       timeouts) or role (the database role sets them; for a pooler that refuses startup parameters)
 //	COURIER_LISTEN         the address of /healthz, /readyz and /metrics (default :8080)
 //	COURIER_SYNC_TIMEOUT   how long to wait for the Secret caches (default 30s)
 //	COURIER_KLOG_V         client-go's verbosity, held below 8 (default 0)
@@ -25,6 +30,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -70,6 +76,7 @@ func exitCode(err error) int {
 // envConfig is what the environment says.
 type envConfig struct {
 	configDir, dbPath, listen string
+	store                     broker.StoreConfig
 	syncTimeout               time.Duration
 	klogV                     int
 	logLevel                  slog.Level
@@ -102,9 +109,57 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		return c, bad("COURIER_LOG_LEVEL", "debug, info, warn or error", errors.New("unknown level"))
 	}
 	c.logLevel = level
+	if c.store, err = loadStoreEnv(getenv); err != nil {
+		return c, err
+	}
 	c.telemetry, err = telemetry.LoadConfig(getenv)
 	if err != nil {
 		return c, fmt.Errorf("%w: %w", broker.ErrWiring, err)
+	}
+	return c, nil
+}
+
+// loadStoreEnv reads the store's variables. The DSN is a secret and its variable holds only where it is, but a person may put the DSN
+// there, so no error here echoes a value.
+func loadStoreEnv(getenv func(string) string) (broker.StoreConfig, error) {
+	bad := func(key, want string) error {
+		return fmt.Errorf("%w: %s is not %s (its value is not shown)", broker.ErrWiring, key, want)
+	}
+	kind := strings.ToLower(getenv("COURIER_STORE"))
+	if kind == "" {
+		kind = string(broker.StoreSQLite)
+	}
+	c := broker.StoreConfig{}
+	switch broker.StoreKind(kind) {
+	case broker.StoreSQLite:
+		c.Kind = broker.StoreSQLite
+	case broker.StorePostgres:
+		c.Kind = broker.StorePostgres
+	default:
+		return c, bad("COURIER_STORE", "sqlite or postgres")
+	}
+	ref, timeouts := getenv("COURIER_POSTGRES_DSN_SECRET"), getenv("COURIER_POSTGRES_TIMEOUTS")
+	if c.Kind == broker.StoreSQLite {
+		// Ignoring either would run on SQLite what the person meant for Postgres.
+		switch {
+		case ref != "":
+			return c, bad("COURIER_POSTGRES_DSN_SECRET", "unset with COURIER_STORE=sqlite")
+		case timeouts != "":
+			return c, bad("COURIER_POSTGRES_TIMEOUTS", "unset with COURIER_STORE=sqlite")
+		}
+		return c, nil
+	}
+	parts := strings.Split(ref, "/")
+	if len(parts) != 3 || slices.Contains(parts, "") {
+		return c, bad("COURIER_POSTGRES_DSN_SECRET", "namespace/name/key, the Secret that holds the DSN")
+	}
+	c.PostgresDSN = broker.SecretKey{Namespace: parts[0], Name: parts[1], Key: parts[2]}
+	switch timeouts {
+	case "", "courier":
+	case "role":
+		c.PostgresRoleTimeouts = true
+	default:
+		return c, bad("COURIER_POSTGRES_TIMEOUTS", "courier or role")
 	}
 	return c, nil
 }
@@ -143,7 +198,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 	defer func() { _ = ln.Close() }()
 
 	cfg := broker.RunConfig{
-		ConfigDir: env.configDir, DBPath: env.dbPath, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver,
+		ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -17,7 +17,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
@@ -27,9 +26,10 @@ import (
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
 // the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
-// config and the Secret caches), the one ChatConnection, the store, the audit writer, the Bindings,
-// and then readiness: /readyz says 503 "starting" until the last of those is done. The connection
-// comes before the store, so a config that v1 cannot serve leaves no database behind.
+// config and the Secret caches), the one ChatConnection, the store (SQLite, or Postgres with its DSN read from
+// a Secret: cfg.Store), the audit writer, the Bindings, and then readiness: /readyz says 503 "starting" until
+// the last of those is done. The connection comes before the store, so a config that v1 cannot serve leaves no
+// database behind.
 func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err := cfg.validate(); err != nil {
 		return err
@@ -100,8 +100,12 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	go func() { served <- Serve(serveCtx, cfg.Listener, NewHandler(metrics, ready)); close(servedDone) }()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
 
+	var extraNamespaces []string // the Postgres DSN's Secret is courier's own, so no resource of the config names its namespace
+	if cfg.Store.kind() == StorePostgres {
+		extraNamespaces = append(extraNamespaces, cfg.Store.PostgresDSN.Namespace)
+	}
 	boot, err := Bootstrap(runCtx, client, BootstrapOptions{
-		Dir: cfg.ConfigDir, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
+		Dir: cfg.ConfigDir, ExtraNamespaces: extraNamespaces, SyncTimeout: cfg.SyncTimeout, PollInterval: cfg.reloadPoll, Logger: log, OnReloadError: metrics.ReloadError,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
@@ -116,10 +120,11 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	connName := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	log.InfoContext(ctx, "serving a ChatConnection", "connection", connName)
 
-	st, err := sqlite.Open(runCtx, cfg.DBPath)
+	st, err := openStore(runCtx, cfg.Store, cfg.DBPath, boot.Secrets, log)
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
+	log.InfoContext(ctx, "opened the store", "store", cfg.Store.kind()) // the kind only: a DSN is never logged
 	if err := st.RegisterMetrics(metrics.reg); err != nil {
 		_ = st.Close()
 		return fmt.Errorf("store metrics: %w", err)

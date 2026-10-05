@@ -1,9 +1,10 @@
 # Defaults for the courier chart.
 #
-# This chart runs ONE replica with its state in SQLite on a PersistentVolumeClaim. That is a limit of courier today, not
-# a default to tune: the database file may be open in one pod, and the session manager keeps per-thread state in memory.
-# More than one replica waits for the Postgres store (H4-3) and leader election with fencing (H4-5), and the chart fails
-# the render for replicaCount > 1 until then. replicaCount 0 is the kill switch: courier stops, the volume stays.
+# This chart runs ONE replica, with its state in SQLite on a PersistentVolumeClaim (store.type sqlite, the default) or in
+# Postgres (store.type postgres). One replica is a limit of courier today, not a default to tune: a SQLite file may be open in
+# one pod, and the session manager keeps per-thread state in memory. More than one replica needs Postgres AND leader election
+# with fencing (H4-5), and the chart fails the render for replicaCount > 1 until that lands. replicaCount 0 is the kill
+# switch: courier stops, and the volume (or the database) stays.
 replicaCount: 1
 
 image:
@@ -77,8 +78,31 @@ config:
   # Secret namespace fails until the process restarts. Has no effect with existingConfigMap.
   rollOnChange: true
 
-# SQLite lives here. The claim is ReadWriteOnce and the Deployment's strategy is Recreate, so the old pod has released
-# the volume before the new one starts.
+# Where courier keeps its state (spec D15). SQLite is one file on a volume (persistence below), for one replica. Postgres is
+# a database you run (the chart does not install one), for more than one replica once leader election (H4-5) lands.
+store:
+  type: sqlite # sqlite or postgres (COURIER_STORE)
+  postgres:
+    # The Secret that holds the DSN, a postgres:// URL or key/value string, in the release namespace: required with
+    # store.type postgres, and refused with sqlite. Make it yourself (by hand, Sealed Secrets, an external operator); the DSN,
+    # password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them).
+    # Courier reads it through the API like its other Secrets, which the Role below grants: list and watch on every Secret
+    # of the release namespace, so keep courier's Secrets in a namespace of their own when it is shared. Percent-encode the
+    # reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: courier
+    # applies its own migrations at start.
+    dsnSecret:
+      name: ""
+      key: ""
+    # Who sets the idle-in-transaction and statement timeouts, which end a stalled leader's transaction and free its locks
+    # (spec D37). "courier" (the default) sends them as startup parameters on every connection. Connect to Postgres directly
+    # or through a pooler in SESSION mode. A pooler in TRANSACTION mode (PgBouncer's pool_mode = transaction) refuses startup
+    # parameters ("unsupported startup parameter"), and listing them in its ignore_startup_parameters silently drops the
+    # protection: there, set both on the database role (ALTER ROLE courier SET idle_in_transaction_session_timeout = '10s';
+    # ALTER ROLE courier SET statement_timeout = '30s') and set this to "role", which turns courier's own off.
+    timeouts: courier
+
+# SQLite lives here (store.type sqlite; with postgres none of this is used or rendered). The claim is ReadWriteOnce and the
+# Deployment's strategy is Recreate, so the old pod has released the volume before the new one starts.
 persistence:
   # Use a claim you manage instead of creating one.
   existingClaim: ""
@@ -119,8 +143,9 @@ resources:
   requests: {cpu: 50m, memory: 64Mi}
   limits: {memory: 256Mi}
 
-# Courier reads the Secrets that its config names through the API (list and watch, in a namespace-scoped Role; it never
-# issues a get). Roles are made in each namespace that holds a referenced Secret, found from config.* above.
+# Courier reads the Secrets that its config names, and the Postgres DSN's, through the API (list and watch, in a
+# namespace-scoped Role; it never issues a get). Roles are made in each namespace that holds a referenced Secret, found from
+# config.* above, and the release namespace with store.type postgres.
 rbac:
   create: true
   # More namespaces to grant that Role in. Needed with config.existingConfigMap, which the chart cannot read.
@@ -163,6 +188,13 @@ networkPolicy:
     # outside the private ranges. Put an egress proxy's address in extraEgress and narrow this to [] to close it.
     cidrs: ["0.0.0.0/0"]
     except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+  # The Postgres database (store.type postgres), as NetworkPolicyPeers: required when this policy is enabled with Postgres, since
+  # the Slack rule excludes private ranges and is 443 only. An ipBlock for a managed database, or the pods of an in-cluster one:
+  #   to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: db}}, podSelector: {matchLabels: {app: postgres}}}]
+  # Egress is on `port` (the server's, 5432 by default). Behind a pooler, name the pooler.
+  postgres:
+    to: []
+    port: 5432
   # Who may scrape the metrics port: NetworkPolicyPeers, for example the Prometheus pods:
   #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
   #     podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}}

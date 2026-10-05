@@ -1,0 +1,57 @@
+# The fast tier's Postgres, for courier's Postgres store (E2E_STORE=postgres make e2e-fast-up; lib.sh's deploy_postgres). One pod
+# with its data in an emptyDir, so it lives and dies with the tier: nothing of it outlives `hack/kind/down.sh fast`. The image is
+# the one hack/postgres/test.sh runs the store's tests on (postgres 17, by the digest of its multi-arch index); the cluster pulls
+# it. Its password is the Secret postgres-auth, which deploy_postgres makes with a generated password; courier's DSN, with the same
+# password, is the Secret courier-pg of namespace courier. Neither is in this file. The Service is ClusterIP, as every double's.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: e2e
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: postgres
+          image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+          imagePullPolicy: IfNotPresent
+          # Speed over durability: the data is thrown away with the tier.
+          args: ["-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+          env:
+            - {name: POSTGRES_USER, value: courier}
+            - {name: POSTGRES_DB, value: courier}
+            # A directory under the mount: initdb cannot chmod the mount point itself (the volume is root's, with fsGroup).
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-auth, key: password}}
+          ports: [{containerPort: 5432}]
+          # While the image initialises it runs a server on its socket only, so a TCP check passes only for the final one.
+          readinessProbe:
+            exec: {command: ["pg_isready", "-q", "-h", "127.0.0.1", "-U", "courier", "-d", "courier"]}
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+      volumes:
+        - {name: data, emptyDir: {}}
+        - {name: run, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: postgres}
+  ports: [{port: 5432, targetPort: 5432}]

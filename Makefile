@@ -21,7 +21,7 @@ test: ## Run unit tests with the race detector, then the testhooks-tagged ones, 
 	go test -race -tags testhooks ./internal/...
 	hack/kind/netpol_test.sh
 
-test-postgres: ## Run the Postgres store's tests and the store conformance suite against a throwaway Postgres container (Docker; hack/postgres/test.sh)
+test-postgres: ## Run the Postgres store's tests, the store conformance suite and the broker's Postgres test against a throwaway Postgres container (Docker; hack/postgres/test.sh)
 	hack/postgres/test.sh
 
 build: ## Build bin/courier
@@ -45,7 +45,7 @@ release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.
 stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and with -no-auth (about 2 minutes)
 	hack/stub-oracle.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink)
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs courier on Postgres
 	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)

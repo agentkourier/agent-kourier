@@ -128,3 +128,60 @@ func TestRunRefusesAnUnknownCommand(t *testing.T) {
 		}
 	}
 }
+
+// The store is SQLite unless the environment says Postgres, and Postgres takes the reference to the Secret that holds its DSN.
+func TestEnvConfigChoosesTheStore(t *testing.T) {
+	ref := broker.SecretKey{Namespace: "courier", Name: "courier-pg", Key: "dsn"}
+	for name, tc := range map[string]struct {
+		env  env
+		want broker.StoreConfig
+	}{
+		"default is sqlite":     {env{}, broker.StoreConfig{Kind: broker.StoreSQLite}},
+		"sqlite, named":         {env{"COURIER_STORE": "sqlite"}, broker.StoreConfig{Kind: broker.StoreSQLite}},
+		"the case is ignored":   {env{"COURIER_STORE": "SQLite"}, broker.StoreConfig{Kind: broker.StoreSQLite}},
+		"postgres":              {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier/courier-pg/dsn"}, broker.StoreConfig{Kind: broker.StorePostgres, PostgresDSN: ref}},
+		"postgres, the courier": {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier/courier-pg/dsn", "COURIER_POSTGRES_TIMEOUTS": "courier"}, broker.StoreConfig{Kind: broker.StorePostgres, PostgresDSN: ref}},
+		"postgres, the role":    {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier/courier-pg/dsn", "COURIER_POSTGRES_TIMEOUTS": "role"}, broker.StoreConfig{Kind: broker.StorePostgres, PostgresDSN: ref, PostgresRoleTimeouts: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := loadEnv(tc.env.get)
+			if err != nil || got.store != tc.want {
+				t.Errorf("store = %+v, %v; want %+v", got.store, err, tc.want)
+			}
+		})
+	}
+}
+
+// What cannot be read, or would be ignored, is a usage error that names the variable. None echoes the value: a person who
+// puts the DSN where its reference belongs must not see it printed.
+func TestEnvConfigRefusesAStoreItCannotUse(t *testing.T) {
+	const dsn = "postgres://courier:fake-pg-password-7Qz@db.example.test:5432/courier"
+	ref := "courier/courier-pg/dsn"
+	for name, tc := range map[string]struct {
+		env env
+		key string
+	}{
+		"unknown store":               {env{"COURIER_STORE": "mysql"}, "COURIER_STORE"},
+		"postgres without a Secret":   {env{"COURIER_STORE": "postgres"}, "COURIER_POSTGRES_DSN_SECRET"},
+		"the DSN in place of a ref":   {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": dsn}, "COURIER_POSTGRES_DSN_SECRET"},
+		"no key":                      {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier/courier-pg"}, "COURIER_POSTGRES_DSN_SECRET"},
+		"an empty part":               {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "courier//dsn"}, "COURIER_POSTGRES_DSN_SECRET"},
+		"too many parts":              {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": "a/b/c/d"}, "COURIER_POSTGRES_DSN_SECRET"},
+		"a Secret with sqlite":        {env{"COURIER_POSTGRES_DSN_SECRET": ref}, "COURIER_POSTGRES_DSN_SECRET"},
+		"a Secret with sqlite, named": {env{"COURIER_STORE": "sqlite", "COURIER_POSTGRES_DSN_SECRET": ref}, "COURIER_POSTGRES_DSN_SECRET"},
+		"unknown timeouts":            {env{"COURIER_STORE": "postgres", "COURIER_POSTGRES_DSN_SECRET": ref, "COURIER_POSTGRES_TIMEOUTS": "never"}, "COURIER_POSTGRES_TIMEOUTS"},
+		"timeouts with sqlite":        {env{"COURIER_POSTGRES_TIMEOUTS": "role"}, "COURIER_POSTGRES_TIMEOUTS"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadEnv(tc.env.get)
+			if !errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("loadEnv = %v, want an ErrWiring naming %s", err, tc.key)
+			}
+			for _, v := range tc.env {
+				if strings.Contains(v, "fake-pg-password") && strings.Contains(err.Error(), "fake-pg-password") {
+					t.Errorf("the error echoes the value: %v", err)
+				}
+			}
+		})
+	}
+}

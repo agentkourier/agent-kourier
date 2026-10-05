@@ -126,6 +126,8 @@ spec:
       - env:
         - name: COURIER_CONFIG_DIR
           value: /etc/courier
+        - name: COURIER_STORE
+          value: sqlite
         - name: COURIER_DB_PATH
           value: /data/courier.db
         - name: COURIER_LISTEN

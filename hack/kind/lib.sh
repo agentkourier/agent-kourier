@@ -310,7 +310,39 @@ deploy_courier() {
   "${K[@]}" -n courier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
     --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n courier create configmap courier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  install_courier "${ROOT}/charts/courier/ci/fast-values.yaml"
+  install_courier "${COURIER_VALUES:-${ROOT}/charts/courier/ci/fast-values.yaml}"
+}
+
+# deploy_postgres: the fast tier's Postgres (fast/postgres.yaml, in namespace e2e) and the two Secrets that carry its password: postgres-auth
+# in e2e, which the server initialises with, and courier-pg in courier, key dsn, which courier reads (charts/courier/ci/fast-postgres-values.yaml
+# names it). The password is generated here, for this cluster, and goes from the shell's memory to the API server through a pipe: it is
+# never on an argument list (kubectl create secret --from-literal would put it there), in a file or in the output. The Secrets are made with
+# `create`, not `apply`, so that no last-applied-configuration annotation holds a second copy. A re-run keeps them while both exist, since
+# the running server was initialised with that password; when either is missing both are made again and the server is replaced, which starts
+# it empty (its data is an emptyDir). Needs K, HERE.
+deploy_postgres() {
+  local password
+  "${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  if [ -z "$("${K[@]}" -n e2e get secret postgres-auth --ignore-not-found -o name)" ] || [ -z "$("${K[@]}" -n courier get secret courier-pg --ignore-not-found -o name)" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      password=$(openssl rand -hex 24)
+    else
+      password=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+    fi
+    [ "${#password}" -eq 48 ] || die "could not generate a password for the fast tier's Postgres"
+    "${K[@]}" -n e2e delete secret postgres-auth --ignore-not-found >/dev/null
+    "${K[@]}" -n courier delete secret courier-pg --ignore-not-found >/dev/null
+    # printf is a builtin: what it prints is not an argument of any process. The password is hex, so the URL needs no escaping.
+    printf 'apiVersion: v1\nkind: Secret\nmetadata: {name: postgres-auth, namespace: e2e}\nstringData: {password: "%s"}\n' "${password}" |
+      "${K[@]}" create -f - >/dev/null
+    printf 'apiVersion: v1\nkind: Secret\nmetadata: {name: courier-pg, namespace: courier}\nstringData: {dsn: "postgres://courier:%s@postgres.e2e.svc.cluster.local:5432/courier?sslmode=disable"}\n' "${password}" |
+      "${K[@]}" create -f - >/dev/null
+    password=
+    # A server that was initialised with another password is replaced: its data goes with it.
+    "${K[@]}" -n e2e delete pod -l app=postgres --ignore-not-found --wait=true >/dev/null
+  fi
+  "${K[@]}" apply -f "${HERE}/fast/postgres.yaml" >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/postgres --timeout=240s
 }
 
 # The curl image the scripts' probe pods run, pinned; the same as the verify scripts'.

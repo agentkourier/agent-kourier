@@ -1,0 +1,46 @@
+# The minimal install on Postgres, fenced by a NetworkPolicy: the database's egress rule is what store.type postgres adds to it.
+image:
+  repository: registry.example.test/courier
+  tag: v0.1.0
+
+config:
+  chatConnections:
+    slack-main:
+      spec:
+        platform: slack
+        mode: socket
+        credentialsSecretRef: {name: slack-main}
+  agentBackends:
+    agents:
+      spec:
+        dialect: kagent-v1
+        url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
+  bindings:
+    sre:
+      spec:
+        agent:
+          backendRef: {name: agents}
+          namespace: kagent
+          name: k8s-agent
+        identity:
+          userId: courier-sre
+          tokenSecretRef: {name: courier-agent-token}
+        chat:
+          connectionRef: {name: slack-main}
+          channel: C0123456789
+          output: live
+
+store:
+  type: postgres
+  postgres:
+    dsnSecret: {name: courier-pg, key: dsn}
+
+networkPolicy:
+  enabled: true
+  kubeApiServer:
+    cidrs: ["10.0.0.1/32"]
+  postgres:
+    to:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: db}}
+        podSelector: {matchLabels: {app: postgres}}
+    port: 5432

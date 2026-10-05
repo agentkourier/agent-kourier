@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -84,11 +85,15 @@ func TestAdoptIntoRelease(t *testing.T) {
 	}
 }
 
+// valuesFile finds the chart's ci values file that a line names.
+var valuesFile = regexp.MustCompile(`ci/[a-z-]+-values\.yaml`)
+
 // TestEveryTierInstallsTheChart: each tier's script installs courier with a values file of the chart's ci directory, and the files
 // exist; none applies a hand-made courier manifest any more.
 func TestEveryTierInstallsTheChart(t *testing.T) {
 	for _, tc := range []struct{ script, want string }{
-		{"lib.sh", `install_courier "${ROOT}/charts/courier/ci/fast-values.yaml"`}, // the fast and full tiers (deploy_courier)
+		{"lib.sh", `install_courier "${COURIER_VALUES:-${ROOT}/charts/courier/ci/fast-values.yaml}"`}, // the fast and full tiers (deploy_courier)
+		{"up-fast.sh", `COURIER_VALUES=${ROOT}/charts/courier/ci/fast-postgres-values.yaml`},          // E2E_STORE=postgres
 		{"up-ax.sh", `install_courier "${ROOT}/charts/courier/ci/ax-values.yaml"`},
 		{"sandbox/up.sh", `helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml"`},
 	} {
@@ -99,7 +104,7 @@ func TestEveryTierInstallsTheChart(t *testing.T) {
 		if !strings.Contains(string(raw), tc.want) {
 			t.Errorf("%s does not run %s", tc.script, tc.want)
 		}
-		if file := strings.Trim(tc.want[strings.LastIndex(tc.want, "/ci/")+1:], `"`); file != "" {
+		if file := valuesFile.FindString(tc.want); file != "" {
 			if _, err := os.Stat("../../charts/courier/" + file); err != nil {
 				t.Errorf("%s names %s: %v", tc.script, file, err)
 			}
