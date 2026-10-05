@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/slack-go/slack/slackevents"
@@ -72,6 +73,13 @@ func botSubtype(s string) bool {
 	return s == "" || s == "bot_message"
 }
 
+// userToken is a user mention as Slack writes it into a message's text: <@UID>, or <@UID|label>. The label is
+// whatever lies up to the first ">", a "|" included. Slack escapes "<" and ">" in what people type, so a raw token
+// is always Slack's own, whether or not it stands in a quote or in code; neither character is allowed inside one, so
+// that an unfinished token cannot swallow the one after it. The pattern is compiled once for every user:
+// group 1 is the ID, and mentionedIn compares it whole, so that U1 is not found in <@U12>.
+var userToken = regexp.MustCompile(`<@([^<>|]+)(?:\|[^<>]*)?>`)
+
 // self is who courier is on the workspace, from auth.test: the user ID its posts carry, and the bot ID.
 type self struct{ user, bot string }
 
@@ -90,7 +98,7 @@ const (
 
 // decode returns the Message that inner carries, and what to do with it (spec 8.2, D36).
 //   - A person's message is forwarded if it is plain, a thread_broadcast or a file_share, with a user, a
-//     channel, a ts and text.
+//     channel, a ts and text. It is Mentioned if its text holds courier's user token (mentionedIn).
 //   - A bot's message (a message event with a bot_id and no subtype or bot_message) is forwarded with its
 //     content, for Run to ask the Sink whether a trigger names the bot. A message of courier's own, by user ID
 //     or by bot ID, is never forwarded (ownPost): two bots would answer each other without end. A bot's message
@@ -128,10 +136,25 @@ func decode(me self, inner any) (Message, verdict) {
 		case !keptSubtype(e.SubType) || e.BotID != "" || isOwn || m.User == "" || m.Text == "":
 			return Message{}, dropped
 		}
-		m.Mentioned = strings.Contains(e.Text, "<@"+me.user+">")
+		m.Mentioned = me.mentionedIn(e.Text)
 		return m, forward
 	}
 	return Message{}, dropped
+}
+
+// mentionedIn reports whether text holds courier's user token, <@UID> or <@UID|label>, anywhere in it: Slack sends
+// an app_mention for a token in a quote or in code, so the message event of that text counts as one too. Plain
+// "@courier", another user's token, <!here>, <!channel> and a user group are not mentions.
+func (me self) mentionedIn(text string) bool {
+	if !strings.Contains(text, "<@") { // most text has none: skip the scan
+		return false
+	}
+	for _, g := range userToken.FindAllStringSubmatch(text, -1) {
+		if g[1] == me.user {
+			return true
+		}
+	}
+	return false
 }
 
 // botPost flattens e's first legacy attachment into the fields a trigger reads. A message with no
