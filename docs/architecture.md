@@ -136,8 +136,10 @@ extension (tool approvals, tool step cards).
 Google ax is a supported backend. ax speaks A2A, so it uses the `a2a` dialect with
 no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
 the actor with a static `ate-target-actor` header from `spec.headers`; the agent is
-an A2A server running as an ax task. The reference agent verifies the Binding's
-bearer ID token itself. Chat, queued replies, restart recovery, actor suspend and resume, and
+an A2A server running as an ax task, which you build and run (ax ships none). No
+front door sits in this path, so the agent must verify the Binding's bearer ID token
+itself, as the reference agent does (issuer, audience and subject), or an
+OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
 in-thread text answers are tested in the AX kind tier. Structured tool approvals and
 tool step cards are kagent-only; the generic dialect leaves them opaque. ax's own
 lifecycle (task, template, egress policy) stays with the operator. See the
