@@ -440,9 +440,12 @@ func TestAStepThatFailsForNowIsTriedAgainAndTheTextGoesOn(t *testing.T) {
 		}
 		return nil
 	})
+	release := e.hold() // the first write is not throttled: text and call must be in before it, or the step waits for a window nobody turns
+	t.Cleanup(release)
 	run := e.stream(t)
 	run.Handle(text("a", "Hel"))
 	run.Handle(call("c1", "search", nil))
+	release()
 	eventually(t, "the stream to start", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 	eventually(t, "the failed step to have been asked for", func() bool { return steps.Load() == 1 })
 	run.Handle(text("b", "lo"))
@@ -479,9 +482,12 @@ func TestAFailingStepNeverHoldsBackTheStop(t *testing.T) {
 // message, so no step of the earlier run is shown twice.
 func TestARecoveredTurnAddsNoStepsToTheStreamItTakesOver(t *testing.T) {
 	e := setup(t)
+	release := e.hold() // the first write is not throttled: text and call must be in before it, or the step waits for a window nobody turns
+	t.Cleanup(release)
 	first, cancel := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
 	first.Handle(text("a", "partial"))
 	first.Handle(call("c1", "search", nil))
+	release()
 	eventually(t, "the step and the ts to be recorded", func() bool {
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID("turn-1", "reply"))
 		return err == nil && row.MessageRef != "" && len(e.tasks()) == 1

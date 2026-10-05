@@ -99,8 +99,10 @@ do. They are the real control, and they are settings, not code: the owner applie
 
 ## CI
 
-`.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make test` on pull requests and pushes
-to `main`, with helm installed and `COURIER_REQUIRE_HELM=1` so the chart tests cannot skip. The kind
+`.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
+runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
+(`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `COURIER_REQUIRE_HELM=1`
+so the chart tests cannot skip. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions, and the pinned node and base images pulled (the tiers
 take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR).

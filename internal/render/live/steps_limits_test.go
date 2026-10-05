@@ -93,10 +93,13 @@ func TestAWindowBeginsAtMostTwoStepsAndTheTextWaitsForTheRest(t *testing.T) {
 // left: it is the last window there is.
 func TestStepsThatAreOverAreFinishedAtOnceAndTheFinalBeginsTheRest(t *testing.T) {
 	e := setup(t)
+	release := e.hold() // the first write is not throttled: both calls must be in before it, or the second waits for a window nobody turns
+	t.Cleanup(release)
 	run := e.stream(t)
 	for i := 1; i <= 2; i++ {
 		run.Handle(call(fmt.Sprint("c", i), "step", nil))
 	}
+	release()
 	eventually(t, "the two steps", func() bool { return len(e.tasks()) == 2 })
 	for i := 3; i <= 6; i++ {
 		run.Handle(call(fmt.Sprint("c", i), "step", nil))

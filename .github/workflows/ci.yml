@@ -1,5 +1,7 @@
-# Pull requests and pushes to main: the checks `make` runs locally, nothing else. The kind tiers (make
-# e2e-fast and the others) are not here; RELEASING.md says what they would need.
+# Pull requests and pushes to main: the checks `make` runs locally, nothing else. `make test` is
+# test-race, test-testhooks and test-scripts in turn; here they are jobs of their own, which run side by side,
+# because the two race passes alone outlast one job's budget on a runner of this size. Nothing is retried or
+# skipped. The kind tiers (make e2e-fast and the others) are not here; RELEASING.md says what they would need.
 name: ci
 
 on:
@@ -15,14 +17,35 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
+  # Observed on a cold cache: setup, fmt and lint took about 7 minutes. 15 leaves room for twice that, and for build.
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Go version is go.mod's; setup-go caches the module cache and the build cache, keyed on go.sum.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: fmt leaves no diff
+        run: |
+          make fmt
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+      - run: make lint
+      - run: make build
+
+  # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that.
+  test:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The Go version is go.mod's; setup-go caches the module cache and the build cache, keyed on go.sum.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -33,13 +56,23 @@ jobs:
         with:
           # The version test/chart passes with; release.yml pins the same one.
           version: v4.3.0
-      - name: fmt leaves no diff
-        run: |
-          make fmt
-          git diff --exit-code
-          test -z "$(git status --porcelain)"
-      - run: make lint
-      - run: make test
+      - run: make test-race
         env:
           COURIER_REQUIRE_HELM: "1"
-      - run: make build
+      - run: make test-scripts
+
+  # The same packages as the first pass but under ./internal/..., built with the testhooks tag: it did not finish in the
+  # 23 minutes that were left after the lint, and one package in it (internal/chat/chattest) took 213 seconds alone.
+  # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part.
+  test-testhooks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make test-testhooks

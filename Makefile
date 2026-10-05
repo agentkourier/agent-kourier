@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-postgres build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -16,9 +16,15 @@ lint: ## Run golangci-lint (also over the e2e, image and testhooks tagged code)
 	$(LINT) run --build-tags e2e,image ./...
 	$(LINT) run --build-tags testhooks ./...
 
-test: ## Run unit tests with the race detector, then the testhooks-tagged ones, then the kind scripts' own (no cluster)
+test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, the testhooks-tagged ones, the kind scripts' own (CI runs the three apart)
+
+test-race: ## Run unit tests with the race detector (the chart tests need helm; COURIER_REQUIRE_HELM=1 fails without it)
 	go test -race ./...
+
+test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
 	go test -race -tags testhooks ./internal/...
+
+test-scripts: ## Run the kind scripts' own tests (no cluster)
 	hack/kind/netpol_test.sh
 
 test-postgres: ## Run the Postgres store's tests, the store conformance suite and the broker's Postgres test against a throwaway Postgres container (Docker; hack/postgres/test.sh)

@@ -483,9 +483,10 @@ func TestRecoverRendersATaskUnderTheTurnRecordedForIt(t *testing.T) {
 	f.recover(t)
 	waitFinal(t, sink)
 	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	if len(sink.refs) != 1 || sink.refs[0].MessageID != inbound("1").MessageID || sink.refs[0].UserID != "U1" || !sink.refs[0].Recovered {
-		t.Errorf("turn refs = %+v; want one, recovered, under the recorded turn (%s) and shown to its author, U1", sink.refs, inbound("1").MessageID)
+	refs := slices.Clone(sink.refs) // not held to the end: the runner tells the sink of the turn's end after the final, and clears the task after that
+	sink.mu.Unlock()
+	if len(refs) != 1 || refs[0].MessageID != inbound("1").MessageID || refs[0].UserID != "U1" || !refs[0].Recovered {
+		t.Errorf("turn refs = %+v; want one, recovered, under the recorded turn (%s) and shown to its author, U1", refs, inbound("1").MessageID)
 	}
 	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if sess, err := f.session(); err != nil || sess.Turn != (store.TaskTurn{}) {
