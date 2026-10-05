@@ -610,6 +610,17 @@ func (t *tstate) outputTurn() store.TaskTurn {
 	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(t.r.UserID, t.began.User)}
 }
 
+// feedbackOf is the feedback buttons the final message of a turn written by user carries (TurnRef.Feedback).
+func feedbackOf(user string, b Backend) store.FeedbackKind {
+	switch {
+	case user == SystemUser:
+		return store.FeedbackInvestigation
+	case user != "" && b.Feedback:
+		return store.FeedbackAnswer
+	}
+	return ""
+}
+
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
 // recording the task as soon as the agent names it.
 func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) error) (out outcome, err error) {
@@ -660,7 +671,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 		// the output of the turn that paused. A task found again after a restart, or followed again
 		// after a lost stream, continues the message it had.
 		out := t.outputTurn()
-		ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: out.ID, UserID: out.User, Output: t.b.Output, Recovered: t.recovered || t.follow}
+		ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: out.ID, UserID: out.User, Output: t.b.Output, Recovered: t.recovered || t.follow, Feedback: feedbackOf(out.User, t.b)}
 		if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
 			h = sh
 		}

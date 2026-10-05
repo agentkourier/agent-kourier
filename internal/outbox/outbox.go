@@ -126,6 +126,11 @@ type Post struct {
 	Out chat.Outgoing
 }
 
+// RepostedSource is the source a reply is posted under when it is posted again, under a row of its own, because the row of the
+// first attempt cannot be found on the platform (a stream whose message was never recorded): the source of the first attempt,
+// and the mark. The rating of such a reply names the first source, and finds the row by this one too.
+func RepostedSource(source string) string { return source + "/recovered" }
+
 // ID returns the outbox ID of a message: deterministic, so a retry of the same event names the
 // same row. An interaction prompt passes its interaction ID as source, so it cannot collide with
 // an agent reply (spec 8.6 step 5).

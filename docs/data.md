@@ -19,8 +19,53 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `interaction_presses.inputs` | What a person typed into a prompt. | Until the press is processed, or the worker gives up (an hour); purged an hour after the interaction's deadline at the latest. |
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned; an unrecorded one is purged after 7 days. |
 | `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. | Until the session has been expired for 90 days, then all deleted together (below). |
+| `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept for the pilot's review (D33). No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
+| `sessions.alert_name`, `sessions.agent_name` | The alert name a trigger started the thread for, in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) or empty, and the agent of the Binding when the session was made. A vote is stored and counted under them, whatever the Binding says later. | As long as the session row, which is deleted with its thread (below). |
 | `audit` | IDs, codes, outcomes and lengths, never message text. | For ever, unless `COURIER_AUDIT_RETENTION` is set (below). |
 | `events.payload` | Nothing writes it yet. The Alertmanager receiver comes with its own purge. | n/a |
+
+### Feedback
+
+The useful and not-useful buttons (spec 8.7) store one row for each person and message, in table `feedback` of both stores:
+
+| Column | Holds |
+|---|---|
+| `connection`, `channel`, `thread_ts` | The session: the thread the rated message is in. |
+| `turn_id` | The turn whose output is the rated message. A thread's several answers are rated apart. |
+| `user_id` | The platform's ID of who voted (a pseudonym, not a name or an email). |
+| `binding`, `agent`, `alert_name` | The Binding, its agent (`namespace/name` on the backend) and the alert name of the thread, as they were at the person's first vote. |
+| `kind` | `investigation` (the final message of a thread that a trigger or an alert started) or `answer` (an answer to a person, on a Binding with `feedback.enabled`). |
+| `verdict` | `useful` or `not_useful`. A later press of the other button replaces it. |
+| `first_at`, `voted_at` | The first vote, and the latest. |
+
+No free text is stored: courier asks for none, and the alert name is kept only in the name shape (an alert's title is
+untrusted text; a value outside the shape is stored as empty). A vote counts only from a member of the bound channel and
+never from a bot. **Retention: rows are kept.** The pilot's exit decision is computed from them, and a later review reads
+them; no retention loop touches the table, the deletion of expired sessions (DP-3) included. A vote on a message whose session
+has been deleted is told that the message can no longer be rated. The voter's ID is the only personal datum in a row: remove the
+rows of a person with `DELETE FROM feedback WHERE user_id = ...` on the operator's own request.
+
+Each vote is also an audit entry of kind `event` whose subject names the turn, channel and thread and whose outcome is the verdict
+(`feedback: verdict=useful changed=false`), and it is counted in `courier_investigation_feedback_total`
+([observability.md](observability.md)); the table, not the metric, is the record D33 is computed from.
+
+The pilot's exit decision (D33) counts investigations, not votes: an investigation (the thread a trigger started) is rated if any
+person voted on its investigation message, and is useful if more of its votes are useful than not useful, so a tie is not useful.
+It is one query, the same in SQLite and Postgres (the stores' tests run this very text against both):
+
+```sql
+WITH rated AS (
+    SELECT connection, channel, thread_ts,
+           SUM(CASE WHEN verdict = 'useful' THEN 1 ELSE 0 END) AS useful,
+           COUNT(*) AS votes
+    FROM feedback
+    WHERE kind = 'investigation'
+    GROUP BY connection, channel, thread_ts
+)
+SELECT COUNT(*) AS rated,
+       COALESCE(SUM(CASE WHEN useful * 2 > votes THEN 1 ELSE 0 END), 0) AS useful
+FROM rated;
+```
 
 ### Interactions: request and answer
 

@@ -8,6 +8,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -75,7 +76,11 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	if mode == "" {
 		mode = v1alpha1.OutputLive
 	}
-	return s.runs.Start(ctx, Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Recipient: recipient, Recovered: t.Recovered}).Handle
+	turn := Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Recipient: recipient, Recovered: t.Recovered}
+	if t.Feedback != "" { // the buttons say what they rate by the value alone, so that a press after a restart finds it
+		turn.Footer = feedback.Parts(t.Feedback, t.Key.Thread, t.MessageID)
+	}
+	return s.runs.Start(ctx, turn).Handle
 }
 
 // Notice is QueueNotice for the session manager's Sink: it has no way to retry, so a notice that could

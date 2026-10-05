@@ -163,7 +163,7 @@ func blockOK(raw json.RawMessage, streaming bool, markdown *int, ids map[string]
 		return ok && n >= 1 && n <= maxHeaderText
 	case "section":
 		return sectionOK(b.Text, b.Fields, b.Accessory)
-	case "context":
+	case "context", "context_actions":
 		for _, e := range b.Elements {
 			if !elementKnown(e) {
 				return false
@@ -238,7 +238,7 @@ func actionElementOK(raw json.RawMessage) bool {
 // invalid_blocks as the error for one that is not on it.
 func knownBlock(t string) bool {
 	switch t {
-	case "actions", "alert", "card", "carousel", "context", "divider", "file", "header", "image", "input",
+	case "actions", "alert", "card", "carousel", "context", "context_actions", "divider", "file", "header", "image", "input",
 		"markdown", "rich_text", "section", "table", "video":
 		return true
 	}

@@ -109,7 +109,7 @@ func renderMessage(m chat.Message) (Content, error) {
 			first = s
 		}
 	}
-	for _, p := range m.Parts {
+	for i, p := range m.Parts {
 		switch p := p.(type) {
 		case chat.Header:
 			if t := text(p.Text, maxHeader, true); t != "" {
@@ -137,7 +137,7 @@ func renderMessage(m chat.Message) (Content, error) {
 			blocks = append(blocks, mentionLine(p))
 			note(p.Text)
 		case chat.Buttons:
-			if b := buttons(p); b != nil {
+			if b := buttons(p, i); b != nil {
 				blocks = append(blocks, b)
 			}
 		}
@@ -202,9 +202,10 @@ func taskEscaper() escaper {
 	}
 }
 
-// buttons is an actions block of p's buttons, or nil if there are none. A label cut to nothing reads
+// buttons is an actions block of p's buttons, or nil if there are none: part i of its message, so that its block_id, which a
+// press names, is its own in the message and the same whenever the message is rendered. A label cut to nothing reads
 // "(blank)": a button with no label is refused.
-func buttons(p chat.Buttons) map[string]any {
+func buttons(p chat.Buttons, i int) map[string]any {
 	var els []map[string]any
 	for _, b := range p.Buttons {
 		if len(els) == maxActions {
@@ -219,7 +220,7 @@ func buttons(p chat.Buttons) map[string]any {
 	if len(els) == 0 {
 		return nil
 	}
-	return map[string]any{"type": "actions", "elements": els}
+	return map[string]any{"type": "actions", "block_id": "buttons" + strconv.Itoa(i), "elements": els}
 }
 
 // The block and action IDs of a prompt, which a press names: question i is in the block "q<i>", and its control's

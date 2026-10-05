@@ -101,3 +101,21 @@ func TestBindingRefusesADialectThatIsNotBuilt(t *testing.T) {
 		t.Errorf("Binding of an a2a Binding = %v, want an error naming the dialect that is not the sentinel", err)
 	}
 }
+
+// feedback.enabled of the Binding reaches the session as Backend.Feedback, which makes the final message of an answer carry the
+// buttons (spec 8.7).
+func TestBackendCarriesTheBindingsFeedbackSetting(t *testing.T) {
+	f := newFixture(t)
+	for _, enabled := range []bool{true, false} {
+		snap := snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+		rb, _ := snap.Binding("sre", "oncall")
+		rb.Binding.Spec.Feedback.Enabled = enabled
+		f.snaps.p.Store(snap)
+
+		be, err := f.b.Backend("sre/oncall")
+
+		if err != nil || be.Feedback != enabled {
+			t.Errorf("Backend.Feedback = %t, %v; want %t from spec.feedback.enabled", be.Feedback, err, enabled)
+		}
+	}
+}

@@ -930,13 +930,22 @@ this with an outbox:
 
 ### 8.7 Feedback
 
-- The final message of every alert investigation, and of a chat answer when the Binding
-  has `feedback.enabled`, carries Useful and Not useful buttons.
-- One vote per Slack user per investigation; a user can change their vote. Votes by bots
-  are ignored.
-- Stored with Binding, agent, alert name, and session, and exported as
-  `courier_investigation_feedback_total{binding, agent, alertname, verdict}`.
-- The pilot exit decision (D33) is computed from these rows.
+- The final message of every investigation that a trigger or an alert started carries Useful and Not useful buttons;
+  the final message of an answer to a person carries them when the Binding has `feedback.enabled`. A message that ends
+  on a question to a person (input-required or auth-required) carries none; the answer that follows does.
+- A vote counts only from a member of the bound channel and never from a bot, and only for the message that was
+  pressed (its turn, channel and thread must match courier's record of that post). A person has one vote on each
+  rated message; the latest press wins, and the vote is acknowledged to them alone, in an ephemeral.
+- A vote is stored in `feedback` with the Binding, agent, alert name, session and turn. The Binding and agent are
+  those of the session when it was created, so a changed or removed Binding neither relabels nor blocks votes on
+  earlier investigations. Votes are audited by IDs and verdict only, and counted in
+  `courier_investigation_feedback_total{binding, agent, alertname, verdict}`: a counter of votes cast (a change is one
+  more vote under its new verdict). The alert name is the trigger's `alertname`, kept only in the name shape; the
+  label is `none` for an answer in a thread no alert started and `unknown` for an investigation with no name, and a
+  Binding has at most 100 names in a process, then `other`.
+- The pilot exit decision (D33) is computed from the rows, not the metric (owner, 2026-10-05): each investigation
+  counts once, useful when most of its investigation votes say Useful (a tie is not useful); "rated" means at least
+  one vote. The query is in `docs/data.md`.
 
 ## 9. State
 
@@ -944,13 +953,13 @@ this with an outbox:
 |---|---|---|
 | `events` | event ID | Durable inbound queue with processing status |
 | `outbox` | outbox ID | Intended Slack posts and their resulting message refs (8.6) |
-| `sessions` | conversation key | `contextId`, current task ID, binding, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
+| `sessions` | conversation key | `contextId`, current task ID, binding, agent and alert name at creation, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
 | `alert_groups` | dedup key | Session link, root message ref, firing or resolved |
 | `run_counters` | binding, window | Rate-limit and daily-cap counters, and skipped counts for the digest |
 | `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours. The alert Binding's `run_counters` (WP-43) is a separate counter for the webhook |
 | `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays until its session is deleted (below). |
 | `reply_queue` | session, sequence | Thread replies waiting for the active task to finish. Text is cleared on delivery; a reply undelivered for 30 days whose session has no active task is dropped, text cleared. |
-| `feedback` | session, Slack user | Verdict, alert name, agent, binding, timestamps |
+| `feedback` | session, turn, Slack user | Verdict, kind (investigation or answer), alert name, agent, binding, timestamps. Kept (not deleted with its session) |
 | `audit` | sequence | Append-only record of events, agent calls, decisions. Append-only except for a purge of entries older than `COURIER_AUDIT_RETENTION` (default `keep`: never purged; otherwise at least 24h). |
 
 Retention (hourly, leader only): a session, and the rows of `reply_queue`, `interactions`, `interaction_presses` and `outbox`

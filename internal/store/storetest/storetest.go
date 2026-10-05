@@ -58,6 +58,7 @@ func Run(t *testing.T, open func(t *testing.T) Instance) {
 		{"Retention", su.retention},
 		{"TriggerThreads", su.triggerThreads},
 		{"TriggerRuns", su.triggerRuns},
+		{"Feedback", su.feedback},
 		{"Fidelity", su.fidelity},
 		{"TraceContext", su.traceContext},
 		{"Lifecycle", su.lifecycle},

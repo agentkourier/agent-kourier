@@ -112,7 +112,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 		if !prefix {
 			u.diverged, suffix = true, ""
 		}
-		if err := u.stream.Stop(ctx, suffix, chat.Message{}, id); err != nil {
+		if err := u.stream.Stop(ctx, suffix, u.stopFooter(v), id); err != nil {
 			return err
 		}
 		u.stopped = true
@@ -125,6 +125,16 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 	}
 	u.sent = u.want(v)
 	return nil
+}
+
+// stopFooter is the message a stream is stopped with: the turn's footer, if the stream holds the text it rates. Slack shows the
+// stop's blocks under the streamed text. A stream that diverged is stopped bare, as it always was, and the update that replaces
+// the message carries the footer (the final view's own message): sent in both, it would be there twice.
+func (u *Run) stopFooter(v view) chat.Message {
+	if u.diverged || !v.rated || v.body == "" || len(u.turn.Footer) == 0 {
+		return chat.Message{}
+	}
+	return chat.Message{Parts: u.turn.Footer}
 }
 
 // appendText sends the text of body up to n, if what was streamed is a prefix of it: a text that is not cannot be
@@ -245,6 +255,6 @@ func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, v view, id string) er
 // stream has no payload, and is not one that Run ever delivers.
 func (u *Run) postInstead(ctx context.Context, ref *chat.Ref, v view) error {
 	u.streaming = false
-	u.turn.Source += "/recovered"
+	u.turn.Source = outbox.RepostedSource(u.turn.Source)
 	return u.write(ctx, ref, v)
 }

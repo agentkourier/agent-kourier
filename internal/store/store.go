@@ -53,6 +53,7 @@ type Store interface {
 	TriggerThreads
 	TriggerRuns
 	ReplyQueue
+	Feedback
 	Audit
 	AuditRetention
 	SessionRetention

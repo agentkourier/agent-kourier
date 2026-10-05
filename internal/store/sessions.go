@@ -30,8 +30,16 @@ type Session struct {
 	// TurnTask is the task Turn was recorded for. A binary from before the turn was recorded starts a task and leaves the
 	// turn as it was, so Turn is the active task's only if TurnTask equals TaskID; otherwise it is another task's, and no
 	// output of this one belongs to it.
-	TurnTask     string
-	Binding      string
+	TurnTask string
+	Binding  string
+	// Alert is the name of the alert the thread was started for (a trigger's `alertname` entry), or empty for a
+	// thread no alert started. It is untrusted text out of a bot's message, kept as the feedback of an investigation's
+	// message needs it, and written by UpsertSession alone.
+	Alert string
+	// Agent is the agent of the Binding when the session was made, namespace/name on its backend, kept so that a vote on a message
+	// of the thread names the agent that wrote it, whatever the Binding says later. Empty for a session of a build from before
+	// the column. Written by UpsertSession alone.
+	Agent        string
 	LastActivity time.Time
 }
 

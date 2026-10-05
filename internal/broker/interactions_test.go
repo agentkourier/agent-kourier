@@ -17,34 +17,49 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
-// pressed is a presser that answers with the error the test sets.
-type pressed struct{ err error }
+// pressed is a presser that answers with the error the test sets, and counts its presses.
+type pressed struct {
+	err error
+	n   *int
+}
 
-func (p pressed) Press(context.Context, chat.Interaction) error { return p.err }
+func (p pressed) Press(context.Context, chat.Interaction) error {
+	if p.n != nil {
+		*p.n++
+	}
+	return p.err
+}
 
-// The handler of buttons tells the three outcomes of a press apart: a button of someone else's is dropped
+// The handler of buttons tells the outcomes of a press apart: a button of someone else's is dropped
 // without a word, a press refused for the limit is acknowledged and logged, and a failure is returned, so
-// that Slack delivers the press again.
+// that Slack delivers the press again. A button that is no interaction's goes to the feedback buttons' handler, and
+// only then is it someone else's; an interaction's never reaches it.
 func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *testing.T) {
 	boom := errors.New("the store is down")
 	for _, tc := range []struct {
-		name    string
-		err     error
-		want    error
-		wantLog string
+		name         string
+		err, fbErr   error
+		want         error
+		wantLog      string
+		wantFeedback int // presses that reached the feedback handler
 	}{
-		{"a press recorded", nil, nil, ""},
-		{"another handler's button", interact.ErrNotInteraction, nil, ""},
-		{"too many presses waiting", fmt.Errorf("interact: record a press: %w", store.ErrLimit), nil, "too many presses"},
-		{"any other failure", boom, boom, ""},
+		{"a press recorded", nil, nil, nil, "", 0},
+		{"a feedback press recorded", interact.ErrNotInteraction, nil, nil, "", 1},
+		{"another handler's button", interact.ErrNotInteraction, feedback.ErrNotFeedback, nil, "", 1},
+		{"too many presses waiting", fmt.Errorf("interact: record a press: %w", store.ErrLimit), nil, nil, "too many presses", 0},
+		{"too many feedback presses waiting", interact.ErrNotInteraction, fmt.Errorf("feedback: record a press: %w", store.ErrLimit), nil, "too many presses", 1},
+		{"any other failure", boom, nil, boom, "", 0},
+		{"a feedback press that fails", interact.ErrNotInteraction, boom, boom, "", 1},
 	} {
 		out := &logBuffer{}
-		h := interactionsHandler(pressed{tc.err}, slog.New(slog.NewTextHandler(out, nil)))
+		var fbPresses int
+		h := interactionsHandler(pressed{err: tc.err}, pressed{err: tc.fbErr, n: &fbPresses}, slog.New(slog.NewTextHandler(out, nil)))
 
 		err := h(t.Context(), chat.Interaction{At: chat.Ref{Channel: "C1"}, PromptID: "x"})
 
@@ -54,7 +69,44 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 		if (tc.wantLog == "") != (out.String() == "") || !strings.Contains(out.String(), tc.wantLog) {
 			t.Errorf("%s: logged %q, want a line with %q (or nothing)", tc.name, out.String(), tc.wantLog)
 		}
+		if fbPresses != tc.wantFeedback {
+			t.Errorf("%s: %d presses reached the feedback handler, want %d", tc.name, fbPresses, tc.wantFeedback)
+		}
 	}
+}
+
+// The press worker's one processor is the interactions' pipeline or the feedback handler, by whose press it is: a
+// feedback press by its lane, which no interaction's has.
+func TestPressRouterSendsAPressToItsOwnProcessor(t *testing.T) {
+	var interactions, feedbacks []int64
+	mk := func(got *[]int64) interact.PressProcessor {
+		return fakeProcessor{process: func(p store.Press) { *got = append(*got, p.Seq) }}
+	}
+	r := pressRouter{interactions: mk(&interactions), feedback: mk(&feedbacks)}
+	for _, p := range []store.Press{{Seq: 1, InteractionID: "ix-0123"}, {Seq: 2, InteractionID: "fb1|turn-1"}, {Seq: 3, InteractionID: "ix-4567"}} {
+		if _, err := r.Process(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.GiveUp(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(interactions, []int64{1, 1, 3, 3}) || !slices.Equal(feedbacks, []int64{2, 2}) {
+		t.Errorf("interactions' pipeline got %v and the feedback handler %v; want each press processed and given up by its own", interactions, feedbacks)
+	}
+}
+
+// fakeProcessor records the presses it is given, to Process and to GiveUp alike.
+type fakeProcessor struct{ process func(store.Press) }
+
+func (f fakeProcessor) Process(_ context.Context, p store.Press) (interact.Result, error) {
+	f.process(p)
+	return interact.Done, nil
+}
+
+func (f fakeProcessor) GiveUp(_ context.Context, p store.Press) error {
+	f.process(p)
+	return nil
 }
 
 // Before the manager exists the interactions' session answers that it is not ready, and calls nothing.

@@ -52,6 +52,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"courier_trigger_decisions_total", "What a matched bot message did to its key's thread, by Binding and decision (started, repeat, closed, close_unknown, dedup, empty_key, not_started, limited).", []string{"binding", "decision"}},
 		{"courier_trigger_limited_total", "Trigger starts a limit stopped, so no investigation began, by Binding, trigger index and the limit (rate, concurrent, daily).", []string{"binding", "trigger", "limit"}},
 		{"courier_trigger_refused_total", "Trigger starts whose first prompt was refused, so no turn started, by Binding, trigger index, the value that failed its check (ref) and why (reason).", []string{"binding", "trigger", "ref", "reason"}},
+		{"courier_investigation_feedback_total", "Votes cast on the final message of an investigation or an answer, by Binding, agent, alert name (none for a thread no alert started, unknown for an alert with no name, other past 100 names for a Binding) and verdict (useful, not_useful). A vote that changes another is one more vote, under its new verdict.", []string{"binding", "agent", "alertname", "verdict"}},
 		{"courier_stream_reconnects_total", "Stream reconnect attempts by outcome.", []string{"outcome"}},
 		{"courier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
 		{"courier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},

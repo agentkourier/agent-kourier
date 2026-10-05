@@ -66,6 +66,9 @@ type Backend struct {
 	// Output is the Binding's chat output mode (live or final), which the sink is told of each
 	// turn. Empty means live.
 	Output v1alpha1.OutputMode
+	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
+	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
+	Feedback bool
 }
 
 // Auditor records agent calls: *audit.Writer. A failed write is logged, never fatal (spec 8.6).
@@ -103,6 +106,10 @@ type TurnRef struct {
 	// thread, so the renderer updates what it posted before, or posts the whole. The output of an
 	// answer to a pause is not that: its MessageID is the answer's own, a new message.
 	Recovered bool
+	// Feedback says which feedback buttons the final message of the output carries (spec 8.7): none for the
+	// zero value, those of an investigation for a turn that nobody wrote (an alert's first prompt: its user is
+	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
+	Feedback store.FeedbackKind
 }
 
 // NoticeKind is what a Notice tells the thread.

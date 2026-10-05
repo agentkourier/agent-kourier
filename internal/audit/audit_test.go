@@ -143,6 +143,57 @@ func TestTriggerRefusedCleansWhatItStores(t *testing.T) {
 	}
 }
 
+// A vote is an event of its own: who voted, on which message, and the verdict, by identifiers only. The alert's name is
+// untrusted text from the alert, and is not an identifier of the vote, so it is not a field of the call.
+func TestFeedbackVote(t *testing.T) {
+	ctx := context.Background()
+	w, s := newWriter(t)
+	v := FeedbackVote{Turn: "slack:ns/conn:C1:1759.002", Channel: "C1", Thread: "1759.002", Verdict: store.VerdictNotUseful}
+	if err := w.FeedbackVote(ctx, who, v); err != nil {
+		t.Fatalf("FeedbackVote: %v", err)
+	}
+	v.Verdict, v.Changed = store.VerdictUseful, true
+	if err := w.FeedbackVote(ctx, who, v); err != nil {
+		t.Fatalf("FeedbackVote of a changed vote: %v", err)
+	}
+	got := rows(t, s)
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2: %+v", len(got), got)
+	}
+	want := []store.AuditEntry{
+		{Sequence: 1, At: t0, Kind: store.AuditEvent, User: "U1", Email: "u1@example.com", Identity: "sa/investigator", Binding: "ns/b",
+			Subject: "feedback turn=slack:ns/conn:C1:1759.002 channel=C1 thread=1759.002", Outcome: "feedback: verdict=not_useful changed=false"},
+		{Sequence: 2, At: t0, Kind: store.AuditEvent, User: "U1", Email: "u1@example.com", Identity: "sa/investigator", Binding: "ns/b",
+			Subject: "feedback turn=slack:ns/conn:C1:1759.002 channel=C1 thread=1759.002", Outcome: "feedback: verdict=useful changed=true"},
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	good := v
+	for name, bad := range map[string]struct {
+		a Actor
+		v FeedbackVote
+	}{
+		"no Binding":  {Actor{User: "U1"}, good},
+		"no user":     {Actor{Binding: "ns/b"}, good},
+		"no turn":     {who, FeedbackVote{Channel: "C1", Thread: "1.1", Verdict: store.VerdictUseful}},
+		"no channel":  {who, FeedbackVote{Turn: "t", Thread: "1.1", Verdict: store.VerdictUseful}},
+		"no thread":   {who, FeedbackVote{Turn: "t", Channel: "C1", Verdict: store.VerdictUseful}},
+		"no verdict":  {who, FeedbackVote{Turn: "t", Channel: "C1", Thread: "1.1"}},
+		"bad verdict": {who, FeedbackVote{Turn: "t", Channel: "C1", Thread: "1.1", Verdict: "meh"}},
+	} {
+		if err := w.FeedbackVote(ctx, bad.a, bad.v); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s: FeedbackVote = %v, want ErrInvalid", name, err)
+		}
+	}
+	if n := len(rows(t, s)); n != 2 {
+		t.Errorf("%d rows after the invalid calls; want the two votes", n)
+	}
+}
+
 func TestAgentCall(t *testing.T) {
 	notSent401 := fmt.Errorf("send: %w", errors.Join(agent.ErrNotSent, agent.ErrCredentialsRejected, &dialect.HTTPStatusError{Code: 401}))
 	lost := &agent.StreamLostError{TaskID: "t-lost", ContextID: "c-lost", Err: errors.New("dropped")}

@@ -287,8 +287,12 @@ type Interactions struct {
 	ApproverGroups []string `json:"approverGroups,omitempty"`
 }
 
-// Feedback configures the useful and not-useful buttons (D27).
+// Feedback configures the useful and not-useful buttons (D27, spec 8.7). The final message of an investigation that
+// a trigger started always carries them; Enabled adds them to the Binding's chat answers too.
 type Feedback struct {
+	// Enabled puts the buttons on the final message of an answer to a person's message in a thread. It does not
+	// switch them off for an investigation a trigger started. Defaults to false.
+	// +optional
 	Enabled bool `json:"enabled,omitempty"`
 }
 

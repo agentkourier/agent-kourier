@@ -76,8 +76,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 18 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of ten scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 19 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of eleven scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -166,6 +166,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"S13", e2e.ChannelS13, "scenario-tools", false, v1alpha1.OutputLive},
 		{"S14", e2e.ChannelS14, "scenario-alert", false, v1alpha1.OutputLive},
 		{"S15", e2e.ChannelS15, "scenario-alert", false, v1alpha1.OutputLive},
+		{"S17", e2e.ChannelS17, "scenario-alert", false, v1alpha1.OutputLive},
 		{"S16", e2e.ChannelS16, "scenario-gated", false, v1alpha1.OutputLive},
 		{"S16b", e2e.ChannelS16B, "test-agent", false, v1alpha1.OutputFinal},
 		{"S16c", e2e.ChannelS16C, "scenario-gated", false, v1alpha1.OutputLive},
@@ -306,6 +307,32 @@ func TestS14TakesTheAlertBotByItsIDWithThePreset(t *testing.T) {
 	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS14 ||
 		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
 		t.Errorf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS14)
+	}
+}
+
+// TestS17TakesTheAlertBotByItsIDAndHasNoFeedbackSetting: S17's channel has S14's trigger for the bot ID the scenario posts
+// as, and the Binding does not turn feedback.enabled on: the scenario shows that the buttons of an investigation a trigger
+// started do not depend on it.
+func TestS17TakesTheAlertBotByItsIDAndHasNoFeedbackSetting(t *testing.T) {
+	set, err := config.Load(t.Context(), courierDir+"config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb, ok := snap.BindingForChannel("courier", "slack-fast", e2e.ChannelS17)
+	if !ok {
+		t.Fatalf("channel %s resolves to no Binding", e2e.ChannelS17)
+	}
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS17 ||
+		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Errorf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS17)
+	}
+	if rb.Binding.Spec.Feedback.Enabled {
+		t.Error("the Binding has feedback.enabled; want it off, so that S17 shows the buttons of an investigation do not need it")
 	}
 }
 

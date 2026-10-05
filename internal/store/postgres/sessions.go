@@ -26,14 +26,14 @@ func (s *Store) UpsertSession(ctx context.Context, sess store.Session) (telemetr
 	if !validKey(sess.Key) || sess.Binding == "" || sess.LastActivity.IsZero() {
 		return fmt.Errorf("upsert session %+v: key, Binding and LastActivity are required: %w", sess.Key, store.ErrInvalid)
 	}
-	_, err := s.exec(ctx, `INSERT INTO sessions (connection, channel, thread_ts, context_id, task_id, binding, last_activity, trace_parent, trace_state)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	_, err := s.exec(ctx, `INSERT INTO sessions (connection, channel, thread_ts, context_id, task_id, binding, alert_name, agent_name, last_activity, trace_parent, trace_state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET
 			context_id = EXCLUDED.context_id, task_id = EXCLUDED.task_id,
-			binding = EXCLUDED.binding, last_activity = EXCLUDED.last_activity,
+			binding = EXCLUDED.binding, alert_name = EXCLUDED.alert_name, agent_name = EXCLUDED.agent_name, last_activity = EXCLUDED.last_activity,
 			trace_parent = CASE WHEN EXCLUDED.trace_parent = '' THEN sessions.trace_parent ELSE EXCLUDED.trace_parent END,
 			trace_state = CASE WHEN EXCLUDED.trace_parent = '' THEN sessions.trace_state ELSE EXCLUDED.trace_state END`,
-		sess.Key.Connection, sess.Key.Channel, sess.Key.Thread, sess.ContextID, sess.TaskID, sess.Binding, sess.LastActivity, sess.TraceParent, sess.TraceState)
+		sess.Key.Connection, sess.Key.Channel, sess.Key.Thread, sess.ContextID, sess.TaskID, sess.Binding, sess.Alert, sess.Agent, sess.LastActivity, sess.TraceParent, sess.TraceState)
 	if err != nil {
 		return fmt.Errorf("upsert session %+v: %w", sess.Key, err)
 	}
@@ -49,9 +49,9 @@ func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl t
 	}
 	sess := store.Session{Key: key}
 	var last time.Time
-	err := s.pool.QueryRow(ctx, `SELECT context_id, task_id, turn_id, turn_user, turn_task, binding, last_activity, trace_parent, trace_state FROM sessions
+	err := s.pool.QueryRow(ctx, `SELECT context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state FROM sessions
 		WHERE connection = $1 AND channel = $2 AND thread_ts = $3`, key.Connection, key.Channel, key.Thread).
-		Scan(&sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState)
+		Scan(&sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &sess.Alert, &sess.Agent, &last, &sess.TraceParent, &sess.TraceState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Session{}, fmt.Errorf("get session %+v: %w", key, store.ErrNotFound)
 	}
@@ -114,7 +114,7 @@ func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) (te
 func (s *Store) ListActiveSessions(ctx context.Context) (sessions []store.Session, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.ListActiveSessions")
 	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	rows, err := s.pool.Query(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, last_activity, trace_parent, trace_state
+	rows, err := s.pool.Query(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state
 		FROM sessions WHERE task_id <> '' ORDER BY last_activity, connection, channel, thread_ts`)
 	if err != nil {
 		return nil, fmt.Errorf("list active sessions: %w", err)
@@ -124,7 +124,7 @@ func (s *Store) ListActiveSessions(ctx context.Context) (sessions []store.Sessio
 	for rows.Next() {
 		var sess store.Session
 		var last time.Time
-		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState); err != nil {
+		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &sess.Alert, &sess.Agent, &last, &sess.TraceParent, &sess.TraceState); err != nil {
 			return nil, fmt.Errorf("scan session row: %w", err)
 		}
 		sess.LastActivity = utc(last)

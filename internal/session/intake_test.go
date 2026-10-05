@@ -152,6 +152,7 @@ type fixture struct {
 	bindingErr       error // when set, every Binding lookup fails with it (guarded by amu)
 	noRejected       bool  // the Backend has no identity Source to call Rejected on
 	textReplies      bool
+	feedback         bool // the Backend has feedback.enabled
 	output           v1alpha1.OutputMode
 }
 
@@ -186,7 +187,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{TextReplies: f.textReplies, ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output}
+	b := Backend{AgentName: "kagent/agent-1", TextReplies: f.textReplies, ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback}
 	if f.noRejected {
 		b.Rejected = nil
 	}

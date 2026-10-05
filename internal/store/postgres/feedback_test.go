@@ -1,0 +1,22 @@
+package postgres
+
+import (
+	"testing"
+
+	"github.com/agentkourier/agent-kourier/internal/store/storetest"
+)
+
+// The query that docs/data.md gives for the pilot's exit decision (D33) answers by the rule of the owner, here as in SQLite:
+// per investigation, the majority of its votes, a tie not useful, and only an investigation's own message.
+func TestTheDocumentedDecisionQueryCountsInvestigationsByMajority(t *testing.T) {
+	serverDSN(t)
+	s, _ := openFresh(t)
+	wantRated, wantUseful := storetest.SeedDecisionVotes(t, s)
+	var rated, useful int
+	if err := s.pool.QueryRow(t.Context(), storetest.DecisionSQL(t)).Scan(&rated, &useful); err != nil {
+		t.Fatal(err)
+	}
+	if rated != wantRated || useful != wantUseful {
+		t.Errorf("the query says %d rated, %d useful; want %d and %d", rated, useful, wantRated, wantUseful)
+	}
+}

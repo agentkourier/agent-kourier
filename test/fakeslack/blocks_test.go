@@ -193,16 +193,18 @@ func TestUnknownBlockAndElementTypesAreRefused(t *testing.T) {
 		inputs = append(inputs, fmt.Sprintf(`{"type":"input","block_id":"b%d","label":{"type":"plain_text","text":"l"},"element":{"type":%q,"action_id":"a"}}`, i, typ))
 	}
 	for name, tc := range map[string]struct{ blocks, want string }{
-		"an unknown block type":                  {`[{"type":"markdownx","text":"x"}]`, "invalid_blocks"},
-		"an empty block type":                    {`[{"type":""}]`, "invalid_blocks"},
-		"an unknown element in an actions block": {`[{"type":"actions","block_id":"b","elements":[{"type":"buttonx","action_id":"a"}]}]`, "invalid_blocks"},
-		"an unknown element in a context block":  {`[{"type":"context","elements":[{"type":"markdown","text":"x"}]}]`, "invalid_blocks"},
-		"an unknown section accessory":           {`[{"type":"section","text":` + text + `,"accessory":{"type":"spinner"}}]`, "invalid_blocks"},
-		"an unknown input element":               {`[{"type":"input","block_id":"b","label":{"type":"plain_text","text":"l"},"element":{"type":"plain_text_inputx","action_id":"a"}}]`, "invalid_blocks"},
-		"a markdown block":                       {`[{"type":"markdown","text":"x"}]`, ""},
-		"a context block of text and image":      {`[{"type":"context","elements":[` + text + `,{"type":"plain_text","text":"p"},{"type":"image","image_url":"https://example.com/a.png","alt_text":"a"}]}]`, ""},
-		"a section with a button accessory":      {`[{"type":"section","text":` + text + `,"accessory":` + btn + `}]`, ""},
-		"an input block of each courier control": {"[" + strings.Join(inputs, ",") + "]", ""},
+		"an unknown block type":                   {`[{"type":"markdownx","text":"x"}]`, "invalid_blocks"},
+		"an empty block type":                     {`[{"type":""}]`, "invalid_blocks"},
+		"an unknown element in an actions block":  {`[{"type":"actions","block_id":"b","elements":[{"type":"buttonx","action_id":"a"}]}]`, "invalid_blocks"},
+		"an unknown element in a context block":   {`[{"type":"context","elements":[{"type":"markdown","text":"x"}]}]`, "invalid_blocks"},
+		"an unknown section accessory":            {`[{"type":"section","text":` + text + `,"accessory":{"type":"spinner"}}]`, "invalid_blocks"},
+		"an unknown input element":                {`[{"type":"input","block_id":"b","label":{"type":"plain_text","text":"l"},"element":{"type":"plain_text_inputx","action_id":"a"}}]`, "invalid_blocks"},
+		"an unknown element in a context_actions": {`[{"type":"context_actions","elements":[{"type":"thumbs","action_id":"a"}]}]`, "invalid_blocks"},
+		"a context_actions block of feedback":     {`[{"type":"context_actions","elements":[{"type":"feedback_buttons","action_id":"fb","positive_button":{"text":{"type":"plain_text","text":"Good"},"value":"good"},"negative_button":{"text":{"type":"plain_text","text":"Bad"},"value":"bad"}}]}]`, ""},
+		"a markdown block":                        {`[{"type":"markdown","text":"x"}]`, ""},
+		"a context block of text and image":       {`[{"type":"context","elements":[` + text + `,{"type":"plain_text","text":"p"},{"type":"image","image_url":"https://example.com/a.png","alt_text":"a"}]}]`, ""},
+		"a section with a button accessory":       {`[{"type":"section","text":` + text + `,"accessory":` + btn + `}]`, ""},
+		"an input block of each courier control":  {"[" + strings.Join(inputs, ",") + "]", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := rawBody(t, fake, "chat.postMessage", url.Values{"token": {testToken}, "channel": {"C1"}, "text": {"x"}, "blocks": {tc.blocks}})

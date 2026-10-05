@@ -211,6 +211,26 @@ func (w *Writer) TriggerRefused(ctx context.Context, a Actor, r TriggerRefusal) 
 	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, outcome)
 }
 
+// FeedbackVote is a person's verdict on a message of an investigation (spec 8.7). It names the message by identifiers and
+// holds the verdict, and nothing else: not the alert's name, which is text out of the alert.
+type FeedbackVote struct {
+	// Turn is the turn whose output is the rated message, and Channel and Thread the conversation it is in.
+	Turn, Channel, Thread string
+	Verdict               store.Verdict
+	// Changed says the verdict replaced another one of the same person.
+	Changed bool
+}
+
+// FeedbackVote records a vote, as an event whose outcome says the verdict. It is a record of something already done: the
+// caller follows its failure as the failure policy says, which is to log and carry on.
+func (w *Writer) FeedbackVote(ctx context.Context, a Actor, v FeedbackVote) error {
+	if a.Binding == "" || a.User == "" || v.Turn == "" || v.Channel == "" || v.Thread == "" || !v.Verdict.Valid() {
+		return fail(store.ErrInvalid, "audit feedback vote on %q: a Binding, user, turn, channel, thread and a verdict are required", v.Turn)
+	}
+	subj := "feedback turn=" + clean(v.Turn, maxField) + " channel=" + clean(v.Channel, maxField) + " thread=" + clean(v.Thread, maxField)
+	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, "feedback: verdict="+string(v.Verdict)+" changed="+strconv.FormatBool(v.Changed))
+}
+
 // AgentCall records a send, answer, cancel or FindTask and its typed outcome.
 func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 	var lost *agent.StreamLostError

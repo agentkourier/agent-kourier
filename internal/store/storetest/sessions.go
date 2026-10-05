@@ -11,7 +11,7 @@ import (
 
 // sameSession compares what a session is, leaving out its trace context and comparing times as instants.
 func sameSession(a, b store.Session) bool {
-	return a.Key == b.Key && a.ContextID == b.ContextID && a.TaskID == b.TaskID && a.Turn == b.Turn && a.TurnTask == b.TurnTask && a.Binding == b.Binding &&
+	return a.Key == b.Key && a.ContextID == b.ContextID && a.TaskID == b.TaskID && a.Turn == b.Turn && a.TurnTask == b.TurnTask && a.Binding == b.Binding && a.Alert == b.Alert && a.Agent == b.Agent &&
 		a.LastActivity.Equal(b.LastActivity)
 }
 
@@ -98,6 +98,29 @@ func (su suite) sessions(t *testing.T) {
 			if got := getSession(t, s, k); got.Binding != fmt.Sprint("ns/b", i) {
 				t.Errorf("session %+v has Binding %q; want ns/b%d: keys that differ in one part, or in case or spaces, are different sessions", k, got.Binding, i)
 			}
+		}
+	})
+
+	su.run(t, "the alert a thread was started for, and its agent, are stored with the session and read back, by GetSession and by ListActiveSessions", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		sess := store.Session{Key: key, TaskID: "task1", Binding: "ns/b", Alert: "KubePodCrashLooping", Agent: "kagent/sre", LastActivity: t0}
+		noErr(t, s.UpsertSession(ctx, sess), "UpsertSession")
+		if got := getSession(t, s, key); got.Alert != sess.Alert || got.Agent != sess.Agent || !sameSession(got, sess) {
+			t.Fatalf("GetSession = %+v; want the alert %q kept", got, sess.Alert)
+		}
+		noErr(t, s.TouchSession(ctx, key, t0.Add(time.Hour)), "TouchSession")
+		noErr(t, s.SetSessionTask(ctx, key, "ctx1", "task2", store.TaskTurn{ID: "turn", User: "U1"}), "SetSessionTask")
+		if got := getSession(t, s, key); got.Alert != sess.Alert || got.Agent != sess.Agent {
+			t.Errorf("the alert after a touch and a new task = %q; want it kept: only an upsert writes it (and the agent)", got.Alert)
+		}
+		active, err := s.ListActiveSessions(ctx)
+		if err != nil || len(active) != 1 || active[0].Alert != sess.Alert || active[0].Agent != sess.Agent {
+			t.Fatalf("ListActiveSessions = %+v, %v; want the session with its alert", active, err)
+		}
+		plain := store.Session{Key: keyOf("2.2"), Binding: "ns/b", LastActivity: t0}
+		noErr(t, s.UpsertSession(ctx, plain), "UpsertSession of a session no alert started")
+		if got := getSession(t, s, plain.Key); got.Alert != "" {
+			t.Errorf("a session no alert started has the alert %q; want none", got.Alert)
 		}
 	})
 

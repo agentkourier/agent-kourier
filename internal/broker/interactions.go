@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -133,7 +134,14 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		}
 		return pipeline.TextReply(ctx, key, reply, task)
 	})
-	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pipeline, Logger: d.log}); err != nil {
+	votes, err := feedback.New(feedback.Config{
+		Store: d.st, Sessions: d.st, Authorizer: d.platform, Ephemerals: d.platform, Auditor: d.auditor,
+		Notify: func(p store.Press) { worker.Submit(p) }, Logger: d.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("interactions: the feedback handler: %w", err)
+	}
+	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pressRouter{interactions: pipeline, feedback: votes}, Logger: d.log}); err != nil {
 		return nil, fmt.Errorf("interactions: the worker: %w", err)
 	}
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
@@ -169,7 +177,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 		}
 	})
 	d.traced("start-interactions")
-	return interactionsHandler(pipeline, d.log), nil
+	return interactionsHandler(pipeline, votes, d.log), nil
 }
 
 // startLoop runs run in a goroutine of its own until its stop is called, and returns that stop: it ends
@@ -181,21 +189,24 @@ func startLoop(parent context.Context, run func(context.Context) error) func(con
 	return func(c context.Context) { cancel(); waitFor(c, done) }
 }
 
-// presser takes the press of a button: *interact.Pipeline.
+// presser takes the press of a button: *interact.Pipeline for a prompt's, *feedback.Handler for a feedback button's.
 type presser interface {
 	Press(ctx context.Context, i chat.Interaction) error
 }
 
 // interactionsHandler is what the chat intake calls for each press of a button, which the adapter has decoded
-// into the neutral model. A button that is not an
-// interaction's is someone else's, and is dropped without a word; a press refused because too many wait is
-// told to the log, and acknowledged, since Slack redelivering it would only add to them. Any other error
+// into the neutral model. A prompt's button goes to the interactions' pipeline; one that is not goes to the feedback
+// buttons' handler, and one that is neither's is someone else's, and is dropped without a word. A press refused because too
+// many wait is told to the log, and acknowledged, since Slack redelivering it would only add to them. Any other error
 // leaves the press unacknowledged, for Slack to deliver again.
-func interactionsHandler(p presser, log *slog.Logger) func(context.Context, chat.Interaction) error {
+func interactionsHandler(p, votes presser, log *slog.Logger) func(context.Context, chat.Interaction) error {
 	return func(ctx context.Context, i chat.Interaction) error {
 		err := p.Press(ctx, i)
+		if errors.Is(err, interact.ErrNotInteraction) {
+			err = votes.Press(ctx, i)
+		}
 		switch {
-		case errors.Is(err, interact.ErrNotInteraction):
+		case errors.Is(err, interact.ErrNotInteraction), errors.Is(err, feedback.ErrNotFeedback):
 			return nil
 		case errors.Is(err, store.ErrLimit):
 			log.WarnContext(ctx, "interact: a press was refused, because too many presses are waiting", "channel", i.At.Channel, "err", err)
@@ -203,4 +214,26 @@ func interactionsHandler(p presser, log *slog.Logger) func(context.Context, chat
 		}
 		return err
 	}
+}
+
+// pressRouter is the press worker's processor. Both kinds of button record their presses in one table, and the worker takes
+// them as they come: a feedback press, by its lane, goes to the feedback handler, and any other to the interactions'
+// pipeline.
+type pressRouter struct{ interactions, feedback interact.PressProcessor }
+
+func (r pressRouter) pick(p store.Press) interact.PressProcessor {
+	if feedback.IsPress(p) {
+		return r.feedback
+	}
+	return r.interactions
+}
+
+// Process implements interact.PressProcessor.
+func (r pressRouter) Process(ctx context.Context, p store.Press) (interact.Result, error) {
+	return r.pick(p).Process(ctx, p)
+}
+
+// GiveUp implements interact.PressProcessor.
+func (r pressRouter) GiveUp(ctx context.Context, p store.Press) error {
+	return r.pick(p).GiveUp(ctx, p)
 }

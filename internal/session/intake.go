@@ -47,6 +47,10 @@ type Inbound struct {
 	// Create lets the turn make the session if there is none: an @mention, a DM, an alert's
 	// first prompt. A plain thread reply leaves it false.
 	Create bool
+	// Alert is the name of the alert the thread is started for, which the session keeps for the feedback on its
+	// messages (spec 8.7). Like Binding it is used only to create a session. The caller has bounded it: it is
+	// text out of an alert.
+	Alert string
 }
 
 // Result is the outcome of a Submit. Queued means the turn has to wait for a task that is
@@ -147,12 +151,13 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 	case errors.Is(err, store.ErrNotFound) && !in.Create:
 		return Result{Disposition: NotOwned}, nil
 	case errors.Is(err, store.ErrNotFound):
-		if _, err := m.cfg.Bindings.Backend(in.Binding); err != nil {
+		backend, err := m.cfg.Bindings.Backend(in.Binding)
+		if err != nil {
 			return Result{}, fmt.Errorf("create session %+v under Binding %q: %w", in.Key, in.Binding, err)
 		}
 		// Before the turn is queued or anything is sent (spec 8.2); the agent's first
 		// response fills in the contextId.
-		if err := m.cfg.Store.UpsertSession(ctx, store.Session{Key: in.Key, Binding: in.Binding, LastActivity: now}); err != nil {
+		if err := m.cfg.Store.UpsertSession(ctx, store.Session{Key: in.Key, Binding: in.Binding, Alert: in.Alert, Agent: backend.AgentName, LastActivity: now}); err != nil {
 			return Result{}, fmt.Errorf("create session %+v: %w", in.Key, err)
 		}
 		return Result{Disposition: Created}, nil

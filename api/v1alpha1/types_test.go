@@ -77,7 +77,7 @@ func TestDefaultThreadReplies(t *testing.T) {
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
 	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute ||
-		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Interactions.ToolApprovals {
+		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Interactions.ToolApprovals || b.Spec.Feedback.Enabled {
 		t.Errorf("defaults not applied: %+v", b.Spec)
 	}
 

@@ -101,6 +101,9 @@ func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	}
 	btns := blocks[5]["elements"].([]any)
 	first, second := btns[0].(map[string]any), btns[1].(map[string]any)
+	if blocks[5]["block_id"] != "buttons5" {
+		t.Errorf("block_id = %v; want one of the part's own (its place in the message), which a press names and Slack would otherwise make up", blocks[5]["block_id"])
+	}
 	if first["action_id"] != "go" || first["value"] != "v1" || first["style"] != "primary" || second["style"] != nil {
 		t.Errorf("buttons = %v %v; want the IDs and values, and primary only on the first", first, second)
 	}

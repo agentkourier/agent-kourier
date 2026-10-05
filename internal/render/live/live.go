@@ -148,6 +148,10 @@ type Turn struct {
 	// UNCONFIRMED(WP-04): whether Slack ends an orphaned stream, and what it answers to a stop of a
 	// stream that has ended.
 	Recovered bool
+	// Footer is what the final message ends with, under its text: the parts of the feedback buttons (spec 8.7). It is
+	// added once, to the message the turn ends with, and to no message before it, and not at all to a turn that ended
+	// with nothing to show. The renderer does not look into it.
+	Footer []chat.Part
 }
 
 // Run is the rendering of one turn.
@@ -167,6 +171,9 @@ type Run struct {
 	tool  *agent.ToolCallEvent // the call being made, if any
 	steps []stepRec            // the tool calls of a stream, in the order they were made
 	final bool
+	// paused says the final event was a pause for input, not the end of the task: the reply so far is a question, and no answer to
+	// rate.
+	paused bool
 
 	// Below: the goroutine's alone.
 	deadline <-chan time.Time // the final text's own deadline, once the final is seen
@@ -233,6 +240,7 @@ func (u *Run) Handle(ev agent.Event) {
 		u.endStep(e)
 	case agent.FinalEvent:
 		u.final = true
+		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
 	}
 	u.mu.Unlock()
 	select {
@@ -474,6 +482,7 @@ type view struct {
 	steps []chat.Step  // the steps a stream shows, in the order of the calls, each in the state to show
 	pos   []int        // where in body each step follows: the text before that place was written before the call
 	final bool
+	rated bool // the final is the task's end, not a pause: the footer belongs on it
 	ok    bool // there is something to show yet
 }
 
@@ -486,19 +495,22 @@ func (u *Run) snapshot() view {
 	for _, id := range u.order {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
-	tool, final := u.tool, u.final
+	tool, final, paused := u.tool, u.final, u.paused
 	var recs []stepRec
 	if u.stepsOn() {
 		recs = slices.Clone(u.steps)
 	}
 	u.mu.Unlock()
-	v := view{final: final}
+	v := view{final: final, rated: final && !paused}
 	var shown *agent.ToolCallEvent
 	if tool != nil && !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
 		shown = tool
 	}
 	v.body = render.Body(events, u.caps.Limit(chat.WhereStream))
 	v.m, v.ok = render.Turn(events, shown, u.caps)
+	if v.rated && len(u.turn.Footer) > 0 { // a turn that ended with no text is replaced below by "(no output)", footer and all
+		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
+	}
 	for i, r := range recs {
 		state := r.state
 		if final && state == chat.StepRunning {

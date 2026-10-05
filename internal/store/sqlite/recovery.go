@@ -13,7 +13,7 @@ import (
 func (s *Store) ListActiveSessions(ctx context.Context) (telemetryResult0 []store.Session, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.ListActiveSessions")
 	defer func() { finishStore(op, telemetryErr) }()
-	rows, err := s.read.QueryContext(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, last_activity, trace_parent, trace_state
+	rows, err := s.read.QueryContext(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state
 		FROM sessions WHERE task_id != '' ORDER BY last_activity, connection, channel, thread_ts`)
 	if err != nil {
 		return nil, fmt.Errorf("list active sessions: %w", err)
@@ -23,7 +23,7 @@ func (s *Store) ListActiveSessions(ctx context.Context) (telemetryResult0 []stor
 	for rows.Next() {
 		var sess store.Session
 		var last int64
-		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState); err != nil {
+		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &sess.Alert, &sess.Agent, &last, &sess.TraceParent, &sess.TraceState); err != nil {
 			return nil, fmt.Errorf("scan session row: %w", err)
 		}
 		sess.LastActivity = fromTS(last)

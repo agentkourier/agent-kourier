@@ -53,6 +53,15 @@ const (
 	ChannelA2AMemory = "CA2AM"
 )
 
+// S17's channel and bot: the feedback buttons on an investigation an alert started.
+const (
+	// ChannelS17 is S17's: scenario-alert behind a botMessage trigger with the alertmanager preset for the bot BotS17. The fast
+	// tier only, as S14's.
+	ChannelS17 = "CS17"
+	// BotS17 is the bot ID S17's alerts are posted as.
+	BotS17 = "B0S17ALERT1"
+)
+
 // The failover scenario's channels (S16, the fast tier on Postgres with two courier replicas only), one for each kind of Binding
 // its cases need.
 const (

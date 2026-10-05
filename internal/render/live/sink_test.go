@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -530,4 +531,42 @@ type submitFunc func(session.Inbound) (session.Result, error)
 
 func (f submitFunc) Submit(_ context.Context, in session.Inbound) (session.Result, error) {
 	return f(in)
+}
+
+// TestTurnRefDecidesTheFooter: the feedback a TurnRef names (spec 8.7) is the buttons its final message carries, on the
+// path the turn takes (a post for an alert, a stream for a person), with a value that names the kind and the turn, so that a
+// press after a restart finds what it rates in the value alone. A turn that names none has no buttons.
+func TestTurnRefDecidesTheFooter(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		user     string
+		feedback store.FeedbackKind
+		want     string // the value of the Useful button, with %s for the thread, or "" for no buttons
+	}{
+		{"an investigation an alert started", session.SystemUser, store.FeedbackInvestigation, "fb1|investigation|useful|%s|turn-1"},
+		{"an answer to a person, which streams", "U1", store.FeedbackAnswer, "fb1|answer|useful|%s|turn-1"},
+		{"a turn that asks for none", "U1", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			key := thread
+			key.Thread = e.root
+			handle := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: tc.user, Feedback: tc.feedback, Output: v1alpha1.OutputLive})
+			handle(text("a", "hello"))
+			handle(agent.FinalEvent{})
+			eventually(t, "the turn to end", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" && !e.reply().Streaming })
+			eventually(t, "the run to have nothing left to wait for", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+			blocks := string(e.reply().Blocks)
+			if tc.want == "" {
+				if strings.Contains(blocks, "feedback") {
+					t.Fatalf("blocks %s; want no buttons", blocks)
+				}
+				return
+			}
+			want := fmt.Sprintf(tc.want, e.root)
+			if !strings.Contains(blocks, want) || !strings.Contains(blocks, strings.Replace(want, "|useful|", "|not_useful|", 1)) || strings.Count(blocks, "Was this useful?") != 1 {
+				t.Fatalf("blocks %s; want both buttons, valued %q and its not_useful twin, and the question once", blocks, want)
+			}
+		})
+	}
 }
