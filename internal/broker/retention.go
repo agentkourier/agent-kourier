@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // The retention loop's defaults.
@@ -22,6 +25,18 @@ const (
 	// defaultMaxAuditBatches bounds the calls of one tick, so that a log far past its retention is worked down over
 	// several ticks and the loop stays stoppable: a million entries.
 	defaultMaxAuditBatches = 1000
+	// defaultSessionGrace is how long after its threadTTL has run out a session is kept before it is deleted with
+	// everything that belongs to it. An expired session is kept so that a reply in its thread gets the expiry notice
+	// rather than silence (spec 8.2); that is a courtesy to a person who comes back, and 90 days is long past the
+	// weeks in which anyone does, while a thread that is never answered again costs its rows for ever.
+	defaultSessionGrace = 90 * 24 * time.Hour
+	// defaultSessionBatch is how many sessions one purge call deletes, each with the rows that belong to it (replies,
+	// interactions, outbox rows): one transaction of a few thousand rows at most, under Postgres's statement timeout and
+	// SQLite's one writer.
+	defaultSessionBatch = 100
+	// defaultMaxSessionBatches bounds the calls of one tick, so that a backlog (the first run after an upgrade finds every
+	// session ever made) is worked down over several ticks: ten thousand sessions.
+	defaultMaxSessionBatches = 100
 )
 
 // MinAuditRetention is the shortest audit retention that is accepted, so that a typo (an hour for a month) does not
@@ -29,17 +44,25 @@ const (
 const MinAuditRetention = 24 * time.Hour
 
 // What the retention loop counts as removed (courier_retention_removed_total, label what). The interactions the
-// interact package clears are counted by its own hook, under RemovedClearedInteractions.
+// interact package clears are counted by its own hook, under RemovedClearedInteractions. A deleted session is counted
+// under RemovedExpiredSessions, and each kind of row that went with it under its own.
 const (
 	RemovedStrandedReplies     = "stranded_replies"
 	RemovedClearedInteractions = "cleared_interactions"
 	RemovedAuditEntries        = "audit_entries"
+	RemovedExpiredSessions     = "expired_sessions"
+	RemovedSessionReplies      = "session_replies"
+	RemovedSessionInteractions = "session_interactions"
+	RemovedSessionPresses      = "session_presses"
+	RemovedSessionOutbox       = "session_outbox"
 )
 
-// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop and store.AuditRetention.
+// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, store.AuditRetention and
+// store.SessionRetention.
 type retentionStore interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
 	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
+	PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error)
 }
 
 // retentionConfig configures a retention. Store is required.
@@ -55,16 +78,26 @@ type retentionConfig struct {
 	// AuditBatch is how many entries each purge call deletes (default 1000), and MaxAuditBatches how many calls one
 	// tick makes at most (default 1000).
 	AuditBatch, MaxAuditBatches int
-	// OnRemoved is told what each pass removed (RemovedStrandedReplies, RemovedAuditEntries) and how many, when it
-	// removed any, for a metric. Optional.
+	// ThreadTTLs returns the threadTTL of each Binding of the config by "namespace/name", and false while no config
+	// is loaded: Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL, so without it
+	// the loop does not delete sessions; broker wiring always sets it.
+	ThreadTTLs func() (map[string]time.Duration, bool)
+	// SessionGrace is how long past its threadTTL a session is kept (default defaultSessionGrace).
+	SessionGrace time.Duration
+	// SessionBatch is how many sessions each purge call deletes (default 100), and MaxSessionBatches how many calls one
+	// tick makes at most (default 100).
+	SessionBatch, MaxSessionBatches int
+	// OnRemoved is told what each pass removed (the Removed constants) and how many, when it removed any, for a metric.
+	// Optional.
 	OnRemoved func(what string, n int)
 	Now       func() time.Time // time.Now if nil
 	Logger    *slog.Logger     // slog.Default() if nil
 }
 
 // retention is the time backstop of what the store keeps that no other loop owns: the text of replies that were
-// never delivered, and, if the operator sets a retention, old audit entries. It writes nothing to the audit log:
-// what it removes is counted in the log of the process, and that is all.
+// never delivered, sessions that have been expired for good with everything that belongs to them, and, if the
+// operator sets a retention, old audit entries. It writes nothing to the audit log: what it removes is counted in the
+// log of the process, and that is all.
 type retention struct{ cfg retentionConfig }
 
 // newRetention returns a retention over cfg.
@@ -87,6 +120,15 @@ func newRetention(cfg retentionConfig) (*retention, error) {
 	if cfg.MaxAuditBatches <= 0 {
 		cfg.MaxAuditBatches = defaultMaxAuditBatches
 	}
+	if cfg.SessionGrace <= 0 {
+		cfg.SessionGrace = defaultSessionGrace
+	}
+	if cfg.SessionBatch <= 0 {
+		cfg.SessionBatch = defaultSessionBatch
+	}
+	if cfg.MaxSessionBatches <= 0 {
+		cfg.MaxSessionBatches = defaultMaxSessionBatches
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -108,6 +150,7 @@ func (r *retention) Run(ctx context.Context) error {
 		case <-tick.C:
 		}
 		r.abandonReplies(ctx)
+		r.purgeSessions(ctx)
 		r.purgeAudit(ctx)
 	}
 }
@@ -120,6 +163,70 @@ func (r *retention) abandonReplies(ctx context.Context) {
 	case n > 0: // a turn that was never sent for this long is a fault worth a look, hence a warning
 		r.removed(RemovedStrandedReplies, n)
 		r.cfg.Logger.WarnContext(ctx, "retention: dropped replies that were never delivered, and their text", "dropped", n, "age", r.cfg.ReplyAge)
+	}
+}
+
+// sessionHorizons is when each Binding's sessions are past deleting: its threadTTL and the grace after now. A session
+// whose Binding is not in the config has no threadTTL to go by, and is held to the longest that any Binding has, and to no
+// less than the default: a Binding that is missing for a while (a config that lost it, and is mended) must not have its
+// sessions deleted on a shorter reckoning than it would have kept them by.
+func (r *retention) sessionHorizons(ttls map[string]time.Duration, now time.Time) store.SessionHorizons {
+	h := store.SessionHorizons{ByBinding: make(map[string]time.Time, len(ttls))}
+	longest := v1alpha1.DefaultThreadTTL
+	for name, ttl := range ttls {
+		h.ByBinding[name] = now.Add(-ttl - r.cfg.SessionGrace)
+		longest = max(longest, ttl)
+	}
+	h.Otherwise = now.Add(-longest - r.cfg.SessionGrace)
+	return h
+}
+
+// purgeSessions deletes the sessions past their horizon, a batch at a time until one is short or the tick's share is spent
+// (a session with a task, a pending interaction, or anything undelivered is never due, however old; the store decides).
+// It does nothing before a config is loaded, and with no source of threadTTLs.
+func (r *retention) purgeSessions(ctx context.Context) {
+	if r.cfg.ThreadTTLs == nil {
+		return
+	}
+	ttls, ok := r.cfg.ThreadTTLs()
+	if !ok {
+		return
+	}
+	h := r.sessionHorizons(ttls, r.cfg.Now())
+	var total store.PurgedSessions
+	for range r.cfg.MaxSessionBatches {
+		got, err := r.cfg.Store.PurgeExpiredSessions(ctx, h, r.cfg.SessionBatch)
+		total = total.Plus(got)
+		if err != nil {
+			r.removedSessions(total) // the batches before it were done
+			if ctx.Err() == nil {
+				r.cfg.Logger.WarnContext(ctx, "retention: expired sessions could not be deleted; it will be tried again", "err", err, "deleted", total.Sessions)
+			}
+			return
+		}
+		if got.Sessions < r.cfg.SessionBatch {
+			break
+		}
+	}
+	if total.Sessions > 0 {
+		r.removedSessions(total)
+		r.cfg.Logger.InfoContext(ctx, "retention: deleted sessions that have been expired for good, with the rows that belonged to them",
+			"sessions", total.Sessions, "replies", total.Replies, "interactions", total.Interactions, "presses", total.Presses, "outbox", total.Outbox, "grace", r.cfg.SessionGrace)
+	}
+}
+
+// removedSessions counts what a purge deleted, a kind of row at a time, and nothing for a kind it found none of.
+func (r *retention) removedSessions(p store.PurgedSessions) {
+	for _, c := range []struct {
+		what string
+		n    int
+	}{
+		{RemovedExpiredSessions, p.Sessions}, {RemovedSessionReplies, p.Replies}, {RemovedSessionInteractions, p.Interactions},
+		{RemovedSessionPresses, p.Presses}, {RemovedSessionOutbox, p.Outbox},
+	} {
+		if c.n > 0 {
+			r.removed(c.what, c.n)
+		}
 	}
 }
 

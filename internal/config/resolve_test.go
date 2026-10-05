@@ -266,3 +266,21 @@ func TestSnapshotListsEveryConnection(t *testing.T) {
 		t.Errorf("ChatConnections = %v; want %v", got, want)
 	}
 }
+
+// Bindings lists every Binding of the config, sorted by namespace and name, so that a caller that needs them all (the
+// retention of sessions, which reads each Binding's threadTTL) does not have to know their names.
+func TestSnapshotBindings(t *testing.T) {
+	set := specSet(t)
+	slices.Reverse(set.Bindings) // listed in the order they were given in, which is not the order of names
+	snap, err := Resolve(context.Background(), set, specSecrets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rb := range snap.Bindings() {
+		got = append(got, rb.Binding.Namespace+"/"+rb.Binding.Name)
+	}
+	if want := []string{"sre/chat-only", "sre/sre-alerts"}; !slices.Equal(got, want) {
+		t.Errorf("Bindings = %v; want %v", got, want)
+	}
+}

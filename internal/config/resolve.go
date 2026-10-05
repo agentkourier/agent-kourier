@@ -40,6 +40,19 @@ func (s *Snapshot) Binding(namespace, name string) (ResolvedBinding, bool) {
 	return rb, ok
 }
 
+// Bindings returns every Binding of the config, sorted by namespace and name. The slice is the caller's; the Bindings are
+// read-only.
+func (s *Snapshot) Bindings() []ResolvedBinding {
+	out := make([]ResolvedBinding, 0, len(s.bindings))
+	for _, rb := range s.bindings {
+		out = append(out, rb)
+	}
+	slices.SortFunc(out, func(a, b ResolvedBinding) int {
+		return cmp.Or(cmp.Compare(a.Binding.Namespace, b.Binding.Namespace), cmp.Compare(a.Binding.Name, b.Binding.Name))
+	})
+	return out
+}
+
 // BindingForChannel returns the Binding that owns a channel of the connection with the given
 // namespace and name. The result is read-only.
 func (s *Snapshot) BindingForChannel(connNamespace, connName, channel string) (ResolvedBinding, bool) {

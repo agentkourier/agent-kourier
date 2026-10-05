@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,6 +27,15 @@ type fakeRetentionStore struct {
 	failReplies int
 	failAudit   bool
 	dropped     int // what AbandonStrandedReplies reports
+
+	sessionCalls []sessionPurge
+	swept        []store.PurgedSessions // what each PurgeExpiredSessions returns, in turn (the last one again after that)
+	failSessions bool
+}
+
+type sessionPurge struct {
+	horizons store.SessionHorizons
+	limit    int
 }
 
 type auditPurge struct {
@@ -56,6 +66,26 @@ func (f *fakeRetentionStore) PurgeAudit(_ context.Context, before time.Time, lim
 		return 0, nil
 	}
 	return f.purged[i], nil
+}
+
+func (f *fakeRetentionStore) PurgeExpiredSessions(_ context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessionCalls = append(f.sessionCalls, sessionPurge{h, limit})
+	if f.failSessions {
+		return store.PurgedSessions{}, errors.New("disk full")
+	}
+	i := min(len(f.sessionCalls), len(f.swept)) - 1
+	if i < 0 {
+		return store.PurgedSessions{}, nil
+	}
+	return f.swept[i], nil
+}
+
+func (f *fakeRetentionStore) sessions() []sessionPurge {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]sessionPurge(nil), f.sessionCalls...)
 }
 
 func (f *fakeRetentionStore) calls() (abandons []time.Duration, purges []auditPurge) {
@@ -315,5 +345,222 @@ func TestRetentionCountsWhatItRemoves(t *testing.T) {
 	r.purgeAudit(t.Context())
 	if got[RemovedStrandedReplies] != 2 || got[RemovedAuditEntries] != 10 {
 		t.Errorf("counted %v after a pass that removed nothing and one that failed; want no change", got)
+	}
+}
+
+// ttls is a config of two Bindings, one that keeps its threads 30 days and one 10 days. Before the first load it is not ready.
+func ttls() (map[string]time.Duration, bool) {
+	return map[string]time.Duration{"ns/long": 30 * 24 * time.Hour, "ns/short": 10 * 24 * time.Hour}, true
+}
+
+func newSessionRetention(t *testing.T, f *fakeRetentionStore, mutate func(*retentionConfig)) *retention {
+	t.Helper()
+	cfg := retentionConfig{Store: f, ThreadTTLs: ttls, SessionBatch: 3, Now: func() time.Time { return sweepNow },
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	r, err := newRetention(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A session is past its horizon a grace (90 days) after its threadTTL, which is its Binding's: the store is told, for
+// each Binding of the config, the time before which a session of it is deleted. A session whose Binding has left the config
+// has no threadTTL to measure by: it is held to the longest of the Bindings', and never to less than the default.
+func TestRetentionPurgesSessionsPastTheirBindingsHorizon(t *testing.T) {
+	grace := 90 * 24 * time.Hour
+	day := 24 * time.Hour
+	for _, tc := range []struct {
+		name string
+		ttls func() (map[string]time.Duration, bool)
+		want store.SessionHorizons
+	}{
+		{"two Bindings", ttls, store.SessionHorizons{
+			ByBinding: map[string]time.Time{"ns/long": sweepNow.Add(-30*day - grace), "ns/short": sweepNow.Add(-10*day - grace)},
+			Otherwise: sweepNow.Add(-90*day - grace), // the default threadTTL is longer than either
+		}},
+		{"a Binding with a longer threadTTL than the default", func() (map[string]time.Duration, bool) {
+			return map[string]time.Duration{"ns/year": 365 * day}, true
+		}, store.SessionHorizons{
+			ByBinding: map[string]time.Time{"ns/year": sweepNow.Add(-365*day - grace)},
+			Otherwise: sweepNow.Add(-365*day - grace),
+		}},
+		{"no Binding at all", func() (map[string]time.Duration, bool) { return map[string]time.Duration{}, true }, store.SessionHorizons{
+			ByBinding: map[string]time.Time{}, Otherwise: sweepNow.Add(-90*day - grace),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeRetentionStore{}
+			newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = tc.ttls }).purgeSessions(t.Context())
+			calls := f.sessions()
+			if len(calls) != 1 || calls[0].limit != 3 || !maps.EqualFunc(calls[0].horizons.ByBinding, tc.want.ByBinding, time.Time.Equal) || !calls[0].horizons.Otherwise.Equal(tc.want.Otherwise) {
+				t.Errorf("PurgeExpiredSessions calls = %+v; want one, of a batch of 3, with the horizons %+v", calls, tc.want)
+			}
+		})
+	}
+}
+
+// Without a config nothing is known of any session's threadTTL, so nothing is deleted; and with no source of them (a
+// retention built without one) the loop does not touch sessions.
+func TestRetentionLeavesSessionsAloneUntilTheirBindingsAreKnown(t *testing.T) {
+	f := &fakeRetentionStore{}
+	newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false } }).purgeSessions(t.Context())
+	newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = nil }).purgeSessions(t.Context())
+	if calls := f.sessions(); len(calls) != 0 {
+		t.Errorf("%d purges; want none", len(calls))
+	}
+}
+
+// One tick does not go on for ever: a batch at a time while a batch comes back full, and at most MaxSessionBatches of
+// them; a short batch says nothing more is due.
+func TestRetentionBoundsTheSessionBatchesOfOneTick(t *testing.T) {
+	full := store.PurgedSessions{Sessions: 3}
+	for _, tc := range []struct {
+		name      string
+		swept     []store.PurgedSessions
+		max       int
+		wantCalls int
+	}{
+		{"until a short one", []store.PurgedSessions{full, full, {Sessions: 1}, full}, 10, 3},
+		{"never short, so the most it may make", []store.PurgedSessions{full}, 4, 4},
+		{"nothing due", nil, 10, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeRetentionStore{swept: tc.swept}
+			newSessionRetention(t, f, func(c *retentionConfig) { c.MaxSessionBatches = tc.max }).purgeSessions(t.Context())
+			if got := len(f.sessions()); got != tc.wantCalls {
+				t.Errorf("%d purge calls in one tick; want %d", got, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// What is deleted is counted for each kind of row, so that it can be seen and alerted on, and not when nothing was
+// deleted or the call failed; a failure after some batches still counts the batches that were done.
+func TestRetentionCountsTheSessionsItDeletes(t *testing.T) {
+	var mu sync.Mutex
+	got := map[string]int{}
+	count := func(what string, n int) { mu.Lock(); got[what] += n; mu.Unlock() }
+	f := &fakeRetentionStore{swept: []store.PurgedSessions{
+		{Sessions: 3, Replies: 10, Interactions: 4, Presses: 1, Outbox: 20}, {Sessions: 1, Replies: 2, Outbox: 5}}}
+	newSessionRetention(t, f, func(c *retentionConfig) { c.OnRemoved = count }).purgeSessions(t.Context())
+	want := map[string]int{RemovedExpiredSessions: 4, RemovedSessionReplies: 12, RemovedSessionInteractions: 4, RemovedSessionPresses: 1, RemovedSessionOutbox: 25}
+	mu.Lock()
+	if !maps.Equal(got, want) {
+		t.Errorf("counted %v; want %v, and nothing for a kind with none", got, want)
+	}
+	mu.Unlock()
+
+	clear(got)
+	f = &fakeRetentionStore{failSessions: true}
+	newSessionRetention(t, f, func(c *retentionConfig) { c.OnRemoved = count }).purgeSessions(t.Context())
+	if len(got) != 0 {
+		t.Errorf("counted %v after a failed call; want nothing", got)
+	}
+}
+
+// A failure is logged and tried again at the next tick, and does not stop the rest of the loop.
+func TestRetentionLogsASessionPurgeFailureAndGoesOn(t *testing.T) {
+	f := &fakeRetentionStore{failSessions: true}
+	logs := &logBuffer{}
+	stop := runRetention(t, retentionConfig{Store: f, ThreadTTLs: ttls, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	waitUntil(t, "three ticks", func() bool { a, _ := f.calls(); return len(a) >= 3 && len(f.sessions()) >= 3 })
+	stop()
+	if got := logs.String(); !strings.Contains(got, "expired sessions could not be deleted") {
+		t.Errorf("the log %q; want a warning for the failure", got)
+	}
+}
+
+// Against the real store, through the loop: the sessions past their Binding's horizon go with what belongs to them, the
+// one inside it stays, and a session with a task that has not ended stays whatever its age.
+func TestRetentionDeletesOnlySessionsPastTheirHorizon(t *testing.T) {
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "courier.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	day, grace := 24*time.Hour, 90*24*time.Hour
+	seed := func(thread, binding, task string, idle time.Duration) store.ConversationKey {
+		k := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: thread}
+		err := st.UpsertSession(t.Context(), store.Session{Key: k, Binding: binding, TaskID: task, LastActivity: sweepNow.Add(-idle)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = st.EnqueueReply(t.Context(), store.Reply{ID: "r-" + thread, Key: k, UserID: "U1", MessageRef: "1.1", Text: "hi", EnqueuedAt: sweepNow.Add(-idle)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.MarkReplyDelivered(t.Context(), "r-"+thread, sweepNow.Add(-idle)); err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	past := seed("1.1", "ns/short", "", 10*day+grace+time.Hour)
+	inside := seed("2.2", "ns/short", "", 10*day+grace-time.Hour)
+	longer := seed("3.3", "ns/long", "", 10*day+grace+time.Hour) // past the short Binding's horizon, not the long one's
+	gone := seed("4.4", "ns/removed", "", 90*day+grace+time.Hour)
+	busy := seed("5.5", "ns/short", "task", 1000*day)
+
+	newSessionRetention(t, &fakeRetentionStore{}, func(c *retentionConfig) { c.Store = st }).purgeSessions(t.Context())
+
+	for k, wantSession := range map[store.ConversationKey]bool{past: false, inside: true, longer: true, gone: false, busy: true} {
+		_, err := st.GetSession(t.Context(), k, 100*365*day, sweepNow)
+		if present := err == nil; present != wantSession {
+			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, wantSession)
+		}
+		if has, err := st.HasReply(t.Context(), "r-"+k.Thread); err != nil || has != wantSession {
+			t.Errorf("reply of %s present = %v, %v; want %v with its session", k.Thread, has, err, wantSession)
+		}
+	}
+}
+
+// Run starts the loop with the config's Bindings: a session of a Binding of the example config that has been expired for
+// longer than the grace, which the database holds from an earlier run, is gone soon after the broker is up, and one
+// that has not stays.
+func TestRunDeletesSessionsExpiredForGood(t *testing.T) {
+	c := startConfig(t)
+	c.retentionEvery = 10 * time.Millisecond
+	seed, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := 24 * time.Hour
+	old := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}
+	recent := store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "2.2"}
+	for k, idle := range map[store.ConversationKey]time.Duration{old: 90*day + 90*day + day, recent: 90*day + 89*day} { // the example's threadTTL is 90 days
+		if err := seed.UpsertSession(t.Context(), store.Session{Key: k, Binding: "sre/sre-alerts", LastActivity: time.Now().Add(-idle)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, c)
+	r.until("/readyz", 200)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
+		if _, body := r.get("/metrics"); strings.Contains(body, `operation="courier.store.PurgeExpiredSessions"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session purge never ran")
+		}
+	}
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := sqlite.Open(t.Context(), c.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for k, want := range map[store.ConversationKey]bool{old: false, recent: true} {
+		_, err := st.GetSession(t.Context(), k, 100*365*day, time.Now())
+		if present := err == nil; present != want {
+			t.Errorf("session %s present = %v (%v); want %v", k.Thread, present, err, want)
+		}
 	}
 }

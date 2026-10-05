@@ -742,8 +742,13 @@ holds the turn's `messageId` (kagent records it there). Found: reconcile as in 8
 (`GetTask`, then `SubscribeToTask` if not terminal). Absent: send. A `-32004` on that send
 means some task is active, possibly an `input-required` pause, so the turn is queued as
 below and the lookup repeats when the active task ends. Whether the model runs twice for a
-duplicate task is not measured; the second task runs in full. An expired session is kept, not deleted, so courier can tell a reply in an
-expired thread (notice) from a reply in a thread it never owned (ignored).
+duplicate task is not measured; the second task runs in full. An expired session is kept for a grace period (90 days) after its threadTTL has run out, so that
+courier can tell a reply in an expired thread (notice) from a reply in a thread it never owned (ignored). After the grace the
+session is deleted with every row that belongs to it, and the thread is one courier never owned: a reply without an @mention is
+ignored, and an @mention starts a new session anchored to the thread (as in "@mention inside a thread courier doesn't own"). A
+session is never deleted while it has an active or paused task, a pending interaction, a reply that was not delivered, or an
+outbox row that was neither posted nor abandoned. A session whose Binding has left the config is held to the longest threadTTL of
+any Binding (and at least the default) plus the grace.
 
 **Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
 activity, and a reply at any point in that window resumes the same `contextId`. kagent
@@ -939,14 +944,20 @@ this with an outbox:
 |---|---|---|
 | `events` | event ID | Durable inbound queue with processing status |
 | `outbox` | outbox ID | Intended Slack posts and their resulting message refs (8.6) |
-| `sessions` | conversation key | `contextId`, current task ID, binding, last activity (expires at `threadTTL`) |
+| `sessions` | conversation key | `contextId`, current task ID, binding, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
 | `alert_groups` | dedup key | Session link, root message ref, firing or resolved |
 | `run_counters` | binding, window | Rate-limit and daily-cap counters, and skipped counts for the digest |
 | `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours. The alert Binding's `run_counters` (WP-43) is a separate counter for the webhook |
-| `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays. |
+| `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays until its session is deleted (below). |
 | `reply_queue` | session, sequence | Thread replies waiting for the active task to finish. Text is cleared on delivery; a reply undelivered for 30 days whose session has no active task is dropped, text cleared. |
 | `feedback` | session, Slack user | Verdict, alert name, agent, binding, timestamps |
 | `audit` | sequence | Append-only record of events, agent calls, decisions. Append-only except for a purge of entries older than `COURIER_AUDIT_RETENTION` (default `keep`: never purged; otherwise at least 24h). |
+
+Retention (hourly, leader only): a session, and the rows of `reply_queue`, `interactions`, `interaction_presses` and `outbox`
+that belong to it, are deleted when its last activity is older than its Binding's `threadTTL` plus 90 days, unless it holds work
+as listed in 8.2; only rows already settled (delivered, decided, posted or abandoned) are deleted. `feedback` is kept until the
+pilot's review (D33). The counts are in `courier_retention_removed_total`. Kept with no rule yet: the outbox rows of a digest or
+a root post, and a notice posted into a thread after its session was deleted.
 
 - **SQLite** (default): single replica, PersistentVolume, WAL mode.
 - **Postgres**: required for more than one replica.

@@ -42,6 +42,7 @@ func (su suite) retention(t *testing.T) {
 	su.interactionRetention(t)
 	su.replyRetention(t)
 	su.auditRetention(t)
+	su.sessionRetention(t)
 }
 
 func (su suite) interactionRetention(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -328,5 +329,26 @@ func TestReloadChangesWhatBackendReturns(t *testing.T) {
 	f.snaps.p.Store(&config.Snapshot{}) // a reload that removed the Binding
 	if _, err := f.b.Backend("sre/oncall"); !errors.Is(err, session.ErrUnknownBinding) {
 		t.Errorf("after the Binding left the config Backend = %v, want ErrUnknownBinding", err)
+	}
+}
+
+// ThreadTTLs is what the retention of sessions asks of the config: each Binding's threadTTL, by name, from the snapshot
+// that is current, and not ready before one is.
+func TestThreadTTLsAreTheCurrentSnapshotsBindings(t *testing.T) {
+	f := newFixture(t)
+	f.snaps.p.Store(snapshot(t, f.url, v1alpha1.DialectKagentV1, 48*time.Hour, "payments"))
+	got, ok := f.b.ThreadTTLs()
+	if want := map[string]time.Duration{"sre/oncall": 48 * time.Hour, "payments/oncall": 48 * time.Hour}; !ok || !maps.Equal(got, want) {
+		t.Errorf("ThreadTTLs = %v, %v; want %v", got, ok, want)
+	}
+
+	f.snaps.p.Store(nil) // before the first load nothing is known, which is not the same as no Binding
+	if got, ok := f.b.ThreadTTLs(); ok || len(got) != 0 {
+		t.Errorf("ThreadTTLs before the first load = %v, %v; want not ready", got, ok)
+	}
+
+	f.snaps.p.Store(&config.Snapshot{}) // a config with no Binding is a config
+	if got, ok := f.b.ThreadTTLs(); !ok || len(got) != 0 {
+		t.Errorf("ThreadTTLs of a config with no Binding = %v, %v; want ready and empty", got, ok)
 	}
 }

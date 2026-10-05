@@ -3,6 +3,7 @@
 package broker
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 	"time"
@@ -129,6 +130,20 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Output:      rb.Binding.Spec.Chat.Output,
 		TextReplies: rb.Backend.Spec.Dialect == v1alpha1.DialectA2A,
 	}, nil
+}
+
+// ThreadTTLs returns the threadTTL of every Binding of the current snapshot, by "namespace/name", and false before the
+// first load, when nothing is known: it is what the retention of sessions measures a session's expiry by.
+func (b *Bindings) ThreadTTLs() (map[string]time.Duration, bool) {
+	snap := b.snaps.Current()
+	if snap == nil {
+		return nil, false
+	}
+	ttls := map[string]time.Duration{}
+	for _, rb := range snap.Bindings() {
+		ttls[v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)] = cmp.Or(rb.Binding.Spec.Session.ThreadTTL.Duration, v1alpha1.DefaultThreadTTL)
+	}
+	return ttls, true
 }
 
 // Binding returns what the interactions need of the Binding named "namespace/name", from the

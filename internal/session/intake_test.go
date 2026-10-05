@@ -341,6 +341,38 @@ func TestSubmitExistingSession(t *testing.T) {
 	}
 }
 
+// An expired session is kept, so that a reply in its thread is told so (D28); once retention has deleted it (DP-3), the
+// thread is one that courier never owned: a reply is ignored, writing and waking nothing, and an @mention starts a new
+// session anchored to the thread, as it does in any thread courier does not own (8.2).
+func TestSubmitInAThreadWhoseSessionWasDeleted(t *testing.T) {
+	f := newFixture(t)
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "c1", Binding: "ns/b1", LastActivity: t0.Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	reply := inbound("1700.05")
+	reply.Create = false
+	if res, err := f.submitAny(reply); err != nil || res.Disposition != Expired {
+		t.Fatalf("a reply in the expired thread = %+v, %v; want Expired, the notice", res, err)
+	}
+
+	// The horizon is the session's threadTTL (1 h) plus the grace, here 30 minutes: it was last active 2 h ago.
+	horizon := t0.Add(-90 * time.Minute)
+	purged, err := f.st.Store.(store.SessionRetention).PurgeExpiredSessions(t.Context(), store.SessionHorizons{ByBinding: map[string]time.Time{"ns/b1": horizon}, Otherwise: horizon}, 10)
+	if err != nil || purged.Sessions != 1 {
+		t.Fatalf("PurgeExpiredSessions = %+v, %v; want the session", purged, err)
+	}
+
+	reply = inbound("1700.06")
+	reply.Create = false
+	res, err := f.submitAny(reply)
+	if _, serr := f.session(); err != nil || res.Disposition != NotOwned || !errors.Is(serr, store.ErrNotFound) || f.woke != 0 || len(f.drain()) != 0 {
+		t.Fatalf("a reply in the swept thread = %+v, %v; session %v, woke %d; want NotOwned and nothing written or woken", res, err, serr, f.woke)
+	}
+	if res, err := f.submit(inbound("1700.07")); err != nil || res.Disposition != Created {
+		t.Errorf("an @mention in the swept thread = %+v, %v; want a new session", res, err)
+	}
+}
+
 func TestSubmitRefusesWhatCannotBeServed(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mutate func(*Inbound)

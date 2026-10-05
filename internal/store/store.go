@@ -55,6 +55,7 @@ type Store interface {
 	ReplyQueue
 	Audit
 	AuditRetention
+	SessionRetention
 	Recovery
 	io.Closer
 }
