@@ -31,7 +31,9 @@ type Session struct {
 // Binding and LastActivity are required; ContextID and TaskID are optional.
 // A missing required value returns ErrInvalid.
 type Sessions interface {
-	// UpsertSession inserts s or replaces the row with the same key.
+	// UpsertSession inserts s or replaces the row with the same key, every column of it, an empty
+	// ContextID or TaskID included. Only the trace context stays when s and the call's context have
+	// none: a caller with no trace does not blank the one that another saved.
 	UpsertSession(ctx context.Context, s Session) error
 	// GetSession returns the session for key. It never writes. ErrNotFound means
 	// no row exists. A session whose last activity is more than ttl (spec D28,

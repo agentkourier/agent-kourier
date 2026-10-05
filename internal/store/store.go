@@ -2,6 +2,17 @@
 //
 // The interfaces speak in domain operations, never SQL, so a Postgres
 // implementation (spec D15) can sit beside the default SQLite one.
+//
+// What every implementation does beyond what a method's comment says (package storetest holds each
+// one to all of it):
+//   - Times are kept to the microsecond (what Postgres keeps; a finer time is not promised) and
+//     returned in UTC; a time that was never set is the zero Time.
+//   - Text is compared byte for byte, so IDs and keys that differ in case or in spaces are different.
+//     Where a list orders rows, rows that tie come in any order.
+//   - A call whose context has ended returns an error wrapping the context's, and changes nothing.
+//   - A row that carries TraceParent and TraceState keeps the value the caller gave; with none it
+//     records the trace of the call's context. A duplicate insert changes nothing, so it leaves what
+//     was saved.
 package store
 
 import (
@@ -25,7 +36,8 @@ var (
 	ErrLimit = errors.New("store: limit reached")
 )
 
-// Store is the full persistence surface, composed of one interface per concern.
+// Store is the full persistence surface, composed of one interface per concern. It is safe for
+// concurrent use, and Close may be called more than once.
 type Store interface {
 	Events
 	Queue

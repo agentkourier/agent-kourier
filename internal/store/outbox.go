@@ -77,7 +77,7 @@ type Outbox interface {
 	// limit on unposted text. A row with no Payload, a stream's, is left alone. ErrInvalid if
 	// either time is zero or not after the Unix epoch.
 	AbandonOutboxBefore(ctx context.Context, before, at time.Time) (ids []string, err error)
-	// ListUnposted returns rows with no message ref that are not abandoned, oldest first, for
-	// recovery reconciliation.
+	// ListUnposted returns rows with no message ref that are not abandoned, oldest first (rows made at
+	// the same time in any order), for recovery reconciliation.
 	ListUnposted(ctx context.Context) ([]OutboxEntry, error)
 }

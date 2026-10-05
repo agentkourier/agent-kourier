@@ -72,8 +72,10 @@ func (e AuditEntry) Redacted() AuditEntry {
 // Audit is an append-only log. There is no update or delete.
 type Audit interface {
 	// AppendAudit adds e to the log. Kind, At, Subject and Outcome are
-	// required, and Outcome must fit MaxAuditOutcome (ErrInvalid otherwise).
-	// The store assigns Sequence; the value in e is ignored.
+	// required, and Outcome must fit MaxAuditOutcome (ErrInvalid otherwise), measured after
+	// redaction, on the text that is kept. The store assigns Sequence; the value in e is ignored.
+	// A reader that pages with ListAudit must never miss an entry appended while it pages: an
+	// entry becomes visible only after every entry with a lower Sequence is.
 	AppendAudit(ctx context.Context, e AuditEntry) error
 	// ListAudit returns entries with At at or after since (zero for no lower
 	// bound) and Sequence above afterSeq, in append order, at most limit of

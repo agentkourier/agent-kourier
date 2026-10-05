@@ -7,8 +7,9 @@ import "context"
 type SessionTasks interface {
 	// SetSessionTask sets the session's active task. An empty taskID clears it (the task
 	// ended). A non-empty contextID replaces the recorded contextId; an empty one leaves it.
-	// Nothing else changes, LastActivity included. It returns ErrNotFound if the session
-	// does not exist and ErrInvalid for an incomplete key.
+	// Nothing else changes, LastActivity included, except that a call made inside a trace records
+	// that trace as the session's (TraceParent and TraceState), and one made outside any leaves it. It
+	// returns ErrNotFound if the session does not exist and ErrInvalid for an incomplete key.
 	SetSessionTask(ctx context.Context, key ConversationKey, contextID, taskID string) error
 	// ResetSession forgets the agent's session: it clears both the contextId and the active
 	// task in one UPDATE, and leaves the Binding and LastActivity alone, so the thread stays

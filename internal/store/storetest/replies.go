@@ -1,0 +1,348 @@
+package storetest
+
+import (
+	"context"
+	"fmt"
+	"runtime"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
+
+func newReply(id string, k store.ConversationKey) store.Reply {
+	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Text: "hello", EnqueuedAt: t0}
+}
+
+// replyClaimer is the part of a store that the interactions package asks for by type assertion and that
+// store.ReplyQueue does not list: pinning a queued answer to one question.
+type replyClaimer interface {
+	ClaimReplyInteraction(ctx context.Context, id, interaction string) error
+}
+
+func (su suite) replyQueue(t *testing.T) {
+	su.run(t, "HasReply sees queued and delivered replies", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		has := func(id string) bool {
+			t.Helper()
+			ok, err := s.HasReply(ctx, id)
+			noErr(t, err, fmt.Sprintf("HasReply(%q)", id))
+			return ok
+		}
+		if has("r1") {
+			t.Fatal("HasReply of an ID never enqueued is true")
+		}
+		_, err := s.EnqueueReply(ctx, newReply("r1", key))
+		noErr(t, err, "enqueue")
+		if !has("r1") || has("r2") {
+			t.Fatal("HasReply after enqueueing r1: want r1 yes, r2 no")
+		}
+		noErr(t, s.MarkReplyDelivered(ctx, "r1", t0), "mark delivered")
+		if !has("r1") {
+			t.Error("HasReply of a delivered reply is false; want the tombstone to answer yes")
+		}
+		_, err = s.HasReply(ctx, "")
+		isErr(t, err, store.ErrInvalid, "HasReply with no ID")
+	})
+
+	su.run(t, "replies of a session come back first in, first out, and sessions do not touch one another", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		other := keyOf("2.2")
+		_, err := s.NextReply(ctx, key)
+		isErr(t, err, store.ErrNotFound, "next on an empty queue")
+		// Enqueue times run backwards on purpose: order must follow the store's sequence, not the clock.
+		for i, r := range []store.Reply{newReply("r1", key), newReply("x1", other), newReply("r2", key), newReply("r3", key)} {
+			r.EnqueuedAt = t0.Add(-time.Duration(i) * time.Hour)
+			if ok, err := s.EnqueueReply(ctx, r); err != nil || !ok {
+				t.Fatalf("enqueue %s = %v, %v", r.ID, ok, err)
+			}
+		}
+		if ok, err := s.EnqueueReply(ctx, newReply("r2", key)); err != nil || ok {
+			t.Fatalf("duplicate enqueue = %v, %v; want false, nil", ok, err)
+		}
+		var last int64
+		for _, want := range []string{"r1", "r2", "r3"} {
+			got, err := s.NextReply(ctx, key)
+			if err != nil || got.ID != want || got.UserID != "U1" || got.Text != "hello" || got.MessageRef != "1700.01" || got.Key != key || got.Sequence <= last {
+				t.Fatalf("next = %+v, %v; want %s with a sequence above %d", got, err, want, last)
+			}
+			last = got.Sequence
+			if again, _ := s.NextReply(ctx, key); again.ID != want {
+				t.Fatalf("NextReply does not leave the head in place: %s", again.ID)
+			}
+			noErr(t, s.MarkReplyDelivered(ctx, want, t0), "mark "+want+" delivered")
+		}
+		_, err = s.NextReply(ctx, key)
+		isErr(t, err, store.ErrNotFound, "next after draining")
+		if got, err := s.NextReply(ctx, other); err != nil || got.ID != "x1" {
+			t.Fatalf("other session's queue = %+v, %v; want x1 untouched", got, err)
+		}
+	})
+
+	// A delivered reply stays as a tombstone: its ID is not queued again, whatever its content.
+	su.run(t, "a delivered reply is a tombstone: marking again is a no-op and the ID is not queued twice", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		_, err := s.EnqueueReply(ctx, newReply("r1", key))
+		noErr(t, err, "enqueue")
+		noErr(t, s.MarkReplyDelivered(ctx, "r1", t0), "mark")
+		noErr(t, s.MarkReplyDelivered(ctx, "r1", t0.Add(time.Hour)), "mark twice")
+		if ok, err := s.EnqueueReply(ctx, newReply("r1", key)); err != nil || ok {
+			t.Fatalf("re-enqueue of a delivered ID = %v, %v; want false, nil", ok, err)
+		}
+		_, err = s.NextReply(ctx, key)
+		isErr(t, err, store.ErrNotFound, "NextReply after the reply was delivered")
+		_, err = s.NextReplyAfter(ctx, key, 0)
+		isErr(t, err, store.ErrNotFound, "NextReplyAfter after the reply was delivered")
+		isErr(t, s.MarkReplyDelivered(ctx, "nope", t0), store.ErrNotFound, "mark of an unknown ID")
+		isErr(t, s.MarkReplyDelivered(ctx, "", t0), store.ErrInvalid, "mark with no ID")
+		isErr(t, s.MarkReplyDelivered(ctx, "r1", time.Time{}), store.ErrInvalid, "mark with no time")
+	})
+
+	// An ID is the turn's messageId, derived from the chat message: it is unique in the whole queue,
+	// not only in a session.
+	su.run(t, "an ID is queued once for the whole store, not once for each session", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		if ok, err := s.EnqueueReply(ctx, newReply("r1", key)); err != nil || !ok {
+			t.Fatalf("first enqueue = %v, %v", ok, err)
+		}
+		if ok, err := s.EnqueueReply(ctx, newReply("r1", keyOf("2.2"))); err != nil || ok {
+			t.Fatalf("the ID again for another session = %v, %v; want false, nil", ok, err)
+		}
+		_, err := s.NextReply(ctx, keyOf("2.2"))
+		isErr(t, err, store.ErrNotFound, "the other session's queue")
+	})
+
+	su.run(t, "a reply needs an ID, a key, a user, a message and a time, and not text", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		for name, mutate := range map[string]func(*store.Reply){
+			"empty ID":       func(r *store.Reply) { r.ID = "" },
+			"empty key part": func(r *store.Reply) { r.Key.Thread = "" },
+			"empty user":     func(r *store.Reply) { r.UserID = "" },
+			"empty ts":       func(r *store.Reply) { r.MessageRef = "" },
+			"zero time":      func(r *store.Reply) { r.EnqueuedAt = time.Time{} },
+		} {
+			bad := newReply("bad", key)
+			mutate(&bad)
+			_, err := s.EnqueueReply(ctx, bad)
+			isErr(t, err, store.ErrInvalid, name+": enqueue")
+		}
+		_, err := s.NextReply(ctx, store.ConversationKey{})
+		isErr(t, err, store.ErrInvalid, "next with an empty key")
+		_, err = s.NextReplyAfter(ctx, key, -1)
+		isErr(t, err, store.ErrInvalid, "NextReplyAfter with a negative cursor")
+		if has, _ := s.HasReply(ctx, "bad"); has {
+			t.Error("a refused reply was queued")
+		}
+
+		empty := newReply("empty", key)
+		empty.Text = ""
+		if ok, err := s.EnqueueReply(ctx, empty); err != nil || !ok {
+			t.Fatalf("enqueue with no text = %v, %v; want it queued", ok, err)
+		}
+		if got, err := s.NextReply(ctx, key); err != nil || got.ID != "empty" || got.Text != "" {
+			t.Errorf("next = %+v, %v; want the reply with no text, still waiting", got, err)
+		}
+	})
+
+	su.run(t, "NextReplyAfter skips replies up to a cursor and leaves them queued", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		for _, id := range []string{"earlier", "answer", "later"} {
+			_, err := s.EnqueueReply(ctx, newReply(id, key))
+			noErr(t, err, "enqueue "+id)
+		}
+		head, err := s.NextReply(ctx, key)
+		noErr(t, err, "NextReply")
+		answer, err := s.NextReplyAfter(ctx, key, head.Sequence)
+		if err != nil || answer.ID != "answer" {
+			t.Fatalf("cursor = %+v, %v", answer, err)
+		}
+		noErr(t, s.MarkReplyDelivered(ctx, answer.ID, t0), "mark")
+		if got, err := s.NextReply(ctx, key); err != nil || got.ID != "earlier" {
+			t.Fatalf("earlier turn lost: %+v, %v", got, err)
+		}
+		if got, err := s.NextReplyAfter(ctx, key, answer.Sequence); err != nil || got.ID != "later" {
+			t.Fatalf("later reply = %+v, %v", got, err)
+		}
+		_, err = s.NextReplyAfter(ctx, key, 1<<62)
+		isErr(t, err, store.ErrNotFound, "NextReplyAfter past the last reply")
+	})
+
+	su.run(t, "many enqueues of one ID queue it exactly once", func(t *testing.T, s store.Store) {
+		const n = 16
+		queued := make([]bool, n)
+		parallel(n, func(i int) {
+			var err error
+			if queued[i], err = s.EnqueueReply(t.Context(), newReply("same", key)); err != nil {
+				t.Errorf("enqueue %d: %v", i, err)
+			}
+		})
+		wins := 0
+		for _, ok := range queued {
+			if ok {
+				wins++
+			}
+		}
+		if wins != 1 {
+			t.Errorf("%d enqueues reported queueing; want exactly 1", wins)
+		}
+		noErr(t, s.MarkReplyDelivered(t.Context(), "same", t0), "mark")
+		_, err := s.NextReply(t.Context(), key)
+		isErr(t, err, store.ErrNotFound, "next after the one reply was delivered")
+	})
+
+	su.run(t, "replies enqueued at the same time to one session come out in one order, each once", func(t *testing.T, s store.Store) {
+		const n = 32
+		parallel(n, func(i int) {
+			if _, err := s.EnqueueReply(t.Context(), newReply(fmt.Sprintf("r%02d", i), key)); err != nil {
+				t.Errorf("enqueue %d: %v", i, err)
+			}
+		})
+		var last int64
+		seen := map[string]bool{}
+		for range n {
+			got, err := s.NextReply(t.Context(), key)
+			if err != nil || got.Sequence <= last {
+				t.Fatalf("next = %+v, %v; want a sequence above %d", got, err, last)
+			}
+			last = got.Sequence
+			seen[got.ID] = true
+			noErr(t, s.MarkReplyDelivered(t.Context(), got.ID, t0), "mark delivered")
+		}
+		if len(seen) != n {
+			t.Errorf("%d distinct replies came out; want %d", len(seen), n)
+		}
+	})
+
+	// An implementation whose sequence is assigned when a row is inserted, and whose row becomes
+	// visible when its transaction commits, can show a reader the reply with sequence 6 before the one
+	// with sequence 5. A reader that walks the queue with a cursor then never sees 5. The queue must
+	// make a reply visible only after every reply with a lower sequence in its session is.
+	su.run(t, "a reader that walks a session's queue with a cursor never misses a reply enqueued at the same time", func(t *testing.T, s store.Store) {
+		const writers, perWriter = 8, 20
+		var finished atomic.Bool
+		type seenReply struct {
+			id  string
+			seq int64
+		}
+		var seen []seenReply
+		pollerDone := make(chan struct{})
+		go func() {
+			defer close(pollerDone)
+			var cursor int64
+			for {
+				done := finished.Load() // read before the query: every enqueue is committed if it is true
+				r, err := s.NextReplyAfter(t.Context(), key, cursor)
+				switch {
+				case err == nil:
+					if r.Sequence <= cursor { // a store that does not move the cursor on would loop for ever
+						t.Errorf("NextReplyAfter(%d) returned sequence %d", cursor, r.Sequence)
+						return
+					}
+					seen = append(seen, seenReply{r.ID, r.Sequence})
+					cursor = r.Sequence
+				case !isNotFound(err):
+					t.Errorf("NextReplyAfter: %v", err)
+					return
+				case done:
+					return
+				default:
+					runtime.Gosched()
+				}
+			}
+		}()
+		parallel(writers, func(w int) {
+			for i := range perWriter {
+				if _, err := s.EnqueueReply(t.Context(), newReply(fmt.Sprintf("w%d-%02d", w, i), key)); err != nil {
+					t.Errorf("enqueue: %v", err)
+				}
+			}
+		})
+		finished.Store(true)
+		<-pollerDone
+		if want := writers * perWriter; len(seen) != want {
+			ids := map[string]bool{}
+			for _, r := range seen {
+				ids[r.id] = true
+			}
+			t.Errorf("the cursor reader saw %d of %d replies: a reply that committed after a later one was skipped", len(ids), want)
+		}
+	})
+
+	su.run(t, "sessions queued to at the same time are each in order", func(t *testing.T, s store.Store) {
+		const sessions, perSession = 4, 12
+		parallel(sessions*perSession, func(i int) {
+			k := keyOf(fmt.Sprint("s", i%sessions))
+			if _, err := s.EnqueueReply(t.Context(), newReply(fmt.Sprintf("r%02d", i), k)); err != nil {
+				t.Errorf("enqueue %d: %v", i, err)
+			}
+		})
+		for sn := range sessions {
+			k := keyOf(fmt.Sprint("s", sn))
+			var seqs []int64
+			for range perSession + 1 { // one more than there are, so a reply that stays queued after its mark is seen
+				got, err := s.NextReply(t.Context(), k)
+				if isNotFound(err) {
+					break
+				}
+				noErr(t, err, "next")
+				seqs = append(seqs, got.Sequence)
+				noErr(t, s.MarkReplyDelivered(t.Context(), got.ID, t0), "mark")
+			}
+			if len(seqs) != perSession || !slices.IsSorted(seqs) {
+				t.Errorf("session %d came out as %v; want %d replies in increasing sequence", sn, seqs, perSession)
+			}
+		}
+	})
+
+	// ClaimReplyInteraction is not in store.ReplyQueue, but the interactions package asks the store for it
+	// by type assertion, and a store without it cannot answer a text question.
+	su.run(t, "a queued answer is pinned to one question and cannot answer another", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		c, ok := s.(replyClaimer)
+		if !ok {
+			t.Fatal("the store has no ClaimReplyInteraction(ctx, id, interaction) error: text replies need it")
+		}
+		for _, id := range []string{"r1", "r2"} {
+			_, err := s.EnqueueReply(ctx, newReply(id, key))
+			noErr(t, err, "enqueue "+id)
+		}
+		if got, _ := s.NextReply(ctx, key); got.InteractionID != "" {
+			t.Fatalf("a reply is queued pinned to %q", got.InteractionID)
+		}
+		noErr(t, c.ClaimReplyInteraction(ctx, "r2", "q1"), "claim")
+		noErr(t, c.ClaimReplyInteraction(ctx, "r2", "q1"), "the same claim again")
+		// Implicit: today a claim for another question fails with ErrNotFound, the error of an update
+		// that matched no row, and not with ErrConflict. Only the failure is pinned.
+		if err := c.ClaimReplyInteraction(ctx, "r2", "q2"); err == nil {
+			t.Error("a claim of a reply already pinned to another question succeeded")
+		}
+		isErr(t, c.ClaimReplyInteraction(ctx, "nope", "q1"), store.ErrNotFound, "claim of an unknown reply")
+		isErr(t, c.ClaimReplyInteraction(ctx, "", "q1"), store.ErrInvalid, "claim with no reply")
+		isErr(t, c.ClaimReplyInteraction(ctx, "r1", ""), store.ErrInvalid, "claim with no question")
+
+		head, err := s.NextReply(ctx, key)
+		if err != nil || head.ID != "r1" || head.InteractionID != "" {
+			t.Fatalf("head = %+v, %v; want r1 unpinned: a claim does not reorder the queue", head, err)
+		}
+		pinned, err := s.NextReplyAfter(ctx, key, head.Sequence)
+		if err != nil || pinned.ID != "r2" || pinned.InteractionID != "q1" {
+			t.Fatalf("after the head = %+v, %v; want r2 pinned to q1", pinned, err)
+		}
+	})
+
+	// Replies are queued by key and need no session row: intake enqueues before the session exists, and
+	// none of the tests above makes one.
+	su.run(t, "a long reply is stored whole", func(t *testing.T, s store.Store) {
+		long := newReply("long", key)
+		long.Text = strings.Repeat("é", 100_000)
+		if _, err := s.EnqueueReply(t.Context(), long); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.NextReply(t.Context(), key); err != nil || got.Text != long.Text {
+			t.Errorf("next = %d bytes of text, %v; want the text of %d bytes", len(got.Text), err, len(long.Text))
+		}
+	})
+}

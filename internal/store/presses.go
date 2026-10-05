@@ -10,7 +10,8 @@ import (
 type Press struct {
 	// TraceParent and TraceState preserve W3C ancestry for durable work; never baggage.
 	TraceParent, TraceState string
-	// Seq orders presses by when they were recorded; the store assigns it.
+	// Seq orders presses by when they were recorded; the store assigns it, and never gives the Seq of
+	// a deleted press to another, so that DeletePress cannot remove a later press by mistake.
 	Seq int64
 	// InteractionID is the pressed button's value, which names the interaction it answers.
 	InteractionID string
@@ -42,6 +43,11 @@ type Presses interface {
 	// PendingPresses reports whether a press of the interaction is waiting that was made at or
 	// before before: one a decision at that time would have had to take into account. The timeout
 	// sweep asks it before it times an interaction out. InteractionID and before are required.
+	//
+	// An answer typed as a reply in the thread is a press not yet recorded, so it counts too: a reply
+	// that waits in the reply queue pinned to the interaction, and enqueued at or before before; or,
+	// for an interaction that is pending, takes text replies and has its prompt posted, one not pinned
+	// to any question that was enqueued from the interaction's creation to before.
 	PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error)
 	// DeletePress removes the press with seq, once it is processed. A press that is already gone is
 	// not an error: a crash may repeat the call.

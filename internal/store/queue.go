@@ -22,8 +22,8 @@ import (
 type Queue interface {
 	// ClaimEvent atomically claims the oldest claimable event: pending with
 	// NextAttemptAt <= now, or processing with an expired lease
-	// (NextAttemptAt <= now). The event becomes processing, its Attempts
-	// increases by one, and NextAttemptAt becomes now+lease, the lease
+	// (NextAttemptAt <= now). Of those, the one due earliest is taken: by NextAttemptAt, then by
+	// ReceivedAt. The event becomes processing, its Attempts increases by one, and NextAttemptAt becomes now+lease, the lease
 	// deadline. The returned Event reflects the claim. It returns ErrNotFound
 	// when nothing is claimable and ErrInvalid for a zero now or a
 	// non-positive lease.

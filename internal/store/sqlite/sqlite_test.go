@@ -1,9 +1,7 @@
 package sqlite
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 	"testing/fstest"
@@ -27,13 +25,23 @@ func openAt(t *testing.T, path string) *Store {
 	return s
 }
 
+// newInteraction returns a valid interaction created at t0 that is due after d.
+func newInteraction(id string, d time.Duration) store.Interaction {
+	return store.Interaction{
+		ID: id, Key: key, TaskID: "task1", Kind: store.InteractionAskUser,
+		Request: []byte(`{"q":1}`), CreatedAt: t0, Deadline: t0.Add(d),
+	}
+}
+
 func openTemp(t *testing.T) *Store {
 	t.Helper()
 	return openAt(t, filepath.Join(t.TempDir(), "courier.db"))
 }
 
-func TestEvents(t *testing.T) {
-	ctx := context.Background()
+// Every connection of both pools runs in WAL mode with foreign keys on, which the rest of the package takes for
+// granted.
+func TestOpenSetsTheJournalModeAndForeignKeys(t *testing.T) {
+	ctx := t.Context()
 	s := openTemp(t)
 	var mode string
 	var fk int
@@ -42,45 +50,6 @@ func TestEvents(t *testing.T) {
 	}
 	if err := s.write.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {
 		t.Fatalf("foreign_keys = %d, %v; want 1", fk, err)
-	}
-	e := store.Event{ID: "ev1", Kind: "alert", BindingKey: "ns/b", Payload: []byte{0, 1, 2}, ReceivedAt: t0}
-
-	for _, bad := range []store.Event{{ReceivedAt: t0}, {ID: "x"}} {
-		if _, err := s.AppendEvent(ctx, bad); !errors.Is(err, store.ErrInvalid) {
-			t.Fatalf("AppendEvent(%+v) = %v; want ErrInvalid", bad, err)
-		}
-	}
-	if ins, err := s.AppendEvent(ctx, e); err != nil || !ins {
-		t.Fatalf("first append = %v, %v; want true, nil", ins, err)
-	}
-	dup := e
-	dup.Payload = []byte("changed")
-	if ins, err := s.AppendEvent(ctx, dup); err != nil || ins {
-		t.Fatalf("duplicate append = %v, %v; want false, nil", ins, err)
-	}
-	got, err := s.GetEvent(ctx, "ev1")
-	if err != nil {
-		t.Fatalf("GetEvent: %v", err)
-	}
-	if !bytes.Equal(got.Payload, e.Payload) || got.Kind != "alert" || got.BindingKey != "ns/b" ||
-		!got.ReceivedAt.Equal(t0) || got.Status != store.EventPending || got.Attempts != 0 || !got.NextAttemptAt.Equal(t0) {
-		t.Fatalf("stored event = %+v", got)
-	}
-
-	if err := s.SetEventStatus(ctx, "ev1", store.EventDead, "boom"); err != nil {
-		t.Fatalf("SetEventStatus: %v", err)
-	}
-	if got, _ = s.GetEvent(ctx, "ev1"); got.Status != store.EventDead || got.LastError != "boom" {
-		t.Fatalf("after status update = %+v", got)
-	}
-	if err := s.SetEventStatus(ctx, "ev1", "bogus", ""); !errors.Is(err, store.ErrInvalid) {
-		t.Fatalf("SetEventStatus bogus = %v; want ErrInvalid", err)
-	}
-	if _, err := s.GetEvent(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("GetEvent missing = %v; want ErrNotFound", err)
-	}
-	if err := s.SetEventStatus(ctx, "nope", store.EventDone, ""); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("SetEventStatus missing = %v; want ErrNotFound", err)
 	}
 }
 

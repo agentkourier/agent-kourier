@@ -20,7 +20,7 @@ type Reply struct {
 	ID  string
 	Key ConversationKey
 	// Sequence orders replies within a session. The store assigns it on
-	// enqueue; the caller's value and clock never affect order.
+	// enqueue; the caller's value and clock never affect order. It need not be comparable between sessions.
 	Sequence int64
 	UserID   string // the platform's ID of the user who wrote the reply
 	// MessageRef is the platform's ID of the reply message, for the queued reaction.
@@ -35,6 +35,16 @@ type Reply struct {
 // at-least-once: the sender takes the head with NextReply, sends it, then
 // marks it delivered. A delivered reply stays as a tombstone (its text is
 // cleared), so a redelivered chat event with the same ID is not queued again.
+//
+// A reader that walks a session's queue with NextReplyAfter must never miss a reply that was
+// enqueued while it walked: a reply becomes visible only after every reply with a lower Sequence in
+// its session is. A store whose Sequence is assigned at insert and shown at commit must serialise
+// the enqueues of a session to keep this.
+//
+// Stores also provide ClaimReplyInteraction(ctx, id, interaction string) error, which pins a queued
+// answer to one question (ErrInvalid for an empty argument, ErrNotFound for an unknown reply, and
+// an error, today also ErrNotFound, for a reply pinned to another question). It is not listed
+// here because the interactions package asks for it by type assertion; storetest requires it.
 type ReplyQueue interface {
 	// EnqueueReply appends r to its session's queue, idempotently by ID, and
 	// reports whether it was newly enqueued; a delivered ID is a duplicate too.

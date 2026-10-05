@@ -7,10 +7,10 @@ import "context"
 // expired session.
 type Recovery interface {
 	// ListActiveSessions returns every session that has an active task (TaskID set), oldest
-	// last activity first. Expired sessions are included: the caller reads each with
-	// GetSession and decides.
+	// last activity first (sessions with the same activity in any order). Expired sessions are
+	// included: the caller reads each with GetSession and decides.
 	ListActiveSessions(ctx context.Context) ([]Session, error)
 	// ListQueuedSessions returns the key of every session with at least one undelivered
-	// reply, once each, the session whose oldest undelivered reply came first leading.
+	// reply, once each, in any order.
 	ListQueuedSessions(ctx context.Context) ([]ConversationKey, error)
 }

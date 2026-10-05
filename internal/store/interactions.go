@@ -86,10 +86,12 @@ type Interactions interface {
 	// GetInteraction returns the interaction with the given ID, or ErrNotFound.
 	GetInteraction(ctx context.Context, id string) (Interaction, error)
 	// ListDueInteractions returns pending interactions whose deadline is at or
-	// before now, oldest deadline first, for the timeout sweep.
+	// before now, oldest deadline first (the same deadline in any order), for the
+	// timeout sweep.
 	ListDueInteractions(ctx context.Context, now time.Time) ([]Interaction, error)
 	// ListDecidedInteractions returns the interactions decided at or after since (answered, timed
-	// out or cancelled), oldest decision first, for repairing the prompts that may still show
+	// out or cancelled), oldest decision first (the same time in any order), for
+	// repairing the prompts that may still show
 	// controls. since is required (ErrInvalid otherwise). No index serves it: it reads the table,
 	// which is small, and is run at start and now and then, not for each interaction.
 	ListDecidedInteractions(ctx context.Context, since time.Time) ([]Interaction, error)
