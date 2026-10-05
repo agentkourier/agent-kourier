@@ -213,7 +213,7 @@ func standFor(t *testing.T, client *fake.Clientset, identity string) *candidate 
 	cfg := testElection
 	cfg.Identity = identity
 	cand := &candidate{}
-	c, err := startCandidacy(t.Context(), client, cfg, slog.New(slog.DiscardHandler), candidacyCallbacks{
+	c, err := startCandidacy(t.Context(), client, cfg, slog.New(slog.DiscardHandler), nil, candidacyCallbacks{
 		gained: func(context.Context) { cand.gained.Add(1) },
 		lost:   func() { cand.lost.Add(1) },
 	})
@@ -293,6 +293,49 @@ func TestCandidacyALeaderThatCannotRenewTheLeaseIsToldSo(t *testing.T) {
 	}
 }
 
+// The lease clock is told of the leader's renewals as the elector makes them, and only of those: while the leader renews
+// the lease is never older than a retry period and a call; once the API server cannot be reached nothing renews it, and it
+// ages by the real time that passes, until the elector gives up (the renew deadline) and the process is to end. This is the
+// hook the chat fence stands on, tried on client-go's own elector and not on a stand-in.
+func TestCandidacyTheLeaseClockFollowsTheLeadersAcceptedRenewals(t *testing.T) {
+	client := fake.NewClientset()
+	var unreachable atomic.Bool
+	client.PrependReactor("*", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if unreachable.Load() {
+			return true, nil, errors.New("the API server is unreachable")
+		}
+		return false, nil, nil
+	})
+	cfg := testElection
+	cfg.Identity = "pod-a_1"
+	lease := newLeaseClock(nil)
+	var gained, lost atomic.Int32
+	c, err := startCandidacy(t.Context(), client, cfg, slog.New(slog.DiscardHandler), lease, candidacyCallbacks{
+		gained: func(context.Context) { gained.Add(1) }, lost: func() { lost.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.stop(context.WithoutCancel(t.Context())) })
+	eventually(t, 5*time.Second, "not leading", func() bool { return gained.Load() == 1 })
+	if _, ok := lease.since(); !ok {
+		t.Fatal("the leader was told it leads, and the lease clock knows of no renewal: the acquisition is one")
+	}
+
+	for range 10 { // a leader that renews: never older than a retry period, a call and a margin for a loaded machine
+		time.Sleep(cfg.RetryPeriod)
+		if age, _ := lease.since(); age > cfg.RetryPeriod+cfg.RenewDeadline/2 {
+			t.Fatalf("the lease clock says the last renewal began %s ago while the leader renews every %s", age, cfg.RetryPeriod)
+		}
+	}
+
+	unreachable.Store(true)
+	eventually(t, 10*time.Second, "the leader was not told it had lost the lease", func() bool { return lost.Load() == 1 })
+	if age, _ := lease.since(); age < cfg.RenewDeadline-cfg.RetryPeriod {
+		t.Errorf("the elector gave up %s after the last accepted renewal; want about the renew deadline, %s, which the chat fence uses as its bound", age, cfg.RenewDeadline)
+	}
+}
+
 // A deliberate stop is not a loss, and hands the Lease over: the other replica takes it on its next try and does not
 // wait out a lease duration.
 func TestCandidacyAStopHandsTheLeaseOverWithoutALossAndWithoutAWait(t *testing.T) {
@@ -333,7 +376,7 @@ func TestCandidacyAStandbyThatStopsIsNotALoss(t *testing.T) {
 func TestCandidacyRefusesTimingsClientGoWouldRefuse(t *testing.T) {
 	cfg := testElection
 	cfg.RenewDeadline = cfg.LeaseDuration
-	_, err := startCandidacy(t.Context(), fake.NewClientset(), cfg, slog.New(slog.DiscardHandler), candidacyCallbacks{gained: func(context.Context) {}, lost: func() {}})
+	_, err := startCandidacy(t.Context(), fake.NewClientset(), cfg, slog.New(slog.DiscardHandler), nil, candidacyCallbacks{gained: func(context.Context) {}, lost: func() {}})
 	if !errors.Is(err, ErrWiring) {
 		t.Errorf("startCandidacy = %v; want ErrWiring", err)
 	}

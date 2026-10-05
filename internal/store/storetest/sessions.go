@@ -11,7 +11,7 @@ import (
 
 // sameSession compares what a session is, leaving out its trace context and comparing times as instants.
 func sameSession(a, b store.Session) bool {
-	return a.Key == b.Key && a.ContextID == b.ContextID && a.TaskID == b.TaskID && a.Binding == b.Binding &&
+	return a.Key == b.Key && a.ContextID == b.ContextID && a.TaskID == b.TaskID && a.Turn == b.Turn && a.TurnTask == b.TurnTask && a.Binding == b.Binding &&
 		a.LastActivity.Equal(b.LastActivity)
 }
 
@@ -192,7 +192,7 @@ func (su suite) sessionTasks(t *testing.T) {
 	// which a concurrent TouchSession may just have moved.
 	su.run(t, "SetSessionTask changes the task and the context and nothing else", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
-		isErr(t, s.SetSessionTask(ctx, key, "c1", "t1"), store.ErrNotFound, "set on a missing session")
+		isErr(t, s.SetSessionTask(ctx, key, "c1", "t1", store.TaskTurn{}), store.ErrNotFound, "set on a missing session")
 		noErr(t, s.UpsertSession(ctx, store.Session{Key: key, Binding: "ns/b", LastActivity: t0}), "UpsertSession")
 		for _, tc := range []struct{ name, contextID, taskID, wantContext, wantTask string }{
 			{"a task and its context", "c1", "t1", "c1", "t1"},
@@ -201,17 +201,60 @@ func (su suite) sessionTasks(t *testing.T) {
 			{"a new context", "c2", "t3", "c2", "t3"},
 		} {
 			noErr(t, s.TouchSession(ctx, key, t0.Add(time.Minute)), "TouchSession")
-			noErr(t, s.SetSessionTask(ctx, key, tc.contextID, tc.taskID), tc.name)
+			noErr(t, s.SetSessionTask(ctx, key, tc.contextID, tc.taskID, store.TaskTurn{}), tc.name)
 			if got := getSession(t, s, key); got.ContextID != tc.wantContext || got.TaskID != tc.wantTask || got.Binding != "ns/b" || !got.LastActivity.Equal(t0.Add(time.Minute)) {
 				t.Errorf("%s: session = %+v; want context %q, task %q, the Binding and the touched activity kept", tc.name, got, tc.wantContext, tc.wantTask)
 			}
 		}
 		for range 2 { // a repeat of the same call is not an error, though no row changes
-			if err := s.SetSessionTask(ctx, key, "c2", "t3"); err != nil {
+			if err := s.SetSessionTask(ctx, key, "c2", "t3", store.TaskTurn{}); err != nil {
 				t.Errorf("repeated set = %v; want nil", err)
 			}
 		}
-		isErr(t, s.SetSessionTask(ctx, store.ConversationKey{}, "c", "t"), store.ErrInvalid, "set with an empty key")
+		isErr(t, s.SetSessionTask(ctx, store.ConversationKey{}, "c", "t", store.TaskTurn{}), store.ErrInvalid, "set with an empty key")
+	})
+
+	// The turn is recorded with the task, in the same write, so that a recovery that finds the task again knows whose
+	// output it is: the turn that began it, and after an answer the answer's.
+	su.run(t, "SetSessionTask records the turn with the task, replaces it with the next, and clears it with the task", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		noErr(t, s.UpsertSession(ctx, store.Session{Key: key, Binding: "ns/b", LastActivity: t0}), "UpsertSession")
+		if got := getSession(t, s, key); got.Turn != (store.TaskTurn{}) {
+			t.Fatalf("a new session's turn = %+v; want none", got.Turn)
+		}
+		first, answer := store.TaskTurn{ID: "slack:c:C1:1.1", User: "U1"}, store.TaskTurn{ID: "answer-1", User: "U2"}
+		noErr(t, s.SetSessionTask(ctx, key, "c1", "t1", first), "the task begins")
+		if got := getSession(t, s, key); got.TaskID != "t1" || got.Turn != first || got.TurnTask != "t1" {
+			t.Errorf("session = %+v; want task t1 of turn %+v, recorded for t1", got, first)
+		}
+		noErr(t, s.TouchSession(ctx, key, t0.Add(time.Minute)), "TouchSession")
+		if got := getSession(t, s, key); got.Turn != first {
+			t.Errorf("a touch changed the turn to %+v", got.Turn)
+		}
+		active, err := s.ListActiveSessions(ctx)
+		if err != nil || len(active) != 1 || active[0].Turn != first {
+			t.Errorf("ListActiveSessions = %+v, %v; want the session with its turn %+v", active, err, first)
+		}
+		// A binary from before the turn was recorded starts another task and leaves the turn: UpsertSession, which replaces the
+		// task and not the turn, is that write. The turn then says which task it was recorded for, and it is not this one's.
+		noErr(t, s.UpsertSession(ctx, store.Session{Key: key, ContextID: "c1", TaskID: "t2", Binding: "ns/b", LastActivity: t0}), "a task that a binary without turns began")
+		if got := getSession(t, s, key); got.TaskID != "t2" || got.Turn != first || got.TurnTask != "t1" {
+			t.Errorf("session = %+v; want task t2 with the turn %+v still recorded for t1", got, first)
+		}
+		noErr(t, s.SetSessionTask(ctx, key, "", "t1", first), "back to t1")
+		noErr(t, s.SetSessionTask(ctx, key, "", "t1", answer), "the answer continues the task")
+		if got := getSession(t, s, key); got.TaskID != "t1" || got.Turn != answer || got.TurnTask != "t1" {
+			t.Errorf("session = %+v; want task t1 of the answer %+v: a later call replaces the turn", got, answer)
+		}
+		noErr(t, s.SetSessionTask(ctx, key, "", "", answer), "the task ends")
+		if got := getSession(t, s, key); got.TaskID != "" || got.Turn != (store.TaskTurn{}) || got.TurnTask != "" {
+			t.Errorf("session = %+v; want no task and no turn: a turn without a task is cleared whatever is given", got)
+		}
+		noErr(t, s.SetSessionTask(ctx, key, "", "t2", first), "another task")
+		noErr(t, s.ResetSession(ctx, key), "ResetSession")
+		if got := getSession(t, s, key); got.TaskID != "" || got.Turn != (store.TaskTurn{}) {
+			t.Errorf("session after a reset = %+v; want no task and no turn", got)
+		}
 	})
 
 	// ResetSession forgets the agent's session, and only that: the Binding and the activity stay, so the
@@ -241,7 +284,7 @@ func (su suite) sessionTasks(t *testing.T) {
 				if err := s.TouchSession(ctx, key, t0.Add(time.Duration(i+1)*time.Minute)); err != nil {
 					t.Errorf("touch: %v", err)
 				}
-			} else if err := s.SetSessionTask(ctx, key, "", fmt.Sprint("t", i)); err != nil {
+			} else if err := s.SetSessionTask(ctx, key, "", fmt.Sprint("t", i), store.TaskTurn{}); err != nil {
 				t.Errorf("set task: %v", err)
 			}
 		})

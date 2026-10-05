@@ -72,7 +72,7 @@ func (s *spyStore) failOnce(call string) error {
 	return err
 }
 
-func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID string) error {
+func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID string, turn store.TaskTurn) error {
 	s.mu.Lock()
 	hook := s.onSet
 	s.mu.Unlock()
@@ -82,7 +82,7 @@ func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID 
 	if err := s.failOnce("set"); err != nil {
 		return err
 	}
-	return s.Store.SetSessionTask(ctx, k, contextID, taskID)
+	return s.Store.SetSessionTask(ctx, k, contextID, taskID, turn)
 }
 
 func (s *spyStore) NextReply(ctx context.Context, k Key) (store.Reply, error) {

@@ -26,6 +26,23 @@ type leaderHalf struct {
 	metrics *Metrics
 	boot    *Config
 	st      openedStore
+	// chatFence refuses the chat writes of a leader whose lease is past its renew deadline. Nil with SQLite, which has no
+	// lease: openPlatform is the one place the platform is built, so that no write to the chat goes round it.
+	chatFence *chatFence
+}
+
+// openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
+// makes (the outbox's posts and reactions, the renderer's streams and edits, the interactions' prompts, edits and ephemerals)
+// goes through the platform that this returns, and nothing else builds one.
+func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
+	p, err := h.cfg.newPlatform(conn, h.log, onConnection)
+	if err != nil {
+		return builtPlatform{}, err
+	}
+	if h.chatFence != nil {
+		p.Platform = fenceChat(p.Platform, h.chatFence)
+	}
+	return p, nil
 }
 
 // start starts the leader half on conn, the ChatConnection and credentials as they are now (a standby that leads hours
@@ -48,7 +65,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
 	// courier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
 	metrics.ChatConnected(connName, false)
-	platform, err := cfg.newPlatform(conn, log, func(up bool) { metrics.ChatConnected(connName, up) })
+	platform, err := h.openPlatform(conn, func(up bool) { metrics.ChatConnected(connName, up) })
 	if err != nil {
 		return nil, err
 	}

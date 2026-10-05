@@ -22,10 +22,23 @@ type Session struct {
 	// TaskID is the active task: the one that runs or waits for input. The session
 	// manager clears it when the task ends, so it is empty when no task is active, and
 	// Recovery.ListActiveSessions finds the sessions a restart must reconcile by it.
-	TaskID       string
+	TaskID string
+	// Turn is the turn whose output the active task belongs to, recorded with the task (SetSessionTask), so that a
+	// recovery renders the task's output under it and finds the message it began. Empty with no task, and for a task
+	// recorded before the column existed. UpsertSession neither writes nor changes it.
+	Turn TaskTurn
+	// TurnTask is the task Turn was recorded for. A binary from before the turn was recorded starts a task and leaves the
+	// turn as it was, so Turn is the active task's only if TurnTask equals TaskID; otherwise it is another task's, and no
+	// output of this one belongs to it.
+	TurnTask     string
 	Binding      string
 	LastActivity time.Time
 }
+
+// TaskTurn is the turn whose output a task belongs to: the turn that began it, or for the continuation of a task that was
+// paused and answered, the answer. ID names the outbox row of the output (and so the message, a stream's included), and User
+// is the platform's ID of the person it is shown to, which a stream needs. The zero value is none.
+type TaskTurn struct{ ID, User string }
 
 // Sessions persists the thread-to-session mapping. Key (all three parts),
 // Binding and LastActivity are required; ContextID and TaskID are optional.

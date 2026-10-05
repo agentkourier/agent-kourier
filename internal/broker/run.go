@@ -31,8 +31,9 @@ import (
 // What only the leader runs follows, as leaderHalf.start has it: the audit writer, the Bindings, the chat platform,
 // the outbox, the session manager and its recovery, the sweeps, the interactions and the chat connection. With SQLite
 // it starts at once. With Postgres a replica first wins a Kubernetes Lease (cfg.Election) and is given the next epoch
-// by the store, which fences every write of a replica that is no longer the leader; a replica that loses the lease or
-// meets a stale epoch ends the process at once (ExitLeadershipLost).
+// by the store, which fences every write of a replica that is no longer the leader, and its chat platform refuses every
+// write once the lease is past its renew deadline (chatFence); a replica that loses the lease, meets a stale epoch or is
+// refused a chat write ends the process at once (ExitLeadershipLost).
 func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err := cfg.validate(); err != nil {
 		return err
@@ -171,7 +172,15 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 
 	// The leader half starts here with SQLite, and with a fencing store when the lease is won and the store has its
 	// epoch. Whatever ends it, or fails to start it, is sent to leaderDone.
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st}
+	// Besides the store's epoch, a leader's writes to the chat are fenced by its own clock: once its lease is past the renew
+	// deadline it writes nothing, and ends (chatFence). Only a replica with a Lease has one to be past.
+	var lease *leaseClock
+	var guard *chatFence
+	if fenced != nil {
+		lease = newLeaseClock(cfg.leaseNow)
+		guard = newChatFence(cfg.Election, lease, fail.now)
+	}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, chatFence: guard}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()
@@ -208,9 +217,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if fenced == nil {
 		go runLeader()
 	} else {
-		cand, err = startCandidacy(ctx, client, cfg.Election, log, candidacyCallbacks{
+		cand, err = startCandidacy(ctx, client, cfg.Election, log, lease, candidacyCallbacks{
 			gained: func(context.Context) { runLeader() },
-			lost:   func() { fail.now("the lease was lost or could not be renewed") },
+			lost:   func() { fail.now(leaseLostReason) },
 		})
 		if err != nil {
 			return err

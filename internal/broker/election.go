@@ -20,9 +20,15 @@ import (
 )
 
 // ExitLeadershipLost is the exit code of a replica that was the leader and no longer is: its lease lapsed or could
-// not be renewed, or a write found that another replica has led since (store.ErrDeposed). The process ends at
+// not be renewed, a write found that another replica has led since (store.ErrDeposed), or a chat write was refused because
+// the lease is past its renew deadline (ErrChatFenced). The process ends at
 // once, with no graceful drain, since a drain would post (spec D37); Kubernetes restarts it as a standby.
 const ExitLeadershipLost = 5
+
+// leaseLostReason is the fail-stop reason of a leader whose lease lapsed or could not be renewed, which refuses no write: the
+// reasons of a write that was refused name that write (a chat write, a store write at a stale epoch). A test that reads why a
+// deposed leader stopped tells them apart by it (test/e2e/fence.go has the same text).
+const leaseLostReason = "the lease was lost or could not be renewed"
 
 // The timings of the election (spec D37), used where ElectionConfig leaves one zero. The leader gives up renewing
 // 5 s before a candidate may take the lease, and exits at once, so the old leader has normally stopped before the
@@ -188,8 +194,9 @@ type candidacyCallbacks struct {
 }
 
 // startCandidacy begins to ask for the Lease. The goroutine ends with stop, or when the Lease is lost, which calls
-// cb.lost; it does not stand again, since the process is to end.
-func startCandidacy(ctx context.Context, client kubernetes.Interface, cfg ElectionConfig, log *slog.Logger, cb candidacyCallbacks) (*candidacy, error) {
+// cb.lost; it does not stand again, since the process is to end. If lease is not nil it is told of every write of the Lease
+// that the API server accepted (renewWatch), which is what chatFence reads.
+func startCandidacy(ctx context.Context, client kubernetes.Interface, cfg ElectionConfig, log *slog.Logger, lease *leaseClock, cb candidacyCallbacks) (*candidacy, error) {
 	cfg = cfg.withDefaults()
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta:  metav1.ObjectMeta{Namespace: cfg.Namespace, Name: cfg.Name},
@@ -197,8 +204,12 @@ func startCandidacy(ctx context.Context, client kubernetes.Interface, cfg Electi
 		LockConfig: resourcelock.ResourceLockConfig{Identity: cfg.Identity},
 	}
 	c := &candidacy{lock: lock, done: make(chan struct{}), stopping: new(atomic.Bool), log: log}
+	var electing resourcelock.Interface = lock // c.lock, not this, is what the hand-over writes: it renews nothing
+	if lease != nil {
+		electing = renewWatch{Interface: lock, clock: lease}
+	}
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-		Lock: lock, LeaseDuration: cfg.LeaseDuration, RenewDeadline: cfg.RenewDeadline, RetryPeriod: cfg.RetryPeriod,
+		Lock: electing, LeaseDuration: cfg.LeaseDuration, RenewDeadline: cfg.RenewDeadline, RetryPeriod: cfg.RetryPeriod,
 		Name: cfg.Name,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: cb.gained,

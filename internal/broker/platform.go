@@ -27,19 +27,18 @@ type Connection struct {
 }
 
 // platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, the modes it
-// is served in, and how to build its adapter.
+// is served in. Its adapter is built by RunConfig.newPlatform, which leaderHalf.openPlatform calls.
 type platformSpec struct {
 	Keys  []string
 	Modes []v1alpha1.ChatMode
-	Build func(c RunConfig, conn Connection, log *slog.Logger) (builtPlatform, error)
 }
 
-// platformFor is the one place that names a platform: a second platform is one more case here, with its keys, its modes
-// and its adapter. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It is a func and
+// platformFor is the one place that names a platform: a second platform is one more case here, with its keys and its modes,
+// and one more in newPlatform for its adapter. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It is a func and
 // not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: []string{"botToken", "appToken"}, Modes: []v1alpha1.ChatMode{v1alpha1.ModeSocket}, Build: buildSlack}, true
+		return platformSpec{Keys: []string{"botToken", "appToken"}, Modes: []v1alpha1.ChatMode{v1alpha1.ModeSocket}}, true
 	}
 	return platformSpec{}, false
 }
@@ -75,22 +74,6 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 		return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 	}
 	return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: the platform %q has no adapter", ErrWiring, name, conn.Platform)
-}
-
-// buildSlack builds the Slack adapter over a client of its own transport, so that its idle connections can be closed at
-// shutdown. RunConfig.newSlack, a seam of the tests, may replace the client.
-func buildSlack(c RunConfig, conn Connection, log *slog.Logger) (builtPlatform, error) {
-	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	sc := slackConfig(conn, log)
-	sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false)}
-	var api slack.API
-	if c.newSlack != nil {
-		api = c.newSlack(sc)
-	} else {
-		api = slack.New(sc)
-	}
-	return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 }
 
 // slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and

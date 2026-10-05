@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -98,7 +99,7 @@ func TestRecoveredTaskLinksToStoredTrace(t *testing.T) {
 	sink := f.live()
 	original, op := telemetry.Start(base, "courier.intake")
 	f.seed("ns/b1", 0)
-	if err := f.st.SetSessionTask(original, key, "c1", "t1"); err != nil {
+	if err := f.st.SetSessionTask(original, key, "c1", "t1", store.TaskTurn{}); err != nil {
 		t.Fatal(err)
 	}
 	originalID := trace.SpanContextFromContext(original).TraceID()

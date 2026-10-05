@@ -166,7 +166,7 @@ func (m *Manager) endPause(ctx context.Context, key Key, taskID a2a.TaskID) erro
 	if sess.TaskID != string(taskID) || taskID == "" {
 		return ErrNotParked // nothing recorded for that task
 	}
-	if err := m.cfg.Store.SetSessionTask(ctx, key, "", ""); err != nil {
+	if err := m.cfg.Store.SetSessionTask(ctx, key, "", "", store.TaskTurn{}); err != nil {
 		return fmt.Errorf("end pause of task %s: %w", taskID, err)
 	}
 	m.start(key) //nolint:contextcheck // the runner belongs to the manager, and outlives the caller
@@ -594,12 +594,20 @@ type tstate struct {
 	traceCtx  context.Context // current attempt, for correlated lifecycle logs
 	system    bool            // courier made the call itself: no person, no turn
 	recovered bool            // the task was found again after a restart
+	began     store.TaskTurn  // the turn the session recorded for the recovered task, whose output the renderer continues; zero if none was
 	texted    bool            // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
 	key       Key
 	c         *convo
 	r         store.Reply
 	sess      store.Session
 	b         Backend
+}
+
+// outputTurn is the turn the output of this attempt belongs to, which the task is recorded with and the renderer is told: an
+// answer's continuation is the answer's own (its output is a message of its own, never the paused turn's), a task found again
+// is the turn the session recorded for it, so that the message that turn began is found, and any other is the turn itself.
+func (t *tstate) outputTurn() store.TaskTurn {
+	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(t.r.UserID, t.began.User)}
 }
 
 // drive runs one attempt at a turn, a Send or a Follow, streaming its events to the sink and
@@ -651,7 +659,8 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 		// An answer's output is a message of its own, named after the answer: it must not overwrite
 		// the output of the turn that paused. A task found again after a restart, or followed again
 		// after a lost stream, continues the message it had.
-		ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: cmp.Or(t.nid, r.ID), UserID: r.UserID, Output: t.b.Output, Recovered: t.recovered || t.follow}
+		out := t.outputTurn()
+		ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: out.ID, UserID: out.User, Output: t.b.Output, Recovered: t.recovered || t.follow}
 		if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
 			h = sh
 		}
@@ -679,7 +688,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 				if t.sess.ContextID == "" {
 					t.sess.ContextID = ev.ContextID // a first turn learns its context here
 				}
-				recordErr = m.accept(sctx, r, ev)
+				recordErr = m.accept(sctx, r, ev, t.outputTurn())
 				if t.recovered && errors.Is(recordErr, store.ErrNotFound) {
 					recordErr = nil // the turn of a recovered task may have no queue row to mark
 				}
@@ -760,7 +769,16 @@ func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
 	if msg.ContextID == "" {
 		msg.ContextID = t.sess.ContextID
 	}
-	return m.drive(&t, func(ctx context.Context, h agent.Handler) error { return t.b.Agent.Answer(ctx, msg, h) })
+	return m.drive(&t, func(ctx context.Context, h agent.Handler) error {
+		// The answer's turn is recorded before the agent is asked, and not when it first names the task: a process that ends
+		// between the two would otherwise leave the session naming the turn that paused, and the recovery would stop that
+		// turn's message and replace it with the continuation. An answer that is then refused leaves the task paused under
+		// the answer's turn, whose worst case is a new message.
+		if err := m.cfg.Store.SetSessionTask(context.WithoutCancel(ctx), t.key, msg.ContextID, string(msg.TaskID), t.outputTurn()); err != nil {
+			return fmt.Errorf("record the answer's turn: %w", err)
+		}
+		return t.b.Agent.Answer(ctx, msg, h)
+	})
 }
 
 // unanswered handles an answer that failed before the agent named a task again. A rejected one
@@ -1268,12 +1286,12 @@ const (
 // recovery can find, never one nobody knows about. Both writes are idempotent, so the pair is
 // retried, a bounded number of times. It does not rewrite the session row, so it cannot undo
 // a Submit's touch.
-func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent) (err error) {
+func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent, turn store.TaskTurn) (err error) {
 	for i := range recordAttempts {
 		if i > 0 {
 			time.Sleep(recordDelay)
 		}
-		if err = m.cfg.Store.SetSessionTask(ctx, r.Key, ev.ContextID, string(ev.TaskID)); err == nil {
+		if err = m.cfg.Store.SetSessionTask(ctx, r.Key, ev.ContextID, string(ev.TaskID), turn); err == nil {
 			if err = m.cfg.Store.MarkReplyDelivered(ctx, r.ID, m.cfg.Now()); err == nil {
 				return nil
 			}
@@ -1285,7 +1303,7 @@ func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent
 // end clears the task of a conversation whose task ended, and touches the session, but only
 // after reading it: an expired session is never touched back to life (D28).
 func (m *Manager) end(ctx context.Context, key Key, ttl time.Duration) error {
-	if err := m.cfg.Store.SetSessionTask(ctx, key, "", ""); err != nil {
+	if err := m.cfg.Store.SetSessionTask(ctx, key, "", "", store.TaskTurn{}); err != nil {
 		return err
 	}
 	switch _, err := m.cfg.Store.GetSession(ctx, key, ttl, m.cfg.Now()); {

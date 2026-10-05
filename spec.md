@@ -189,7 +189,7 @@ upstream webhook trigger stays compatible with courier.
 | D34 | Binding token source | For the pilot, a Binding's bearer token is read from `identity.tokenSecretRef` on every call (cached from a watch, never stored elsewhere), and rotated outside courier before it expires (Dex: 24 h). A rejected credential (`ErrCredentialsRejected`, HTTP 401/403 at the front door) fails the turn, re-reads the Secret, is audited and raises a metric; courier never falls back to `userId`. Minting with the client-credentials grant plugs in behind the same `TokenSource` interface once H-02 picks a provider that supports it (Q9). Secret values are held in a type whose every formatting path redacts. Secrets courier reads are type `Opaque`; the watch keeps values for Opaque Secrets only (key names for every other type), in the namespaces courier is granted. After the pilot, narrow to one watch per referenced Secret (a `metadata.name` field selector plus RBAC `resourceNames`). (Resolves Q10, after WP-03; narrowed by the WP-21e1 review.) |
 | D35 | Chat-neutral model | Slack sits behind one platform-neutral seam, `chat.Platform` (6.2), so a second chat platform is one adapter and no change to session, interact, render, outbox or store. The model carries literal text with no markup field; each adapter neutralises markup for its platform and passes a shared hostile-text conformance suite before it ships. The outbox stores the versioned neutral message and the adapter renders it at delivery; a payload of the earlier, Slack-shaped form is abandoned as invalid with a log line, not migrated. Abandon metrics use neutral reasons (channel_gone, too_long, invalid_content, other), with the platform's own code in the log. The Slack message ID string is unchanged (`slack:<connection>:<channel>:<ts>`), and the store's columns keep their names. (Owner-approved 2026-10-02; WP-37.) |
 | D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the bot by ID, never by display name. Courier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial, CT-1; accepted by the owner 2026-10-04.) |
-| D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once. (Owner, 2026-10-04; H4-4.) |
+| D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: proposed 2026-10-05, H4-5b, for owner sign-off.) |
 
 ## 6. Architecture
 
@@ -798,7 +798,11 @@ making the prefix optional breaks multi-turn context.
   they use throttled `chat.update`. Rate limits for both are verified in Phase 0.
 - kagent 1.0 rejects A2A push notifications, and there is no replay cursor. On a dropped
   stream courier calls `GetTask` to reconcile state, then `SubscribeToTask`.
-- On courier restart, non-terminal tasks found in the store are reconciled the same way.
+- On courier restart, non-terminal tasks found in the store are reconciled the same way. The
+  session records the turn whose output the task belongs to, in the same write as the task (the
+  turn that began it, and after a button answer the answer's), and recovery renders the task's output
+  under it, so a stream that the stopped process left open is ended and replaced with the whole output
+  and no half-written message stays in the thread; with no recorded turn it is posted anew.
 
 ### 8.4 Interactions
 
@@ -976,8 +980,12 @@ this with an outbox:
   all of courier's work: Socket Mode, session runners, the outbox, sweeps and digests. The standby
   serves health and metrics and waits. A takeover is a restart to the new leader: the same recovery
   runs. Every write transaction checks the leader's epoch in Postgres and fails if it is stale, and
-  a leader that loses its lease or a write to a stale epoch exits at once (D37). A Slack post or
-  agent send already in flight in a paused, deposed leader can happen once more; S16 measures it.
+  a leader that loses its lease or a write to a stale epoch exits at once (D37). A leader whose
+  lease was not renewed within its renew deadline (it was paused) refuses every write to the chat
+  from then on and exits, so a paused, deposed leader cannot finish a stream it had open; each
+  Slack call, or agent send, already in flight when the pause began (one for each concurrent writer)
+  can still happen once more, and S16 measures it. The new leader renders a recovered task under the
+  turn the session recorded for it, which ends and replaces a stream the old leader left open.
   Active/active (workers on all replicas) is deferred until one replica's throughput is not enough.
   The design is in `tasks/plans/h4-4-ha-design.md`.
 - **Observability.** Prometheus metrics: events received, deduped, rate limited; agent

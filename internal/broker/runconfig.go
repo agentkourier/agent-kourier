@@ -74,6 +74,9 @@ type RunConfig struct {
 	leaveKlog bool
 	// exit ends the process when leadership is lost: os.Exit if nil. A test records the call instead.
 	exit func(code int)
+	// leaseNow is the clock of the leader's lease and of the fence of its chat writes (time.Now if nil): a seam for this
+	// package's tests, which cannot wait for a renew deadline or pause a process.
+	leaseNow func() time.Time
 	// wrapStore replaces the store Run opened with one that wraps it, for this package's tests that need a store
 	// that fences (store.Fenced) over SQLite, which does not.
 	wrapStore func(openedStore) openedStore

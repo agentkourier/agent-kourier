@@ -73,7 +73,7 @@ func TestRecoverDropsATaskThatEndedWhileItWasLookedAt(t *testing.T) {
 	f.st.mu.Lock()
 	f.st.onNext = func() {
 		once.Do(func() { // a Stop lands while recovery reads the queue
-			if err := f.st.Store.SetSessionTask(context.Background(), key, "c1", ""); err != nil {
+			if err := f.st.Store.SetSessionTask(context.Background(), key, "c1", "", store.TaskTurn{}); err != nil {
 				t.Error(err)
 			}
 		})
@@ -158,6 +158,31 @@ func TestRecoverParksAPausedTask(t *testing.T) {
 	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
 	if _, _, fo := f.agent.counts(); fo != 1 {
 		t.Errorf("%d follows; want the second Recover to start nothing", fo)
+	}
+}
+
+// A pause that is found again after a restart, and then answered, continues under the answer: the paused turn is the
+// recovered one, and its message (which the pause was shown in) is not the answer's output.
+func TestRecoverOfAPausedTaskThatIsAnsweredRendersTheAnswerUnderItsOwnTurn(t *testing.T) {
+	f, sink := restarted(t)
+	recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: "U1"})
+	f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateInputRequired) }
+	f.agent.answer = func(_ *a2a.Message, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+	f.recover(t)
+	waitFinal(t, sink)
+	eventually(t, "the runner to park", func() bool {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		return f.m.convos[key] != nil && f.m.convos[key].parked == "t1"
+	})
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 2 || sink.refs[0].MessageID != inbound("1").MessageID || sink.refs[1].MessageID != "ans-1" {
+		t.Errorf("turn refs = %+v; want the pause under the recorded turn, then the answer's output under ans-1", sink.refs)
 	}
 }
 
@@ -330,7 +355,7 @@ func TestRecoverLooksUpAQueuedHeadBeforeSendingIt(t *testing.T) {
 	setup := func(t *testing.T, noTask bool) (*fixture, *fakeSink) {
 		f, sink := restarted(t)
 		if noTask {
-			if err := f.st.SetSessionTask(t.Context(), key, "", ""); err != nil { // context c1 stays
+			if err := f.st.SetSessionTask(t.Context(), key, "", "", store.TaskTurn{}); err != nil { // context c1 stays
 				t.Fatal(err)
 			}
 		}
@@ -390,7 +415,7 @@ func TestHeadFromBeforeTheRestartIsLookedUpWhateverWakesFirst(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, sink := restarted(t)
-			if err := f.st.SetSessionTask(t.Context(), key, "", ""); err != nil { // context c1 stays
+			if err := f.st.SetSessionTask(t.Context(), key, "", "", store.TaskTurn{}); err != nil { // context c1 stays
 				t.Fatal(err)
 			}
 			queuedBeforeTheRestart(t, f)
@@ -410,7 +435,7 @@ func TestHeadFromBeforeTheRestartIsLookedUpWhateverWakesFirst(t *testing.T) {
 // A turn this process enqueued itself cannot have been sent before: it goes out with no lookup.
 func TestHeadThisProcessEnqueuedIsSentWithoutALookup(t *testing.T) {
 	f, sink := restarted(t)
-	if err := f.st.SetSessionTask(t.Context(), key, "", ""); err != nil {
+	if err := f.st.SetSessionTask(t.Context(), key, "", "", store.TaskTurn{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -436,6 +461,187 @@ func TestRecoverDoesNotTakeAHeadAnotherTaskHolds(t *testing.T) {
 	defer sink.mu.Unlock()
 	if len(sink.refs) == 0 || sink.refs[0].MessageID != "task:t1" || !sink.refs[0].Recovered {
 		t.Errorf("turn refs = %+v; want t1 followed under its own turn, task:t1", sink.refs)
+	}
+}
+
+// recordedTurn leaves the session as a process that ended in the middle of a task left it: the task t1 is recorded, with the
+// turn whose output it belongs to (SetSessionTask records the two in one write).
+func recordedTurn(t *testing.T, f *fixture, turn store.TaskTurn) {
+	t.Helper()
+	if err := f.st.SetSessionTask(t.Context(), key, "c1", "t1", turn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A task found again is rendered under the turn the session recorded for it, so that the renderer finds the message that
+// turn began, a stream the leader that died left open included, and ends it and replaces it with the whole output, where a
+// turn of its own would post the output once more beside it (spec 8.3, D37). The output is shown to the turn's author, which a
+// stream needs.
+func TestRecoverRendersATaskUnderTheTurnRecordedForIt(t *testing.T) {
+	f, sink := restarted(t)
+	recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: "U1"})
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || sink.refs[0].MessageID != inbound("1").MessageID || sink.refs[0].UserID != "U1" || !sink.refs[0].Recovered {
+		t.Errorf("turn refs = %+v; want one, recovered, under the recorded turn (%s) and shown to its author, U1", sink.refs, inbound("1").MessageID)
+	}
+	eventually(t, "the task to be cleared", func() bool { return f.taskID() == "" })
+	if sess, err := f.session(); err != nil || sess.Turn != (store.TaskTurn{}) {
+		t.Errorf("session = %+v, %v; want the turn cleared with the task", sess, err)
+	}
+}
+
+// A session with a task and no recorded turn (one that a binary from before the turn was recorded left) is followed under a
+// turn of its own, which posts the output anew, as it was.
+func TestRecoverOfATaskWithNoRecordedTurnPostsItsOutputUnderATurnOfItsOwn(t *testing.T) {
+	f, sink := restarted(t)
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || sink.refs[0].MessageID != "task:t1" || sink.refs[0].UserID != "" || !sink.refs[0].Recovered {
+		t.Errorf("turn refs = %+v; want the task followed under task:t1, recovered", sink.refs)
+	}
+}
+
+// A task that paused and was answered, and then is found again, continues under the ANSWER: its output is a message of its
+// own, and the message of the turn that paused is not touched (the invariant of the runner's TurnRef). The session records
+// the turn that began the task, and the answer's when the answer continues it, in the same write as the task.
+func TestAnAnsweredTaskIsRecordedUnderTheAnswerAndRecoveredUnderIt(t *testing.T) {
+	gate := make(chan struct{})
+	f, sink := pausedFirst(t, func(_ *a2a.Message, h agent.Handler) error {
+		accepted(h, 0) // the agent names the task again: the answer's turn is recorded
+		<-gate
+		return turn(h, 0, a2a.TaskStateCompleted)
+	})
+	defer close(gate)
+	if sess, err := f.session(); err != nil || sess.TaskID != "t1" || sess.Turn.ID != inbound("1").MessageID || sess.Turn.User != "U1" {
+		t.Fatalf("session while paused = %+v, %v; want t1 recorded under the turn that began it, %s, by U1", sess, err, inbound("1").MessageID)
+	}
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the answer to be recorded as the turn of the task", func() bool {
+		sess, err := f.session()
+		return err == nil && sess.Turn.ID == "ans-1"
+	})
+	if sess, _ := f.session(); sess.Turn.User != "U1" || sess.TaskID != "t1" {
+		t.Errorf("session = %+v; want task t1 under the answer, shown to U1", sess)
+	}
+
+	// The process ends here. A new one finds the session as it was left, and follows the task.
+	rec, recSink := restarted(t)
+	sess, err := f.session()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedTurn(t, rec, sess.Turn)
+	rec.recover(t)
+	waitFinal(t, recSink)
+	recSink.mu.Lock()
+	defer recSink.mu.Unlock()
+	if len(recSink.refs) != 1 || recSink.refs[0].MessageID != "ans-1" || recSink.refs[0].MessageID == inbound("1").MessageID || !recSink.refs[0].Recovered {
+		t.Errorf("turn refs = %+v; want the continuation under the answer, ans-1, and never under the turn that paused (%s)", recSink.refs, inbound("1").MessageID)
+	}
+	_ = sink
+}
+
+// A turn recorded for another task is not this task's: a binary from before turns were recorded starts a task and leaves the
+// session's turn as it was, and the output of the new task must not replace the message of the old one's turn.
+func TestRecoverDoesNotTakeATurnThatWasRecordedForAnotherTask(t *testing.T) {
+	f, sink := restarted(t)
+	recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: "U1"}) // recorded for t1
+	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "c1", TaskID: "t2", Binding: "ns/b1", LastActivity: t0}); err != nil {
+		t.Fatal(err) // the older binary began t2, and left the turn
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) != 1 || sink.refs[0].MessageID != "task:t2" || sink.refs[0].UserID != "" {
+		t.Errorf("turn refs = %+v; want t2 followed under a turn of its own, task:t2, which posts anew: the turn is t1's", sink.refs)
+	}
+}
+
+// The answer's turn is recorded before the agent is asked, so a process that ends after the agent took the answer and before it
+// said anything leaves the session naming the answer, and the recovery does not replace the message of the turn that paused. An
+// answer that cannot be recorded is not sent: the pause stays open, and the person answers again.
+func TestTheAnswersTurnIsRecordedBeforeTheAgentIsAsked(t *testing.T) {
+	gate := make(chan struct{})
+	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error { <-gate; return nil }) // takes the answer, says nothing
+	defer close(gate)
+
+	f.st.fail = map[string]error{"set": errors.New("the database is busy")}
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the person to be told the answer was not delivered", func() bool {
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		return slices.ContainsFunc(sink.notices, func(n Notice) bool { return n.Kind == NoticeFailed })
+	})
+	eventually(t, "the runner to park again", func() bool { f.m.mu.Lock(); defer f.m.mu.Unlock(); return f.m.convos[key].parked == "t1" })
+	f.agent.mu.Lock()
+	sent := len(f.agent.answers)
+	f.agent.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("%d answers reached the agent although the turn could not be recorded; want none", sent)
+	}
+
+	if err := f.m.Answer(t.Context(), key, answerMsg("ans-2")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the agent to be asked", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
+	sess, err := f.session() // the agent has said nothing: no state event has been seen
+	if err != nil || sess.TaskID != "t1" || sess.Turn.ID != "ans-2" || sess.TurnTask != "t1" {
+		t.Fatalf("session = %+v, %v; want t1 under the answer, ans-2, before the agent has named the task", sess, err)
+	}
+
+	rec, recSink := restarted(t)
+	recordedTurn(t, rec, sess.Turn)
+	rec.recover(t)
+	waitFinal(t, recSink)
+	recSink.mu.Lock()
+	defer recSink.mu.Unlock()
+	if len(recSink.refs) != 1 || recSink.refs[0].MessageID != "ans-2" {
+		t.Errorf("turn refs = %+v; want the continuation under the answer, ans-2, and not the turn that paused (%s)", recSink.refs, inbound("1").MessageID)
+	}
+}
+
+// What is queued behind the task stays queued, and is no turn of the task: the output goes under the recorded turn.
+func TestRecoverRendersTheTaskUnderItsRecordedTurnNotTheHeadBehindIt(t *testing.T) {
+	f, sink := restarted(t)
+	recordedTurn(t, f, store.TaskTurn{ID: inbound("1").MessageID, User: "U1"})
+	if _, err := f.st.EnqueueReply(t.Context(), store.Reply{ID: inbound("2").MessageID, Key: key, UserID: "U1", MessageRef: "2", Text: "again", EnqueuedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) { return nil, nil, nil }
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) == 0 || sink.refs[0].MessageID != inbound("1").MessageID || !sink.refs[0].Recovered {
+		t.Errorf("turn refs = %+v; want the task followed under the recorded turn %s, recovered", sink.refs, inbound("1").MessageID)
+	}
+}
+
+// A head that is the task's own turn (a crash after the agent took it, before the queue knew) is the turn the output belongs
+// to, and not whatever turn the session recorded before: here the session still names an earlier turn.
+func TestRecoverRendersTheTaskUnderItsHeadWhenTheHeadIsItsOwnTurnAndNotTheEarlierRecordedOne(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	recordedTurn(t, f, store.TaskTurn{ID: "slack:slack:C1:0.5", User: "U9"}) // an earlier turn of the thread
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return &a2a.Task{ID: "t1", ContextID: "c1"}, []a2a.TaskID{"t1"}, nil
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.refs) == 0 || sink.refs[0].MessageID != inbound("1").MessageID {
+		t.Errorf("turn refs = %+v; want the output under the head, %s, which is the task's own turn", sink.refs, inbound("1").MessageID)
 	}
 }
 

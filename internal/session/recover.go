@@ -90,12 +90,13 @@ func (m *Manager) recoverKey(key Key) {
 	// the task's history says so: the turn is then the task's, marked delivered by following it, and
 	// never sent again.
 	turnRow := store.Reply{ID: recoveredPrefix + sess.TaskID, Key: key}
+	headIsTask := false
 	if herr == nil && sess.ContextID != "" {
 		for attempt := 1; ; attempt++ { // asked again until it answers: a fallback would render t's output twice
 			task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID)
 			if err == nil {
 				if task != nil && string(task.ID) == sess.TaskID {
-					turnRow = head
+					turnRow, headIsTask = head, true
 					// The crash may have come before this turn's reaction was taken off, and nothing else
 					// would now do it: the runner never takes the row up again, it follows the task.
 					m.mu.Lock()
@@ -113,6 +114,9 @@ func (m *Manager) recoverKey(key Key) {
 	}
 	t := &tstate{key: key, r: turnRow, sess: sess, b: backend,
 		follow: true, taskID: a2a.TaskID(sess.TaskID), recovered: true}
+	if !headIsTask && sess.TurnTask == sess.TaskID { // no turn of the queue is the task's: the session says whose output it is, if it does for this task
+		t.began = sess.Turn // (a turn recorded for another task is a binary's that did not know of turns: it starts tasks and leaves it)
+	}
 	telemetry.Count(m.ctx, "courier_session_recovery_total", "adopted")
 	m.adopt(key, t)
 }

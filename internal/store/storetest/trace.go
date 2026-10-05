@@ -201,11 +201,11 @@ func (su suite) traceContext(t *testing.T) {
 		sess := store.Session{Key: key, Binding: "ns/b", LastActivity: t0, TraceParent: carrierA, TraceState: stateA}
 		noErr(t, s.UpsertSession(t.Context(), sess), "upsert")
 
-		noErr(t, s.SetSessionTask(t.Context(), key, "", "task-1"), "SetSessionTask outside a trace")
+		noErr(t, s.SetSessionTask(t.Context(), key, "", "task-1", store.TaskTurn{}), "SetSessionTask outside a trace")
 		if got := getSession(t, s, key); got.TraceParent != carrierA {
 			t.Errorf("trace = %q after a task set outside a trace; want it kept", got.TraceParent)
 		}
-		noErr(t, s.SetSessionTask(ctx, key, "", "task-2"), "SetSessionTask inside a trace")
+		noErr(t, s.SetSessionTask(ctx, key, "", "task-2", store.TaskTurn{}), "SetSessionTask inside a trace")
 		got := getSession(t, s, key)
 		ancestry(t, "session after a task set inside a trace", got.TraceParent, got.TraceState, id)
 		noErr(t, s.ResetSession(t.Context(), key), "ResetSession")

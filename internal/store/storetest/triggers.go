@@ -520,7 +520,7 @@ func (su suite) triggerRuns(t *testing.T) {
 			t.Fatalf("a third with two running = %+v; want concurrent", got)
 		}
 		// One ends: the session's task is cleared, as the manager does when the task ends.
-		if err := s.SetSessionTask(t.Context(), runOf("1.1", t0).Key, "", ""); err != nil {
+		if err := s.SetSessionTask(t.Context(), runOf("1.1", t0).Key, "", "", store.TaskTurn{}); err != nil {
 			t.Fatal(err)
 		}
 		if got := admit(t, s, runOf("1.3", t0.Add(3*time.Second)), lim); !got.Admitted {

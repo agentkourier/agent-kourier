@@ -49,9 +49,9 @@ func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl t
 	}
 	sess := store.Session{Key: key}
 	var last time.Time
-	err := s.pool.QueryRow(ctx, `SELECT context_id, task_id, binding, last_activity, trace_parent, trace_state FROM sessions
+	err := s.pool.QueryRow(ctx, `SELECT context_id, task_id, turn_id, turn_user, turn_task, binding, last_activity, trace_parent, trace_state FROM sessions
 		WHERE connection = $1 AND channel = $2 AND thread_ts = $3`, key.Connection, key.Channel, key.Thread).
-		Scan(&sess.ContextID, &sess.TaskID, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState)
+		Scan(&sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Session{}, fmt.Errorf("get session %+v: %w", key, store.ErrNotFound)
 	}
@@ -78,19 +78,23 @@ func (s *Store) TouchSession(ctx context.Context, key store.ConversationKey, at 
 }
 
 // SetSessionTask implements store.SessionTasks.
-func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, contextID, taskID string) (telemetryErr error) {
+func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, contextID, taskID string, turn store.TaskTurn) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.SetSessionTask")
 	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
 	if !validKey(key) {
 		return fmt.Errorf("set session task %+v: the key is incomplete: %w", key, store.ErrInvalid)
 	}
 	parent, state := telemetry.Capture(ctx)
+	turnID, turnUser, turnTask := turn.ID, turn.User, taskID
+	if taskID == "" || turnID == "" { // no task, no turn; and a turn is recorded for the task it is given with
+		turnID, turnUser, turnTask = "", "", ""
+	}
 	n, err := s.exec(ctx, `UPDATE sessions SET
 			trace_parent = CASE WHEN $1::text = '' THEN trace_parent ELSE $1::text END,
 			trace_state = CASE WHEN $1::text = '' THEN trace_state ELSE $2::text END,
-			task_id = $3, context_id = CASE WHEN $4::text = '' THEN context_id ELSE $4::text END
-		WHERE connection = $5 AND channel = $6 AND thread_ts = $7`,
-		parent, state, taskID, contextID, key.Connection, key.Channel, key.Thread)
+			task_id = $3, turn_id = $4, turn_user = $5, turn_task = $6, context_id = CASE WHEN $7::text = '' THEN context_id ELSE $7::text END
+		WHERE connection = $8 AND channel = $9 AND thread_ts = $10`,
+		parent, state, taskID, turnID, turnUser, turnTask, contextID, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("set session task %+v", key))
 }
 
@@ -101,7 +105,7 @@ func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) (te
 	if !validKey(key) {
 		return fmt.Errorf("reset session %+v: the key is incomplete: %w", key, store.ErrInvalid)
 	}
-	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = ''
+	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = '', turn_id = '', turn_user = '', turn_task = ''
 		WHERE connection = $1 AND channel = $2 AND thread_ts = $3`, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("reset session %+v", key))
 }
@@ -110,7 +114,7 @@ func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) (te
 func (s *Store) ListActiveSessions(ctx context.Context) (sessions []store.Session, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "courier.store.ListActiveSessions")
 	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	rows, err := s.pool.Query(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, binding, last_activity, trace_parent, trace_state
+	rows, err := s.pool.Query(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, last_activity, trace_parent, trace_state
 		FROM sessions WHERE task_id <> '' ORDER BY last_activity, connection, channel, thread_ts`)
 	if err != nil {
 		return nil, fmt.Errorf("list active sessions: %w", err)
@@ -120,7 +124,7 @@ func (s *Store) ListActiveSessions(ctx context.Context) (sessions []store.Sessio
 	for rows.Next() {
 		var sess store.Session
 		var last time.Time
-		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState); err != nil {
+		if err := rows.Scan(&sess.Key.Connection, &sess.Key.Channel, &sess.Key.Thread, &sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &last, &sess.TraceParent, &sess.TraceState); err != nil {
 			return nil, fmt.Errorf("scan session row: %w", err)
 		}
 		sess.LastActivity = utc(last)

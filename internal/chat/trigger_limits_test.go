@@ -211,7 +211,7 @@ func TestMaxConcurrentCountsRunningInvestigations(t *testing.T) {
 		t.Errorf("courier_trigger_limited_total = %v; want 1 for concurrent", got)
 	}
 	// The first investigation ends: the manager clears its task.
-	if err := h.st.SetSessionTask(t.Context(), store.ConversationKey{Connection: conn, Channel: "C1", Thread: "100.1"}, "", ""); err != nil {
+	if err := h.st.SetSessionTask(t.Context(), store.ConversationKey{Connection: conn, Channel: "C1", Thread: "100.1"}, "", "", store.TaskTurn{}); err != nil {
 		t.Fatal(err)
 	}
 	h.clk.advance(time.Second)
