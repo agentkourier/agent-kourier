@@ -170,6 +170,84 @@ func (su suite) replyQueue(t *testing.T) {
 		isErr(t, err, store.ErrNotFound, "NextReplyAfter past the last reply")
 	})
 
+	// The context window of a mentioned turn starts at the previous turn's message (spec 8.2, D38), so the previous row
+	// is the session's own, whatever state it is in.
+	su.run(t, "PreviousReply is the session's row just below a sequence, delivered rows and pinned ones included", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		other := keyOf("2.2")
+		rows := []store.Reply{
+			{ID: "a1", Key: key, MessageRef: "1700.10"},
+			{ID: "x1", Key: other, MessageRef: "1700.11"}, // another session's, between two of this one's
+			{ID: "a2", Key: key, MessageRef: "1700.20"},
+			{ID: "a3", Key: key, MessageRef: "1700.30"},
+			{ID: "a4", Key: key, MessageRef: "1700.40"},
+			{ID: "x2", Key: other, MessageRef: "1700.41"},
+		}
+		for _, r := range rows {
+			r.UserID, r.Text, r.EnqueuedAt = "U1", "hello", t0
+			if ok, err := s.EnqueueReply(ctx, r); err != nil || !ok {
+				t.Fatalf("enqueue %s = %v, %v", r.ID, ok, err)
+			}
+		}
+		// Nothing is delivered yet, so walking each queue from the start gives every row's sequence.
+		seq := map[string]int64{}
+		for _, k := range []store.ConversationKey{key, other} {
+			var cursor int64
+			for {
+				r, err := s.NextReplyAfter(ctx, k, cursor)
+				if isNotFound(err) {
+					break
+				}
+				noErr(t, err, "walk")
+				seq[r.ID], cursor = r.Sequence, r.Sequence
+			}
+		}
+		if len(seq) != len(rows) {
+			t.Fatalf("walked %v; want the %d rows", seq, len(rows))
+		}
+		// a2 is delivered (a tombstone, its text cleared) and a3 is pinned to a question: both are still rows.
+		noErr(t, s.MarkReplyDelivered(ctx, "a2", t0), "deliver a2")
+		c, ok := s.(replyClaimer)
+		if !ok {
+			t.Fatal("the store has no ClaimReplyInteraction")
+		}
+		noErr(t, c.ClaimReplyInteraction(ctx, "a3", "q1"), "pin a3")
+
+		for _, tc := range []struct{ below, want string }{
+			{"a4", "a3"}, // pinned: still the previous row
+			{"a3", "a2"}, // delivered: still the previous row
+			{"a2", "a1"}, // x1 sits between them and is another session's
+		} {
+			got, err := s.PreviousReply(ctx, key, seq[tc.below])
+			if err != nil || got.ID != tc.want || got.Key != key {
+				t.Errorf("PreviousReply below %s = %+v, %v; want %s", tc.below, got, err, tc.want)
+			}
+		}
+		got, err := s.PreviousReply(ctx, key, seq["a2"])
+		if err != nil || got.MessageRef != "1700.10" || got.UserID != "U1" || got.Sequence != seq["a1"] {
+			t.Errorf("PreviousReply = %+v, %v; want the whole row of a1 with its message ref, user and sequence", got, err)
+		}
+		if got, err := s.PreviousReply(ctx, key, seq["a3"]); err != nil || got.Text != "" {
+			t.Errorf("PreviousReply below a3 = %+v, %v; want the tombstone of a2, whose text is cleared", got, err)
+		}
+		// A sequence that is none of the session's still finds the greatest row below it, whoever's the sequence was.
+		if got, err := s.PreviousReply(ctx, key, seq["x2"]); err != nil || got.ID != "a4" {
+			t.Errorf("PreviousReply below x2's sequence = %+v, %v; want a4, the last row of this session below it", got, err)
+		}
+		if got, err := s.PreviousReply(ctx, other, seq["x2"]); err != nil || got.ID != "x1" {
+			t.Errorf("PreviousReply of the other session = %+v, %v; want x1", got, err)
+		}
+
+		_, err = s.PreviousReply(ctx, key, seq["a1"])
+		isErr(t, err, store.ErrNotFound, "PreviousReply of the first row, with only another session's below it")
+		_, err = s.PreviousReply(ctx, keyOf("9.9"), seq["x2"])
+		isErr(t, err, store.ErrNotFound, "PreviousReply of a session with no rows")
+		_, err = s.PreviousReply(ctx, store.ConversationKey{}, seq["a2"])
+		isErr(t, err, store.ErrInvalid, "PreviousReply with an empty key")
+		_, err = s.PreviousReply(ctx, key, 0)
+		isErr(t, err, store.ErrInvalid, "PreviousReply below sequence 0")
+	})
+
 	su.run(t, "many enqueues of one ID queue it exactly once", func(t *testing.T, s store.Store) {
 		const n = 16
 		queued := make([]bool, n)

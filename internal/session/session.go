@@ -213,6 +213,15 @@ type Config struct {
 	// False means the prompt is not ready; the queue remains intact.
 	// store.ErrReplyNotAnswer keeps the reply queued as an ordinary turn.
 	TextReply func(context.Context, Key, store.Reply, a2a.Task) (bool, error)
+	// ThreadContext returns what a mentioned turn of a Binding with chat.threadReplies: mention carries of the
+	// thread (spec 8.2, D38): the replies posted between the previous turn's message (after) and this one's
+	// (before), both exclusive, already framed as untrusted data, or a fixed line saying they could not be read,
+	// or "" when there is nothing to add. The window can be empty or inverted (after at or after before: two
+	// mentions enqueued against ts order), and the hook returns "" for it. It never fails, and it may do I/O, so it
+	// is called off every lock. The
+	// runner calls it once for each turn it sends, in the send of a turn only: never for a task that is followed
+	// again, found again or recovered. Nil adds nothing.
+	ThreadContext func(ctx context.Context, key Key, binding, after, before string) string
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 	// RetryBase and RetryMax are the first pause before a resend, which doubles up to RetryMax.

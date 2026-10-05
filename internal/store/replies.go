@@ -61,6 +61,13 @@ type ReplyQueue interface {
 	// NextReplyAfter reads the oldest undelivered reply whose sequence exceeds after.
 	// Skipped rows remain queued; normal turns still use NextReply.
 	NextReplyAfter(ctx context.Context, key ConversationKey, after int64) (Reply, error)
+	// PreviousReply returns the session's row with the greatest Sequence below the given one, whatever its state: a
+	// delivered row (a tombstone, its text cleared), a dropped one and one pinned to an interaction all count, and
+	// another session's rows never do. It is how a turn finds the message that ended the window of the turn before it
+	// (spec 8.2, D38), and it is the same on every attempt, after a restart and after a failover, because it reads
+	// stored rows. ErrNotFound if the session has no row below it, as for its first turn; ErrInvalid for an invalid
+	// key or a sequence below 1.
+	PreviousReply(ctx context.Context, key ConversationKey, sequence int64) (Reply, error)
 	// MarkReplyDelivered records that the reply was sent at the given time and
 	// discards its text. Marking again is a no-op. It returns ErrNotFound for
 	// an unknown ID and ErrInvalid for an empty ID or zero time.

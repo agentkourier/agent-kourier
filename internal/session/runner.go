@@ -13,6 +13,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -48,6 +49,18 @@ type convo struct {
 	textAfter    int64         // queue cursor for the current question; skipped replies stay queued
 	pendingReply store.Reply   // decided reply whose delivery write must succeed before its answer is sent
 	queued       chan struct{} // wakes a parked text-question runner
+	window       windowText    // the thread context of the head turn, so that a resend does not ask for it again
+}
+
+// windowText is the thread context (Config.ThreadContext) of one turn, kept for as long as the turn is the head of its
+// conversation: a send that got -32004 is sent again, and must carry what the first carried without the store or the
+// hook being asked again. The runner alone reads and writes it, and the next turn replaces it.
+type windowText struct {
+	id      string // the turn's ID; empty before the first turn that asks
+	none    bool   // the turn has no turn before it, so no window
+	after   string // the message of the turn before it: the window opens after it
+	asked   bool   // the hook was called, and section is its answer, which may be ""
+	section string
 }
 
 // outcome is how one turn left the conversation: nothing queued, the task ended, or the task
@@ -468,8 +481,10 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	c.ttl = backend.ThreadTTL
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
 	send := func(ctx context.Context, h agent.Handler) error {
-		return backend.Agent.Send(ctx, m.message(r, sess, backend), h)
+		// Only a send carries the thread's context: the turn that is followed was sent before, with its own.
+		return backend.Agent.Send(ctx, m.message(m.withThreadContext(ctx, c, r, sess.Binding, backend), sess, backend), h)
 	}
+	sends := true // false once the turn is found on the agent, to be followed and not sent
 	hold := m.held(key, r.ID, sess)
 	m.mu.Lock()
 	prev := m.attempted[key]
@@ -495,7 +510,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 				if len(holders) > 1 {
 					m.duplicates(t, holders)
 				}
-				send = func(ctx context.Context, h agent.Handler) error { return backend.Agent.Follow(ctx, task.ID, h) }
+				send, sends = func(ctx context.Context, h agent.Handler) error { return backend.Agent.Follow(ctx, task.ID, h) }, false
 			case sess.TaskID != "": // absent, and a task of the session runs: this turn is behind it
 				return idle, hold
 			}
@@ -504,7 +519,56 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		}
 		m.release(key, r.ID) // reconciled: followed, or the agent never had it
 	}
+	if sends {
+		if err := m.readWindow(sctx, c, r, backend); err != nil { // like any store failure here: wait and try again, with no notice
+			c.tries++
+			return blocked, err
+		}
+	}
 	return m.drive(t, send)
+}
+
+// wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a person's turn, in
+// a Binding with chat.threadReplies: mention, that is not pinned to a question, when a hook is configured.
+func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
+	return m.cfg.ThreadContext != nil && b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && r.InteractionID == ""
+}
+
+// readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
+// queue, delivered or not, and keeps it for the turn. It is read from stored rows, so it is the same on every attempt,
+// after a restart and after a failover. A turn with no row before it has no window. It runs before the turn is sent,
+// where a store that fails waits like any other failure of the runner: the turn is never sent without its context,
+// which it could not be sent again with, and nothing tells the thread the agent cannot be reached.
+func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Backend) error {
+	if !m.wantsThreadContext(r, b) || c.window.id == r.ID {
+		return nil
+	}
+	prev, err := m.cfg.Store.PreviousReply(ctx, r.Key, r.Sequence)
+	switch {
+	case errors.Is(err, store.ErrNotFound): // the first turn of the thread: nothing came before it
+		c.window = windowText{id: r.ID, none: true}
+	case err != nil:
+		return fmt.Errorf("read the turn before %s: %w", r.ID, err)
+	default:
+		c.window = windowText{id: r.ID, after: prev.MessageRef}
+	}
+	return nil
+}
+
+// withThreadContext returns the turn r with the thread's context after the person's text (R18: one text part, the
+// dialect's attribution in front of it), or r as it was queued. The hook is called once for the turn, for the window
+// from readWindow's message to this turn's, and what it returned is kept, so a resend after -32004 does not ask again.
+func (m *Manager) withThreadContext(ctx context.Context, c *convo, r store.Reply, binding string, b Backend) store.Reply {
+	if !m.wantsThreadContext(r, b) || c.window.id != r.ID || c.window.none {
+		return r
+	}
+	if !c.window.asked {
+		c.window.section, c.window.asked = m.cfg.ThreadContext(ctx, r.Key, binding, c.window.after, r.MessageRef), true
+	}
+	if c.window.section != "" {
+		r.Text += "\n\n" + c.window.section
+	}
+	return r
 }
 
 // superseded reports whether the session no longer records the task t, which Recover read some

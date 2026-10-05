@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,5 +59,15 @@ func TestReplyClaimMigrationUpgradesCurrentMain(t *testing.T) {
 	r, err = s.NextReplyAfter(ctx, key, 0)
 	if err != nil || r.InteractionID != "question" || r.TraceParent != "parent" || r.TraceState != "state" {
 		t.Fatalf("claimed upgraded reply = %+v, %v", r, err)
+	}
+}
+
+// PreviousReply runs on every mentioned turn of a mention-only Binding. Migration 22's index of a thread, which ends in
+// the sequence as SQLite's rowid, answers it by a seek: no table scan and no sort of the thread's rows. A plan that
+// misses it fails here, so an index dropped or a query reworded is seen (TM-5 needed no index of its own for this).
+func TestPreviousReplyUsesTheThreadIndex(t *testing.T) {
+	plan := strings.Join(queryPlan(t, openTemp(t), previousReplyQuery, []any{"slack", "C1", "1.1", int64(5)}), "\n")
+	if !strings.Contains(plan, "USING INDEX reply_queue_thread (connection=? AND channel=? AND thread_ts=? AND rowid<?)") || strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("plan = %q; want a seek of reply_queue_thread to the rows below the sequence, with no sort", plan)
 	}
 }

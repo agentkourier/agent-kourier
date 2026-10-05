@@ -90,6 +90,28 @@ func (s *Store) nextReplyAfter(ctx context.Context, key store.ConversationKey, a
 	return r, nil
 }
 
+// PreviousReply implements store.ReplyQueue.
+func (s *Store) PreviousReply(ctx context.Context, key store.ConversationKey, sequence int64) (reply store.Reply, telemetryErr error) {
+	ctx, op := telemetry.Start(ctx, "courier.store.PreviousReply")
+	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+	if !validKey(key) || sequence < 1 {
+		return store.Reply{}, fmt.Errorf("previous reply %+v below %d: a key and a sequence from 1 are required: %w", key, sequence, store.ErrInvalid)
+	}
+	r := store.Reply{Key: key}
+	var enqueued time.Time
+	err := s.pool.QueryRow(ctx, `SELECT id, sequence, user_id, message_ts, text, enqueued_at, interaction_id, trace_parent, trace_state FROM reply_queue
+		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND sequence < $4 ORDER BY sequence DESC LIMIT 1`,
+		key.Connection, key.Channel, key.Thread, sequence).Scan(&r.ID, &r.Sequence, &r.UserID, &r.MessageRef, &r.Text, &enqueued, &r.InteractionID, &r.TraceParent, &r.TraceState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Reply{}, fmt.Errorf("previous reply %+v below %d: %w", key, sequence, store.ErrNotFound)
+	}
+	if err != nil {
+		return store.Reply{}, fmt.Errorf("previous reply %+v below %d: %w", key, sequence, err)
+	}
+	r.EnqueuedAt = utc(enqueued)
+	return r, nil
+}
+
 // MarkReplyDelivered implements store.ReplyQueue. COALESCE keeps the first delivery time, which makes
 // a repeat a no-op that still matches the row.
 func (s *Store) MarkReplyDelivered(ctx context.Context, id string, at time.Time) (telemetryErr error) {
