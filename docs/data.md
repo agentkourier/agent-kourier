@@ -145,12 +145,47 @@ a shorter reckoning than it would have kept them by. Nothing is deleted before a
 
 **Never deleted, whatever its age**, while any of these holds, so that a session is not deleted from under work that still reads it:
 
-- an **active or paused task** on the session (its `task_id` is set; recovery follows it);
+- an **active or paused task** on the session (its `task_id` is set; recovery follows it), unless the task is older than the
+  horizon, which the sweep ends first (below);
 - a **pending interaction**;
 - a **reply that was never delivered** (one that is stranded is dropped after 30 days, see above, and then no longer holds the session);
 - an **outbox row that was neither posted nor abandoned**.
 
 Whatever held a session back, once it is resolved, the next sweep takes the session.
+
+**A task that a crash left.** A session is deleted only when it holds no task, but a task that was recorded when courier crashed
+is not always found again: recovery follows the tasks of sessions that are live, and leaves an expired session exactly as it is,
+so a session that expired after the crash, with its `task_id` still set, would be kept for ever. The retention loop ends such a
+task. Each tick, before anything is dropped or deleted, it lists the sessions that are **past their horizon** (the same
+horizon as the deletion: the Binding's `threadTTL` plus 90 days) and still record a task, oldest first, and for each:
+
+0. leaves it if this process's session manager still runs that task (parked on a question it has not given up on, or streaming
+   it): the task is its runner's, and clearing it from under the runner would leave the runner parked after the session is
+   deleted, so that a new session under the same key waited behind it. The tick says, at WARN, that it left some. The runner
+   ends it (a streaming task, when the runner gives up on it), or the interaction timeout does (a parked one), and a restart
+   does when neither can (a Binding that left the config makes the timeout's cancel fail for ever).
+
+1. asks the task's agent to cancel it. This is a courtesy and never stops the sweep: the call is bounded (10 seconds); an agent
+   that does not answer is not asked again in that tick, so a Binding whose agent is down costs one timeout and not one for each
+   task; an error, or an agent that says it knows no such task, is recorded and goes on; a session whose Binding has left the
+   config has no agent to ask, and goes on. A tick that is stopped (the broker is shutting down) before the answer comes ends no
+   task, so the next run asks again.
+2. clears the task (and the turn recorded for it; the agent's context stays) and cancels the **pending interactions of that task**,
+   in one transaction, and only while the session is still past its horizon and still records that task. A session that has been
+   active since, or whose task is another, is left whole. The prompt of a cancelled interaction is **not** edited: the purge
+   deletes the settled interaction in the same tick, before the repair of ended prompts (every five minutes) lists it, and
+   the repair skips a prompt whose interaction is gone. The prompt, nearly 180 days old, keeps its buttons, and a press on
+   one is answered that the question is gone.
+3. audits it: one entry of kind `event`, by the Binding and, when a cancel was made, the service identity it was made under (as
+   a stop's is), subject `task=<id> context=<id>`, outcome `stale_task_ended: cancel=<ok | failed <type of the error> |
+   no_binding | skipped> interactions=<n>`: identifiers, the type of an error and a count, never agent text and never the
+   thread. The log of the tick carries counts only.
+
+Nothing inside the horizon is touched: a task on a session that is live, or expired for less than the grace, is a task that
+recovery may still follow. The session is deleted by the purge that follows in the same tick, or by the next, as any session
+whose work has ended. It is bounded as the purge is: 50 sessions to a listing and at most 10 listings (500 tasks) to a tick;
+with Postgres each ending checks the leader's epoch first (D37). It counts `stale_tasks` and `stale_task_interactions` in
+`courier_retention_removed_total`.
 
 **What a person sees.** A reply in a thread whose session is deleted is a reply in a thread courier never owned, and is ignored
 (spec 8.2). An @mention in it starts a new session anchored to that thread, as it does in any thread courier does not own.
@@ -161,7 +196,7 @@ leader runs it. It deletes 100 sessions to a call, in a transaction, and at most
 sweep after an upgrade finds every old session, and works them down over several ticks. With Postgres each write checks the
 leader's epoch first (D37), and a session that a writer holds locked is left for the next call. It logs a count at INFO and counts in
 `courier_retention_removed_total`: `expired_sessions`, and the rows that went with them as `session_replies`,
-`session_interactions`, `session_presses` and `session_outbox`. Migration 0022 adds the indexes the sweep reads by (a session's
+`session_interactions`, `session_presses` and `session_outbox` (and, for a stale task, as above). Migration 0022 adds the indexes the sweep reads by (a session's
 last activity; a thread's replies, interactions and outbox rows; an outbox row's source, in the C collation with Postgres).
 
 Not deleted here: `feedback` rows, which are kept until the pilot's review of them (D33).

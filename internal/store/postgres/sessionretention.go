@@ -81,10 +81,9 @@ func (s *Store) PurgeExpiredSessions(ctx context.Context, h store.SessionHorizon
 	return out, nil
 }
 
-// expiredSessions finds, and locks, the sessions that are past their horizon and that nothing holds back, oldest first,
-// and returns the three parts of their keys as parallel slices. The first condition is the latest of the horizons, which
-// the sessions' index answers; the rest is the session's own.
-func expiredSessions(ctx context.Context, tx pgx.Tx, h store.SessionHorizons, limit int) (conns, channels, threads []string, err error) {
+// pastHorizon is the condition that a session s is past its horizon, with its arguments, numbered from $1. The first part
+// is the latest of the horizons, which the sessions' index answers; the second is the session's own, by its Binding.
+func pastHorizon(h store.SessionHorizons) (string, []any) {
 	latest := h.Otherwise
 	for _, at := range h.ByBinding {
 		if at.After(latest) {
@@ -97,14 +96,21 @@ func expiredSessions(ctx context.Context, tx pgx.Tx, h store.SessionHorizons, li
 		args = append(args, b, h.ByBinding[b])
 		fmt.Fprintf(&when, " WHEN $%d::text THEN $%d::timestamptz", len(args)-1, len(args))
 	}
-	args = append(args, h.Otherwise, limit)
-	horizon := fmt.Sprintf("$%d::timestamptz", len(args)-1) // a CASE needs a WHEN, so with no Binding named it is the one horizon
+	args = append(args, h.Otherwise)
+	horizon := fmt.Sprintf("$%d::timestamptz", len(args)) // a CASE needs a WHEN, so with no Binding named it is the one horizon
 	if when.Len() > 0 {
 		horizon = fmt.Sprintf("CASE s.binding%s ELSE %s END", when.String(), horizon)
 	}
+	return "s.last_activity < $1::timestamptz AND s.last_activity < " + horizon, args
+}
+
+// expiredSessions finds, and locks, the sessions that are past their horizon and that nothing holds back, oldest first,
+// and returns the three parts of their keys as parallel slices.
+func expiredSessions(ctx context.Context, tx pgx.Tx, h store.SessionHorizons, limit int) (conns, channels, threads []string, err error) {
+	past, args := pastHorizon(h)
+	args = append(args, limit)
 	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT s.connection, s.channel, s.thread_ts FROM sessions s
-		WHERE s.last_activity < $1::timestamptz
-		AND s.last_activity < %s
+		WHERE %s
 		AND s.task_id = ''
 		AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.connection = s.connection AND i.channel = s.channel
 			AND i.thread_ts = s.thread_ts AND i.state = 'pending')
@@ -117,7 +123,7 @@ func expiredSessions(ctx context.Context, tx pgx.Tx, h store.SessionHorizons, li
 			WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts
 			AND o.message_ref = '' AND o.abandoned_at IS NULL)
 		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT $%d
-		FOR UPDATE OF s SKIP LOCKED`, horizon, len(args)), args...)
+		FOR UPDATE OF s SKIP LOCKED`, past, len(args)), args...)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("find sessions: %w", err)
 	}

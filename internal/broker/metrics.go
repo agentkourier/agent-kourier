@@ -55,7 +55,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
 		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_retention_removed_total",
-			Help: "Stored content removed by retention, by what: stranded_replies, cleared_interactions, audit_entries, expired_sessions, session_replies, session_interactions, session_presses or session_outbox."}, []string{"what"}),
+			Help: "Stored content removed by retention, by what: stranded_replies, cleared_interactions, audit_entries, expired_sessions, session_replies, session_interactions, session_presses, session_outbox, stale_tasks (a task left on an expired session, ended) or stale_task_interactions (pending interactions cancelled with it)."}, []string{"what"}),
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_interaction_decisions_total",
 			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
 		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "courier_chat_connected",

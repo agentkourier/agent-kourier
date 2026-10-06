@@ -677,3 +677,51 @@ func TestStopWhileTheRunnerIsTellingTheThreadItGaveUp(t *testing.T) {
 	}
 	close(release)
 }
+
+// HoldsTask tells retention that a runner of this process still works on a task: parked on it, or streaming it. A task it
+// does not know, another conversation's, and one that has ended are not held.
+func TestHoldsTaskSaysWhetherARunnerHasTheTask(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	mid, gate := make(chan struct{}), make(chan struct{})
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 0 {
+			accepted(h, n)
+			mid <- struct{}{}
+			<-gate
+			return turn(h, n, a2a.TaskStateInputRequired)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	if f.m.HoldsTask(key, "t1") {
+		t.Error("HoldsTask before any turn = true; want false")
+	}
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	<-mid
+	if !f.m.HoldsTask(key, "t1") {
+		t.Error("HoldsTask of a streaming task = false; want true")
+	}
+	close(gate)
+	waitFinal(t, sink) // the task has paused: parked on it
+	if !f.m.HoldsTask(key, "t1") {
+		t.Error("HoldsTask of a parked task = false; want true")
+	}
+	for name, c := range map[string]struct {
+		key  Key
+		task string
+	}{"another task": {key, "t2"}, "no task": {key, ""}, "another conversation": {Key{Connection: key.Connection, Channel: key.Channel, Thread: "9.9"}, "t1"}} {
+		if f.m.HoldsTask(c.key, c.task) {
+			t.Errorf("HoldsTask of %s = true; want false", name)
+		}
+	}
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+		t.Fatalf("Stop = %v, %v", did, err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); f.m.HoldsTask(key, "t1"); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("HoldsTask is still true after the pause ended")
+		}
+	}
+}

@@ -55,6 +55,16 @@ func (m *Manager) Cancel(ctx context.Context, key Key, taskID a2a.TaskID, reason
 	return nil
 }
 
+// HoldsTask reports whether this manager's runner for the conversation still works on the task: it waits for input on it, or
+// streams or follows it. The retention of a task that a crash left on a long-expired session asks, so as not to clear a task
+// from under a runner that has it.
+func (m *Manager) HoldsTask(key Key, taskID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.convos[key]
+	return c != nil && taskID != "" && (string(c.parked) == taskID || string(c.driving) == taskID)
+}
+
 // cancelAttempts bounds how often a synchronous control retries a cancel that may pass.
 const cancelAttempts = 3
 

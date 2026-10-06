@@ -31,6 +31,14 @@ type fakeRetentionStore struct {
 	sessionCalls []sessionPurge
 	swept        []store.PurgedSessions // what each PurgeExpiredSessions returns, in turn (the last one again after that)
 	failSessions bool
+
+	staleQueue []store.StaleTask               // what ListStaleTasks returns, up to its limit, until each is ended
+	staleLists []sessionPurge                  // each ListStaleTasks call: its horizons and limit
+	endCalls   []store.StaleTask               // each EndStaleTask call, in order
+	endAs      map[string]store.EndedStaleTask // what EndStaleTask returns for a task, by ID (default: ended, no interactions)
+	endErr     map[string]error                // an error for the EndStaleTask of a task, by ID
+	failList   bool
+	order      []string // the loop's calls to the store, in order, by method
 }
 
 type sessionPurge struct {
@@ -46,6 +54,7 @@ type auditPurge struct {
 func (f *fakeRetentionStore) AbandonStrandedReplies(_ context.Context, _ time.Time, age time.Duration) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.order = append(f.order, "AbandonStrandedReplies")
 	f.abandons = append(f.abandons, age)
 	if f.failReplies > 0 {
 		f.failReplies--
@@ -71,6 +80,7 @@ func (f *fakeRetentionStore) PurgeAudit(_ context.Context, before time.Time, lim
 func (f *fakeRetentionStore) PurgeExpiredSessions(_ context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.order = append(f.order, "PurgeExpiredSessions")
 	f.sessionCalls = append(f.sessionCalls, sessionPurge{h, limit})
 	if f.failSessions {
 		return store.PurgedSessions{}, errors.New("disk full")

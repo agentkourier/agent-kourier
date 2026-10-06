@@ -231,6 +231,56 @@ func (w *Writer) FeedbackVote(ctx context.Context, a Actor, v FeedbackVote) erro
 	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subj, "feedback: verdict="+string(v.Verdict)+" changed="+strconv.FormatBool(v.Changed))
 }
 
+// StaleCancel is how the cancel at the agent of a stale task went.
+type StaleCancel string
+
+// How the cancel of a stale task went.
+const (
+	StaleCancelOK        StaleCancel = "ok"         // the agent cancelled the task
+	StaleCancelFailed    StaleCancel = "failed"     // the call failed or timed out; CancelErr says how
+	StaleCancelNoBinding StaleCancel = "no_binding" // the Binding has left the config, so there is no agent to call
+	StaleCancelSkipped   StaleCancel = "skipped"    // none was made: the Binding's agent could not be reached earlier in the same sweep
+)
+
+// StaleTask is a task that retention ended: it was recorded on a session that had been expired for good (a crash left it),
+// and the session no longer records it. The audit names the task and its context and never the thread.
+type StaleTask struct {
+	TaskID    a2a.TaskID
+	ContextID string
+	// Cancel is how the cancel at the agent went. CancelErr is the error of a failed one, of which only its type is recorded.
+	Cancel    StaleCancel
+	CancelErr error
+	// Interactions is how many pending interactions of the task were cancelled with it.
+	Interactions int
+}
+
+// StaleTaskEnded records that retention ended a stale task, and how the cancel at the agent went. It records something
+// already done, so a failure is logged, metered and returned, and never undoes it.
+func (w *Writer) StaleTaskEnded(ctx context.Context, a Actor, t StaleTask) error {
+	failed := t.Cancel == StaleCancelFailed
+	switch {
+	case a.Binding == "":
+		return fail(store.ErrInvalid, "audit stale task %q: a Binding is required", t.TaskID)
+	case t.TaskID == "":
+		return fail(store.ErrInvalid, "audit stale task: a task ID is required")
+	case t.Interactions < 0:
+		return fail(store.ErrInvalid, "audit stale task %q: a negative number of interactions", t.TaskID)
+	case failed != (t.CancelErr != nil):
+		return fail(store.ErrInvalid, "audit stale task %q: exactly a failed cancel has an error", t.TaskID)
+	}
+	switch t.Cancel {
+	case StaleCancelOK, StaleCancelFailed, StaleCancelNoBinding, StaleCancelSkipped:
+	default:
+		return fail(store.ErrInvalid, "audit stale task %q: unknown cancel %q", t.TaskID, t.Cancel)
+	}
+	cancel := string(t.Cancel)
+	if t.CancelErr != nil {
+		cancel += " " + strings.Join(errorTags(t.CancelErr), ",")
+	}
+	outcome := "stale_task_ended: cancel=" + cancel + " interactions=" + strconv.Itoa(t.Interactions)
+	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subject(t.TaskID, t.ContextID, ""), outcome)
+}
+
 // AgentCall records a send, answer, cancel or FindTask and its typed outcome.
 func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 	var lost *agent.StreamLostError

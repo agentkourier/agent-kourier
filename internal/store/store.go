@@ -57,6 +57,7 @@ type Store interface {
 	Audit
 	AuditRetention
 	SessionRetention
+	StaleTasks
 	Recovery
 	io.Closer
 }

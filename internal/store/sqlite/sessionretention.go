@@ -42,29 +42,35 @@ func (s *Store) PurgeExpiredSessions(ctx context.Context, h store.SessionHorizon
 	return out, nil
 }
 
-// expiredSessions returns the keys of the sessions that are past their horizon and that nothing holds back, oldest
-// first. The first condition is the latest of the horizons, which the sessions' index answers; the rest is the
-// session's own.
-func expiredSessions(ctx context.Context, tx *sql.Tx, h store.SessionHorizons, limit int) ([]store.ConversationKey, error) {
-	bindings := slices.Sorted(maps.Keys(h.ByBinding))
+// pastHorizon is the condition that a session s is past its horizon, with its arguments. The first part is the latest of
+// the horizons, which the sessions' index answers; the second is the session's own, by its Binding.
+func pastHorizon(h store.SessionHorizons) (string, []any) {
 	latest := h.Otherwise
 	for _, at := range h.ByBinding {
 		latest = maxTime(latest, at)
 	}
 	args := []any{ts(latest)}
 	var when strings.Builder
-	for _, b := range bindings {
+	for _, b := range slices.Sorted(maps.Keys(h.ByBinding)) {
 		when.WriteString(" WHEN ? THEN ?")
 		args = append(args, b, ts(h.ByBinding[b]))
 	}
-	args = append(args, ts(h.Otherwise), limit)
+	args = append(args, ts(h.Otherwise))
 	horizon := "?" // a CASE needs a WHEN, so with no Binding named it is the one horizon
 	if when.Len() > 0 {
 		horizon = "CASE s.binding" + when.String() + " ELSE ? END"
 	}
+	return "s.last_activity < ? AND s.last_activity < " + horizon, args
+}
+
+// expiredSessions returns the keys of the sessions that are past their horizon and that nothing holds back, oldest
+// first.
+func expiredSessions(ctx context.Context, tx *sql.Tx, h store.SessionHorizons, limit int) ([]store.ConversationKey, error) {
+	past, args := pastHorizon(h)
+	args = append(args, limit)
+	//nolint:gosec // G202: past is column names and placeholders; every value is an argument
 	rows, err := tx.QueryContext(ctx, `SELECT s.connection, s.channel, s.thread_ts FROM sessions s
-		WHERE s.last_activity < ?
-		AND s.last_activity < `+horizon+`
+		WHERE `+past+`
 		AND s.task_id = ''
 		AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.connection = s.connection AND i.channel = s.channel
 			AND i.thread_ts = s.thread_ts AND i.state = 'pending')

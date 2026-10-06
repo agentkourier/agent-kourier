@@ -747,7 +747,10 @@ courier can tell a reply in an expired thread (notice) from a reply in a thread 
 session is deleted with every row that belongs to it, and the thread is one courier never owned: a reply without an @mention is
 ignored, and an @mention starts a new session anchored to the thread (as in "@mention inside a thread courier doesn't own"). A
 session is never deleted while it has an active or paused task, a pending interaction, a reply that was not delivered, or an
-outbox row that was neither posted nor abandoned. A session whose Binding has left the config is held to the longest threadTTL of
+outbox row that was neither posted nor abandoned. The one exception is a task that a crash left recorded on a session already
+past the deletion horizon (its Binding's threadTTL plus the grace): retention first asks the agent to cancel it, bounded and
+best effort, then clears it and cancels its pending interactions, so that the session is then deleted as any whose work has
+ended; a task a runner of the leader still holds is left to that runner. A session whose Binding has left the config is held to the longest threadTTL of
 any Binding (and at least the default) plus the grace.
 
 **Thread lifetime.** The mapping is kept for `threadTTL` (90 days) after the last
@@ -964,7 +967,7 @@ this with an outbox:
 
 Retention (hourly, leader only): a session, and the rows of `reply_queue`, `interactions`, `interaction_presses` and `outbox`
 that belong to it, are deleted when its last activity is older than its Binding's `threadTTL` plus 90 days, unless it holds work
-as listed in 8.2; only rows already settled (delivered, decided, posted or abandoned) are deleted. `feedback` is kept until the
+as listed in 8.2 (a task older than that horizon is ended first, counted as `stale_tasks`); only rows already settled (delivered, decided, posted or abandoned) are deleted. `feedback` is kept until the
 pilot's review (D33). The counts are in `courier_retention_removed_total`. Kept with no rule yet: the outbox rows of a digest or
 a root post, and a notice posted into a thread after its session was deleted.
 

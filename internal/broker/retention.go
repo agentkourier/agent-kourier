@@ -7,7 +7,11 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -37,6 +41,13 @@ const (
 	// defaultMaxSessionBatches bounds the calls of one tick, so that a backlog (the first run after an upgrade finds every
 	// session ever made) is worked down over several ticks: ten thousand sessions.
 	defaultMaxSessionBatches = 100
+	// defaultCancelTimeout bounds the cancel of one stale task at its agent. It is a courtesy to the agent: the task is
+	// cleared whether or not it comes back, and the sweep must not wait on an agent that does not answer.
+	defaultCancelTimeout = 10 * time.Second
+	// defaultStaleBatch is how many stale tasks one listing reads, and defaultMaxStaleBatches how many listings one tick makes:
+	// five hundred tasks, each a call at an agent that may be slow, which is far more than a crash leaves.
+	defaultStaleBatch      = 50
+	defaultMaxStaleBatches = 10
 )
 
 // MinAuditRetention is the shortest audit retention that is accepted, so that a typo (an hour for a month) does not
@@ -45,7 +56,9 @@ const MinAuditRetention = 24 * time.Hour
 
 // What the retention loop counts as removed (courier_retention_removed_total, label what). The interactions the
 // interact package clears are counted by its own hook, under RemovedClearedInteractions. A deleted session is counted
-// under RemovedExpiredSessions, and each kind of row that went with it under its own.
+// under RemovedExpiredSessions, and each kind of row that went with it under its own. A task that a crash left on a
+// session that was past its horizon, which the loop ended so that the session could be deleted, is counted under
+// RemovedStaleTasks, and the pending interactions that were cancelled with it under RemovedStaleInteractions.
 const (
 	RemovedStrandedReplies     = "stranded_replies"
 	RemovedClearedInteractions = "cleared_interactions"
@@ -55,14 +68,29 @@ const (
 	RemovedSessionInteractions = "session_interactions"
 	RemovedSessionPresses      = "session_presses"
 	RemovedSessionOutbox       = "session_outbox"
+	RemovedStaleTasks          = "stale_tasks"
+	RemovedStaleInteractions   = "stale_task_interactions"
 )
 
-// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, store.AuditRetention and
-// store.SessionRetention.
+// retentionStore is what the retention loop asks of the store: store.ReplyQueue's backstop, store.AuditRetention,
+// store.SessionRetention and store.StaleTasks.
 type retentionStore interface {
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
 	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
 	PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error)
+	ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error)
+	EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error)
+}
+
+// taskCanceller cancels a task at the agent of a Binding: Bindings. It returns the service identity the call was made
+// under (empty when none was made), and its error wraps session.ErrUnknownBinding when the config has no such Binding.
+type taskCanceller interface {
+	CancelTask(ctx context.Context, binding, taskID string) (identity string, err error)
+}
+
+// staleAuditor records a stale task that was ended: audit.Writer.
+type staleAuditor interface {
+	StaleTaskEnded(ctx context.Context, a audit.Actor, t audit.StaleTask) error
 }
 
 // retentionConfig configures a retention. Store is required.
@@ -87,6 +115,20 @@ type retentionConfig struct {
 	// SessionBatch is how many sessions each purge call deletes (default 100), and MaxSessionBatches how many calls one
 	// tick makes at most (default 100).
 	SessionBatch, MaxSessionBatches int
+	// Canceller cancels a stale task at its agent, and Audit records that the task was ended; broker wiring always sets
+	// both. Without a Canceller no cancel is made, and without an Audit nothing is recorded: the task is ended all the same.
+	Canceller taskCanceller
+	Audit     staleAuditor
+	// Holds reports whether this process's session manager still runs the task on the session: parked on a question it
+	// has not given up on, or streaming it. A task it holds is left alone, for its own runner and the interaction timeout
+	// to end: clearing it from under the runner would leave the runner parked on it after the session is deleted, and a
+	// new session under the same key would wait behind it until a restart. Required with a Canceller (newRetention refuses without it), so that wiring cannot leave it out.
+	Holds func(key store.ConversationKey, taskID string) bool
+	// CancelTimeout bounds each cancel at an agent (default defaultCancelTimeout).
+	CancelTimeout time.Duration
+	// StaleBatch is how many stale tasks each listing reads (default 50), and MaxStaleBatches how many listings one tick
+	// makes at most (default 10).
+	StaleBatch, MaxStaleBatches int
 	// OnRemoved is told what each pass removed (the Removed constants) and how many, when it removed any, for a metric.
 	// Optional.
 	OnRemoved func(what string, n int)
@@ -95,15 +137,18 @@ type retentionConfig struct {
 }
 
 // retention is the time backstop of what the store keeps that no other loop owns: the text of replies that were
-// never delivered, sessions that have been expired for good with everything that belongs to them, and, if the
-// operator sets a retention, old audit entries. It writes nothing to the audit log: what it removes is counted in the
-// log of the process, and that is all.
+// never delivered, tasks that a crash left on sessions that have been expired for good, those sessions with everything
+// that belongs to them, and, if the operator sets a retention, old audit entries. What it removes is counted and logged
+// by count; only the ending of a stale task is written to the audit log, by identifiers.
 type retention struct{ cfg retentionConfig }
 
 // newRetention returns a retention over cfg.
 func newRetention(cfg retentionConfig) (*retention, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("broker: a Store is required for retention")
+	}
+	if cfg.Canceller != nil && cfg.Holds == nil { // a stale task is cancelled and cleared only where the runners that may hold it are asked
+		return nil, errors.New("broker: Holds is required for retention with a Canceller: a task a runner holds must not be cleared from under it")
 	}
 	if cfg.AuditRetention < 0 || (cfg.AuditRetention > 0 && cfg.AuditRetention < MinAuditRetention) {
 		return nil, fmt.Errorf("broker: the audit retention is %v; want 0 (keep) or at least %v", cfg.AuditRetention, MinAuditRetention)
@@ -129,6 +174,15 @@ func newRetention(cfg retentionConfig) (*retention, error) {
 	if cfg.MaxSessionBatches <= 0 {
 		cfg.MaxSessionBatches = defaultMaxSessionBatches
 	}
+	if cfg.CancelTimeout <= 0 {
+		cfg.CancelTimeout = defaultCancelTimeout
+	}
+	if cfg.StaleBatch <= 0 {
+		cfg.StaleBatch = defaultStaleBatch
+	}
+	if cfg.MaxStaleBatches <= 0 {
+		cfg.MaxStaleBatches = defaultMaxStaleBatches
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -149,6 +203,7 @@ func (r *retention) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-tick.C:
 		}
+		r.endStaleTasks(ctx) // first, so that what it frees is dropped and deleted by the passes below, in the same tick
 		r.abandonReplies(ctx)
 		r.purgeSessions(ctx)
 		r.purgeAudit(ctx)
@@ -179,6 +234,138 @@ func (r *retention) sessionHorizons(ttls map[string]time.Duration, now time.Time
 	}
 	h.Otherwise = now.Add(-longest - r.cfg.SessionGrace)
 	return h
+}
+
+// endStaleTasks ends the tasks that sessions past their horizon still record: only a crash after a session expired leaves
+// one (recovery skips an expired session, and a task that ends clears itself), and the purge never deletes a session with a
+// task, so without this such a session would be kept for ever. For each, oldest first, it asks the agent to cancel the task,
+// bounded and best effort (an unreachable agent, an error or a Binding that has left the config does not stop it), and then
+// clears the task, cancels its pending interactions and audits it, which the store does only while the session is still past
+// its horizon and still records that task. A session inside its horizon is never listed. It does nothing before a config is
+// loaded, and with no source of threadTTLs.
+func (r *retention) endStaleTasks(ctx context.Context) {
+	if r.cfg.ThreadTTLs == nil {
+		return
+	}
+	ttls, ok := r.cfg.ThreadTTLs()
+	if !ok {
+		return
+	}
+	now := r.cfg.Now()
+	h := r.sessionHorizons(ttls, now)
+	var tally staleTally
+	tried := map[store.ConversationKey]bool{} // a session whose ending failed is not tried again in this tick
+	down := map[string]bool{}                 // Bindings whose agent did not answer in this tick: not asked again
+list:
+	for range r.cfg.MaxStaleBatches {
+		stale, err := r.cfg.Store.ListStaleTasks(ctx, h, r.cfg.StaleBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				r.cfg.Logger.WarnContext(ctx, "retention: stale tasks could not be listed; it will be tried again", "err", err)
+			}
+			break
+		}
+		fresh := 0
+		for _, t := range stale {
+			if tried[t.Key] {
+				continue
+			}
+			tried[t.Key] = true
+			fresh++
+			if r.cfg.Holds != nil && r.cfg.Holds(t.Key, t.TaskID) {
+				tally.held++
+				continue
+			}
+			cancel := r.cancelStale(ctx, t, down)
+			if ctx.Err() != nil { // shutting down: the cancel may not have been made, and the next run makes it
+				break list
+			}
+			ended, err := r.cfg.Store.EndStaleTask(ctx, h, t, now)
+			switch {
+			case err != nil:
+				if ctx.Err() == nil {
+					r.cfg.Logger.WarnContext(ctx, "retention: a stale task could not be ended; it will be tried again", "err", err)
+				}
+			case ended.Ended:
+				tally.add(cancel.how, ended.Interactions)
+				r.auditStale(ctx, t, cancel, ended.Interactions)
+			}
+		}
+		if len(stale) < r.cfg.StaleBatch || fresh == 0 {
+			break
+		}
+	}
+	if tally.held > 0 {
+		r.cfg.Logger.WarnContext(ctx, "retention: left stale tasks that this process still runs; their runners, the interaction timeout or a restart end them", "tasks", tally.held)
+	}
+	if tally.tasks > 0 {
+		r.removed(RemovedStaleTasks, tally.tasks)
+		if tally.interactions > 0 {
+			r.removed(RemovedStaleInteractions, tally.interactions)
+		}
+		r.cfg.Logger.InfoContext(ctx, "retention: ended tasks that a crash left on sessions that have been expired for good",
+			"tasks", tally.tasks, "interactions", tally.interactions, "cancelled", tally.cancelled, "cancel_failed", tally.failed, "cancel_skipped", tally.skipped)
+	}
+}
+
+// staleTally counts what one tick of endStaleTasks did.
+type staleTally struct {
+	tasks, interactions        int
+	held                       int // left to this process's runner (Holds)
+	cancelled, failed, skipped int // how the cancels at the agents went: skipped is no Binding, or an agent that did not answer
+}
+
+func (s *staleTally) add(cancel audit.StaleCancel, interactions int) {
+	s.tasks++
+	s.interactions += interactions
+	switch cancel {
+	case audit.StaleCancelOK:
+		s.cancelled++
+	case audit.StaleCancelFailed:
+		s.failed++
+	default:
+		s.skipped++
+	}
+}
+
+// staleCancel is how the cancel of a stale task went: what happened, the agent's error of a failed one, and the identity the
+// call was made under, which is empty when no call was made.
+type staleCancel struct {
+	how      audit.StaleCancel
+	err      error
+	identity string
+}
+
+// cancelStale asks the agent of t's Binding to cancel the task, within CancelTimeout, and says how it went. It never fails
+// the sweep. An agent that does not answer once is not asked again in the tick (down): a task of a Binding whose agent is
+// down would otherwise cost a timeout each. An agent that answers that the task is unknown or cannot be cancelled is up.
+func (r *retention) cancelStale(ctx context.Context, t store.StaleTask, down map[string]bool) staleCancel {
+	if r.cfg.Canceller == nil || down[t.Binding] {
+		return staleCancel{how: audit.StaleCancelSkipped}
+	}
+	cctx, stop := context.WithTimeout(ctx, r.cfg.CancelTimeout)
+	defer stop()
+	identity, err := r.cfg.Canceller.CancelTask(cctx, t.Binding, t.TaskID)
+	switch {
+	case err == nil:
+		return staleCancel{how: audit.StaleCancelOK, identity: identity}
+	case errors.Is(err, session.ErrUnknownBinding):
+		return staleCancel{how: audit.StaleCancelNoBinding}
+	}
+	if !errors.Is(err, a2a.ErrTaskNotFound) && !errors.Is(err, a2a.ErrTaskNotCancelable) {
+		down[t.Binding] = true
+	}
+	return staleCancel{how: audit.StaleCancelFailed, err: err, identity: identity}
+}
+
+// auditStale records that t was ended, as the identity the cancel was made under when one was. The task is ended, so a
+// failure to audit is never undone by it: the writer logs and meters it, and the sweep goes on.
+func (r *retention) auditStale(ctx context.Context, t store.StaleTask, c staleCancel, interactions int) {
+	if r.cfg.Audit == nil {
+		return
+	}
+	_ = r.cfg.Audit.StaleTaskEnded(ctx, audit.Actor{Binding: t.Binding, Identity: c.identity}, audit.StaleTask{
+		TaskID: a2a.TaskID(t.TaskID), ContextID: t.ContextID, Cancel: c.how, CancelErr: c.err, Interactions: interactions})
 }
 
 // purgeSessions deletes the sessions past their horizon, a batch at a time until one is short or the tick's share is spent

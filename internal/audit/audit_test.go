@@ -194,6 +194,68 @@ func TestFeedbackVote(t *testing.T) {
 	}
 }
 
+// A task that retention ended is an event of its own: the identifiers of the task and its context, how the cancel at the
+// agent went (typed, never the agent's text), and how many pending interactions went with it.
+func TestStaleTaskEnded(t *testing.T) {
+	ctx := context.Background()
+	w, s := newWriter(t)
+	ended := func(c StaleCancel, err error, n int) StaleTask {
+		return StaleTask{TaskID: "t1", ContextID: "c1", Cancel: c, CancelErr: err, Interactions: n}
+	}
+	for _, c := range []StaleTask{
+		ended(StaleCancelOK, nil, 0),
+		ended(StaleCancelOK, nil, 2),
+		ended(StaleCancelFailed, fmt.Errorf("cancel: %w", agent.ErrCancelFailed), 0),
+		ended(StaleCancelFailed, errors.New("boom: secret-looking text"), 1),
+		ended(StaleCancelNoBinding, nil, 0),
+		ended(StaleCancelSkipped, nil, 0),
+	} {
+		if err := w.StaleTaskEnded(ctx, who, c); err != nil {
+			t.Fatalf("StaleTaskEnded(%+v): %v", c, err)
+		}
+	}
+	want := []string{
+		"stale_task_ended: cancel=ok interactions=0",
+		"stale_task_ended: cancel=ok interactions=2",
+		"stale_task_ended: cancel=failed cancel_failed interactions=0",
+		"stale_task_ended: cancel=failed error interactions=1",
+		"stale_task_ended: cancel=no_binding interactions=0",
+		"stale_task_ended: cancel=skipped interactions=0",
+	}
+	got := rows(t, s)
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		e := got[i]
+		if e.Kind != store.AuditEvent || e.Subject != "task=t1 context=c1" || e.Outcome != w || e.Binding != "ns/b" || e.Identity != "sa/investigator" {
+			t.Errorf("row %d = %+v, want an event on task=t1 context=c1 by ns/b with outcome %q", i, e, w)
+		}
+	}
+
+	for name, bad := range map[string]struct {
+		a Actor
+		t StaleTask
+	}{
+		"no Binding":           {Actor{}, ended(StaleCancelOK, nil, 0)},
+		"no task":              {who, StaleTask{ContextID: "c1", Cancel: StaleCancelOK}},
+		"no cancel":            {who, StaleTask{TaskID: "t1"}},
+		"an unknown cancel":    {who, StaleTask{TaskID: "t1", Cancel: "maybe"}},
+		"a negative number":    {who, ended(StaleCancelOK, nil, -1)},
+		"a failure with none":  {who, ended(StaleCancelFailed, nil, 0)},
+		"an error with an ok":  {who, ended(StaleCancelOK, errors.New("x"), 0)},
+		"an error on a skip":   {who, ended(StaleCancelSkipped, errors.New("x"), 0)},
+		"an error on no agent": {who, ended(StaleCancelNoBinding, errors.New("x"), 0)},
+	} {
+		if err := w.StaleTaskEnded(ctx, bad.a, bad.t); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s: StaleTaskEnded = %v, want ErrInvalid", name, err)
+		}
+	}
+	if n := len(rows(t, s)); n != len(want) {
+		t.Errorf("%d rows after the invalid calls; want the %d that were valid", n, len(want))
+	}
+}
+
 func TestAgentCall(t *testing.T) {
 	notSent401 := fmt.Errorf("send: %w", errors.Join(agent.ErrNotSent, agent.ErrCredentialsRejected, &dialect.HTTPStatusError{Code: 401}))
 	lost := &agent.StreamLostError{TaskID: "t-lost", ContextID: "c-lost", Err: errors.New("dropped")}

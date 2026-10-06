@@ -141,11 +141,12 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, fmt.Errorf("trigger digest: %w", err)
 	}
 	stops.add("trigger-digest", startLoop(runCtx, digest.Run))
-	// The retention of what no other loop owns (data protection): reply text that was never delivered, sessions that have
-	// been expired for good with what belongs to them, and audit entries past the operator's retention, if one is set. It
-	// writes only to the store, so it stops with the other loops.
+	// The retention of what no other loop owns (data protection): reply text that was never delivered, tasks that a crash
+	// left on sessions that have been expired for good, those sessions with what belongs to them, and audit entries past
+	// the operator's retention, if one is set. It writes to the store and the audit, and asks an agent to cancel a stale
+	// task, a call that is bounded and that its context ends, so it stops with the other loops.
 	retain, err := newRetention(retentionConfig{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLs: bindings.ThreadTTLs,
-		OnRemoved: metrics.RetentionRemoved, Logger: log})
+		Canceller: bindings, Audit: auditor, Holds: mgr.HoldsTask, OnRemoved: metrics.RetentionRemoved, Logger: log})
 	if err != nil {
 		return nil, fmt.Errorf("store retention: %w", err)
 	}

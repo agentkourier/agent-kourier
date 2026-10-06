@@ -4,6 +4,7 @@ package broker
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -132,6 +133,21 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Feedback:      rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies: rb.Binding.Spec.Chat.ThreadReplies,
 	}, nil
+}
+
+// CancelTask asks the agent of the Binding named "namespace/name" to cancel the task, for the retention of a task that a
+// crash left on a session that expired long ago, and returns the Binding's service identity, which the call was made under
+// (it is empty when the Binding could not be resolved, and nothing was called). An error wrapping session.ErrUnknownBinding
+// means the config has no such Binding; any other is the agent's, or a Binding that cannot be served now.
+func (b *Bindings) CancelTask(ctx context.Context, binding, taskID string) (string, error) {
+	be, err := b.Backend(binding)
+	if err != nil {
+		return "", err
+	}
+	if _, err := be.Agent.CancelTask(ctx, a2a.TaskID(taskID)); err != nil {
+		return be.Identity, fmt.Errorf("cancel task: %w", err)
+	}
+	return be.Identity, nil
 }
 
 // ThreadTTLs returns the threadTTL of every Binding of the current snapshot, by "namespace/name", and false before the
