@@ -48,6 +48,9 @@ func TestSpecExamplesDecode(t *testing.T) {
 		a.RateLimit.MaxRuns != 5 || a.RateLimit.MaxConcurrent != 2 || a.MaxRunsPerDay != 40 {
 		t.Errorf("alerts did not decode as in the spec: %+v", a)
 	}
+	if b.Spec.Chat.ThreadReplies != ThreadRepliesAll {
+		t.Errorf("Binding threadReplies = %q, want %q", b.Spec.Chat.ThreadReplies, ThreadRepliesAll)
+	}
 	if b.Spec.Identity.UserID != "courier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
 		!b.Spec.Interactions.AskUser || !b.Spec.Feedback.Enabled ||
 		b.Status.WebhookPath != "/hooks/alertmanager/sre/sre-alerts" {

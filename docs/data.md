@@ -115,6 +115,19 @@ answer, a busy or not-ready session that is waited out without limit). 30 days i
 of the default `threadTTL`, after which a session is expired and recovery skips it. A drop is logged at WARN, with a count, and counted in `courier_retention_removed_total{what="stranded_replies"}`. The queued
 reaction (the hourglass) stays on the dropped reply's message, since nothing takes it off.
 
+### Thread replies in a mention-only Binding
+
+With `chat.threadReplies: mention` (spec 8.2, D38), a reply in a thread that does not mention courier is not a turn. It is
+not stored: no reply row, no reaction, no change to the session's last activity. Slack delivers every reply's event, and courier
+drops an unmentioned one at intake; two counters, which hold no content, are all that remains of it
+(`courier_thread_unmentioned_total` and `courier_intake_total{disposition="unmentioned"}`). Courier reads the text again from
+Slack only when someone later mentions courier in the thread, and then only the replies since the session's previous turn.
+They are cleaned, redacted and cut (spec 8.2), and go to the agent, and so to its model provider, as part of that turn's text.
+Before that they reach neither the agent nor its provider (with `all`, every reply does). Nothing new is stored: the section is built when the turn is
+sent and held in memory while that turn is the head of its session's queue, `reply_queue.text` holds only what the person who
+mentioned courier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
+mention: it is queued pinned to the question and kept as its answer (`interactions.answer`, above).
+
 ### Sessions and what belongs to them
 
 Clearing content leaves the rows, and a thread that nobody answers again would keep its rows for ever. A session is kept after

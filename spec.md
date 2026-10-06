@@ -191,6 +191,7 @@ upstream webhook trigger stays compatible with courier.
 | D35 | Chat-neutral model | Slack sits behind one platform-neutral seam, `chat.Platform` (6.2), so a second chat platform is one adapter and no change to session, interact, render, outbox or store. The model carries literal text with no markup field; each adapter neutralises markup for its platform and passes a shared hostile-text conformance suite before it ships. The outbox stores the versioned neutral message and the adapter renders it at delivery; a payload of the earlier, Slack-shaped form is abandoned as invalid with a log line, not migrated. Abandon metrics use neutral reasons (channel_gone, too_long, invalid_content, other), with the platform's own code in the log. The Slack message ID string is unchanged (`slack:<connection>:<channel>:<ts>`), and the store's columns keep their names. (Owner-approved 2026-10-02; WP-37.) |
 | D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the bot by ID, never by display name. Courier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial, CT-1; accepted by the owner 2026-10-04.) |
 | D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: owner, 2026-10-05, H4-5b.) |
+| D38 | Thread replies | A Binding's `chat.threadReplies` is `all` (default) or `mention`. In `mention`, only a reply that mentions courier is a turn, and it carries the unmentioned replies since the last turn as untrusted data; a typed answer to a question that takes text replies needs no mention. (Owner, 2026-10-05; mention-only thread replies, TM-8.) |
 
 ## 6. Architecture
 
@@ -418,6 +419,7 @@ spec:
     connectionRef: { namespace: courier-system, name: slack-main }
     channel: C0123456789             # investigation channel ID, not name
     output: live                     # live | final
+    threadReplies: all               # all | mention; see 8.2
     triggers:                        # empty means [{type: mention}]; see 8.2
       - type: mention
       - type: botMessage             # alerts Alertmanager itself posts to this channel
@@ -538,7 +540,7 @@ them (below the table).
 | Trigger | Behavior |
 |---|---|
 | @mention in a bound channel (not in a thread) | New thread, new session |
-| Reply in a thread courier owns, with or without an @mention | Continues that session |
+| Reply in a thread courier owns | Continues that session. With `chat.threadReplies: mention` (D38), only a reply that @mentions courier does; the rest are ignored, except a typed answer to a pending question that takes text replies (8.4) |
 | @mention inside a thread courier doesn't own, in a bound channel | New session anchored to that thread; courier owns it from then on |
 | Reply without an @mention in any other thread | Ignored |
 | Any message posted by courier itself (including `message_changed` from its own edits) | Ignored, always: courier would otherwise answer itself without end |
@@ -549,8 +551,8 @@ them (below the table).
 **`chat.triggers` (D36).** An empty list is `[{type: mention}]`, the table above. A list that
 names triggers is the whole list: a Binding that lists only `botMessage` triggers starts no session
 from an @mention, in or out of a thread (the intake says so once, at info). The row for a reply in
-a thread courier owns is no trigger and holds either way, so people can follow up in the thread of
-an alert without a mention. A Binding adds
+a thread courier owns is no trigger and holds whatever the triggers say; whether it needs a mention is
+`chat.threadReplies` (below). A Binding adds
 triggers; v1 has two types, `mention` (the @mention rows) and `botMessage`. Triggers are tried in
 order and the first that matches handles the message. A `botMessage` trigger accepts messages
 from one bot, named by `from.botId` and never by display name, and then:
@@ -700,9 +702,9 @@ a mention takes (the session row, the queued turn and a wake, all local writes),
 message's ts as the thread and its ID as the turn's `messageId`, so a redelivery is the same
 turn. Nobody wrote the turn, so it names no user: it is filed under the manager's system user
 and carries no attribution prefix, which is for what a person wrote, and its audit rows name no
-person. A person's reply in that thread then continues the session without a mention, as in
-any thread courier owns. The text of a template reads `.Fields` entries, not `.Key`: the preset's
-key is the group's label values, which hold spaces, and a value in the instruction part must be
+person. A person's reply in that thread then continues the session as in any thread
+courier owns (with `threadReplies: mention`, only one that mentions courier). The text of a
+template reads `.Fields` entries, not `.Key`: the preset's key is the group's label values, which hold spaces, and a value in the instruction part must be
 name-shaped, so a template that reads `.Key` is refused.
 
 A prompt that fails its check (a value outside the name shape, too long, a `.Link` that is no
@@ -762,7 +764,10 @@ task, or a first response whose `contextId` differs from the stored one, as the 
 longer existing (UNCONFIRMED: kagent's signal for a lost session is not measured). After
 `threadTTL` the thread is expired for good: every later reply in it gets a fixed notice
 saying the conversation has expired and that a new mention in the channel starts a new
-one. The mention's two events (app_mention and message) give one notice.
+one. The mention's two events (app_mention and message) give one notice. In `mention`, a reply in an expired thread that
+does not mention courier gets no notice. A reply in a thread whose Binding is gone gets the notice if it mentions
+courier, or if the Binding that now owns the channel takes all replies, or when no Binding owns the channel (the
+default mode is `all`).
 
 **Reply while a task is running.** kagent allows one active task per session and
 rejects a new message while one runs, with JSON-RPC `-32004` "resource conflict" (inside
@@ -772,13 +777,37 @@ completed) starts a new task in the same context (WP-02, measured). A queued rep
 therefore keeps its `messageId`, and a resend that still gets `-32004` stays queued. Courier queues the reply per session, marks it
 with a reaction, and sends queued replies in order, one per turn, when the active task
 reaches a terminal state, or when a pause ends (answered, timed out or cancelled). A reply
-sent while an interaction is pending is held the same way; it is neither sent nor treated as
-the interaction's answer. A user can stop the active task from the thread; the stop control
-calls `CancelTask`, and queued replies then proceed. A turn's `messageId` is
+sent while an interaction is pending is held the same way, and is not its answer, unless the question takes
+text replies (the `a2a` dialect's single free-text question): then the first such reply after the question is
+its answer, decided with a button's checks and audit (8.4), and never sent as a turn. A user can stop
+the active task from the thread; the stop control calls `CancelTask`, and queued replies then proceed. A turn's `messageId` is
 `slack:<connection>:<channel>:<ts>`, so the `app_mention` and `message` events for one
 message are one turn. When `-32004` comes from a task courier did not record, courier
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
 never drops the reply.
+
+**Mention-only thread replies (D38).** `chat.threadReplies` is `all` (the default: any person's reply in a thread
+courier owns is a turn) or `mention`. In `mention`, a reply is a turn only if it mentions courier, whether the thread
+was started by a mention or by a trigger. The adapter decides what a mention is: on Slack, what Slack reports as one
+(an `app_mention`), which includes courier's user token anywhere in the text, in a quote or in code; plain text such as
+`@courier` is not one, and a mention added by an edit does not count. Direct messages need none. An unmentioned reply is
+ignored: nothing is written, no reaction is added, and the thread's `threadTTL` is not extended. It is counted
+(`courier_thread_unmentioned_total{binding}`). The one exception is a reply while the agent waits on a question that
+takes text replies (8.4): it is that question's answer, and never a turn. It
+counts only while the session's current task waits on a question whose prompt courier has posted; a typed reply at any
+other time is ignored like any other unmentioned reply. A mentioned turn carries the unmentioned replies since the
+session's previous turn: courier reads the thread between the previous turn's message and this one (both exclusive) when it
+sends the turn, and appends them after the person's text, oldest first, in a hashed `thread-replies` block of untrusted
+data (R2), each cleaned, redacted, escaped and cut (in that order). Courier's own posts, other bots' messages and
+messages that were themselves turns or answers are left out. At most the newest 50 replies, 1000 UTF-16 units each and
+6000 for the block with its lead sentence, are kept; the block says how many were left out. The window comes from the
+reply queue, so it is the same after a restart or a failover, and a reply posted after a mention falls in the next
+mention's window. A platform that cannot read a thread sends the mentioned message alone; a read that fails, or a
+thread whose window is longer than the adapter reads (on Slack, more than 5 pages, 1000 messages), sends it with a fixed
+line saying the earlier replies could not be read (`courier_thread_context_total{binding,outcome}`).
+In `mention`, the final message of each turn (not one that ends in a question, not a turn with no output) carries, under
+its text and above the feedback question when there is one (8.7), the context line "Mention me in this thread to ask a
+follow-up." (owner's decision 6b; added with TM-9).
 
 **Attribution is load-bearing (WP-36h, measured on kagent).** kagent keeps courier's
 attribution at the start of the text a person wrote (`[Slack: <name> (<user id>)] ...`), and
@@ -826,6 +855,10 @@ Binding was declared to point at a read-only agent.
 2. Courier stores it as pending and renders it in the thread:
    - **Ask user:** each question with its choices as a select (multi-select where
      allowed), or a free-text input when there are no choices, and a Submit button.
+   - **Text replies (`a2a` dialect):** a single question with no choices also takes a typed reply in the thread, and its
+     prompt says so. While the session's task waits on it and its prompt is posted, the first reply after the question is
+     its answer, checked and audited as a Submit is (steps 3 to 5), and never sent as a turn; in a Binding with
+     `chat.threadReplies: mention` it needs no mention (D38).
    - **Tool approval (Phase 5):** tool name and full arguments, Approve and Deny
      buttons. Several tool calls in one pause get one control each, plus approve-all
      and deny-all.
@@ -1013,7 +1046,10 @@ a root post, and a notice posted into a thread after its session was deleted.
   Active/active (workers on all replicas) is deferred until one replica's throughput is not enough.
   The design is in `tasks/plans/h4-4-ha-design.md`.
 - **Observability.** Prometheus metrics: events received, deduped, rate limited; agent
-  call latency and errors; stream reconnects; approval outcomes; Slack API errors.
+  call latency and errors; stream reconnects; approval outcomes; Slack API errors; and, for
+  `chat.threadReplies: mention` (D38), `courier_thread_unmentioned_total{binding}` (replies ignored for want
+  of a mention) and `courier_thread_context_total{binding,outcome}` (what a mentioned turn's thread read
+  came to: `read`, `empty`, `cut`, `failed` or `unsupported`).
   OpenTelemetry traces with the trace context passed to the backend. Structured logs.
 - **Packaging.** Pilot: a single Deployment with a mounted config file and a
   PersistentVolume for SQLite. After hardening: a Helm chart containing CRDs,

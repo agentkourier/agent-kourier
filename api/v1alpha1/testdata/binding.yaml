@@ -13,6 +13,7 @@ spec:
     connectionRef: { namespace: courier-system, name: slack-main }
     channel: C0123456789             # investigation channel ID, not name
     output: live                     # live | final
+    threadReplies: all               # all | mention; see 8.2
     triggers:                        # empty means [{type: mention}]; see spec 8.2
       - type: mention
       - type: botMessage             # alerts Alertmanager itself posts to this channel

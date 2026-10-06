@@ -141,6 +141,7 @@ spec:
       name: slack
     channel: C0123456789
     output: live
+    threadReplies: all   # the default; "mention" ignores thread replies that do not @mention courier
 ```
 
 This example assumes the agent and authenticated backend endpoint already exist.

@@ -27,11 +27,11 @@ func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const output = "    output: live                     # live | final\n"
-	if !strings.Contains(string(raw), output) {
-		t.Fatal("the fixture's binding.yaml has no `output: live` line to add threadReplies after")
+	const all = "    threadReplies: all               # all | mention; see 8.2\n"
+	if !strings.Contains(string(raw), all) {
+		t.Fatal("the fixture's binding.yaml has no `threadReplies: all` line to change")
 	}
-	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), output, output+"    threadReplies: mention\n", 1)), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), all, "    threadReplies: mention\n", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
