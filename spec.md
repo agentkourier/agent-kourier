@@ -798,8 +798,10 @@ counts only while the session's current task waits on a question whose prompt co
 other time is ignored like any other unmentioned reply. A mentioned turn carries the unmentioned replies since the
 session's previous turn: courier reads the thread between the previous turn's message and this one (both exclusive) when it
 sends the turn, and appends them after the person's text, oldest first, in a hashed `thread-replies` block of untrusted
-data (R2), each cleaned, redacted, escaped and cut (in that order). Courier's own posts, other bots' messages and
-messages that were themselves turns or answers are left out. At most the newest 50 replies, 1000 UTF-16 units each and
+data (R2), each with its author's display name (`<from>`) and, apart from it, the platform's user ID (`<id>`), which
+alone says who wrote it; each reply's text is cleaned, read through a 4000-byte window, redacted, escaped and cut (in that
+order), and a reply with no white space keeps its start. Courier's own posts, other bots' messages, messages that were
+themselves turns or answers, and replies that are blank once their invisible characters are deleted are left out. At most the newest 50 replies, 1000 UTF-16 units each and
 6000 for the block with its lead sentence, are kept; the block says how many were left out. The window comes from the
 reply queue, so it is the same after a restart or a failover, and a reply posted after a mention falls in the next
 mention's window. A platform that cannot read a thread sends the mentioned message alone; a read that fails, or a
