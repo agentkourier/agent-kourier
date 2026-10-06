@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -17,7 +18,7 @@ import (
 // The thread context of a mentioned turn (spec 8.2, D38): in a Binding with chat.threadReplies: mention, the replies that
 // people wrote in the thread since the session's previous turn, which were not turns themselves. The session manager asks for
 // it (session.Config.ThreadContext) once for each turn it sends; this is what answers: read the thread through the platform,
-// leave out what is not a person's unmentioned reply, name the authors, and render the block (render.ThreadReplies).
+// leave out what is not a person's unmentioned reply, name the authors, and render the block (render.ThreadRepliesCounted).
 const (
 	// threadFetchLimit is how many messages of the window the read asks for. The platform's limit and its count of what it
 	// left out are of every message, courier's own, other bots' and those that were turns included, so a window holds
@@ -143,12 +144,14 @@ func (t *threadContext) read(ctx context.Context, target chat.Target, after, bef
 }
 
 // eligible returns the replies of msgs that the context shows, oldest first: a person's message that the adapter would
-// forward, which is not courier's own (its answers and notes), not a bot's (D36), has a user and was not itself a turn or
-// an answer (the reply queue holds it, queued or delivered), so the agent is not told what it has already been sent.
+// forward, which is not courier's own (its answers and notes), not a bot's (D36), has a user, has text once normalized (a
+// reply of zero-width characters is blank to the block, and must not take one of its newest fifty places or cost a lookup)
+// and was not itself a turn or an answer (the reply queue holds it, queued or delivered), so the agent is not told what it
+// has already been sent.
 func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage) ([]chat.HistoryMessage, error) {
 	var out []chat.HistoryMessage
 	for _, m := range msgs {
-		if m.Own || m.Ignored || m.Message.Bot != nil || m.Message.User == "" || strings.TrimSpace(m.Message.Text) == "" {
+		if m.Own || m.Ignored || m.Message.Bot != nil || m.Message.User == "" || strings.TrimSpace(redact.Normalize(m.Message.Text)) == "" {
 			continue
 		}
 		turn, err := t.replies.HasReply(ctx, chat.MessageID(m.Message.At))

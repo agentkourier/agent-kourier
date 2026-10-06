@@ -23,7 +23,7 @@ import (
 //	<the caller's clause> is below, between the <untrusted-data-0123456789ab> and </untrusted-data-0123456789ab> tags<, the order>. <the safety sentence>
 //	<untrusted-data-0123456789ab>
 //	<title>...</title>
-//	<reply><from>Ada (U1)</from><text>...</text></reply>
+//	<reply><from>Ada</from><id>U1</id><text>...</text></reply>
 //	3 earlier replies left out.
 //	</untrusted-data-0123456789ab>
 //
@@ -75,19 +75,14 @@ type untrustedField struct {
 	Name string
 	// Value is the text as it came, untrusted. It is cleaned by Kind, and then shown escaped and cut to Cap.
 	Value string
-	// Qualifier is a second untrusted text, shown in parentheses after Value: the author's ID after the author's
-	// name. It is cleaned, escaped and cut as Value is, each on its own so that a long Value does not take its place;
-	// with no Value it is shown alone.
-	Qualifier string
-	// Kind is how Value and Qualifier are cleaned.
+	// Kind is how Value is cleaned.
 	Kind fieldKind
 	// OneLine puts the cleaned text on one line, its white space run written as one space.
 	OneLine bool
-	// Label marks a field that says what an item is about and is no content of its own, as the author is of a
-	// reply: an item with nothing to show but labels is skipped.
+	// Label marks a field that says what an item is about and is no content of its own, as the author's name and ID
+	// are of a reply: an item with nothing to show but labels is skipped.
 	Label bool
-	// Cap is the most that the field shows of Value, and of Qualifier, in UTF-16 units as escaped and with the mark of
-	// a cut.
+	// Cap is the most that the field shows of Value, in UTF-16 units as escaped and with the mark of a cut.
 	Cap int
 	// Window is how many bytes of a kindWindow field are read for secrets.
 	Window int
@@ -221,12 +216,12 @@ func (b untrustedBlock) lead(tag string) string {
 	return prose(b.Opening) + " " + verb + " below, between the <" + tag + "> and </" + tag + "> tags" + order + ". " + safety(b.Plural)
 }
 
-// cleanedField is what a field is once its text is cleaned: the value and the qualifier, not yet escaped or cut.
+// cleanedField is what a field is once its text is cleaned: the value, not yet escaped or cut.
 type cleanedField struct {
-	name             string
-	value, qualifier string
-	label            bool
-	cap              int
+	name  string
+	value string
+	label bool
+	cap   int
 }
 
 // cleanedItem is an item whose fields are cleaned.
@@ -268,9 +263,9 @@ func (b untrustedBlock) cleanItems() []cleanedItem {
 			if !validName(f.Name) {
 				continue
 			}
-			cf := cleanedField{name: f.Name, value: f.clean(f.Value), qualifier: f.clean(f.Qualifier), label: f.Label, cap: f.Cap}
+			cf := cleanedField{name: f.Name, value: f.clean(f.Value), label: f.Label, cap: f.Cap}
 			c.fields = append(c.fields, cf)
-			if !f.Label && (!blank(cf.value) || !blank(cf.qualifier)) {
+			if !f.Label && !blank(cf.value) {
 				content = true
 			}
 		}
@@ -290,36 +285,17 @@ type renderedItem struct {
 	fields []escapedField
 }
 
-// text returns the field's value and qualifier written escaped and cut, at most room units in all; ok is false if
-// that is only the mark of a cut (nothing of it is shown).
+// text returns the field's value written escaped and cut, at most room units; ok is false if that is only the mark
+// of a cut (nothing of it is shown).
 func (f cleanedField) text(room int) (string, bool) {
-	value, qualifier := f.value, f.qualifier
-	if blank(value) {
-		value = ""
-	}
-	if blank(qualifier) {
-		qualifier = ""
-	}
-	if value == "" && qualifier == "" {
+	if blank(f.value) {
 		return "", true
 	}
-	// Each part is cut on its own, to the cap, and to what the room leaves it: with both, half of the room less the
-	// parentheses and the space.
-	const joint = len(" ()")
 	limit := min(f.cap, room)
-	if value != "" && qualifier != "" {
-		limit = min(f.cap, (room-joint)/2)
-	}
 	if limit <= chat.Units(chat.Truncated) && limit < f.cap { // the room, not the cap, leaves nothing to show but the mark
 		return "", false
 	}
-	switch {
-	case value == "":
-		return escapeCut(qualifier, limit), true
-	case qualifier == "":
-		return escapeCut(value, limit), true
-	}
-	return escapeCut(value, limit) + " (" + escapeCut(qualifier, limit) + ")", true
+	return escapeCut(f.value, limit), true
 }
 
 // render writes the item in at most room units. ok is false if the room leaves a field nothing to show but the mark of
@@ -332,7 +308,7 @@ func (it cleanedItem) render(room int) (renderedItem, bool) {
 	written := make([]cleanedField, 0, len(it.fields))
 	taken := chat.Units(open) + chat.Units(closing) // the tags of the item and its fields
 	for _, f := range it.fields {
-		if it.wrapper == "" && blank(f.value) && blank(f.qualifier) {
+		if it.wrapper == "" && blank(f.value) {
 			continue
 		}
 		written = append(written, f)
@@ -444,15 +420,55 @@ func (b untrustedBlock) render() (section string, leftOut int) {
 	return out.String(), leftOut
 }
 
-// angleBracket returns what r is written as if it is "<" or ">" or looks like one: the
-// full-width and the small forms, the single guillemets, the mathematical, the CJK and the
-// U+2329 angle brackets, and the modifier letters that are arrowheads. A model may read
-// "＜/tag＞" as a tag, so each is escaped like the ASCII ones. It returns "" for any other rune.
+// angleBracket returns what r is written as if it is "<" or ">" or looks like one: the full-width and the small
+// forms, the single and the double guillemets, the angle brackets of mathematics, CJK and U+2329 (single, double, the
+// ornaments, the vertical presentation forms, the one with a dot and the curved one), the Canadian syllabics PA and PO,
+// and the modifier letters that are arrowheads. A model may read "＜/tag＞" or "«/tag»" as a tag, so each is escaped like
+// the ASCII ones. It returns "" for any other rune.
+//
+// It follows the safety sentence's promise of look-alikes, so a form that reads as a bracket and is missing here is a
+// way past it; ordinary text that holds one (French « quotes ») is escaped too, and reaches the agent as &lt; and &gt;.
 func angleBracket(r rune) string {
 	switch r {
-	case '<', '＜', '﹤', '‹', '⟨', '〈', '˂', '〈':
+	case '<',
+		'\uFF1C', // FULLWIDTH LESS-THAN SIGN
+		'\uFE64', // SMALL LESS-THAN SIGN
+		'\u2039', // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+		'\u00AB', // LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+		'\u27E8', // MATHEMATICAL LEFT ANGLE BRACKET
+		'\u27EA', // MATHEMATICAL LEFT DOUBLE ANGLE BRACKET
+		'\u2329', // LEFT-POINTING ANGLE BRACKET
+		'\u3008', // LEFT ANGLE BRACKET
+		'\u300A', // LEFT DOUBLE ANGLE BRACKET
+		'\u02C2', // MODIFIER LETTER LEFT ARROWHEAD
+		'\u276C', // MEDIUM LEFT-POINTING ANGLE BRACKET ORNAMENT
+		'\u276E', // HEAVY LEFT-POINTING ANGLE QUOTATION MARK ORNAMENT
+		'\u2770', // HEAVY LEFT-POINTING ANGLE BRACKET ORNAMENT
+		'\u1438', // CANADIAN SYLLABICS PA
+		'\u2991', // LEFT ANGLE BRACKET WITH DOT
+		'\u29FC', // LEFT-POINTING CURVED ANGLE BRACKET
+		'\uFE3D', // PRESENTATION FORM FOR VERTICAL LEFT DOUBLE ANGLE BRACKET
+		'\uFE3F': // PRESENTATION FORM FOR VERTICAL LEFT ANGLE BRACKET
 		return "&lt;"
-	case '>', '＞', '﹥', '›', '⟩', '〉', '˃', '〉':
+	case '>',
+		'\uFF1E', // FULLWIDTH GREATER-THAN SIGN
+		'\uFE65', // SMALL GREATER-THAN SIGN
+		'\u203A', // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+		'\u00BB', // RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+		'\u27E9', // MATHEMATICAL RIGHT ANGLE BRACKET
+		'\u27EB', // MATHEMATICAL RIGHT DOUBLE ANGLE BRACKET
+		'\u232A', // RIGHT-POINTING ANGLE BRACKET
+		'\u3009', // RIGHT ANGLE BRACKET
+		'\u300B', // RIGHT DOUBLE ANGLE BRACKET
+		'\u02C3', // MODIFIER LETTER RIGHT ARROWHEAD
+		'\u276D', // MEDIUM RIGHT-POINTING ANGLE BRACKET ORNAMENT
+		'\u276F', // HEAVY RIGHT-POINTING ANGLE QUOTATION MARK ORNAMENT
+		'\u2771', // HEAVY RIGHT-POINTING ANGLE BRACKET ORNAMENT
+		'\u1433', // CANADIAN SYLLABICS PO
+		'\u2992', // RIGHT ANGLE BRACKET WITH DOT
+		'\u29FD', // RIGHT-POINTING CURVED ANGLE BRACKET
+		'\uFE3E', // PRESENTATION FORM FOR VERTICAL RIGHT DOUBLE ANGLE BRACKET
+		'\uFE40': // PRESENTATION FORM FOR VERTICAL RIGHT ANGLE BRACKET
 		return "&gt;"
 	}
 	return ""

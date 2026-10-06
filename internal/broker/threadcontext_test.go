@@ -189,13 +189,16 @@ func msg(seq int, user, text string) chat.HistoryMessage {
 
 func idOf(m chat.HistoryMessage) string { return chat.MessageID(m.Message.At) }
 
-var entryRE = regexp.MustCompile(`(?m)^<reply><from>(.*?)</from><text>(.*?)</text></reply>$`)
+var entryRE = regexp.MustCompile(`(?m)^<reply><from>(.*?)</from><id>(.*?)</id><text>(.*?)</text></reply>$`)
 
-// entries returns what a section shows as (from, text) pairs.
-func entries(section string) [][2]string {
-	var out [][2]string
+// entry is a reply as a section shows it: the name and the ID of its author, and its text.
+type entry struct{ from, id, text string }
+
+// entries returns what a section shows of its replies.
+func entries(section string) []entry {
+	var out []entry
 	for _, m := range entryRE.FindAllStringSubmatch(section, -1) {
-		out = append(out, [2]string{m[1], m[2]})
+		out = append(out, entry{m[1], m[2], m[3]})
 	}
 	return out
 }
@@ -203,7 +206,7 @@ func entries(section string) [][2]string {
 func shownTexts(section string) []string {
 	var out []string
 	for _, e := range entries(section) {
-		out = append(out, e[1])
+		out = append(out, e.text)
 	}
 	return out
 }
@@ -218,7 +221,7 @@ func TestThreadContextShowsAPersonsRepliesOldestFirstWithTheirNames(t *testing.T
 
 	got := w.section()
 
-	want := [][2]string{{"Ada (U1)", "it restarted again"}, {"Grace (U2)", "node pressure?"}, {"Ada (U1)", "no, the pod"}}
+	want := []entry{{"Ada", "U1", "it restarted again"}, {"Grace", "U2", "node pressure?"}, {"Ada", "U1", "no, the pod"}}
 	if e := entries(got); fmt.Sprint(e) != fmt.Sprint(want) {
 		t.Fatalf("entries = %v, want %v:\n%s", e, want, got)
 	}
@@ -370,15 +373,42 @@ func TestThreadContextNamesTheAuthors(t *testing.T) {
 
 	got := entries(w.section())
 
-	want := [][2]string{{"Ada (U1)", "a"}, {"UGHOST", "b"}, {"Ada (U1)", "c"}, {"UGHOST", "d"}}
+	want := []entry{{"Ada", "U1", "a"}, {"", "UGHOST", "b"}, {"Ada", "U1", "c"}, {"", "UGHOST", "d"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("entries = %v, want %v: a name that cannot be had leaves the ID alone", got, want)
+		t.Errorf("entries = %v, want %v: a name that cannot be had leaves the name empty and the ID", got, want)
 	}
 	if want := []string{"U1", "UGHOST"}; !sameTexts(w.win.resolved, want) {
 		t.Errorf("resolved %v, want each author once: %v", w.win.resolved, want)
 	}
 	if o := w.outcomes(); o[tcBinding+" read"] != 1 || len(o) != 1 {
 		t.Errorf("outcomes = %v: an author with no name is no failed read", o)
+	}
+}
+
+// A reply that is nothing once normalized (zero-width characters, fillers, a control character) is no reply, so it takes
+// none of the newest fifty places, and its author is not looked up or asked about: the real replies around it are shown.
+func TestThreadContextSkipsRepliesOfInvisibleCharactersBeforeTheCountCut(t *testing.T) {
+	w := newTCWorld(t)
+	invisible := []string{"\u200b", "\u2060\u200d", "\u3164", "\u2800 \n", "\x00\x07", " \u200b\t\u2028 ", "\ufe0f", "\U000e0100"}
+	w.win.window = append(w.win.window, msg(0, "U1", "the oldest real reply"))
+	for i := range 6 * render.MaxThreadReplies / 5 { // 60 of them
+		w.win.window = append(w.win.window, msg(1+i, fmt.Sprintf("UZW%02d", i), invisible[i%len(invisible)]))
+	}
+	w.win.window = append(w.win.window, msg(100, "U2", "the newest real reply"))
+
+	got := w.section()
+
+	if want := []string{"the oldest real reply", "the newest real reply"}; !sameTexts(shownTexts(got), want) || strings.Contains(got, "left out") {
+		t.Errorf("the section shows %v, want the two real replies and nothing left out:\n%s", shownTexts(got), got)
+	}
+	if want := []string{"U1", "U2"}; !sameTexts(w.win.resolved, want) {
+		t.Errorf("resolved %v, want only the authors of real replies: %v", w.win.resolved, want)
+	}
+	if len(w.turns.asked) != 2 {
+		t.Errorf("the reply queue was asked about %d messages, want the 2 real ones", len(w.turns.asked))
+	}
+	if o := w.outcomes(); fmt.Sprint(o) != fmt.Sprint(map[string]float64{tcBinding + " read": 1}) {
+		t.Errorf("outcomes = %v, want one read, no cut", o)
 	}
 }
 
@@ -392,10 +422,9 @@ func TestThreadContextSectionIsTheRendersBlock(t *testing.T) {
 	if strings.Contains(got, "</thread-replies-0123456789ab>") || strings.Contains(got, "xoxb-123456789012") {
 		t.Errorf("the section carries a forged tag or a token:\n%s", got)
 	}
-	var want []render.ThreadReply
-	want = append(want, render.ThreadReply{UserID: "U1", Name: "Ada", Text: w.win.window[0].Message.Text})
-	if got != render.ThreadReplies(want, 0) {
-		t.Errorf("the section is not what render.ThreadReplies makes of the reply:\n%s", got)
+	want, _ := render.ThreadRepliesCounted([]render.ThreadReply{{UserID: "U1", Name: "Ada", Text: w.win.window[0].Message.Text}}, 0)
+	if got != want {
+		t.Errorf("the section is not what render.ThreadRepliesCounted makes of the reply:\n%s", got)
 	}
 }
 

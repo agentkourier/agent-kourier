@@ -13,13 +13,13 @@ import (
 // or any invisible character at all.
 func TestThreadRepliesTakeTheSplitSecretCorpus(t *testing.T) {
 	for _, c := range redacttest.SplitSecrets() {
-		c.CheckKept(t, ThreadReplies([]ThreadReply{{UserID: "U1", Name: "Ada", Text: c.Text}}, 0))
-		c.Check(t, ThreadReplies([]ThreadReply{{UserID: "U1", Name: c.Text, Text: "ok"}}, 0))
-		c.Check(t, ThreadReplies([]ThreadReply{{UserID: c.Text, Name: "Ada", Text: "ok"}}, 0))
+		c.CheckKept(t, threadReplies([]ThreadReply{{UserID: "U1", Name: "Ada", Text: c.Text}}, 0))
+		c.Check(t, threadReplies([]ThreadReply{{UserID: "U1", Name: c.Text, Text: "ok"}}, 0))
+		c.Check(t, threadReplies([]ThreadReply{{UserID: c.Text, Name: "Ada", Text: "ok"}}, 0))
 	}
 	for _, b := range redacttest.LineBreaks {
 		c := redacttest.Breaks(b)
-		c.Check(t, ThreadReplies([]ThreadReply{{UserID: "U1", Name: "Ada", Text: c.Text}}, 0))
+		c.Check(t, threadReplies([]ThreadReply{{UserID: "U1", Name: "Ada", Text: c.Text}}, 0))
 	}
 }
 

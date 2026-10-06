@@ -108,14 +108,14 @@ func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
 		t.Fatalf("the second turn lacks a block after its own text:\n%s", second)
 	}
 	for _, want := range []string{
-		"<reply><from>grace (U2)</from><text>I think it is the node</text></reply>",
-		"<reply><from>ada (U1)</from><text>no, the pod restarted</text></reply>",
+		"<reply><from>grace</from><id>U2</id><text>I think it is the node</text></reply>",
+		"<reply><from>ada</from><id>U1</id><text>no, the pod restarted</text></reply>",
 	} {
 		if !strings.Contains(second[block:], want) {
 			t.Errorf("the block lacks %s:\n%s", want, second)
 		}
 	}
-	if strings.Index(second, "grace (U2)") > strings.Index(second, "no, the pod restarted") {
+	if strings.Index(second, "<from>grace</from><id>U2</id>") > strings.Index(second, "no, the pod restarted") {
 		t.Errorf("the block is not oldest first:\n%s", second)
 	}
 	for _, out := range []string{"why is it down?", "the answer", "and now?"} {
