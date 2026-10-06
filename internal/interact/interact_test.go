@@ -141,15 +141,15 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	r := &rig{st: &refStore{Store: st}, slack: &poster{posted: map[string]string{}}, sess: &sess{}}
-	r.audit = &auditor{Writer: audit.New(st, audit.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
+	r.audit = &auditor{Writer: newWriter(t, st, audit.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ob := (outbox.New(outbox.Config{Store: st, Platform: r.slack, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second, Logger: quiet}))
+	ob := (newOutbox(t, outbox.Config{Store: st, Platform: r.slack, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second, Logger: quiet}))
 	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), AskUser: true, Timeout: timeout}
 	r.outbox = ob
 	if mod != nil {
 		mod(&b)
 	}
-	if r.in, err = interact.New(interact.Config{Store: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }}); err != nil {
+	if r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }})); err != nil {
 		t.Fatal(err)
 	}
 	return r

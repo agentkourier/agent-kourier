@@ -57,8 +57,14 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if cfg.auditStore != nil {
 		auditLog = cfg.auditStore(st)
 	}
-	auditor := audit.New(auditLog, audit.Options{Logger: log, OnFailure: metrics.AuditFailure})
-	bindings := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
+	auditor, err := audit.New(auditLog, audit.Options{Logger: log, OnFailure: metrics.AuditFailure})
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
+	if err != nil {
+		return nil, err
+	}
 	sd.add(stepPool, func(context.Context) { bindings.Close() })
 
 	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
@@ -70,9 +76,12 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, err
 	}
 	chatCtx, report, stopChat := WithAuthFailure(runCtx)
-	ob := outbox.New(outbox.Config{
+	ob, err := outbox.New(outbox.Config{
 		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,
 	})
+	if err != nil {
+		return nil, err
+	}
 	if err := ob.Reconcile(runCtx); err != nil { // Slack may be down: Run below tries again, so this only says so
 		log.WarnContext(ctx, "outbox: the first reconcile did not finish; it will be tried again", "error", err)
 	}
@@ -93,7 +102,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
+	renderer, err := live.New(live.Config{Sender: ob, Platform: platform, Store: st, Logger: log})
+	if err != nil {
+		return nil, err
+	}
 	var sink renderSink = live.NewSink(renderer, ob, log)
 	if cfg.sink != nil {
 		sink = cfg.sink
@@ -111,7 +123,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, and the fence forwards it).
-	threads := newThreadContext(threadContextConfig{Platform: platform.Platform, Replies: st, Logger: log})
+	threads, err := newThreadContext(threadContextConfig{Platform: platform.Platform, Replies: st, Logger: log})
+	if err != nil {
+		return nil, err
+	}
 	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
@@ -162,11 +177,20 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	// A match of a botMessage trigger that starts a turn becomes a session through the manager's intake, the path a
 	// mention takes. The threads of the keys are in the store; the permalink comes from what the platform learned when it
 	// connected, since the start runs on the acknowledgement path and may call neither Slack nor the agent.
-	starter := &triggerStarter{conn: connName, submit: mgr, notice: sink.QueueNotice, audit: auditor, link: permalinks(platform.Platform), log: log}
-	intake := chat.NewIntake(newIntakeConfig(intakeParts{
+	starter, err := newTriggerStarter(triggerStarterConfig{
+		Conn: connName, Submit: mgr, Notice: sink.QueueNotice, Audit: auditor, Link: permalinks(platform.Platform), Log: log,
+	})
+	if err != nil {
+		return nil, err
+	}
+	intakeCfg, err := newIntakeConfig(intakeParts{
 		conn: conn.Ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
 		notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
-	}))
+	})
+	if err != nil {
+		return nil, err
+	}
+	intake := chat.NewIntake(intakeCfg)
 	chatDone, chatStopped := make(chan error, 1), make(chan struct{})
 	parts.traced("open-intake")
 	go func() {

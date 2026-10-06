@@ -104,8 +104,31 @@ func (f *fakeRetentionStore) calls() (abandons []time.Duration, purges []auditPu
 	return append([]time.Duration(nil), f.abandons...), append([]auditPurge(nil), f.purges...)
 }
 
+// harmless fills what cfg leaves out of the required fields with doubles that do nothing, for the tests that are about
+// something else: no config is loaded (so no session is deleted and no stale task listed), no task is held, and nothing is
+// cancelled, audited or counted. A test that is about one of them sets it.
+func harmless(cfg retentionConfig) retentionConfig {
+	if cfg.ThreadTTLs == nil {
+		cfg.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false }
+	}
+	if cfg.Canceller == nil {
+		cfg.Canceller = &fakeCanceller{}
+	}
+	if cfg.Audit == nil {
+		cfg.Audit = &fakeStaleAudit{}
+	}
+	if cfg.Holds == nil {
+		cfg.Holds = func(store.ConversationKey, string) bool { return false }
+	}
+	if cfg.OnRemoved == nil {
+		cfg.OnRemoved = func(string, int) {}
+	}
+	return cfg
+}
+
 func runRetention(t *testing.T, cfg retentionConfig) (stop func()) {
 	t.Helper()
+	cfg = harmless(cfg)
 	cfg.Interval = time.Millisecond
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return sweepNow }
@@ -166,8 +189,8 @@ func TestRetentionAbandonsStrandedRepliesAndKeepsTheAuditLogByDefault(t *testing
 // stops at the first that is not: a short batch says nothing older is left.
 func TestRetentionPurgesAuditInBatchesUntilOneIsShort(t *testing.T) {
 	f := &fakeRetentionStore{purged: []int{7, 7, 3, 7}} // the fourth is never asked for
-	r, err := newRetention(retentionConfig{Store: f, AuditRetention: 90 * 24 * time.Hour, AuditBatch: 7,
-		Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 90 * 24 * time.Hour, AuditBatch: 7,
+		Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,8 +209,8 @@ func TestRetentionPurgesAuditInBatchesUntilOneIsShort(t *testing.T) {
 // One tick does not go on for ever: a log far past its retention is worked down over several ticks.
 func TestRetentionBoundsTheBatchesOfOneTick(t *testing.T) {
 	f := &fakeRetentionStore{purged: []int{5}} // always a full batch
-	r, err := newRetention(retentionConfig{Store: f, AuditRetention: 24 * time.Hour, AuditBatch: 5, MaxAuditBatches: 3,
-		Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 24 * time.Hour, AuditBatch: 5, MaxAuditBatches: 3,
+		Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,11 +239,11 @@ func TestNewRetentionRefusesWhatIsNotLegal(t *testing.T) {
 		"a negative retention":   {Store: f, AuditRetention: -time.Hour},
 		"a retention of an hour": {Store: f, AuditRetention: time.Hour},
 	} {
-		if _, err := newRetention(cfg); err == nil {
+		if _, err := newRetention(harmless(cfg)); err == nil {
 			t.Errorf("newRetention with %s succeeded", name)
 		}
 	}
-	if _, err := newRetention(retentionConfig{Store: f, AuditRetention: MinAuditRetention}); err != nil {
+	if _, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: MinAuditRetention})); err != nil {
 		t.Errorf("newRetention at the least retention = %v", err)
 	}
 }
@@ -337,9 +360,9 @@ func TestRetentionCountsWhatItRemoves(t *testing.T) {
 	f := &fakeRetentionStore{dropped: 2, purged: []int{7, 3}}
 	var mu sync.Mutex
 	got := map[string]int{}
-	r, err := newRetention(retentionConfig{Store: f, AuditRetention: 48 * time.Hour, AuditBatch: 7, Now: func() time.Time { return sweepNow },
+	r, err := newRetention(harmless(retentionConfig{Store: f, AuditRetention: 48 * time.Hour, AuditBatch: 7, Now: func() time.Time { return sweepNow },
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		OnRemoved: func(what string, n int) { mu.Lock(); got[what] += n; mu.Unlock() }})
+		OnRemoved: func(what string, n int) { mu.Lock(); got[what] += n; mu.Unlock() }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +396,7 @@ func newSessionRetention(t *testing.T, f *fakeRetentionStore, mutate func(*reten
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	r, err := newRetention(cfg)
+	r, err := newRetention(harmless(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,12 +439,10 @@ func TestRetentionPurgesSessionsPastTheirBindingsHorizon(t *testing.T) {
 	}
 }
 
-// Without a config nothing is known of any session's threadTTL, so nothing is deleted; and with no source of them (a
-// retention built without one) the loop does not touch sessions.
+// Without a config nothing is known of any session's threadTTL, so nothing is deleted.
 func TestRetentionLeavesSessionsAloneUntilTheirBindingsAreKnown(t *testing.T) {
 	f := &fakeRetentionStore{}
 	newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false } }).purgeSessions(t.Context())
-	newSessionRetention(t, f, func(c *retentionConfig) { c.ThreadTTLs = nil }).purgeSessions(t.Context())
 	if calls := f.sessions(); len(calls) != 0 {
 		t.Errorf("%d purges; want none", len(calls))
 	}

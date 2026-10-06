@@ -77,13 +77,13 @@ type DecideConfig struct {
 	Session  Session
 	Sessions SessionReader
 	Outbox   Enqueuer
-	// Replacer, if set, takes the controls off the prompt once the answer has been sent.
+	// Replacer takes the controls off the prompt once the answer has been sent. Required.
 	Replacer PromptReplacer
 	Now      func() time.Time // time.Now if nil
 	Logger   *slog.Logger     // slog.Default() if nil
-	// OnDecision, if set, is called once for each press decided, with its result: "answered" (it
+	// OnDecision is called once for each press decided, with its result: "answered" (it
 	// won), "superseded" (another decision came first), "late" (made at or after the deadline) or
-	// "invalid" (the dialect refused the answer). It is for a metric.
+	// "invalid" (the dialect refused the answer). It is for a metric. Required.
 	OnDecision func(result string)
 }
 
@@ -99,6 +99,12 @@ type Decider struct {
 func NewDecider(cfg DecideConfig) (*Decider, error) {
 	if cfg.Store == nil || cfg.Auditor == nil || cfg.Ephemerals == nil || cfg.Session == nil || cfg.Sessions == nil || cfg.Outbox == nil {
 		return nil, errors.New("interact: Store, Auditor, Ephemerals, Session, Sessions and Outbox are required")
+	}
+	if cfg.Replacer == nil {
+		return nil, errors.New("interact: Replacer is required")
+	}
+	if cfg.OnDecision == nil {
+		return nil, errors.New("interact: OnDecision is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -181,9 +187,6 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 // edit is logged and left to the repair, and never fails the decision: deciding it again would send the
 // answer again. It does Slack I/O, and a press is decided on the worker, not on Slack's acknowledgement.
 func (d *Decider) replacePrompt(ctx context.Context, id string) {
-	if d.cfg.Replacer == nil {
-		return
-	}
 	if err := d.cfg.Replacer.Replace(ctx, id); err != nil {
 		d.cfg.Logger.WarnContext(ctx, "interact: the prompt of an answered interaction keeps its controls until it is repaired", "interaction", id, "err", err)
 	}
@@ -322,7 +325,5 @@ func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, 
 }
 
 func (d *Decider) count(result string) {
-	if d.cfg.OnDecision != nil {
-		d.cfg.OnDecision(result)
-	}
+	d.cfg.OnDecision(result)
 }

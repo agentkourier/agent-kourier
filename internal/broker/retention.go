@@ -93,7 +93,9 @@ type staleAuditor interface {
 	StaleTaskEnded(ctx context.Context, a audit.Actor, t audit.StaleTask) error
 }
 
-// retentionConfig configures a retention. Store is required.
+// retentionConfig configures a retention. Store, ThreadTTLs, Canceller, Audit, Holds and OnRemoved are required:
+// newRetention refuses a config without them and names the field, so that a wiring that leaves one out fails at start-up
+// and the loop does not run with a pass that does nothing. The rest are tunables with defaults.
 type retentionConfig struct {
 	Store retentionStore
 	// Interval is how often the loop runs (default 1 hour).
@@ -107,22 +109,20 @@ type retentionConfig struct {
 	// tick makes at most (default 1000).
 	AuditBatch, MaxAuditBatches int
 	// ThreadTTLs returns the threadTTL of each Binding of the config by "namespace/name", and false while no config
-	// is loaded: Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL, so without it
-	// the loop does not delete sessions; broker wiring always sets it.
+	// is loaded: Bindings.ThreadTTLs. A session is deleted SessionGrace after its Binding's threadTTL.
 	ThreadTTLs func() (map[string]time.Duration, bool)
 	// SessionGrace is how long past its threadTTL a session is kept (default defaultSessionGrace).
 	SessionGrace time.Duration
 	// SessionBatch is how many sessions each purge call deletes (default 100), and MaxSessionBatches how many calls one
 	// tick makes at most (default 100).
 	SessionBatch, MaxSessionBatches int
-	// Canceller cancels a stale task at its agent, and Audit records that the task was ended; broker wiring always sets
-	// both. Without a Canceller no cancel is made, and without an Audit nothing is recorded: the task is ended all the same.
+	// Canceller cancels a stale task at its agent, and Audit records that the task was ended.
 	Canceller taskCanceller
 	Audit     staleAuditor
 	// Holds reports whether this process's session manager still runs the task on the session: parked on a question it
 	// has not given up on, or streaming it. A task it holds is left alone, for its own runner and the interaction timeout
 	// to end: clearing it from under the runner would leave the runner parked on it after the session is deleted, and a
-	// new session under the same key would wait behind it until a restart. Required with a Canceller (newRetention refuses without it), so that wiring cannot leave it out.
+	// new session under the same key would wait behind it until a restart.
 	Holds func(key store.ConversationKey, taskID string) bool
 	// CancelTimeout bounds each cancel at an agent (default defaultCancelTimeout).
 	CancelTimeout time.Duration
@@ -130,7 +130,6 @@ type retentionConfig struct {
 	// makes at most (default 10).
 	StaleBatch, MaxStaleBatches int
 	// OnRemoved is told what each pass removed (the Removed constants) and how many, when it removed any, for a metric.
-	// Optional.
 	OnRemoved func(what string, n int)
 	Now       func() time.Time // time.Now if nil
 	Logger    *slog.Logger     // slog.Default() if nil
@@ -144,11 +143,19 @@ type retention struct{ cfg retentionConfig }
 
 // newRetention returns a retention over cfg.
 func newRetention(cfg retentionConfig) (*retention, error) {
-	if cfg.Store == nil {
+	switch {
+	case cfg.Store == nil:
 		return nil, errors.New("broker: a Store is required for retention")
-	}
-	if cfg.Canceller != nil && cfg.Holds == nil { // a stale task is cancelled and cleared only where the runners that may hold it are asked
-		return nil, errors.New("broker: Holds is required for retention with a Canceller: a task a runner holds must not be cleared from under it")
+	case cfg.Holds == nil: // a stale task is cancelled and cleared only where the runners that may hold it are asked
+		return nil, errors.New("broker: Holds is required for retention: a task a runner holds must not be cleared from under it")
+	case cfg.ThreadTTLs == nil:
+		return nil, errors.New("broker: ThreadTTLs is required for retention: without it no session is deleted and no stale task is ended")
+	case cfg.Canceller == nil:
+		return nil, errors.New("broker: Canceller is required for retention: a stale task is cancelled at its agent")
+	case cfg.Audit == nil:
+		return nil, errors.New("broker: Audit is required for retention: an ended stale task is recorded")
+	case cfg.OnRemoved == nil:
+		return nil, errors.New("broker: OnRemoved is required for retention: what it removes is counted")
 	}
 	if cfg.AuditRetention < 0 || (cfg.AuditRetention > 0 && cfg.AuditRetention < MinAuditRetention) {
 		return nil, fmt.Errorf("broker: the audit retention is %v; want 0 (keep) or at least %v", cfg.AuditRetention, MinAuditRetention)
@@ -242,11 +249,8 @@ func (r *retention) sessionHorizons(ttls map[string]time.Duration, now time.Time
 // bounded and best effort (an unreachable agent, an error or a Binding that has left the config does not stop it), and then
 // clears the task, cancels its pending interactions and audits it, which the store does only while the session is still past
 // its horizon and still records that task. A session inside its horizon is never listed. It does nothing before a config is
-// loaded, and with no source of threadTTLs.
+// loaded.
 func (r *retention) endStaleTasks(ctx context.Context) {
-	if r.cfg.ThreadTTLs == nil {
-		return
-	}
 	ttls, ok := r.cfg.ThreadTTLs()
 	if !ok {
 		return
@@ -272,7 +276,7 @@ list:
 			}
 			tried[t.Key] = true
 			fresh++
-			if r.cfg.Holds != nil && r.cfg.Holds(t.Key, t.TaskID) {
+			if r.cfg.Holds(t.Key, t.TaskID) {
 				tally.held++
 				continue
 			}
@@ -340,7 +344,7 @@ type staleCancel struct {
 // the sweep. An agent that does not answer once is not asked again in the tick (down): a task of a Binding whose agent is
 // down would otherwise cost a timeout each. An agent that answers that the task is unknown or cannot be cancelled is up.
 func (r *retention) cancelStale(ctx context.Context, t store.StaleTask, down map[string]bool) staleCancel {
-	if r.cfg.Canceller == nil || down[t.Binding] {
+	if down[t.Binding] {
 		return staleCancel{how: audit.StaleCancelSkipped}
 	}
 	cctx, stop := context.WithTimeout(ctx, r.cfg.CancelTimeout)
@@ -361,20 +365,14 @@ func (r *retention) cancelStale(ctx context.Context, t store.StaleTask, down map
 // auditStale records that t was ended, as the identity the cancel was made under when one was. The task is ended, so a
 // failure to audit is never undone by it: the writer logs and meters it, and the sweep goes on.
 func (r *retention) auditStale(ctx context.Context, t store.StaleTask, c staleCancel, interactions int) {
-	if r.cfg.Audit == nil {
-		return
-	}
 	_ = r.cfg.Audit.StaleTaskEnded(ctx, audit.Actor{Binding: t.Binding, Identity: c.identity}, audit.StaleTask{
 		TaskID: a2a.TaskID(t.TaskID), ContextID: t.ContextID, Cancel: c.how, CancelErr: c.err, Interactions: interactions})
 }
 
 // purgeSessions deletes the sessions past their horizon, a batch at a time until one is short or the tick's share is spent
 // (a session with a task, a pending interaction, or anything undelivered is never due, however old; the store decides).
-// It does nothing before a config is loaded, and with no source of threadTTLs.
+// It does nothing before a config is loaded.
 func (r *retention) purgeSessions(ctx context.Context) {
-	if r.cfg.ThreadTTLs == nil {
-		return
-	}
 	ttls, ok := r.cfg.ThreadTTLs()
 	if !ok {
 		return
@@ -448,7 +446,5 @@ func (r *retention) purgeAudit(ctx context.Context) {
 }
 
 func (r *retention) removed(what string, n int) {
-	if r.cfg.OnRemoved != nil {
-		r.cfg.OnRemoved(what, n)
-	}
+	r.cfg.OnRemoved(what, n)
 }

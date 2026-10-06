@@ -529,9 +529,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 }
 
 // wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a person's turn, in
-// a Binding with chat.threadReplies: mention, that is not pinned to a question, when a hook is configured.
+// a Binding with chat.threadReplies: mention, that is not pinned to a question.
 func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
-	return m.cfg.ThreadContext != nil && b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && r.InteractionID == ""
+	return b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && r.InteractionID == ""
 }
 
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
@@ -730,15 +730,13 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	// does so on a context of its own (the renderer's bounded flush).
 	tctx, endTurn := context.WithCancel(parentCtx)
 	defer endTurn()
-	if m.cfg.Sink != nil {
-		// An answer's output is a message of its own, named after the answer: it must not overwrite
-		// the output of the turn that paused. A task found again after a restart, or followed again
-		// after a lost stream, continues the message it had.
-		out := t.outputTurn()
-		ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: out.ID, UserID: out.User, Output: t.b.Output, Recovered: t.recovered || t.follow, Feedback: feedbackOf(out.User, t.b), ThreadReplies: t.b.ThreadReplies}
-		if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
-			h = sh
-		}
+	// An answer's output is a message of its own, named after the answer: it must not overwrite
+	// the output of the turn that paused. A task found again after a restart, or followed again
+	// after a lost stream, continues the message it had.
+	shown := t.outputTurn()
+	ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Recovered: t.recovered || t.follow, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
+	if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
+		h = sh
 	}
 	var final *a2a.Task
 	var recordErr error
@@ -973,9 +971,7 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
 	// Named after the task and the thread, not the turn row: a restart that follows the task again raises the same post.
-	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: "the agent refused to continue the task"})
-	}
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, t.taskID, NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: "the agent refused to continue the task"})
 	m.finish(t, TurnRefused)
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
@@ -1007,9 +1003,7 @@ func (m *Manager) goneNotice(ctx context.Context, key Key, id a2a.TaskID, ts str
 // taskNotice tells the thread something about the task id. The notice is named after the task and its
 // kind, so that every path that finds the same fact, whichever turn row it holds, posts it once.
 func (m *Manager) taskNotice(ctx context.Context, key Key, id a2a.TaskID, kind NoticeKind, ts string) {
-	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(ctx, key, Notice{ID: taskNoticeID(key, id, kind), Kind: kind, MessageRef: ts})
-	}
+	m.cfg.Sink.Notice(ctx, key, Notice{ID: taskNoticeID(key, id, kind), Kind: kind, MessageRef: ts})
 }
 
 // taskNoticeID names the notice of kind about the task id in the thread key. The thread is part of it
@@ -1236,9 +1230,7 @@ func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
 	case NoticeWedged, NoticeDuplicateRun, NoticeRetrying:
 		telemetry.Count(m.ctx, "courier_session_recovery_total", string(kind))
 	}
-	if m.cfg.Sink != nil {
-		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
-	}
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
 }
 
 // actor is who an audit row of this turn names.
@@ -1302,14 +1294,12 @@ func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Mes
 		return msg
 	}
 	user := dialect.User{ID: r.UserID}
-	if m.cfg.Users != nil {
-		switch u, err := m.cfg.Users.ResolveUser(m.ctx, r.UserID); {
-		case err != nil:
-			m.cfg.Logger.Warn("resolve user for attribution, using the ID alone", "user", r.UserID, "error", err)
-		default:
-			user = u
-			user.ID = r.UserID // the platform's answer never renames the author
-		}
+	switch u, err := m.cfg.Users.ResolveUser(m.ctx, r.UserID); {
+	case err != nil:
+		m.cfg.Logger.Warn("resolve user for attribution, using the ID alone", "user", r.UserID, "error", err)
+	default:
+		user = u
+		user.ID = r.UserID // the platform's answer never renames the author
 	}
 	b.Attribute(msg, user)
 	return msg

@@ -62,7 +62,7 @@ func (noCalls) Classify(chat.Op, error) chat.Verdict { return chat.Verdict{Class
 
 func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	for _, kind := range []session.NoticeKind{session.NoticeRetrying, session.NoticeStillBusy, session.NoticeNotReady, session.NoticeFailed, session.NoticeSessionGone, session.NoticeBindingGone, session.NoticeExpired, session.NoticeAnswerRejected, session.NoticeAnswerDropped, session.NoticeStopped, session.NoticeWedged, session.NoticeDuplicateRun, session.NoticeTaskFailed, session.NoticeTaskRejected, session.NoticeTaskCanceled, session.NoticeNoOutput} {
@@ -87,7 +87,7 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 // session not ready, in words that promise only what courier does: it keeps trying.
 func TestStuckNoticesSayWhatTheTurnWaitsFor(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
@@ -110,7 +110,7 @@ func TestStuckNoticesSayWhatTheTurnWaitsFor(t *testing.T) {
 // and no call is made to Slack.
 func TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeDequeued, MessageRef: "1.5"}
 	for range 2 {
 		sink.Notice(t.Context(), thread, n)
@@ -168,7 +168,7 @@ func TestQueuedReactionIsTakenOffTheMessage(t *testing.T) {
 // and no call is made to Slack, which is waiting for the acknowledgement this runs inside.
 func TestQueuedNoticeEnqueuesAReactionAndSendsNothing(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	n := session.Notice{ID: "slack:ns/conn:C1:1.5/queued", Kind: session.NoticeQueued, MessageRef: "1.5"}
 	for range 2 {
 		sink.Notice(t.Context(), thread, n)
@@ -272,7 +272,7 @@ func TestTurnHandlerDoesNotWaitOnSlack(t *testing.T) {
 	e := setup(t)
 	slow := &blocker{release: make(chan struct{})}
 	defer close(slow.release) // Slack answers in the end, and the run's write returns
-	r := live.New(live.Config{Sender: slow, Platform: slack.NewPlatform(nil, "ns/conn"), Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r := newRenderer(t, live.Config{Sender: slow, Platform: slack.NewPlatform(nil, "ns/conn"), Store: e.store, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	handle := live.NewSink(r, e.ob, nil).Turn(ctx, session.TurnRef{Key: thread, MessageID: "m1", UserID: session.SystemUser})
@@ -342,7 +342,7 @@ func TestTurnWithoutFinalFreesItsGoroutine(t *testing.T) {
 // what the person wrote is nowhere in it.
 func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
@@ -364,7 +364,7 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 // name no cause: the agent's status text is untrusted and not courier's to repeat (spec 8.4, R2).
 func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
@@ -388,7 +388,7 @@ func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
 // fills in: nothing of the message that fired them is in them.
 func TestNoticesOfATriggerThreadAreFixedTextAndATime(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
@@ -410,7 +410,7 @@ func TestNoticesOfATriggerThreadAreFixedTextAndATime(t *testing.T) {
 // value, which the caller took from a closed set, and never the value.
 func TestNoticeOfARefusedTriggerStartIsFixedText(t *testing.T) {
 	e := setup(t)
-	sink := e.sink(t, outbox.New(outbox.Config{Store: e.store, Platform: noCalls{t}}))
+	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	n := session.Notice{ID: "slack:ns/conn:C1:5.5/" + string(session.NoticeTriggerRefused), Kind: session.NoticeTriggerRefused, MessageRef: "5.5", Detail: ".Fields.alertname failed the prompt check."}

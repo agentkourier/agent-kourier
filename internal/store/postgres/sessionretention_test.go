@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/storetest"
 )
 
 func oldSession(t *testing.T, s *Store, thread string) store.ConversationKey {
@@ -134,7 +135,7 @@ func TestPurgeExpiredSessionsDeletesOnlySettledRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The queued reaction of the delivered reply, asked for and not made yet: found by its source, and not settled.
-	reaction, err := outbox.New(outbox.Config{Store: s, Now: func() time.Time { return t0 }}).
+	reaction, err := storetest.EnqueueOnlyOutbox(t, s, func() time.Time { return t0 }).
 		EnqueueReaction(ctx, outbox.Reaction{Source: "done-reply/queued", Channel: k.Channel, TS: "1.1", Name: "hourglass_flowing_sand"})
 	if err != nil {
 		t.Fatal(err)

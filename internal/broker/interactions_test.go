@@ -15,12 +15,16 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 )
 
 // pressed is a presser that answers with the error the test sets, and counts its presses.
@@ -265,5 +269,42 @@ func TestRunStopsTheInteractionsLoopsBetweenTheIntakeAndTheManager(t *testing.T)
 	}
 	if len(atManager) != 0 {
 		t.Errorf("%v were still running when the manager began to close, after the interactions' step", atManager)
+	}
+}
+
+// newTap refuses a deps with a part left out, and the error names it: the interactions are built from these parts, and one
+// that is nil would fail at its first use, or never.
+func TestInteractionDepsNameThePartThatIsMissing(t *testing.T) {
+	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	full := interactionDeps{
+		st: st, ob: &outbox.Outbox{}, platform: builtPlatform{Platform: chattest.NewFake()}, auditor: &audit.Writer{},
+		bindings: &Bindings{}, metrics: &Metrics{}, log: slog.Default(),
+	}
+	for _, tc := range []struct {
+		part  string
+		clear func(*interactionDeps)
+	}{
+		{"st", func(d *interactionDeps) { d.st = nil }},
+		{"ob", func(d *interactionDeps) { d.ob = nil }},
+		{"platform", func(d *interactionDeps) { d.platform = builtPlatform{} }},
+		{"auditor", func(d *interactionDeps) { d.auditor = nil }},
+		{"bindings", func(d *interactionDeps) { d.bindings = nil }},
+		{"metrics", func(d *interactionDeps) { d.metrics = nil }},
+		{"log", func(d *interactionDeps) { d.log = nil }},
+	} {
+		t.Run(tc.part, func(t *testing.T) {
+			d := full
+			tc.clear(&d)
+			if _, _, err := d.newTap(nil); err == nil || !strings.Contains(err.Error(), tc.part+" is required") {
+				t.Fatalf("newTap = %v; want an error that names %s", err, tc.part)
+			}
+		})
+	}
+	if err := full.check(); err != nil {
+		t.Errorf("check with every part = %v", err)
 	}
 }

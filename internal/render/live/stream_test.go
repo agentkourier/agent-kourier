@@ -349,7 +349,7 @@ func TestNotStreamingIsMatchedByTypeNotByText(t *testing.T) {
 			e := setup(t)
 			e.postedByUpdate(t)
 			e.cfg.Platform = stopFails{Platform: e.cfg.Platform, err: tc.err}
-			e.live = live.New(e.cfg)
+			e.live = newRenderer(t, e.cfg)
 			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
 			again.Handle(text("a", "the whole answer"))
 			again.Handle(agent.FinalEvent{})

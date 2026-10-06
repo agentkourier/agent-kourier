@@ -71,7 +71,7 @@ type PressConfig struct {
 	EarlyFor time.Duration
 	// GiveUpAfter bounds failed text-answer retries; default matches the press worker.
 	GiveUpAfter time.Duration
-	// Notify, if set, is called with each press recorded, for the worker (WP-33d1d) to pick it up. It runs
+	// Notify is called with each press recorded, for the worker (WP-33d1d) to pick it up. Required. It runs
 	// in Press, on the path that acknowledges the button to Slack, so it must never block: a hand-off to a
 	// buffered or unbounded queue, as Worker.Submit is, and not to a channel a worker may not be reading.
 	Notify func(store.Press)
@@ -89,6 +89,9 @@ type Pipeline struct{ cfg PressConfig }
 func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 	if cfg.Store == nil || cfg.Sessions == nil || cfg.Lookup == nil || cfg.Authorizer == nil || cfg.Ephemerals == nil || cfg.Decider == nil || cfg.Auditor == nil {
 		return nil, errors.New("interact: Store, Sessions, Lookup, Authorizer, Ephemerals, Decider and Auditor are required")
+	}
+	if cfg.Notify == nil {
+		return nil, errors.New("interact: Notify is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -125,9 +128,7 @@ func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
 		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
 	}
-	if p.cfg.Notify != nil {
-		p.cfg.Notify(press)
-	}
+	p.cfg.Notify(press)
 	return nil
 }
 

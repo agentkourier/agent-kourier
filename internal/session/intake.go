@@ -92,7 +92,7 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	// Both outside the intake lock: a slow wake or notice must not hold up other turns. The notice comes first, so
 	// that the runner never sends the turn, and takes its reaction off, before the reaction was asked for (the
 	// sink is made to cope with that order too, but this is the cheap half of it).
-	if res.Queued && m.markPending(in.MessageID) && m.cfg.Sink != nil {
+	if res.Queued && m.markPending(in.MessageID) {
 		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: queuedID(in.MessageID), Kind: NoticeQueued, MessageRef: in.MessageRef})
 	}
 	m.wake(in.Key)
@@ -232,11 +232,7 @@ func (m *Manager) unmentioned(ctx context.Context, binding string) Result {
 	return Result{Disposition: Unmentioned}
 }
 
-// pendingTextQuestion is the question of the thread that a typed reply answers, or store.ErrNotFound. With no
-// Questions configured no thread has one.
+// pendingTextQuestion is the question of the thread that a typed reply answers, or store.ErrNotFound.
 func (m *Manager) pendingTextQuestion(ctx context.Context, key Key) (store.Interaction, error) {
-	if m.cfg.Questions == nil {
-		return store.Interaction{}, store.ErrNotFound
-	}
 	return m.cfg.Questions.PendingTextQuestion(ctx, key)
 }

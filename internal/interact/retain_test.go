@@ -71,7 +71,7 @@ func (p *purges) list() []purge {
 
 func startRetention(t *testing.T, cfg interact.RetentionConfig) (stop func() error) {
 	t.Helper()
-	rt, err := interact.NewRetention(cfg)
+	rt, err := interact.NewRetention(retentionCfg(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,9 +285,9 @@ func TestPurgingAPressTheWorkerIsOnIsHarmless(t *testing.T) {
 		t.Fatal(err)
 	}
 	presses, _ := r.st.ListPresses(t.Context())
-	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}},
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}},
 		Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
-		Decider: purgingDecider{st: r.st, inner: r.d, at: deadline.Add(time.Hour)}})
+		Decider: purgingDecider{st: r.st, inner: r.d, at: deadline.Add(time.Hour)}}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -113,9 +113,7 @@ func (i *Intake) refuseAskUser(ctx context.Context, p Pause, b Binding, in diale
 	case err != nil:
 		return fmt.Errorf("interact: cancel the question %s: %w", id, err)
 	}
-	if i.cfg.OnApprovalOutcome != nil {
-		i.cfg.OnApprovalOutcome(p.Binding, OutcomeAskUserCancelled)
-	}
+	i.cfg.OnApprovalOutcome(p.Binding, OutcomeAskUserCancelled)
 	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
 	return i.cfg.Audit.Decision(ctx, a, audit.Decision{InteractionID: id, TaskID: in.TaskID, Result: audit.DecisionAutoDenied})
 }
@@ -174,9 +172,7 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 		// The denial is decided by policy when the pause arrives, so it is dated then.
 		switch err := i.cfg.Store.SubmitInteraction(ctx, row.ID, raw, autoDecider, row.CreatedAt); {
 		case err == nil:
-			if i.cfg.OnApprovalOutcome != nil {
-				i.cfg.OnApprovalOutcome(p.Binding, OutcomeAutoDenied)
-			}
+			i.cfg.OnApprovalOutcome(p.Binding, OutcomeAutoDenied)
 		case !errors.Is(err, store.ErrConflict): // a conflict is another call's win, which this one finishes
 			return fmt.Errorf("interact: record the denial of %s: %w", row.ID, err)
 		}

@@ -32,7 +32,44 @@ func newWriter(t *testing.T) (*Writer, *sqlite.Store) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	return New(s, Options{Now: func() time.Time { return t0 }}), s
+	return writerOver(t, s, Options{Now: func() time.Time { return t0 }}), s
+}
+
+// writerOver is New over log, with NoFailure as the OnFailure that opts leave out, for the tests that are not about the meter.
+func writerOver(t *testing.T, log store.Audit, opts Options) *Writer {
+	t.Helper()
+	if opts.OnFailure == nil {
+		opts.OnFailure = NoFailure
+	}
+	w, err := New(log, opts)
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+	return w
+}
+
+// New refuses what it cannot work without, and says which: the log, and the meter of failed writes (a wiring that leaves
+// it out would count nothing and say nothing).
+func TestNewNamesWhatIsMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		log  store.Audit
+		opts Options
+		want string
+	}{
+		{"no log", nil, Options{OnFailure: NoFailure}, "log"},
+		{"no OnFailure", failing{}, Options{}, "OnFailure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, err := New(tc.log, tc.opts)
+			if err == nil || w != nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("New = %v, %v; want an error that names %q", w, err, tc.want)
+			}
+		})
+	}
+	if _, err := New(failing{}, Options{OnFailure: NoFailure}); err != nil {
+		t.Fatalf("New with both = %v, want none", err)
+	}
 }
 
 func rows(t *testing.T, s *sqlite.Store) []store.AuditEntry {
@@ -457,7 +494,7 @@ func TestWriteFailureIsReturnedLoggedAndMetered(t *testing.T) {
 	for _, secret := range append([]string{fakes[0]}, bearerVariants...) {
 		var logs bytes.Buffer
 		var metered []store.AuditKind
-		w := New(failing{err: errors.New("disk full " + secret)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		w := writerOver(t, failing{err: errors.New("disk full " + secret)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 			OnFailure: func(k store.AuditKind) { metered = append(metered, k) }})
 		err := w.Event(context.Background(), who, SourceAlert, "evt-1", EventAccepted)
 		if err == nil || !strings.Contains(err.Error(), "disk full") || strings.Contains(err.Error(), "SECRETA") || strings.Contains(err.Error(), fakes[0]) {
@@ -560,7 +597,7 @@ func TestFreeTextTakesTheFullRules(t *testing.T) {
 			t.Errorf("%s: stored outcome %q; want %q gone and %q kept", tc.name, got, tc.secret, tc.visible)
 		}
 		var logs bytes.Buffer
-		failed := New(failing{err: errors.New("disk full " + tc.in)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		failed := writerOver(t, failing{err: errors.New("disk full " + tc.in)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 		err := failed.Event(ctx, who, SourceAlert, "evt-1", EventAccepted)
 		if err == nil || strings.Contains(err.Error(), tc.secret) || strings.Contains(logs.String(), tc.secret) {
 			t.Errorf("%s: returned error %v, log %q; want %q in neither", tc.name, err, logs.String(), tc.secret)

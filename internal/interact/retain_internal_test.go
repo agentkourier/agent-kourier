@@ -10,7 +10,7 @@ import (
 // TestRetentionRunsEveryTenMinutesWithAnHoursGraceByDefault: configured by nothing, it is the backstop of
 // the worker's own cap, which is an hour.
 func TestRetentionRunsEveryTenMinutesWithAnHoursGraceByDefault(t *testing.T) {
-	rt, err := NewRetention(RetentionConfig{Store: struct{ RetentionStore }{}})
+	rt, err := NewRetention(RetentionConfig{Store: struct{ RetentionStore }{}, OnCleared: func(int) {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestRetentionRunsEveryTenMinutesWithAnHoursGraceByDefault(t *testing.T) {
 // build an edit from, and give up on prompts that still show their buttons. An answer not yet delivered waits
 // longer still.
 func TestASettledInteractionIsKeptLongerThanAnythingThatReadsIt(t *testing.T) {
-	rt, err := NewRetention(RetentionConfig{Store: struct{ RetentionStore }{}})
+	rt, err := NewRetention(RetentionConfig{Store: struct{ RetentionStore }{}, OnCleared: func(int) {}})
 	if err != nil {
 		t.Fatal(err)
 	}

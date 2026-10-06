@@ -80,7 +80,7 @@ type SweepConfig struct {
 	// Grace is how long past its deadline an interaction waits before it is swept (default 5
 	// seconds), so that a press that was being decided at the deadline has been recorded first.
 	Grace time.Duration
-	// OnTimeout, if set, is called once for each interaction that timed out, with its ID, for a metric.
+	// OnTimeout is called once for each interaction that timed out, with its ID, for a metric. Required.
 	OnTimeout func(id string)
 }
 
@@ -101,6 +101,9 @@ type Sweeper struct {
 func NewSweeper(cfg SweepConfig) (*Sweeper, error) {
 	if cfg.Store == nil || cfg.Sessions == nil || cfg.Session == nil || cfg.Updater == nil || cfg.Outbox == nil || cfg.Auditor == nil || cfg.Presses == nil {
 		return nil, errors.New("interact: Store, Sessions, Session, Updater, Outbox, Auditor and Presses are required")
+	}
+	if cfg.OnTimeout == nil {
+		return nil, errors.New("interact: OnTimeout is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -252,7 +255,5 @@ func (s *Sweeper) report(ctx context.Context, row store.Interaction, now time.Ti
 	if err := s.cfg.Auditor.Decision(ctx, actor, d); err != nil {
 		s.cfg.Logger.ErrorContext(ctx, "interact: a timeout was not audited", "interaction", row.ID, "err", err)
 	}
-	if s.cfg.OnTimeout != nil {
-		s.cfg.OnTimeout(row.ID)
-	}
+	s.cfg.OnTimeout(row.ID)
 }

@@ -32,10 +32,25 @@ func (h house) id(what string) string { return h.key.Thread + "-" + what }
 // queued is the source of the queued reaction of the reply what: what the session manager names the notice.
 func (h house) queued(what string) string { return h.id(what) + "/queued" }
 
+// noPlatform is the platform of an outbox that only enqueues: a call to it is a bug of the test, and panics on the nil
+// interface it embeds.
+type noPlatform struct{ outbox.Platform }
+
+// EnqueueOnlyOutbox returns an Outbox over s that only enqueues, as the sink asks it to, and never posts: no call to a chat
+// platform is made through it, and one would panic.
+func EnqueueOnlyOutbox(t testing.TB, s store.Outbox, now func() time.Time) *outbox.Outbox {
+	t.Helper()
+	o, err := outbox.New(outbox.Config{Store: s, Platform: noPlatform{}, OnAbandon: outbox.NoAbandon, Now: now})
+	if err != nil {
+		t.Fatalf("outbox.New: %v", err)
+	}
+	return o
+}
+
 // reaction asks the outbox, as the sink does, for the queued reaction of the reply what, and returns its row's ID.
 func (h house) reaction(t *testing.T, s store.Store, what string) string {
 	t.Helper()
-	id, err := outbox.New(outbox.Config{Store: s, Now: func() time.Time { return h.last }}).
+	id, err := EnqueueOnlyOutbox(t, s, func() time.Time { return h.last }).
 		EnqueueReaction(t.Context(), outbox.Reaction{Source: h.queued(what), Channel: h.key.Channel, TS: "7." + h.key.Thread, Name: "hourglass_flowing_sand"})
 	noErr(t, err, "reaction of "+what)
 	return id
@@ -72,7 +87,7 @@ func (h house) build(t *testing.T, s store.Store) {
 	// The reaction was made, and then taken off when the turn was sent: the two rows of one source.
 	react := h.reaction(t, s, "r1")
 	noErr(t, s.RecordMessageRef(ctx, react, "7."+h.key.Thread), "react")
-	unreact, err := outbox.New(outbox.Config{Store: s, Now: func() time.Time { return h.last }}).
+	unreact, err := EnqueueOnlyOutbox(t, s, func() time.Time { return h.last }).
 		EnqueueUnreaction(ctx, outbox.Reaction{Source: h.queued("r1"), Channel: h.key.Channel, TS: "7." + h.key.Thread, Name: "hourglass_flowing_sand"})
 	noErr(t, err, "unreaction")
 	noErr(t, s.RecordMessageRef(ctx, unreact, "7."+h.key.Thread), "unreact")
@@ -215,7 +230,7 @@ func (su suite) sessionRetention(t *testing.T) {
 			_, err := s.EnqueueReply(ctx, r)
 			noErr(t, err, "enqueue "+r.ID)
 			noErr(t, s.MarkReplyDelivered(ctx, r.ID, t0), "deliver "+r.ID)
-			id, err := outbox.New(outbox.Config{Store: s, Now: func() time.Time { return t0 }}).
+			id, err := EnqueueOnlyOutbox(t, s, func() time.Time { return t0 }).
 				EnqueueReaction(ctx, outbox.Reaction{Source: r.ID + "/queued", Channel: "C1", TS: "7.7", Name: "hourglass_flowing_sand"})
 			noErr(t, err, "reaction of "+r.ID)
 			noErr(t, s.RecordMessageRef(ctx, id, "7.7"), "post "+id)

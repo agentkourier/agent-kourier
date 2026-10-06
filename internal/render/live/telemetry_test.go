@@ -35,7 +35,7 @@ func TestFinalDeliveryMetricsDistinguishFailureFromCompletion(t *testing.T) {
 			if tc.fail {
 				cfg.Sender = &failingSender{err: store.ErrInvalid}
 			}
-			renderer := live.New(cfg)
+			renderer := newRenderer(t, cfg)
 			ctx, cancel := context.WithCancel(telemetry.WithObserver(t.Context(), obs))
 			defer cancel()
 			run := renderer.Start(ctx, live.Turn{Source: "turn-final", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputFinal})

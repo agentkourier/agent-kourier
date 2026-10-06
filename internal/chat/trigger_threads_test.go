@@ -787,7 +787,10 @@ func TestNoAlertTextIsInNotesLogsOrTheDatabase(t *testing.T) {
 func TestNotesArePostedThroughTheOutboxExactlyOnce(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	fake := chattest.NewFake()
-	ob := outbox.New(outbox.Config{Store: h.st, Platform: fake, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	ob, err := outbox.New(outbox.Config{Store: h.st, Platform: fake, OnAbandon: outbox.NoAbandon, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("outbox.New = %v", err)
+	}
 	sink := live.NewSink(nil, ob, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	h.cfg.Notice = sink.QueueNotice
 	h.in = chat.NewIntake(h.cfg)

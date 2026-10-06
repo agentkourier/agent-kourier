@@ -51,7 +51,8 @@ func (l *lateSession) Cancel(ctx context.Context, key store.ConversationKey, id 
 	return m.Cancel(ctx, key, id, reason)
 }
 
-// interactionDeps is what the interactions are built from: the parts of Run they share.
+// interactionDeps is what the interactions are built from: the parts of Run they share. Every part but trace is required
+// (check names the one that is missing).
 type interactionDeps struct {
 	st       store.Store
 	ob       *outbox.Outbox
@@ -60,7 +61,29 @@ type interactionDeps struct {
 	bindings *Bindings
 	metrics  *Metrics
 	log      *slog.Logger
-	trace    func(step string) // a test's: told as each step of startup is done
+	trace    func(step string) // a test's: told as each step of startup is done. Optional.
+}
+
+// check refuses a deps with a part left out, and names it: the interactions are built from these in two steps (newTap,
+// then start), and a part that is nil would fail in the first call that uses it, or not at all.
+func (d interactionDeps) check() error {
+	switch {
+	case d.st == nil:
+		return errors.New("interactions: st is required")
+	case d.ob == nil:
+		return errors.New("interactions: ob is required")
+	case d.platform.Platform == nil:
+		return errors.New("interactions: platform is required")
+	case d.auditor == nil:
+		return errors.New("interactions: auditor is required")
+	case d.bindings == nil:
+		return errors.New("interactions: bindings is required")
+	case d.metrics == nil:
+		return errors.New("interactions: metrics is required")
+	case d.log == nil:
+		return errors.New("interactions: log is required")
+	}
+	return nil
 }
 
 func (d interactionDeps) traced(step string) {
@@ -82,6 +105,9 @@ func (d interactionDeps) recovered(step string, fn func() error) error {
 // newTap builds the intake of pauses, with a session that is bound later, and the tap that hands the
 // renderer's turns' pauses to it. The manager is built over the tap, and the session bound to the manager.
 func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession, error) {
+	if err := d.check(); err != nil {
+		return nil, nil, err
+	}
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
 		Store: d.st, Lookup: d.bindings, Platform: d.platform, Outbox: d.ob, Session: late, Audit: d.auditor,

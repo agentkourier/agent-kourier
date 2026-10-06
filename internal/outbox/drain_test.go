@@ -58,7 +58,7 @@ func ref(st store.Outbox, id string) string {
 func TestEnqueueIsOneLocalWrite(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	p := &poster{}
-	o := outbox.New(drainConfig(st, p))
+	o := mustNew(t, drainConfig(st, p))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -94,7 +94,7 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 	// A stream's row has no payload, and the renderer records its ref itself; Run must leave it alone.
 	stream := store.OutboxEntry{ID: "s1/reply", EventID: "s1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0}
 	p := &poster{found: map[string]string{"left/notice": "55.5"}}
-	o := outbox.New(drainConfig(st, p))
+	o := mustNew(t, drainConfig(st, p))
 	start(t, o) // nothing is enqueued yet, so only the drain at start can deliver the row a crash left
 	eventually(t, "the drain at start", func() bool { return ref(st, "left/notice") == "55.5" })
 
@@ -116,7 +116,7 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 func TestRunEndsWithItsContext(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	before := goleak.IgnoreCurrent()
-	o := outbox.New(drainConfig(st, &poster{}))
+	o := mustNew(t, drainConfig(st, &poster{}))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- o.Run(ctx) }()
@@ -157,7 +157,7 @@ func TestAFailingRowBacksOff(t *testing.T) {
 		}
 		return nil
 	}
-	o := outbox.New(cfg)
+	o := mustNew(t, cfg)
 	if _, err := o.Enqueue(t.Context(), reply("ev1")); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestAFailingRowBacksOff(t *testing.T) {
 // enqueued, not become a row that is never delivered and holds its ID.
 func TestEnqueueRefusesEmptyContent(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
-	o := outbox.New(drainConfig(st, &poster{}))
+	o := mustNew(t, drainConfig(st, &poster{}))
 	if id, err := o.Enqueue(t.Context(), outbox.Post{Source: "n1", Role: store.OutboxNotice, Channel: "C1"}); !errors.Is(err, store.ErrInvalid) || id != "" {
 		t.Fatalf("Enqueue with no content = %q, %v; want ErrInvalid", id, err)
 	}
@@ -222,7 +222,7 @@ func TestASignalDuringADrainIsNotLost(t *testing.T) {
 		}
 		return nil
 	}}
-	o := outbox.New(drainConfig(st, p))
+	o := mustNew(t, drainConfig(st, p))
 	if _, err := o.Enqueue(t.Context(), reply("ev1")); err != nil {
 		t.Fatal(err)
 	}

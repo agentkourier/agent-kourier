@@ -85,7 +85,7 @@ type Platform interface {
 	Classify(op chat.Op, err error) chat.Verdict
 }
 
-// Config configures an Outbox. Store and Platform are required.
+// Config configures an Outbox. Store, Platform and OnAbandon are required: New refuses a Config without them, and says which.
 type Config struct {
 	Store    store.Outbox
 	Platform Platform
@@ -109,11 +109,14 @@ type Config struct {
 	LookupTimeoutFloor time.Duration
 	// PurgeInterval is how often Reconcile drops the text of expired rows (default 5 minutes).
 	PurgeInterval time.Duration
-	// OnAbandon, if set, is called once for each row that is abandoned, with its ID and the reason:
+	// OnAbandon is called once for each row that is abandoned, with its ID and the reason:
 	// a neutral reason (chat.Reason) or AbandonInvalid, AbandonLookupTimeout or AbandonExpired. It is for a
-	// metric, and runs under the delivery lock, so it must not block.
+	// metric, and runs under the delivery lock, so it must not block. Required: NoAbandon counts nothing.
 	OnAbandon func(id, reason string)
 }
+
+// NoAbandon is the OnAbandon of an Outbox whose abandoned rows are logged and counted nowhere.
+func NoAbandon(_, _ string) {}
 
 // Post is one message to deliver. Source and Role give its ID: Source is the event, turn or
 // interaction it belongs to, and must differ for each message of one source and role.
@@ -163,8 +166,17 @@ type retryState struct {
 	next         time.Time
 }
 
-// New returns an Outbox over cfg.
-func New(cfg Config) *Outbox {
+// New returns an Outbox over cfg. It refuses a Config without its Store, Platform or OnAbandon, naming the field, so that a
+// wiring that leaves one out fails at start-up.
+func New(cfg Config) (*Outbox, error) {
+	switch {
+	case cfg.Store == nil:
+		return nil, errors.New("outbox: Config.Store is required")
+	case cfg.Platform == nil:
+		return nil, errors.New("outbox: Config.Platform is required")
+	case cfg.OnAbandon == nil:
+		return nil, errors.New("outbox: Config.OnAbandon is required (NoAbandon counts nothing)")
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -192,7 +204,7 @@ func New(cfg Config) *Outbox {
 	if cfg.Retention <= 0 {
 		cfg.Retention = 7 * 24 * time.Hour
 	}
-	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), retry: map[string]retryState{}}
+	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), retry: map[string]retryState{}}, nil
 }
 
 // Send writes the row, posts the message and records its ID, and returns where it is. A message that
@@ -650,9 +662,7 @@ func (o *Outbox) reportAbandon(ctx context.Context, id, reason, code string, cau
 		attrs = append(attrs, "err", cause)
 	}
 	o.cfg.Logger.WarnContext(ctx, "outbox: a post was abandoned and will not be retried", attrs...)
-	if o.cfg.OnAbandon != nil {
-		o.cfg.OnAbandon(id, reason)
-	}
+	o.cfg.OnAbandon(id, reason)
 }
 
 // find looks for the row's message, within the call timeout.

@@ -22,6 +22,21 @@ type triggerAuditor interface {
 	TriggerRefused(ctx context.Context, a audit.Actor, r audit.TriggerRefusal) error
 }
 
+// triggerStarterConfig is what a triggerStarter is made from. Every field is required: newTriggerStarter refuses a config
+// without one and names it. Link is the one that may legitimately do nothing, and says so with noPermalink.
+type triggerStarterConfig struct {
+	// Conn is the ChatConnection as it appears in keys and message IDs: namespace/name.
+	Conn   string
+	Submit chat.Submitter
+	// Notice queues a note in a thread (live.Sink.QueueNotice); its error means the note was not written.
+	Notice func(ctx context.Context, key session.Key, n session.Notice) error
+	Audit  triggerAuditor
+	// Link builds the permalink of a message, and says false if the platform cannot (chat.Permalinker). noPermalink says it
+	// always: the view's Link is then empty.
+	Link func(chat.Ref) (string, bool)
+	Log  *slog.Logger
+}
+
 // triggerStarter turns a botMessage trigger's decision to start into an investigation (spec 8.2): it renders the
 // first prompt from the trigger's template and the matched message, and gives it to the session manager's own
 // intake, the durable path a mention takes, anchored to the alert's thread. It is the Intake's IntakeConfig.OnStart.
@@ -30,24 +45,42 @@ type triggerAuditor interface {
 // writes, and a wake. It calls no agent and no Slack API; the permalink comes from what the platform cached when it
 // connected.
 type triggerStarter struct {
-	// conn is the ChatConnection as it appears in keys and message IDs: namespace/name.
 	conn   string
 	submit chat.Submitter
-	// notice queues a note in a thread (live.Sink.QueueNotice); its error means the note was not written.
 	notice func(ctx context.Context, key session.Key, n session.Notice) error
 	audit  triggerAuditor
-	// link builds the permalink of a message, and says false if the platform cannot (chat.Permalinker). Nil
-	// is the same: the view's Link is then empty.
-	link func(chat.Ref) (string, bool)
-	log  *slog.Logger
+	link   func(chat.Ref) (string, bool)
+	log    *slog.Logger
 }
 
-// permalinks returns the permalink builder of p, or nil if the platform makes none.
+// newTriggerStarter returns a triggerStarter over cfg, or an error that names the field that cfg leaves out.
+func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
+	switch {
+	case cfg.Conn == "":
+		return nil, errors.New("broker: Conn is required for the trigger start")
+	case cfg.Submit == nil:
+		return nil, errors.New("broker: Submit is required for the trigger start: it is how a turn is queued")
+	case cfg.Notice == nil:
+		return nil, errors.New("broker: Notice is required for the trigger start: it is how a refused start is told to the thread")
+	case cfg.Audit == nil:
+		return nil, errors.New("broker: Audit is required for the trigger start: a refused start is recorded")
+	case cfg.Link == nil:
+		return nil, errors.New("broker: Link is required for the trigger start (noPermalink for a platform that makes none)")
+	case cfg.Log == nil:
+		return nil, errors.New("broker: Log is required for the trigger start")
+	}
+	return &triggerStarter{conn: cfg.Conn, submit: cfg.Submit, notice: cfg.Notice, audit: cfg.Audit, link: cfg.Link, log: cfg.Log}, nil
+}
+
+// noPermalink is the Link of a platform that makes none: the prompt's link is empty.
+func noPermalink(chat.Ref) (string, bool) { return "", false }
+
+// permalinks returns the permalink builder of p, or noPermalink if the platform makes none.
 func permalinks(p chat.Platform) func(chat.Ref) (string, bool) {
 	if l, ok := p.(chat.Permalinker); ok {
 		return l.Permalink
 	}
-	return nil
+	return noPermalink
 }
 
 // OnStart implements IntakeConfig.OnStart.
@@ -72,12 +105,10 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 	view := v1alpha1.PromptView{
 		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: cmp.Or(m.Preset, "botMessage"), Fields: m.Fields,
 	}
-	if s.link != nil {
-		if link, ok := s.link(at); ok {
-			view.Link = link
-		} else {
-			s.log.DebugContext(ctx, "chat: the platform made no permalink for an alert; the prompt's link is empty", "channel", at.Channel, "message", at.ID)
-		}
+	if link, ok := s.link(at); ok {
+		view.Link = link
+	} else {
+		s.log.DebugContext(ctx, "chat: the platform made no permalink for an alert; the prompt's link is empty", "channel", at.Channel, "message", at.ID)
 	}
 	prompt, err := render.NewPrompt("promptTemplate", m.PromptTemplate) // parsed at load too; this is the same parse
 	var text string

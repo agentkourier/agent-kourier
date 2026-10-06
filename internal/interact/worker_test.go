@@ -392,8 +392,8 @@ func TestRecordingAPressNeverWaitsForTheWorker(t *testing.T) {
 	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { <-gate; return interact.Done, nil }}
 	w, _, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Workers = 1 })
 	t.Cleanup(func() { close(gate) }) // before the worker is stopped
-	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
-		Limits: store.PressLimits{Total: 100, PerUser: 100}, Notify: w.Submit})
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+		Limits: store.PressLimits{Total: 100, PerUser: 100}, Notify: w.Submit}))
 	if err != nil {
 		t.Fatal(err)
 	}

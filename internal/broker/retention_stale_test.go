@@ -296,15 +296,6 @@ func TestRetentionEndsAStaleTaskWhoseBindingHasLeft(t *testing.T) {
 	}
 }
 
-// With no agents wired the tasks are still ended, and nothing is audited without an auditor: no nil is called.
-func TestRetentionEndsStaleTasksWithoutAnAgentOrAnAuditor(t *testing.T) {
-	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, func(c *retentionConfig) { c.Canceller, c.Audit = nil, nil })
-	g.r.endStaleTasks(t.Context())
-	if len(g.f.endCalls) != 1 || g.counted()[RemovedStaleTasks] != 1 {
-		t.Errorf("%d ended, %d counted; want the task ended", len(g.f.endCalls), g.counted()[RemovedStaleTasks])
-	}
-}
-
 // A failure to audit does not undo the ending, and does not stop the rest.
 func TestRetentionGoesOnWhenAnEndingCannotBeAudited(t *testing.T) {
 	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1"), stale("2.2", "ns/short", "t2")}, nil)
@@ -422,18 +413,32 @@ func TestRetentionLeavesAStaleTaskThatARunnerOfThisProcessHolds(t *testing.T) {
 	}
 }
 
-// Holds is what keeps a runner's task from being cleared from under it, so a retention with agents to cancel at and no way to
-// ask it is refused, and wiring that leaves it out fails every test that builds the broker.
-func TestRetentionRequiresHoldsWithACanceller(t *testing.T) {
-	f := &fakeRetentionStore{}
-	if _, err := newRetention(retentionConfig{Store: f, Canceller: &fakeCanceller{}}); err == nil || !strings.Contains(err.Error(), "Holds") {
-		t.Errorf("newRetention with a Canceller and no Holds = %v; want an error naming Holds", err)
+// Every collaborator and hook of the retention is required, and the error names the field that is left out: Holds is what
+// keeps a runner's task from being cleared from under it, and the rest are what the loop ends, cancels, records and counts
+// with. A wiring that drops one fails every test that builds the broker.
+func TestNewRetentionNamesTheFieldThatIsMissing(t *testing.T) {
+	full := harmless(retentionConfig{Store: &fakeRetentionStore{}})
+	for _, tc := range []struct {
+		field string
+		clear func(*retentionConfig)
+	}{
+		{"Store", func(c *retentionConfig) { c.Store = nil }},
+		{"Holds", func(c *retentionConfig) { c.Holds = nil }},
+		{"ThreadTTLs", func(c *retentionConfig) { c.ThreadTTLs = nil }},
+		{"Canceller", func(c *retentionConfig) { c.Canceller = nil }},
+		{"Audit", func(c *retentionConfig) { c.Audit = nil }},
+		{"OnRemoved", func(c *retentionConfig) { c.OnRemoved = nil }},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			cfg := full
+			tc.clear(&cfg)
+			if r, err := newRetention(cfg); err == nil || r != nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("newRetention = %v, %v; want an error that names %s", r, err, tc.field)
+			}
+		})
 	}
-	if _, err := newRetention(retentionConfig{Store: f, Canceller: &fakeCanceller{}, Holds: func(store.ConversationKey, string) bool { return false }}); err != nil {
-		t.Errorf("newRetention with both = %v; want none", err)
-	}
-	if _, err := newRetention(retentionConfig{Store: f}); err != nil {
-		t.Errorf("newRetention with neither = %v; want none: without agents nothing is cancelled", err)
+	if _, err := newRetention(full); err != nil {
+		t.Errorf("newRetention with every field = %v; want none", err)
 	}
 }
 
@@ -447,17 +452,14 @@ func TestRetentionLogsAStaleListingFailure(t *testing.T) {
 	}
 }
 
-// Without a config nothing is known of any session's threadTTL, so no task is judged stale, and with no source of them (a
-// retention built without one) the loop does not look.
+// Without a config nothing is known of any session's threadTTL, so no task is judged stale and the loop does not look.
 func TestRetentionLeavesTasksAloneUntilTheirBindingsAreKnown(t *testing.T) {
-	for name, src := range map[string]func() (map[string]time.Duration, bool){
-		"no config loaded": func() (map[string]time.Duration, bool) { return nil, false }, "no source": nil,
-	} {
-		g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, func(c *retentionConfig) { c.ThreadTTLs = src })
-		g.r.endStaleTasks(t.Context())
-		if len(g.f.staleLists) != 0 || len(g.agents.got()) != 0 {
-			t.Errorf("%s: %d listings, %d cancels; want none", name, len(g.f.staleLists), len(g.agents.got()))
-		}
+	g := newStaleRig(t, []store.StaleTask{stale("1.1", "ns/short", "t1")}, func(c *retentionConfig) {
+		c.ThreadTTLs = func() (map[string]time.Duration, bool) { return nil, false }
+	})
+	g.r.endStaleTasks(t.Context())
+	if len(g.f.staleLists) != 0 || len(g.agents.got()) != 0 {
+		t.Errorf("%d listings, %d cancels; want none", len(g.f.staleLists), len(g.agents.got()))
 	}
 }
 
@@ -521,7 +523,11 @@ func TestRetentionEndsAStaleTaskAndTheNextPurgeDeletesTheSession(t *testing.T) {
 
 	agents := &fakeCanceller{errs: map[string]error{"ns/removed": session.ErrUnknownBinding}}
 	rig := newStaleRig(t, nil, func(c *retentionConfig) {
-		c.Store, c.Canceller, c.Audit = st, agents, audit.New(st, audit.Options{Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		w, err := audit.New(st, audit.Options{Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), OnFailure: audit.NoFailure})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Store, c.Canceller, c.Audit = st, agents, w
 		c.StaleBatch = 10
 	})
 

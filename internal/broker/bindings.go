@@ -5,6 +5,7 @@ package broker
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -28,7 +29,8 @@ type Snapshots interface {
 	Current() *config.Snapshot
 }
 
-// Options configures Bindings.
+// Options configures Bindings. OnRejected is required: NewBindings refuses Options without it, and names it. The rest
+// are tunables with defaults.
 type Options struct {
 	// Agent applies to every agent the pools hand out.
 	Agent agent.Config
@@ -37,7 +39,7 @@ type Options struct {
 	ResponseTimeout time.Duration
 	// OnRejected is called once for each credential a backend rejected, for a metric, with the
 	// Binding's namespace/name. Turns run concurrently, so it may be called from several
-	// goroutines at once and must be safe for that.
+	// goroutines at once and must be safe for that. Required.
 	OnRejected func(binding string)
 }
 
@@ -69,14 +71,25 @@ type Bindings struct {
 }
 
 // NewBindings returns Bindings that read the config from snaps, Secrets through secrets, and
-// record rejected credentials through aud. Close it when done.
-func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Auditor, opts Options) *Bindings {
+// record rejected credentials through aud. It refuses a nil snaps, secrets or aud, and Options without OnRejected,
+// naming what is missing. Close it when done.
+func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Auditor, opts Options) (*Bindings, error) {
+	switch {
+	case snaps == nil:
+		return nil, errors.New("broker: snaps is required for Bindings: it is where the config comes from")
+	case secrets == nil:
+		return nil, errors.New("broker: secrets is required for Bindings: it is where the credentials come from")
+	case aud == nil:
+		return nil, errors.New("broker: aud is required for Bindings: a rejected credential is recorded")
+	case opts.OnRejected == nil:
+		return nil, errors.New("broker: Options.OnRejected is required for Bindings: a rejected credential is counted")
+	}
 	d := kagentv1.New(opts.ResponseTimeout)
 	g := generic.New(opts.ResponseTimeout)
 	return &Bindings{
 		snaps: snaps, secrets: secrets, aud: aud, opts: opts,
 		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}, v1alpha1.DialectA2A: {g, agent.NewPool(g, opts.Agent), g.Attribute, g.CloseIdleConnections}},
-	}
+	}, nil
 }
 
 // Close closes the agent pools, then the idle connections of the dialects' transports, so that

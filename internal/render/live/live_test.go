@@ -279,16 +279,61 @@ func setup(t *testing.T) *env {
 	t.Cleanup(func() { _ = e.store.Close() })
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	platform := slack.NewPlatform(client, "ns/conn")
-	e.ob = outbox.New(outbox.Config{Store: e.store, Platform: platform, Logger: quiet})
+	e.ob = newOutbox(t, outbox.Config{Store: e.store, Platform: platform, Logger: quiet})
 	e.rf = &recordFail{Outbox: e.store}
 	e.cfg = live.Config{Sender: e.ob, Platform: platform, Store: e.rf, Throttle: throttle, FinalDeadline: 10 * time.Minute, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(e.logs, nil))}
-	e.live = live.New(e.cfg)
+	e.live = newRenderer(t, e.cfg)
 	t.Cleanup(func() { // a run that saw its final goes on without its context: turn the clock for it
 		for deadline := time.Now().Add(3 * time.Second); runsAlive() && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
 			e.clk.advance(throttle)
 		}
 	})
 	return e
+}
+
+// newOutbox is outbox.New, with the OnAbandon that cfg leaves out counting nothing: these tests are not about the metric.
+func newOutbox(t *testing.T, cfg outbox.Config) *outbox.Outbox {
+	t.Helper()
+	if cfg.OnAbandon == nil {
+		cfg.OnAbandon = outbox.NoAbandon
+	}
+	o, err := outbox.New(cfg)
+	if err != nil {
+		t.Fatalf("outbox.New = %v", err)
+	}
+	return o
+}
+
+// newRenderer is live.New, failing the test if cfg is refused.
+func newRenderer(t *testing.T, cfg live.Config) *live.Renderer {
+	t.Helper()
+	r, err := live.New(cfg)
+	if err != nil {
+		t.Fatalf("live.New = %v", err)
+	}
+	return r
+}
+
+// New refuses a Config without its Sender, Platform or Store, and the error names the field.
+func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
+	e := setup(t)
+	for _, field := range []string{"Sender", "Platform", "Store"} {
+		t.Run(field, func(t *testing.T) {
+			cfg := e.cfg
+			switch field {
+			case "Sender":
+				cfg.Sender = nil
+			case "Platform":
+				cfg.Platform = nil
+			case "Store":
+				cfg.Store = nil
+			}
+			r, err := live.New(cfg)
+			if err == nil || r != nil || !strings.Contains(err.Error(), field) {
+				t.Fatalf("New = %v, %v; want an error that names %s", r, err, field)
+			}
+		})
+	}
 }
 
 func (e *env) start(t *testing.T, mode v1alpha1.OutputMode, recovered bool) (*live.Run, context.CancelFunc) {

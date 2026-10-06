@@ -55,8 +55,7 @@ type Sender interface {
 	Send(ctx context.Context, p outbox.Post) (chat.Ref, error)
 }
 
-// Config configures a Renderer. Sender and Platform are required. Store is for the stream path; a Renderer
-// with no Store never streams.
+// Config configures a Renderer. Sender, Platform and Store are required: New refuses a Config without them.
 type Config struct {
 	Sender Sender
 	// Platform edits a message, runs a stream, and says what the platform can do (Capabilities) and what an
@@ -89,8 +88,17 @@ type Renderer struct {
 	runs sync.WaitGroup // the goroutines of the turns started and not over
 }
 
-// New returns a Renderer over cfg.
-func New(cfg Config) *Renderer {
+// New returns a Renderer over cfg. It refuses a Config without its Sender, Platform or Store, naming the field, so that a
+// wiring that leaves one out fails at start-up (a Renderer with no Store would never stream, and nothing would say so).
+func New(cfg Config) (*Renderer, error) {
+	switch {
+	case cfg.Sender == nil:
+		return nil, errors.New("live: Config.Sender is required")
+	case cfg.Platform == nil:
+		return nil, errors.New("live: Config.Platform is required")
+	case cfg.Store == nil:
+		return nil, errors.New("live: Config.Store is required")
+	}
 	if cfg.Throttle <= 0 {
 		cfg.Throttle = 2 * time.Second
 	}
@@ -112,7 +120,7 @@ func New(cfg Config) *Renderer {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities()}
+	return &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities()}, nil
 }
 
 // Wait returns once every turn started so far has ended, or with ctx's error if that comes first, so that
@@ -206,7 +214,7 @@ type stepRec struct {
 // Start begins rendering a turn and returns it. Its goroutine ends once the final text is
 // written, or given up on, or when ctx ends.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
-	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams && r.cfg.Store != nil
+	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
 	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
 	r.runs.Add(1)
 	go func() { defer r.runs.Done(); u.run(ctx) }()

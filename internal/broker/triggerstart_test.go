@@ -86,12 +86,16 @@ type starter struct {
 func newStarter(t *testing.T) *starter {
 	t.Helper()
 	s := &starter{sub: &startSubmitter{}, notes: &startNotes{}, aud: &startAudit{}, logs: &bytes.Buffer{}, tel: telemetrytest.New(t)}
-	s.triggerStarter = &triggerStarter{
-		conn: startConn, submit: s.sub, notice: s.notes.take, audit: s.aud,
-		link: func(r chat.Ref) (string, bool) {
+	var err error
+	s.triggerStarter, err = newTriggerStarter(triggerStarterConfig{
+		Conn: startConn, Submit: s.sub, Notice: s.notes.take, Audit: s.aud,
+		Link: func(r chat.Ref) (string, bool) {
 			return "https://example.slack.com/archives/" + r.Channel + "/p" + strings.Replace(r.ID, ".", "", 1), true
 		},
-		log: slog.New(slog.NewTextHandler(s.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Log: slog.New(slog.NewTextHandler(s.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	if err != nil {
+		t.Fatalf("newTriggerStarter = %v", err)
 	}
 	return s
 }
@@ -214,7 +218,7 @@ func TestOnStartLinkIsTheCourierBuiltPermalinkNotTheTitleLink(t *testing.T) {
 // than a guess, and the turn still starts.
 func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	s := newStarter(t)
-	s.link = nil
+	s.link = noPermalink
 	m := firing(t)
 	m.PromptTemplate = "Alert [{{ .Link }}]"
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
@@ -229,6 +233,43 @@ func TestOnStartWithoutAPermalinkHasAnEmptyLink(t *testing.T) {
 	}
 	if got := instructionOf(t, s.sub.got[1].Text); got != "Alert []" {
 		t.Errorf("instruction = %q; want an empty link when the platform has none", got)
+	}
+}
+
+// newTriggerStarter refuses a config without any of its fields, and the error names the one: the start would otherwise
+// render nothing, queue nothing, tell no thread or audit no refusal.
+func TestNewTriggerStarterNamesTheFieldThatIsMissing(t *testing.T) {
+	full := triggerStarterConfig{
+		Conn: startConn, Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Link: noPermalink, Log: slog.Default(),
+	}
+	for _, tc := range []struct {
+		field string
+		clear func(*triggerStarterConfig)
+	}{
+		{"Conn", func(c *triggerStarterConfig) { c.Conn = "" }},
+		{"Submit", func(c *triggerStarterConfig) { c.Submit = nil }},
+		{"Notice", func(c *triggerStarterConfig) { c.Notice = nil }},
+		{"Audit", func(c *triggerStarterConfig) { c.Audit = nil }},
+		{"Link", func(c *triggerStarterConfig) { c.Link = nil }},
+		{"Log", func(c *triggerStarterConfig) { c.Log = nil }},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			cfg := full
+			tc.clear(&cfg)
+			if got, err := newTriggerStarter(cfg); err == nil || got != nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("newTriggerStarter = %v, %v; want an error that names %s", got, err, tc.field)
+			}
+		})
+	}
+	if _, err := newTriggerStarter(full); err != nil {
+		t.Fatalf("newTriggerStarter with every field = %v", err)
+	}
+}
+
+// A platform that makes no permalink is given noPermalink, and not nil: the start asks it for a link either way.
+func TestPermalinksOfAPlatformThatMakesNoneIsNoPermalink(t *testing.T) {
+	if link, ok := permalinks(struct{ chat.Platform }{})(chat.Ref{Channel: "C1", ID: "1.1"}); ok || link != "" {
+		t.Errorf("permalinks = %q, %v; want none", link, ok)
 	}
 }
 

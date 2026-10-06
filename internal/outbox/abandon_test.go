@@ -48,7 +48,7 @@ func abandoning(t *testing.T, st store.Outbox, p *poster, mod func(*outbox.Confi
 	if mod != nil {
 		mod(&cfg)
 	}
-	return outbox.New(cfg), a, logs
+	return mustNew(t, cfg), a, logs
 }
 
 func warnings(l *syncBuffer) int { return strings.Count(l.String(), "level=WARN") }

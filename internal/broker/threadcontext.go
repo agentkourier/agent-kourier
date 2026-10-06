@@ -48,6 +48,8 @@ type threadReplyStore interface {
 	HasReply(ctx context.Context, id string) (bool, error)
 }
 
+// threadContextConfig configures a threadContext. Platform and Replies are required: newThreadContext refuses a config
+// without them, naming the field. Logger and After are tunables with defaults.
 type threadContextConfig struct {
 	// Platform is the built chat platform, as the broker uses it (the fenced one, with an election). Whether it can read a
 	// thread is asked of it by a type assertion on this value, as the trigger start asks for chat.Permalinker, and never of
@@ -71,7 +73,14 @@ type threadContext struct {
 	noted map[string]bool // the Bindings that were told of an unsupported platform in the log
 }
 
-func newThreadContext(cfg threadContextConfig) *threadContext {
+// newThreadContext returns a threadContext over cfg.
+func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
+	switch {
+	case cfg.Platform == nil:
+		return nil, errors.New("broker: a Platform is required for the thread context")
+	case cfg.Replies == nil:
+		return nil, errors.New("broker: Replies is required for the thread context: it asks whether a message was a turn")
+	}
 	t := &threadContext{platform: cfg.Platform, replies: cfg.Replies, log: cfg.Logger, after: cfg.After, noted: map[string]bool{}}
 	t.reader, _ = cfg.Platform.(chat.ThreadReader)
 	if t.log == nil {
@@ -80,7 +89,7 @@ func newThreadContext(cfg threadContextConfig) *threadContext {
 	if t.after == nil {
 		t.after = time.After
 	}
-	return t
+	return t, nil
 }
 
 // Section is session.Config.ThreadContext: the section of the replies in the thread key between the messages after and

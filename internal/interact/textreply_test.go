@@ -41,7 +41,7 @@ func textQuestionWithPrompt(t *testing.T, r *pressRig, posted bool) (a2a.Task, s
 		}
 	}
 	r.task(t, "task-1")
-	r.pl, err = interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }})
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{interact.Binding{Dialect: d, AskUser: true, Timeout: time.Minute}}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
 	}

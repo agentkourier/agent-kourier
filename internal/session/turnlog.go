@@ -77,7 +77,7 @@ func (m *Manager) unqueue(t *tstate) {
 	_, marked := m.marked[t.r.ID]
 	delete(m.marked, t.r.ID)
 	m.mu.Unlock()
-	if marked && m.cfg.Sink != nil {
+	if marked {
 		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: queuedID(t.r.ID), Kind: NoticeDequeued, MessageRef: t.r.MessageRef})
 	}
 }
@@ -108,9 +108,7 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	if begun {
 		attrs = append(attrs, "duration_ms", m.cfg.Now().Sub(start).Milliseconds())
 	}
-	if m.cfg.OnTurnEnd != nil {
-		m.cfg.OnTurnEnd(t.sess.Binding, outcome)
-	}
+	m.cfg.OnTurnEnd(t.sess.Binding, outcome)
 	m.cfg.Logger.InfoContext(m.turnContext(t), "session turn ended", append(attrs, extra...)...) // after the report: whoever sees the line finds it counted
 }
 

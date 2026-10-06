@@ -19,10 +19,10 @@ func TestARefusedAnswerIsLoggedWithoutItsValue(t *testing.T) {
 	const typed = "xoxb-1111-2222-FAKEFAKEFAKE password=hunter2-FAKE and a long private note about a customer"
 	r := newDecideRig(t)
 	var out logBuf
-	d, err := interact.NewDecider(interact.DecideConfig{
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{
 		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out,
 		Logger: slog.New(telemetry.NewJSONHandler(&out, slog.LevelDebug)),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -171,7 +171,7 @@ func TestPermanentErrorEndsTheRunAtOnce(t *testing.T) {
 			e := setup(t)
 			send := &failingSender{err: fmt.Errorf("deliver: %w", permanent)}
 			logs := &strings.Builder{}
-			r := live.New(live.Config{Sender: send, Platform: slack.NewPlatform(nil, "ns/conn"), Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+			r := newRenderer(t, live.Config{Sender: send, Platform: slack.NewPlatform(nil, "ns/conn"), Store: e.store, Throttle: throttle, Now: e.clk.Now, After: e.clk.After, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 			run := r.Start(t.Context(), live.Turn{Source: "turn-1", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputLive})
 			run.Handle(text("a", "hello"))
 			select {
@@ -293,7 +293,7 @@ func TestFinalModeWaitsForTheFinal(t *testing.T) {
 func TestAHungWriteIsAbandonedAtWriteTimeout(t *testing.T) {
 	e := setup(t)
 	e.cfg.WriteTimeout = time.Second
-	e.live = live.New(e.cfg)
+	e.live = newRenderer(t, e.cfg)
 	e.rec.hangUpdates = 1
 	run, _ := e.partial(t)
 	run.Handle(text("a", "the final answer"))

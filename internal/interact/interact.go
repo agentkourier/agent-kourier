@@ -62,7 +62,7 @@ type Config struct {
 	Session  Session
 	Audit    Auditor
 	// OnApprovalOutcome is called once for each pause a Binding's policy turned away, for the
-	// approval-outcome metric (WP-35f2). The outcomes are a closed set. Optional.
+	// approval-outcome metric (WP-35f2). The outcomes are a closed set. Required.
 	OnApprovalOutcome func(binding string, outcome Outcome)
 	Now               func() time.Time // time.Now if nil
 	Logger            *slog.Logger     // slog.Default() if nil
@@ -75,6 +75,9 @@ type Intake struct{ cfg Config }
 func New(cfg Config) (*Intake, error) {
 	if cfg.Store == nil || cfg.Lookup == nil || cfg.Platform == nil || cfg.Outbox == nil || cfg.Session == nil || cfg.Audit == nil {
 		return nil, errors.New("interact: Store, Lookup, Platform, Outbox, Session and Audit are required")
+	}
+	if cfg.OnApprovalOutcome == nil {
+		return nil, errors.New("interact: OnApprovalOutcome is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

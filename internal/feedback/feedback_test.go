@@ -650,7 +650,7 @@ func TestAPressRecordedBeforeARestartIsProcessedAfterIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A new Handler over the same store, as a restart makes, finds the press in the store and processes it.
-	h, err := feedback.New(feedback.Config{Store: r.st, Sessions: r.st, Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud, Now: func() time.Time { return t0.Add(time.Hour) }})
+	h, err := feedback.New(notifying(feedback.Config{Store: r.st, Sessions: r.st, Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud, Now: func() time.Time { return t0.Add(time.Hour) }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,5 +756,22 @@ func TestAnAlertNameOutsideTheNameShapeIsNotKept(t *testing.T) {
 		if got := feedback.AlertName(tc.in); got != tc.want {
 			t.Errorf("AlertName(%q) = %q; want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// notifying is cfg with the Notify that it leaves out, which a test that is not about the worker's hand-off does not need.
+func notifying(cfg feedback.Config) feedback.Config {
+	if cfg.Notify == nil {
+		cfg.Notify = func(store.Press) {}
+	}
+	return cfg
+}
+
+// New refuses a Config without Notify, and the error names it: the worker would never hear of a press.
+func TestNewRefusesAnUnwiredNotify(t *testing.T) {
+	r := newRig(t)
+	_, err := feedback.New(feedback.Config{Store: r.st, Sessions: r.st, Authorizer: r.az, Ephemerals: r.eph, Auditor: r.aud})
+	if err == nil || !strings.Contains(err.Error(), "Notify") {
+		t.Fatalf("New = %v; want an error that names Notify", err)
 	}
 }

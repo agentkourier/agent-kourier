@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -208,7 +209,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { _ = s.Close() })
 	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, raw: s, qs: &spyQuestions{Questions: s}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Questions: f.qs, Bindings: f, Audit: f, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	f.m, err = New(Config{Store: f.st, Questions: f.qs, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -216,6 +217,28 @@ func newFixture(t *testing.T) *fixture {
 	f.onWake = func() {}
 	return f
 }
+
+// quietSink renders nothing: a turn has no handler, and a notice is dropped.
+type quietSink struct{}
+
+func (quietSink) Turn(context.Context, TurnRef) agent.Handler { return nil }
+func (quietSink) Notice(context.Context, Key, Notice)         {}
+
+// idOnly resolves every user to their ID alone, which is what a turn is attributed by when the platform knows no one.
+type idOnly struct{}
+
+func (idOnly) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+	return dialect.User{ID: id}, nil
+}
+
+// noQuestions finds no pending question in any thread.
+type noQuestions struct{}
+
+func (noQuestions) PendingTextQuestion(context.Context, store.ConversationKey) (store.Interaction, error) {
+	return store.Interaction{}, store.ErrNotFound
+}
+
+func noTurnEnd(string, TurnOutcome) {}
 
 // spyQuestions counts the reads of the manager's Questions and fails them when err is set (a store error on the
 // intake path).
@@ -769,9 +792,9 @@ func TestSubmitUnmentionedReplyToATextQuestionEdges(t *testing.T) {
 			t.Fatalf("redelivered Submit = %+v, %v; want Accepted", res, err)
 		}
 	})
-	t.Run("no Questions: every unmentioned reply is ignored", func(t *testing.T) {
+	t.Run("no pending question found: every unmentioned reply is ignored", func(t *testing.T) {
 		f := newFixture(t)
-		f.m.cfg.Questions = nil
+		f.m.cfg.Questions = noQuestions{}
 		f.threadReplies, f.textReplies = v1alpha1.ThreadRepliesMention, true
 		f.seed("ns/b1", 0)
 		f.question("q1", true)

@@ -87,7 +87,7 @@ func TestAuditFreeTextTakesTheSplitSecretCorpus(t *testing.T) {
 func TestAuditFailureTextTakesTheSplitSecretCorpus(t *testing.T) {
 	for _, c := range redacttest.SplitSecretsSample() {
 		var logs bytes.Buffer
-		w := New(failing{err: errors.New("disk full " + c.Text)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		w := writerOver(t, failing{err: errors.New("disk full " + c.Text)}, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 		err := w.Event(context.Background(), who, SourceAlert, "evt-1", EventAccepted)
 		if err == nil {
 			t.Fatalf("%s: Event = nil, want the failure", c.Name)

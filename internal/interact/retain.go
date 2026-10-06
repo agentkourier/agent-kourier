@@ -49,7 +49,7 @@ type RetentionConfig struct {
 	// RepairHorizon plus an hour, see defaultClearGrace); UndeliveredGrace is the same for an answered one whose
 	// answer was never marked delivered (default 7 days). The rest of the row is kept.
 	ClearGrace, UndeliveredGrace time.Duration
-	// OnCleared is told how many interactions each sweep cleared, when it cleared any, for a metric. Optional.
+	// OnCleared is told how many interactions each sweep cleared, when it cleared any, for a metric. Required.
 	OnCleared func(n int)
 	Now       func() time.Time // time.Now if nil
 	Logger    *slog.Logger     // slog.Default() if nil
@@ -68,6 +68,9 @@ type Retention struct{ cfg RetentionConfig }
 func NewRetention(cfg RetentionConfig) (*Retention, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("interact: a Store is required")
+	}
+	if cfg.OnCleared == nil {
+		return nil, errors.New("interact: OnCleared is required")
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 10 * time.Minute
@@ -117,9 +120,7 @@ func (r *Retention) Run(ctx context.Context) error {
 		case err != nil && ctx.Err() == nil:
 			r.cfg.Logger.WarnContext(ctx, "interact: settled interactions could not be cleared; it will be tried again", "err", err)
 		case n > 0:
-			if r.cfg.OnCleared != nil {
-				r.cfg.OnCleared(n)
-			}
+			r.cfg.OnCleared(n)
 			r.cfg.Logger.InfoContext(ctx, "interact: cleared the request and answer of settled interactions", "cleared", n, "grace", r.cfg.ClearGrace)
 		}
 	}

@@ -60,9 +60,9 @@ func newPressRig(t *testing.T) *pressRig {
 	}
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
 	var err error
-	r.pl, err = interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.got = append(r.got, p) }})
+		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.got = append(r.got, p) }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,8 +304,8 @@ func (r *pressRig) loggedPipeline(t *testing.T) (*interact.Pipeline, *logBuf) {
 	t.Helper()
 	logs := &logBuf{}
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
-	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
-		Logger: slog.New(slog.NewTextHandler(logs, nil)), Now: func() time.Time { return r.now }})
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
+		Logger: slog.New(slog.NewTextHandler(logs, nil)), Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestARefusalIsAuditedBeforeThePersonIsToldAndNotWithoutIt(t *testing.T) {
 // TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson.
 func TestThePressLimitsDefaultToAThousandInAllAndTenForOnePerson(t *testing.T) {
 	r := newPressRig(t)
-	pl, err := interact.NewPipeline(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud})
+	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud}))
 	if err != nil {
 		t.Fatal(err)
 	}

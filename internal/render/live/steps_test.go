@@ -355,7 +355,7 @@ func (e *env) spy(t *testing.T, steps bool, fail func(int) error) *atomic.Int32 
 	caps := e.cfg.Platform.Capabilities()
 	caps.Steps = steps
 	e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: caps, steps: n, fail: fail}
-	e.live = live.New(e.cfg)
+	e.live = newRenderer(t, e.cfg)
 	return n
 }
 
@@ -522,7 +522,7 @@ func TestStepsAreShownThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	e := setup(t)
 	fake := chattest.NewFake()
 	e.cfg.Platform = fake
-	e.live = live.New(e.cfg)
+	e.live = newRenderer(t, e.cfg)
 	run := e.stream(t)
 	run.Handle(call("c1", "search", map[string]any{"q": "up"}))
 	eventually(t, "the step", func() bool { m := fake.Messages(); return len(m) == 1 && len(m[0].Steps) == 1 })

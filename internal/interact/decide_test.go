@@ -211,10 +211,10 @@ func newDecideRig(t *testing.T) *decideRig {
 	r.sess.log, r.rep.log = r.flow, r.flow
 	r.st = &orderedStore{Store: st, log: r.calls, all: r.flow}
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls, all: r.flow}
-	r.d, err = interact.NewDecider(interact.DecideConfig{
+	r.d, err = interact.NewDecider(decideCfg(interact.DecideConfig{
 		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,8 +685,8 @@ func (f failingSessions) GetSession(context.Context, store.ConversationKey, time
 func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	d, err := interact.NewDecider(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: failingSessions{errBoom},
-		Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: failingSessions{errBoom},
+		Outbox: r.out, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,8 +743,8 @@ func TestAHungEditDoesNotHoldUpThePress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := interact.NewDecider(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: rp, Outbox: r.out,
-		Logger: slog.New(slog.NewTextHandler(r.logs, nil))})
+	d, err := interact.NewDecider(decideCfg(interact.DecideConfig{Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: rp, Outbox: r.out,
+		Logger: slog.New(slog.NewTextHandler(r.logs, nil))}))
 	if err != nil {
 		t.Fatal(err)
 	}

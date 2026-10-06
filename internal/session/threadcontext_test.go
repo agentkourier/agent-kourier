@@ -144,7 +144,7 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		mode     v1alpha1.ThreadReplies
 		user     string
 		previous bool
-		unset    bool // no hook is configured
+		noop     bool // the hook is NoThreadContext
 		want     bool // the hook is called, and its section appended
 	}{
 		{name: "a mention-only turn", mode: v1alpha1.ThreadRepliesMention, user: "U1", previous: true, want: true},
@@ -152,12 +152,12 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		{name: "the mode is empty", mode: "", user: "U1", previous: true},
 		{name: "a turn nobody wrote", mode: v1alpha1.ThreadRepliesMention, user: SystemUser, previous: true},
 		{name: "the first turn of the thread", mode: v1alpha1.ThreadRepliesMention, user: "U1"},
-		{name: "no hook configured", mode: v1alpha1.ThreadRepliesMention, user: "U1", previous: true, unset: true},
+		{name: "the no-op hook", mode: v1alpha1.ThreadRepliesMention, user: "U1", previous: true, noop: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink, hook := thread(t, tc.mode, tc.previous)
-			if tc.unset {
-				f.m.cfg.ThreadContext = nil
+			if tc.noop {
+				f.m.cfg.ThreadContext = NoThreadContext
 			}
 			f.enqueue(t, "turn", queuedRef, tc.user, false)
 			f.m.wake(key)

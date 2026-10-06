@@ -132,11 +132,11 @@ type Decision struct {
 	Answer *dialect.Answer
 }
 
-// Options configures a Writer. The zero value logs to slog.Default, meters nothing, uses
-// the wall clock and gives each write five seconds.
+// Options configures a Writer. OnFailure is required (New refuses without it; NoFailure meters nothing).
+// The rest default: the logger to slog.Default, the clock to the wall clock, and each write to five seconds.
 type Options struct {
 	Logger *slog.Logger
-	// OnFailure is called once for each failed write, for a metric (spec D34, section 11).
+	// OnFailure is called once for each failed write, for a metric (spec D34, section 11). Required.
 	OnFailure func(store.AuditKind)
 	Now       func() time.Time
 	// Timeout bounds one write, which runs detached from the caller's cancellation so
@@ -150,8 +150,18 @@ type Writer struct {
 	opts Options
 }
 
-// New returns a Writer over log.
-func New(log store.Audit, opts Options) *Writer {
+// NoFailure is the OnFailure of a Writer whose failed writes are logged and returned, and counted nowhere.
+func NoFailure(store.AuditKind) {}
+
+// New returns a Writer over log. It refuses a nil log or a nil Options.OnFailure, so that a wiring that leaves the metric
+// out fails at start-up and not silently.
+func New(log store.Audit, opts Options) (*Writer, error) {
+	switch {
+	case log == nil:
+		return nil, errors.New("audit: a log (store.Audit) is required")
+	case opts.OnFailure == nil:
+		return nil, errors.New("audit: Options.OnFailure is required (NoFailure meters nothing)")
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -161,7 +171,7 @@ func New(log store.Audit, opts Options) *Writer {
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Second
 	}
-	return &Writer{log: log, opts: opts}
+	return &Writer{log: log, opts: opts}, nil
 }
 
 // Event records an inbound alert or Slack message and what the router did with it.
@@ -389,9 +399,7 @@ func (w *Writer) append(ctx context.Context, kind store.AuditKind, a Actor, at t
 	defer cancel()
 	if err := w.log.AppendAudit(wctx, e); err != nil {
 		w.opts.Logger.ErrorContext(ctx, "audit write failed", "kind", kind, "error", cleanFree(err.Error(), maxReason))
-		if w.opts.OnFailure != nil {
-			w.opts.OnFailure(kind)
-		}
+		w.opts.OnFailure(kind)
 		return fail(err, "audit %s", kind)
 	}
 	return nil

@@ -209,8 +209,16 @@ type Sink interface {
 	Notice(ctx context.Context, key Key, n Notice)
 }
 
-// Config configures a Manager. Store and Bindings are required. A nil Users attributes a turn
-// by the user's ID alone, and a nil Sink drops the output.
+// NoThreadContext is the ThreadContext of a manager whose mentioned turns carry their own message alone: the platform
+// cannot read a thread, or the deployment does not want it to. It adds no text, but the runner still reads where the
+// window opens (one Store.PreviousReply per mentioned turn of a mention-only Binding) before it asks the hook, and a store
+// that fails there holds the turn back like any other store failure of the runner.
+func NoThreadContext(context.Context, Key, string, string, string) string { return "" }
+
+// Config configures a Manager. Store, Bindings, Audit, Users, Sink, Questions, ThreadContext and OnTurnEnd are required:
+// New refuses a Config without them and names the field, so that a wiring that leaves one out fails at start-up and
+// not by doing nothing. Where nothing is a choice, there is a value that says so (NoThreadContext). TextReply is set
+// after construction (SetTextReplyHandler), the one hook New cannot ask for: it joins the rest when that goes (D2).
 type Config struct {
 	// Context supplies tracing and other values. Cancellation belongs to Close.
 	Context  context.Context
@@ -220,10 +228,10 @@ type Config struct {
 	Sink     Sink
 	Now      func() time.Time
 	Logger   *slog.Logger
-	Audit    Auditor // required: a failure the manager must record is never dropped (spec 8.6 step 7)
+	Audit    Auditor // a failure the manager must record is never dropped (spec 8.6 step 7)
 	// Questions is asked, in a Binding whose threadReplies is mention, whether a thread has a pending question that
-	// takes text replies, so that a typed answer needs no mention (D38). Nil means no thread has one: every
-	// unmentioned reply is then ignored.
+	// takes text replies, so that a typed answer needs no mention (D38). A value that finds none ignores every
+	// unmentioned reply.
 	Questions Questions
 	// TextReply durably decides a queued answer through the interaction policy and audit.
 	// False means the prompt is not ready; the queue remains intact.
@@ -236,7 +244,7 @@ type Config struct {
 	// mentions enqueued against ts order), and the hook returns "" for it. It never fails, and it may do I/O, so it
 	// is called off every lock. The
 	// runner calls it once for each turn it sends, in the send of a turn only: never for a task that is followed
-	// again, found again or recovered. Nil adds nothing.
+	// again, found again or recovered. NoThreadContext adds nothing.
 	ThreadContext func(ctx context.Context, key Key, binding, after, before string) string
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
@@ -252,7 +260,7 @@ type Config struct {
 	// It defaults to 15 minutes.
 	SendGiveUp time.Duration
 	// OnTurnEnd is called once for each turn that ends, with the Binding's name and how it ended, for a
-	// metric. Nil does nothing. It must not block.
+	// metric. It must not block.
 	OnTurnEnd func(binding string, outcome TurnOutcome)
 }
 
@@ -309,6 +317,16 @@ func New(cfg Config) (*Manager, error) {
 		return nil, errors.New("session: Bindings is required")
 	case cfg.Audit == nil:
 		return nil, errors.New("session: Audit is required")
+	case cfg.Users == nil:
+		return nil, errors.New("session: Users is required")
+	case cfg.Sink == nil:
+		return nil, errors.New("session: Sink is required")
+	case cfg.Questions == nil:
+		return nil, errors.New("session: Questions is required")
+	case cfg.ThreadContext == nil:
+		return nil, errors.New("session: ThreadContext is required (NoThreadContext adds nothing)")
+	case cfg.OnTurnEnd == nil:
+		return nil, errors.New("session: OnTurnEnd is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

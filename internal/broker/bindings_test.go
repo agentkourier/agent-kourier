@@ -143,7 +143,11 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(stub.Close)
 	f.url = srv.URL
 	f.snaps.p.Store(snapshot(t, srv.URL, v1alpha1.DialectKagentV1, 36*time.Hour))
-	f.b = NewBindings(f.snaps, f.reader, f.audit, Options{OnRejected: func(b string) { f.metrics = append(f.metrics, b) }})
+	var err error
+	f.b, err = NewBindings(f.snaps, f.reader, f.audit, Options{OnRejected: func(b string) { f.metrics = append(f.metrics, b) }})
+	if err != nil {
+		t.Fatalf("NewBindings = %v", err)
+	}
 	t.Cleanup(f.b.Close)
 	return f
 }
@@ -366,5 +370,27 @@ func TestThreadTTLsAreTheCurrentSnapshotsBindings(t *testing.T) {
 	f.snaps.p.Store(&config.Snapshot{}) // a config with no Binding is a config
 	if got, ok := f.b.ThreadTTLs(); !ok || len(got) != 0 {
 		t.Errorf("ThreadTTLs of a config with no Binding = %v, %v; want ready and empty", got, ok)
+	}
+}
+
+// NewBindings refuses what it cannot work without, and says which: a Bindings with no OnRejected would reject credentials
+// and count none.
+func TestNewBindingsNamesWhatIsMissing(t *testing.T) {
+	f := newFixture(t)
+	full := Options{OnRejected: func(string) {}}
+	for _, tc := range []struct {
+		name string
+		call func() (*Bindings, error)
+	}{
+		{"snaps", func() (*Bindings, error) { return NewBindings(nil, f.reader, f.audit, full) }},
+		{"secrets", func() (*Bindings, error) { return NewBindings(f.snaps, nil, f.audit, full) }},
+		{"aud", func() (*Bindings, error) { return NewBindings(f.snaps, f.reader, nil, full) }},
+		{"OnRejected", func() (*Bindings, error) { return NewBindings(f.snaps, f.reader, f.audit, Options{}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if b, err := tc.call(); err == nil || b != nil || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("NewBindings = %v, %v; want an error that names %s", b, err, tc.name)
+			}
+		})
 	}
 }

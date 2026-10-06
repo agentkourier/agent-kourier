@@ -97,8 +97,19 @@ func newFixture(t *testing.T, id v1alpha1.Identity, headers ...v1alpha1.Header) 
 }
 
 func (f *fixture) source() *Source {
-	w := audit.New(f.store, audit.Options{Logger: slog.New(slog.NewTextHandler(f.logs, nil))})
+	w := newWriter(f.t, f.store, audit.Options{Logger: slog.New(slog.NewTextHandler(f.logs, nil))})
 	return mustNew(f.t, f.binding, f.backend, f.reader, w, Options{OnRejected: func(b string) { f.metric = append(f.metric, b) }})
+}
+
+// newWriter is audit.New over log with the failure meter left out: these tests are not about it.
+func newWriter(t *testing.T, log store.Audit, opts audit.Options) *audit.Writer {
+	t.Helper()
+	opts.OnFailure = audit.NoFailure
+	w, err := audit.New(log, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
 }
 
 func mustNew(t *testing.T, b *v1alpha1.Binding, be *v1alpha1.AgentBackend, r SecretReader, aud Auditor, opts Options) *Source {
@@ -229,7 +240,7 @@ func TestUnreadableSecretFailsTheTurn(t *testing.T) {
 // not leave the userId as the identity.
 func TestEmptyTokenFromAnySourceFailsTheTurn(t *testing.T) {
 	f := newFixture(t, v1alpha1.Identity{UserID: "svc"})
-	s := mustNew(t, f.binding, f.backend, f.reader, audit.New(f.store, audit.Options{}), Options{Token: &fakeToken{}})
+	s := mustNew(t, f.binding, f.backend, f.reader, newWriter(t, f.store, audit.Options{}), Options{Token: &fakeToken{}})
 	got, err := s.Credentials(t.Context())
 	if !errors.Is(err, agent.ErrTokenUnreadable) || !errors.Is(err, secret.ErrEmptyValue) {
 		t.Fatalf("Credentials err = %v, want ErrTokenUnreadable wrapping ErrEmptyValue", err)
@@ -274,7 +285,7 @@ func TestRotationIsPickedUpWithoutRestart(t *testing.T) {
 
 	f := newFixture(t, v1alpha1.Identity{TokenSecretRef: tokenRef()}, v1alpha1.Header{Name: "X-Api-Key", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "creds", Key: "key"}})
 	f.backend.Namespace = "sre" // header secrets live beside the backend
-	s := mustNew(t, f.binding, f.backend, r, audit.New(f.store, audit.Options{}), Options{})
+	s := mustNew(t, f.binding, f.backend, r, newWriter(t, f.store, audit.Options{}), Options{})
 	before, err := s.Credentials(t.Context())
 	if err != nil || before.Token.Reveal() != "old-token" || header(before, "X-Api-Key") != "old-key" {
 		t.Fatalf("first Credentials = %s, %v", plain(before), err)
@@ -427,7 +438,7 @@ func (f *fakeToken) Refresh(context.Context) error               { f.refreshes++
 func TestAnyTokenSourceFitsTheSeam(t *testing.T) {
 	f := newFixture(t, v1alpha1.Identity{UserID: "svc"})
 	ft := &fakeToken{token: "minted"}
-	s := mustNew(t, f.binding, f.backend, f.reader, audit.New(f.store, audit.Options{}), Options{Token: ft})
+	s := mustNew(t, f.binding, f.backend, f.reader, newWriter(t, f.store, audit.Options{}), Options{Token: ft})
 	got, err := s.Credentials(t.Context())
 	if err != nil || got.Token.Reveal() != "minted" {
 		t.Fatalf("Credentials = %s, %v", plain(got), err)

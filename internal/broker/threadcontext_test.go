@@ -129,7 +129,8 @@ func newTCWorld(t *testing.T) *tcWorld {
 
 // build returns the thread context over p, with the world's reply queue, log and clock.
 func (w *tcWorld) build(p chat.Platform) *threadContext {
-	return newThreadContext(threadContextConfig{
+	w.t.Helper()
+	return mustThreadContext(w.t, threadContextConfig{
 		Platform: p, Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
 		After: func(d time.Duration) <-chan time.Time {
 			w.mu.Lock()
@@ -140,6 +141,34 @@ func (w *tcWorld) build(p chat.Platform) *threadContext {
 			return c
 		},
 	})
+}
+
+func mustThreadContext(t *testing.T, cfg threadContextConfig) *threadContext {
+	t.Helper()
+	tc, err := newThreadContext(cfg)
+	if err != nil {
+		t.Fatalf("newThreadContext = %v", err)
+	}
+	return tc
+}
+
+// newThreadContext refuses a config without its Platform or Replies, and the error names the field: a wiring that drops one
+// would build a context that cannot read a thread or ask which messages were turns.
+func TestNewThreadContextNamesTheFieldThatIsMissing(t *testing.T) {
+	w := newTCWorld(t)
+	for _, tc := range []struct {
+		field string
+		cfg   threadContextConfig
+	}{
+		{"Platform", threadContextConfig{Replies: w.turns}},
+		{"Replies", threadContextConfig{Platform: w.fake}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			if got, err := newThreadContext(tc.cfg); err == nil || got != nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("newThreadContext = %v, %v; want an error that names %s", got, err, tc.field)
+			}
+		})
+	}
 }
 
 // section asks for the window ("100.000100", "100.000900") of the thread over the world's windowReader.
@@ -658,7 +687,7 @@ func TestThreadContextWaitsOutARateLimitOnce(t *testing.T) {
 		w.win.window = []chat.HistoryMessage{msg(1, "U1", "a reply")}
 		w.win.script = []error{limited(time.Second)}
 		ctx, cancel := context.WithCancel(w.ctx)
-		tc := newThreadContext(threadContextConfig{
+		tc := mustThreadContext(t, threadContextConfig{
 			Platform: w.win, Replies: w.turns, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
 			After: func(time.Duration) <-chan time.Time { cancel(); return make(chan time.Time) }, // never fires
 		})

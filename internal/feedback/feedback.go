@@ -159,7 +159,7 @@ type Config struct {
 	Logger     *slog.Logger     // slog.Default() if nil
 	// Limits bounds the presses waiting (default 1000 in all, 10 for one person).
 	Limits store.PressLimits
-	// Notify, if set, is called with each press recorded, for the worker to pick it up. It runs in Press, on the path that
+	// Notify is called with each press recorded, for the worker to pick it up. Required. It runs in Press, on the path that
 	// acknowledges the button to Slack, so it must never block (interact.Worker.Submit does not).
 	Notify func(store.Press)
 }
@@ -179,6 +179,9 @@ var _ interact.PressProcessor = (*Handler)(nil)
 func New(cfg Config) (*Handler, error) {
 	if cfg.Store == nil || cfg.Sessions == nil || cfg.Authorizer == nil || cfg.Ephemerals == nil || cfg.Auditor == nil {
 		return nil, errors.New("feedback: Store, Sessions, Authorizer, Ephemerals and Auditor are required")
+	}
+	if cfg.Notify == nil {
+		return nil, errors.New("feedback: Notify is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -223,9 +226,7 @@ func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
 	if press.Seq, err = h.cfg.Store.RecordPress(ctx, press, h.cfg.Limits); err != nil {
 		return fmt.Errorf("feedback: record a press on %s: %w", v.Turn, err)
 	}
-	if h.cfg.Notify != nil {
-		h.cfg.Notify(press)
-	}
+	h.cfg.Notify(press)
 	return nil
 }
 

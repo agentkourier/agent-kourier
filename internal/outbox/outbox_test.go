@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -130,9 +131,49 @@ func (p *poster) counts() (posts, finds int) {
 	return p.posts, p.finds
 }
 
+// mustNew is outbox.New, with NoAbandon as the OnAbandon that cfg leaves out: most tests are not about the metric.
+func mustNew(t *testing.T, cfg outbox.Config) *outbox.Outbox {
+	t.Helper()
+	if cfg.OnAbandon == nil {
+		cfg.OnAbandon = outbox.NoAbandon
+	}
+	o, err := outbox.New(cfg)
+	if err != nil {
+		t.Fatalf("outbox.New = %v", err)
+	}
+	return o
+}
+
+// New refuses a Config without its Store, Platform or OnAbandon, and the error names the field: a wiring that drops one
+// fails at start-up instead of posting nothing, or counting nothing.
+func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
+	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
+	full := outbox.Config{Store: st, Platform: &poster{}, OnAbandon: outbox.NoAbandon}
+	for _, tc := range []struct{ field string }{{"Store"}, {"Platform"}, {"OnAbandon"}} {
+		t.Run(tc.field, func(t *testing.T) {
+			cfg := full
+			switch tc.field {
+			case "Store":
+				cfg.Store = nil
+			case "Platform":
+				cfg.Platform = nil
+			case "OnAbandon":
+				cfg.OnAbandon = nil
+			}
+			o, err := outbox.New(cfg)
+			if err == nil || o != nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("New = %v, %v; want an error that names %s", o, err, tc.field)
+			}
+		})
+	}
+	if _, err := outbox.New(full); err != nil {
+		t.Fatalf("New with all three = %v, want none", err)
+	}
+}
+
 func newOutbox(t *testing.T, st store.Outbox, p outbox.Platform) *outbox.Outbox {
 	t.Helper()
-	return outbox.New(outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 },
+	return mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 },
 		CallTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 }
 
@@ -312,7 +353,7 @@ func TestSlackCallsAreBounded(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	hang := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 	p := &poster{onPost: hang}
-	ob := outbox.New(outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
+	ob := mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0 }, CallTimeout: 20 * time.Millisecond})
 	done := make(chan error, 1)
 	go func() {
 		_, err := ob.Send(t.Context(), reply("ev1")) // hangs in Post
@@ -408,7 +449,7 @@ func TestLookupStartsWhereTheRowWasMade(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "c.db"))
 	var clock atomic.Int64
 	p := &poster{onPost: func(context.Context) error { return errors.New("connection reset") }}
-	ob := outbox.New(outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
+	ob := mustNew(t, outbox.Config{Store: st, Platform: p, Now: func() time.Time { return t0.Add(time.Duration(clock.Load())) }, CallTimeout: time.Second})
 	if _, err := ob.Send(t.Context(), reply("ev1")); err == nil {
 		t.Fatal("Send with a failing post succeeded")
 	}

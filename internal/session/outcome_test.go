@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -651,11 +652,35 @@ func TestRefusedCredentialWithoutASourceIsAudited(t *testing.T) {
 	}
 }
 
-// An Auditor is required: a manager that audits nothing would drop the failures it must record.
-func TestNewRequiresAnAuditor(t *testing.T) {
+// New refuses a Config without what the manager must have, and the error names the field: a wiring that drops one
+// fails at start-up and not by doing nothing. TextReply is not in the list: it is set after construction.
+func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 	f := newFixture(t)
-	if _, err := New(Config{Store: f.st, Bindings: f}); err == nil {
-		t.Error("New without an Auditor = nil; want an error")
+	full := f.m.cfg
+	for _, tc := range []struct {
+		field string
+		clear func(*Config)
+	}{
+		{"Store", func(c *Config) { c.Store = nil }},
+		{"Bindings", func(c *Config) { c.Bindings = nil }},
+		{"Audit", func(c *Config) { c.Audit = nil }},
+		{"Users", func(c *Config) { c.Users = nil }},
+		{"Sink", func(c *Config) { c.Sink = nil }},
+		{"Questions", func(c *Config) { c.Questions = nil }},
+		{"ThreadContext", func(c *Config) { c.ThreadContext = nil }},
+		{"OnTurnEnd", func(c *Config) { c.OnTurnEnd = nil }},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			cfg := full
+			tc.clear(&cfg)
+			m, err := New(cfg)
+			if err == nil || m != nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("New = %v, %v; want an error that names %s", m, err, tc.field)
+			}
+		})
+	}
+	if _, err := New(full); err != nil {
+		t.Fatalf("New with every required field = %v, want none", err)
 	}
 }
 

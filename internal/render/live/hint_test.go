@@ -211,7 +211,7 @@ func TestTheHintSurvivesTheOutboxRow(t *testing.T) {
 			cfg.Sender = sender
 			key := thread
 			key.Thread = e.root
-			h := live.NewSink(live.New(cfg), e.ob, slog.New(slog.NewTextHandler(io.Discard, nil))).Turn(t.Context(),
+			h := live.NewSink(newRenderer(t, cfg), e.ob, slog.New(slog.NewTextHandler(io.Discard, nil))).Turn(t.Context(),
 				session.TurnRef{Key: key, MessageID: "turn-1", UserID: "U1", Output: v1alpha1.OutputFinal, Feedback: tc.feedback, ThreadReplies: v1alpha1.ThreadRepliesMention})
 			h(text("a", "the answer"))
 			h(agent.FinalEvent{})

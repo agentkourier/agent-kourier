@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
@@ -82,6 +83,13 @@ type noAudit struct{}
 
 func (noAudit) AgentCall(context.Context, audit.Actor, audit.Call) error { return nil }
 
+// idOnly resolves every user to their ID alone.
+type idOnly struct{}
+
+func (idOnly) ResolveUser(_ context.Context, id string) (dialect.User, error) {
+	return dialect.User{ID: id}, nil
+}
+
 // noticeSink is the live sink with no rendering of turns, so that the thread shows nothing but what the notices do.
 type noticeSink struct{ *live.Sink }
 
@@ -105,6 +113,7 @@ func TestAReplyThatWaitedLosesItsHourglassWhenItIsSent(t *testing.T) {
 	m, err := session.New(session.Config{
 		Store: e.store, Bindings: oneBinding{session.Backend{ThreadTTL: time.Hour, Agent: ag}}, Audit: noAudit{},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Sink: noticeSink{e.sink(t, e.ob)},
+		Users: idOnly{}, Questions: e.store, ThreadContext: session.NoThreadContext, OnTurnEnd: func(string, session.TurnOutcome) {},
 	})
 	if err != nil {
 		t.Fatal(err)

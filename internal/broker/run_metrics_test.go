@@ -17,6 +17,16 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
+// enqueuer is an Outbox over st that only enqueues, for the tests that seed a store before Run opens it.
+func enqueuer(t testing.TB, st store.Outbox) *outbox.Outbox {
+	t.Helper()
+	o, err := outbox.New(outbox.Config{Store: st, Platform: slack.NewPlatform(idleSlack{}, "ns/conn"), OnAbandon: outbox.NoAbandon})
+	if err != nil {
+		t.Fatalf("outbox.New = %v", err)
+	}
+	return o
+}
+
 // seedPost leaves one unsent post in the store, as an earlier run that died would, for the outbox's
 // first reconcile to find.
 func seedPost(t *testing.T, c RunConfig) {
@@ -26,7 +36,7 @@ func seedPost(t *testing.T, c RunConfig) {
 		t.Fatal(err)
 	}
 	post := outbox.Post{Source: "ev1", Role: store.OutboxNotice, Channel: "C0123456789", Out: chat.Say(chat.Message{Fallback: "hi"})}
-	if _, err := outbox.New(outbox.Config{Store: seed, Platform: slack.NewPlatform(idleSlack{}, "ns/conn")}).Enqueue(t.Context(), post); err != nil {
+	if _, err := enqueuer(t, seed).Enqueue(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
 	if err := seed.Close(); err != nil {
@@ -42,7 +52,7 @@ func seedReaction(t *testing.T, c RunConfig) {
 		t.Fatal(err)
 	}
 	react := outbox.Reaction{Source: "ev1/queued", Channel: "C0123456789", TS: "1.1", Name: "hourglass_flowing_sand"}
-	if _, err := outbox.New(outbox.Config{Store: seed, Platform: slack.NewPlatform(idleSlack{}, "ns/conn")}).EnqueueReaction(t.Context(), react); err != nil {
+	if _, err := enqueuer(t, seed).EnqueueReaction(t.Context(), react); err != nil {
 		t.Fatal(err)
 	}
 	if err := seed.Close(); err != nil {
