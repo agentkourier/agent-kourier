@@ -102,12 +102,13 @@ func (c *Client) scrub(op string, err error) error {
 // angle bracket. Compiled once and never modified.
 var socketURL = regexp.MustCompile(`wss?://[^\s"'<>\\]+`)
 
-// clean returns s with the configured tokens, anything shaped like a Slack token, and any WebSocket URL, replaced.
+// clean returns s with the configured tokens, anything shaped like a Slack token, and any WebSocket URL, replaced,
+// normalized and on one line (redact.IdentifierText).
 func (c *Client) clean(s string) string {
 	for _, t := range []string{c.bot.Reveal(), c.app.Reveal()} {
 		if t != "" {
 			s = strings.ReplaceAll(s, t, "[redacted]")
 		}
 	}
-	return socketURL.ReplaceAllString(redact.Secrets(s), "[redacted]")
+	return socketURL.ReplaceAllString(redact.IdentifierText(s), "[redacted]")
 }

@@ -812,7 +812,7 @@ func TestPromptParsesLikeTheLoadCheck(t *testing.T) {
 }
 
 func TestPromptCaps(t *testing.T) {
-	long := strings.Repeat("a", 100_000)
+	long := strings.Repeat(strings.Repeat("a", 20)+" ", 5_000) // words: an unbroken run over redact.MaxBytes is cut whole
 	hostileAll := TriggerMessage{Text: long, Title: long, TitleLink: long, Fallback: long, Footer: long, AttachmentText: long}
 
 	t.Run("the instruction part is cut and marked", func(t *testing.T) {

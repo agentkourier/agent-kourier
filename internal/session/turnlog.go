@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"slices"
+	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // TurnOutcome is how a turn ended: the state its task reached, or the class of what stopped it. It is
@@ -151,21 +153,11 @@ func (m *Manager) taskEnded(t *tstate, task *a2a.Task) {
 	m.finish(t, stateOutcome(task.Status.State), "output", output)
 }
 
-// visible reports whether s has anything to read: some character that is not white space, a control or
-// format character, or a blank filler. It follows chat.Clean, which the renderer shows text through (the chat
-// package imports this one, so it cannot be called here).
+// visible reports whether s has anything to read: some character that is not white space once the invisible
+// characters are gone. It uses redact.Normalize, the one deletion set that chat.Clean, which the renderer shows text
+// through, uses too (the chat package imports this one, so Clean cannot be called here).
 func visible(s string) bool {
-	for i := 0; i < len(s); {
-		r, n := utf8.DecodeRuneInString(s[i:])
-		i += n
-		switch {
-		case r == utf8.RuneError && n == 1: // invalid UTF-8, which Clean deletes
-		case unicode.IsSpace(r), r == 'ㅤ', r == '⠀', unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs):
-		default:
-			return true
-		}
-	}
-	return false
+	return strings.TrimFunc(redact.Normalize(s), unicode.IsSpace) != ""
 }
 
 func (m *Manager) turnContext(t *tstate) context.Context {

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Redacted is what takes the place of a secret value.
@@ -30,9 +31,10 @@ var secretSuffixes = []string{"password", "passwd", "secret", "token", "apikey",
 var secretJoined = map[string]bool{"connectionstring": true, "sessionid": true}
 
 // SecretName reports whether any word of name is a secret word, or ends in one of the long ones,
-// or the name as a whole is one of secretJoined.
+// or the name as a whole is one of secretJoined. It normalizes name first, so that an invisible
+// character cannot split "password".
 func SecretName(name string) bool {
-	words := nameWords(name)
+	words := nameWords(Normalize(name))
 	if secretJoined[strings.Join(words, "")] {
 		return true
 	}
@@ -87,9 +89,27 @@ func nameWords(name string) []string {
 }
 
 // MaxBytes bounds each key and string that is redacted. Longer text is cut at the last white
-// space within it (see Bound), so that the work is bounded whatever the agent sends, and
-// ToolLine shows at most a few hundred characters of it anyway.
+// space within it (see Bound), and ToolLine shows at most a few hundred characters of it anyway.
+// The work is bounded whatever the agent sends because text over rawCap is cut before any pattern
+// reads it (see capRaw).
 const MaxBytes = 4 << 10
+
+// rawCap is how much of a text the token layer reads as it came: four times MaxBytes, which Bound shows at most a
+// quarter of, so what is cut off is never shown. A text longer than that is cut at a character, and what is kept
+// is marked with Truncated.
+const rawCap = 4 * MaxBytes
+
+// capRaw returns s cut to rawCap bytes at a character boundary, and whether it was cut.
+func capRaw(s string) (string, bool) {
+	if len(s) <= rawCap {
+		return s, false
+	}
+	cut := rawCap
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut], true
+}
 
 // Bound returns s cut to at most MaxBytes at a white-space boundary and marked with
 // Truncated, or s if it is short enough. Every word is whole or gone, so no part of a secret that
@@ -135,25 +155,74 @@ var (
 	bareRun = regexp.MustCompile(`[A-Za-z0-9/+=]+`)
 )
 
-// Text takes secrets out of free text: a command line, a connection string, a log line, an error.
-// It deletes format characters first, so that none can split a name or a scheme, cuts the text to
-// MaxBytes at a white-space boundary (see Bound), and then redacts URL credentials, what Secrets
-// knows for a token, a private key, the value of any "name=value" or "--flag value" whose name
-// is a SecretName, a "-u user:password" flag, and an AWS secret access key by its shape. It runs
-// before any cut the caller makes, so no prefix of a secret is shown. Line breaks are kept: they
-// end a value, and the caller decides what to do with them.
-func Text(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) {
-			return -1
-		}
-		return r
-	}, s)
-	s = Bound(s)
+// FreeText takes secrets out of free text: a command line, a connection string, a log line, an error, an
+// agent's question, a thread reply. It returns normalized text (see Normalize): the invisible characters are
+// deleted and the line breaks written "\n" first, so that none can split a name or a scheme, and no caller can
+// get the order of cleaning and redacting wrong. It then cuts the text to MaxBytes at a white-space boundary (see
+// Bound), and redacts URL credentials, what secrets knows for a token, a private key, the value of any
+// "name=value" or "--flag value" whose name is a SecretName, a "-u user:password" flag, and an AWS secret access
+// key by its shape. The order is normalize, bound, match, and it runs before any cut the caller makes, so no
+// prefix of a secret is shown. Line breaks are kept: they end a value, and the caller decides what to do with
+// them. IdentifierText is the entry for a short value that must be one line.
+//
+// The token layer also runs once on the text as it came, before it is normalized: deleting an invisible
+// character can glue a word to a scheme ("token", a zero-width space, "Bearer") or a credential to it, and the
+// glued rules, which need a word boundary and a credential that decodes, refuse what the gap hid. Its patterns
+// tolerate the gaps, so they take these in the raw text.
+func FreeText(s string) string {
+	s, cut := capRaw(s)
+	s = Normalize(secrets(s))
+	if cut { // the end of the kept text may be a secret the cut went through, and invisible padding may have brought it forward
+		s = dropTail(s) + Truncated
+	}
+	return matchFree(Bound(s))
+}
+
+// FreeTextCut is FreeText for a caller that shows only the start of the text, such as the alert fields of a prompt.
+// Where FreeText cuts at white space, so that an unbroken run longer than MaxBytes goes whole, FreeTextCut cuts at
+// a character boundary at limit bytes, so that a field with no white space in it (Japanese, a long link) keeps its
+// start, and marks the cut with Truncated. The cut comes after normalizing and before matching, as Bound's does.
+//
+// A secret that straddles the cut is cut with it, and what is left of it may match no rule (a URL password without
+// its "@", a bare key short of its 40 characters). The matched text can also be much shorter than the cut text, so
+// what the caller shows of it may reach back to the end of the cut. So when the text was cut, the last run of the
+// matched text goes before the mark: back to the last white space in its final tailDrop bytes, or if there is none
+// the final tailDrop bytes. A secret that holds white space and straddles the cut (a URL password with a space in
+// it) loses only its last word to this, and shows the rest of itself, if no other rule has taken it.
+func FreeTextCut(s string, limit int) string {
+	s = Normalize(secrets(s))
+	if len(s) <= limit {
+		return matchFree(s)
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return dropTail(matchFree(s[:cut])) + Truncated
+}
+
+// tailDrop is how much of the end of a cut text dropTail takes at most.
+const tailDrop = 1 << 10
+
+// dropTail returns s without its last run: cut back to the last white space in its final tailDrop bytes, or, if
+// there is none, without those bytes, at a character boundary (and with nothing left of a text that is shorter).
+func dropTail(s string) string {
+	from := max(len(s)-tailDrop, 0)
+	for from < len(s) && !utf8.RuneStart(s[from]) {
+		from++
+	}
+	if i := strings.LastIndexFunc(s[from:], unicode.IsSpace); i >= 0 {
+		return s[:from+i]
+	}
+	return s[:from]
+}
+
+// matchFree is the matching half of FreeText, on text that is normalized and cut.
+func matchFree(s string) string {
 	s = urlUserinfo.ReplaceAllString(s, "${1}"+redacted+"@")
 	s = urlSpaced.ReplaceAllString(s, "${1}"+redacted+"@")
 	s = plainUserinfo.ReplaceAllString(s, redacted+"@")
-	s = Secrets(s)
+	s = secrets(s)
 	s = pemKey.ReplaceAllString(s, redacted)
 	s = redactNamed(s, namedPair, true)
 	s = redactNamed(s, secretFlag, false)
@@ -164,6 +233,24 @@ func Text(s string) string {
 		}
 		return run
 	})
+}
+
+// IdentifierText takes secrets out of an identifier: a short value that is shown or stored on one line, such as
+// an audit field, a user's or a Binding's name. It returns normalized text (see
+// Normalize) with every run of white space, a line break among it, written as one space and the ends trimmed,
+// and redacts only what has a shape of its own: a Slack token, a Bearer or Basic credential, a JWT, an OAuth
+// field. It does not read an identifier as a "name=value" or a flag: "secret:ns/name" is the identity of a
+// Secret, and a task ID may be 40 characters long. It does not bound the text, but for the work of reading it
+// (a text over rawCap is cut and marked); the caller caps an identifier after it is redacted, so that no
+// token is cut short of its pattern. Like FreeText, it runs the token layer on
+// the text as it came as well, before the invisible characters are deleted.
+func IdentifierText(s string) string {
+	s, cut := capRaw(s)
+	s = secrets(strings.Join(strings.Fields(Normalize(secrets(s))), " "))
+	if cut {
+		s += Truncated
+	}
+	return s
 }
 
 // redactNamed replaces the value after each match of re, a name and what separates it from its

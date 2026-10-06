@@ -22,7 +22,7 @@ import (
 // oldest first, with a sentence before it that says the block is data and not instructions and names the tag. It is
 // built as the untrusted block of a trigger's message is (prompt.go): the tag ends in the first 12 hex digits of a
 // SHA-256 over what the block holds, so no reply can hold its own hash, and every name and text is cleaned of control and
-// format characters (chat.Clean), has its secrets taken out (redact.Text, bounded) and is escaped (escapeCut): no "<" of a
+// format characters, has its secrets taken out (redact.FreeText, which normalizes and bounds it) and is escaped (escapeCut): no "<" of a
 // reply survives, so nothing in it can close the block early or open a tag that passes for courier's.
 
 // Caps on the thread context, in UTF-16 units as chat.Truncate counts them. Anything cut ends in chat.Truncated, and what is
@@ -77,16 +77,17 @@ type threadEntry struct {
 // prepareThread cleans, redacts, escapes and cuts r. It says false for a reply that has no text once cleaned: there is
 // nothing to show of it, and it is not "left out".
 //
-// The order is chat.Clean, then redact.Text, and it matters for safety. redact.Text tolerates format characters (Cf) inside
-// a secret's name, but Clean also deletes control characters (Cc), private use and the blank fillers U+3164 and U+2800.
-// Redacting first leaves "pass\x07word=hunter2" looking like no secret, and Clean then rejoins it into "password=hunter2"
-// after the redaction looked. Cleaned first, redaction sees the text as the reader will.
+// The text goes through redact.FreeText alone: it normalizes first (deletes control, format and private-use characters,
+// the blank fillers and the variation selectors) and matches second, and that order matters for safety. Redacting first
+// would leave "pass\x07word=hunter2" looking like no secret, and cleaning it afterwards would rejoin it into
+// "password=hunter2" after the redaction looked. TestThreadRepliesRedactsWhatCleaningWouldRejoin pins it. A name and an ID
+// are shown on one line, so chat.Clean puts the redacted text on one.
 func prepareThread(r ThreadReply) (threadEntry, bool) {
-	text := redact.Text(chat.Clean(r.Text, false))
+	text := redact.FreeText(r.Text)
 	if strings.TrimSpace(text) == "" {
 		return threadEntry{}, false
 	}
-	e := threadEntry{name: redact.Text(chat.Clean(r.Name, true)), id: redact.Text(chat.Clean(r.UserID, true)), text: text}
+	e := threadEntry{name: chat.Clean(redact.FreeText(r.Name), true), id: chat.Clean(redact.FreeText(r.UserID), true), text: text}
 	// Each is cut on its own, so that a long name does not take the ID's place.
 	from := escapeCut(e.id, MaxThreadNameUnits)
 	if e.name != "" {

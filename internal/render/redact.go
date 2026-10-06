@@ -3,7 +3,6 @@ package render
 import (
 	"strings"
 
-	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
@@ -23,25 +22,27 @@ func RedactArgs(args map[string]any) map[string]any {
 // key whose name redact.SecretName accepts, the "value" of a map whose "name" or "key" names a secret (which is how
 // Kubernetes writes an env var, {"name": "DB_PASSWORD", "value": "..."}), the second of a
 // two-element list whose first is a secret name (a header as ["X-Api-Key", "..."]), and what
-// redact.Text finds in each string. Keys and strings are cleaned first, so that zero-width and
-// control characters cannot split a name, and bounded (see redact.MaxBytes). A string is redacted
+// redact.FreeText finds in each string. Strings are normalized by redact.FreeText, and a name by
+// redact.SecretName, so that zero-width and control characters cannot split one; a string is bounded
+// (see redact.MaxBytes), and a key is read as identifier text (one line, its tokens taken out: a key may be one, and
+// two keys that come to the same text are one) and bounded. A string is redacted
 // as it is, with its own line breaks, and not as the JSON that shows it: there a newline is a
 // backslash and an "n", which would join the next name. Letters that only look like Latin ones
 // (Cyrillic "a" in "password") are not handled.
 func redactArgs(v any) any {
 	switch t := v.(type) {
 	case string:
-		return redact.Text(chat.Clean(t, false))
+		return redact.FreeText(t)
 	case map[string]any:
 		pair := false
 		for k, x := range t {
-			if s, ok := x.(string); ok && (strings.EqualFold(k, "name") || strings.EqualFold(k, "key")) && redact.SecretName(chat.Clean(s, true)) {
+			if s, ok := x.(string); ok && (strings.EqualFold(k, "name") || strings.EqualFold(k, "key")) && redact.SecretName(s) {
 				pair = true
 			}
 		}
 		out := make(map[string]any, len(t))
 		for k, x := range t {
-			k = redact.Bound(chat.Clean(k, true))
+			k = redact.Bound(redact.IdentifierText(k))
 			if redact.SecretName(k) || (pair && strings.EqualFold(k, "value")) {
 				out[k] = redacted
 			} else {
@@ -50,7 +51,7 @@ func redactArgs(v any) any {
 		}
 		return out
 	case []any:
-		if name, ok := firstString(t); ok && len(t) == 2 && redact.SecretName(chat.Clean(name, true)) {
+		if name, ok := firstString(t); ok && len(t) == 2 && redact.SecretName(name) {
 			return []any{redactArgs(name), redacted}
 		}
 		out := make([]any, len(t))

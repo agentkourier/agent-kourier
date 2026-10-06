@@ -32,7 +32,7 @@ func NewJSONHandler(w io.Writer, level slog.Leveler) slog.Handler {
 }
 
 // RedactAttr is a slog.HandlerOptions.ReplaceAttr. It replaces the value of an attribute that holds an error, or
-// is named err, error, cause, reason or panic, with its text passed through redact.Text and cut to
+// is named err, error, cause, reason or panic, with its text passed through redact.FreeText and cut to
 // MaxLogErrorBytes, so a secret in an error, and the agent's or Slack's own words in one, do not reach the log.
 // The attribute keeps its key, and every other attribute, the message, the level and the time are returned as
 // they came. The handler calls it for attributes in groups, and for those added with With, as well.
@@ -65,7 +65,7 @@ func LogText(v any) (text string) {
 	} else {
 		text = fmt.Sprint(v)
 	}
-	text = redact.Text(text)
+	text = redact.FreeText(text)
 	if len(text) <= MaxLogErrorBytes {
 		return text
 	}

@@ -2,50 +2,26 @@ package chat
 
 import (
 	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // Truncated ends text that Truncate cut. It holds nothing an adapter needs to escape, on any platform.
 const Truncated = "… (truncated)"
 
-// Clean returns s without the characters a reader cannot see and a platform may act on: control
-// characters, and format characters (zero-width, joiners, bidirectional overrides and isolates, the soft
-// hyphen, the invisible tag characters), private-use and surrogate code points, the two blank fillers (Hangul
-// U+3164 and Braille U+2800) and invalid UTF-8. Every kind of line break (CR, CRLF, NEL, the Unicode line and
-// paragraph separators) becomes "\n". They are deleted before an adapter escapes anything, so none can split "<!channel>" apart, or reorder what the
-// reader sees. A zero-width-joined emoji falls apart into its parts, which is the price of deleting them
-// all.
+// Clean returns s without the characters a reader cannot see and a platform may act on: the invisible
+// characters of redact.Normalize, which owns the set, so that display and redaction cannot disagree on it.
+// They are control characters, format characters (zero-width, joiners, bidirectional overrides and isolates,
+// the soft hyphen, the invisible tag characters), private-use and surrogate code points, the two blank fillers
+// (Hangul U+3164 and Braille U+2800), the variation selectors and invalid UTF-8. Every kind of line break (CR,
+// CRLF, NEL, the Unicode line and paragraph separators) becomes "\n". They are deleted before an adapter
+// escapes anything, so none can split "<!channel>" apart, or reorder what the reader sees. A zero-width-joined
+// emoji falls apart into its parts, which is the price of deleting them all.
 //
 // If line is true the result is one line: any white space, a line break among it, becomes a single space,
-// and the ends are trimmed.
+// and the ends are trimmed. That is all Clean adds to the normalization.
 func Clean(s string, line bool) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); {
-		r, n := utf8.DecodeRuneInString(s[i:])
-		i += n
-		switch {
-		case r == utf8.RuneError && n == 1:
-			continue
-		case r == '\r':
-			if i < len(s) && s[i] == '\n' {
-				i++
-			}
-			b.WriteByte('\n')
-		case r == '\n' || r == '\u0085' || r == '\u2028' || r == '\u2029':
-			b.WriteByte('\n')
-		case r == '\t':
-			b.WriteByte('\t')
-		case r == '\u3164' || r == '\u2800': // blank fillers: shown as nothing, in no category of the above
-			continue
-		case unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs):
-			continue
-		default:
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
+	out := redact.Normalize(s)
 	if line {
 		out = strings.Join(strings.Fields(out), " ")
 	}

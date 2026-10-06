@@ -2,15 +2,15 @@
 //
 // The router, the session manager and the interaction flow call it, so no caller builds a
 // store.AuditEntry by hand. It takes identifiers and typed outcomes, never payloads. Every
-// string that reaches a row is cleaned, redacted and capped. Identifiers, and an outcome, which is
-// tags and identifiers (the task IDs of a duplicate run among them), go through redact.Secrets, the
-// shapes of a token. Free text, which is an unusable pause's reason, an error and the failure log's
-// line, goes through redact.Text too, which also takes the value of a "--password=x", a connection
-// string, a key block or a URL's credentials. An identifier does not: an agent chooses its task IDs,
-// and the rules would redact one that is 40 characters long, or holds "token=". This repeats the
-// store's own redaction (every field but Email, after WP-23c) on purpose: only this package also
-// deletes invisible characters and unifies spaces first. Returned errors and the failure log are
-// cleaned the same way.
+// string that reaches a row is normalized, redacted and capped, by redact: the invisible characters are
+// deleted before any secret is matched. Identifiers, and an outcome, which is tags and identifiers (the
+// task IDs of a duplicate run among them), go through redact.IdentifierText, on one line, with the shapes
+// of a token taken out. Free text, which is an unusable pause's reason, an error and the failure log's
+// line, goes through redact.FreeText too, which also takes the value of a "--password=x", a connection
+// string, a key block or a URL's credentials, and is then put on one line. An identifier does not: an
+// agent chooses its task IDs, and the rules would redact one that is 40 characters long, or holds
+// "token=". This repeats the store's own redaction (every field but Email) on purpose. Returned errors
+// and the failure log are cleaned the same way.
 //
 // Failure policy (spec 8.6 step 7). No write is dropped silently: each failure is logged
 // (without the entry), counted through Options.OnFailure, and returned. The caller then
@@ -26,11 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -467,44 +465,21 @@ func orElse[T ~string](have, fallback T) T {
 	return fallback
 }
 
-// gluedBearer catches what redact.Secrets, which needs a gap after "bearer", misses:
-// a colon separator ("Bearer: X"), and a token glued to the scheme after a format character
-// (a zero-width space, say) vanished. The glued form needs a run of 8 or more characters
-// starting with a letter or digit, so an identifier such as "ns/bearer-gateway" survives.
-// The store now treats Unicode gaps as whitespace itself (WP-23c); the cleaning here is
-// defence in depth, and the store holds without it.
-var gluedBearer = regexp.MustCompile(`(?i)bearer(?::\s*\S+|[A-Za-z0-9]\S{7,})`)
-
-// clean makes s safe for an identifier field: it deletes format characters, turns control
-// characters and every Unicode space into an ASCII space, redacts the shapes of a token
-// (redact.Secrets), and caps s at limit bytes, ending in "..." when it cut. The order matters.
-// Format characters are deleted and spaces unified first, as defence in depth: redact.Secrets
-// handles Unicode gaps on its own, and the redaction does not depend on this step. Redaction runs
-// before the cut, so a token cannot be cut short of its pattern.
+// clean makes s safe for an identifier field: redact.IdentifierText normalizes it onto one line and takes
+// the shapes of a token out, and capped cuts the result to limit bytes, ending in "..." when it cut.
+// Redaction runs before the cut, so a token cannot be cut short of its pattern.
 func clean(s string, limit int) string {
-	return capped(gluedBearer.ReplaceAllString(redact.Secrets(unify(s)), "[redacted]"), limit)
+	return capped(redact.IdentifierText(s), limit)
 }
 
 // cleanFree is clean for free text: an error, or the reason a dialect gave for an unusable pause. It
-// redacts with every rule of redact.Text, which also takes the value of a "--password=x", a
-// connection string, a key block or a URL's credentials. Identifiers do not take it, and nor does an
-// outcome, which is tags and identifiers: it would read the identity "secret:ns/name" as a secret
-// named "secret", and redact a task ID that is 40 characters long or holds "token=".
+// redacts with every rule of redact.FreeText, which also takes the value of a "--password=x", a
+// connection string, a key block or a URL's credentials, and then puts the text on one line. Identifiers
+// do not take it, and nor does an outcome, which is tags and identifiers: it would read the identity
+// "secret:ns/name" as a secret named "secret", and redact a task ID that is 40 characters long or
+// holds "token=".
 func cleanFree(s string, limit int) string {
-	return capped(gluedBearer.ReplaceAllString(redact.Text(unify(s)), "[redacted]"), limit)
-}
-
-// unify deletes format characters and turns control characters and every Unicode space into a space.
-func unify(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case unicode.Is(unicode.Cf, r):
-			return -1
-		case unicode.IsControl(r) || unicode.IsSpace(r):
-			return ' '
-		}
-		return r
-	}, s)
+	return capped(strings.Join(strings.Fields(redact.FreeText(s)), " "), limit)
 }
 
 // capped cuts s to limit bytes at a character boundary, ending in "..." when it cut.

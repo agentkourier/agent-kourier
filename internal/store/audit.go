@@ -35,7 +35,8 @@ const MaxAuditOutcome = 200
 // It holds identifiers and a short outcome only. Never put a payload, message
 // text, token, or any Secret content in it: the audit table is read by people
 // and exported (spec section 10). As a backstop, AppendAudit passes every text
-// field except Email through redact.Secrets (see Redacted).
+// field except Email through redact.IdentifierText (see Redacted), so what is stored is
+// normalized, on one line.
 type AuditEntry struct {
 	// Sequence is assigned by the store on append.
 	Sequence int64
@@ -55,17 +56,17 @@ type AuditEntry struct {
 	Outcome string
 }
 
-// Redacted returns e with redact.Secrets applied to every free-text field: User,
-// Identity, Binding, Subject and Outcome. Kind is a validated enum, and Email is
-// an identity field by design (spec 8.5), so both stay as they are. Every Audit
-// implementation must store the result of Redacted, never e itself: the store
-// is the last line of defence behind the audit writer.
+// Redacted returns e with redact.IdentifierText applied to every text field: User, Identity, Binding,
+// Subject and Outcome, which come back normalized (the invisible characters deleted) and on one line,
+// with the tokens taken out. Kind is a validated enum, and Email is an identity field by design (spec
+// 8.5), so both stay as they are. Every Audit implementation must store the result of Redacted, never
+// e itself: the store is the last line of defence behind the audit writer.
 func (e AuditEntry) Redacted() AuditEntry {
-	e.User = redact.Secrets(e.User)
-	e.Identity = redact.Secrets(e.Identity)
-	e.Binding = redact.Secrets(e.Binding)
-	e.Subject = redact.Secrets(e.Subject)
-	e.Outcome = redact.Secrets(e.Outcome)
+	e.User = redact.IdentifierText(e.User)
+	e.Identity = redact.IdentifierText(e.Identity)
+	e.Binding = redact.IdentifierText(e.Binding)
+	e.Subject = redact.IdentifierText(e.Subject)
+	e.Outcome = redact.IdentifierText(e.Outcome)
 	return e
 }
 

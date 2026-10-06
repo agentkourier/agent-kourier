@@ -14,9 +14,10 @@ func r(cps ...rune) string { return string(cps) }
 // raw is the string of the bytes bs, which may be invalid UTF-8.
 func raw(bs ...byte) string { return string(bs) }
 
-// session cannot import chat (chat imports session), so session.visible repeats the rule of chat.Clean that
-// decides whether text shows: the renderer drops an artifact that is blank once cleaned (render.Body). This
-// pins the two together: if Clean learns to delete another kind of character, or visible another, this fails.
+// session cannot import chat (chat imports session), so session.visible decides whether text shows from
+// redact.Normalize, the deletion set that chat.Clean uses: the renderer drops an artifact that is blank once
+// cleaned (render.Body). This pins the two together, variation selectors included: a message of only U+FE0F
+// is not visible.
 func TestVisibleAgreesWithWhatTheRendererShows(t *testing.T) {
 	for _, s := range []string{
 		"", " ", "\n\t \r\n", "text", " text ", "a",
@@ -30,9 +31,21 @@ func TestVisibleAgreesWithWhatTheRendererShows(t *testing.T) {
 		r(0xa0), r(0xa0, 0x200b), r(0x2003), r(0x1680), // other white space
 		r(' ', 0x200b, 0x2800) + "x" + r(0x3164, ' '), raw(0xff) + "x", r(0x200b) + ".", r(0x3164, 0x3164) + "a",
 		r(0x1f600), r(0x301), r(0x200d, 0x1f600),
+		r(0xfe0f), r(0xfe00, 0xfe0f), r(0xe0100), r(0xe01ef, ' '), r(0xfe0f) + "x", r(0x2764, 0xfe0f), // variation selectors alone show nothing
 	} {
 		if got, want := session.Visible(s), strings.TrimSpace(chat.Clean(s, false)) != ""; got != want {
 			t.Errorf("visible(%q) = %v; chat.Clean says %v", s, got, want)
 		}
+	}
+}
+
+func TestAMessageOfOnlyAVariationSelectorIsNotVisible(t *testing.T) {
+	for _, s := range []string{r(0xfe0f), r(0xfe00), r(0xe0100), r(0xe01ef), " " + r(0xfe0f) + "\n"} {
+		if session.Visible(s) {
+			t.Errorf("visible(%q) = true, want false: a variation selector shows nothing on its own", s)
+		}
+	}
+	if !session.Visible(r(0x2764, 0xfe0f)) {
+		t.Error("an emoji with its presentation selector is text")
 	}
 }

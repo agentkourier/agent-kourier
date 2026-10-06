@@ -92,11 +92,29 @@ The grace is **25 hours**, from what reads the two after a decision:
 
 ### Secrets in what is stored
 
-The request is stored through `redact`: the agent's hint and each question's text pass through `redact.Text`, a tool's
+The request is stored through `redact`: the agent's hint and each question's text pass through `redact.FreeText`, a tool's
 name likewise, and a tool's arguments through the redaction that the Slack status line uses (`render.RedactArgs`: values
 under a secret name, `name`/`value` pairs, tokens, URL credentials, private keys), so that what is stored is never more than
 what is shown. The agent still receives what it always did: the answer is built from request and tool IDs and the chosen
 choice, none of which changes.
+
+**Stored and logged text is normalized.** Redaction returns normalized text, not the original with only the secret spans
+replaced: before it matches anything, `internal/redact` deletes the invisible characters (control characters except line
+breaks and tab, format characters such as the zero-width space and the bidirectional overrides, private-use and surrogate
+code points, invalid UTF-8, the blank fillers U+3164 and U+2800, and every variation selector U+FE00 to U+FE0F and
+U+E0100 to U+E01EF) and writes every kind of line break (CR, CRLF, NEL, U+2028, U+2029) as `\n`. So no such character
+can split a secret's name past the redaction, and none is stored, logged or sent to the agent in the alert and thread
+blocks. What a reader sees stays, an emoji with its glyph and without its presentation selector. There are two shapes:
+**free text** (a pause's hint and questions, an error in a log line, a thread reply, an alert field) keeps its line breaks and
+is cut at 4 KiB at a white space; an **identifier** (an audit field, a user's or a Binding's name) is one line, every run of
+white space a single space, and is read for tokens only. The alert fields that reach the agent are the exception to the 4 KiB cut: a field with no white space in it
+(a Japanese body, a long Grafana link) is read up to 12000 bytes, cut at a character and marked, so its first 3000 UTF-16
+units reach the agent, redacted, instead of the whole field being replaced by "… (truncated)" (the last run of a cut
+field, back to its last white space, is left out, so that no start of a secret the cut went through is shown); the footer is an identifier,
+so its `name: value` pairs (`courier-key: ns/alertname`) stay and only its tokens are taken out. A token or credential is
+matched both in the text as it came and in the normalized text, so that a word or an invisible character that
+normalization closes up cannot hide one. The same set of characters is deleted from the text that is shown in
+Slack (`chat.Clean`), so display and redaction cannot disagree on it.
 
 Accepted limitation: a pause is told to be the same one as a stored pause by comparing both after redaction, so two pauses
 under one interaction ID that differ only in a redacted value count as the same. A keyed digest of the unredacted pause

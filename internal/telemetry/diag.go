@@ -39,7 +39,7 @@ func diagLogger(log *slog.Logger, limit *warnLimiter) logr.Logger {
 
 // diagnostic logs msg and the class of err, at most once per warnEvery for each distinct msg.
 func diagnostic(log *slog.Logger, limit *warnLimiter, msg string, err error) {
-	msg = redact.Text(msg)
+	msg = redact.FreeText(msg)
 	if suppressed, ok := limit.allow(msg); ok {
 		attrs := []any{"suppressed", suppressed}
 		if err != nil {

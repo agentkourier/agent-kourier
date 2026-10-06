@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 // The first prompt of a chat trigger (spec 8.2, R2; design: tasks/plans/chat-triggers.md). It has
@@ -32,8 +33,10 @@ import (
 // ends in the first 12 hex digits of a SHA-256 over the cleaned fields of the message, so it is
 // the same for the same message and different for another, and no message can hold its own
 // hash: a model cannot take a forged close tag in the message for the real one. The message is
-// cleaned of control and format characters and its line breaks made "\n" (chat.Clean), and then
-// "&" is written "&amp;", and "<", ">" and the look-alike angle brackets (see angleBracket)
+// normalized and redacted (redact.FreeTextCut: the invisible characters deleted, the line breaks made "\n", the
+// secrets taken out, in the first 12000 bytes, cut at a character), the one-line title and link put on one line
+// (chat.Clean), and the footer, which is a line of identifiers such as "courier-key: ns/alertname", read as
+// identifier text (redact.IdentifierText: the tokens taken out, a "name: value" pair kept), and then "&" is written "&amp;", and "<", ">" and the look-alike angle brackets (see angleBracket)
 // "&lt;" and "&gt;", as spec 8.4 does for text of the agent. So no "<" of the message survives:
 // nothing in it can close the block early, or open a tag that passes for courier's, whatever
 // its case or spacing. The cost is that Slack's own markup, "<url|text>" and "&amp;", is
@@ -190,18 +193,38 @@ func (p *Prompt) safeView(view v1alpha1.PromptView) (v1alpha1.PromptView, error)
 // messageField is one field of a TriggerMessage, as the block shows it.
 type messageField struct {
 	name  v1alpha1.MessageField
-	value string // cleaned
+	value string // normalized and redacted
+}
+
+// alertWindowBytes is how much of a field is read for secrets: four times MaxFieldUnits, so that the 3000 units a field
+// shows (never more than 9000 bytes of text) lie whole inside it, with room after them for a secret that runs
+// across the end of what is shown. A field longer than it is cut at a character, not at white space, so that a body
+// with none (Japanese) or a long link keeps its start.
+const alertWindowBytes = 4 * MaxFieldUnits
+
+// alertField is the value of one field of the message as the block shows it, other than the footer: normalized and
+// with its secrets taken out (redact.FreeTextCut, read up to alertWindowBytes), then, for a field that is one line (line), put on one. The
+// footer is identifier text: the free-text rules would read its "courier-key: X" as a pair named by the secret word
+// "key" and take the key out, and the key is what the footer is there for. A field's name is one of
+// courier's constants, never the message's, so it takes no redaction. The agent is sent this and nothing else of the
+// field, so a secret that an alert or a person wrote into one does not reach the model's provider.
+func alertField(s string, line bool) string {
+	s = redact.FreeTextCut(s, alertWindowBytes)
+	if line {
+		s = chat.Clean(s, true)
+	}
+	return s
 }
 
 // untrustedSection returns the sentence and the block for msg, in at most MaxUntrustedUnits.
 func untrustedSection(msg TriggerMessage) string {
 	fields := []messageField{
-		{v1alpha1.FieldTitle, chat.Clean(msg.Title, true)},
-		{v1alpha1.FieldText, chat.Clean(msg.Text, false)},
-		{v1alpha1.FieldAttachmentText, chat.Clean(msg.AttachmentText, false)},
-		{v1alpha1.FieldFallback, chat.Clean(msg.Fallback, false)},
-		{v1alpha1.FieldTitleLink, chat.Clean(msg.TitleLink, true)},
-		{v1alpha1.FieldFooter, chat.Clean(msg.Footer, true)},
+		{v1alpha1.FieldTitle, alertField(msg.Title, true)},
+		{v1alpha1.FieldText, alertField(msg.Text, false)},
+		{v1alpha1.FieldAttachmentText, alertField(msg.AttachmentText, false)},
+		{v1alpha1.FieldFallback, alertField(msg.Fallback, false)},
+		{v1alpha1.FieldTitleLink, alertField(msg.TitleLink, true)},
+		{v1alpha1.FieldFooter, redact.IdentifierText(msg.Footer)},
 	}
 	tag := blockTag(fields)
 	closeBlock := "</" + tag + ">\n"

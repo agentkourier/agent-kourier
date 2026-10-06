@@ -1,34 +1,48 @@
-// Package redact takes secrets out of text that is shown or stored: courier's one place that
-// knows what a token, a credential or a secret value looks like (spec 8.4, 8.6 step 7).
+// Package redact takes secrets out of text that is shown, stored, logged or sent to an agent: courier's one
+// place that knows what a token, a credential or a secret value looks like (spec 8.4, 8.6 step 7).
+//
+// It has two entry points, FreeText and IdentifierText, and both return normalized text (see Normalize):
+// the invisible characters deleted and the line breaks written "\n" before any secret is matched, so that no
+// caller can get the order of cleaning and redacting wrong. The package imports no other package of courier.
 package redact
 
 import (
+	"bytes"
+	"encoding/base64"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	redacted = "[redacted]"
 
-	// space is any Unicode white space: what unicode.IsSpace accepts, which is
-	// the ASCII set plus vertical tab, NEL (U+0085) and category Z. Go's \s is
-	// ASCII only, so NBSP and the em space would slip past it.
-	space = `\t-\r \x{85}\p{Z}`
-	// format is category Cf: zero-width space and joiners, BOM, soft hyphen,
-	// word joiner. They render as nothing, so an attacker can hide one between
-	// a scheme and its credential, or inside a prefix.
-	format = `\p{Cf}`
-	// blank is what may pad a field: white space, format and control (Cc)
-	// characters, so NUL, ESC and the C1 set cannot split a scheme from its
+	// space is the white space that ends a credential: tab, the line breaks (LF, CR, NEL, and the Unicode line and
+	// paragraph separators of category Z) and every other Unicode space (NBSP and the em space, which Go's \s, ASCII
+	// only, would miss). The vertical tab and the form feed are not here: Normalize deletes them, so they are
+	// part of a credential (see deletable), not its end.
+	space = `\t\n\r \x{85}\p{Z}`
+	// deletable is every character Normalize deletes, as a class body: format, control (Cc, but not the white space
+	// and line breaks above), private use, the blank fillers, the variation selectors and invalid UTF-8 (which a
+	// pattern reads as U+FFFD). The patterns run on the text as it came as well as on the normalized text, and in
+	// the first run a character that will be deleted must be transparent: inside a credential it does not end it,
+	// or the rest would be glued to the "[redacted]" where the second run cannot see it.
+	deletable = `\p{Cf}\p{Co}\x{3164}\x{2800}\x{fe00}-\x{fe0f}\x{e0100}-\x{e01ef}\x{fffd}\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f`
+	// blank is what may pad a field: white space and everything Normalize
+	// deletes, so NUL, ESC and the C1 set cannot split a scheme from its
 	// credential either.
-	blank = space + format + `\p{Cc}`
+	blank = space + deletable
 	// esc is a literal escape sequence of the kind Go's %q, %+q and %#v print
 	// for a character they cannot show: a backslash and t, x00, u00a0 or
 	// U000e0001. An audit field that holds quoted text carries an invisible
 	// gap as one of these, so they count as format and blank characters.
 	esc = `\\(?:[abfnrtv0]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`
-	// gap is what may hide inside a word: format characters or escapes.
-	gap = `(?:` + format + `|` + esc + `)*`
+	// gap is what may hide inside a word: any number of the characters that Normalize deletes (zero-width space
+	// and joiners, BOM, soft hyphen, word joiner, control characters, ...), or escapes. They render as nothing, so
+	// an attacker can hide any of them, and more than one, inside a scheme or a prefix.
+	gap = `(?:[` + deletable + `]|` + esc + `)*`
 	// pad is one character of padding: a blank character or an escape.
 	pad = `(?:[` + blank + `]|` + esc + `)`
 	// sep separates a scheme from its credential: any run of blank characters
@@ -43,13 +57,27 @@ const (
 	// but cannot start with a separator or stop character, so a scheme followed
 	// by nothing but padding, or by the end of a JSON string, is left alone.
 	credential = `\\*["']?[^` + blank + `:` + stop + `][^` + space + stop + `]*`
-	// jwtChar is one character of a JWT segment: base64url, a format character
-	// or an escape.
-	jwtChar = `(?:[\w\p{Cf}-]|` + esc + `)`
+	// jwtChar is one character of a JWT segment: base64url, a character that
+	// is deleted, or an escape.
+	jwtChar = `(?:[\w-]|[` + deletable + `]|` + esc + `)`
+	// b64Std and b64URL are the characters of a base64 run, in the standard alphabet and in either one.
+	b64Std = `[A-Za-z0-9+/]`
+	b64URL = `[A-Za-z0-9+/_-]`
+	// gluedRest is how many characters follow the first of a token glued to
+	// "bearer": with that one, a token of seven. A word of fewer after
+	// "bearer" ("bearerless", "bearerbonds") is no credential.
+	gluedRest = `6`
 	// value is the value of an OAuth field: it stops at white space, a stop,
-	// or a query delimiter.
-	value = `[^` + space + stop + `&]+`
+	// or a query delimiter, and holds at least one character that is not deleted (a value of nothing but
+	// zero-width spaces is no value: the redaction would take them and leave the real text after them).
+	value = `[` + deletable + `]*[^` + space + stop + `&` + deletable + `][^` + space + stop + `&]*`
 )
+
+// run returns a pattern for a run of at least n characters of class (a character class), and up to two "=" of
+// padding, that no deleted character ends: each may be followed by any number of them, which count for nothing.
+func run(class string, n int) string {
+	return `(?:` + class + `[` + deletable + `]*){` + strconv.Itoa(n) + `,}(?:=[` + deletable + `]*){0,2}`
+}
 
 // spell returns a pattern for s that tolerates format characters and escapes
 // between its letters ("xo<ZWSP>xb-", `xo\u200bxb-`).
@@ -67,15 +95,18 @@ func pair(a, b string) string {
 
 var (
 	// secretPattern matches Slack tokens, bearer credentials and JWTs. Bearer
-	// takes a separator and a credential, or, glued to the scheme, a run of
-	// at least 7 token characters starting with a letter or digit, so
-	// "bearers", "bearer's" and identifiers like "bearer-gateway" survive.
-	// Slack tokens and Bearer credentials end at a stop, so compact JSON keeps
-	// its next field. Compiled once and never modified.
+	// takes a separator and a credential, or, glued to the scheme, a token of
+	// at least gluedMin characters starting with a letter or digit, and then
+	// only at a word boundary before "bearer": "flagbearer" and "x_bearer",
+	// "bearers", "bearer's", a short word and identifiers like
+	// "bearer-gateway" survive. Slack tokens and Bearer credentials end at a
+	// stop, so compact JSON keeps its next field. Compiled once and never
+	// modified.
 	secretPattern = regexp.MustCompile(
 		spell("xox") + gap + `[a-z]` + gap + `-[^` + space + stop + `]+` +
 			`|` + spell("xapp-") + `[^` + space + stop + `]+` +
-			`|(?i:` + spell("bearer") + `)(?:` + sep + credential + `|[A-Za-z0-9][\w~+/=.\p{Cf}-]{6,})` +
+			`|(?i:` + spell("bearer") + `)` + sep + credential +
+			`|\b(?i:` + spell("bearer") + `)[A-Za-z0-9][^` + space + stop + `]{` + gluedRest + `,}` +
 			`|` + spell("eyJ") + jwtChar + `+\.` + jwtChar + `+\.` + jwtChar + `*`)
 
 	// oauthPattern matches an OAuth token or secret field, as key=value or as
@@ -91,15 +122,26 @@ var (
 	// basicPattern matches "Basic" and a base64 credential of at least 8
 	// characters (user:pass encodes to that or longer). Basic is a common
 	// English word, so Secrets also spares plain words.
-	basicPattern = regexp.MustCompile(`(?i:` + spell("basic") + `)` + sep + `([A-Za-z0-9+/]{8,}={0,2})`)
+	basicPattern = regexp.MustCompile(`(?i:` + spell("basic") + `)` + sep + `(` + run(b64Std, 8) + `)`)
+
+	// gluedBasicPattern is a Basic credential against its scheme, with nothing between: what is left of
+	// "Basic", an invisible character and a credential once normalization has deleted the character. It
+	// needs a word boundary before "Basic" and a base64 run (either alphabet) of at least 12 characters
+	// (user:pass is 12), and replaceGluedBasic takes it only if the run decodes to a "user:password": there
+	// is no gap to tell "BasicdXNlcjpwYXNz" from "BasicAuthMiddleware" but what the run says.
+	gluedBasicPattern = regexp.MustCompile(`\b(?i:` + spell("basic") + `)(` + run(b64URL, 12) + `)`)
 
 	// plainWord is a word with at most a leading capital: prose, not base64.
 	plainWord = regexp.MustCompile(`^[A-Z]?[a-z]+$`)
 )
 
-// Secrets replaces anything in s that looks like a Slack token, a Bearer
-// or Basic credential, a JWT, or the value of an OAuth access_token,
-// refresh_token, id_token or client_secret field with "[redacted]". Schemes
+// secrets is the token layer of redaction, which FreeText and IdentifierText
+// run on text they have normalized. It replaces anything in s that looks like
+// a Slack token, a Bearer or Basic credential, a JWT, or the value of an OAuth
+// access_token, refresh_token, id_token or client_secret field with
+// "[redacted]". It is not an entry point: it matches s as it is, and the
+// patterns tolerate the invisible characters only as defence in depth, since
+// both entries delete them first. Schemes
 // and credentials may be separated by any Unicode white space, format or
 // control character, a colon, or "%20", and each of those may also appear as
 // the literal escape Go's %q, %+q and %#v print for it (\t, \x00, \u00a0,
@@ -111,7 +153,8 @@ var (
 // brace or backslash, so compact JSON keeps the fields after it; a credential
 // that itself contains one of those is cut there. "key= next" is an empty
 // value and leaves "next" alone. It is a backstop for free-text audit fields,
-// not a license to put secrets in them.
+// not a license to put secrets in them. A Bearer credential glued to its
+// scheme needs a word boundary before "bearer" and seven characters of token.
 //
 // Known limits, all deliberate; TestSecretsKnownLimits pins them:
 //   - A value that is a JSON object or array ({"access_token":{...}}) is not
@@ -125,16 +168,43 @@ var (
 //   - A format or control character inside a credential or value, printed by
 //     %q as an escape, ends it at the backslash; the rest survives.
 //   - A Basic credential under 8 base64 characters survives (it would collide
-//     with ordinary words).
+//     with ordinary words). Glued to its scheme, with no gap at all, one survives
+//     that is under 12 characters, or does not decode to UTF-8 text with a colon
+//     and no control character in it (a "user:password"): so "BasicAuthMiddleware"
+//     is kept, and so is a glued Latin-1 credential. A gap, of any kind Normalize
+//     deletes, makes it a credential for the first rule, whatever it decodes to.
+//   - A Bearer credential under 7 characters survives when nothing at all
+//     separates it from its scheme ("Bearerabc").
 //   - A scheme or key written in fullwidth or other compatibility forms (U+FF22
 //     for B) is not matched, because that would need NFKC normalization first.
-func Secrets(s string) string {
+func secrets(s string) string {
 	s = secretPattern.ReplaceAllString(s, redacted)
 	s = oauthPattern.ReplaceAllString(s, "${1}"+redacted)
-	return basicPattern.ReplaceAllStringFunc(s, func(m string) string {
-		if plainWord.MatchString(basicPattern.FindStringSubmatch(m)[1]) {
+	s = basicPattern.ReplaceAllStringFunc(s, func(m string) string {
+		if plainWord.MatchString(Normalize(basicPattern.FindStringSubmatch(m)[1])) {
 			return m
 		}
 		return redacted
 	})
+	return gluedBasicPattern.ReplaceAllStringFunc(s, func(m string) string {
+		if userPassword(Normalize(gluedBasicPattern.FindStringSubmatch(m)[1])) {
+			return redacted
+		}
+		return m
+	})
+}
+
+// userPassword reports whether run is base64, in the standard or the URL alphabet and with or without its
+// padding, of UTF-8 text that holds a colon and no control character: the "user:password" a Basic credential
+// carries. (Latin-1 text is not taken: the credential is a "user:password" in UTF-8, as RFC 7617 says it should be, and
+// a glued Latin-1 run, with no gap to show it, would let far more words pass for one.)
+func userPassword(run string) bool {
+	run = strings.TrimRight(run, "=")
+	for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+		b, err := enc.DecodeString(run)
+		if err == nil && bytes.IndexByte(b, ':') >= 0 && utf8.Valid(b) && !bytes.ContainsFunc(b, unicode.IsControl) {
+			return true
+		}
+	}
+	return false
 }

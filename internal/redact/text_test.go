@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// textShapes has one case per shape of secret in free text. Each says what must not survive Text,
+// textShapes has one case per shape of secret in free text. Each says what must not survive FreeText,
 // and a neighbour that is no secret and must.
 var textShapes = []struct {
 	name    string
@@ -46,9 +46,9 @@ var textShapes = []struct {
 	{"a bearer token, by the layer underneath", "VISIBLE Bearer SECRETVALUE12", "SECRETVALUE12", "VISIBLE"},
 }
 
-func TestTextRedactsEveryShape(t *testing.T) {
+func TestFreeTextRedactsEveryShape(t *testing.T) {
 	for _, tc := range textShapes {
-		got := Text(tc.in)
+		got := FreeText(tc.in)
 		if tc.secret != "" && strings.Contains(got, tc.secret) {
 			t.Errorf("%s: %q shows %q", tc.name, got, tc.secret)
 		}
@@ -59,10 +59,10 @@ func TestTextRedactsEveryShape(t *testing.T) {
 }
 
 // What only looks like a secret is kept: a commit hash, an email, a time, plain words.
-func TestTextKeepsWhatIsNoSecret(t *testing.T) {
+func TestFreeTextKeepsWhatIsNoSecret(t *testing.T) {
 	in := "sha 0123456789abcdef0123456789abcdef01234567 mail ada@example.test at 12:30 on monday, the keyboard is monkey-proof"
-	if got := Text(in); got != in {
-		t.Errorf("Text(%q) = %q; want it unchanged", in, got)
+	if got := FreeText(in); got != in {
+		t.Errorf("FreeText(%q) = %q; want it unchanged", in, got)
 	}
 }
 
@@ -79,27 +79,27 @@ func TestSecretName(t *testing.T) {
 	}
 }
 
-// Text deletes format characters itself, so a caller that did not clean first is as safe.
-func TestTextDeletesFormatCharacters(t *testing.T) {
-	if got := Text("a\u200bb\u202ec password\u200b=\u200bSECRETVAL"); strings.Contains(got, "SECRETVAL") || strings.ContainsAny(got, "\u200b\u202e") {
+// FreeText deletes the invisible characters itself, so a caller that did not clean first is as safe.
+func TestFreeTextDeletesFormatCharacters(t *testing.T) {
+	if got := FreeText("a\u200bb\u202ec password\u200b=\u200bSECRETVAL"); strings.Contains(got, "SECRETVAL") || strings.ContainsAny(got, "\u200b\u202e") {
 		t.Errorf("Text = %q; want the format characters gone and the value redacted", got)
 	}
 }
 
-// Text cuts its input at a word boundary before it redacts, so the work is bounded and no part of a
+// FreeText cuts its input at a word boundary before it redacts, so the work is bounded and no part of a
 // secret that straddles the cut survives.
-func TestTextIsBounded(t *testing.T) {
-	if got := Text(strings.Repeat("a=", 512<<10)); len(got) > MaxBytes+len(Truncated) {
+func TestFreeTextIsBounded(t *testing.T) {
+	if got := FreeText(strings.Repeat("a=", 512<<10)); len(got) > MaxBytes+len(Truncated) {
 		t.Errorf("a 1 MB value kept %d bytes; want at most %d", len(got), MaxBytes+len(Truncated))
 	}
-	if got := Text("short value"); got != "short value" {
+	if got := FreeText("short value"); got != "short value" {
 		t.Errorf("a short value became %q", got)
 	}
 	straddle := strings.Repeat("x ", (MaxBytes-12)/2) + "password=SECRETVALUE tail"
-	if got := Text(straddle); strings.Contains(got, "SEC") || strings.Contains(got, "word=") || !strings.HasSuffix(got, Truncated) {
+	if got := FreeText(straddle); strings.Contains(got, "SEC") || strings.Contains(got, "word=") || !strings.HasSuffix(got, Truncated) {
 		t.Errorf("a secret across the limit left %q at the end", got[len(got)-40:])
 	}
-	if got := Text(strings.Repeat("y", 2*MaxBytes)); strings.Contains(got, "y") {
+	if got := FreeText(strings.Repeat("y", 2*MaxBytes)); strings.Contains(got, "y") {
 		t.Errorf("an unbroken run of %d bytes kept some of itself", 2*MaxBytes)
 	}
 	if got := Bound("short"); got != "short" {
@@ -108,11 +108,11 @@ func TestTextIsBounded(t *testing.T) {
 }
 
 // Redacting twice is redacting once, so a field that passes through two layers is not changed by the second.
-func TestTextIsIdempotent(t *testing.T) {
+func TestFreeTextIsIdempotent(t *testing.T) {
 	for _, tc := range textShapes {
-		once := Text(tc.in)
-		if twice := Text(once); twice != once {
-			t.Errorf("%s: Text(Text(x)) = %q; Text(x) = %q", tc.name, twice, once)
+		once := FreeText(tc.in)
+		if twice := FreeText(once); twice != once {
+			t.Errorf("%s: FreeText(FreeText(x)) = %q; FreeText(x) = %q", tc.name, twice, once)
 		}
 	}
 }
@@ -134,8 +134,8 @@ func FuzzTextNeverShowsAValue(f *testing.F) {
 			"password=" + secret, "--token " + secret, `{"api_key":"` + secret + `"}`, "https://u:" + secret + "@host/", "PGPASSWORD=" + secret + " psql",
 			"Cookie: sid=" + secret, "curl -u admin:" + secret + " http://h",
 		} {
-			if got := Text(in); strings.Contains(got, secret) {
-				t.Errorf("Text(%q) = %q; want %q gone", in, got, secret)
+			if got := FreeText(in); strings.Contains(got, secret) {
+				t.Errorf("FreeText(%q) = %q; want %q gone", in, got, secret)
 			}
 		}
 	})

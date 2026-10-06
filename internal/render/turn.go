@@ -68,14 +68,14 @@ func Body(events []agent.TextEvent, limit int) string {
 }
 
 // Tool returns the status line of a tool call: the tool's name and a summary of its arguments, sorted by key, as
-// "name=json, ...". Secrets are taken out first, before anything is shown or cut (redactArgs and redact.Text):
+// "name=json, ...". Secrets are taken out first, before anything is shown or cut (redactArgs and redact.FreeText):
 // values by the name they sit under, in maps and in "name=value" text, URL credentials, private keys, tokens and AWS
 // keys by shape. Then name and summary are each put on one line and capped, so the line is short whatever the agent
 // sent.
 func Tool(name string, args map[string]any) chat.ToolLine {
 	summary := toolSummary(redactArgs(args).(map[string]any))
 	return chat.ToolLine{
-		Name:    chat.Truncate(chat.Clean(name, true), maxToolName),
+		Name:    chat.Truncate(redact.IdentifierText(name), maxToolName),
 		Summary: chat.Truncate(chat.Clean(summary, true), maxToolArgs),
 	}
 }
@@ -96,7 +96,7 @@ func toolSummary(shown map[string]any) string {
 	for i, k := range keys {
 		parts[i] = k + "=" + jsonValue(shown[k])
 	}
-	return redact.Text(strings.Join(parts, ", "))
+	return redact.FreeText(strings.Join(parts, ", "))
 }
 
 // jsonValue is v as compact JSON, with "<", ">" and "&" left as they are.
