@@ -16,6 +16,10 @@ var (
 	validGatePatt = regexp.MustCompile(`^` + gateName + `$`)
 	// blockTag finds the name of the untrusted block courier appends to a trigger's first prompt.
 	blockTag = regexp.MustCompile(`untrusted-data-[0-9a-f]{12}`)
+	// threadBlockOpen finds the opening line of the block of thread replies courier appends to a mentioned turn in a
+	// Binding whose chat.threadReplies is mention: the tag alone on its line. The sentence before the block names the tag
+	// inline, so a match on the line is the block's own.
+	threadBlockOpen = regexp.MustCompile(`(?m)^<(thread-replies-[0-9a-f]{12})>$`)
 )
 
 // ValidGate reports whether name can name a gate. Gates stay open for the life of the server, so
@@ -40,6 +44,9 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //     "It is up, so I will restart it.", calls restart_service(service="api"), whose result is an error
 //     ({"error": "restart refused: api is locked"}, the entry kagent reports a failed call with), and says
 //     "The restart was refused." It never waits, so the whole turn ends in moments.
+//   - scenario-context says which turn of its context it is, how many replies of the thread the turn carried and the tag of
+//     the block that held them: "Turn 2. Replies: 1. Block: thread-replies-0123456789ab.", or "Block: none." for a turn
+//     with no block. With "gate:G" in the prompt it then holds on the gate and ends with " Released.", as scenario-gated.
 //
 // The scenarios and the agents that serve them in the cluster:
 //
@@ -63,6 +70,8 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //	                      in progress, and each text once
 //	S14  scenario-alert   "Investigating: <the prompt's first line> Block: <the untrusted block's tag>." shows
 //	                      that an alert's first turn is the template's output and the hashed block
+//	S18  scenario-context "Turn N. Replies: K. Block: <tag|none>." shows that a mention-only Binding sent the unmentioned
+//	                      replies since the last turn, once, in a block of their own
 func ScenarioAgents(s *Server) {
 	const ns = "kagent"
 	s.Agent(ns, "scenario-alert").Reply(func(prompt string) []Step {
@@ -72,6 +81,18 @@ func ScenarioAgents(s *Server) {
 			block = tag
 		}
 		return []Step{Text("Investigating: " + first + " Block: " + block + ".")}
+	})
+	s.Agent(ns, "scenario-context").ReplyWithHistory(func(prior []string, prompt string) []Step {
+		tag, replies, said := "none", 0, prompt
+		if all := threadBlockOpen.FindAllStringSubmatchIndex(prompt, -1); len(all) > 0 {
+			open := all[len(all)-1] // the last: the person's own text comes before the block courier appends
+			tag, replies, said = prompt[open[2]:open[3]], strings.Count(prompt[open[1]:], "<reply>"), prompt[:open[0]]
+		}
+		steps := []Step{Text(fmt.Sprintf("Turn %d. Replies: %d. Block: %s.", len(prior)+1, replies, tag))}
+		if m := gatePattern.FindStringSubmatch(said); m != nil { // a gate is the person's to name, not the replies'
+			steps = append(steps, Hold(m[1]), Text(" Released."))
+		}
+		return steps
 	})
 	s.Agent(ns, "scenario-tools").Reply(func(string) []Step {
 		service := map[string]any{"service": "api"}

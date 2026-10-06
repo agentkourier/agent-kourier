@@ -30,7 +30,7 @@ Bedrock image contains neither that model nor the test control endpoints.
 | S11 | Explicitly skipped: structured tool-approval metadata is specific to kagent |
 | S12 | Failed provider and empty completion, safe user notice and outcome metric |
 | S13 | Explicitly skipped: generic A2A does not interpret kagent tool-step metadata |
-| S14/S15/S17 | Fast-only alert-trigger fixtures, also skipped by kagent |
+| S14/S15/S17/S18 | Fast-only alert-trigger fixtures, also skipped by kagent |
 | AX deadline | Question expires and cancels without synthesizing an answer |
 
 The fixture provisioner uses public AX/Substrate RPCs. It pre-creates each

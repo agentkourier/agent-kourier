@@ -76,8 +76,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 19 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of eleven scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 20 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of twelve scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -167,6 +167,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"S14", e2e.ChannelS14, "scenario-alert", false, v1alpha1.OutputLive},
 		{"S15", e2e.ChannelS15, "scenario-alert", false, v1alpha1.OutputLive},
 		{"S17", e2e.ChannelS17, "scenario-alert", false, v1alpha1.OutputLive},
+		{"S18", e2e.ChannelS18, "scenario-context", false, v1alpha1.OutputLive},
 		{"S16", e2e.ChannelS16, "scenario-gated", false, v1alpha1.OutputLive},
 		{"S16b", e2e.ChannelS16B, "test-agent", false, v1alpha1.OutputFinal},
 		{"S16c", e2e.ChannelS16C, "scenario-gated", false, v1alpha1.OutputLive},
@@ -333,6 +334,32 @@ func TestS17TakesTheAlertBotByItsIDAndHasNoFeedbackSetting(t *testing.T) {
 	}
 	if rb.Binding.Spec.Feedback.Enabled {
 		t.Error("the Binding has feedback.enabled; want it off, so that S17 shows the buttons of an investigation do not need it")
+	}
+}
+
+// TestS18TakesOnlyMentionsInItsThreadsAndStartsThemByMentionOrAlert: S18's Binding has threadReplies mention, and starts a thread
+// from a mention or from an alert of the bot ID the scenario posts as (S14's trigger), so that the scenario's cases
+// run in a thread of either kind.
+func TestS18TakesOnlyMentionsInItsThreadsAndStartsThemByMentionOrAlert(t *testing.T) {
+	set, err := config.Load(t.Context(), courierDir+"config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb, ok := snap.BindingForChannel("courier", "slack-fast", e2e.ChannelS18)
+	if !ok {
+		t.Fatalf("channel %s resolves to no Binding", e2e.ChannelS18)
+	}
+	if got := rb.Binding.Spec.Chat.ThreadReplies; got != v1alpha1.ThreadRepliesMention {
+		t.Errorf("threadReplies is %q; want %q", got, v1alpha1.ThreadRepliesMention)
+	}
+	triggers := rb.Binding.Spec.Chat.Triggers
+	if len(triggers) != 2 || triggers[0].Type != v1alpha1.TriggerMention || triggers[1].Type != v1alpha1.TriggerBotMessage || triggers[1].From == nil ||
+		triggers[1].From.BotID != e2e.BotS18 || triggers[1].Preset != v1alpha1.PresetAlertmanager || triggers[1].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Errorf("triggers %+v; want a mention trigger and a botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS18)
 	}
 }
 

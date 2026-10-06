@@ -62,6 +62,15 @@ const (
 	BotS17 = "B0S17ALERT1"
 )
 
+// S18's channel and bot: a thread whose replies need a mention (chat.threadReplies: mention).
+const (
+	// ChannelS18 is S18's: scenario-context behind a mention trigger and a botMessage trigger with the alertmanager preset for the
+	// bot BotS18, with threadReplies mention. The fast tier only: the full tier's kagent has no such agent.
+	ChannelS18 = "CS18"
+	// BotS18 is the bot ID S18's alerts are posted as.
+	BotS18 = "B0S18ALERT1"
+)
+
 // The failover scenario's channels (S16, the fast tier on Postgres with two courier replicas only), one for each kind of Binding
 // its cases need.
 const (
