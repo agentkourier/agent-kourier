@@ -95,6 +95,20 @@ func textOf(entry string) string {
 	return text
 }
 
+// leftOutLine is the last line of a block that left n replies out, written out here and not taken from the module.
+func leftOutLine(n int) string {
+	if n == 1 {
+		return "1 earlier reply left out."
+	}
+	return fmt.Sprintf("%d earlier replies left out.", n)
+}
+
+// threadLine returns the entry that a section shows of r alone: the whole line, as the block budgets it.
+func threadLine(t *testing.T, r ThreadReply) string {
+	t.Helper()
+	return splitThread(t, ThreadReplies([]ThreadReply{r}, 0)).entries[0]
+}
+
 func replies(texts ...string) []ThreadReply {
 	out := make([]ThreadReply, len(texts))
 	for i, s := range texts {
@@ -464,9 +478,9 @@ func TestThreadRepliesBlockIsBoundedAndKeepsTheNewest(t *testing.T) {
 						t.Fatalf("last line = %q, want %q", p.last, leftOutLine(left))
 					}
 					// It is as full as it can be: the next older entry would not have fit.
-					older, _ := prepareThread(entries[left-1])
-					if len(p.entries) < MaxThreadReplies && chat.Units(got)+chat.Units(older.line) <= MaxThreadBlockUnits {
-						t.Fatalf("the section is %d units and the next older entry is %d: it would have fit", chat.Units(got), chat.Units(older.line))
+					older := threadLine(t, entries[left-1])
+					if len(p.entries) < MaxThreadReplies && chat.Units(got)+chat.Units(older) <= MaxThreadBlockUnits {
+						t.Fatalf("the section is %d units and the next older entry is %d: it would have fit", chat.Units(got), chat.Units(older))
 					}
 				}
 			})
@@ -476,28 +490,19 @@ func TestThreadRepliesBlockIsBoundedAndKeepsTheNewest(t *testing.T) {
 
 func TestThreadRepliesBlockAtItsCapIsWhole(t *testing.T) {
 	// Fill the budget to the unit, then one more.
-	one, _ := prepareThread(ThreadReply{UserID: "U1", Name: "Ada", Text: strings.Repeat("c", 900)})
-	frame := chat.Units(ThreadReplies(replies("x"), 0)) - chat.Units(mustPrepare(t, replies("x")[0]).line)
-	n := (MaxThreadBlockUnits - frame) / chat.Units(one.line)
+	one := threadLine(t, ThreadReply{UserID: "U1", Name: "Ada", Text: strings.Repeat("c", 900)})
+	frame := chat.Units(ThreadReplies(replies("x"), 0)) - chat.Units(threadLine(t, replies("x")[0]))
+	n := (MaxThreadBlockUnits - frame) / chat.Units(one)
 	entries := make([]ThreadReply, n)
 	for i := range entries {
 		entries[i] = ThreadReply{UserID: "U1", Name: "Ada", Text: strings.Repeat("c", 900)}
 	}
 	if got, left := ThreadRepliesCounted(entries, 0); left != 0 || chat.Units(got) > MaxThreadBlockUnits {
-		t.Fatalf("%d entries that fit (%d units) were cut: %d left out, %d units", n, frame+n*chat.Units(one.line), left, chat.Units(got))
+		t.Fatalf("%d entries that fit (%d units) were cut: %d left out, %d units", n, frame+n*chat.Units(one), left, chat.Units(got))
 	}
 	if _, left := ThreadRepliesCounted(append(entries, entries[0]), 0); left < 1 {
 		t.Errorf("%d entries, which are over the cap, left nothing out", n+1)
 	}
-}
-
-func mustPrepare(t *testing.T, r ThreadReply) threadEntry {
-	t.Helper()
-	e, ok := prepareThread(r)
-	if !ok {
-		t.Fatalf("no entry for %+v", r)
-	}
-	return e
 }
 
 func TestThreadRepliesCapsAreConsistent(t *testing.T) {
