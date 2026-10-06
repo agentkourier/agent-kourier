@@ -15,7 +15,7 @@ import (
 func TestSlackErrorTextTakesTheSplitSecretCorpus(t *testing.T) {
 	cl, calls, _ := userClient(t, nil)
 	calls.status = http.StatusOK
-	for _, c := range redacttest.Identifiers(redacttest.SplitSecrets()) {
+	for _, c := range redacttest.Identifiers(redacttest.SplitSecretsSample()) {
 		if !utf8.ValidString(c.Text) {
 			continue
 		}

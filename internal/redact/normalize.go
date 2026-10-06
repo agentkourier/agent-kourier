@@ -12,9 +12,13 @@ import (
 //
 // The invisible characters are control characters (Cc) except the line breaks and tab, format characters (Cf:
 // zero-width space and joiners, bidirectional controls, the soft hyphen, the tag characters), private-use (Co) and
-// surrogate (Cs) code points, invalid UTF-8, the blank fillers U+3164 and U+2800, and every variation selector
-// (U+FE00 to U+FE0F, U+E0100 to U+E01EF). An emoji keeps its glyph and loses only its presentation hint, and a
-// zero-width-joined emoji falls apart into its parts, which is the price of deleting them all.
+// surrogate (Cs) code points, invalid UTF-8, and the rest of the Unicode Default_Ignorable_Code_Point property that
+// is shown as nothing: the blank fillers (U+3164, U+2800, the Hangul fillers U+115F, U+1160 and U+FFA0), the combining
+// grapheme joiner U+034F, the Khmer inherent vowels U+17B4 and U+17B5, every variation selector (U+180B to U+180D and
+// U+180F, which are Mongolian's, U+FE00 to U+FE0F, U+E0100 to U+E01EF) and the reserved code points that the property
+// holds for characters yet to come (U+2065, U+FFF0 to U+FFF8, and U+E0000 to U+E0FFF, the tag and selector block).
+// An emoji keeps its glyph and loses only its presentation hint, and a zero-width-joined emoji falls apart into its
+// parts, which is the price of deleting them all.
 //
 // The line breaks are CR, CRLF, NEL (U+0085) and the Unicode line and paragraph separators (U+2028, U+2029),
 // each of which becomes "\n". Tab and every kind of white space stay. A literal escape, the text that %q prints
@@ -69,9 +73,13 @@ func deleted(r rune) bool {
 	switch {
 	case r == '\n' || r == '\t' || isLineBreak(r):
 		return false
-	case r == '\U00003164' || r == '\U00002800': // blank fillers: shown as nothing, in none of the categories below
+	case r == '\U00003164' || r == '\U00002800' || r == '\U0000115f' || r == '\U00001160' || r == '\U0000ffa0': // blank fillers: shown as nothing, in none of the categories below
 		return true
-	case r >= '\U0000fe00' && r <= '\U0000fe0f', r >= '\U000e0100' && r <= '\U000e01ef': // variation selectors
+	case r == '\U0000034f' || r == '\U000017b4' || r == '\U000017b5': // the combining grapheme joiner and Khmer's inherent vowels: Mn, shown as nothing
+		return true
+	case r >= '\U0000180b' && r <= '\U0000180d', r == '\U0000180f', r >= '\U0000fe00' && r <= '\U0000fe0f': // variation selectors
+		return true
+	case r == '\U00002065', r >= '\U0000fff0' && r <= '\U0000fff8', r >= '\U000e0000' && r <= '\U000e0fff': // reserved, ignorable by default (the last range holds the selectors U+E0100 to U+E01EF too)
 		return true
 	}
 	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs)

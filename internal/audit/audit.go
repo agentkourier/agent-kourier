@@ -473,13 +473,15 @@ func clean(s string, limit int) string {
 }
 
 // cleanFree is clean for free text: an error, or the reason a dialect gave for an unusable pause. It
-// redacts with every rule of redact.FreeText, which also takes the value of a "--password=x", a
-// connection string, a key block or a URL's credentials, and then puts the text on one line. Identifiers
+// redacts with every rule of redact.FreeTextLine, which also takes the value of a "--password=x", a
+// connection string, a key block or a URL's credentials, and puts the text on one line. It reads the text
+// joined as well as with its lines, so a flag, a user or a URL that a line break cuts from its value is
+// taken as it was before audit redacted the text it joined. Identifiers
 // do not take it, and nor does an outcome, which is tags and identifiers: it would read the identity
 // "secret:ns/name" as a secret named "secret", and redact a task ID that is 40 characters long or
 // holds "token=".
 func cleanFree(s string, limit int) string {
-	return capped(strings.Join(strings.Fields(redact.FreeText(s)), " "), limit)
+	return capped(redact.FreeTextLine(s), limit)
 }
 
 // capped cuts s to limit bytes at a character boundary, ending in "..." when it cut.

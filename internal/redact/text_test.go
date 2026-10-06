@@ -3,6 +3,7 @@ package redact
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // textShapes has one case per shape of secret in free text. Each says what must not survive FreeText,
@@ -44,6 +45,24 @@ var textShapes = []struct {
 	{"a secret pair inside a secret value", "VISIBLE password=token=SECRETVAL", "SECRETVAL", "VISIBLE"},
 	{"a Slack token, by the layer underneath", "VISIBLE xoxb-1234-SECRETVAL", "SECRETVAL", "VISIBLE"},
 	{"a bearer token, by the layer underneath", "VISIBLE Bearer SECRETVALUE12", "SECRETVALUE12", "VISIBLE"},
+	// A space of any width around the separator, after a flag, or ending a value.
+	{"a no-break space around an equals sign", "password\u00a0=\u00a0SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a narrow no-break space around a colon", "password\u202f:\u202fSECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a no-break space around the equals sign of an environment name", "api_key\u00a0=\u00a0SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a no-break space before the colon of JSON", "{\"password\"\u00a0: \"SECRETVAL\", \"user\": \"VISIBLE\"}", "SECRETVAL", "VISIBLE"},
+	{"a thin space before a colon", "password\u2009: SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"an ideographic space around an equals sign", "password\u3000=\u3000SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a no-break space after a flag", "tool --password\u00a0SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a no-break space before a flag", "tool\u00a0--password SECRETVAL VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a no-break space after curl -u", "curl -u\u00a0admin:SECRETVAL https://VISIBLE", "SECRETVAL", "admin"},
+	{"a no-break space after curl --user", "curl --user\u00a0admin:SECRETVAL https://VISIBLE", "SECRETVAL", "admin"},
+	{"a no-break space that ends a value", "password=SECRETVAL\u00a0VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"an ideographic space that ends a cookie pair", "Cookie: sid=SECRETVAL;\u3000csrf=SECRETTWO", "SECRETTWO", "Cookie"},
+	// Kubernetes and shell forms, with a value on a line of its own.
+	{"an env entry", "- name: DB_PASSWORD\n  value: SECRETVAL\n- name: VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"an env entry, quoted", "- name: \"API_TOKEN\"\n  value: \"SECRETVAL\"\n- name: VISIBLE", "SECRETVAL", "VISIBLE"},
+	{"a block scalar", "password: |\n  SECRETVAL\n  SECRETTWO\nnext: VISIBLE", "SECRETTWO", "VISIBLE"},
+	{"a flag whose value follows a trailing backslash", "mysql --password \\\n  SECRETVAL \\\n  --VISIBLE", "SECRETVAL", "VISIBLE"},
 }
 
 func TestFreeTextRedactsEveryShape(t *testing.T) {
@@ -139,4 +158,79 @@ func FuzzTextNeverShowsAValue(f *testing.F) {
 			}
 		}
 	})
+}
+
+// The exact result of the rules for Kubernetes env entries, YAML block scalars, a trailing backslash and the space class, and
+// of what they leave alone. FreeText is the first of each pair, FreeTextLine, the text with its lines joined, the second.
+func TestFreeTextReadsManifestAndShellForms(t *testing.T) {
+	for _, tc := range []struct{ name, in, free, line string }{
+		{"an env entry", "- name: DB_PASSWORD\n  value: hunter2", "- name: DB_PASSWORD\n  value: [redacted]", "- name: DB_PASSWORD value: [redacted]"},
+		{"an env entry, then another", "- name: PGPASSWORD\n  value: hunter2\n- name: LOG\n  value: debug", "- name: PGPASSWORD\n  value: [redacted]\n- name: LOG\n  value: debug", "- name: PGPASSWORD value: [redacted] - name: LOG value: debug"},
+		{"an env entry with a line between", "- name: API_TOKEN\n  # by hand\n  value: hunter2", "- name: API_TOKEN\n  # by hand\n  value: [redacted]", "- name: API_TOKEN # by hand value: [redacted]"},
+		{"an env entry in JSON", `{"name":"DB_PASSWORD","value":"hunter2"}`, `{"name":"DB_PASSWORD","value":[redacted]}`, `{"name":"DB_PASSWORD","value":[redacted]}`},
+		{"an env entry that is no secret", "- name: LOG_LEVEL\n  value: debug", "- name: LOG_LEVEL\n  value: debug", "- name: LOG_LEVEL value: debug"},
+		{"an env entry with no value of its own", "- name: DB_PASSWORD\n  valueFrom:\n    fieldRef:\n      fieldPath: metadata.name", "- name: DB_PASSWORD\n  valueFrom:\n    fieldRef:\n      fieldPath: metadata.name", "- name: DB_PASSWORD valueFrom: fieldRef: fieldPath: metadata.name"},
+		{"a value three lines after the name", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: hunter2", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: hunter2", "- name: DB_PASSWORD a: 1 b: 2 value: hunter2"},
+		{"a name that ends in name", "hostname: DB_PASSWORD\n  value: hunter2", "hostname: DB_PASSWORD\n  value: hunter2", "hostname: DB_PASSWORD value: hunter2"},
+		{"a literal block scalar", "password: |\n  hunter2\n  more\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a literal block scalar that strips", "password: |-\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a folded block scalar", "password: >\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a folded block scalar that strips, with a blank line", "password: >-\n  hunter2\n\n  more\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block scalar with an indentation indicator", "password: |2+\n    hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block scalar under a list entry", "- token: |\n    hunter2\n- other: x", "- token: [redacted]\n- other: x", "- token: [redacted] - other: x"},
+		{"a block scalar with nothing under it", "password: |\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block scalar under a name that is no secret", "description: |\n  hunter2\nnext: x", "description: |\n  hunter2\nnext: x", "description: | hunter2 next: x"},
+		{"a folded block scalar under a name that is no secret", "args: >-\n  hunter2\nnext: x", "args: >-\n  hunter2\nnext: x", "args: >- hunter2 next: x"},
+		{"a block header with text after it", "password: | hunter2\n  more\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block header with text after it, and no line under it", "password: | hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block header with a comment after it", "password: | # note\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block scalar under a name, and a line indented as much as the name", "  password: |\n    hunter2\n  next: x", "  password: [redacted]\n  next: x", "password: [redacted] next: x"},
+		{"a cookie list for an env entry", "- name: COOKIE\n  value: sid=hunter2; csrf=more tail", "- name: COOKIE\n  value: [redacted] tail", "- name: COOKIE value: [redacted] tail"},
+		{"a flag's value is no cookie list", "tool --token abc; note=1", "tool --token [redacted] note=1", "tool --token [redacted] note=1"},
+		{"a lone backslash and a space", `mysql --password \ hunter2 tail`, `mysql --password [redacted] tail`, `mysql --password [redacted] tail`},
+		{"a lone backslash and a user flag", `curl -u \ admin:hunter2 tail`, `curl -u \ admin:[redacted] tail`, `curl -u \ admin:[redacted] tail`},
+		{"a trailing backslash and a blank line", "mysql --password \\\n\nrun now", "mysql --password [redacted]\n\nrun now", "mysql --password [redacted] run now"},
+		{"a no-break space in the user of a user flag", "curl -u ad\u00a0min:hunter2 tail", "curl -u ad\u00a0min:[redacted] tail", "curl -u ad min:[redacted] tail"},
+		{"a flag and its value after a trailing backslash", "mysql --password \\\n  hunter2", "mysql --password [redacted]", "mysql --password [redacted]"},
+		{"a name and its value after a trailing backslash", "PASSWORD=\\\n  hunter2 tail", "PASSWORD=[redacted] tail", "PASSWORD=[redacted] tail"},
+		{"a command that goes on", "mysql --password \\\n  hunter2 \\\n  --verbose", "mysql --password [redacted] \\\n  --verbose", "mysql --password [redacted] \\ --verbose"},
+		{"a quoted value after a trailing backslash", "curl --token \\\n  'hunter2 two' tail", "curl --token [redacted] tail", "curl --token [redacted] tail"},
+		{"a flag that follows a trailing backslash", "mysql --password \\\n  --verbose", "mysql --password [redacted]\n  --verbose", "mysql --password [redacted] --verbose"},
+		{"a continued command with a flag that is no secret", "mysql --verbose \\\n  run", "mysql --verbose \\\n  run", "mysql --verbose \\ run"},
+		{"a user flag after a trailing backslash", "curl -u \\\n admin:hunter2 tail", "curl -u \\\n admin:[redacted] tail", "curl -u \\ admin:[redacted] tail"},
+		{"a flag and its value across a line break", "deploy --password\nhunter2", "deploy --password\nhunter2", "deploy --password [redacted]"},
+		{"a no-break space around an equals sign", "password\u00a0=\u00a0hunter2", "password\u00a0=\u00a0[redacted]", "password = [redacted]"},
+		{"a no-break space that ends a value", "password=hunter2\u00a0tail", "password=[redacted]\u00a0tail", "password=[redacted] tail"},
+		{"a thin space that ends a quoted value", "{\"password\": \"hunter2\"}\u2009tail", "{\"password\": [redacted]}\u2009tail", "{\"password\": [redacted]} tail"},
+		{"a marker that a no-break space ends", "password=[redacted]\u00a0hunter2", "password=[redacted]\u00a0hunter2", "password=[redacted] hunter2"},
+		{"a URL's password across a line break", "https://user:pa\nss@host/x", "https://user:pa\nss@host/x", "https://[redacted]@host/x"},
+		{"a user and its password across a line break", "-u\nadmin:hunter2", "-u\nadmin:hunter2", "-u admin:[redacted]"},
+	} {
+		if got := FreeText(tc.in); got != tc.free {
+			t.Errorf("%s: FreeText(%q) = %q, want %q", tc.name, tc.in, got, tc.free)
+		}
+		if got := FreeTextLine(tc.in); got != tc.line {
+			t.Errorf("%s: FreeTextLine(%q) = %q, want %q", tc.name, tc.in, got, tc.line)
+		}
+		if got := FreeTextCutLine(tc.in, 4096); got != tc.line {
+			t.Errorf("%s: FreeTextCutLine(%q) = %q, want %q", tc.name, tc.in, got, tc.line)
+		}
+		if got := FreeTextCut(tc.in, 4096); got != tc.free {
+			t.Errorf("%s: FreeTextCut(%q) = %q, want %q", tc.name, tc.in, got, tc.free)
+		}
+	}
+}
+
+// capAt cuts at a character: whatever byte the limit falls on, the text it returns is valid and is a prefix.
+func TestCapAtCutsAtACharacter(t *testing.T) {
+	text := "a\U000065e5b\U0001F600c"
+	for n := 0; n <= len(text); n++ {
+		got, cut := capAt(text, n)
+		if !utf8.ValidString(got) || !strings.HasPrefix(text, got) || len(got) > n || cut != (n < len(text)) {
+			t.Errorf("capAt(%q, %d) = %q, %t", text, n, got, cut)
+		}
+	}
+	if got, _ := capAt(text, 3); got != "a" {
+		t.Errorf("capAt(%q, 3) = %q, want the character that does not fit left out", text, got)
+	}
 }

@@ -77,7 +77,8 @@ type untrustedField struct {
 	Value string
 	// Kind is how Value is cleaned.
 	Kind fieldKind
-	// OneLine puts the cleaned text on one line, its white space run written as one space.
+	// OneLine puts the cleaned text on one line, its white space run written as one space: it is read joined as well as with
+	// its lines (redact.FreeTextLine, redact.FreeTextCutLine), so that a line break cannot hide a secret from a rule.
 	OneLine bool
 	// Label marks a field that says what an item is about and is no content of its own, as the author's name and ID
 	// are of a reply: an item with nothing to show but labels is skipped.
@@ -230,20 +231,22 @@ type cleanedItem struct {
 	fields  []cleanedField
 }
 
-// clean returns s as the field's kind cleans it. A kind it does not know is free text, the strictest.
+// clean returns s as the field's kind cleans it. A kind it does not know is free text, the strictest. A field that is
+// one line is read joined as well as with its lines, and not redacted and joined after: a flag and its value, or a
+// URL's password, that a line break cuts apart is taken. Identifier text is one line already.
 func (f untrustedField) clean(s string) string {
-	switch f.Kind {
-	case kindWindow:
-		s = redact.FreeTextCut(s, f.Window)
-	case kindIdentifier:
-		s = redact.IdentifierText(s)
+	switch {
+	case f.Kind == kindIdentifier:
+		return redact.IdentifierText(s)
+	case f.Kind == kindWindow && f.OneLine:
+		return redact.FreeTextCutLine(s, f.Window)
+	case f.Kind == kindWindow:
+		return redact.FreeTextCut(s, f.Window)
+	case f.OneLine:
+		return redact.FreeTextLine(s)
 	default:
-		s = redact.FreeText(s)
+		return redact.FreeText(s)
 	}
-	if f.OneLine {
-		s = chat.Clean(s, true)
-	}
-	return s
 }
 
 // blank says that s has nothing to show.

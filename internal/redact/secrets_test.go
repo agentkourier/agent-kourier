@@ -185,3 +185,67 @@ func TestSecretsKnownLimits(t *testing.T) {
 		}
 	}
 }
+
+// Tokens that give themselves away by a prefix are taken with no name before them, from the length of the shortest
+// real one down to a little under it, and not a character fewer; a word that only begins like one is kept.
+func TestSecretsTokensWithAPrefix(t *testing.T) {
+	a := func(n int) string { return strings.Repeat("a", n) }
+	for _, c := range []struct{ name, in, want string }{
+		{"GitHub personal", "ghp_" + a(36), redacted},
+		{"GitHub OAuth", "gho_" + a(36), redacted},
+		{"GitHub user", "ghu_" + a(36), redacted},
+		{"GitHub server", "ghs_" + a(36), redacted},
+		{"GitHub refresh", "ghr_" + a(36), redacted},
+		{"GitHub fine-grained", "github_pat_" + a(22) + "_" + a(59), redacted},
+		{"GitHub fine-grained, shortest taken", "github_pat_" + a(20), redacted},
+		{"GitHub fine-grained, one short", "github_pat_" + a(19), "github_pat_" + a(19)},
+		{"GitHub, shortest taken", "ghp_" + a(20), redacted},
+		{"GitHub, one short", "ghp_" + a(19), "ghp_" + a(19)},
+		{"GitHub, an unknown letter", "ghx_" + a(36), "ghx_" + a(36)},
+		{"GitLab", "glpat-" + a(20), redacted},
+		{"GitLab, one short", "glpat-" + a(19), "glpat-" + a(19)},
+		{"OpenAI legacy", "sk-" + a(48), redacted},
+		{"OpenAI project", "sk-proj-" + a(100), redacted},
+		{"OpenAI project, with hyphens and underscores", "sk-proj-Ab_cd-" + a(60), redacted},
+		{"Anthropic", "sk-ant-api03-" + a(90), redacted},
+		{"sk-, shortest taken", "sk-" + a(20), redacted},
+		{"sk-, one short", "sk-" + a(19), "sk-" + a(19)},
+		{"Google", "AIza" + a(35), redacted},
+		{"Google, longer", "AIza" + a(36), redacted},
+		{"Google, one short", "AIza" + a(34), "AIza" + a(34)},
+		{"Stripe live secret", "sk_live_" + a(24), redacted},
+		{"Stripe live restricted", "rk_live_" + a(24), redacted},
+		{"Stripe test secret", "sk_test_" + a(24), redacted},
+		{"Stripe test restricted", "rk_test_" + a(24), redacted},
+		{"Stripe, shortest taken", "sk_live_" + a(16), redacted},
+		{"Stripe, one short", "sk_live_" + a(15), "sk_live_" + a(15)},
+		{"Stripe, publishable", "pk_live_" + a(24), "pk_live_" + a(24)},
+		{"in an assignment", "OPENAI_API_KEY=sk-proj-" + a(40) + " ok", "OPENAI_API_KEY=" + redacted + " ok"},
+		{"in a sentence, before a full stop", "use ghp_" + a(36) + ". Then", "use " + redacted + ". Then"},
+		{"in JSON", `{"k":"AIza` + a(35) + `","u":"U1"}`, `{"k":"` + redacted + `","u":"U1"}`},
+		{"two", "sk-" + a(30) + " " + "glpat-" + a(20), redacted + " " + redacted},
+		// Words that begin like a token, and the end of a longer word.
+		{"sk-learn", "pip install sk-learn", "pip install sk-learn"},
+		{"risk-free", "a risk-free trade", "a risk-free trade"},
+		{"ask-me", "ask-me anything", "ask-me anything"},
+		{"a task ID", "task-0123456789abcdefghijklmnopqrstuvwxyz1", "task-0123456789abcdefghijklmnopqrstuvwxyz1"},
+		{"a disk name", "disk-usage-0123456789abcdefghijklmnop", "disk-usage-0123456789abcdefghijklmnop"},
+		{"AIza with too little", "AIzawhatever", "AIzawhatever"},
+		{"prefixes alone", "ghp_ gho_ github_pat_ glpat- sk-proj- sk_live_ rk_test_", "ghp_ gho_ github_pat_ glpat- sk-proj- sk_live_ rk_test_"},
+		{"a name that ends like a Stripe key", "network_live_connections_established", "network_live_connections_established"},
+		// Azure SAS: the value of sig, from 16 characters, and not what only has the name.
+		{"SAS signature", "https://acct.blob.core.windows.net/c?sv=2020-08-04&sig=abcdEFGH1234%2Bsecret%2Fvalue%3D&se=2030", "https://acct.blob.core.windows.net/c?sv=2020-08-04&sig=" + redacted + "&se=2030"},
+		{"SAS signature with its padding", "sig=" + a(43) + "=", "sig=" + redacted},
+		{"SAS signature, shortest taken", "?sig=" + a(16), "?sig=" + redacted},
+		{"SAS signature, one short", "?sig=" + a(15), "?sig=" + a(15)},
+		{"sig= in prose", "the sig= field is empty", "the sig= field is empty"},
+		{"sig= ending a word (no word boundary: the value is taken)", "mysig=" + a(30), "mysig=" + redacted},
+	} {
+		if got := secrets(c.in); got != c.want {
+			t.Errorf("%s: secrets(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+		if got := IdentifierText(c.in); got != c.want {
+			t.Errorf("%s: IdentifierText(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}

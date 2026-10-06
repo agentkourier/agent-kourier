@@ -14,7 +14,7 @@ import (
 // An error attribute in a log line, under any key that holds one, is normalized and redacted as free text: a secret
 // that an invisible character splits does not reach the log, and no invisible character does.
 func TestJSONHandlerTakesTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		var buf bytes.Buffer
 		l := newTestLogger(&buf)
 		l.Error("m", "error", errors.New(c.Text))
@@ -34,14 +34,14 @@ func TestJSONHandlerTakesTheSplitSecretCorpus(t *testing.T) {
 
 // LogText is the one place the text of an error is made fit for a log line, and it takes the corpus out as well.
 func TestLogTextTakesTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		c.CheckKept(t, LogText(errors.New(c.Text)))
 	}
 }
 
 // OpenTelemetry's own messages, which an exporter builds from its configuration, are redacted as free text too.
 func TestDiagnosticsTakeTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		var buf bytes.Buffer
 		diagnostic(slog.New(slog.NewJSONHandler(&buf, nil)), newWarnLimiter(time.Now, warnEvery), c.Text, nil)
 		c.Check(t, fmt.Sprint(logLine(t, &buf)["msg"]))

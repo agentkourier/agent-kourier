@@ -12,7 +12,7 @@ import (
 // The thread block shows a reply's text, name and ID, and none of them holds a secret an invisible character splits,
 // or any invisible character at all.
 func TestThreadRepliesTakeTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		c.CheckKept(t, threadReplies([]ThreadReply{{UserID: "U1", Name: "Ada", Text: c.Text}}, 0))
 		c.Check(t, threadReplies([]ThreadReply{{UserID: "U1", Name: c.Text, Text: "ok"}}, 0))
 		c.Check(t, threadReplies([]ThreadReply{{UserID: c.Text, Name: "Ada", Text: "ok"}}, 0))
@@ -27,11 +27,11 @@ func TestThreadRepliesTakeTheSplitSecretCorpus(t *testing.T) {
 // in any field, and no invisible character. The footer is identifier text, so it is held to the token layer of the
 // corpus; the other fields to every rule of free text.
 func TestAlertBlockTakesTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		c.CheckKept(t, untrustedSection(TriggerMessage{Text: c.Text}))
 		c.Check(t, untrustedSection(TriggerMessage{Title: c.Text, TitleLink: c.Text, Fallback: c.Text, AttachmentText: c.Text}))
 	}
-	for _, c := range redacttest.Identifiers(redacttest.SplitSecrets()) {
+	for _, c := range redacttest.Identifiers(redacttest.SplitSecretsSample()) {
 		c.Check(t, untrustedSection(TriggerMessage{Footer: c.Text}))
 	}
 	for _, b := range redacttest.LineBreaks {
@@ -55,7 +55,7 @@ func TestAlertFooterKeepsPairsAndLosesTokens(t *testing.T) {
 
 // What is stored of a tool call's arguments (RedactArgs) and what is shown of them (Tool) take the corpus out alike.
 func TestToolArgumentsTakeTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		args := map[string]any{"note": c.Text, "list": []any{c.Text}}
 		got := RedactArgs(args)
 		c.CheckKept(t, got["note"].(string))
@@ -63,7 +63,7 @@ func TestToolArgumentsTakeTheSplitSecretCorpus(t *testing.T) {
 		c.Check(t, Tool("run", args).Summary)
 	}
 	// A name is identifier text, and so is a key: a token that is one is taken out of it.
-	for _, c := range redacttest.Identifiers(redacttest.SplitSecrets()) {
+	for _, c := range redacttest.Identifiers(redacttest.SplitSecretsSample()) {
 		c.Check(t, Tool(c.Text, nil).Name)
 		for k := range RedactArgs(map[string]any{c.Text: "v"}) {
 			c.Check(t, k)
@@ -198,5 +198,39 @@ func TestAlertFieldNeverShowsWhatTheCutWentThrough(t *testing.T) {
 				t.Errorf("%s in %s: the block lost the start of the field", name, field)
 			}
 		}
+	}
+}
+
+// A field of a block that is one line (an alert's title and its link, an author's name) is read joined as well as with
+// its lines, so a flag and its value, a user and its password, or a URL's password that a line break cuts apart is taken
+// there as it would be on one line. Redacting its lines and joining them after leaks all of them.
+func TestOneLineFieldsTakeWhatALineBreakHides(t *testing.T) {
+	for _, c := range redacttest.LineSplits() {
+		c.Check(t, untrustedSection(TriggerMessage{Title: c.Text}))
+		c.Check(t, untrustedSection(TriggerMessage{TitleLink: c.Text}))
+		c.Check(t, threadReplies([]ThreadReply{{UserID: "U1", Name: c.Text, Text: "ok"}}, 0))
+		c.Check(t, threadReplies([]ThreadReply{{UserID: c.Text, Name: "Ada", Text: "ok"}}, 0))
+		for _, kind := range []fieldKind{kindFreeText, kindWindow} {
+			f := untrustedField{Kind: kind, OneLine: true, Window: 4096}
+			got := f.clean(c.Text)
+			c.Check(t, got)
+			if strings.ContainsAny(got, "\n\t") {
+				t.Errorf("%s: kind %d: %q is not one line", c.Name, kind, got)
+			}
+		}
+	}
+}
+
+// The alert title that the review round found: a flag whose value is on the next line reaches the agent redacted. The
+// text field, which keeps its lines, is the contrast: its own line structure is what the agent sees of it.
+func TestAlertTitleWithAFlagAndItsValueOnTheNextLine(t *testing.T) {
+	got := untrustedSection(TriggerMessage{Title: "deploy --password\nhunter2", TitleLink: "https://user:pa\nss@host/x"})
+	for _, leaked := range []string{"hunter2", "user:pa", "ss@host"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("the block shows %q:\n%s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "<title>deploy --password [redacted]</title>") || !strings.Contains(got, "<titleLink>https://[redacted]@host/x</titleLink>") {
+		t.Errorf("the block does not show the one-line fields redacted:\n%s", got)
 	}
 }

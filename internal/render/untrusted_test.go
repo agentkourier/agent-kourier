@@ -346,7 +346,7 @@ func TestUntrustedBlockTakesTheSplitSecretCorpusOutOfEveryKind(t *testing.T) {
 					free = append(free, i)
 				}
 			}
-			cases := redacttest.SplitSecrets()
+			cases := redacttest.SplitSecretsSample()
 			for _, b := range redacttest.LineBreaks {
 				cases = append(cases, redacttest.Breaks(b))
 			}
@@ -356,7 +356,7 @@ func TestUntrustedBlockTakesTheSplitSecretCorpusOutOfEveryKind(t *testing.T) {
 			if len(identifier) == 0 {
 				return
 			}
-			for _, c := range redacttest.Identifiers(redacttest.SplitSecrets()) {
+			for _, c := range redacttest.Identifiers(redacttest.SplitSecretsSample()) {
 				c.Check(t, tg.build(t, tg.fill(c.Text, identifier...)))
 			}
 		})

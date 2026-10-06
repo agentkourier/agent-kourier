@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"unicode"
@@ -23,7 +24,10 @@ func TestNormalizeDeletesEveryInvisible(t *testing.T) {
 }
 
 // Every code point is either kept, turned into a line break or deleted, as the set says: a sweep of the whole
-// range, so that a class that has no sample in the corpus cannot be dropped, nor a category table narrowed.
+// range, so that a class that has no sample in the corpus cannot be dropped, nor a category table narrowed. The set is
+// the control, format, private-use and surrogate characters, the Braille blank, and Unicode's Default_Ignorable_Code_Point
+// and Variation_Selector properties (the Hangul fillers, the Mongolian selectors, U+034F and the reserved ignorables
+// among them), so a Unicode update that adds a character of the kind fails here, and not in a leak.
 func TestNormalizeSweepsEveryCodePoint(t *testing.T) {
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if r >= 0xD800 && r <= 0xDFFF {
@@ -35,9 +39,9 @@ func TestNormalizeSweepsEveryCodePoint(t *testing.T) {
 			want = "\n"
 		case r == '\t':
 			want = "\t"
-		case unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co), r == 0x3164, r == 0x2800,
-			r >= 0xFE00 && r <= 0xFE0F, r >= 0xE0100 && r <= 0xE01EF:
-			want = ""
+		case unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co), r == 0x2800,
+			unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r), unicode.Is(unicode.Variation_Selector, r):
+			want = "" // 0x2800, the Braille blank, is the one blank character that Default_Ignorable_Code_Point lacks
 		default:
 			want = string(r)
 		}
@@ -105,5 +109,23 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 		if twice := Normalize(once); twice != once {
 			t.Errorf("%s: Normalize twice = %q, once = %q", c.Name, twice, once)
 		}
+	}
+}
+
+// The token patterns' class of deleted characters (deletable) is the deletion set: a character that Normalize deletes
+// is transparent in a pattern, and one that it keeps is not. Two characters differ on purpose: CR, which Normalize
+// reads as a line break before it asks, and U+FFFD, which stands for invalid UTF-8 in a pattern and is kept as text.
+func TestDeletableIsTheDeletionSet(t *testing.T) {
+	class := regexp.MustCompile(`^[` + deletable + `]$`)
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if (r >= 0xD800 && r <= 0xDFFF) || r == '\r' || r == 0xFFFD {
+			continue
+		}
+		if got, want := class.MatchString(string(r)), deleted(r); got != want {
+			t.Fatalf("deletable holds U+%04X: %t, Normalize deletes it: %t", r, got, want)
+		}
+	}
+	if !class.MatchString("\xff") {
+		t.Error("deletable does not hold invalid UTF-8")
 	}
 }

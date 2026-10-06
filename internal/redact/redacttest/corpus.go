@@ -19,9 +19,9 @@ type Invisible struct {
 	Text string
 }
 
-// Invisibles has a sample of every class of the deletion set, and both ends of each variation-selector range. A
-// class that a change drops from the set has a sample here, so every test over Invisibles fails for it.
-var Invisibles = []Invisible{
+// coreInvisibles has a sample of every class of the deletion set that the first version had, and both ends of each
+// variation-selector range.
+var coreInvisibles = []Invisible{
 	{"Cc NUL", "\x00"},
 	{"Cc BEL", "\x07"},
 	{"Cc vertical tab", "\x0b"},
@@ -61,6 +61,48 @@ var Invisibles = []Invisible{
 	{"variation selector 256", "\U000e01ef"},
 }
 
+// ignorableInvisibles are the rest of the Unicode Default_Ignorable_Code_Point property that is shown as nothing and is in
+// none of the categories above: the combining grapheme joiner, the Hangul fillers, the Khmer inherent vowels, the Mongolian
+// free variation selectors and the reserved code points of the property, each range at both its ends.
+var ignorableInvisibles = []Invisible{
+	{"Mn combining grapheme joiner", "\U0000034f"},
+	{"Lo Hangul choseong filler", "\U0000115f"},
+	{"Lo Hangul jungseong filler", "\U00001160"},
+	{"Mn Khmer inherent vowel Aq", "\U000017b4"},
+	{"Mn Khmer inherent vowel Aa", "\U000017b5"},
+	{"Mn Mongolian free variation selector 1", "\U0000180b"},
+	{"Mn Mongolian free variation selector 2", "\U0000180c"},
+	{"Mn Mongolian free variation selector 3", "\U0000180d"},
+	{"Mn Mongolian free variation selector 4", "\U0000180f"},
+	{"Lo halfwidth Hangul filler", "\U0000ffa0"},
+	{"Cn reserved ignorable U+2065", "\U00002065"},
+	{"Cn reserved ignorable U+FFF0", "\U0000fff0"},
+	{"Cn reserved ignorable U+FFF8", "\U0000fff8"},
+	{"Cn reserved tag U+E0000", "\U000e0000"},
+	{"Cn reserved tag U+E0002", "\U000e0002"},
+	{"Cn reserved ignorable U+E0080", "\U000e0080"},
+	{"Cn reserved ignorable U+E01F0", "\U000e01f0"},
+	{"Cn reserved ignorable U+E0FFF", "\U000e0fff"},
+}
+
+// Invisibles has a sample of every class of the deletion set, and both ends of each variation-selector range and of
+// each run of Default_Ignorable code points. A class that a change drops from the set has a sample here, so every
+// test over Invisibles fails for it. The first ones are coreInvisibles, and ignorableInvisibles follow, so an index
+// into the list (pairRepresentatives, fewRepresentatives) stays where it was.
+var Invisibles = append(append([]Invisible(nil), coreInvisibles...), ignorableInvisibles...)
+
+// crossed are the invisibles that each template of splits and insides is cut with: all of coreInvisibles, and one
+// sample of each run of ignorableInvisibles. The rest of the deletion set is held by every test that goes over
+// Invisibles alone (Normalize, the token patterns' class, SecretName), and the corpus, which every caller runs, does not
+// grow by the whole set for each template.
+func crossed() []Invisible {
+	out := append([]Invisible(nil), coreInvisibles...)
+	for _, i := range []int{0, 1, 5, 9, 11, 13} { // 034f, 115f, 180b, ffa0, fff0, e0000
+		out = append(out, ignorableInvisibles[i])
+	}
+	return out
+}
+
 // LineBreak is a kind of line break, as it reaches redaction.
 type LineBreak struct {
 	Name string
@@ -95,6 +137,13 @@ type Case struct {
 // value is the secret in most cases: a run no pattern of redaction knows by its own shape, so that only the
 // name, the scheme or the prefix around it gives it away.
 const value = "Zq9vK3mT7wRx"
+
+// long is a run for the tokens that have a minimum length: 36 characters, none of which ends a token. A Google API key
+// takes long[:35], its exact length, and ends no other way.
+const long = value + value + value
+
+// sasValue is the value of an Azure SAS signature as a URL carries it: base64 with its "+" and "=" percent-encoded.
+const sasValue = value + "%2B" + value + "%3D"
 
 // encodedBasic is the base64 of "user:password", the credential of a Basic scheme.
 const encodedBasic = "dXNlcjpwYXNzd29yZA=="
@@ -148,6 +197,10 @@ var splits = []split{
 	{"a Basic credential, glued", "Authorization: Basic%s" + encodedBasic + " tail", encodedBasic, false},
 	{"a Basic credential, spaced", "Authorization: Basic %s" + encodedBasic + " tail", encodedBasic, false},
 	{"a URL password", "https://adm:Zq9%svK3mT7wRx@host/path tail", value, true},
+	// Tokens that give themselves away by a prefix, with no name before them.
+	{"a GitHub personal token", "gh%sp_" + long + " tail", long, false},
+	{"an OpenAI key", "s%sk-" + long + " tail", long, false},
+	{"an Azure SAS signature", "https://acct.blob.core.windows.net/c?sv=2020-08-04&si%sg=" + sasValue + " tail", sasValue, false},
 }
 
 // insides are templates of a secret whose VALUE, not its name, an invisible character cuts: "%s" is inside the
@@ -163,6 +216,35 @@ var insides = []split{
 	{"a glued word and a glued Basic cut in its value", "token\x00BasicdXNlcjpw%sYXNzd29yZA== tail", "YXNzd29yZA", false},
 	{"a JWT signature cut in its value", "eyJhbGciOiJub25lIn0.eyJjYW5hcnkiOjF9.sigZq9v%sK3mT7wRx tail", "K3mT7wRx", false},
 	{"an OAuth field value cut in its value", "access_token=Zq9v%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"a GitHub token cut in its value", "ghp_" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"an Azure SAS signature cut in its value", "https://h/c?sv=1&sig=" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+}
+
+// splitsFew and insidesFew are the same for the other tokens with a prefix of their own (each is built from the same
+// pieces, spelled with a gap between the letters and before the run), run with fewRepresentatives, so that the
+// corpus, which every caller runs, does not grow by the whole deletion set for each prefix.
+var splitsFew = []split{
+	{"a GitHub OAuth token", "gho%s_" + long + " tail", long, false},
+	{"a GitHub user token", "ghu_%s" + long + " tail", long, false},
+	{"a GitHub server token", "g%shs_" + long + " tail", long, false},
+	{"a GitHub refresh token", "ghr%s_" + long + " tail", long, false},
+	{"a GitHub fine-grained token", "github%s_pat_" + long + "_" + long + " tail", long, false},
+	{"a GitLab token", "glpat%s-" + long + " tail", long, false},
+	{"an OpenAI project key", "sk-pro%sj-" + long + " tail", long, false},
+	{"an Anthropic key", "sk-a%snt-api03-" + long + " tail", long, false},
+	{"a Google API key", "AI%sza" + long[:35] + " tail", long[:35], false},
+	{"a Stripe live secret key", "sk%s_live_" + long + " tail", long, false},
+	{"a Stripe live restricted key", "rk_l%sive_" + long + " tail", long, false},
+	{"a Stripe test secret key", "sk_te%sst_" + long + " tail", long, false},
+	{"a Stripe test restricted key", "rk_test%s_" + long + " tail", long, false},
+}
+
+var insidesFew = []split{
+	{"a fine-grained GitHub token cut in its value", "github_pat_" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"a GitLab token cut in its value", "glpat-" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"an OpenAI project key cut in its value", "sk-proj-" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"a Google API key cut in its value", "AIza" + long[:35] + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"a Stripe key cut in its value", "sk_live_" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
 }
 
 // twoInvisibles are templates with two invisible characters, "%s" and "%t": one inside the scheme's name, the
@@ -177,15 +259,81 @@ var twoInvisibles = []split{
 	{"a JWT's prefix cut twice", "e%syJ%thbGciOiJub25lIn0.eyJjYW5hcnkiOjF9." + value + " tail", value, false},
 }
 
-// pairRepresentatives are the invisibles that two-invisible templates are run with: one of each class.
+// twoInvisiblesPrefixed are the same for the tokens with a prefix of their own and for the Azure SAS signature, which are
+// built like the others (a gap between the letters and before the value). They are run with fewRepresentatives, so
+// that the corpus does not grow by the square of the deletion set for every template.
+var twoInvisiblesPrefixed = []split{
+	{"a GitHub token's prefix cut twice", "g%shp%t_" + long + " tail", long, false},
+	{"an Azure SAS signature's name cut twice", "https://h/c?sv=1&s%si%tg=" + sasValue + " tail", sasValue, false},
+	{"a word, an invisible, an OpenAI key and a gap before its run", "word%ssk-%t" + long + " tail", long, false},
+	{"a word, an invisible, an Azure SAS name and a gap before its value", "https://h/c?sv=1&word%ssig=%t" + sasValue + " tail", sasValue, false},
+}
+
+// pairRepresentatives are the invisibles that two-invisible templates are run with: one of each class (see Invisibles
+// for the indexes).
 var pairRepresentatives = []int{0, 2, 4, 6, 8, 15, 16, 18, 21, 25, 26, 29, 30, 33, 34}
 
-// SplitSecrets returns the corpus: every template of splits with every Invisible cut into it, the same secrets
-// written as the literal escapes that %q prints, and the cases about spaces and the glued Bearer.
+// fewRepresentatives are six of them for twoInvisiblesPrefixed: a control character, a format character, a private-use
+// character, a variation selector, the combining grapheme joiner and a Hangul filler.
+var fewRepresentatives = []int{0, 8, 21, 33, 37, 46}
+
+// SplitSecrets returns the corpus: every template of splits with every Invisible cut into it (the tokens with a
+// prefix of their own, a few of them), the same secrets written as the literal escapes that %q prints, the cases about
+// spaces and the glued Bearer, what looks like a secret and is not, and the Kubernetes and shell forms. LineSplits is
+// not in it. It is for the tests of internal/redact; a caller of redaction runs SplitSecretsSample.
 func SplitSecrets() []Case {
+	return build(crossed(), few(), pairRepresentatives, fewRepresentatives, spaceKinds)
+}
+
+// sampleIndexes are the indexes of Invisibles that the sample cuts into every template: one of each class of the
+// deletion set (a control character, a format character, a private-use one, an encoded surrogate, invalid UTF-8, a blank
+// filler, a variation selector, a default-ignorable Mn and a reserved one).
+var sampleIndexes = []int{0, 8, 21, 25, 26, 29, 33, 37, 47}
+
+// sampleRepresentatives are the invisibles that the sample pairs in the templates with two.
+var sampleRepresentatives = []int{0, 8, 21, 33, 37}
+
+// SplitSecretsSample is the corpus every caller of redaction runs: every template and every form of SplitSecrets, but
+// cut with one invisible of each class and with the three first kinds of space (no-break, general, ideographic) in place
+// of every one, so that a caller's test, which has to check only that its text goes through the right entry, does not
+// pay for the whole cross product. The full cross stays in internal/redact's own tests.
+func SplitSecretsSample() []Case {
+	sample := make([]Invisible, len(sampleIndexes))
+	for k, i := range sampleIndexes {
+		sample[k] = Invisibles[i]
+	}
+	return build(sample, sample, sampleRepresentatives, sampleRepresentatives, spaceKinds[:3])
+}
+
+// few returns the invisibles at fewRepresentatives.
+func few() []Invisible {
+	out := make([]Invisible, len(fewRepresentatives))
+	for k, i := range fewRepresentatives {
+		out[k] = Invisibles[i]
+	}
+	return out
+}
+
+// build returns the cases of the templates: splits and insides cut with invs, splitsFew and insidesFew with fewInvs, the
+// templates with two invisibles paired from the indexes pairReps and fewReps, and the forms with spaces of the kinds.
+func build(invs, fewInvs []Invisible, pairReps, fewReps []int, kinds []spaceKind) []Case {
 	var out []Case
-	for _, s := range append(append([]split(nil), splits...), insides...) {
-		for _, inv := range Invisibles {
+	out = append(out, singles(append(append([]split(nil), splits...), insides...), invs)...)
+	out = append(out, singles(append(append([]split(nil), splitsFew...), insidesFew...), fewInvs)...)
+	out = append(out, pairs(twoInvisibles, pairReps)...)
+	out = append(out, pairs(twoInvisiblesPrefixed, fewReps)...)
+	out = append(out, escapes()...)
+	out = append(out, spaces(kinds)...)
+	out = append(out, gluedBearer()...)
+	out = append(out, keeps()...)
+	return append(out, manifests()...)
+}
+
+// singles returns the cases of the templates with each of invs cut into them at their "%s".
+func singles(templates []split, invs []Invisible) []Case {
+	var out []Case
+	for _, s := range templates {
+		for _, inv := range invs {
 			out = append(out, Case{
 				Name:    s.name + " split by " + inv.Name,
 				Text:    strings.Replace(s.text, "%s", inv.Text, 1),
@@ -195,9 +343,15 @@ func SplitSecrets() []Case {
 			})
 		}
 	}
-	for _, s := range twoInvisibles {
-		for _, i := range pairRepresentatives {
-			for _, j := range pairRepresentatives {
+	return out
+}
+
+// pairs returns the cases of the templates with every pair of the invisibles at the indexes reps in their two places.
+func pairs(templates []split, reps []int) []Case {
+	var out []Case
+	for _, s := range templates {
+		for _, i := range reps {
+			for _, j := range reps {
 				text := strings.Replace(strings.Replace(s.text, "%s", Invisibles[i].Text, 1), "%t", Invisibles[j].Text, 1)
 				out = append(out, Case{
 					Name:    s.name + " split by " + Invisibles[i].Name + " and " + Invisibles[j].Name,
@@ -208,9 +362,7 @@ func SplitSecrets() []Case {
 			}
 		}
 	}
-	out = append(out, escapes()...)
-	out = append(out, spaces()...)
-	return append(out, gluedBearer()...)
+	return out
 }
 
 // escapes are token secrets whose giveaway is cut by what %q prints for an invisible character: text, not the
@@ -232,25 +384,133 @@ func escapes() []Case {
 	return out
 }
 
-// spaces are secrets after a white space that Go's \s does not match.
-func spaces() []Case {
+// spaceKind is a kind of Unicode space.
+type spaceKind struct{ name, text string }
+
+// spaceKinds are the kinds of space that a secret's neighbours are written with. The first three are the sample's.
+var spaceKinds = []spaceKind{
+	{"no-break space", "\U000000a0"}, {"em space", "\U00002003"}, {"ideographic space", "\U00003000"},
+	{"narrow no-break space", "\U0000202f"}, {"thin space", "\U00002009"},
+}
+
+// spaces are secrets next to a white space that Go's \s does not match: before a separator, after a flag, or ending the
+// value, in each width of space that a person or a tool may write.
+func spaces(kinds []spaceKind) []Case {
 	var out []Case
-	for _, sp := range []struct{ name, text string }{
-		{"no-break space", "\U000000a0"}, {"em space", "\U00002003"}, {"ideographic space", "\U00003000"},
-	} {
-		for _, form := range []struct{ name, text string }{
-			{"Bearer", "Authorization: Bearer%s" + value + " tail"},
-			{"Bearer after a colon", "Authorization:%sBearer%s" + value + " tail"},
-			{"a pair", "password:%s" + value + " tail"},
+	for _, sp := range kinds {
+		for _, form := range []struct {
+			name, text string
+			free       bool
+		}{
+			{"Bearer", "Authorization: Bearer%s" + value + " tail", false},
+			{"Bearer after a colon", "Authorization:%sBearer%s" + value + " tail", false},
+			{"a pair", "password:%s" + value + " tail", true},
+			{"a pair, spaced on both sides of its equals sign", "password%s=%s" + value + " tail", true},
+			{"a pair, spaced on both sides of its colon", "password%s:%s" + value + " tail", true},
+			{"an environment name, spaced on both sides", "api_key%s=%s" + value + " tail", true},
+			{"a JSON pair, spaced before its colon", `{"password"%s: "` + value + `"} tail`, true},
+			{"a secret flag, spaced before its value", "tool --password%s" + value + " tail", true},
+			{"a secret flag after a space", "tool%s--password " + value + " tail", true},
+			{"a user flag after a space", "curl%s-u admin:" + value + " tail", true},
+			{"a user flag, spaced before its user", "curl -u%sadmin:" + value + " tail", true},
+			{"a user flag whose value the space ends", "curl -u admin:" + value + "%stail", true},
+			{"a Token scheme", "Authorization: Token%s" + value + " tail", true},
+			{"a long user flag, spaced before its user", "curl --user%sadmin:" + value + " tail", true},
+			{"a value that the space ends", "password=" + value + "%stail", true},
+			{"a cookie list whose pairs the space follows", "Cookie: sid=" + value + ";%scsrf=" + value + " tail", true},
 		} {
 			out = append(out, Case{
 				Name:    form.name + " across a " + sp.name,
 				Text:    strings.ReplaceAll(form.text, "%s", sp.text),
 				Secrets: []string{value},
 				Keep:    []string{"tail"},
-				Free:    form.name == "a pair",
+				Free:    form.free,
 			})
 		}
+	}
+	return out
+}
+
+// keeps are texts that look like one of the rules of redaction and are not: prose that mentions a token prefix, a name
+// that a prefix is only the end of, a value too short to be a key, Kubernetes and shell text with no secret in it. A
+// place that only redacts must leave each whole.
+func keeps() []Case {
+	var out []Case
+	for _, k := range []struct{ name, text string }{
+		{"sk- in a library name", "pip install sk-learn tail"},
+		{"sk- ending a word", "a risk-free trade, ask-me anything tail"},
+		{"sk- ending a long identifier", "task-0123456789abcdefghijklmnopqrstuvwxyz1 and disk-usage-0123456789abcdefghijklmnop tail"},
+		{"a sk- key one character short", "sk-" + long[:19] + " tail"},
+		{"a Google key prefix with too little after it", "AIzawhatever tail"},
+		{"a Google key one character short", "AIza" + long[:34] + " tail"},
+		{"GitHub prefixes in prose", "ghp_ and gho_ and github_pat_ tokens are rotated tail"},
+		{"a GitHub token one character short", "ghp_" + long[:19] + " tail"},
+		{"a GitLab prefix in prose", "the glpat- prefix tail"},
+		{"Stripe prefixes in prose", "sk_live_ and rk_test_ keys start so tail"},
+		{"a Stripe name that ends in rk_live_", "network_live_connections_established tail"},
+		{"sig= in prose", "the sig= field is empty tail"},
+		{"sig= with a short value", "sig=abc and sig=0123456789abcde tail"},
+		{"an env entry with a name that is no secret", "- name: LOG_LEVEL\n  value: debug\n- name: REGION\n  value: tail"},
+		{"an env entry that takes its value from the pod", "- name: DB_PASSWORD\n  valueFrom:\n    fieldRef:\n      fieldPath: metadata.name\n  tail"},
+		{"a block scalar under a name that is no secret", "description: |\n  plain prose here\nnext: tail"},
+		{"a stripped block scalar under a name that is no secret", "args: |-\n  run --verbose now\nnext: tail"},
+		{"a continued command with a flag that is no secret", "mysql --verbose \\\n  run tail"},
+	} {
+		// A text of several lines is kept whole only where lines are kept: identifier text puts them on one.
+		out = append(out, Case{Name: "kept: " + k.name, Text: k.text, Keep: []string{k.text}, Free: strings.Contains(k.text, "\n")})
+	}
+	return out
+}
+
+// manifests are the forms of Kubernetes and shell text in which a secret's value is on a line of its own: the value
+// of an env entry named by a secret, a block scalar under a secret name, and a value continued after a trailing
+// backslash. Only the free-text rules know them, and each is held with every kind of line break.
+func manifests() []Case {
+	var out []Case
+	add := func(name, text string, keep ...string) {
+		out = append(out, Case{Name: name, Text: text, Secrets: []string{value}, Keep: append([]string{"tail"}, keep...), Free: true})
+	}
+	add("an env entry", "env:\n- name: DB_PASSWORD\n  value: "+value+"\n- name: LOG_LEVEL\n  value: tail", "LOG_LEVEL", "DB_PASSWORD")
+	add("an env entry, quoted", "- name: \"API_TOKEN\"\n  value: \""+value+"\"\n- name: tail", "API_TOKEN")
+	add("an env entry with a comment before its value", "- name: PGPASSWORD\n  # set by hand\n  value: "+value+"\n- name: tail")
+	add("an env entry in a nested list", "    - name: client_secret\n      value: "+value+"\n    - name: tail")
+	add("an env entry with a value that starts with a dash", "- name: DB_PASSWORD\n  value: -"+value+"\n- name: tail")
+	add("an env entry in JSON on one line", `{"name":"DB_PASSWORD","value":"`+value+`"} tail`)
+	add("an env entry in JSON on two lines", "{\n  \"name\": \"API_TOKEN\",\n  \"value\": \""+value+"\"\n}\ntail")
+	add("an env entry in a flow mapping", "{name: DB_PASSWORD, value: "+value+"} tail")
+	add("an env entry with a block scalar for a value", "- name: DB_PASSWORD\n  value: |\n    "+value+"\n- name: tail")
+	for _, h := range []string{"|", "|-", "|+", ">", ">-", ">+", "|2", "|2-"} {
+		add("a block scalar, header "+h, "password: "+h+"\n  "+value+"\n  "+value+"\nnext: tail", "next: tail")
+	}
+	add("a block scalar under a list entry", "- apiKey: >-\n    "+value+"\n    "+value+"\n- other: tail", "other: tail")
+	add("a block scalar with a blank line in it", "password: |\n  "+value+"\n\n  "+value+"\nnext: tail", "next: tail")
+	add("a block scalar with a comment after its header", "password: | # note\n  "+value+"\nnext: tail", "next: tail")
+	add("a block scalar at the end of the text", "tail: 1\ntoken: |\n  "+value)
+	for _, b := range LineBreaks {
+		add("a block scalar, lines ended by a "+b.Name, "password: |"+b.Text+"  "+value+b.Text+"next: tail", "next: tail")
+		add("a flag and its value after a trailing backslash and a "+b.Name, "mysql --password \\"+b.Text+"  "+value+" tail")
+		add("a user flag continued after a "+b.Name, "curl -u \\"+b.Text+"  admin:"+value+" tail", "admin")
+	}
+	add("a name and its value after a trailing backslash", "PASSWORD=\\\n  "+value+" tail")
+	add("a flag, a trailing backslash and a quoted value", "curl --token \\\n  '"+value+"' tail")
+	add("a continued command that goes on", "mysql -u root --password \\\n  "+value+" \\\n  --verbose tail", "--verbose")
+	return out
+}
+
+// LineSplits are secrets that a line break cuts from what gives them away: a flag from its value, a user from its
+// password, a URL's password in two. A place that keeps its line breaks reads each line as it is and does not take them;
+// a place that puts the text on one line must, so it runs these too (redact.FreeTextLine, audit's free text, the one-line
+// fields of an untrusted block).
+func LineSplits() []Case {
+	var out []Case
+	for _, b := range LineBreaks {
+		out = append(out,
+			Case{Name: "a secret flag and its value across a " + b.Name, Text: "deploy --password" + b.Text + value + " tail", Secrets: []string{value}, Keep: []string{"deploy", "tail"}, Free: true},
+			Case{Name: "a user flag and its user across a " + b.Name, Text: "curl -u" + b.Text + "admin:" + value + " tail", Secrets: []string{value}, Keep: []string{"tail"}, Free: true},
+			Case{Name: "a long user flag and its user across a " + b.Name, Text: "curl --user" + b.Text + "admin:" + value + " tail", Secrets: []string{value}, Keep: []string{"tail"}, Free: true},
+			Case{Name: "a URL password across a " + b.Name, Text: "https://user:Zq9vK3m" + b.Text + "T7wRx@host/x tail", Secrets: []string{"Zq9vK3m", "T7wRx"}, Keep: []string{"host", "tail"}, Free: true},
+			Case{Name: "a secret flag after a " + b.Name + " and a space, then its value", Text: "first" + b.Text + "tool --token " + b.Text + value + " tail", Secrets: []string{value}, Keep: []string{"first", "tail"}, Free: true},
+		)
 	}
 	return out
 }

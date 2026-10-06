@@ -101,8 +101,11 @@ choice, none of which changes.
 **Stored and logged text is normalized.** Redaction returns normalized text, not the original with only the secret spans
 replaced: before it matches anything, `internal/redact` deletes the invisible characters (control characters except line
 breaks and tab, format characters such as the zero-width space and the bidirectional overrides, private-use and surrogate
-code points, invalid UTF-8, the blank fillers U+3164 and U+2800, and every variation selector U+FE00 to U+FE0F and
-U+E0100 to U+E01EF) and writes every kind of line break (CR, CRLF, NEL, U+2028, U+2029) as `\n`. So no such character
+code points, invalid UTF-8, the blank fillers U+3164, U+2800, U+115F, U+1160 and U+FFA0, the combining grapheme joiner
+U+034F, the Khmer inherent vowels U+17B4 and U+17B5, every variation selector (U+180B to U+180D, U+180F, U+FE00 to U+FE0F,
+U+E0100 to U+E01EF), and the reserved code points that Unicode's Default_Ignorable_Code_Point property keeps invisible for
+characters yet to come: U+2065, U+FFF0 to U+FFF8, U+E0000 to U+E0FFF) and writes every kind of line break (CR, CRLF, NEL,
+U+2028, U+2029) as `\n`. So no such character
 can split a secret's name past the redaction, and none is stored, logged or sent to the agent in the alert and thread
 blocks. What a reader sees stays, an emoji with its glyph and without its presentation selector. There are two shapes:
 **free text** (a pause's hint and questions, an error in a log line, an alert field, and what a thread reply says or its author
@@ -114,11 +117,25 @@ user ID (`<id>`), which is what says who wrote a reply. The alert fields and the
 the exception to the 4 KiB cut: a field with no white space in it (a Japanese body, a long Grafana link) is read up to 12000
 bytes (4000 for a reply), cut at a character and marked, so its first 3000 UTF-16 units (1000 for a reply) reach the agent,
 redacted, instead of the whole field being replaced by "… (truncated)" (the last run of a cut
-field, back to its last white space, is left out, so that no start of a secret the cut went through is shown); the footer is an identifier,
+field, back to its last white space, is left out, so that no start of a secret the cut went through is shown; and the text
+is read as it came only up to four times that window, so the work is bounded whatever is sent); the footer is an identifier,
 so its `name: value` pairs (`courier-key: ns/alertname`) stay and only its tokens are taken out. A token or credential is
 matched both in the text as it came and in the normalized text, so that a word or an invisible character that
 normalization closes up cannot hide one. The same set of characters is deleted from the text that is shown in
 Slack (`chat.Clean`), so display and redaction cannot disagree on it.
+
+Besides a secret's name, free text is redacted by what stands around a value. A space of any width (a no-break space, a thin
+or an ideographic space) is white space to the rules, before and after a `=` or `:`, after a `--flag` and at the end of a value.
+A Kubernetes env entry whose `name:` is a secret name loses its `value:` when it follows on the next line or the one after (or
+after a comma, as in JSON); a YAML block scalar (`|`, `|-`, `>`, `>-` and the other indicators) under a secret name loses all its
+lines that are indented more than its key; a value that follows a trailing backslash (`mysql --password \`, and the next line)
+is the first word of that next line. A token that has a prefix of its own is redacted with no name before it (and by identifier
+text too): GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`, GitLab's `glpat-`, the `sk-` of OpenAI and Anthropic
+(`sk-proj-`, `sk-ant-`), Google's `AIza` (35 characters), Stripe's `sk_live_`, `rk_live_` and their `_test_` kind, and the `sig=`
+value of an Azure SAS URL; each from a minimum length a little under the real token's, so that "sk-learn" and "AIzawhatever" stay.
+Text that is shown on one line (an audit row's free text, an alert's title and link, a thread author's name) is read twice, with
+its lines and then joined, so that a flag, a user or a URL's password that a line break cuts from its value is taken as it would
+be on one line.
 
 In the alert and thread blocks, "&", "<" and ">" are written `&amp;`, `&lt;` and `&gt;`, and so is every character that a
 reader may take for an angle bracket: the full-width and small forms, the single and double guillemets, the mathematical,

@@ -35,7 +35,7 @@ func TestCleanWritesEveryLineBreakAsNewline(t *testing.T) {
 // What Clean shows and what redaction reads are one text: for any text of the corpus, Clean without the line flag is
 // Normalize, and with it Normalize on one line. Clean adds the line flag and nothing else.
 func TestCleanIsTheNormalizerAndItsLineFlag(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		n := redact.Normalize(c.Text)
 		if got := chat.Clean(c.Text, false); got != n {
 			t.Errorf("%s: Clean = %q, Normalize = %q", c.Name, got, n)

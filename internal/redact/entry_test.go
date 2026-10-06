@@ -2,8 +2,10 @@ package redact
 
 import (
 	"encoding/base64"
+	"math"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/agentkourier/agent-kourier/internal/redact/redacttest"
 )
@@ -311,5 +313,82 @@ func TestTheRawCutDropsTheRunItWentThrough(t *testing.T) {
 	}
 	if got := FreeText(text); strings.Contains(got, "wJalrXUt") || !strings.HasPrefix(got, "ok") || !strings.HasSuffix(got, Truncated) {
 		t.Errorf("FreeText = %q, want the start kept, the key gone and the cut marked", got)
+	}
+}
+
+// Free text for one line takes every secret of the corpus, those that a line break cuts from their giveaway among them,
+// and returns one line: what the lines of FreeText show to a flag or a URL is not shown to it.
+func TestFreeTextLineTakesEverySplitSecret(t *testing.T) {
+	check := func(c redacttest.Case, name, got string) {
+		t.Helper()
+		c.Check(t, got)
+		if strings.ContainsAny(got, "\n\t") || got != strings.Join(strings.Fields(got), " ") {
+			t.Errorf("%s: %s = %q is not one line", c.Name, name, got)
+		}
+	}
+	for _, c := range append(redacttest.SplitSecrets(), redacttest.LineSplits()...) {
+		check(c, "FreeTextLine", FreeTextLine(c.Text))
+	}
+	// FreeTextCutLine shares everything but the cut with it: the sample is enough.
+	for _, c := range append(redacttest.SplitSecretsSample(), redacttest.LineSplits()...) {
+		check(c, "FreeTextCutLine", FreeTextCutLine(c.Text, 4096))
+	}
+}
+
+// The lines of free text are not joined, so a flag does not take a value from the next line: the contrast that shows
+// why a text shown on one line goes through FreeTextLine, which joins it before it reads it, and not through FreeText and
+// a join after.
+func TestFreeTextLeavesWhatALineBreakHidesAndFreeTextLineTakesIt(t *testing.T) {
+	for _, c := range redacttest.LineSplits() {
+		kept := false
+		for _, s := range c.Secrets {
+			kept = kept || strings.Contains(FreeText(c.Text), s)
+		}
+		if !kept {
+			t.Errorf("%s: FreeText took %q, which it never read on one line; FreeTextLine is no longer what takes it", c.Name, c.Text)
+		}
+	}
+}
+
+// FreeTextCut reads a text as it came only up to a few times its limit, at a character, so that the work is bounded
+// whatever is sent. What is cut there is cut and marked like what is cut at the limit; padding that hides what follows
+// the cap hides all of it.
+func TestFreeTextCutReadsABoundedRawText(t *testing.T) {
+	const limit = 12000
+	const secretValue = "Zq9vK3mT7wRx"
+	// A megabyte of one character: the result is within the limit, marked.
+	for name, fn := range map[string]func(string, int) string{"FreeTextCut": FreeTextCut, "FreeTextCutLine": FreeTextCutLine} {
+		got := fn(strings.Repeat("\U000065e5", 1<<20/3), limit)
+		if len(got) > limit+len(Truncated) || !strings.HasSuffix(got, Truncated) {
+			t.Errorf("%s of a megabyte = %d bytes ending %q", name, len(got), got[max(len(got)-20, 0):])
+		}
+		// Invisible padding past the cap hides the text after it, and the text is marked as cut.
+		padded := strings.Repeat("\U0000200b", cutRawFactor*limit/3+10) + "password=" + secretValue
+		if got := fn(padded, limit); got != Truncated {
+			t.Errorf("%s of padding past the cap = %q, want only the mark", name, got)
+		}
+		// Padding within the cap is not counted against the limit.
+		inside := strings.Repeat("\U0000200b", limit/3) + "short password=" + secretValue
+		if got := fn(inside, limit); got != "short password="+redacted {
+			t.Errorf("%s of padding inside the cap = %q", name, got)
+		}
+		// A character is never cut in two: the text is valid, whatever byte the cap lands on.
+		for shift := range 4 {
+			got := fn(strings.Repeat("\U0001F600", cutRawFactor*limit/4+shift), limit)
+			if !utf8.ValidString(got) {
+				t.Errorf("%s with the cap %d bytes into a character: %q is not valid UTF-8", name, shift, got[max(len(got)-20, 0):])
+			}
+		}
+	}
+	// A text at the cap is not cut by it.
+	if got := FreeTextCut(strings.Repeat("a", cutRawFactor*limit), limit); !strings.HasSuffix(got, Truncated) || len(got) > limit+len(Truncated) {
+		t.Errorf("FreeTextCut of a text at the cap = %d bytes", len(got))
+	}
+	// And a limit that would overflow the cap is no panic.
+	if got := FreeTextCut("short", math.MaxInt); got != "short" {
+		t.Errorf("FreeTextCut with the largest limit = %q", got)
+	}
+	if got := FreeTextCut("short", -1); got != Truncated {
+		t.Errorf("FreeTextCut with a negative limit = %q", got)
 	}
 }

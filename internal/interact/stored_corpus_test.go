@@ -11,7 +11,7 @@ import (
 // question, a tool's name or arguments or a sub-agent's name, is not kept (spec 9 and 10 promise redaction before
 // storing). A question's choices are the one thing stored as given, so that an answer picks one by its index.
 func TestStorableTakesTheSplitSecretCorpus(t *testing.T) {
-	for _, c := range redacttest.SplitSecrets() {
+	for _, c := range redacttest.SplitSecretsSample() {
 		got := storable(dialect.Interaction{
 			Kind: dialect.AskUser, TaskID: "task-1", RequestID: "req-1",
 			Hint:      c.Text,
