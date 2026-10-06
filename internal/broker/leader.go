@@ -109,7 +109,10 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome})
+	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
+	// platform as it is built here (fenced with an election: the read is not a write, and the fence forwards it).
+	threads := newThreadContext(threadContextConfig{Platform: platform.Platform, Replies: st, Logger: log})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
