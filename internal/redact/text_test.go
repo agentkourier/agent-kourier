@@ -170,8 +170,10 @@ func TestFreeTextReadsManifestAndShellForms(t *testing.T) {
 		{"an env entry in JSON", `{"name":"DB_PASSWORD","value":"hunter2"}`, `{"name":"DB_PASSWORD","value":[redacted]}`, `{"name":"DB_PASSWORD","value":[redacted]}`},
 		{"an env entry that is no secret", "- name: LOG_LEVEL\n  value: debug", "- name: LOG_LEVEL\n  value: debug", "- name: LOG_LEVEL value: debug"},
 		{"an env entry with no value of its own", "- name: DB_PASSWORD\n  valueFrom:\n    fieldRef:\n      fieldPath: metadata.name", "- name: DB_PASSWORD\n  valueFrom:\n    fieldRef:\n      fieldPath: metadata.name", "- name: DB_PASSWORD valueFrom: fieldRef: fieldPath: metadata.name"},
-		{"a value three lines after the name", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: hunter2", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: hunter2", "- name: DB_PASSWORD a: 1 b: 2 value: hunter2"},
-		{"a name that ends in name", "hostname: DB_PASSWORD\n  value: hunter2", "hostname: DB_PASSWORD\n  value: hunter2", "hostname: DB_PASSWORD value: hunter2"},
+		{"a value three lines after the name", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: hunter2", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: [redacted]", "- name: DB_PASSWORD a: 1 b: 2 value: [redacted]"},
+		{"a value past a list entry", "- name: DB_PASSWORD\n  a: 1\n- b: 2\n  value: hunter2", "- name: DB_PASSWORD\n  a: 1\n- b: 2\n  value: hunter2", "- name: DB_PASSWORD a: 1 - b: 2 value: hunter2"},
+		{"a value nine lines after the name", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  c: 3\n  d: 4\n  e: 5\n  f: 6\n  g: 7\n  h: 8\n  i: 9\n  value: hunter2", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  c: 3\n  d: 4\n  e: 5\n  f: 6\n  g: 7\n  h: 8\n  i: 9\n  value: hunter2", "- name: DB_PASSWORD a: 1 b: 2 c: 3 d: 4 e: 5 f: 6 g: 7 h: 8 i: 9 value: hunter2"},
+		{"the first value is the entry's", "- name: DB_PASSWORD\n  value: one\n  value: two", "- name: DB_PASSWORD\n  value: [redacted]\n  value: two", "- name: DB_PASSWORD value: [redacted] value: two"}, {"a name that ends in name", "hostname: DB_PASSWORD\n  value: hunter2", "hostname: DB_PASSWORD\n  value: hunter2", "hostname: DB_PASSWORD value: hunter2"},
 		{"a literal block scalar", "password: |\n  hunter2\n  more\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
 		{"a literal block scalar that strips", "password: |-\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
 		{"a folded block scalar", "password: >\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
@@ -205,6 +207,85 @@ func TestFreeTextReadsManifestAndShellForms(t *testing.T) {
 		{"a marker that a no-break space ends", "password=[redacted]\u00a0hunter2", "password=[redacted]\u00a0hunter2", "password=[redacted] hunter2"},
 		{"a URL's password across a line break", "https://user:pa\nss@host/x", "https://user:pa\nss@host/x", "https://[redacted]@host/x"},
 		{"a user and its password across a line break", "-u\nadmin:hunter2", "-u\nadmin:hunter2", "-u admin:[redacted]"},
+		// A secret-named key whose value is another key: the nested key is not the value.
+		{"a nested secret key", "authorization:\n  credentials: hunter2", "authorization:\n  credentials: [redacted]", "authorization: credentials: [redacted]"},
+		{"a nested secret key, after a key that is no secret", "http_config:\n  authorization:\n    type: Bearer\n    credentials: hunter2", "http_config:\n  authorization:\n    type: Bearer\n    credentials: [redacted]", "http_config: authorization: [redacted] Bearer credentials: [redacted]"},
+		{"a nested password", "basic_auth:\n  password: hunter2", "basic_auth:\n  password: [redacted]", "basic_auth: password: [redacted]"},
+		{"a nested password two levels down", "redis:\n  auth:\n    password: hunter2", "redis:\n  auth:\n    password: [redacted]", "redis: auth: password: [redacted]"},
+		{"a nested secret under a token", "token:\n  secret: hunter2", "token:\n  secret: [redacted]", "token: secret: [redacted]"},
+		{"a nested value", "apiKey:\n  value: hunter2", "apiKey:\n  value: [redacted]", "apiKey: value: [redacted]"},
+		{"a secret key on a line with a secret key", "secret: password: hunter2", "secret: password: [redacted]", "secret: password: [redacted]"},
+		{"a nested password in a flow mapping", "auth: {password: hunter2}", "auth: {password: [redacted]", "auth: {password: [redacted]"},
+		{"a nested password in JSON", `{"auth": {"password": "hunter2"}}`, `{"auth": {"password": [redacted]}}`, `{"auth": {"password": [redacted]}}`},
+		{"a secret key and nothing after the nested key", "token: password:", "token: [redacted]", "token: [redacted]"},
+		{"a value with a colon in it is no nested key", "password: abc:hunter2", "password: [redacted]", "password: [redacted]"},
+		{"a nested key that is no secret, under a secret", "secret:\n  name: db", "secret:\n  name: db", "secret: [redacted] db"},
+		{"a nested key that is no secret, then the secret", "auth:\n  user: bob\n  password: hunter2", "auth:\n  user: bob\n  password: [redacted]", "auth: [redacted] bob password: [redacted]"},
+		{"a blank line ends a name's value", "Token:\n\nPlease rotate it", "Token:\n\nPlease rotate it", "Token: [redacted] rotate it"},
+		{"an indented value after a blank line", "password:\n\n  hunter2", "password:\n\n  [redacted]", "password: [redacted]"},
+		{"a value on the line after a name", "password:\nhunter2", "password:\n[redacted]", "password: [redacted]"},
+		{"a label, a blank line and a secret", "Password:\n\nhunter2", "Password:\n\n[redacted]", "Password: [redacted]"},
+		{"a blank line of spaces and a secret", "password:\n   \nhunter2x", "password:\n   \n[redacted]", "password: [redacted]"},
+		{"a name, a blank line and a list", "The token:\n\n- expired at 10:00", "The token:\n\n- expired at 10:00", "The token: [redacted] expired at 10:00"},
+		// A value that looks like a key is the value of the name above it; only a key's shape is a key.
+		{"a value that is a secret name, and a line of equals signs", "password: Password123\n=======", "password: [redacted]\n=======", "password: [redacted] ======="},
+		{"a value that is a secret name and a hash rocket", "secret: apikey123 => rotated", "secret: [redacted] => rotated", "secret: [redacted] => rotated"},
+		{"a value, a spaced equals sign", "password: MySecret2024 = rotated yesterday", "password: [redacted] = rotated yesterday", "password: [redacted] = rotated yesterday"},
+		{"a value and a colon on the next line", "password: mytoken\n: x", "password: [redacted]\n: x", "password: [redacted] : x"},
+		{"a quoted value that holds a key", `password: "Session: abc123"`, "password: [redacted]", "password: [redacted]"},
+		{"a quoted value that holds an assignment", "password: 'key=abc123'", "password: [redacted]", "password: [redacted]"},
+		{"a value that is a secret name and a colon", "password: secret:hunter2", "password: [redacted]", "password: [redacted]"},
+		{"a quoted value on the next line that holds a colon", "password:\n  'hunter2: x'", "password:\n  [redacted]", "password: [redacted]"},
+		{"a secret key and a key, then the value", "password: token: realsecret1", "password: token: [redacted]", "password: token: [redacted]"},
+		{"a spaced secret pair two levels down", "auth:\n  credentials:\n    password : SECRETx1", "auth:\n  credentials:\n    password : [redacted]", "auth: credentials: [redacted] : [redacted]"},
+		{"a secret pair with an equals sign two levels down", "credentials:\n  secret:\n    token = SECRETx1", "credentials:\n  secret:\n    [redacted]", "credentials: secret: [redacted]"},
+		{"a compact JSON object under a secret name", "secret:\n  {\"name\":\"SECRETKEY\",\"value\":\"x\"}", "secret:\n  [redacted]", "secret: [redacted]"},
+		{"a secret name as the value, and a pair that reads it as a name", "password:\n  Password123 = rotated", "password:\n  [redacted]", "password: [redacted]"},
+		{"a spaced password under basic_auth", "basic_auth:\n  password : S3CRET", "basic_auth:\n  password : [redacted]", "basic_auth: [redacted] : [redacted]"},
+		{"a spaced key under a spaced name", "authorization :\n  credentials : S3CRET", "authorization :\n  credentials : [redacted]", "authorization : [redacted] : [redacted]"},
+		{"a spaced quoted pair in JSON", `{"credentials" : {"password" : "S3CRET"}}`, `{"credentials" : {"password" : [redacted]}}`, `{"credentials" : {"password" : [redacted]}}`},
+		{"a PowerShell assignment under a name", "secret:\n  $env:APIKEY = \"x\"", "secret:\n  [redacted]", "secret: [redacted]"},
+		{"a bold name with the colon inside", "**Password:** x", "**Password:** [redacted]", "**Password:** [redacted]"},
+		{"an italic name", "*Token:* x", "*Token:* [redacted]", "*Token:* [redacted]"},
+		{"a bold name in a list item", "- **API key**: x", "- **API key**: [redacted]", "- **API key**: [redacted]"},
+		{"a bold label, a blank line and a quoted secret", "**Password:**\n\n`x`", "**Password:**\n\n[redacted]", "**Password:** [redacted]"},
+		{"a value that begins with emphasis marks", "password: ~~x", "password: [redacted]", "password: [redacted]"},
+		{"a value that begins with emphasis marks, glued to the colon", "password:~~x", "password:[redacted]", "password:[redacted]"},
+		{"a secret and words after a blank line", "password:\n\nhunter2x (rotated)", "password:\n\n[redacted] (rotated)", "password: [redacted] (rotated)"},
+		{"a compact JSON object with a comma after it", "Token:\n    {\"db\":\"SECRET\"},", "Token:\n    [redacted]", "Token: [redacted]"},
+		{"a compact JSON object that is cut", "password:\n{\"db\":\"SECRET\"", "password:\n[redacted]", "password: [redacted]"},
+		{"spaced JSON under a name is read as keys", "password:\n  {\"user\": \"bob\", \"password\": \"SECRET\"}", "password:\n  {\"user\": \"bob\", \"password\": [redacted]}", "password: [redacted] \"bob\", \"password\": [redacted]}"},
+		{"a secret pair that is the fifth in the first run", "secret:\n  a=b=c=d=password : SEKRITX", "secret:\n  [redacted]", "secret: [redacted]"},
+		{"a PowerShell secret pair after others", "secret:\n  $env:A=1;$env:B=2;$env:APIKEY = SEKRITX", "secret:\n  [redacted]", "secret: [redacted]"},
+		{"a secret pair behind many assignments", "token:\n  a0=0;a1=1;a2=2;a3=3;secret = SECRET", "token:\n  [redacted]", "token: [redacted]"},
+		{"a name with text, then a secret entry", "name: HOST\nsome text\nname: DB_PASSWORD\nvalue: S3CRET", "name: HOST\nsome text\nname: DB_PASSWORD\nvalue: [redacted]", "name: HOST some text name: DB_PASSWORD value: [redacted]"},
+		// Bearer before a secret word and its colon.
+		{"a Bearer and a secret word with a colon", "Use the bearer token: abc123xyz789", "Use the bearer token: [redacted]", "Use the bearer token: [redacted]"},
+		{"an Authorization, a Bearer and a secret word with a colon", "Authorization: Bearer credentials: abc123xyz789", "Authorization: [redacted] credentials: [redacted]", "Authorization: [redacted] credentials: [redacted]"},
+		{"a Bearer ending a line and a secret key under it", "Authorization: Bearer\n  token: realtoken123", "Authorization: [redacted]\n  token: [redacted]", "Authorization: [redacted] token: [redacted]"},
+		// Env entries, the JSON inside a string, comments and blank lines, and another entry's value.
+		{"an env entry in JSON inside a string", `{\"name\":\"DB_PASSWORD\",\"value\":\"hunter2\"}`, `{\"name\":\"DB_PASSWORD\",\"value\":[redacted]}`, `{\"name\":\"DB_PASSWORD\",\"value\":[redacted]}`},
+		{"an env entry with two comment lines", "- name: API_TOKEN\n  # a\n  # b\n  value: hunter2", "- name: API_TOKEN\n  # a\n  # b\n  value: [redacted]", "- name: API_TOKEN # a # b value: [redacted]"},
+		{"an env entry with a blank line", "- name: API_TOKEN\n\n  value: hunter2", "- name: API_TOKEN\n\n  value: [redacted]", "- name: API_TOKEN value: [redacted]"},
+		{"an env entry and another entry's value", "- name: DB_PASSWORD\n- name: HOST\n  value: public", "- name: DB_PASSWORD\n- name: HOST\n  value: public", "- name: DB_PASSWORD - name: HOST value: public"},
+		// A tag or an anchor before a block header.
+		{"a block scalar with a tag", "password: !!binary |\n  aHVudGVyMg==\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block scalar with an anchor", "password: &pw |\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a block scalar with a tag and an anchor", "password: !!str &pw >-\n  hunter2\nnext: x", "password: [redacted]\nnext: x", "password: [redacted] next: x"},
+		{"a tag before a block scalar under a name that is no secret", "note: !!binary |\n  hunter2\nnext: x", "note: !!binary |\n  hunter2\nnext: x", "note: !!binary | hunter2 next: x"},
+		{"a tag that is no tag and the word after it", "password: !hunter2 more", "password: [redacted]", "password: [redacted]"},
+		{"an anchor and a plain value", "password: &pgpw supersecret1", "password: [redacted]", "password: [redacted]"},
+		{"an anchor, a value and an alias", "POSTGRES_PASSWORD: &pw s3cr3t\nother: *pw", "POSTGRES_PASSWORD: [redacted]\nother: *pw", "POSTGRES_PASSWORD: [redacted] other: *pw"},
+		{"a tag and a quoted value with a space", `password: !!str "hunter 2"`, "password: [redacted]", "password: [redacted]"},
+		{"a tag and a plain value", "password: !!str hunter2", "password: [redacted]", "password: [redacted]"},
+		// The continuation marks of PowerShell and cmd.
+		{"a flag after a PowerShell backtick", "mysql --password `\n  hunter2 tail", "mysql --password [redacted] tail", "mysql --password [redacted] tail"},
+		{"a name after a cmd caret", "set PASSWORD=^\n hunter2 tail", "set PASSWORD=[redacted] tail", "set PASSWORD=[redacted] tail"},
+		{"a flag after a backtick, then a flag", "mysql --password `\n  --verbose", "mysql --password [redacted]\n  --verbose", "mysql --password [redacted] --verbose"},
+		{"a user flag after a backtick", "curl -u `\n  admin:hunter2 tail", "curl -u `\n  admin:[redacted] tail", "curl -u ` admin:[redacted] tail"},
+		// URL userinfo ends at a space of any width.
+		{"a no-break space after a host, then an address", "see https://example.test\u00a0bob@example.test tail", "see https://example.test\u00a0bob@example.test tail", "see https://example.test bob@example.test tail"},
+		{"a no-break space after userinfo", "https://u:p@h\u00a0next@x", "https://[redacted]@h\u00a0next@x", "https://[redacted]@h next@x"},
 	} {
 		if got := FreeText(tc.in); got != tc.free {
 			t.Errorf("%s: FreeText(%q) = %q, want %q", tc.name, tc.in, got, tc.free)
@@ -218,6 +299,75 @@ func TestFreeTextReadsManifestAndShellForms(t *testing.T) {
 		if got := FreeTextCut(tc.in, 4096); got != tc.free {
 			t.Errorf("%s: FreeTextCut(%q) = %q, want %q", tc.name, tc.in, got, tc.free)
 		}
+	}
+}
+
+// TestFreeTextKnownLimits pins what the free-text rules document they do not catch, and what they take that is no secret.
+// Each is deliberate: when one is fixed, flip its case and update the limits listed on FreeText and in docs/data.md.
+func TestFreeTextKnownLimits(t *testing.T) {
+	for _, c := range []struct {
+		name, in, leak string
+		line           bool // the leak is in FreeTextLine's result too
+	}{
+		// FreeTextLine reads the lines first, and the pair on the second line takes its "@" away before the joined read, which
+		// would see the URL's password cut by it.
+		{"a URL password, and a pair with an @ on the next line", "https://admin:hunter2\npassword=x@host", "hunter2", true},
+		{"a list under a secret name", "password:\n- hunter2", "hunter2", true},
+		{"a mapping of keys that are no secret names under a secret name", "secret:\n  db: hunter2", "hunter2", true},
+		{"a plain scalar that goes on", "password: hunter\n  2secret", "2secret", true},
+		{"a fenced block after a name", "New password:\n\n```\nhunter2x\n```", "hunter2x", true},
+		{"terraform's name and value", "set {\n  name  = \"auth.password\"\n  value = \"hunter2x\"\n}", "hunter2x", true},
+		{"a tag with its value on the next line", "password: !!str\n  hunter2x", "hunter2x", true},
+		{"a secret written where a nested key would be", "token:\n  SECRET : x", "SECRET", false},
+		{"a quoted secret written where a nested key would be", "Password:\n    'SECRET': rotated", "SECRET", false},
+		{"a sentence that begins with a plain word after a blank line", "password:\n\nletmein now", "letmein", false},
+		{"a short flag", "mysql -p hunter2", "hunter2", true},
+		{"a name and a value with no separator", "passwd  hunter2", "hunter2", true},
+	} {
+		if got := FreeText(c.in); !strings.Contains(got, c.leak) {
+			t.Errorf("%s: FreeText(%q) = %q, the documented limit no longer leaks %q", c.name, c.in, got, c.leak)
+		}
+		if got := FreeTextLine(c.in); c.line && !strings.Contains(got, c.leak) {
+			t.Errorf("%s: FreeTextLine(%q) = %q, the documented limit no longer leaks %q", c.name, c.in, got, c.leak)
+		}
+	}
+	// Read joined, a line break is a space: a value that began a paragraph, or a word after a flag on the line above, is
+	// taken for the value.
+	for _, c := range []struct{ name, in, want string }{
+		{"a name and a new paragraph", "Token:\n\nPlease rotate it", "Token: [redacted] rotate it"},
+		{"a flag and the next sentence", "Retry with --token\nThe deploy failed", "Retry with --token [redacted] deploy failed"},
+		{"a secret object and one of its keys", "secret:\n  name: db", "secret: [redacted] db"},
+	} {
+		if got := FreeTextLine(c.in); got != c.want {
+			t.Errorf("%s: FreeTextLine(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+		if got := FreeText(c.in); got != c.in {
+			t.Errorf("%s: FreeText(%q) = %q, want it kept (its lines tell the name from the text)", c.name, c.in, got)
+		}
+	}
+}
+
+// A Markdown legend of a secret word is taken: the name rules cannot tell "**Key**: blue means prod" from a key and its value.
+func TestAMarkdownLegendOfASecretWordIsTaken(t *testing.T) {
+	for in, want := range map[string]string{
+		"**Key**: blue means prod":   "**Key**: [redacted] means prod",
+		"**Session**: 42 minutes":    "**Session**: [redacted] minutes",
+		"**Note**: blue means prod":  "**Note**: blue means prod",
+		"**Token**: rotate it today": "**Token**: [redacted] it today",
+	} {
+		if got := FreeText(in); got != want {
+			t.Errorf("FreeText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A one-word paragraph after a name and a blank line is taken for the value, in every entry: a secret may be a plain word.
+func TestAOneWordParagraphAfterABlankLineIsTaken(t *testing.T) {
+	if got := FreeText("Token:\n\nExpired"); got != "Token:\n\n[redacted]" {
+		t.Errorf("FreeText = %q", got)
+	}
+	if got := FreeTextLine("Token:\n\nExpired"); got != "Token: [redacted]" {
+		t.Errorf("FreeTextLine = %q", got)
 	}
 }
 

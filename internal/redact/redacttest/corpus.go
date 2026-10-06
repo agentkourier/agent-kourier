@@ -142,6 +142,10 @@ const value = "Zq9vK3mT7wRx"
 // takes long[:35], its exact length, and ends no other way.
 const long = value + value + value
 
+// patBody is the body of a fine-grained GitHub token after "github_pat_": 22 characters, an underscore and 59 (the
+// first part reuses long, the second is long and 23 more).
+var patBody = long[:22] + "_" + long + long[:23]
+
 // sasValue is the value of an Azure SAS signature as a URL carries it: base64 with its "+" and "=" percent-encoded.
 const sasValue = value + "%2B" + value + "%3D"
 
@@ -200,6 +204,9 @@ var splits = []split{
 	// Tokens that give themselves away by a prefix, with no name before them.
 	{"a GitHub personal token", "gh%sp_" + long + " tail", long, false},
 	{"an OpenAI key", "s%sk-" + long + " tail", long, false},
+	{"a short sk- key of 22 characters", "key s%sk-6Yq3x5dM0LzTyb1XkQwR2A tail", "6Yq3x5dM0LzTyb1XkQwR2A", false},
+	{"an sk- key with hyphens and underscores", "s%sk-aB3_dE5-fG7_hI9-jK1_lM2-nO4_pQ6-rS8 tail", "aB3_dE5-fG7_hI9-jK1_lM2-nO4_pQ6-rS8", false},
+	{"a lower-case sk- key with a digit and a long run", "s%sk-3f9a2b7c1d4e8f0a6b5c9d2e7f1a3b8c tail", "3f9a2b7c1d4e8f0a6b5c9d2e7f1a3b8c", false},
 	{"an Azure SAS signature", "https://acct.blob.core.windows.net/c?sv=2020-08-04&si%sg=" + sasValue + " tail", sasValue, false},
 }
 
@@ -228,7 +235,7 @@ var splitsFew = []split{
 	{"a GitHub user token", "ghu_%s" + long + " tail", long, false},
 	{"a GitHub server token", "g%shs_" + long + " tail", long, false},
 	{"a GitHub refresh token", "ghr%s_" + long + " tail", long, false},
-	{"a GitHub fine-grained token", "github%s_pat_" + long + "_" + long + " tail", long, false},
+	{"a GitHub fine-grained token", "github%s_pat_" + patBody + " tail", long, false},
 	{"a GitLab token", "glpat%s-" + long + " tail", long, false},
 	{"an OpenAI project key", "sk-pro%sj-" + long + " tail", long, false},
 	{"an Anthropic key", "sk-a%snt-api03-" + long + " tail", long, false},
@@ -240,9 +247,10 @@ var splitsFew = []split{
 }
 
 var insidesFew = []split{
-	{"a fine-grained GitHub token cut in its value", "github_pat_" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"a fine-grained GitHub token cut in its value", "github_pat_" + patBody + "%sK3mT7wRx tail", "K3mT7wRx", false},
 	{"a GitLab token cut in its value", "glpat-" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
 	{"an OpenAI project key cut in its value", "sk-proj-" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
+	{"an OpenAI key cut in its value", "sk-" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
 	{"a Google API key cut in its value", "AIza" + long[:35] + "%sK3mT7wRx tail", "K3mT7wRx", false},
 	{"a Stripe key cut in its value", "sk_live_" + long + "%sK3mT7wRx tail", "K3mT7wRx", false},
 }
@@ -266,6 +274,8 @@ var twoInvisiblesPrefixed = []split{
 	{"a GitHub token's prefix cut twice", "g%shp%t_" + long + " tail", long, false},
 	{"an Azure SAS signature's name cut twice", "https://h/c?sv=1&s%si%tg=" + sasValue + " tail", sasValue, false},
 	{"a word, an invisible, an OpenAI key and a gap before its run", "word%ssk-%t" + long + " tail", long, false},
+	{"a word and a gap on each side of the k of an OpenAI project key", "word%ss%tk-proj-" + long + " tail", long, false},
+	{"a word and a gap on each side of the k of an OpenAI key", "word%ss%tk-" + long + " tail", long, false},
 	{"a word, an invisible, an Azure SAS name and a gap before its value", "https://h/c?sv=1&word%ssig=%t" + sasValue + " tail", sasValue, false},
 }
 
@@ -455,6 +465,27 @@ func keeps() []Case {
 		{"a block scalar under a name that is no secret", "description: |\n  plain prose here\nnext: tail"},
 		{"a stripped block scalar under a name that is no secret", "args: |-\n  run --verbose now\nnext: tail"},
 		{"a continued command with a flag that is no secret", "mysql --verbose \\\n  run tail"},
+		// Names that begin with the letters of a key and are no key: a hyphenated name is read as words, and a key is one run.
+		{"a library name with hyphens and a year", "pip install sk-learn-tutorial-for-beginners-2024 tail"},
+		{"a Binding name that holds sk-", "binding team-sk-payments-alerts-production-east tail"},
+		{"a path that holds sk-", "see https://docs.example.test/acme/sk-observability-dashboards-prod tail"},
+		{"a pod name that holds sk-", "pod sk-payments-api-7c9d8f6b5-x2k4p is crashlooping tail"},
+		{"a namespace that holds sk-", "namespace sk-platform-observability-prod tail"},
+		{"a sk- run of lower case only", "sk-" + strings.Repeat("abcdefgh", 6) + " tail"},
+		{"a snake-case name that ends in nk_test_", "network_test_connectivityToService tail"},
+		{"a snake-case name that ends in hs_", "highs_and_lows_metric_value_total tail"},
+		{"a snake-case name that ends in sk_test_", "risk_test_suiteNumberOneTwoThree tail"},
+		{"a GitHub token 35 characters long", "ghp_" + long[:35] + " tail"},
+		{"a fine-grained GitHub token with a short second part", "github_pat_" + long[:22] + "_" + long[:30] + " tail"},
+		{"a Stripe key 23 characters long", "sk_live_" + long[:23] + " tail"},
+		// A value begins on a line after a blank line only if it is indented: prose that follows a name is not a value.
+		{"a name, a blank line and a new paragraph", "Token:\n\nPlease rotate it tail"},
+		{"a name, a blank line and a list", "The token:\n\n- expired at 10:00\n- was rotated tail"},
+		{"a secret object under a name, and a key that is no secret", "secret:\n  name: db tail"},
+		{"a JSON env entry named by a secret with a valueFrom, then an entry with a public value", "{\n\"name\": \"DB_PASSWORD\",\n\"valueFrom\": {\"fieldRef\": {\"fieldPath\": \"status.podIP\"}}\n},\n{\n\"name\": \"HOST\",\n\"value\": \"public\"\n} tail"},
+		{"ordinary bold prose", "**Important:** rotate it and use **token** carefully tail"},
+		{"a bold name that is no secret", "**Note**: the rotation is on friday tail"},
+		{"an env entry named by a secret and another entry's value", "- name: DB_PASSWORD\n- name: HOST\n  value: public tail"},
 	} {
 		// A text of several lines is kept whole only where lines are kept: identifier text puts them on one.
 		out = append(out, Case{Name: "kept: " + k.name, Text: k.text, Keep: []string{k.text}, Free: strings.Contains(k.text, "\n")})
@@ -490,8 +521,105 @@ func manifests() []Case {
 		add("a block scalar, lines ended by a "+b.Name, "password: |"+b.Text+"  "+value+b.Text+"next: tail", "next: tail")
 		add("a flag and its value after a trailing backslash and a "+b.Name, "mysql --password \\"+b.Text+"  "+value+" tail")
 		add("a user flag continued after a "+b.Name, "curl -u \\"+b.Text+"  admin:"+value+" tail", "admin")
+		add("a PowerShell continuation after a "+b.Name, "mysql --password `"+b.Text+"  "+value+" tail")
+		add("a cmd continuation after a "+b.Name, "set PASSWORD=^"+b.Text+"  "+value+" tail")
+		add("a tag before a block scalar, lines ended by a "+b.Name, "password: !!binary |"+b.Text+"  "+value+b.Text+"next: tail", "next: tail")
 	}
 	add("a name and its value after a trailing backslash", "PASSWORD=\\\n  "+value+" tail")
+	// A secret-named key whose value is another key: the nested key's value is the secret.
+	add("a nested secret key", "authorization:\n  credentials: "+value+" tail", "authorization")
+	add("a nested secret key two levels down", "http_config:\n  authorization:\n    type: Bearer\n    credentials: "+value+" tail", "http_config")
+	add("a nested password under basic_auth", "basic_auth:\n  password: "+value+" tail")
+	add("a nested password under auth, under redis", "redis:\n  auth:\n    password: "+value+" tail", "redis")
+	add("a nested secret under a token", "token:\n  secret: "+value+" tail")
+	add("a nested value under a key", "apiKey:\n  value: "+value+" tail")
+	add("a secret key whose value is another secret key", "secret: password: "+value+" tail")
+	add("a nested password in a flow mapping", "auth: {password: "+value+"} tail")
+	add("a nested password in JSON", `{"auth": {"password": "`+value+`"}} tail`)
+	add("a nested password after a sibling", "auth:\n  username: bob\n  password: "+value+" tail", "bob")
+	add("a nested key after a blank line, indented", "password:\n\n  "+value+" tail")
+	// A secret on a line of its own after a blank line: a label and the secret, shown as they would be without the blank line.
+	add("a label, a blank line and a secret", "Password:\n\n"+value+"\ntail")
+	add("a label with words, a blank line and a secret", "New password:\n\n"+value+"\ntail")
+	add("a sentence, a blank line and a token", "Here is the token:\n\n"+value+"\ntail")
+	add("an equals sign, a blank line and a secret", "password=\n\n"+value+"\ntail")
+	add("a blank line of spaces and a secret", "password:\n   \n"+value+"\ntail")
+	add("an indented name, a blank line and a secret at the same indent", "  password:\n\n  "+value+"\ntail")
+	for _, b := range LineBreaks {
+		add("a name and a secret after two "+b.Name+"s", "password:"+b.Text+b.Text+value+b.Text+"tail")
+	}
+	// A secret that looks like a key, a line of "=" under it, or a word with a colon: it is the value of the name above it.
+	add("a value that is a secret name, and a line of equals signs", "password: Password"+value+"\n=======\ntail")
+	add("a value that ends in _password, and a line of equals signs", "admin_password: "+value+"_password\n==========\ntail")
+	add("a value in a merge conflict", "<<<<<<< HEAD\npassword: "+value+"_password\n=======\n>>>>>>> branch tail")
+	add("a value and a banner of equals signs", "DB_PASSWORD=Password"+value+"\n==== done ====\ntail")
+	add("a value and a spaced equals sign", "password: Password"+value+" = rotated yesterday tail")
+	add("a value and a hash rocket", "secret: apikey"+value+" => rotated tail")
+	add("a value that is a secret name and a spaced colon", "password: Password"+value+" : rotated tail")
+	add("a value under a name that has an equals sign in it", "password:\n  foo="+value+"\ntail")
+	add("a value and a colon on the next line", "password: mytoken"+value+"\n: x\ntail")
+	add("a value with a colon in it", "pass: admin-pass:"+value+" tail")
+	add("a quoted value that holds a key", `password: "Session: `+value+`" tail`)
+	add("a quoted value that holds an assignment", "password: 'key="+value+"' tail")
+	add("a value that is an assignment", "token: Session="+value+" tail")
+	add("a value that is a secret name and a colon", "password: secret:"+value+" tail")
+	add("a value that is a key and a colon with no space", "token: key:"+value+" tail")
+	add("a JSON value on the next line that holds a colon", "{\n  \"password\":\n    \""+value+": x\"\n}\ntail")
+	add("a quoted value on the next line that holds a colon", "password:\n  '"+value+": x'\ntail")
+	// A tag or an anchor before a value that is no block scalar.
+	add("an anchor and a plain value", "password: &pgpw "+value+" tail")
+	add("an anchor, a value and an alias", "POSTGRES_PASSWORD: &pw "+value+"\nother: *pw\ntail")
+	add("a tag and a quoted value with a space", `password: !!str "`+value+` x" tail`)
+	add("a tag and a plain value", "password: !!str "+value+" tail")
+	// Bearer before a secret word and its colon.
+	add("a Bearer and a secret word with a colon, on one line", "Use the bearer token: "+value+" tail")
+	add("an Authorization, a Bearer and a secret word with a colon", "Authorization: Bearer credentials: "+value+" tail", "Authorization")
+	// A secret pair under a secret-named key that nestedKey does not read, two levels down, or a compact object under one.
+	add("a spaced secret pair two levels under secret names", "auth:\n  credentials:\n    password : "+value+" tail", "auth")
+	add("a secret pair with an equals sign two levels down", "credentials:\n  secret:\n    token = "+value+" tail")
+	add("a quoted name with a space before its colon", "credentials:\n  \"passwd\" : \""+value+"\" tail")
+	add("a PowerShell assignment under a secret name", "secret:\n  $env:APIKEY = \""+value+"\" tail")
+	add("a compact JSON object under a secret name", "credentials:\n  {\"username\":\"admin\",\"pw\":\""+value+"\"} tail")
+	add("a compact JSON object of one key under a secret name", "secret:\n  {\"db\":\""+value+"\"} tail")
+	add("a compact JSON env entry under a secret name", "secret:\n  {\"name\":\"SECRETKEY\",\"value\":\""+value+"\"} tail")
+	add("a compact escaped JSON object under a secret name", "secret:\n  {\\\"db\\\":\\\""+value+"\\\"} tail")
+	add("a compact JSON object under a name, with a comma after it", "Token:\n    {\"db\":\""+value+"\"},\ntail")
+	add("a compact JSON object under a name, with a comma and more after it", "Token:\n    {\"db\":\""+value+"\"}, tail")
+	add("a compact JSON object under a name that is cut", "password:\n{\"db\":\""+value+"\"\ntail")
+	add("a secret pair that is the fifth in the first run", "secret:\n  a=b=c=d=password : "+value+" tail")
+	add("a PowerShell secret pair after others on the line", "secret:\n  $env:A=1;$env:B=2;$env:APIKEY = "+value+" tail")
+	add("a secret name as a value, then a pair that reads it as a name", "password:\n  Password"+value+" = rotated tail")
+	add("a spaced password under basic_auth", "basic_auth:\n  password : "+value+" tail")
+	add("a spaced secret key under a spaced secret key", "authorization :\n  credentials : "+value+" tail")
+	add("a spaced quoted pair in JSON", `{"credentials" : {"password" : "`+value+`"}} tail`)
+	// Markdown emphasis around a name.
+	add("a bold name with the colon inside", "**Password:** "+value+" tail")
+	add("a bold name with the colon outside", "**Password**: "+value+" tail")
+	add("an italic name", "*Token:* "+value+" tail")
+	add("a bold name in a list item", "- **API key**: "+value+" tail")
+	add("a bold label, a blank line and a quoted secret", "**Password:**\n\n`"+value+"`\ntail")
+	out = append(out, Case{Name: "a value that begins with emphasis marks, glued to the colon", Text: "password:~~" + value + " tail", Secrets: []string{"~~", value}, Keep: []string{"tail"}, Free: true})
+	out = append(out, Case{Name: "a value that begins with emphasis marks", Text: "password: ~~" + value + " tail", Secrets: []string{"~~" + value, "~" + value}, Keep: []string{"tail"}, Free: true})
+	// A secret followed by words after a blank line, and the JSON env entries that follow one another.
+	add("a blank line, a secret and words after it", "password:\n\n"+value+" (rotated)\ntail")
+	add("a JSON env entry that is no secret, then a secret entry", "{\n\"name\": \"HOST\",\n\"valueFrom\": {\"fieldRef\": {\"fieldPath\": \"status.podIP\"}}\n},\n{\n\"name\": \"API_TOKEN\",\n\"value\": \""+value+"\"\n} tail")
+	add("an env name with text, then a secret entry", "name: HOST\nsome text\nname: DB_PASSWORD\nvalue: "+value+"\ntail")
+	// Env entries: the JSON that is in a string, comments and blank lines before the value.
+	add("an env entry in JSON inside a string", `{\"name\":\"DB_PASSWORD\",\"value\":\"`+value+`\"} tail`)
+	add("an env entry in JSON inside a string, on two lines", "{\\\"name\\\": \\\"API_TOKEN\\\",\n \\\"value\\\": \\\""+value+"\\\"} tail")
+	add("an env entry with two comment lines before its value", "- name: PGPASSWORD\n  # set by hand\n  # and rotated\n  value: "+value+"\n- name: tail")
+	add("an env entry with another key before its value", "- name: DB_PASSWORD\n  description: x\n  value: "+value+"\n- name: tail")
+	add("an env entry with several keys before its value", "- name: DB_PASSWORD\n  a: 1\n  b: 2\n  value: "+value+"\n- name: tail")
+	add("an env entry with a blank line before its value", "- name: PGPASSWORD\n\n  value: "+value+"\n- name: tail")
+	// A tag or an anchor in front of a block scalar's header.
+	add("a block scalar with a tag", "password: !!binary |\n  "+value+"\n  "+value+"\nnext: tail", "next: tail")
+	add("a block scalar with an anchor", "password: &pw |\n  "+value+"\nnext: tail", "next: tail")
+	add("a block scalar with a custom tag", "token: !vault >-\n  "+value+"\n  "+value+"\nnext: tail", "next: tail")
+	add("a block scalar with a tag and an anchor", "password: !!str &pw |\n  "+value+"\nnext: tail", "next: tail")
+	// The continuation marks of PowerShell and cmd.
+	add("a flag and its value after a PowerShell backtick", "mysql --password `\n  "+value+" tail")
+	add("a name and its value after a cmd caret", "set PASSWORD=^\n  "+value+" tail")
+	add("a user flag after a backtick", "curl -u `\n  admin:"+value+" tail", "admin")
 	add("a flag, a trailing backslash and a quoted value", "curl --token \\\n  '"+value+"' tail")
 	add("a continued command that goes on", "mysql -u root --password \\\n  "+value+" \\\n  --verbose tail", "--verbose")
 	return out

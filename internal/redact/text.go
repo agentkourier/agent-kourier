@@ -126,45 +126,57 @@ func Bound(s string) string {
 // "\n" is the only line break in it.
 const hspace = `\t\p{Z}`
 
+// continuations are the marks that continue a command on the next line when one ends a line: the backslash of a POSIX shell,
+// the backtick of PowerShell and the caret of cmd, as a class body.
+const continuations = "\\\\`^"
+
 var (
 	// urlUserinfo matches the credentials in "scheme://user:pass@host": everything up to the last "@"
 	// of the word, so an "@" or a "/" in the password does not end it early. A path with an "@" in it
 	// is redacted too, which loses a little and leaks nothing.
-	urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s"]*@`)
+	urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^` + space + `"]*@`)
 	// urlSpaced is the same for a password that holds a space ("https://u:pa ss@h"): userinfo with a
 	// colon, up to the last "@" of the same quoted value or line, so that it cannot reach the next
 	// argument. It takes more than the userinfo when text after a "host:port" holds an "@", which
 	// loses a little and leaks nothing.
-	urlSpaced = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s"/@]*:[^"\n]*@`)
+	urlSpaced = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^` + space + `"/@]*:[^"\n]*@`)
 	// plainUserinfo is "user:pass@host" with no scheme, up to the last "@" of the word. The
 	// password may not start with "/", which leaves "scheme://" to urlUserinfo.
-	plainUserinfo = regexp.MustCompile(`[A-Za-z0-9_.\-]+:[^\s"'/][^\s"']*@`)
+	plainUserinfo = regexp.MustCompile(`[A-Za-z0-9_.\-]+:[^` + space + `"'/][^` + space + `"']*@`)
 	// pemKey matches a private key from its BEGIN line to the end of the text, END line or not.
 	pemKey = regexp.MustCompile(`-----BEGIN[A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----[\s\S]*`)
 	// namedPair finds "name=value", "name: value", "name => value" and, inside JSON, name":"value"
 	// (with the quotes escaped when the JSON is itself in a string), by the name and its
-	// separator only, with white space of any width, a no-break space among it, around the separator. The value is
+	// separator only, with white space of any width, a no-break space among it, around the separator, and Markdown
+	// emphasis ("**Password:** x", "**Password**: x", "*Token:* x": up to three of "*", "_" or "~" after the name, and
+	// after the separator if white space follows them, so that a value that begins with one is whole). The value is
 	// found by valueEnd, so that a long run that is no secret is scanned once. Group 1 is the name; the match ends
 	// where the value starts.
-	namedPair = regexp.MustCompile(`(?i)([a-z0-9_.\-]+)(?:\\?["'])?[` + space + `]*(?:=>|[=:])[` + space + `]*`)
+	namedPair = regexp.MustCompile(`(?i)([a-z0-9_.\-]+)(?:\\?["'])?[*_~]{0,3}[` + space + `]*(?:=>|[=:])(?:[*_~]{1,3}[` + space + `]+|[` + space + `]*)`)
 	// secretFlag finds a command-line flag and the white space before its value: "--token abc". That white space holds
 	// no line break: a value on the next line is the flag's only after a trailing backslash (see continued). Group 1 is
 	// the flag's name.
 	secretFlag = regexp.MustCompile(`(?i)(?:^|[` + space + `])--?([a-z][a-z0-9_.\-]*)[` + hspace + `]+`)
 	// userFlag is a flag that takes "user:password": curl's -u and --user. The value follows after white space or
-	// "=", or, for -u, directly: "-uadmin:pw". It may begin after a trailing backslash (and its line break).
+	// "=", or, for -u, directly: "-uadmin:pw". It may begin after a continuation mark (see continuations) and its line
+	// break.
 	userFlag = regexp.MustCompile(`(?i)((?:^|[` + space + `])(?:-u[` + hspace + `]*|--user[` + hspace + `=]+|--proxy-user[` + hspace + `=]+)` +
-		`(?:\\[` + hspace + `]*(?:\n[` + hspace + `]*)?)?[^\s:]*:)[^` + space + `]+`)
-	// envPair finds a Kubernetes env entry, "name: DB_PASSWORD" and its "value:" on the next line or the one after (or
-	// after a comma): the entry's name says the value is a secret. Group 1 is the entry's name, and the match ends where
-	// the value starts. The "name" is not the end of a longer word ("hostname:").
-	envPair = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.\-])["']?name["']?[` + hspace + `]*:[` + hspace + `]*["']?([^\s"',}]+)["']?(?:[` + hspace + `]+#[^\n]*)?` +
-		`(?:[` + hspace + `]*,?[` + hspace + `]*\n(?:[^\n]*\n)?|[` + hspace + `]*,)[` + hspace + `]*["']?value["']?[` + hspace + `]*:[` + hspace + `]*`)
+		`(?:[` + continuations + `][` + hspace + `]*(?:\n[` + hspace + `]*)?)?[^\s:]*:)[^` + space + `]+`)
+	// envPair finds a Kubernetes env entry, "name: DB_PASSWORD" and its "value:" on a later line, past up to eight lines of the
+	// entry (comments, blank lines and other keys, "description: x"; a line that begins a list entry, "- name: HOST", or
+	// an object, "{" or "}" of JSON, is the next entry's and ends the match), or after a comma on the same line: the entry's name says the value is a secret.
+	// The entry may be JSON that is itself in a string (name\":\"DB_PASSWORD\"). Group 1 is the entry's name, and the match
+	// ends where the value starts. The "name" is not the end of a longer word ("hostname:"). The lines are lazy, so the
+	// first "value:" is the entry's.
+	envPair = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_.\-])\\?["']?name\\?["']?[` + hspace + `]*:[` + hspace + `]*\\?["']?([^\s"',}\\]+)\\?["']?(?:[` + hspace + `]+#[^\n]*)?` +
+		`(?:[` + hspace + `]*,?[` + hspace + `]*\n(?:[` + hspace + `]*(?:#[^\n]*|[^-#{}` + space + `][^\n]*)?\n){0,8}?|[` + hspace + `]*,)[` + hspace + `]*\\?["']?value\\?["']?[` + hspace + `]*:[` + hspace + `]*`)
 	// blockHeader is what starts a YAML block scalar, whose lines are the value: "|" and ">", with the chomping and
 	// indentation indicators that may follow ("|-", ">+", "|2").
 	blockHeader = regexp.MustCompile(`^[|>](?:[1-9][+-]?|[+-][1-9]?)?$`)
 	// schemeWord is an authorization scheme before a value: "Token abc".
 	schemeWord = regexp.MustCompile(`(?i)^(?:bearer|basic|token|digest)[` + hspace + `]+`)
+	// listMarker is the first word of a list item: "-", "*", "+" or a number and a full stop or a bracket.
+	listMarker = regexp.MustCompile(`^(?:[-*+]|[0-9]+[.)])$`)
 	// nextPair is a cookie-style continuation: "; name=value".
 	nextPair = regexp.MustCompile(`^[` + hspace + `]*[A-Za-z0-9_.\-]+=[^` + space + `]*`)
 	// bareRun is a run of the characters of an AWS secret access key.
@@ -176,12 +188,30 @@ var (
 // deleted and the line breaks written "\n" first, so that none can split a name or a scheme, and no caller can
 // get the order of cleaning and redacting wrong. It then cuts the text to MaxBytes at a white-space boundary (see
 // Bound), and redacts URL credentials, what secrets knows for a token, a private key, the value of any
-// "name=value" or "--flag value" whose name is a SecretName, a "-u user:password" flag, a Kubernetes env entry's value
-// (a "name: DB_PASSWORD" and its "value:"), a YAML block scalar under such a name, a value that a trailing backslash
-// continues on the next line, and an AWS secret access key by its shape. The order is normalize, bound, match, and it
-// runs before any cut the caller makes, so no prefix of a secret is shown. Line breaks are kept: they end a value, and
-// the caller decides what to do with them. FreeTextLine is the entry for free text that is shown on one line, and
-// IdentifierText for a short value that must be one line and is no free text.
+// "name=value" or "--flag value" whose name is a SecretName (when that value is itself a key, the key's own value, as in
+// "authorization:\n  credentials: x"), a "-u user:password" flag, a Kubernetes env entry's value (a "name: DB_PASSWORD"
+// and its "value:", past comment lines), a YAML block scalar under such a name (with a tag or an anchor before its
+// header, or without), a value that a trailing continuation mark (a backslash, a backtick, a caret) continues on the next
+// line, and an AWS secret access key by its shape. The order is normalize, bound, match, and it runs before any cut the
+// caller makes, so no prefix of a secret is shown. Line breaks are kept: they end a value, and the caller decides what to
+// do with them. FreeTextLine is the entry for free text that is shown on one line, and IdentifierText for a short value
+// that must be one line and is no free text.
+//
+// Known limits, all deliberate (TestFreeTextKnownLimits pins them): the rules read a value as a run up to white space, and
+// a few shapes of text have none. A URL's password that a line break cuts is taken by FreeTextLine only if no pair on the
+// next line takes the "@" first ("https://admin:hunter2\npassword=x@host": the lines are read before they are joined, and
+// that is the second read's only way to see the "@"). A list ("password:\n- hunter2") or a mapping of keys that are no
+// secret names ("secret:\n  db: hunter2") under a secret name, a fenced block after a name ("password:\n\n```\nx\n```": the
+// fence is the value), Terraform's separate "name = ..." and "value = ..." lines, a tag with its value on the next line
+// ("password: !!str\n  x"; FreeTextLine leaves it too), a plain scalar that goes on over lines, a short flag
+// ("-p hunter2") and a name with no separator ("passwd hunter2") leave the value. A secret written where a nested key
+// would be, on the line under a secret name ("token:\n  SECRET : x", "Password:\n    'SECRET': rotated"), is shown by
+// FreeText as the key it looks like (FreeTextLine, which joins the lines, takes it). After a blank line a value is taken
+// unless the line reads as prose, a plain word first and more words after it: "password:\n\nletmein now" leaves the word
+// in FreeText (FreeTextLine takes it), and "Token:\n\nExpired", one word, is taken. And text that reads as a name and a
+// value only once its lines are joined is taken by FreeTextLine as one ("Retry with --token\nThe deploy": "The");
+// FreeText keeps the lines and does not. A Markdown legend of a secret word ("**Key**: blue means prod") is taken as a name
+// and its value, which loses a little.
 //
 // The token layer also runs once on the text as it came, before it is normalized: deleting an invisible
 // character can glue a word to a scheme ("token", a zero-width space, "Bearer") or a credential to it, and the
@@ -189,7 +219,7 @@ var (
 // tolerate the gaps, so they take these in the raw text.
 func FreeText(s string) string { return freeText(s, false) }
 
-// FreeTextLine is FreeText for free text that is shown on one line, such as a title, a link or an author's name, and for
+// FreeTextLine is FreeText for free text that is shown on one line, such as a title, a link or an author's name and ID, and for
 // the free text that an audit row keeps on one line: it returns what FreeText does with every run of white space, a
 // line break among it, written as one space and the ends trimmed. The text is read twice, as FreeText reads it, with
 // its lines, and then joined, so that what a line break hides from a rule is not hidden from it: a flag and its value,
@@ -340,35 +370,266 @@ const (
 )
 
 // redactNamed replaces the value after each match of re, a name and what separates it from its
-// value, whose name is a SecretName. A match whose name is not is skipped, but the search goes on
-// from the end of the match, so "x=password=y" gives nothing away. The text is read once: matches
-// come from one pass, and a value is scanned only for a secret name. The value ends at white space or at the end of
-// its quotes, and see valueRule, continued and blockScalarEnd for the rest.
+// value, whose name is a SecretName. A match whose name is not is skipped, and the search goes on from the end of its
+// name, not of the match: a match that reaches over what follows its name (an env entry's lines up to its "value:") must
+// not hide a later name, and "x=password=y" gives nothing away. A value that was taken is not read again, and a value is
+// scanned only for a secret name (what a skipped match reached over is read again from its name on, a few lines at most). The value ends at white space or at the end of its quotes,
+// and see valueRule, startOfPair, continued, tagged and blockScalarEnd for the rest.
 func redactNamed(s string, re *regexp.Regexp, rule valueRule) string {
 	var out strings.Builder
-	pos := 0
-	for _, loc := range re.FindAllStringSubmatchIndex(s, -1) {
+	pos, from := 0, 0
+	for from < len(s) {
+		loc := re.FindStringSubmatchIndex(s[from:])
+		if loc == nil {
+			break
+		}
+		for i := range loc {
+			if loc[i] >= 0 {
+				loc[i] += from
+			}
+		}
 		valStart := loc[1]
-		if loc[0] < pos || valStart >= len(s) || !SecretName(s[loc[2]:loc[3]]) || (rule == flagValue && s[valStart] == '-') {
-			continue // inside a value already taken, no value, no secret, or a flag
+		if !SecretName(s[loc[2]:loc[3]]) {
+			from = loc[3]
+			continue
+		}
+		from = loc[1]
+		if valStart >= len(s) || (rule == flagValue && s[valStart] == '-') {
+			continue // no value, or a flag
+		}
+		through := 0
+		if rule == pairValue {
+			var skip bool
+			if valStart, through, skip = startOfPair(s, loc[0], valStart); skip {
+				continue
+			}
 		}
 		end := valueEnd(s, valStart)
 		if end == valStart { // white space where the value should start: a line break after a flag's own, for one
 			continue
 		}
-		end = continued(s, valStart, end, rule)
+		end = max(continued(s, valStart, end, rule), through)
 		if rule != flagValue {
-			end = blockScalarEnd(s, valStart, end)
+			header, headerEnd := tagged(s, valStart, end)
+			end = max(end, blockScalarEnd(s, header, headerEnd))
 		}
 		for rule != flagValue && end > valStart && s[end-1] == ';' && nextPair.MatchString(s[end:]) { // a cookie's other pairs
 			end += len(nextPair.FindString(s[end:]))
 		}
 		out.WriteString(s[pos:valStart])
 		out.WriteString(redacted)
-		pos = end
+		pos, from = end, end
 	}
 	out.WriteString(s[pos:])
 	return out.String()
+}
+
+// valueHolders are the keys that hold the value of the key above them, the secret itself: "apiKey:", then "value:" and
+// the secret on the next line. Any other nested key is a label or a field of its own, and a secret key's value is read
+// from the nested key that is a secret name.
+var valueHolders = map[string]bool{"value": true}
+
+// startOfPair says where the value of the pair that begins at pairStart and whose value starts at start (the white
+// space after its separator is behind start, and may hold line breaks) is to be read from, how far it reaches at least
+// (through; 0 for as far as its first run), and whether the match is to be skipped. The value of a pair is read as a run
+// up to white space, so when it is itself a key, "credentials:" in "authorization:\n  credentials: x", the run is the key
+// and the secret that follows it would be shown, and the nested match, which the search would find next, skipped as
+// inside a value already taken. So:
+//
+//   - the match is skipped when what the value starts with (past a "{", a "[", a quote, or white space) is a key (see
+//     nestedKey) that is a SecretName and has something after it: the search goes on to that key, which takes its own value;
+//   - when it is a valueHolder ("value:"), the value starts after it;
+//   - when it is another key, on a line of its own under the name ("secret:\n  name: db"), the match is skipped too: that
+//     is a field of the object under the name, not its value, unless it is a compact flow mapping, one run, which the name
+//     takes whole ("secret:\n  {\"db\":\"x\"}");
+//   - when the line under the name begins with a secret pair that nestedKey does not read ("password : x", "$env:APIKEY =
+//     x"), the value is that whole pair, its value too: it is what the name above takes, and nothing of it is shown;
+//   - otherwise the value is read from start, as it always was: "password: abc:def", "password: key=x" and
+//     "password: Password123" and a line of "=======" under it are all value.
+//
+// A value that starts after a blank line is no value either unless it is indented more than the name's line, or its line
+// does not read as prose, which is a plain word first (or a list item of one): "Token:\n\nPlease rotate it" is a name and a
+// new paragraph, "password:\n\n  hunter2" a key and a value of YAML, and "Password:\n\nhunter2x" a label and a secret on a
+// line of its own, which is shown as it would be without the blank line. A one-word line is a value ("Token:\n\nExpired"
+// is taken: a secret may be a plain word).
+func startOfPair(s string, pairStart, start int) (valueStart, through int, skip bool) {
+	gap := s[pairStart:start]
+	if strings.Count(gap, "\n") >= 2 && lineIndent(s, start) <= lineIndent(s, pairStart) && !oneWordLine(s, start) && proseLine(s, start) {
+		return start, 0, true
+	}
+	crossed := strings.Contains(gap, "\n")
+	for range 4 { // a value holder under a value holder is no deeper than a few levels
+		name, valueAt, ok := nestedKey(s, start, crossed)
+		if !ok && crossed { // not a key: a secret pair that nestedKey does not read is taken whole
+			return start, secretPairThrough(s, start), false
+		}
+		if !ok || valueAt >= len(s) { // not a key, or nothing after it: the value is as it is
+			return start, 0, false
+		}
+		switch {
+		case SecretName(name):
+			return start, 0, true
+		case valueHolders[strings.ToLower(name)]:
+			start = valueAt
+		case crossed && !compactFlow(s, start):
+			return start, 0, true
+		default:
+			return start, 0, false
+		}
+	}
+	return start, 0, false
+}
+
+// nestedKey reads a key at the start of the value that begins at start, past any "{", "[", quotes, backslashes and white
+// space, and returns its name and where what follows it begins. It reads only what has a key's shape, because a secret
+// is the value of the name above it however much it looks like a key ("password: Password123" and a line of "=====",
+// "password: key=x", "password: 'a: b'", "password: s:ecret"): a quoted key, which is closed by its quote before the
+// separator, with ":" or "=>" ("token": x, 'token' => x), or an unquoted one, a name and ":" and white space (YAML's ": ").
+// An unquoted key is never followed by "=" or "=>" or a glued ":", and has no white space before its ":" unless it begins
+// a line of its own under the name above it (ownLine: "basic_auth:\n  password : x"); a quoted key may have some
+// between its closing quote and its separator anywhere.
+func nestedKey(s string, start int, ownLine bool) (name string, valueStart int, ok bool) {
+	i, quoted := start, false
+	for i < len(s) {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == '"' || r == '\'' {
+			quoted = true
+		} else if r != '{' && r != '[' && r != '\\' && !isSpace(r) {
+			break
+		}
+		i += n
+	}
+	j := i
+	for j < len(s) && (s[j] >= 'a' && s[j] <= 'z' || s[j] >= 'A' && s[j] <= 'Z' || s[j] >= '0' && s[j] <= '9' || s[j] == '_' || s[j] == '.' || s[j] == '-') {
+		j++
+	}
+	if j == i {
+		return "", 0, false
+	}
+	name, k := s[i:j], j
+	if quoted {
+		if k < len(s) && s[k] == '\\' {
+			k++
+		}
+		if k >= len(s) || (s[k] != '"' && s[k] != '\'') {
+			return "", 0, false // a quoted scalar, not a key: the quote does not close before the separator
+		}
+		k = skipHSpace(s, k+1)
+		switch {
+		case strings.HasPrefix(s[k:], "=>"):
+			k += 2
+		case strings.HasPrefix(s[k:], ":"):
+			k++
+		default:
+			return "", 0, false
+		}
+		return name, skipSpace(s, k), true
+	}
+	if ownLine {
+		k = skipHSpace(s, k)
+	}
+	if !strings.HasPrefix(s[k:], ":") || k+1 >= len(s) {
+		return "", 0, false
+	}
+	r, _ := utf8.DecodeRuneInString(s[k+1:])
+	if !isSpace(r) {
+		return "", 0, false
+	}
+	return name, skipSpace(s, k+1), true
+}
+
+// secretPairThrough returns where the value of the pair whose name is a SecretName and begins in the first run of the
+// line that starts at start ends (what valueEnd would take as the value is a run, and the pair's name is in it), or 0 if
+// there is no such pair. The pair is not a key to nestedKey ("password : x", "$env:APIKEY = x", "Password123 = rotated"),
+// and its name, and the value above it, are taken with it: nothing of the line is left to show a secret.
+func secretPairThrough(s string, start int) int {
+	end := valueEnd(s, start)
+	lineEnd := len(s)
+	if k := strings.IndexByte(s[start:], '\n'); k >= 0 {
+		lineEnd = start + k
+	}
+	last := 0
+	for from := start; from < lineEnd; { // the pairs whose names are in the first run, however many; the work ends with it
+		m := namedPair.FindStringSubmatchIndex(s[from:lineEnd])
+		if m == nil || from+m[2] >= end {
+			break
+		}
+		if SecretName(s[from+m[2]:from+m[3]]) && from+m[1] < len(s) {
+			last = valueEnd(s, from+m[1])
+		}
+		from += m[1]
+	}
+	return last
+}
+
+// compactFlow reports whether the value that starts at start is a flow collection with no white space in it ({"db":"x"}),
+// or the start of one that is cut ({"db":"x"), or one that a comma or a semicolon follows: one run, which the name above
+// takes whole. A run that ends before its line does and does not end in a bracket is no collection (spaced JSON, an
+// env entry: {"name": "x", ...), and its first key is read as a key.
+func compactFlow(s string, start int) bool {
+	if s[start] != '{' && s[start] != '[' {
+		return false
+	}
+	end := valueEnd(s, start)
+	if end <= start {
+		return false
+	}
+	if end == len(s) || s[end] == '\n' { // the run is the rest of its line: {"db":"x"}, and one that is cut, {"db":"x"
+		return true
+	}
+	run := strings.TrimRight(s[start:end], ",;") // a flow collection in a list or a mapping, {"db":"x"},
+	return strings.HasSuffix(run, "}") || strings.HasSuffix(run, "]")
+}
+
+// proseLine reports whether the line of s that begins at i reads as prose: its first word, after a list marker ("- ",
+// "* ", "1. "), is a plain word with at most a leading capital, as a sentence begins and a secret ("hunter2x",
+// "S3cr3t-Pa55", a token) does not.
+func proseLine(s string, i int) bool {
+	end := len(s)
+	if k := strings.IndexByte(s[i:], '\n'); k >= 0 {
+		end = i + k
+	}
+	f := strings.Fields(s[i:end])
+	if len(f) > 1 && listMarker.MatchString(f[0]) {
+		f = f[1:]
+	}
+	return len(f) > 0 && plainWord.MatchString(f[0])
+}
+
+// skipSpace returns the index of the first character of s at or after i that is not white space of any kind.
+func skipSpace(s string, i int) int {
+	for i < len(s) {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if !isSpace(r) {
+			break
+		}
+		i += n
+	}
+	return i
+}
+
+// oneWordLine reports whether the line of s that begins at i, less the white space that ends it, holds no white space:
+// a single word, such as a secret on a line of its own, where a sentence has several.
+func oneWordLine(s string, i int) bool {
+	end := len(s)
+	if k := strings.IndexByte(s[i:], '\n'); k >= 0 {
+		end = i + k
+	}
+	return !strings.ContainsFunc(strings.TrimRightFunc(s[i:end], isHSpace), isHSpace)
+}
+
+// lineIndent is how many characters of white space begin the line of s that holds index i.
+func lineIndent(s string, i int) int {
+	n := 0
+	for j := strings.LastIndexByte(s[:i], '\n') + 1; j < len(s); {
+		r, size := utf8.DecodeRuneInString(s[j:])
+		if !isHSpace(r) {
+			break
+		}
+		n++
+		j += size
+	}
+	return n
 }
 
 // isSpace reports whether r is white space that ends an unquoted value: of any width, as the space class of the
@@ -392,11 +653,12 @@ func skipHSpace(s string, i int) int {
 	return i
 }
 
-// continued returns where the value that starts at start and ends at end ends once a trailing backslash is read. A
-// shell goes on to the next line after a backslash that ends a line, so the value of "--password \" is the first word of
-// the next line; with the lines joined, the backslash is followed by a space instead. A flag's value is not another flag.
+// continued returns where the value that starts at start and ends at end ends once a trailing continuation mark is read
+// (see continuations). A shell goes on to the next line after a backslash that ends a line, as PowerShell does after a
+// backtick and cmd after a caret, so the value of "--password \" is the first word of the next line; with the lines
+// joined, the mark is followed by a space instead. A flag's value is not another flag.
 func continued(s string, start, end int, rule valueRule) int {
-	if s[start:end] != `\` {
+	if end-start != 1 || !strings.ContainsRune(continuations, rune(s[start])) {
 		return end
 	}
 	i := skipHSpace(s, end)
@@ -407,6 +669,33 @@ func continued(s string, start, end int, rule valueRule) int {
 		return end
 	}
 	return valueEnd(s, i)
+}
+
+// tagged returns where the header of a block scalar is, or where the value ends, for a value that starts at start and
+// ends at end with a tag or an anchor ("password: !!binary |", "password: &pw >-", "password: &pw hunter2",
+// "password: !!str 'hunter 2'"): the header that follows them on the line, which is what blockScalarEnd reads from, or
+// the end of the word or the quoted string that follows, which the value goes on to ("password: !important note" loses
+// "note" too). With no tag or anchor, or one and nothing after it on the line, the start and end are returned as they are.
+func tagged(s string, start, end int) (int, int) {
+	hs, he := start, end
+	for range 4 { // a tag and an anchor, and a little room: more is no YAML
+		if s[hs] != '!' && s[hs] != '&' {
+			break
+		}
+		i := skipHSpace(s, he)
+		if i == he || i >= len(s) || s[i] == '\n' {
+			break
+		}
+		next := valueEnd(s, i)
+		if blockHeader.MatchString(s[i:next]) {
+			return i, next
+		}
+		hs, he = i, next
+	}
+	if hs == start {
+		return start, end
+	}
+	return hs, he
 }
 
 // blockScalarEnd returns where the value that starts at start and ends at end ends if it is the header of a YAML block
@@ -463,6 +752,9 @@ func endsValue(s string, i int) bool {
 // a malformed one.
 func valueEnd(s string, i int) int {
 	if loc := schemeWord.FindStringIndex(s[i:]); loc != nil {
+		if name, _, ok := nestedKey(s, i+loc[1], false); ok && SecretName(name) { // "Bearer token: x": the scheme alone, the key has its own value
+			return i + len(strings.TrimRightFunc(s[i:i+loc[1]], isHSpace))
+		}
 		i += loc[1]
 	}
 	switch {

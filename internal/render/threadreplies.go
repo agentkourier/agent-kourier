@@ -13,10 +13,11 @@ package render
 // built by the untrusted block module (untrusted.go), which writes that sentence, the tag, the escaping and the cut, and
 // drops the oldest replies that do not fit, counting them in the last line. This file says only what the block holds:
 // each reply is an item with an author, two labels (the name the platform gives them, and the platform's ID, apart from
-// each other, because a name is the person's to choose and may say anything, an ID among it), and a text. Each name, ID and
-// text is cleaned of control and format characters, has its secrets taken out (redact.FreeText, and for the text
-// redact.FreeTextCut, which keeps the start of a reply that has no white space in it) and is escaped: no "<" of a reply
-// survives, so nothing in it can close the block early or open a tag that passes for courier's.
+// each other, because a name is the person's to choose and may say anything, an ID among it), and a text. Each is
+// normalized (the invisible characters deleted), has its secrets taken out and is escaped: the name and the ID go through
+// redact.FreeTextLine, as one line read with its lines and joined, and the text through redact.FreeTextCut, which keeps
+// the start of a reply that has no white space in it. No "<" of a reply survives, so nothing in it can close the block
+// early or open a tag that passes for courier's.
 
 // Caps on the thread context, in UTF-16 units as chat.Truncate counts them. Anything cut ends in chat.Truncated, and what is
 // left out as a whole is counted in the block's last line. They are not configurable in v1.

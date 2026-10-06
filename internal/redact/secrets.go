@@ -75,10 +75,9 @@ const (
 	// zero-width spaces is no value: the redaction would take them and leave the real text after them).
 	value = `[` + deletable + `]*[^` + space + stop + `&` + deletable + `][^` + space + stop + `&]*`
 
-	// A token's characters after its prefix, and how many of them make a token and not a word that begins like one.
-	// The lengths are those of the real tokens or a little under, so a test key a person wrote short is still taken;
-	// "sk-learn", "ask-me" and "AIzawhatever" are well under.
-	wordChars  = `[A-Za-z0-9_]`
+	// A token's characters after its prefix. The lengths that make a token (see prefixPatterns, skProject and skBare) are those of
+	// the real tokens or a little under, so a test key a person wrote short is still taken; "sk-learn", "ask-me" and
+	// "AIzawhatever" are well under.
 	urlChars   = `[A-Za-z0-9_-]`
 	alnumChars = `[A-Za-z0-9]`
 )
@@ -109,11 +108,15 @@ func pair(a, b string) string {
 }
 
 var (
-	// skKey matches the sk- keys of OpenAI and Anthropic (sk-proj-, sk-ant-: they are sk- and a longer run), from
-	// 20 characters after the prefix. It needs a word boundary, or it would take the end of "task-" and "disk-" and every
-	// long identifier that has it, and the boundary is what a gap that Normalize deletes can hide ("word", a zero-width
-	// space, "sk-"): so it is one of the patterns of the raw pass too, and the run after it tolerates the gaps.
-	skKey = `\bsk-[` + deletable + `]*` + chars(urlChars, 20)
+	// skProject and skBare match the sk- keys of OpenAI and Anthropic: group 1 is the prefix and group 2 the run after it,
+	// which rawSecrets reads (see skShape) before it takes the match. skProject is sk-proj-, sk-svcacct-, sk-admin- and
+	// sk-ant- with 20 characters of the URL alphabet after it; skBare is sk- and 20 of them. Both need a word boundary,
+	// or they would take the end of "task-" and "disk-" and every long identifier that has it, and the boundary is what
+	// a gap that Normalize deletes can hide ("word", a zero-width space, "sk-"), even inside the prefix ("word", a gap,
+	// "s", a gap, "k-proj-"): so they are patterns of the raw pass, and spell and the run tolerate the gaps.
+	skProject = regexp.MustCompile(`(\b` + spell("sk-") + gap + `(?:` + spell("proj-") + `|` + spell("svcacct-") + `|` + spell("admin-") + `|` + spell("ant-") + `)` +
+		`[` + deletable + `]*)(` + chars(urlChars, 20) + `)`)
+	skBare = regexp.MustCompile(`(\b` + spell("sk-") + `[` + deletable + `]*)(` + chars(urlChars, 20) + `)`)
 
 	// secretPattern matches Slack tokens, bearer credentials and JWTs. Bearer
 	// takes a separator and a credential, or, glued to the scheme, a token of
@@ -128,8 +131,7 @@ var (
 			`|` + spell("xapp-") + `[^` + space + stop + `]+` +
 			`|(?i:` + spell("bearer") + `)` + sep + credential +
 			`|\b(?i:` + spell("bearer") + `)[A-Za-z0-9][^` + space + stop + `]{` + gluedRest + `,}` +
-			`|` + spell("eyJ") + jwtChar + `+\.` + jwtChar + `+\.` + jwtChar + `*` +
-			`|` + skKey)
+			`|` + spell("eyJ") + jwtChar + `+\.` + jwtChar + `+\.` + jwtChar + `*`)
 
 	// oauthPattern matches an OAuth token or secret field, as key=value or as
 	// JSON "key":"value", plain or with the quotes escaped (\"key\":\"value\").
@@ -142,18 +144,20 @@ var (
 		`)\\*["']?(?:` + pad + `*:` + pad + `*|` + pad + `*=|` + pad + `+=` + pad + `+)\\*["']?)(` + value + `)`)
 
 	// prefixPatterns match the tokens that give themselves away by a prefix, with no name before them, in the normalized
-	// text only: GitHub's (ghp_, gho_, ghu_, ghs_, ghr_, github_pat_), GitLab's glpat-, Google's AIza and its 35
-	// characters, and Stripe's secret and restricted keys, live and test, each from the length of the shortest real one
-	// or a little under ("AIzawhatever" stays). They need no word boundary, so a gap that Normalize deletes cannot hide
-	// one from the pass over the normalized text, and they are literal prefixes, which the regexp package finds fast:
-	// they are not in the pass over the text as it came (see secrets). The sk- keys are skKey, in secretPattern.
+	// text only, each in the shape of the real token: GitHub's gh[pousr]_ and its 36 letters and digits (or more: a token
+	// that a gap cut is glued to what follows it, and is taken whole), the fine-grained github_pat_ and its 22, an
+	// underscore and 59, GitLab's glpat- and its 20 or a little under, Google's AIza and its 35, and Stripe's secret and
+	// restricted keys, live and test, from 24 letters and digits (a snake-case name that ends in "sk_test_" has fewer).
+	// They need no word boundary, so a gap that Normalize deletes cannot hide one from the pass over the normalized text,
+	// and they are literal prefixes, which the regexp package finds fast: they are not in the pass over the text as it
+	// came (see secrets). The sk- keys are skProject and skBare, which are.
 	prefixPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`gh[pousr]_` + wordChars + `{20,}`),
-		regexp.MustCompile(`github_pat_` + wordChars + `{20,}`),
+		regexp.MustCompile(`gh[pousr]_` + alnumChars + `{36,}`),
+		regexp.MustCompile(`github_pat_` + alnumChars + `{22,}_` + alnumChars + `{59,}`),
 		regexp.MustCompile(`glpat-` + urlChars + `{20,}`),
 		regexp.MustCompile(`AIza` + urlChars + `{35,}`),
-		regexp.MustCompile(`sk_(?:live|test)_` + alnumChars + `{16,}`),
-		regexp.MustCompile(`rk_(?:live|test)_` + alnumChars + `{16,}`),
+		regexp.MustCompile(`sk_(?:live|test)_` + alnumChars + `{24,}`),
+		regexp.MustCompile(`rk_(?:live|test)_` + alnumChars + `{24,}`),
 	}
 
 	// sasPattern matches the signature of an Azure shared access signature, the value of the "sig" query parameter, in
@@ -172,6 +176,11 @@ var (
 	// (user:pass is 12), and replaceGluedBasic takes it only if the run decodes to a "user:password": there
 	// is no gap to tell "BasicdXNlcjpwYXNz" from "BasicAuthMiddleware" but what the run says.
 	gluedBasicPattern = regexp.MustCompile(`\b(?i:` + spell("basic") + `)(` + run(b64URL, 12) + `)`)
+
+	// bearerKey is what the Bearer pattern takes when the credential it found is a key: "Bearer", a separator and a name
+	// and its colon ("Bearer credentials:", the "type: Bearer" of YAML and the "credentials:" under it). Group 1 is the
+	// separator and group 2 the name, without its colon.
+	bearerKey = regexp.MustCompile(`^(?i:bearer)(` + sep + `)([A-Za-z0-9_.\-]+):$`)
 
 	// plainWord is a word with at most a leading capital: prose, not base64.
 	plainWord = regexp.MustCompile(`^[A-Z]?[a-z]+$`)
@@ -196,10 +205,13 @@ var (
 // that itself contains one of those is cut there. "key= next" is an empty
 // value and leaves "next" alone. It is a backstop for free-text audit fields,
 // not a license to put secrets in them. A Bearer credential glued to its
-// scheme needs a word boundary before "bearer" and seven characters of token. A token with a prefix of its own
-// (GitHub's ghp_ and its kind, GitLab's glpat-, the sk- of OpenAI and Anthropic, Google's AIza, Stripe's sk_live_ and
-// its kind) is taken with no name before it, from the length of the shortest real one (a word that only begins so,
-// "sk-learn" or "AIzawhatever", is kept), and so is the value of an Azure SAS signature (sig=, from 16 characters).
+// scheme needs a word boundary before "bearer" and seven characters of token. "Bearer", a line break and a key that is a
+// SecretName and a colon ("type: Bearer", then "credentials:" under it) is no scheme and its credential: the key is left
+// for the rules that read names, which take its value. A token with a prefix of its own (GitHub's ghp_ and its kind,
+// GitLab's glpat-, the sk- of OpenAI and Anthropic, Google's AIza, Stripe's sk_live_ and its kind) is taken with no name
+// before it, in the shape of the real token (see prefixPatterns and skShape: a word that only begins so, "sk-learn", a pod
+// called "sk-payments-api-7c9d8f6b5-x2k4p", "AIzawhatever" or "network_test_connectivityToService", is kept), and so is
+// the value of an Azure SAS signature (sig=, from 16 characters).
 //
 // Known limits, all deliberate; TestSecretsKnownLimits pins them:
 //   - A value that is a JSON object or array ({"access_token":{...}}) is not
@@ -233,7 +245,14 @@ func secrets(s string) string {
 // rawSecrets is secrets without the patterns that are for normalized text only (prefixPatterns, sasPattern): the
 // token layer for text as it came, whose patterns tolerate the gaps that Normalize deletes.
 func rawSecrets(s string) string {
-	s = secretPattern.ReplaceAllString(s, redacted)
+	s = secretPattern.ReplaceAllStringFunc(s, func(m string) string {
+		if isBearerKey(m) {
+			return m
+		}
+		return redacted
+	})
+	s = replaceSK(s, skProject, false)
+	s = replaceSK(s, skBare, true)
 	s = oauthPattern.ReplaceAllString(s, "${1}"+redacted)
 	s = basicPattern.ReplaceAllStringFunc(s, func(m string) string {
 		if plainWord.MatchString(Normalize(basicPattern.FindStringSubmatch(m)[1])) {
@@ -247,6 +266,64 @@ func rawSecrets(s string) string {
 		}
 		return m
 	})
+}
+
+// isBearerKey reports whether m, a match of secretPattern, is the word Bearer and a key whose name is a SecretName and
+// a colon, on the line below it ("type: Bearer", then "credentials: x") or on its own line ("the bearer token: x"): a
+// secret word and a colon is the key of a credential and never one, and taking it would leave its value. The key and its
+// value are for the rules that read names (see matchFree).
+func isBearerKey(m string) bool {
+	g := bearerKey.FindStringSubmatch(Normalize(m))
+	return g != nil && SecretName(g[2])
+}
+
+// replaceSK replaces each match of re (skProject or skBare) whose run is a key's (see skShape) with the marker.
+func replaceSK(s string, re *regexp.Regexp, bare bool) string {
+	return re.ReplaceAllStringFunc(s, func(m string) string {
+		if skShape(re.FindStringSubmatch(m)[2], bare) {
+			return redacted
+		}
+		return m
+	})
+}
+
+// skRunMin is how long a run of letters and digits a lower-case bare sk- key holds: OpenAI's legacy keys are one of 48,
+// the service keys and OpenRouter's have one of the length of the random part. A name of words (a pod, a namespace, a
+// package) is made of short ones.
+const skRunMin = 20
+
+// skShape reports whether run, what follows an sk- prefix (with the gaps that Normalize deletes still in it), is a key's.
+// A capital letter makes it one (a random run of that length has some, and the names that begin "sk-", Kubernetes' and
+// the packages', are lower case; a Title-Case slug is taken too, which loses a little). Without a capital it takes a
+// digit, and, for a bare key, a run of letters and digits of skRunMin or more, which no hyphenated name
+// ("sk-learn-tutorial-for-beginners-2024") has; the keys with a prefix of their own (sk-proj-) need only the digit.
+func skShape(run string, bare bool) bool {
+	run = Normalize(run)
+	digit := false
+	for _, r := range run {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			return true
+		case r >= '0' && r <= '9':
+			digit = true
+		}
+	}
+	if !digit {
+		return false
+	}
+	if !bare {
+		return true
+	}
+	longest, cur := 0, 0
+	for _, r := range run {
+		if r >= '0' && r <= '9' || r >= 'a' && r <= 'z' {
+			cur++
+			longest = max(longest, cur)
+		} else {
+			cur = 0
+		}
+	}
+	return longest >= skRunMin
 }
 
 // userPassword reports whether run is base64, in the standard or the URL alphabet and with or without its

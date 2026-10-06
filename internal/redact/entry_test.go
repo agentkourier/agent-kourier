@@ -195,6 +195,8 @@ func TestTheTokenLayerRunsOnTheRawTextToo(t *testing.T) {
 		{"a percent-encoded colon", "%3ABearer\U0000200bZq9vK3mT7wRx", "%3A" + redacted},
 		{"a word run into Bearer", "authBearer\x07Zq9vK3mT7wRx", "auth" + redacted},
 		{"a letter run into Bearer", "xBearer\x00Zq9vK3mT7wRx", "x" + redacted},
+		{"an sk- key behind a word, with a gap on each side of its k", "word\u200bs\u200bk-proj-Zq9vK3mT7wRxZq9vK3mT7wRx", "word" + redacted},
+		{"an sk- key behind a word, with a gap before its sk-", "word\u200bsk-Zq9vK3mT7wRxZq9vK3mT7wRxZq9vK3mT7wRx", "word" + redacted},
 		{"Basic, a control character and Latin-1 text", "Basic\x07" + latin1, redacted},
 		{"Basic, a control character and a password with a control character", "Basic\x07" + control, redacted},
 		{"Basic, a private-use character and a password with a control character", "Basic\U0000e000" + control, redacted},

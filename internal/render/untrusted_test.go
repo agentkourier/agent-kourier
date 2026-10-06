@@ -161,16 +161,19 @@ func (tg hostileTarget) fill(s string, only ...int) []string {
 // leftLookalikes and rightLookalikes are the characters that a reader may take for "<" and for ">", as code points and in
 // pairs (the left and right of each form), written out here and not taken from the module: the full-width and small
 // forms, the single and the double guillemets, the angle brackets of mathematics, CJK and U+2329, the double ones, the
-// ornaments, the vertical forms, the bracket with a dot, the curved one, the Canadian syllabics PA and PO, and the
-// modifier arrowheads.
+// ornaments, the vertical forms, the bracket with a dot, the curved one, the Canadian syllabics PA and PO, the modifier
+// arrowheads (high and low), the arc brackets, the circled and nested less-than and greater-than, much-less and
+// much-greater, less-than with a dot, precedes and succeeds, and the white triangles.
 var (
 	leftLookalikes = []rune{
 		0xFF1C, 0xFE64, 0x2039, 0x00AB, 0x27E8, 0x27EA, 0x2329, 0x3008, 0x300A, 0x02C2,
 		0x276C, 0x276E, 0x2770, 0x1438, 0x2991, 0x29FC, 0xFE3D, 0xFE3F,
+		0x227A, 0x22D6, 0x226A, 0x02F1, 0x2993, 0x2995, 0x29C0, 0x2AA1, 0x25C1, 0x22D8, 0x2AF7,
 	}
 	rightLookalikes = []rune{
 		0xFF1E, 0xFE65, 0x203A, 0x00BB, 0x27E9, 0x27EB, 0x232A, 0x3009, 0x300B, 0x02C3,
 		0x276D, 0x276F, 0x2771, 0x1433, 0x2992, 0x29FD, 0xFE3E, 0xFE40,
+		0x227B, 0x22D7, 0x226B, 0x02F2, 0x2994, 0x2996, 0x29C1, 0x2AA2, 0x25B7, 0x22D9, 0x2AF8,
 	}
 )
 
@@ -301,7 +304,7 @@ func TestAngleBracketLookalikes(t *testing.T) {
 			t.Errorf("U+%04X/U+%04X are written %q, want &lt;/x&gt;", l, r, got)
 		}
 	}
-	for _, r := range []rune{'a', '(', ')', '[', ']', '{', '}', '/', '=', '\u3014', '\u3015', '\u300c', '\u300d', '\uff3b', '\u2192', '\u2264'} {
+	for _, r := range []rune{'a', '(', ')', '[', ']', '{', '}', '/', '=', '\u3014', '\u3015', '\u300c', '\u300d', '\uff3b', '\u2192', '\u2264', '\u25C0', '\u25B6', '\u16B2'} {
 		if got := escapeCut(string(r), 100); got != string(r) {
 			t.Errorf("U+%04X is written %q, want it left alone", r, got)
 		}

@@ -201,7 +201,7 @@ func TestAlertFieldNeverShowsWhatTheCutWentThrough(t *testing.T) {
 	}
 }
 
-// A field of a block that is one line (an alert's title and its link, an author's name) is read joined as well as with
+// A field of a block that is one line (an alert's title and its link, an author's name and ID) is read joined as well as with
 // its lines, so a flag and its value, a user and its password, or a URL's password that a line break cuts apart is taken
 // there as it would be on one line. Redacting its lines and joining them after leaks all of them.
 func TestOneLineFieldsTakeWhatALineBreakHides(t *testing.T) {

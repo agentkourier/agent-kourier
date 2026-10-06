@@ -108,8 +108,8 @@ characters yet to come: U+2065, U+FFF0 to U+FFF8, U+E0000 to U+E0FFF) and writes
 U+2028, U+2029) as `\n`. So no such character
 can split a secret's name past the redaction, and none is stored, logged or sent to the agent in the alert and thread
 blocks. What a reader sees stays, an emoji with its glyph and without its presentation selector. There are two shapes:
-**free text** (a pause's hint and questions, an error in a log line, an alert field, and what a thread reply says or its author
-is called) keeps its line breaks and is cut at 4 KiB at a white space; an **identifier** (an audit field, a Binding's name, the
+**free text** (a pause's hint and questions, an error in a log line, an alert field, and what a thread reply says) keeps its
+line breaks and is cut at 4 KiB at a white space; an **identifier** (an audit field, a Binding's name, the
 name that the chat platform's user cache keeps) is one line, every run of white space a single space, and is read for tokens
 only. A person's display name is not identifier text where it reaches the agent: it is theirs to choose and may say anything,
 so the thread block cleans it again as free text and shows it in an element of its own (`<from>`), apart from the platform's
@@ -125,23 +125,65 @@ normalization closes up cannot hide one. The same set of characters is deleted f
 Slack (`chat.Clean`), so display and redaction cannot disagree on it.
 
 Besides a secret's name, free text is redacted by what stands around a value. A space of any width (a no-break space, a thin
-or an ideographic space) is white space to the rules, before and after a `=` or `:`, after a `--flag` and at the end of a value.
-A Kubernetes env entry whose `name:` is a secret name loses its `value:` when it follows on the next line or the one after (or
-after a comma, as in JSON); a YAML block scalar (`|`, `|-`, `>`, `>-` and the other indicators) under a secret name loses all its
-lines that are indented more than its key; a value that follows a trailing backslash (`mysql --password \`, and the next line)
-is the first word of that next line. A token that has a prefix of its own is redacted with no name before it (and by identifier
-text too): GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`, GitLab's `glpat-`, the `sk-` of OpenAI and Anthropic
-(`sk-proj-`, `sk-ant-`), Google's `AIza` (35 characters), Stripe's `sk_live_`, `rk_live_` and their `_test_` kind, and the `sig=`
-value of an Azure SAS URL; each from a minimum length a little under the real token's, so that "sk-learn" and "AIzawhatever" stay.
-Text that is shown on one line (an audit row's free text, an alert's title and link, a thread author's name) is read twice, with
-its lines and then joined, so that a flag, a user or a URL's password that a line break cuts from its value is taken as it would
-be on one line.
+or an ideographic space) is white space to the rules, before and after a `=` or `:`, after a `--flag`, at the end of a value
+and at the end of a URL's user and password. A value that is itself a key is not the value: in `authorization:\n  credentials: x`
+(the Prometheus and Alertmanager `http_config`), `basic_auth:\n  password: x`, `redis:\n  auth:\n    password: x`,
+`apiKey:\n  value: x` and `auth: {password: x}` the secret is the value of the nested key. Only what has a key's shape is a
+key: a quoted name closed by its quote before the `:` (with white space allowed between them, anywhere), or a name and `: ` with white
+space after the colon (and, for a key that begins its own line under the name, white space before it: `password : x`);
+`password: Password123` and a line of `=======` under it, `key=x`, `secret:hunter2` and `"Session: x"` are values. A line
+under a secret name that begins with a secret pair of another shape (`password : x`, `token = x`, `$env:APIKEY = x`) is
+taken whole with the name above it, and so is a compact JSON object on the line under it (`secret:\n  {"db":"x"}`). A `Bearer`
+before a secret-named key and its colon (`type: Bearer` and `credentials:` under it, `bearer token: x`) takes no
+credential: the key has its own value. Markdown emphasis around a name does not hide it (`**Password:** x`,
+`**Password**: x`, `*Token:* x`, `- **API key**: x`). A value does not begin after a blank line unless it is indented under
+its name or its line does not read as prose, a plain word first and more words after it (`Password:`, a blank line and
+`hunter2x` or `hunter2x (rotated)` is a secret; `Token:`, a blank line and `Please rotate it` is prose). A Kubernetes env entry whose `name:`
+is a secret name loses its `value:` when it follows later in the entry, up to eight lines on (comments, blank lines and other
+keys among them), or after a comma, as in JSON, also when the JSON is itself in a string; a line that begins another entry
+(any line that begins with `-`, `- name:` and `---` among them) or an object (a line that begins with `{` or `}`) ends the
+match, so one entry's name does not take the next entry's value, and a name
+that is no secret does not hide a later one that is. A YAML block scalar (`|`, `|-`, `>`, `>-` and the other
+indicators, with a tag or an anchor before the indicator or without) under a secret name loses all its lines that are indented
+more than its key, and a tag or an anchor before a plain or quoted value goes with it (`password: &pw x`, `!!str "x y"`, and
+`password: !important note` loses "note" too); a value that follows a trailing continuation mark (`mysql --password \`, PowerShell's backtick, cmd's
+caret) is the first word of the next line. A token that has a prefix of its own is redacted with no name before it (and by
+identifier text too), in the shape of the real token: GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_` and `ghr_` and their 36 letters
+and digits, the fine-grained `github_pat_` with its 22, an underscore and 59, GitLab's `glpat-`, the `sk-` keys of OpenAI and
+Anthropic (`sk-proj-`, `sk-svcacct-`, `sk-admin-` and `sk-ant-` from 20 characters with a digit or a capital among them; a bare `sk-`
+from 20 characters with a capital, or with a digit and a run of 20 lower-case letters and digits, so a Title-Case slug is taken
+too and `sk-learn-tutorial-for-beginners-2024` is not), Google's `AIza` (35 characters), Stripe's
+`sk_live_`, `rk_live_` and their `_test_` kind (24 letters and digits), and the `sig=` value of an Azure SAS URL. So "sk-learn",
+"AIzawhatever", a pod called `sk-payments-api-7c9d8f6b5-x2k4p`, a namespace called `sk-platform-observability-prod` and
+`network_test_connectivityToService` stay. Text that is shown on one line (an audit row's free text, an alert's title and
+link, a thread author's name and ID) is read twice, with its lines and then joined, so that a flag, a user or a URL's password that
+a line break cuts from its value is taken as it would be on one line.
+
+What the free-text rules do not catch, and what they take that is no secret, is deliberate and pinned by tests
+(`TestFreeTextKnownLimits`). The rules read a value as a run up to white space, so a few shapes leave it: a list
+(`password:\n- x`) or a mapping of keys that are no secret names (`secret:\n  db: x`) under a secret name, a fenced block after
+a name (`password:\n\n` and three backticks: the fence is the value), Terraform's separate `name = "auth.password"` and
+`value = "x"` lines, a tag with its value on the next line (`password: !!str\n  x`, left by the one-line entries too), a plain
+scalar that goes on over several lines, a short flag (`-p x`) and a name with no separator (`passwd x`). A secret written where
+a nested key would be, on the line under a secret name (`token:\n  SECRET : x`, `Password:\n    'SECRET': rotated`), is shown
+as the key it looks like by the entries that keep lines (the one-line entries take it). After a blank line a value that
+begins with a plain word and goes on in words (`password:\n\nletmein now`) is read as prose and left by the entries that keep
+lines (the one-line entries take the word); a one-word paragraph (`Token:\n\nExpired`) is taken in every entry
+(`TestAOneWordParagraphAfterABlankLineIsTaken`). A Markdown legend of a secret word (`**Key**: blue means prod`,
+`**Session**: 42 minutes`) is taken as a name and its value, an over-redaction (`TestAMarkdownLegendOfASecretWordIsTaken`). A URL's password that a line break cuts (`https://admin:x\npassword=y@host`) is taken only if the line below does not
+take its `@` first, because the lines are read before they are joined. And text that reads as a name and a value only once its
+lines are joined is taken in the one-line entries: `Token:`, a blank line and `Please rotate it` shows
+`Token: [redacted] rotate it`, and `Retry with --token`, a line break and `The deploy` loses `The`; the entries that keep lines
+tell the name from the text.
 
 In the alert and thread blocks, "&", "<" and ">" are written `&amp;`, `&lt;` and `&gt;`, and so is every character that a
 reader may take for an angle bracket: the full-width and small forms, the single and double guillemets, the mathematical,
-CJK, U+2329 and ornament angle brackets, the vertical and curved forms, the Canadian syllabics PA and PO, and the arrowhead
-modifier letters. Ordinary text that holds one reaches the agent escaped as well: French quotation marks (« bonjour »)
-arrive as `&lt; bonjour &gt;`.
+CJK, U+2329 and ornament angle brackets, the vertical, curved and dotted forms (U+2991, U+2992), the Canadian syllabics PA and
+PO, the arrowhead modifier letters (high and low), the arc brackets, the circled and the nested (double and triple) less-than and
+greater-than, much-less and much-greater (and very much), less-than with a dot, precedes and succeeds, and the white triangles. Ordinary text that holds one
+reaches the agent escaped as well: French quotation marks (« bonjour ») arrive as `&lt; bonjour &gt;`. The filled triangles
+(◀ ▶), which interface text uses as arrows, are left as they are, and so is the Runic letter ᚲ, a letter with no right-hand
+partner.
 
 Accepted limitation: a pause is told to be the same one as a stored pause by comparing both after redaction, so two pauses
 under one interaction ID that differ only in a redacted value count as the same. A keyed digest of the unredacted pause

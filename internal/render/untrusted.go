@@ -426,11 +426,14 @@ func (b untrustedBlock) render() (section string, leftOut int) {
 // angleBracket returns what r is written as if it is "<" or ">" or looks like one: the full-width and the small
 // forms, the single and the double guillemets, the angle brackets of mathematics, CJK and U+2329 (single, double, the
 // ornaments, the vertical presentation forms, the one with a dot and the curved one), the Canadian syllabics PA and PO,
-// and the modifier letters that are arrowheads. A model may read "＜/tag＞" or "«/tag»" as a tag, so each is escaped like
-// the ASCII ones. It returns "" for any other rune.
+// the modifier letters that are arrowheads (high and low), the arc brackets, the circled and the nested (double and triple) less-than
+// and greater-than, much-less and much-greater (and very much), less-than with a dot, precedes and succeeds, and the white triangles. A
+// model may read "＜/tag＞" or "«/tag»" as a tag, so each is escaped like the ASCII ones. It returns "" for any other rune.
 //
 // It follows the safety sentence's promise of look-alikes, so a form that reads as a bracket and is missing here is a
-// way past it; ordinary text that holds one (French « quotes ») is escaped too, and reaches the agent as &lt; and &gt;.
+// way past it; ordinary text that holds one (French « quotes », a ≪ b) is escaped too, and reaches the agent as &lt; and
+// &gt;. The filled triangles (◀ ▶), which interface text uses as arrows, and the Runic letter ᚲ, a letter with no
+// right-hand partner, are left alone, with the rest of the arrows and relations.
 func angleBracket(r rune) string {
 	switch r {
 	case '<',
@@ -451,6 +454,17 @@ func angleBracket(r rune) string {
 		'\u2991', // LEFT ANGLE BRACKET WITH DOT
 		'\u29FC', // LEFT-POINTING CURVED ANGLE BRACKET
 		'\uFE3D', // PRESENTATION FORM FOR VERTICAL LEFT DOUBLE ANGLE BRACKET
+		'\u227A', // PRECEDES
+		'\u22D6', // LESS-THAN WITH DOT
+		'\u226A', // MUCH LESS-THAN
+		'\u02F1', // MODIFIER LETTER LOW LEFT ARROWHEAD
+		'\u2993', // LEFT ARC LESS-THAN BRACKET
+		'\u2995', // DOUBLE LEFT ARC GREATER-THAN BRACKET
+		'\u29C0', // CIRCLED LESS-THAN
+		'\u2AA1', // DOUBLE NESTED LESS-THAN
+		'\u25C1', // WHITE LEFT-POINTING TRIANGLE
+		'\u22D8', // VERY MUCH LESS-THAN
+		'\u2AF7', // TRIPLE NESTED LESS-THAN
 		'\uFE3F': // PRESENTATION FORM FOR VERTICAL LEFT ANGLE BRACKET
 		return "&lt;"
 	case '>',
@@ -471,6 +485,17 @@ func angleBracket(r rune) string {
 		'\u2992', // RIGHT ANGLE BRACKET WITH DOT
 		'\u29FD', // RIGHT-POINTING CURVED ANGLE BRACKET
 		'\uFE3E', // PRESENTATION FORM FOR VERTICAL RIGHT DOUBLE ANGLE BRACKET
+		'\u227B', // SUCCEEDS
+		'\u22D7', // GREATER-THAN WITH DOT
+		'\u226B', // MUCH GREATER-THAN
+		'\u02F2', // MODIFIER LETTER LOW RIGHT ARROWHEAD
+		'\u2994', // RIGHT ARC GREATER-THAN BRACKET
+		'\u2996', // DOUBLE RIGHT ARC LESS-THAN BRACKET
+		'\u29C1', // CIRCLED GREATER-THAN
+		'\u2AA2', // DOUBLE NESTED GREATER-THAN
+		'\u25B7', // WHITE RIGHT-POINTING TRIANGLE
+		'\u22D9', // VERY MUCH GREATER-THAN
+		'\u2AF8', // TRIPLE NESTED GREATER-THAN
 		'\uFE40': // PRESENTATION FORM FOR VERTICAL RIGHT ANGLE BRACKET
 		return "&gt;"
 	}
