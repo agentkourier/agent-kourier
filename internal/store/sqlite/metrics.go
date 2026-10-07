@@ -7,6 +7,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // RegisterMetrics exposes both pool statistics and durable backlog gauges.
@@ -42,12 +44,14 @@ func (c *backlogCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var replies, oldestReply, outbox, oldestOutbox, interactions int64
+	d := Dialect{}
+	undelivered, pending, undecided := store.UndeliveredReplies("").Text(d), store.PendingOutbox("").Text(d), store.PendingInteractions("").Text(d)
 	err := c.s.read.QueryRowContext(ctx, `SELECT
- (SELECT COUNT(*) FROM reply_queue WHERE delivered_at IS NULL),
- (SELECT COALESCE(MIN(enqueued_at),0) FROM reply_queue WHERE delivered_at IS NULL),
- (SELECT COUNT(*) FROM outbox WHERE message_ref = '' AND abandoned_at = 0),
- (SELECT COALESCE(MIN(created_at),0) FROM outbox WHERE message_ref = '' AND abandoned_at = 0),
- (SELECT COUNT(*) FROM interactions WHERE state = 'pending')`).Scan(&replies, &oldestReply, &outbox, &oldestOutbox, &interactions)
+ (SELECT COUNT(*) FROM reply_queue WHERE `+undelivered+`),
+ (SELECT COALESCE(MIN(enqueued_at),0) FROM reply_queue WHERE `+undelivered+`),
+ (SELECT COUNT(*) FROM outbox WHERE `+pending+`),
+ (SELECT COALESCE(MIN(created_at),0) FROM outbox WHERE `+pending+`),
+ (SELECT COUNT(*) FROM interactions WHERE `+undecided+`)`).Scan(&replies, &oldestReply, &outbox, &oldestOutbox, &interactions)
 	ds := backlogDescriptors()
 	if err != nil {
 		for _, d := range ds {

@@ -372,8 +372,3 @@ func fromNull(t *time.Time) time.Time {
 	}
 	return t.UTC()
 }
-
-// afterEpoch reports whether t is after the Unix epoch. SQLite stores 0 for a time never set, so the
-// store refuses the zero time and anything at or before the epoch for the times that SQLite could
-// not tell from unset; Postgres has NULL for that, but the stores answer the same.
-func afterEpoch(t time.Time) bool { return t.After(time.Unix(0, 0)) }

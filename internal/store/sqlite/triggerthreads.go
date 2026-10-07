@@ -5,14 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
-
-// triggerTime reports whether t can be stored as one of a trigger thread's times: a stored 0 in closed_at
-// means "open", so the zero time and anything at or before the Unix epoch are refused.
-func triggerTime(t time.Time) bool { return !t.IsZero() && t.UnixNano() > 0 }
 
 const triggerThreadColumns = `binding, key_hash, thread, opened, last_seen, closed_at, cooldown_until`
 
@@ -33,27 +30,27 @@ func scanTriggerThread(r interface{ Scan(...any) error }) (store.TriggerThread, 
 	return t, nil
 }
 
+// openTriggerThreadQuery is the upsert that reserves the key of t, and its arguments: the row is replaced only where
+// store.TriggerThreadReplaceable says so.
+func openTriggerThreadQuery(t store.TriggerThread, stale store.TriggerStale) (string, []any) {
+	b := store.NewBinder(Dialect{})
+	values := strings.Join([]string{b.Arg(t.Binding), b.Arg(t.KeyHash), b.Arg(t.Thread), b.Time(t.Opened), b.Time(t.Opened)}, ", ")
+	replaceable := b.Render(store.TriggerThreadReplaceable(stale))
+	return `INSERT INTO trigger_threads (` + triggerThreadColumns + `) VALUES (` + values + `, 0, 0)
+			ON CONFLICT (binding, key_hash) DO UPDATE SET thread = excluded.thread, opened = excluded.opened,
+				last_seen = excluded.last_seen, closed_at = 0, cooldown_until = 0
+			WHERE ` + replaceable, b.Args()
+}
+
 // OpenTriggerThread implements store.TriggerThreads. The upsert's WHERE is the rule for replacing a row, and
 // the write pool has one connection, so two starts of a key cannot both pass it. A new row has cooldown_until 0,
 // which is a turn that has not started (MarkTriggerStarted).
 func (s *adapter) OpenTriggerThread(ctx context.Context, t store.TriggerThread, stale store.TriggerStale) (store.TriggerThread, bool, error) {
-	var unstarted, idle int64 // no row was opened or seen before 0
-	if triggerTime(stale.Unstarted) {
-		unstarted = ts(stale.Unstarted)
-	}
-	if triggerTime(stale.Idle) {
-		idle = ts(stale.Idle)
-	}
 	var current store.TriggerThread
 	var opened bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `INSERT INTO trigger_threads (`+triggerThreadColumns+`) VALUES (?, ?, ?, ?, ?, 0, 0)
-			ON CONFLICT (binding, key_hash) DO UPDATE SET thread = excluded.thread, opened = excluded.opened,
-				last_seen = excluded.last_seen, closed_at = 0, cooldown_until = 0
-			WHERE (trigger_threads.closed_at <> 0 AND trigger_threads.cooldown_until <= excluded.opened)
-				OR (trigger_threads.cooldown_until = 0 AND trigger_threads.thread <> excluded.thread AND trigger_threads.opened < ?)
-				OR (trigger_threads.closed_at = 0 AND trigger_threads.cooldown_until <> 0 AND trigger_threads.last_seen < ?)`,
-			t.Binding, t.KeyHash, t.Thread, ts(t.Opened), ts(t.Opened), unstarted, idle)
+		query, args := openTriggerThreadQuery(t, stale)
+		n, err := execRows(ctx, tx, query, args...)
 		if err != nil {
 			return err
 		}
@@ -91,7 +88,7 @@ func (s *adapter) MarkTriggerStarted(ctx context.Context, binding, keyHash, thre
 
 // ReleaseTriggerThread implements store.TriggerThreads.
 func (s *adapter) ReleaseTriggerThread(ctx context.Context, binding, keyHash, thread string) (bool, error) {
-	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE binding = ? AND key_hash = ? AND thread = ? AND cooldown_until = 0`, binding, keyHash, thread)
+	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE binding = ? AND key_hash = ? AND thread = ? AND `+store.TriggerThreadUnstarted("").Text(Dialect{}), binding, keyHash, thread)
 	if err != nil {
 		return false, fmt.Errorf("release trigger thread of %q: %w", binding, err)
 	}
@@ -120,7 +117,7 @@ func (s *adapter) ReopenTriggerThread(ctx context.Context, binding, keyHash stri
 func (s *adapter) CloseTriggerThread(ctx context.Context, binding, keyHash string, at time.Time) (bool, error) {
 	var closed bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `UPDATE trigger_threads SET closed_at = ?, last_seen = MAX(last_seen, ?) WHERE binding = ? AND key_hash = ? AND closed_at = 0`, ts(at), ts(at), binding, keyHash)
+		n, err := execRows(ctx, tx, `UPDATE trigger_threads SET closed_at = ?, last_seen = MAX(last_seen, ?) WHERE binding = ? AND key_hash = ? AND `+store.TriggerThreadOpen("").Text(Dialect{}), ts(at), ts(at), binding, keyHash)
 		if err != nil || n > 0 {
 			closed = n > 0
 			return err
@@ -142,11 +139,8 @@ func (s *adapter) CloseTriggerThread(ctx context.Context, binding, keyHash strin
 
 // PurgeTriggerThreads implements store.TriggerThreads.
 func (s *adapter) PurgeTriggerThreads(ctx context.Context, now, idleBefore time.Time) (int, error) {
-	var idle int64 // no row was seen before 0
-	if triggerTime(idleBefore) {
-		idle = ts(idleBefore)
-	}
-	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE (closed_at <> 0 AND cooldown_until < ?) OR (closed_at = 0 AND last_seen < ?)`, ts(now), idle)
+	b := store.NewBinder(Dialect{})
+	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE `+b.Render(store.TriggerThreadPurgeable(now, idleBefore)), b.Args()...)
 	if err != nil {
 		return 0, fmt.Errorf("purge trigger threads: %w", err)
 	}

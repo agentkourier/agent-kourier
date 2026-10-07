@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,6 +70,75 @@ func TestAdaptersDoNotCheckArgumentsOrRecordTelemetry(t *testing.T) {
 					}
 					return true
 				})
+			}
+		}
+	}
+}
+
+// policyFragments are the texts of the policy predicates (predicates.go) that an adapter must not write itself, in
+// either dialect: what is pending and what is settled, what holds a session back, when a session is past its horizon,
+// the open and closed states of a trigger thread, and the byte order of the outbox's event index.
+var policyFragments = []string{
+	"message_ref = ''", "abandoned_at = 0", "abandoned_at <> 0", "abandoned_at > 0", "abandoned_at IS",
+	"last_activity <", "NOT EXISTS (SELECT 1 FROM interactions", "NOT EXISTS (SELECT 1 FROM outbox", `COLLATE "C"`,
+	"closed_at IS", "closed_at > 0", "closed_at <> 0", "closed_at = 0 AND", "cooldown_until IS", "cooldown_until > 0",
+	"cooldown_until <> 0", "cooldown_until = 0 AND", "decided_at IS NOT NULL", "decided_at > 0", "octet_length(", "length(request",
+	"state = 'pending'", "state <> 'pending'", "delivered_at IS NULL", "delivered_at IS NOT NULL",
+}
+
+// policyExceptions are the places where an adapter writes one of the fragments on purpose, each with its reason. They are
+// statements of the adapter that are not the policy of the predicate: a compare-and-set guard of a state transition (the
+// row must still be pending when the update runs), a read of one row's own state, or a query that has no predicate to
+// share (a replay of every undelivered reply by thread, or a lookup by ID).
+var policyExceptions = map[string]map[string]string{
+	"sqlite/interaction_transitions.go": {"state = 'pending'": "the compare-and-set guard of a decision"},
+	"postgres/interactions.go": {
+		"state = 'pending'":    "the compare-and-set guard of a decision, and the ListPending and text-reply lookups of one thread",
+		"delivered_at IS NULL": "the compare-and-set guard of MarkInteractionDelivered",
+	},
+	"sqlite/interactions.go": {"state = 'pending'": "the ListPending and text-reply lookups of one thread"},
+	"sqlite/replies.go":      {"delivered_at IS NULL": "the head of a thread's reply queue, and the stranded-reply sweep"},
+	"postgres/replies.go":    {"delivered_at IS NULL": "the head of a thread's reply queue, and the stranded-reply sweep"},
+	"sqlite/recovery.go":     {"delivered_at IS NULL": "recovery's list of the threads with a reply queued"},
+	"postgres/sessions.go":   {"delivered_at IS NULL": "recovery's list of the threads with a reply queued"},
+	"sqlite/presses.go":      {"state = 'pending'": "a press's own interaction", "delivered_at IS NULL": "the replies queued for one interaction"},
+	"postgres/presses.go":    {"state = 'pending'": "a press's own interaction", "delivered_at IS NULL": "the replies queued for one interaction"},
+}
+
+// TestAdaptersDoNotSpellThePolicyPredicates is a search of the adapters' source text, not of their syntax: a backend that
+// writes a fragment of a policy predicate in its own SQL has a second copy, and the copies drift. The predicates are
+// store's, rendered through the backend's Dialect (dialect.go); the adapters keep the shape of their statements. It only
+// finds the spellings it lists, so a new predicate or a new spelling of one belongs in policyFragments; the exceptions
+// are policyExceptions.
+func TestAdaptersDoNotSpellThePolicyPredicates(t *testing.T) {
+	for file, fragments := range policyExceptions { // an exception that no longer applies is dropped
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for f := range fragments {
+			if !strings.Contains(string(src), f) {
+				t.Errorf("%s is excepted for %q, which it no longer writes", file, f)
+			}
+		}
+	}
+	for _, dir := range adapterDirs {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil || len(files) == 0 {
+			t.Fatalf("no files in %s: %v", dir, err)
+		}
+		for _, file := range files {
+			if strings.HasSuffix(file, "_test.go") || filepath.Base(file) == "dialect.go" {
+				continue
+			}
+			src, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range policyFragments {
+				if _, ok := policyExceptions[filepath.ToSlash(file)][f]; !ok && strings.Contains(string(src), f) {
+					t.Errorf("%s writes %q: the predicate is store's (predicates.go)", file, f)
+				}
 			}
 		}
 	}

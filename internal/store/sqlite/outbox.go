@@ -60,7 +60,8 @@ func (s *adapter) GetOutbox(ctx context.Context, id string) (store.OutboxEntry, 
 
 // ListUnposted implements store.Outbox.
 func (s *adapter) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE message_ref = '' AND abandoned_at = 0 ORDER BY created_at, id`)
+	//nolint:gosec // G202: the predicate is column names and literals (store.PendingOutbox); every value is an argument
+	rows, err := s.read.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE `+store.PendingOutbox("").Text(Dialect{})+` ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list unposted outbox: %w", err)
 	}
@@ -83,7 +84,7 @@ func (s *adapter) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error)
 func (s *adapter) AbandonOutbox(ctx context.Context, id string, at time.Time) (bool, error) {
 	var abandoned bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `UPDATE outbox SET abandoned_at = ?, payload = '' WHERE id = ? AND message_ref = '' AND abandoned_at = 0`, ts(at), id)
+		n, err := execRows(ctx, tx, `UPDATE outbox SET abandoned_at = ?, payload = '' WHERE id = ? AND `+store.PendingOutbox("").Text(Dialect{}), ts(at), id)
 		if err != nil || n > 0 {
 			abandoned = n > 0
 			return err
@@ -109,8 +110,9 @@ func (s *adapter) AbandonOutbox(ctx context.Context, id string, at time.Time) (b
 func (s *adapter) AbandonOutboxBefore(ctx context.Context, before, at time.Time) ([]string, error) {
 	var ids []string
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		//nolint:gosec // G202: the predicate is column names and literals (store.PendingOutbox); every value is an argument
 		rows, err := tx.QueryContext(ctx, `UPDATE outbox SET abandoned_at = ?, payload = ''
-			WHERE message_ref = '' AND abandoned_at = 0 AND payload <> '' AND created_at < ? RETURNING id`, ts(at), ts(before))
+			WHERE `+store.PendingOutbox("").Text(Dialect{})+` AND payload <> '' AND created_at < ? RETURNING id`, ts(at), ts(before))
 		if err != nil {
 			return err
 		}

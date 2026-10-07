@@ -3,9 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -13,10 +10,6 @@ import (
 )
 
 var _ store.SessionRetention = (*adapter)(nil)
-
-// settledOutbox is the outbox rows that are done with: posted, or given up on. A row that is neither may still be
-// delivered, and is not the sweep's to delete (it holds its session back).
-const settledOutbox = `(o.message_ref <> '' OR o.abandoned_at IS NOT NULL)`
 
 // PurgeExpiredSessions implements store.SessionRetention. It is a write like any other: the epoch is checked first, so
 // only the leader purges. The sessions are chosen and locked (a session that a writer holds is left for the next call)
@@ -32,34 +25,7 @@ func (s *adapter) PurgeExpiredSessions(ctx context.Context, h store.SessionHoriz
 		// Only settled rows are deleted: each statement reads its own snapshot (READ COMMITTED), so a row that was
 		// written after the sessions were chosen, an unposted notice for a reply in the thread, is not one the sweep
 		// found nothing holding back. The rows that name the session's replies go before the replies.
-		const keys = `unnest($1::text[], $2::text[], $3::text[]) AS k(connection, channel, thread_ts)`
-		for _, d := range []struct {
-			what  string
-			query string
-			n     *int
-		}{
-			{"presses", `DELETE FROM interaction_presses WHERE interaction_id IN
-				(SELECT i.id FROM interactions i JOIN ` + keys + ` ON i.connection = k.connection AND i.channel = k.channel AND i.thread_ts = k.thread_ts
-				WHERE i.state <> 'pending')`, &out.Presses},
-			{"interactions", `DELETE FROM interactions i USING ` + keys + ` WHERE i.connection = k.connection AND i.channel = k.channel AND i.thread_ts = k.thread_ts
-				AND i.state <> 'pending'`, &out.Interactions},
-			{"outbox rows of the threads", `DELETE FROM outbox o USING ` + keys + ` WHERE o.channel = k.channel AND o.thread_ts = k.thread_ts
-				AND ` + settledOutbox, &out.Outbox},
-			// An outbox row is tied to a reply that has no thread of its own like this: a row made for a reply has the reply's ID
-			// and a "/" and a suffix as its source (event_id): the queued reaction of a turn, and the removal of it, are made for
-			// Source "<reply ID>/queued" (session.queuedID), and the runner's notices for "<reply ID>/<kind>" (Manager.notice).
-			// Such a row has no thread, so this is the only way to find it. Its source is in the range from id + "/" up to, and
-			// not including, id + "0", the character after "/": a range of the outbox_event index (migration 0022), compared in
-			// the C collation, in which the range is exactly the prefix (a locale's order ignores punctuation). The range
-			// deliberately excludes the bare ID: a row sourced by it is a render post made for the thread, which the
-			// (channel, thread) delete above finds.
-			{"outbox rows of the replies", `DELETE FROM outbox o USING
-				(SELECT r.id FROM reply_queue r JOIN ` + keys + ` ON r.connection = k.connection AND r.channel = k.channel AND r.thread_ts = k.thread_ts) AS rr
-				WHERE o.event_id COLLATE "C" >= rr.id || '/' AND o.event_id COLLATE "C" < rr.id || '0' AND ` + settledOutbox, &out.Outbox},
-			{"replies", `DELETE FROM reply_queue r USING ` + keys + ` WHERE r.connection = k.connection AND r.channel = k.channel AND r.thread_ts = k.thread_ts
-				AND r.delivered_at IS NOT NULL`, &out.Replies},
-			{"sessions", `DELETE FROM sessions s USING ` + keys + ` WHERE s.connection = k.connection AND s.channel = k.channel AND s.thread_ts = k.thread_ts`, &out.Sessions},
-		} {
+		for _, d := range purgeSteps(&out) {
 			tag, err := tx.Exec(ctx, d.query, conns, channels, threads)
 			if err != nil {
 				return fmt.Errorf("delete the %s: %w", d.what, err)
@@ -74,49 +40,58 @@ func (s *adapter) PurgeExpiredSessions(ctx context.Context, h store.SessionHoriz
 	return out, nil
 }
 
-// pastHorizon is the condition that a session s is past its horizon, with its arguments, numbered from $1. The first part
-// is the latest of the horizons, which the sessions' index answers; the second is the session's own, by its Binding.
-func pastHorizon(h store.SessionHorizons) (string, []any) {
-	latest := h.Otherwise
-	for _, at := range h.ByBinding {
-		if at.After(latest) {
-			latest = at
-		}
+// purgeStep is one delete of the purge of sessions: what it deletes, the statement, and the count it adds to. Each statement
+// takes the keys of the sessions as three parallel arrays, $1 to $3, and is for all of them at once.
+type purgeStep struct {
+	what  string
+	query string
+	n     *int
+}
+
+// purgeSteps are the deletes of the purge, in the order they run, adding what they delete to out. Only settled rows are
+// deleted (store.SettledOutbox and the rest), and a statement is for all the keys, so a batch is a few statements and none
+// is longer than the statement timeout allows for the batch the caller sized.
+func purgeSteps(out *store.PurgedSessions) []purgeStep {
+	const keys = `unnest($1::text[], $2::text[], $3::text[]) AS k(connection, channel, thread_ts)`
+	d := Dialect{}
+	decided, settled := store.DecidedInteractions("i").Text(d), store.SettledOutbox("o").Text(d)
+	return []purgeStep{
+		{"presses", `DELETE FROM interaction_presses WHERE interaction_id IN
+				(SELECT i.id FROM interactions i JOIN ` + keys + ` ON i.connection = k.connection AND i.channel = k.channel AND i.thread_ts = k.thread_ts
+				WHERE ` + decided + `)`, &out.Presses},
+		{"interactions", `DELETE FROM interactions i USING ` + keys + ` WHERE i.connection = k.connection AND i.channel = k.channel AND i.thread_ts = k.thread_ts
+				AND ` + decided, &out.Interactions},
+		{"outbox rows of the threads", `DELETE FROM outbox o USING ` + keys + ` WHERE o.channel = k.channel AND o.thread_ts = k.thread_ts
+				AND ` + settled, &out.Outbox},
+		// An outbox row is tied to a reply that has no thread of its own by its source, in a range of the reply's ID
+		// (store.OutboxDerivedFromReplyRow).
+		{"outbox rows of the replies", `DELETE FROM outbox o USING
+				(SELECT r.id FROM reply_queue r JOIN ` + keys + ` ON r.connection = k.connection AND r.channel = k.channel AND r.thread_ts = k.thread_ts) AS rr
+				WHERE ` + store.OutboxDerivedFromReplyRow("o", "rr").Text(d) + ` AND ` + settled, &out.Outbox},
+		{"replies", `DELETE FROM reply_queue r USING ` + keys + ` WHERE r.connection = k.connection AND r.channel = k.channel AND r.thread_ts = k.thread_ts
+				AND ` + store.DeliveredReplies("r").Text(d), &out.Replies},
+		{"sessions", `DELETE FROM sessions s USING ` + keys + ` WHERE s.connection = k.connection AND s.channel = k.channel AND s.thread_ts = k.thread_ts`, &out.Sessions},
 	}
-	args := []any{latest}
-	var when strings.Builder
-	for _, b := range slices.Sorted(maps.Keys(h.ByBinding)) {
-		args = append(args, b, h.ByBinding[b])
-		fmt.Fprintf(&when, " WHEN $%d::text THEN $%d::timestamptz", len(args)-1, len(args))
-	}
-	args = append(args, h.Otherwise)
-	horizon := fmt.Sprintf("$%d::timestamptz", len(args)) // a CASE needs a WHEN, so with no Binding named it is the one horizon
-	if when.Len() > 0 {
-		horizon = fmt.Sprintf("CASE s.binding%s ELSE %s END", when.String(), horizon)
-	}
-	return "s.last_activity < $1::timestamptz AND s.last_activity < " + horizon, args
+}
+
+// expiredSessionsQuery is the statement that finds, and locks, the sessions that are past their horizon and that nothing
+// holds back, oldest first, and its arguments. A session that a writer holds is skipped, for the next call.
+func expiredSessionsQuery(h store.SessionHorizons, limit int) (string, []any) {
+	b := store.NewBinder(Dialect{})
+	past := b.Render(store.PastHorizon("s", h))
+	held := b.Render(store.NothingHoldsBack("s"))
+	lim := b.Arg(limit)
+	return `SELECT s.connection, s.channel, s.thread_ts FROM sessions s
+		WHERE ` + past + ` AND ` + held + `
+		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT ` + lim + `
+		FOR UPDATE OF s SKIP LOCKED`, b.Args()
 }
 
 // expiredSessions finds, and locks, the sessions that are past their horizon and that nothing holds back, oldest first,
 // and returns the three parts of their keys as parallel slices.
 func expiredSessions(ctx context.Context, tx pgx.Tx, h store.SessionHorizons, limit int) (conns, channels, threads []string, err error) {
-	past, args := pastHorizon(h)
-	args = append(args, limit)
-	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT s.connection, s.channel, s.thread_ts FROM sessions s
-		WHERE %s
-		AND s.task_id = ''
-		AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.connection = s.connection AND i.channel = s.channel
-			AND i.thread_ts = s.thread_ts AND i.state = 'pending')
-		AND NOT EXISTS (SELECT 1 FROM reply_queue r WHERE r.connection = s.connection AND r.channel = s.channel
-			AND r.thread_ts = s.thread_ts AND r.delivered_at IS NULL)
-		AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.channel = s.channel AND o.thread_ts = s.thread_ts
-			AND o.message_ref = '' AND o.abandoned_at IS NULL)
-		AND NOT EXISTS (SELECT 1 FROM reply_queue r JOIN outbox o
-			ON o.event_id COLLATE "C" >= r.id || '/' AND o.event_id COLLATE "C" < r.id || '0'
-			WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts
-			AND o.message_ref = '' AND o.abandoned_at IS NULL)
-		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT $%d
-		FOR UPDATE OF s SKIP LOCKED`, past, len(args)), args...)
+	query, args := expiredSessionsQuery(h, limit)
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("find sessions: %w", err)
 	}

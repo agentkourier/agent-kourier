@@ -4,10 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"maps"
-	"slices"
-	"strings"
-	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -36,46 +32,23 @@ func (s *adapter) PurgeExpiredSessions(ctx context.Context, h store.SessionHoriz
 	return out, nil
 }
 
-// pastHorizon is the condition that a session s is past its horizon, with its arguments. The first part is the latest of
-// the horizons, which the sessions' index answers; the second is the session's own, by its Binding.
-func pastHorizon(h store.SessionHorizons) (string, []any) {
-	latest := h.Otherwise
-	for _, at := range h.ByBinding {
-		latest = maxTime(latest, at)
-	}
-	args := []any{ts(latest)}
-	var when strings.Builder
-	for _, b := range slices.Sorted(maps.Keys(h.ByBinding)) {
-		when.WriteString(" WHEN ? THEN ?")
-		args = append(args, b, ts(h.ByBinding[b]))
-	}
-	args = append(args, ts(h.Otherwise))
-	horizon := "?" // a CASE needs a WHEN, so with no Binding named it is the one horizon
-	if when.Len() > 0 {
-		horizon = "CASE s.binding" + when.String() + " ELSE ? END"
-	}
-	return "s.last_activity < ? AND s.last_activity < " + horizon, args
+// expiredSessionsQuery is the statement that finds the sessions that are past their horizon and that nothing holds back,
+// oldest first, and its arguments.
+func expiredSessionsQuery(h store.SessionHorizons, limit int) (string, []any) {
+	b := store.NewBinder(Dialect{})
+	past := b.Render(store.PastHorizon("s", h))
+	held := b.Render(store.NothingHoldsBack("s"))
+	lim := b.Arg(limit)
+	return `SELECT s.connection, s.channel, s.thread_ts FROM sessions s
+		WHERE ` + past + ` AND ` + held + `
+		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT ` + lim, b.Args()
 }
 
 // expiredSessions returns the keys of the sessions that are past their horizon and that nothing holds back, oldest
 // first.
 func expiredSessions(ctx context.Context, tx *sql.Tx, h store.SessionHorizons, limit int) ([]store.ConversationKey, error) {
-	past, args := pastHorizon(h)
-	args = append(args, limit)
-	//nolint:gosec // G202: past is column names and placeholders; every value is an argument
-	rows, err := tx.QueryContext(ctx, `SELECT s.connection, s.channel, s.thread_ts FROM sessions s
-		WHERE `+past+`
-		AND s.task_id = ''
-		AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.connection = s.connection AND i.channel = s.channel
-			AND i.thread_ts = s.thread_ts AND i.state = 'pending')
-		AND NOT EXISTS (SELECT 1 FROM reply_queue r WHERE r.connection = s.connection AND r.channel = s.channel
-			AND r.thread_ts = s.thread_ts AND r.delivered_at IS NULL)
-		AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.channel = s.channel AND o.thread_ts = s.thread_ts
-			AND o.message_ref = '' AND o.abandoned_at = 0)
-		AND NOT EXISTS (SELECT 1 FROM reply_queue r JOIN outbox o ON o.event_id >= r.id || '/' AND o.event_id < r.id || '0'
-			WHERE r.connection = s.connection AND r.channel = s.channel AND r.thread_ts = s.thread_ts
-			AND o.message_ref = '' AND o.abandoned_at = 0)
-		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT ?`, args...)
+	query, args := expiredSessionsQuery(h, limit)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("find sessions: %w", err)
 	}
@@ -93,20 +66,6 @@ func expiredSessions(ctx context.Context, tx *sql.Tx, h store.SessionHorizons, l
 	}
 	return keys, nil
 }
-
-// derivedSources is what ties an outbox row to a reply that has no thread of its own: a row made for a reply has the
-// reply's ID, a "/" and a suffix as its source (EventID): the queued reaction of a turn, and the removal of
-// it, are made for Source "<reply ID>/queued" (session.queuedID), and the runner's notices for "<reply ID>/<kind>"
-// (Manager.notice). Such a row has no thread, so this is the only way to find it. The rows whose source starts with
-// id + "/" are those from id + "/" up to, and not including, id + "0", the character after "/", which is a range of
-// the outbox_event index (migration 0022): the range holds under SQLite's binary order, and the Postgres store
-// compares in the C collation to the same effect. The range deliberately excludes the bare reply ID: a row sourced by
-// it is a render post made for the thread, which the (channel, thread) delete finds.
-const derivedSources = `event_id >= ? AND event_id < ?`
-
-// settledOutbox is the outbox rows that are done with: posted, or given up on. A row that is neither may still be
-// delivered, and is not the sweep's to delete (it holds its session back).
-const settledOutbox = `(message_ref <> '' OR abandoned_at <> 0)`
 
 // replyIDs returns the IDs of the replies of the session k.
 func replyIDs(ctx context.Context, tx *sql.Tx, k store.ConversationKey) ([]string, error) {
@@ -146,22 +105,26 @@ func deleteSession(ctx context.Context, tx *sql.Tx, k store.ConversationKey, out
 	if err != nil {
 		return err
 	}
+	d := Dialect{}
+	decided, settled := store.DecidedInteractions("").Text(d), store.SettledOutbox("").Text(d)
 	steps := []purgeStep{
 		{"presses", `DELETE FROM interaction_presses WHERE interaction_id IN
-			(SELECT id FROM interactions WHERE connection = ? AND channel = ? AND thread_ts = ? AND state <> 'pending')`, &out.Presses, where},
-		{"interactions", `DELETE FROM interactions WHERE connection = ? AND channel = ? AND thread_ts = ? AND state <> 'pending'`, &out.Interactions, where},
-		{"outbox rows of the thread", `DELETE FROM outbox WHERE channel = ? AND thread_ts = ? AND ` + settledOutbox, &out.Outbox, []any{k.Channel, k.Thread}},
+			(SELECT id FROM interactions WHERE connection = ? AND channel = ? AND thread_ts = ? AND ` + decided + `)`, &out.Presses, where},
+		{"interactions", `DELETE FROM interactions WHERE connection = ? AND channel = ? AND thread_ts = ? AND ` + decided, &out.Interactions, where},
+		{"outbox rows of the thread", `DELETE FROM outbox WHERE channel = ? AND thread_ts = ? AND ` + settled, &out.Outbox, []any{k.Channel, k.Thread}},
 	}
 	for _, id := range replies {
-		steps = append(steps, purgeStep{"outbox rows of a reply", `DELETE FROM outbox WHERE ` + derivedSources + ` AND ` + settledOutbox, &out.Outbox, []any{id + "/", id + "0"}})
+		b := store.NewBinder(d)
+		derived := b.Render(store.OutboxDerivedFromReplyID("", id))
+		steps = append(steps, purgeStep{"outbox rows of a reply", `DELETE FROM outbox WHERE ` + derived + ` AND ` + settled, &out.Outbox, b.Args()})
 	}
-	steps = append(steps, purgeStep{"replies", `DELETE FROM reply_queue WHERE connection = ? AND channel = ? AND thread_ts = ? AND delivered_at IS NOT NULL`, &out.Replies, where})
-	for _, d := range steps {
-		n, err := execRows(ctx, tx, d.query, d.args...)
+	steps = append(steps, purgeStep{"replies", `DELETE FROM reply_queue WHERE connection = ? AND channel = ? AND thread_ts = ? AND ` + store.DeliveredReplies("").Text(d), &out.Replies, where})
+	for _, step := range steps {
+		n, err := execRows(ctx, tx, step.query, step.args...)
 		if err != nil {
-			return fmt.Errorf("delete the %s of %+v: %w", d.what, k, err)
+			return fmt.Errorf("delete the %s of %+v: %w", step.what, k, err)
 		}
-		*d.n += int(n)
+		*step.n += int(n)
 	}
 	n, err := execRows(ctx, tx, `DELETE FROM sessions WHERE connection = ? AND channel = ? AND thread_ts = ?`, where...)
 	if err != nil {
@@ -169,11 +132,4 @@ func deleteSession(ctx context.Context, tx *sql.Tx, k store.ConversationKey, out
 	}
 	out.Sessions += int(n)
 	return nil
-}
-
-func maxTime(a, b time.Time) time.Time {
-	if b.After(a) {
-		return b
-	}
-	return a
 }

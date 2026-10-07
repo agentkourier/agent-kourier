@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,14 +12,25 @@ import (
 
 var _ store.StaleTasks = (*adapter)(nil)
 
+// endStaleTaskQuery is the statement that clears the task t of a session if the session is still past its horizon, and
+// its arguments.
+func endStaleTaskQuery(h store.SessionHorizons, t store.StaleTask) (string, []any) {
+	b := store.NewBinder(Dialect{})
+	key := `s.connection = ` + b.Arg(t.Key.Connection) + ` AND s.channel = ` + b.Arg(t.Key.Channel) + ` AND s.thread_ts = ` + b.Arg(t.Key.Thread)
+	task := `s.task_id = ` + b.Arg(t.TaskID)
+	return `UPDATE sessions s SET task_id = '', turn_id = '', turn_user = '', turn_task = ''
+			WHERE ` + key + ` AND ` + task + ` AND ` + b.Render(store.PastHorizon("s", h)), b.Args()
+}
+
 // ListStaleTasks implements store.StaleTasks. It is a read, and so is not fenced.
 func (s *adapter) ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error) {
 	var stale []store.StaleTask
-	past, args := pastHorizon(h)
-	args = append(args, limit)
+	b := store.NewBinder(Dialect{})
+	past := b.Render(store.PastHorizon("s", h))
+	lim := b.Arg(limit)
 	rows, err := s.pool.Query(ctx, `SELECT s.connection, s.channel, s.thread_ts, s.binding, s.context_id, s.task_id FROM sessions s
 		WHERE `+past+` AND s.task_id <> ''
-		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT $`+strconv.Itoa(len(args)), args...)
+		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT `+lim, b.Args()...)
 	if err != nil {
 		return nil, fmt.Errorf("list stale tasks: %w", err)
 	}
@@ -43,18 +53,15 @@ func (s *adapter) ListStaleTasks(ctx context.Context, h store.SessionHorizons, l
 // transaction, so a session that moved on is left whole.
 func (s *adapter) EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error) {
 	var ended store.EndedStaleTask
-	past, args := pastHorizon(h)
-	n := len(args)
-	args = append(args, t.Key.Connection, t.Key.Channel, t.Key.Thread, t.TaskID)
+	endTask, args := endStaleTaskQuery(h, t)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE sessions s SET task_id = '', turn_id = '', turn_user = '', turn_task = ''
-			WHERE s.connection = $%d AND s.channel = $%d AND s.thread_ts = $%d AND s.task_id = $%d AND %s`, n+1, n+2, n+3, n+4, past), args...)
+		tag, err := tx.Exec(ctx, endTask, args...)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		ended.Ended = true
 		tag, err = tx.Exec(ctx, `UPDATE interactions SET state = 'cancelled', decided_at = $1
-			WHERE connection = $2 AND channel = $3 AND thread_ts = $4 AND task_id = $5 AND state = 'pending'`,
+			WHERE connection = $2 AND channel = $3 AND thread_ts = $4 AND task_id = $5 AND `+store.PendingInteractions("").Text(Dialect{}),
 			now, t.Key.Connection, t.Key.Channel, t.Key.Thread, t.TaskID)
 		ended.Interactions = int(tag.RowsAffected())
 		return err

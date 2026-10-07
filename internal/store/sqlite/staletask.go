@@ -11,14 +11,26 @@ import (
 
 var _ store.StaleTasks = (*adapter)(nil)
 
+// endStaleTaskQuery is the statement that clears the task t of a session if the session is still past its horizon, and
+// its arguments.
+func endStaleTaskQuery(h store.SessionHorizons, t store.StaleTask) (string, []any) {
+	b := store.NewBinder(Dialect{})
+	key := `s.connection = ` + b.Arg(t.Key.Connection) + ` AND s.channel = ` + b.Arg(t.Key.Channel) + ` AND s.thread_ts = ` + b.Arg(t.Key.Thread)
+	task := `s.task_id = ` + b.Arg(t.TaskID)
+	return `UPDATE sessions AS s SET task_id = '', turn_id = '', turn_user = '', turn_task = ''
+			WHERE ` + key + ` AND ` + task + ` AND ` + b.Render(store.PastHorizon("s", h)), b.Args()
+}
+
 // ListStaleTasks implements store.StaleTasks.
 func (s *adapter) ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error) {
-	past, args := pastHorizon(h)
+	b := store.NewBinder(Dialect{})
+	past := b.Render(store.PastHorizon("s", h))
+	lim := b.Arg(limit)
 	var stale []store.StaleTask
 	//nolint:gosec // G202: past is column names and placeholders; every value is an argument
 	rows, err := s.read.QueryContext(ctx, `SELECT s.connection, s.channel, s.thread_ts, s.binding, s.context_id, s.task_id FROM sessions s
 		WHERE `+past+` AND s.task_id <> ''
-		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT ?`, append(args, limit)...)
+		ORDER BY s.last_activity, s.connection, s.channel, s.thread_ts LIMIT `+lim, b.Args()...)
 	if err != nil {
 		return nil, fmt.Errorf("list stale tasks: %w", err)
 	}
@@ -39,18 +51,16 @@ func (s *adapter) ListStaleTasks(ctx context.Context, h store.SessionHorizons, l
 // EndStaleTask implements store.StaleTasks. The session is cleared only while it is still past its horizon and still records
 // the task, and the interactions are cancelled in the same transaction, so a session that moved on is left whole.
 func (s *adapter) EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error) {
-	past, args := pastHorizon(h)
+	endTask, args := endStaleTaskQuery(h, t)
 	var ended store.EndedStaleTask
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		n, err := execRows(ctx, tx, `UPDATE sessions AS s SET task_id = '', turn_id = '', turn_user = '', turn_task = ''
-			WHERE s.connection = ? AND s.channel = ? AND s.thread_ts = ? AND s.task_id = ? AND `+past,
-			append([]any{t.Key.Connection, t.Key.Channel, t.Key.Thread, t.TaskID}, args...)...)
+		n, err := execRows(ctx, tx, endTask, args...)
 		if err != nil || n == 0 {
 			return err
 		}
 		ended.Ended = true
 		n, err = execRows(ctx, tx, `UPDATE interactions SET state = 'cancelled', decided_at = ?
-			WHERE connection = ? AND channel = ? AND thread_ts = ? AND task_id = ? AND state = 'pending'`,
+			WHERE connection = ? AND channel = ? AND thread_ts = ? AND task_id = ? AND `+store.PendingInteractions("").Text(Dialect{}),
 			ts(now), t.Key.Connection, t.Key.Channel, t.Key.Thread, t.TaskID)
 		ended.Interactions = int(n)
 		return err

@@ -120,10 +120,8 @@ func (s *adapter) ListDecidedInteractions(ctx context.Context, since time.Time) 
 // ClearSettledInteractions implements store.Interactions. A cleared row has empty blobs, so the
 // length test is what keeps a second sweep from counting it again.
 func (s *adapter) ClearSettledInteractions(ctx context.Context, now time.Time, grace, undeliveredGrace time.Duration) (int, error) {
-	n, err := s.exec(ctx, `UPDATE interactions SET request = x'', answer = x''
-		WHERE state <> 'pending' AND decided_at > 0 AND (length(request) > 0 OR length(answer) > 0)
-		AND decided_at <= ? AND (state <> 'answered' OR delivered_at > 0 OR decided_at <= ?)`,
-		ts(now.Add(-grace)), ts(now.Add(-undeliveredGrace)))
+	b := store.NewBinder(Dialect{})
+	n, err := s.exec(ctx, `UPDATE interactions SET request = x'', answer = x'' WHERE `+b.Render(store.ClearableInteractions(now, grace, undeliveredGrace)), b.Args()...)
 	if err != nil {
 		return 0, fmt.Errorf("clear settled interactions: %w", err)
 	}

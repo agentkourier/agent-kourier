@@ -14,13 +14,15 @@ import (
 // day is the window of maxRunsPerDay, and so how long the rows of trigger_runs are of use.
 const day = 24 * time.Hour
 
-// runningStarts counts the admitted starts of a trigger since a time whose investigation is still going: its session
-// has an active task, or it has a turn that is queued and not yet delivered, which is a start that was taken and has
-// not begun. A run counts once however many of its turns are queued.
-const runningStarts = `SELECT COUNT(*) FROM trigger_runs r
+// runningStartsQuery is the statement that counts the admitted starts of a trigger since a time whose investigation is
+// still going: its session has an active task, or it has a turn that is queued and not yet delivered, which is a start
+// that was taken and has not begun. A run counts once however many of its turns are queued.
+func runningStartsQuery() string {
+	return `SELECT COUNT(*) FROM trigger_runs r
 	WHERE r.binding = $1 AND r.trigger_index = $2 AND r.limited = '' AND r.at > $3
 	AND (EXISTS (SELECT 1 FROM sessions s WHERE s.connection = r.connection AND s.channel = r.channel AND s.thread_ts = r.thread_ts AND s.task_id <> '')
-	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = r.thread_ts AND q.delivered_at IS NULL))`
+	  OR EXISTS (SELECT 1 FROM reply_queue q WHERE q.connection = r.connection AND q.channel = r.channel AND q.thread_ts = r.thread_ts AND ` + store.UndeliveredReplies("q").Text(Dialect{}) + `))`
+}
 
 // startsSince counts the admitted starts of a trigger after a time. Its arguments are the Binding, the trigger and the time.
 const startsSince = `SELECT COUNT(*) FROM trigger_runs WHERE binding = $1 AND trigger_index = $2 AND limited = '' AND at > $3`
@@ -102,7 +104,7 @@ func reachedLimit(ctx context.Context, tx pgx.Tx, run store.TriggerRun, limits s
 	}
 	if limits.MaxConcurrent > 0 {
 		var n int
-		if err := tx.QueryRow(ctx, runningStarts, run.Binding, run.Trigger, run.At.Add(-day)).Scan(&n); err != nil || n >= limits.MaxConcurrent {
+		if err := tx.QueryRow(ctx, runningStartsQuery(), run.Binding, run.Trigger, run.At.Add(-day)).Scan(&n); err != nil || n >= limits.MaxConcurrent {
 			return store.LimitConcurrent, err
 		}
 	}

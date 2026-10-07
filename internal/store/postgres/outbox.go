@@ -97,7 +97,7 @@ func (s *adapter) GetOutbox(ctx context.Context, id string) (store.OutboxEntry, 
 
 // ListUnposted implements store.Outbox.
 func (s *adapter) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE message_ref = '' AND abandoned_at IS NULL ORDER BY created_at, id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE `+store.PendingOutbox("").Text(Dialect{})+` ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list unposted outbox: %w", err)
 	}
@@ -121,7 +121,7 @@ func (s *adapter) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error)
 func (s *adapter) AbandonOutbox(ctx context.Context, id string, at time.Time) (bool, error) {
 	var abandoned bool
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE outbox SET abandoned_at = $1, payload = '' WHERE id = $2 AND message_ref = '' AND abandoned_at IS NULL`, at, id)
+		tag, err := tx.Exec(ctx, `UPDATE outbox SET abandoned_at = $1, payload = '' WHERE id = $2 AND `+store.PendingOutbox("").Text(Dialect{}), at, id)
 		if err != nil || tag.RowsAffected() > 0 {
 			abandoned = tag.RowsAffected() > 0
 			return err
@@ -149,7 +149,7 @@ func (s *adapter) AbandonOutboxBefore(ctx context.Context, before, at time.Time)
 	var ids []string
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE outbox SET abandoned_at = $1, payload = ''
-			WHERE message_ref = '' AND abandoned_at IS NULL AND payload <> '' AND created_at < $2 RETURNING id`, at, before)
+			WHERE `+store.PendingOutbox("").Text(Dialect{})+` AND payload <> '' AND created_at < $2 RETURNING id`, at, before)
 		if err != nil {
 			return err
 		}

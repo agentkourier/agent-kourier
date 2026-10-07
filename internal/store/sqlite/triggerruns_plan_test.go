@@ -20,7 +20,7 @@ func TestTriggerRunQueriesUseAnIndex(t *testing.T) {
 		{"the digests due", dueWindows, []any{int64(1)}, ""},
 		{"the mark of a digested window", markDigested, []any{"b", 0, int64(1)}, "binding=? AND trigger_index=?"},
 		{"the starts in a window", startsSince, []any{"b", 0, int64(1)}, ""},
-		{"the running investigations", runningStarts, []any{"b", 0, int64(1)}, ""},
+		{"the running investigations", runningStartsQuery(), []any{"b", 0, int64(1)}, ""},
 	} {
 		plan := queryPlan(t, s, q.sql, q.args)
 		t.Logf("%s:\n  %s", q.name, strings.Join(plan, "\n  "))
