@@ -457,7 +457,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	}
 	// A claimed answer left by a crash, or one queued pinned by the intake, must be reconciled with its
 	// question, never sent as an ordinary turn, whatever the Binding's dialect is by now.
-	if r.InteractionID != "" {
+	if Queued(r).Kind == AdmitAnswer {
 		m.mu.Lock()
 		textReply := m.cfg.TextReply
 		m.mu.Unlock()
@@ -529,9 +529,9 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 }
 
 // wantsThreadContext reports whether the turn r takes the thread's context (Config.ThreadContext): a person's turn, in
-// a Binding with chat.threadReplies: mention, that is not pinned to a question.
+// a Binding with chat.threadReplies: mention. A reply that was admitted as an answer to a question is no turn (Queued).
 func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
-	return b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && r.InteractionID == ""
+	return b.ThreadReplies == v1alpha1.ThreadRepliesMention && r.UserID != SystemUser && Queued(r).Kind == AdmitTurn
 }
 
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's

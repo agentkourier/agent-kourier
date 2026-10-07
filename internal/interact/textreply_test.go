@@ -284,3 +284,53 @@ func TestTextReplyPinnedAtEnqueueToAClosedQuestionIsConsumedAndTold(t *testing.T
 		})
 	}
 }
+
+// A task that waits on a question that is no text question (a choice, or a tool's approval) is never decided by a
+// typed reply: the shape is session.IsTextQuestion's, and the reply is neither claimed nor audited.
+func TestTextReplyToAQuestionThatTakesNoTextIsRefused(t *testing.T) {
+	r := newPressRig(t) // the Binding's dialect is kagent's, whose questions offer choices
+	task := askUser("req-1")
+	reply := store.Reply{ID: "reply-1", Key: key, UserID: "UALICE1", MessageRef: "101.1", Text: "a", EnqueuedAt: r.now}
+	if _, err := r.st.EnqueueReply(t.Context(), reply); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || err == nil || errors.Is(err, store.ErrReplyNotAnswer) {
+		t.Fatalf("TextReply = %v, %v; want the refusal of a question that takes no text, which is no verdict that the reply is a turn", done, err)
+	}
+	queued, err := r.st.NextReply(t.Context(), key)
+	if err != nil || queued.InteractionID != "" || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
+		t.Fatalf("the reply was claimed or decided: %+v, %v", queued, err)
+	}
+}
+
+// A reply pinned to its question names it: it is decided against that question whatever task it is handed, which is
+// none when the runner reconciles a claim or a reply pinned at the intake (session.Queued).
+func TestTextReplyPinnedToAQuestionNeedsNoTask(t *testing.T) {
+	r := newPressRig(t)
+	_, reply, id := textQuestion(t, r)
+	reply.InteractionID = id // as EnqueueReply stores it
+	if done, err := r.pl.TextReply(t.Context(), key, reply, a2a.Task{}); !done || err != nil {
+		t.Fatalf("TextReply = %v, %v; want the answer decided against its pinned question", done, err)
+	}
+	if row, _ := r.st.GetInteraction(t.Context(), id); row.State != store.InteractionAnswered || len(r.sess.answers()) != 1 {
+		t.Fatalf("the pinned question was not answered: %+v", row)
+	}
+}
+
+// An answer to a question whose prompt was seen is decided even though the question has closed since: the pipeline
+// tells the person it came too late (Process), and it is not left to be sent to the agent as a turn.
+func TestTextReplyToAClosedQuestionWithItsPromptSeenIsDecidedNotTurned(t *testing.T) {
+	r := newPressRig(t)
+	task, reply, id := textQuestion(t, r)
+	if err := r.st.SubmitInteraction(t.Context(), id, []byte(`[["x"]]`), "UBOBBY1", r.now); err != nil {
+		t.Fatal(err)
+	}
+	done, err := r.pl.TextReply(t.Context(), key, reply, task)
+	if errors.Is(err, store.ErrReplyNotAnswer) {
+		t.Fatalf("TextReply = %v, %v; want the answer decided, and not left as a turn", done, err)
+	}
+	queued, qerr := r.st.NextReply(t.Context(), key)
+	if qerr != nil || queued.InteractionID != id {
+		t.Fatalf("the reply was not claimed for its question: %+v, %v", queued, qerr)
+	}
+}

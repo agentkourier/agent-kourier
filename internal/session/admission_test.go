@@ -1,9 +1,14 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 const (
@@ -185,6 +190,213 @@ func TestTakesTextReplies(t *testing.T) {
 	for dialect, want := range map[string]bool{dialectA2A: true, dialectKagent: false, "": false} {
 		if got := TakesTextReplies(dialect); got != want {
 			t.Errorf("TakesTextReplies(%q) = %v; want %v", dialect, got, want)
+		}
+	}
+}
+
+// Queued reads back what Classify decided and Manager.carryOut wrote: a reply is an answer to the question it was
+// enqueued pinned to, and any other is a turn.
+func TestQueued(t *testing.T) {
+	tests := []struct {
+		name string
+		r    store.Reply
+		want Admission
+	}{
+		{"enqueued by a mention", store.Reply{ID: "r1"}, admTurn},
+		{"enqueued pinned to a question", store.Reply{ID: "r1", InteractionID: "q1"}, admAnswerQ1},
+		{"claimed for a question by the pipeline", store.Reply{ID: "r1", InteractionID: "q1", UserID: "U1", Text: "prod"}, admAnswerQ1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Queued(tt.r); got != tt.want {
+				t.Errorf("Queued(%+v) = %+v; want %+v", tt.r, got, tt.want)
+			}
+		})
+	}
+}
+
+// Only a turn and an answer leave a row in the queue: a person's reply that is any other kind is not in the thread's
+// history of what the agent was sent.
+func TestAdmissionQueues(t *testing.T) {
+	for _, tt := range []struct {
+		adm  Admission
+		want bool
+	}{
+		{admTurn, true}, {admAnswerQ1, true},
+		{admNotOwned, false}, {admUnmentioned, false}, {admGoneQuietly, false}, {admExpired, false}, {admGone, false},
+		{Admission{}, false},
+	} {
+		if got := tt.adm.Queues(); got != tt.want {
+			t.Errorf("%+v.Queues() = %v; want %v", tt.adm, got, tt.want)
+		}
+	}
+}
+
+// What the intake writes is what Queued and WasAdmitted read, for every kind of admission: a reply is in the queue
+// exactly when it was admitted as a turn or an answer, and it is read back as the same kind, pinned to the same question.
+func TestSubmitWritesWhatQueuedAndWasAdmittedRead(t *testing.T) {
+	const live, expired = 0 * time.Hour, 2 * time.Hour
+	tests := []struct {
+		name      string
+		mode      v1alpha1.ThreadReplies
+		age       time.Duration
+		mentioned bool
+		create    bool
+		owned     bool
+		gone      bool
+		want      Admission
+	}{
+		{"not owned", modeMention, live, false, false, false, false, admNotOwned},
+		{"a mention creates the session", modeMention, live, true, true, false, false, admTurn},
+		{"a mention in a live thread", modeMention, live, true, false, true, false, admTurn},
+		{"a plain reply in mode all", modeAll, live, false, false, true, false, admTurn},
+		{"a plain reply in mode mention, answering the pending question", modeMention, live, false, false, true, false, admAnswerQ1},
+		{"an expired thread", modeAll, expired, true, false, true, false, admExpired},
+		{"a gone Binding", modeAll, live, true, false, true, true, admGone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.threadReplies, f.textReplies = tt.mode, true
+			if tt.owned {
+				name := "ns/b1"
+				if tt.gone {
+					name = "ns/gone"
+				}
+				f.seed(name, tt.age)
+				f.question("q1", true)
+			}
+			in := reply("1700.02", tt.mentioned)
+			in.Create = tt.create
+			res, err := f.submitAny(in)
+			if err != nil || res.Admission != tt.want {
+				t.Fatalf("Submit = %+v, %v; want %+v", res, err, tt.want)
+			}
+			admitted, err := WasAdmitted(t.Context(), f.raw, in.MessageID)
+			if err != nil || admitted != tt.want.Queues() {
+				t.Fatalf("WasAdmitted = %v, %v; want %v", admitted, err, tt.want.Queues())
+			}
+			rows := f.drain()
+			if len(rows) != map[bool]int{true: 1, false: 0}[tt.want.Queues()] {
+				t.Fatalf("%d rows queued; want one if and only if the reply was admitted", len(rows))
+			}
+			if len(rows) == 1 && Queued(rows[0]) != tt.want {
+				t.Errorf("Queued(%+v) = %+v; want %+v: the row does not say what the admission decided", rows[0], Queued(rows[0]), tt.want)
+			}
+		})
+	}
+}
+
+type failingRecord struct{ err error }
+
+func (r failingRecord) HasReply(context.Context, string) (bool, error) { return false, r.err }
+
+// A queue that cannot say is an error, never "not admitted": the reply would be shown to the agent a second time.
+func TestWasAdmittedPassesAStoreErrorOn(t *testing.T) {
+	boom := errors.New("database is locked")
+	if admitted, err := WasAdmitted(t.Context(), failingRecord{boom}, "slack:slack:C1:1"); admitted || !errors.Is(err, boom) {
+		t.Errorf("WasAdmitted = %v, %v; want false and the store's error", admitted, err)
+	}
+}
+
+func TestIsTextQuestion(t *testing.T) {
+	ask := func(change func(*dialect.Interaction)) *dialect.Interaction {
+		in := &dialect.Interaction{Kind: dialect.AskUser, Questions: []dialect.Question{{Text: "Which service?"}}}
+		change(in)
+		return in
+	}
+	tests := []struct {
+		name string
+		in   *dialect.Interaction
+		want bool
+	}{
+		{"one question with no choices", ask(func(*dialect.Interaction) {}), true},
+		{"choices that are an empty list (kagent sends one for free text)", ask(func(in *dialect.Interaction) { in.Questions[0].Choices = []string{} }), true},
+		{"no interaction", nil, false},
+		{"one question with choices", ask(func(in *dialect.Interaction) { in.Questions[0].Choices = []string{"a", "b"} }), false},
+		{"two questions", ask(func(in *dialect.Interaction) { in.Questions = append(in.Questions, dialect.Question{Text: "Why?"}) }), false},
+		{"no question", ask(func(in *dialect.Interaction) { in.Questions = nil }), false},
+		{"a tool approval", ask(func(in *dialect.Interaction) { in.Kind = dialect.ToolApproval }), false},
+		{"a question of no kind", ask(func(in *dialect.Interaction) { in.Kind = "" }), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsTextQuestion(tt.in); got != tt.want {
+				t.Errorf("IsTextQuestion(%+v) = %v; want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// JudgeAnswer is the rule of whether a queued reply answers the question that the paused task waits on.
+func TestJudgeAnswer(t *testing.T) {
+	asked := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	reply := func(at time.Time, pinned bool) store.Reply {
+		r := store.Reply{ID: "r1", EnqueuedAt: at}
+		if pinned {
+			r.InteractionID = "q1"
+		}
+		return r
+	}
+	seen := AskedQuestion{CreatedAt: asked, Posted: true, Open: true}
+	tests := []struct {
+		name string
+		r    store.Reply
+		q    AskedQuestion
+		want AnswerVerdict
+	}{
+		// A reply that was queued as a turn.
+		{"a turn after the question, which is posted and open", reply(asked.Add(time.Second), false), seen, AnswerDecides},
+		{"a turn at the instant the question was asked", reply(asked, false), seen, AnswerDecides},
+		{"a turn before the question was asked", reply(asked.Add(-time.Second), false), seen, AnswerNone},
+		{"a turn before the question, which is not posted either", reply(asked.Add(-time.Second), false), AskedQuestion{CreatedAt: asked, Open: true}, AnswerNone},
+		{"a turn after a question that closed after its prompt was posted", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked, Posted: true}, AnswerDecides},
+		{"a turn after a question whose prompt is not posted yet", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked, Open: true}, AnswerWaits},
+		{"a turn after a question that closed unseen", reply(asked.Add(time.Second), false), AskedQuestion{CreatedAt: asked}, AnswerNone},
+		// A reply pinned to its question when it was queued.
+		{"pinned, to a posted open question", reply(asked.Add(time.Second), true), seen, AnswerDecides},
+		{"pinned, to a question that closed after its prompt was posted", reply(asked.Add(time.Second), true), AskedQuestion{CreatedAt: asked, Posted: true}, AnswerDecides},
+		{"pinned, to a question whose prompt is not posted yet (a legacy claim)", reply(asked.Add(time.Second), true), AskedQuestion{CreatedAt: asked, Open: true}, AnswerDecides},
+		{"pinned, to a question that closed unseen", reply(asked.Add(time.Second), true), AskedQuestion{CreatedAt: asked}, AnswerConsumed},
+		{"pinned from before the question was asked (a legacy claim may predate it)", reply(asked.Add(-time.Second), true), seen, AnswerDecides},
+		{"pinned from before the question, which closed unseen", reply(asked.Add(-time.Second), true), AskedQuestion{CreatedAt: asked}, AnswerConsumed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := JudgeAnswer(tt.r, tt.q); got != tt.want {
+				t.Errorf("JudgeAnswer(%+v, %+v) = %q; want %q", tt.r, tt.q, got, tt.want)
+			}
+		})
+	}
+}
+
+// A reply pinned to its question is never a turn, whatever the question's state: it is never judged AnswerNone,
+// which would leave it queued to be sent as one. And no verdict but AnswerNone lets a reply that came before the
+// question be taken for its answer.
+func TestJudgeAnswerInvariants(t *testing.T) {
+	asked := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	for _, pinned := range []bool{false, true} {
+		for _, at := range []time.Time{asked.Add(-time.Second), asked, asked.Add(time.Second)} {
+			for _, posted := range []bool{false, true} {
+				for _, open := range []bool{false, true} {
+					r := store.Reply{ID: "r1", EnqueuedAt: at}
+					if pinned {
+						r.InteractionID = "q1"
+					}
+					q := AskedQuestion{CreatedAt: asked, Posted: posted, Open: open}
+					got := JudgeAnswer(r, q)
+					switch {
+					case pinned && (got == AnswerNone || got == AnswerWaits):
+						t.Errorf("pinned %+v, %+v: %q; a pinned reply is decided or consumed, never left queued as a turn", r, q, got)
+					case !pinned && got == AnswerConsumed:
+						t.Errorf("%+v, %+v: %q; only a pinned reply is consumed", r, q, got)
+					case !pinned && at.Before(asked) && got != AnswerNone:
+						t.Errorf("%+v, %+v: %q; a reply before the question is no answer", r, q, got)
+					case got != AnswerDecides && got != AnswerWaits && got != AnswerNone && got != AnswerConsumed:
+						t.Errorf("%+v, %+v: verdict %q is not one of the four", r, q, got)
+					}
+				}
+			}
 		}
 	}
 }

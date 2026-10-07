@@ -94,7 +94,7 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageRef and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
 	}
 	res, err := m.queue(ctx, in)
-	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
+	if err != nil || !res.Admission.Queues() {
 		return res, err
 	}
 	// Both outside the intake lock: a slow wake or notice must not hold up other turns. The notice comes first, so
@@ -134,7 +134,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	defer m.intake.Unlock()
 	now := m.cfg.Now()
 	res, pin, err := m.admit(ctx, in, now)
-	if err != nil || (res.Disposition != Created && res.Disposition != Accepted) {
+	if err != nil || !res.Admission.Queues() {
 		return res, err
 	}
 	user := in.UserID

@@ -42,12 +42,6 @@ const (
 	threadUnsupported = "unsupported" // the platform cannot read a thread: the turn went with the mentioned message alone
 )
 
-// threadReplyStore is what the context asks of the reply queue: whether a message was a turn or an answer
-// (store.ReplyQueue.HasReply).
-type threadReplyStore interface {
-	HasReply(ctx context.Context, id string) (bool, error)
-}
-
 // threadContextConfig configures a threadContext. Platform and Replies are required: newThreadContext refuses a config
 // without them, naming the field. Logger and After are tunables with defaults.
 type threadContextConfig struct {
@@ -55,8 +49,9 @@ type threadContextConfig struct {
 	// thread is asked of it by a type assertion on this value, as the trigger start asks for chat.Permalinker, and never of
 	// builtPlatform, which hides it.
 	Platform chat.Platform
-	Replies  threadReplyStore
-	Logger   *slog.Logger
+	// Replies is the reply queue, which session.WasAdmitted reads to tell a reply that was a turn or an answer.
+	Replies session.ReplyRecord
+	Logger  *slog.Logger
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time
 }
@@ -65,7 +60,7 @@ type threadContextConfig struct {
 type threadContext struct {
 	platform chat.Platform
 	reader   chat.ThreadReader // nil if the platform does not implement it
-	replies  threadReplyStore
+	replies  session.ReplyRecord
 	log      *slog.Logger
 	after    func(time.Duration) <-chan time.Time
 
@@ -163,11 +158,11 @@ func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage
 		if m.Own || m.Ignored || m.Message.Bot != nil || m.Message.User == "" || strings.TrimSpace(redact.Normalize(m.Message.Text)) == "" {
 			continue
 		}
-		turn, err := t.replies.HasReply(ctx, chat.MessageID(m.Message.At))
+		admitted, err := session.WasAdmitted(ctx, t.replies, chat.MessageID(m.Message.At))
 		if err != nil {
 			return nil, err
 		}
-		if !turn {
+		if !admitted {
 			out = append(out, m)
 		}
 	}

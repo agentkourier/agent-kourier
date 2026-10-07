@@ -4,15 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/internal/chat"
-	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// TextReply decides a durable thread reply with the same authorization and audit as Submit.
+// TextReply decides a durable thread reply with the same authorization and audit as Submit. Whether the reply is an
+// answer to the question at all is not its rule: session.IsTextQuestion says whether the question takes text, and
+// session.JudgeAnswer, over the question's row, whether this reply answers it, waits for its prompt or stays a turn
+// (store.ErrReplyNotAnswer). What is left here is to decide the answer: the question's conversation, membership,
+// the claim, the audit and the answer to the agent.
 func (p *Pipeline) TextReply(ctx context.Context, key store.ConversationKey, reply store.Reply, task a2a.Task) (bool, error) {
 	sess, err := p.cfg.Sessions.GetSession(ctx, key, 100*365*24*time.Hour, p.cfg.Now())
 	if err != nil {
@@ -22,13 +27,14 @@ func (p *Pipeline) TextReply(ctx context.Context, key store.ConversationKey, rep
 	if err != nil {
 		return false, err
 	}
-	id := reply.InteractionID
+	queued := session.Queued(reply)
+	id := queued.Question // a reply pinned to its question names it; any other is read from the task's
 	if id == "" {
 		in, err := b.Dialect.ParseInteraction(task)
 		if err != nil {
 			return false, err
 		}
-		if in == nil || in.Kind != dialect.AskUser || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 0 {
+		if !session.IsTextQuestion(in) {
 			return false, errors.New("not a text question")
 		}
 		id = InteractionID(*in)
@@ -43,21 +49,18 @@ func (p *Pipeline) TextReply(ctx context.Context, key store.ConversationKey, rep
 	if row.Key != key {
 		return false, errors.New("question belongs to another conversation")
 	}
-	if reply.InteractionID == "" && reply.EnqueuedAt.Before(row.CreatedAt) {
+	switch v := session.JudgeAnswer(reply, session.AskedQuestion{CreatedAt: row.CreatedAt, Posted: row.MessageRef != "", Open: row.State == store.InteractionPending}); v {
+	case session.AnswerDecides: // claimed below, then decided
+	case session.AnswerNone:
 		return false, store.ErrReplyNotAnswer
+	case session.AnswerConsumed: // a claim left by an older process, or an answer typed to a question that closed unseen
+		return true, nil
+	case session.AnswerWaits:
+		return false, nil
+	default:
+		return false, fmt.Errorf("text reply %s: unknown answer verdict %q", reply.ID, v)
 	}
-	// A closed question that never had a prompt cannot take an answer. Leave new
-	// replies as ordinary turns, and retire any claim left by an older process.
-	if row.MessageRef == "" && row.State != store.InteractionPending {
-		if reply.InteractionID != "" {
-			return true, nil
-		}
-		return false, store.ErrReplyNotAnswer
-	}
-	if reply.InteractionID == "" {
-		if row.MessageRef == "" {
-			return false, nil
-		}
+	if queued.Kind == session.AdmitTurn {
 		claims, ok := p.cfg.Store.(interface {
 			ClaimReplyInteraction(context.Context, string, string) error
 		})

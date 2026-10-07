@@ -1,12 +1,25 @@
 package session
 
-import "github.com/agentkourier/agent-kourier/api/v1alpha1"
+import (
+	"context"
+	"time"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/store"
+)
 
 // Reply admission (CONTEXT.md) is the decision what a person's reply in a thread is: a turn for the agent, an
 // answer to the question the agent waits on, ignored, or answered with a notice (spec 8.2, 8.4, D38). It is one
 // pure function of the facts of the reply, so that the rule is read, tested and changed here and nowhere else:
 // Manager.admit gathers the facts from the store and carries out the decision, and the chat intake only
 // acknowledges the event and posts the notice.
+//
+// The decision is made once, at the intake, and read back from what it left, never made again: Queued says what a
+// reply in the queue was admitted as (the runner), and WasAdmitted whether a message was admitted at all (thread
+// context). The one question left open at the intake is whether a reply queued as a turn is, now, the answer to the
+// question the paused task waits on: JudgeAnswer decides it for the runner, through the text-reply handler, and
+// IsTextQuestion is the shape of a question that a typed reply can answer.
 
 // AdmissionKind is what a reply was classified as. The set is closed.
 type AdmissionKind string
@@ -48,6 +61,93 @@ type Admission struct {
 	Ignored  IgnoreReason // AdmitIgnored
 }
 
+// Queues says the admission leaves a row in the reply queue: only a turn and an answer do, and every other kind
+// writes nothing (Manager.carryOut). That row, which stays as a tombstone once the reply is delivered, is the durable
+// record of the admission that WasAdmitted reads.
+func (a Admission) Queues() bool { return a.Kind == AdmitTurn || a.Kind == AdmitAnswer }
+
+// Queued says what the reply r in the queue was admitted as: an answer to the question it was enqueued pinned to
+// (Admission.Question, which Manager.carryOut stores in Reply.InteractionID, and which a claim sets for a reply
+// that was queued as a turn and found to answer), or else a turn. A pinned reply is never sent as a turn.
+func Queued(r store.Reply) Admission {
+	if r.InteractionID != "" {
+		return Admission{Kind: AdmitAnswer, Question: r.InteractionID}
+	}
+	return Admission{Kind: AdmitTurn}
+}
+
+// ReplyRecord is the reply queue as WasAdmitted reads it (store.ReplyQueue).
+type ReplyRecord interface {
+	// HasReply reports whether a reply with this ID was ever enqueued, queued or delivered.
+	HasReply(ctx context.Context, id string) (bool, error)
+}
+
+// WasAdmitted says whether the message with the ID messageID, a person's reply in a thread, was admitted as a turn or
+// an answer: the agent was sent it, or is to be. Every other reply (ignored, answered with a notice) left no row
+// (Admission.Queues). The decision itself cannot be made again from here: the question it depended on, and the mode,
+// are not the facts of the time the reply was written.
+func WasAdmitted(ctx context.Context, record ReplyRecord, messageID string) (bool, error) {
+	return record.HasReply(ctx, messageID)
+}
+
+// IsTextQuestion says whether the interaction in is a question that a typed reply can answer: the agent asks the
+// user for one answer, to one question that offers no choices. It is the shape of a question that the dialect marks
+// as taking text replies (dialect.Interaction.TextReplies) and that the store keeps marked; a reply is never decided
+// against any other. A nil interaction is no question.
+func IsTextQuestion(in *dialect.Interaction) bool {
+	return in != nil && in.Kind == dialect.AskUser && len(in.Questions) == 1 && len(in.Questions[0].Choices) == 0
+}
+
+// AskedQuestion is the facts of the question that the paused task waits on, which AnswerVerdict depends on. The
+// interaction pipeline reads them from the question's row.
+type AskedQuestion struct {
+	CreatedAt time.Time // when the question was asked
+	// Posted: its prompt is in the thread, so that somebody has seen it.
+	Posted bool
+	// Open: it is still pending: nobody has answered it, and it has not timed out or been cancelled.
+	Open bool
+}
+
+// AnswerVerdict is whether a queued reply answers the question the paused task waits on. The set is closed.
+type AnswerVerdict string
+
+// The verdicts on a queued reply.
+const (
+	// AnswerDecides: the reply is the answer. The interaction pipeline decides it: membership, audit, the claim, the
+	// answer to the agent. This includes a reply pinned to a question whose prompt has not been posted, a legacy
+	// claim, which the pipeline retries and gives up on.
+	AnswerDecides AnswerVerdict = "decides"
+	// AnswerWaits: the reply may answer the question, but its prompt is not posted yet, so nobody has seen it. The
+	// reply stays queued, unclaimed, and the runner asks again.
+	AnswerWaits AnswerVerdict = "waits"
+	// AnswerNone: the reply is no answer to this question and stays an ordinary turn: it was queued before the
+	// question was asked, or the question closed without anyone seeing it.
+	AnswerNone AnswerVerdict = "none"
+	// AnswerConsumed: the reply was pinned to the question when it was queued (Queued), and the question closed
+	// without anyone seeing it. It is no turn either, and there is nothing to decide: it is taken off the queue.
+	AnswerConsumed AnswerVerdict = "consumed"
+)
+
+// JudgeAnswer is the rule of whether the queued reply r answers the question q that the paused task waits on now
+// (spec 8.4, D38). A reply that was queued as a turn is the answer only if it came after the question was asked,
+// and a question that nobody has seen takes no answer: its reply is no answer when the question has closed, and
+// waits for the prompt when it is still open. A reply pinned to its question at the intake was decided there, and
+// is never a turn: it is the answer, or, when the question closed unseen, consumed.
+func JudgeAnswer(r store.Reply, q AskedQuestion) AnswerVerdict {
+	pinned := Queued(r).Kind == AdmitAnswer
+	switch {
+	case !pinned && r.EnqueuedAt.Before(q.CreatedAt):
+		return AnswerNone
+	case !q.Posted && !q.Open && pinned:
+		return AnswerConsumed
+	case !q.Posted && !q.Open:
+		return AnswerNone
+	case !q.Posted && !pinned:
+		return AnswerWaits
+	}
+	return AnswerDecides
+}
+
 // PendingQuestion is the facts of the question a thread waits on that takes text replies.
 type PendingQuestion struct {
 	ID     string
@@ -87,8 +187,9 @@ type ReplyFacts struct {
 // TakesTextReplies says whether a Binding whose backend speaks dialect has questions that a typed reply in the
 // thread can answer (spec 8.4: the a2a dialect). It is the one definition. What it leaves to data is per question:
 // the dialect marks each question it makes (dialect.Interaction.TextReplies), the store keeps the mark (the
-// text_replies column) for PendingTextQuestion, and interact checks the question's shape before it decides an answer.
-func TakesTextReplies(dialect string) bool { return dialect == string(v1alpha1.DialectA2A) }
+// text_replies column) for PendingTextQuestion, and IsTextQuestion is the shape that interact checks before it decides
+// an answer.
+func TakesTextReplies(name string) bool { return name == string(v1alpha1.DialectA2A) }
 
 // gated says the mode holds this reply back: in mention mode a reply that does not mention courier is no turn (D38).
 // The mode is the session's Binding's, and only a session whose Binding is gone has the channel's current Binding's
