@@ -322,6 +322,22 @@ func TestUnsupportedDialectIsRejected(t *testing.T) {
 	}
 }
 
+// Backend carries the dialect of the Binding's backend, which is what says whether it takes text replies to the agent's
+// questions (spec 8.4): the a2a dialect does, kagent-v1 does not.
+func TestBackendCarriesTheDialectThatSaysWhetherItTakesTextReplies(t *testing.T) {
+	f := newFixture(t)
+	for _, tt := range []struct {
+		dialect v1alpha1.Dialect
+		want    bool
+	}{{v1alpha1.DialectA2A, true}, {v1alpha1.DialectKagentV1, false}} {
+		f.snaps.p.Store(snapshot(t, f.url, tt.dialect, time.Hour))
+		be, err := f.b.Backend("sre/oncall")
+		if err != nil || session.TakesTextReplies(be.Dialect) != tt.want {
+			t.Errorf("%s: Backend = dialect %q, %v; want takes text replies %v", tt.dialect, be.Dialect, err, tt.want)
+		}
+	}
+}
+
 // The Binding's chat.threadReplies reaches the session manager's gate through Backend, and a reload changes it for the
 // next reply, as it does the threadTTL.
 func TestBackendCarriesThreadReplies(t *testing.T) {

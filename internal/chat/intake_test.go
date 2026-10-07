@@ -41,7 +41,21 @@ func (s *submitter) Submit(_ context.Context, in session.Inbound) (session.Resul
 	if fn != nil {
 		return fn(in)
 	}
-	return session.Result{Disposition: session.Accepted}, nil
+	return resultOf(session.Accepted), nil
+}
+
+// resultOf is what the session manager answers a reply that it gave the disposition d: the pairing of Disposition and
+// Admission it makes, the notice of BindingGone being the one a reply that is taken gets.
+func resultOf(d session.Disposition) session.Result {
+	admission := map[session.Disposition]session.Admission{
+		session.Created:     {Kind: session.AdmitTurn},
+		session.Accepted:    {Kind: session.AdmitTurn},
+		session.NotOwned:    {Kind: session.AdmitIgnored, Ignored: session.IgnoredNotOwned},
+		session.Unmentioned: {Kind: session.AdmitIgnored, Ignored: session.IgnoredUnmentioned},
+		session.Expired:     {Kind: session.AdmitNotice, Notice: session.NoticeExpired},
+		session.BindingGone: {Kind: session.AdmitNotice, Notice: session.NoticeBindingGone},
+	}[d]
+	return session.Result{Disposition: d, Admission: admission}
 }
 
 func (s *submitter) submitted() []session.Inbound {
@@ -152,7 +166,7 @@ func TestTheMessageIDIsTheStringTheStoreAlreadyHolds(t *testing.T) {
 // remembered only once a turn is queued, so a redelivery is not submitted again; any other
 // answer leaves the next event of the message free to try.
 func TestSubmitOutcomes(t *testing.T) {
-	disposition := func(d session.Disposition) (session.Result, error) { return session.Result{Disposition: d}, nil }
+	disposition := func(d session.Disposition) (session.Result, error) { return resultOf(d), nil }
 	tests := []struct {
 		name    string
 		answer  func() (session.Result, error)
@@ -161,6 +175,9 @@ func TestSubmitOutcomes(t *testing.T) {
 	}{
 		{"created", func() (session.Result, error) { return disposition(session.Created) }, false, false},
 		{"accepted", func() (session.Result, error) { return disposition(session.Accepted) }, false, false},
+		{"an answer to the agent's question", func() (session.Result, error) {
+			return session.Result{Disposition: session.Accepted, Admission: session.Admission{Kind: session.AdmitAnswer, Question: "q1"}}, nil
+		}, false, false},
 		{"not owned", func() (session.Result, error) { return disposition(session.NotOwned) }, false, true},
 		{"expired", func() (session.Result, error) { return disposition(session.Expired) }, false, true},
 		{"binding gone", func() (session.Result, error) { return disposition(session.BindingGone) }, false, true},
@@ -255,7 +272,7 @@ func TestAThreadCourierCannotContinueGetsOneNotice(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var got notices
 			in, sub := newIntakeNotifying(t, got.take)
-			sub.fn = func(session.Inbound) (session.Result, error) { return session.Result{Disposition: tc.disposition}, nil }
+			sub.fn = func(session.Inbound) (session.Result, error) { return resultOf(tc.disposition), nil }
 			// The two events of one mention: the same message, twice.
 			m := inbound("C1", "5.5", "4.4", true)
 			m.Text = "<!channel> <@U2> [x](https://evil.example) & \u202e"
@@ -282,7 +299,7 @@ func TestAThreadCourierCannotContinueGetsOneNotice(t *testing.T) {
 // to submit. And a thread that cannot be continued is quiet, not a crash, when no one takes notices.
 func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
 	disposition := func(d session.Disposition) func(session.Inbound) (session.Result, error) {
-		return func(session.Inbound) (session.Result, error) { return session.Result{Disposition: d}, nil }
+		return func(session.Inbound) (session.Result, error) { return resultOf(d), nil }
 	}
 	for name, fn := range map[string]func(session.Inbound) (session.Result, error){
 		"created":   disposition(session.Created),
@@ -305,7 +322,7 @@ func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
 	}
 	for _, d := range []session.Disposition{session.Expired, session.BindingGone} {
 		in, sub := newIntakeNotifying(t, nil)
-		sub.fn = func(session.Inbound) (session.Result, error) { return session.Result{Disposition: d}, nil }
+		sub.fn = func(session.Inbound) (session.Result, error) { return resultOf(d), nil }
 		if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", false)); err != nil {
 			t.Errorf("%s with no notice func: %v; want it quiet", d, err)
 		}
@@ -320,7 +337,7 @@ func TestAFailedNoticeLeavesTheEventToBeRedelivered(t *testing.T) {
 	got := notices{fail: []error{errors.New("disk full")}}
 	in, sub := newIntakeNotifying(t, got.take)
 	sub.fn = func(session.Inbound) (session.Result, error) {
-		return session.Result{Disposition: session.Expired}, nil
+		return resultOf(session.Expired), nil
 	}
 	m := inbound("C1", "5.5", "4.4", true)
 	if err := in.Message(t.Context(), m); err == nil || !strings.Contains(err.Error(), "disk full") {
@@ -364,6 +381,26 @@ func TestIntakeTellsTheSessionWhetherAReplyMentionsCourier(t *testing.T) {
 	}
 }
 
+// An admission the Intake does not know (the zero value, or a kind a newer session manager added) is an error, so that
+// the event is delivered again and the mismatch is seen, rather than a turn dropped in silence.
+func TestAnAdmissionTheIntakeDoesNotKnowIsAnErrorAndNotRemembered(t *testing.T) {
+	for _, kind := range []session.AdmissionKind{"", "reject"} {
+		in, sub := newIntake(t)
+		sub.fn = func(session.Inbound) (session.Result, error) {
+			return session.Result{Disposition: session.Accepted, Admission: session.Admission{Kind: kind}}, nil
+		}
+		m := inbound("C1", "5.5", "4.4", true)
+		for range 2 {
+			if err := in.Message(t.Context(), m); err == nil {
+				t.Errorf("kind %q: Message = nil; want an error, so the platform delivers the event again", kind)
+			}
+		}
+		if n := len(sub.submitted()); n != 2 {
+			t.Errorf("kind %q: Submit called %d times for two deliveries; want 2: the message is not remembered", kind, n)
+		}
+	}
+}
+
 // An Unmentioned reply is not remembered and not noticed: the message event of a mention may come before its
 // app_mention, and the second is the one that counts. The same reply delivered again, still unmentioned, is
 // asked about again: the Binding's mode may have been reloaded to all in between.
@@ -372,9 +409,9 @@ func TestAnUnmentionedReplyIsNeitherSeenNorNoticed(t *testing.T) {
 	in, sub := newIntakeModes(t, got.take, v1alpha1.ThreadRepliesMention, "")
 	sub.fn = func(req session.Inbound) (session.Result, error) {
 		if req.Mentioned {
-			return session.Result{Disposition: session.Accepted}, nil
+			return resultOf(session.Accepted), nil
 		}
-		return session.Result{Disposition: session.Unmentioned}, nil
+		return resultOf(session.Unmentioned), nil
 	}
 	plain := inbound("C1", "5.5", "4.4", false)
 	for range 2 {
@@ -399,50 +436,50 @@ func TestAnUnmentionedReplyIsNeitherSeenNorNoticed(t *testing.T) {
 	}
 }
 
-// A reply in a thread whose Binding left the config is answered with the Binding-gone notice if it mentions
-// courier, or if the Binding that now owns the channel takes all replies; otherwise it is ignored (spec 8.2).
-func TestBindingGoneNoticeFollowsTheModeOfTheBindingThatOwnsTheChannel(t *testing.T) {
-	tests := []struct {
-		name     string
-		channel  string // C1 is owned by a Binding in c1's mode; C9 by none
-		c1       v1alpha1.ThreadReplies
-		mentions bool
-		direct   bool
-		notice   bool
+// A reply in a thread whose Binding left the config is answered with the Binding-gone notice or left alone as the
+// session manager decides (reply admission). What this adds is the fact the decision needs and only the channel
+// knows: the mode of the Binding that owns the channel now, empty where none does.
+func TestIntakeTellsTheSessionTheModeOfTheBindingThatOwnsTheChannel(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		channel string // C1 is owned by a Binding in c1's mode; C9 by none
+		c1      v1alpha1.ThreadReplies
+		want    v1alpha1.ThreadReplies
 	}{
-		{"mentioned, the owner takes all", "C1", v1alpha1.ThreadRepliesAll, true, false, true},
-		{"mentioned, the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, true, false, true},
-		{"mentioned, no owner", "C9", "", true, false, true},
-		{"direct message, the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, false, true, true},
-		{"unmentioned, the owner takes all", "C1", v1alpha1.ThreadRepliesAll, false, false, true},
-		{"unmentioned, the owner's mode is unset: all", "C1", "", false, false, true},
-		{"unmentioned, the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, false, false, false},
-		{"unmentioned, no owner: the default mode is all", "C9", "", false, false, true},
-	}
-	for _, tt := range tests {
+		{"the owner takes mentions", "C1", v1alpha1.ThreadRepliesMention, v1alpha1.ThreadRepliesMention},
+		{"the owner takes all", "C1", v1alpha1.ThreadRepliesAll, v1alpha1.ThreadRepliesAll},
+		{"the owner's mode is unset", "C1", "", ""},
+		{"no owner", "C9", v1alpha1.ThreadRepliesMention, ""},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			var got notices
-			in, sub := newIntakeModes(t, got.take, tt.c1, "")
-			sub.fn = func(session.Inbound) (session.Result, error) {
-				return session.Result{Disposition: session.BindingGone}, nil
-			}
-			m := inbound(tt.channel, "5.5", "4.4", tt.mentions)
-			m.Direct = tt.direct
-			if err := in.Message(t.Context(), m); err != nil {
+			in, sub := newIntakeModes(t, nil, tt.c1, "")
+			if err := in.Message(t.Context(), inbound(tt.channel, "5.5", "4.4", false)); err != nil {
 				t.Fatal(err)
 			}
-			if (len(got.got) == 1) != tt.notice || len(got.got) > 1 {
-				t.Fatalf("notices %+v; want one: %v", got.got, tt.notice)
-			}
-			// A reply that was left alone is not remembered, so the mention that follows is noticed.
-			if !tt.notice {
-				mention := m
-				mention.Mentioned = true
-				if err := in.Message(t.Context(), mention); err != nil || len(got.got) != 1 || got.got[0].Kind != session.NoticeBindingGone {
-					t.Errorf("the mention of the same message: %v, notices %+v; want the Binding-gone notice", err, got.got)
-				}
+			if got := sub.submitted(); len(got) != 1 || got[0].ChannelThreadReplies != tt.want {
+				t.Fatalf("submitted %+v; want one reply with ChannelThreadReplies %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// A reply the session manager leaves alone in a thread whose Binding is gone is neither noticed nor remembered, so
+// the app_mention of the same message that follows is noticed.
+func TestAReplyLeftAloneInAThreadWhoseBindingIsGoneIsNeitherNoticedNorSeen(t *testing.T) {
+	var got notices
+	in, sub := newIntakeNotifying(t, got.take)
+	sub.fn = func(req session.Inbound) (session.Result, error) {
+		if req.Mentioned {
+			return resultOf(session.BindingGone), nil
+		}
+		return session.Result{Disposition: session.BindingGone, Admission: session.Admission{Kind: session.AdmitIgnored, Ignored: session.IgnoredBindingGone}}, nil
+	}
+	plain := inbound("C1", "5.5", "4.4", false)
+	if err := in.Message(t.Context(), plain); err != nil || len(got.got) != 0 {
+		t.Fatalf("the reply: %v, notices %+v; want none", err, got.got)
+	}
+	if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", true)); err != nil || len(got.got) != 1 || got.got[0].Kind != session.NoticeBindingGone {
+		t.Errorf("the mention of the same message: %v, notices %+v; want the Binding-gone notice", err, got.got)
 	}
 }
 
@@ -453,7 +490,7 @@ func TestExpiredIsNoticedInEveryMode(t *testing.T) {
 		var got notices
 		in, sub := newIntakeModes(t, got.take, mode, "")
 		sub.fn = func(session.Inbound) (session.Result, error) {
-			return session.Result{Disposition: session.Expired}, nil
+			return resultOf(session.Expired), nil
 		}
 		if err := in.Message(t.Context(), inbound("C1", "5.5", "4.4", true)); err != nil || len(got.got) != 1 || got.got[0].Kind != session.NoticeExpired {
 			t.Errorf("mode %q: %v, notices %+v; want one expiry notice", mode, err, got.got)

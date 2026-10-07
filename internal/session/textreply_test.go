@@ -675,6 +675,39 @@ func TestUnmentionedReplyDuringANonTextPauseIsUnmentioned(t *testing.T) {
 	}
 }
 
+// A reply that waits behind a pause of a Binding whose dialect has no text questions is never offered to the
+// text-reply handler: it is a turn, and goes out once the pause ends.
+func TestAReplyWaitingBehindAPauseWithNoTextQuestionsIsNeverOfferedToTheHandler(t *testing.T) {
+	f := newFixture(t) // textReplies is false
+	f.m.cfg.RetryBase = time.Millisecond
+	f.agent.script = pauseFirst
+	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, nil
+	}
+	sink := f.live()
+	if _, err := f.submit(inbound("1")); err != nil {
+		t.Fatal(err)
+	}
+	waitFinal(t, sink)
+	var offered atomic.Int32
+	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+		offered.Add(1)
+		return false, nil
+	})
+	if _, err := f.submit(reply("2", true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Cancel(t.Context(), key, "t1", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	f.retired(t)
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	if offered.Load() != 0 || len(f.agent.answers) != 0 {
+		t.Errorf("offered=%d answers=%v; want the reply never offered to the handler and no answer", offered.Load(), f.agent.answers)
+	}
+}
+
 // A pinned reply whose question closed before the runner reached it (it timed out, or was cancelled or answered
 // meanwhile) is consumed at once by the handler, which tells the person, and is never sent as a turn. The turns
 // behind it go out without waiting for anything.

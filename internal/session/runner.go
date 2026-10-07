@@ -260,7 +260,7 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 	m.mu.Lock()
 	textReply := m.cfg.TextReply
 	m.mu.Unlock()
-	if c.paused != nil && c.paused.b.TextReplies && textReply != nil {
+	if c.paused != nil && TakesTextReplies(c.paused.b.Dialect) && textReply != nil {
 		r, err := m.cfg.Store.NextReplyAfter(m.ctx, key, c.textAfter)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return m.waitTextReply(key, c, err)

@@ -172,6 +172,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	if !req.Create && m.At.Thread == "" {
 		return nil
 	}
+	req.ChannelThreadReplies = in.channelThreadReplies(m.At.Channel)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.binding", req.Binding))
 	res, err := in.cfg.Submitter.Submit(ctx, req)
 	if res.Disposition != "" {
@@ -185,30 +186,29 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	case err != nil:
 		return fmt.Errorf("submit %s: %w", req.MessageID, err)
 	}
-	switch res.Disposition {
-	case session.Created, session.Accepted:
+	// What the reply is was decided by the session manager (reply admission); this only acts on it.
+	switch adm := res.Admission; adm.Kind {
+	case session.AdmitTurn, session.AdmitAnswer:
 		in.seen.add(seen)
-	case session.Unmentioned:
+	case session.AdmitIgnored:
 		// Not remembered and not noticed: the message's app_mention may still come, and it counts.
-	case session.Expired, session.BindingGone:
-		// The notice answers a reply that asked for something. In a thread whose Binding is gone, that is a
-		// reply that mentions courier, or any reply when the Binding that owns the channel now takes them all.
-		silent := res.Disposition == session.BindingGone && !req.Mentioned && !in.takesAllReplies(m.At.Channel)
-		level := slog.LevelWarn
-		if silent {
-			level = slog.LevelDebug // chatter in a thread nobody was asked into
+		if adm.Ignored == session.IgnoredBindingGone { // chatter in a thread nobody was asked into
+			in.log.DebugContext(ctx, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
 		}
-		in.log.Log(ctx, level, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
-		if in.cfg.Notice != nil && !silent {
-			kind, suffix := session.NoticeExpired, "/expired"
-			if res.Disposition == session.BindingGone {
-				kind, suffix = session.NoticeBindingGone, "/binding_gone"
-			}
-			if err := in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: kind, MessageRef: m.At.ID}); err != nil {
+	case session.AdmitNotice:
+		in.log.WarnContext(ctx, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
+		if in.cfg.Notice != nil {
+			suffix := "/" + string(adm.Notice)
+			if err := in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: adm.Notice, MessageRef: m.At.ID}); err != nil {
 				return fmt.Errorf("notice %s%s: %w", req.MessageID, suffix, err)
 			}
 			in.seen.add(seen) // the mention's other event is the same message, and the same notice
 		}
+	default:
+		// A kind this Intake does not know is a mismatch with the session manager, and a reply dropped in silence
+		// would be a lost turn: return it, so the platform leaves the event unacknowledged and delivers it again,
+		// and the error is counted and visible. It names the kind, never the message.
+		return fmt.Errorf("submit %s: unknown reply admission kind %q", req.MessageID, adm.Kind)
 	}
 	return nil
 }
@@ -338,16 +338,19 @@ func (in *Intake) binding(ctx context.Context, channel string) (name string, ok 
 	return name, true
 }
 
-// takesAllReplies says whether the Binding that owns channel now takes every person's reply in a thread it owns,
-// which is whether chat.threadReplies is not mention. A channel nobody owns is taken to: the default mode is all,
-// and the mode of a Binding that is gone is unknown, so where nobody chose mention the notice goes out as it always did.
-func (in *Intake) takesAllReplies(channel string) bool {
+// channelThreadReplies is the chat.threadReplies of the Binding that owns channel now, which the session manager
+// reads only for a thread whose own Binding is gone. Empty where nobody owns the channel, or there is no config yet:
+// the default mode is all, so where nobody chose mention the notice goes out as it always did.
+func (in *Intake) channelThreadReplies(channel string) v1alpha1.ThreadReplies {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
-		return true
+		return ""
 	}
 	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel)
-	return !ok || rb.Binding.Spec.Chat.ThreadReplies != v1alpha1.ThreadRepliesMention
+	if !ok {
+		return ""
+	}
+	return rb.Binding.Spec.Chat.ThreadReplies
 }
 
 // recentMax bounds each generation of recent.

@@ -193,11 +193,19 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", TextReplies: f.textReplies, ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies}
+	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies}
 	if f.noRejected {
 		b.Rejected = nil
 	}
 	return b, nil
+}
+
+// dialect is the Binding's: a2a has questions that take text replies, kagent-v1 has none.
+func (f *fixture) dialect() string {
+	if f.textReplies {
+		return string(v1alpha1.DialectA2A)
+	}
+	return string(v1alpha1.DialectKagentV1)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -631,6 +639,11 @@ func TestSubmitThreadReplyGate(t *testing.T) {
 			if err != nil || res.Disposition != tt.want {
 				t.Fatalf("Submit = %+v, %v; want %s", res, err, tt.want)
 			}
+			// The caller acts on the admission: a turn is remembered, a notice posted, the rest left alone.
+			kinds := map[Disposition]AdmissionKind{Accepted: AdmitTurn, Unmentioned: AdmitIgnored, Expired: AdmitNotice}
+			if res.Admission.Kind != kinds[tt.want] {
+				t.Errorf("Admission = %+v; want kind %s", res.Admission, kinds[tt.want])
+			}
 			got, _ := f.session()
 			switch tt.want {
 			case Accepted:
@@ -646,52 +659,38 @@ func TestSubmitThreadReplyGate(t *testing.T) {
 	}
 }
 
-// The gate is for replies in a thread courier owns: whatever may create a session is not held to it, and a
-// reply in a thread nobody owns, or whose Binding left, is answered as it always was.
-func TestSubmitThreadReplyGateLeavesTheRestAlone(t *testing.T) {
-	t.Run("a mention in a thread courier does not own creates it", func(t *testing.T) {
-		f := newFixture(t)
-		f.threadReplies = v1alpha1.ThreadRepliesMention
-		in := inbound("1700.02")
-		in.Mentioned = true
-		if res, err := f.submitAny(in); err != nil || res.Disposition != Created {
-			t.Fatalf("Submit = %+v, %v; want Created", res, err)
-		}
-	})
-	t.Run("a trigger's start is no reply and needs no mention", func(t *testing.T) {
-		f := newFixture(t)
-		f.threadReplies = v1alpha1.ThreadRepliesMention
-		in := inbound("1700.02")
-		in.UserID = ""
-		if res, err := f.submitAny(in); err != nil || res.Disposition != Created || f.st.upserts != 1 {
-			t.Fatalf("Submit = %+v, %v, %d upserts; want Created", res, err, f.st.upserts)
-		}
-	})
-	t.Run("a turn that may create, in a live thread, is taken unmentioned", func(t *testing.T) {
-		f := newFixture(t)
-		f.threadReplies = v1alpha1.ThreadRepliesMention
-		f.seed("ns/b1", 0)
-		in := inbound("1700.02") // Create, not Mentioned: an alert's prompt into a thread it already has
-		in.UserID = ""
-		if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
-			t.Fatalf("Submit = %+v, %v; want Accepted", res, err)
-		}
-	})
-	t.Run("an unmentioned reply in a thread nobody owns is not owned", func(t *testing.T) {
-		f := newFixture(t)
-		f.threadReplies = v1alpha1.ThreadRepliesMention
-		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != NotOwned {
-			t.Fatalf("Submit = %+v, %v; want NotOwned", res, err)
-		}
-	})
-	t.Run("an unmentioned reply whose Binding is gone is BindingGone, for the caller to judge", func(t *testing.T) {
-		f := newFixture(t)
-		f.threadReplies = v1alpha1.ThreadRepliesMention
-		f.seed("ns/gone", 100*time.Hour)
-		if res, err := f.submitAny(reply("1700.02", false)); err != nil || res.Disposition != BindingGone {
-			t.Fatalf("Submit = %+v, %v; want BindingGone", res, err)
-		}
-	})
+// A reply in a thread whose Binding is gone is answered with the Binding-gone notice, or left alone, as the mode of the
+// Binding that owns the channel now says (spec 8.2): the session's own Binding cannot be asked. Either way nothing is
+// written, queued, touched or woken, and a reply left alone is not counted as unmentioned: no Binding is left to count
+// it for.
+func TestSubmitBindingGoneFollowsTheModeOfTheChannelsBinding(t *testing.T) {
+	tests := []struct {
+		name      string
+		channel   v1alpha1.ThreadReplies // the Binding that owns the channel now; empty is none, or all
+		mentioned bool
+		want      Admission
+	}{
+		{"no owner", "", false, Admission{Kind: AdmitNotice, Notice: NoticeBindingGone}},
+		{"the owner takes all", v1alpha1.ThreadRepliesAll, false, Admission{Kind: AdmitNotice, Notice: NoticeBindingGone}},
+		{"the owner takes mentions, a plain reply", v1alpha1.ThreadRepliesMention, false, Admission{Kind: AdmitIgnored, Ignored: IgnoredBindingGone}},
+		{"the owner takes mentions, a mentioned reply", v1alpha1.ThreadRepliesMention, true, Admission{Kind: AdmitNotice, Notice: NoticeBindingGone}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, ctx, _, reg := tracingFixture(t)
+			f.threadReplies = v1alpha1.ThreadRepliesAll // the session's own Binding is gone: this is never asked
+			seeded := f.seed("ns/gone", 100*time.Hour)
+			in := reply("1700.02", tt.mentioned)
+			in.ChannelThreadReplies = tt.channel
+			res, err := f.m.Submit(ctx, in)
+			if got, _ := f.session(); err != nil || res.Disposition != BindingGone || res.Admission != tt.want || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
+				t.Errorf("Submit = %+v, %v; session %+v, %d touches, woke %d; want BindingGone, %+v and no change", res, err, got, f.st.touches, f.woke, tt.want)
+			}
+			if got := counter(t, reg, "courier_thread_unmentioned_total", map[string]string{"binding": "ns/gone"}); got != 0 {
+				t.Errorf("courier_thread_unmentioned_total = %v; want 0", got)
+			}
+		})
+	}
 }
 
 // A reply that does not mention courier is taken in mention mode when the thread has a pending question that takes
@@ -757,6 +756,9 @@ func TestSubmitUnmentionedReplyToATextQuestion(t *testing.T) {
 			pinned := ""
 			if tt.mode == v1alpha1.ThreadRepliesMention && !tt.mentioned {
 				pinned = q.ID
+			}
+			if wantKind := map[bool]AdmissionKind{true: AdmitAnswer, false: AdmitTurn}[pinned != ""]; res.Admission.Kind != wantKind || res.Admission.Question != pinned {
+				t.Errorf("Admission = %+v; want kind %s for the question %q", res.Admission, wantKind, pinned)
 			}
 			if len(queued) != 1 || queued[0].InteractionID != pinned || f.st.touches != 1 || f.woke != 1 {
 				t.Errorf("queued %+v, %d touches, woke %d; want one reply pinned to %q, one touch and one wake", queued, f.st.touches, f.woke, pinned)
@@ -868,4 +870,66 @@ func counter(t *testing.T, reg *prometheus.Registry, name string, labels map[str
 		}
 	}
 	return 0
+}
+
+// Disposition and Admission are two names of one outcome, and admit is the one place that pairs them: for every kind of
+// outcome a Submit can have, they agree (the chat intake and the metrics read one each).
+func TestSubmitDispositionAndAdmissionAgree(t *testing.T) {
+	const expired = 2 * time.Hour // past ns/b1's threadTTL of 1 h
+	tests := []struct {
+		name  string
+		setup func(f *fixture)
+		in    Inbound
+		want  Result
+	}{
+		{"created", func(*fixture) {}, inbound("1700.02"), Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn}}},
+		{"accepted", func(f *fixture) { f.seed("ns/b1", 0) }, inbound("1700.02"), Result{Disposition: Accepted, Admission: Admission{Kind: AdmitTurn}}},
+		{"answer", func(f *fixture) {
+			f.threadReplies, f.textReplies = v1alpha1.ThreadRepliesMention, true
+			f.seed("ns/b1", 0)
+			f.question("q1", true)
+		}, reply("1700.02", false), Result{Disposition: Accepted, Admission: Admission{Kind: AdmitAnswer, Question: "q1"}}},
+		{"not owned", func(*fixture) {}, reply("1700.02", false), Result{Disposition: NotOwned, Admission: Admission{Kind: AdmitIgnored, Ignored: IgnoredNotOwned}}},
+		{"unmentioned", func(f *fixture) { f.threadReplies = v1alpha1.ThreadRepliesMention; f.seed("ns/b1", 0) }, reply("1700.02", false), Result{Disposition: Unmentioned, Admission: Admission{Kind: AdmitIgnored, Ignored: IgnoredUnmentioned}}},
+		{"unmentioned in an expired thread", func(f *fixture) { f.threadReplies = v1alpha1.ThreadRepliesMention; f.seed("ns/b1", expired) }, reply("1700.02", false), Result{Disposition: Unmentioned, Admission: Admission{Kind: AdmitIgnored, Ignored: IgnoredUnmentioned}}},
+		{"expired", func(f *fixture) { f.seed("ns/b1", expired) }, reply("1700.02", true), Result{Disposition: Expired, Admission: Admission{Kind: AdmitNotice, Notice: NoticeExpired}}},
+		{"binding gone", func(f *fixture) { f.seed("ns/gone", expired) }, reply("1700.02", true), Result{Disposition: BindingGone, Admission: Admission{Kind: AdmitNotice, Notice: NoticeBindingGone}}},
+		{"binding gone, left alone", func(f *fixture) { f.seed("ns/gone", expired) }, func() Inbound {
+			in := reply("1700.02", false)
+			in.ChannelThreadReplies = v1alpha1.ThreadRepliesMention
+			return in
+		}(), Result{Disposition: BindingGone, Admission: Admission{Kind: AdmitIgnored, Ignored: IgnoredBindingGone}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			tt.setup(f)
+			res, err := f.submitAny(tt.in)
+			res.Queued = false // not part of the pairing
+			if err != nil || res != tt.want {
+				t.Errorf("Submit = %+v, %v; want %+v", res, err, tt.want)
+			}
+		})
+	}
+}
+
+// A kind or reason the manager does not know is an error that writes nothing, never a turn.
+func TestCarryOutRefusesAnAdmissionItDoesNotKnow(t *testing.T) {
+	for _, adm := range []Admission{
+		{},
+		{Kind: "reject"},
+		{Kind: AdmitIgnored},
+		{Kind: AdmitIgnored, Ignored: "shrug"},
+		{Kind: AdmitNotice},
+		{Kind: AdmitNotice, Notice: NoticeQueued},
+	} {
+		t.Run(string(adm.Kind)+"/"+string(adm.Ignored)+string(adm.Notice), func(t *testing.T) {
+			f := newFixture(t)
+			seeded := f.seed("ns/b1", 0)
+			res, pin, err := f.m.carryOut(t.Context(), reply("1700.02", true), true, "ns/b1", adm, t0)
+			if got, _ := f.session(); err == nil || res != (Result{}) || pin != "" || got != seeded || f.st.touches != 0 || f.st.upserts != 1 || len(f.drain()) != 0 {
+				t.Errorf("carryOut(%+v) = %+v, %q, %v; session %+v, %d touches; want an error and nothing written", adm, res, pin, err, got, f.st.touches)
+			}
+		})
+	}
 }

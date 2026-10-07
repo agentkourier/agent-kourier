@@ -31,7 +31,7 @@ func (s *submitter) Submit(_ context.Context, in session.Inbound) (session.Resul
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.got = append(s.got, in)
-	return session.Result{Disposition: session.Accepted}, nil
+	return session.Result{Disposition: session.Accepted, Admission: session.Admission{Kind: session.AdmitTurn}}, nil
 }
 
 func (s *submitter) submitted() []session.Inbound {

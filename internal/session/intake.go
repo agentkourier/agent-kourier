@@ -23,7 +23,8 @@ const SystemUser = "courier:system"
 // Disposition says what Submit did with a turn.
 type Disposition string
 
-// The dispositions of a Submit. Created and Accepted both mean the turn is queued. A
+// The dispositions of a Submit, which are the outcome as the metrics and the alert path name it; the reply admission
+// (admission.go, Result.Admission) is the decision, and what the chat intake acts on. Created and Accepted both mean the turn is queued. A
 // redelivery after a partial failure finds the session the first attempt made, and the
 // mention/message pair may split the same way, so a turn that created the session can be
 // reported as Accepted: never hang a one-time side effect on Created.
@@ -31,7 +32,7 @@ const (
 	Created     Disposition = "created"      // a new session was made and the turn queued on it
 	Accepted    Disposition = "accepted"     // the session is live and the turn queued on it
 	NotOwned    Disposition = "not_owned"    // courier owns no such thread: ignore the turn (spec 8.2)
-	BindingGone Disposition = "binding_gone" // owned, but its Binding left the config: nothing written; the caller posts the notice
+	BindingGone Disposition = "binding_gone" // owned, but its Binding left the config: nothing written; Result.Admission says whether the caller posts the notice
 	Expired     Disposition = "expired"      // owned but past threadTTL: nothing written; the caller posts the notice
 	// Unmentioned is a reply the Binding does not take: owned, but the Binding's threadReplies is mention
 	// and the reply does not mention courier (D38). Nothing is written or queued, the session is not
@@ -58,6 +59,10 @@ type Inbound struct {
 	// Create lets the turn make the session if there is none: an @mention, a DM, an alert's
 	// first prompt. A plain thread reply leaves it false.
 	Create bool
+	// ChannelThreadReplies is the chat.threadReplies of the Binding that owns the channel now, empty when none does
+	// (the default mode, all). It is read only when the session's own Binding has left the config, and then it
+	// decides whether a reply that does not mention courier is answered with the Binding-gone notice (spec 8.2).
+	ChannelThreadReplies v1alpha1.ThreadReplies
 	// Alert is the name of the alert the thread is started for, which the session keeps for the feedback on its
 	// messages (spec 8.7). Like Binding it is used only to create a session. The caller has bounded it: it is
 	// text out of an alert.
@@ -69,6 +74,9 @@ type Inbound struct {
 type Result struct {
 	Disposition Disposition
 	Queued      bool
+	// Admission is what the reply was classified as (admission.go). The caller acts on it: acknowledges a turn or
+	// an answer, and posts the notice of a notice. It is the zero value only for an error.
+	Admission Admission
 }
 
 // readAll is a threadTTL no session outlives: the real one is the session's Binding's.
@@ -155,16 +163,83 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	return res, nil
 }
 
-// admit reads the session and, for a new thread that may be created, writes its row, or, for
-// a live one, touches it. A reply the Binding does not take (threadReplies mention, no mention)
-// is returned Unmentioned without a touch, unless it is the answer to a question that takes text replies:
-// that one is Accepted, and pin is the question, which the reply is enqueued pinned to (D38).
+// admit gathers the facts of the reply (the session, its Binding, expiry and, if the decision needs it, the pending
+// question), classifies the reply (ReplyFacts.Classify) and carries the admission out (carryOut).
 func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result, string, error) {
+	f := ReplyFacts{Create: in.Create, Mentioned: in.Mentioned, ChannelMode: in.ChannelThreadReplies}
+	binding := ""
 	sess, err := m.cfg.Store.GetSession(ctx, in.Key, readAll, now)
 	switch {
-	case errors.Is(err, store.ErrNotFound) && !in.Create:
-		return Result{Disposition: NotOwned}, "", nil
 	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
+	default:
+		f.Owned, f.TaskID, binding = true, sess.TaskID, sess.Binding
+		backend, err := m.cfg.Bindings.Backend(sess.Binding)
+		if errors.Is(err, ErrUnknownBinding) { // expiry cannot be judged without it, so old or not
+			f.BindingGone = true
+			break
+		} else if err != nil {
+			return Result{}, "", fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
+		}
+		f.Mode, f.Dialect = backend.ThreadReplies, backend.Dialect
+		// The store owns the expiry rule: ask it again, with the session's own threadTTL.
+		switch _, err := m.cfg.Store.GetSession(ctx, in.Key, backend.ThreadTTL, now); {
+		case errors.Is(err, store.ErrExpired):
+			f.Expired = true
+		case err != nil:
+			return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
+		}
+	}
+	if f.NeedsQuestion() {
+		switch q, err := m.cfg.Questions.PendingTextQuestion(ctx, in.Key); {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			return Result{}, "", fmt.Errorf("read the pending question of %+v: %w", in.Key, err)
+		default:
+			f.Question = &PendingQuestion{ID: q.ID, TaskID: q.TaskID, Posted: q.MessageRef != ""}
+		}
+	}
+	return m.carryOut(ctx, in, f.Owned, binding, f.Classify(), now)
+}
+
+// carryOut does what the admission decided: for a turn it writes the row of a new thread or touches a live one; for an
+// answer it touches the thread and returns pin, the question the reply is enqueued pinned to (D38); for anything else
+// it writes nothing and the session is not touched. binding is the session's Binding, which an unmentioned reply is
+// counted for. A kind or reason it does not know is an error and writes nothing.
+func (m *Manager) carryOut(ctx context.Context, in Inbound, owned bool, binding string, adm Admission, now time.Time) (Result, string, error) {
+	res := Result{Admission: adm}
+	switch adm.Kind {
+	case AdmitIgnored:
+		switch adm.Ignored {
+		case IgnoredNotOwned:
+			res.Disposition = NotOwned
+		case IgnoredUnmentioned:
+			// It writes nothing; it counts the reply for the Binding, which is how a thread that people talk in
+			// without waking the agent shows up.
+			telemetry.Count(ctx, "courier_thread_unmentioned_total", binding)
+			res.Disposition = Unmentioned
+		case IgnoredBindingGone:
+			res.Disposition = BindingGone
+		default:
+			return Result{}, "", fmt.Errorf("reply admission %+v: unknown reason to ignore the reply", adm)
+		}
+		return res, "", nil
+	case AdmitNotice:
+		switch adm.Notice {
+		case NoticeExpired:
+			res.Disposition = Expired
+		case NoticeBindingGone:
+			res.Disposition = BindingGone
+		default:
+			return Result{}, "", fmt.Errorf("reply admission %+v: unknown notice", adm)
+		}
+		return res, "", nil
+	case AdmitTurn, AdmitAnswer:
+	default:
+		return Result{}, "", fmt.Errorf("reply admission %+v: unknown kind", adm)
+	}
+	if !owned {
 		backend, err := m.cfg.Bindings.Backend(in.Binding)
 		if err != nil {
 			return Result{}, "", fmt.Errorf("create session %+v under Binding %q: %w", in.Key, in.Binding, err)
@@ -174,65 +249,12 @@ func (m *Manager) admit(ctx context.Context, in Inbound, now time.Time) (Result,
 		if err := m.cfg.Store.UpsertSession(ctx, store.Session{Key: in.Key, Binding: in.Binding, Alert: in.Alert, Agent: backend.AgentName, LastActivity: now}); err != nil {
 			return Result{}, "", fmt.Errorf("create session %+v: %w", in.Key, err)
 		}
-		return Result{Disposition: Created}, "", nil
-	case err != nil:
-		return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
-	}
-	backend, err := m.cfg.Bindings.Backend(sess.Binding)
-	if errors.Is(err, ErrUnknownBinding) { // expiry cannot be judged without it, so old or not
-		return Result{Disposition: BindingGone}, "", nil
-	} else if err != nil {
-		return Result{}, "", fmt.Errorf("session %+v: Binding %q: %w", in.Key, sess.Binding, err)
-	}
-	// In mention mode a reply that does not mention courier is not taken (D38). A Create turn is no reply:
-	// a mention, a DM, a trigger's start and an alert's prompt are held to nothing.
-	gated := backend.ThreadReplies == v1alpha1.ThreadRepliesMention && !in.Mentioned && !in.Create
-	// The store owns the expiry rule: ask it again, with the session's own threadTTL.
-	switch _, err := m.cfg.Store.GetSession(ctx, in.Key, backend.ThreadTTL, now); {
-	case errors.Is(err, store.ErrExpired) && gated:
-		return m.unmentioned(ctx, sess.Binding), "", nil // no expiry notice for a reply that was not asking for anything
-	case errors.Is(err, store.ErrExpired):
-		return Result{Disposition: Expired}, "", nil
-	case err != nil:
-		return Result{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
-	}
-	pin := ""
-	if gated {
-		// Not a turn, but possibly an answer: a reply in a thread whose agent waits on a question that takes text
-		// replies is that question's, mention or not, and is queued pinned to it, so that it is decided like a
-		// button's press and can never be sent as a turn. Only a dialect that has such questions is asked.
-		if !backend.TextReplies {
-			return m.unmentioned(ctx, sess.Binding), "", nil
-		}
-		q, err := m.pendingTextQuestion(ctx, in.Key)
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return m.unmentioned(ctx, sess.Binding), "", nil
-		case err != nil:
-			return Result{}, "", fmt.Errorf("read the pending question of %+v: %w", in.Key, err)
-		// A question stays pending until it is answered, refused or swept at its deadline, whether or not the agent
-		// still waits on it: one whose task is not the session's (the pause ended, or a new task began) takes no
-		// answer, and neither does one whose prompt is not posted (nobody has seen it, and a reply pinned to it
-		// would hold the queue until it is). What is typed meanwhile is chatter.
-		case q.TaskID != sess.TaskID || q.MessageRef == "":
-			return m.unmentioned(ctx, sess.Binding), "", nil
-		}
-		pin = q.ID
+		res.Disposition = Created
+		return res, "", nil
 	}
 	if err := m.cfg.Store.TouchSession(ctx, in.Key, now); err != nil {
 		return Result{}, "", fmt.Errorf("touch session %+v: %w", in.Key, err)
 	}
-	return Result{Disposition: Accepted}, pin, nil
-}
-
-// unmentioned is the result for a reply the Binding's mention mode turns away. It writes nothing; it counts the
-// reply for the Binding, which is how a thread that people talk in without waking the agent shows up.
-func (m *Manager) unmentioned(ctx context.Context, binding string) Result {
-	telemetry.Count(ctx, "courier_thread_unmentioned_total", binding)
-	return Result{Disposition: Unmentioned}
-}
-
-// pendingTextQuestion is the question of the thread that a typed reply answers, or store.ErrNotFound.
-func (m *Manager) pendingTextQuestion(ctx context.Context, key Key) (store.Interaction, error) {
-	return m.cfg.Questions.PendingTextQuestion(ctx, key)
+	res.Disposition = Accepted
+	return res, adm.Question, nil
 }

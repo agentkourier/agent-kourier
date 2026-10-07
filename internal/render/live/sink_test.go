@@ -506,7 +506,7 @@ func TestAFailedNoticeOfTheIntakeIsOneRowWhenRedelivered(t *testing.T) {
 		Snapshot:   func() *config.Snapshot { return nil },
 		Submitter: submitFunc(func(session.Inbound) (session.Result, error) {
 			submits++
-			return session.Result{Disposition: session.Expired}, nil
+			return session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}, nil
 		}),
 		Notice: sink.QueueNotice,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

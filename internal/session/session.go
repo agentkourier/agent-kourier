@@ -55,10 +55,9 @@ type AgentAPI interface {
 
 // Backend is what the manager needs to know about one Binding.
 type Backend struct {
-	// Name, AgentName and Dialect identify configured backend resources for spans.
+	// Name, AgentName and Dialect identify configured backend resources for spans. Dialect is also what says whether
+	// the Binding takes text replies to the agent's questions (TakesTextReplies).
 	Name, AgentName, Dialect string
-	// TextReplies allows queued thread replies to answer plain-text pauses.
-	TextReplies bool
 	// ThreadReplies is the Binding's chat.threadReplies. Anything but mention, the empty value too,
 	// means every person's reply in a thread courier owns is a turn (spec 8.2, D38).
 	ThreadReplies v1alpha1.ThreadReplies

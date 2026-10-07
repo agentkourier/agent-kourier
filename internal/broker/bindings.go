@@ -142,7 +142,6 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Rejected:      src.Rejected,
 		Identity:      src.Identity(),
 		Output:        rb.Binding.Spec.Chat.Output,
-		TextReplies:   rb.Backend.Spec.Dialect == v1alpha1.DialectA2A,
 		Feedback:      rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies: rb.Binding.Spec.Chat.ThreadReplies,
 	}, nil
