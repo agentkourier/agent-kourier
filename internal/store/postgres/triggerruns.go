@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // day is the window of maxRunsPerDay, and so how long the rows of trigger_runs are of use.
@@ -46,12 +45,8 @@ const markDigested = `UPDATE trigger_runs SET digested = true
 // transaction under an advisory lock that every admission takes, so two starts cannot both pass the last free place:
 // the limits are counts, and READ COMMITTED would let two callers read the same count. A start is brief and the lock is
 // held for it only.
-func (s *Store) AdmitTriggerRun(ctx context.Context, run store.TriggerRun, limits store.TriggerRunLimits) (admission store.TriggerAdmission, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.AdmitTriggerRun")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if run.Binding == "" || run.Trigger < 0 || !validKey(run.Key) || !afterEpoch(run.At) || limits.DigestWindow <= 0 {
-		return store.TriggerAdmission{}, fmt.Errorf("admit trigger run of %q: the Binding, trigger, key, a time after the Unix epoch and a digest window are required: %w", run.Binding, store.ErrInvalid)
-	}
+func (s *adapter) AdmitTriggerRun(ctx context.Context, run store.TriggerRun, limits store.TriggerRunLimits) (store.TriggerAdmission, error) {
+	var admission store.TriggerAdmission
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if err := lock(ctx, tx, lockTriggerRuns, ""); err != nil {
 			return err
@@ -138,12 +133,7 @@ func recordStopped(ctx context.Context, tx pgx.Tx, run store.TriggerRun, limit s
 }
 
 // ListTriggerDigests implements store.TriggerRuns.
-func (s *Store) ListTriggerDigests(ctx context.Context, now time.Time) (digests []store.TriggerDigest, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListTriggerDigests")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !afterEpoch(now) {
-		return nil, fmt.Errorf("list trigger digests: the time must be after the Unix epoch: %w", store.ErrInvalid)
-	}
+func (s *adapter) ListTriggerDigests(ctx context.Context, now time.Time) ([]store.TriggerDigest, error) {
 	rows, err := s.pool.Query(ctx, dueWindows, now)
 	if err != nil {
 		return nil, fmt.Errorf("list trigger digests: %w", err)
@@ -173,12 +163,7 @@ func (s *Store) ListTriggerDigests(ctx context.Context, now time.Time) (digests 
 }
 
 // MarkTriggerDigested implements store.TriggerRuns.
-func (s *Store) MarkTriggerDigested(ctx context.Context, binding string, trigger int, start time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.MarkTriggerDigested")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if binding == "" || trigger < 0 || !afterEpoch(start) {
-		return fmt.Errorf("mark trigger digested of %q: the Binding, trigger and a window start after the Unix epoch are required: %w", binding, store.ErrInvalid)
-	}
+func (s *adapter) MarkTriggerDigested(ctx context.Context, binding string, trigger int, start time.Time) error {
 	if _, err := s.exec(ctx, markDigested, binding, trigger, start); err != nil {
 		return fmt.Errorf("mark trigger digested of %q: %w", binding, err)
 	}
@@ -186,12 +171,7 @@ func (s *Store) MarkTriggerDigested(ctx context.Context, binding string, trigger
 }
 
 // PurgeTriggerRuns implements store.TriggerRuns.
-func (s *Store) PurgeTriggerRuns(ctx context.Context, before time.Time) (purged int, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PurgeTriggerRuns")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !afterEpoch(before) {
-		return 0, fmt.Errorf("purge trigger runs: the time must be after the Unix epoch: %w", store.ErrInvalid)
-	}
+func (s *adapter) PurgeTriggerRuns(ctx context.Context, before time.Time) (int, error) {
 	n, err := s.exec(ctx, `DELETE FROM trigger_runs WHERE at < $1`, before)
 	if err != nil {
 		return 0, fmt.Errorf("purge trigger runs: %w", err)

@@ -16,7 +16,7 @@ import (
 // reports whether it changed the row. If it did not, the current state and
 // decider are read in the same transaction, so the caller classifies the same
 // state the update saw. A missing row returns ErrNotFound.
-func (s *Store) transition(ctx context.Context, id, update string, args ...any) (applied bool, state store.InteractionState, decider string, err error) {
+func (s *adapter) transition(ctx context.Context, id, update string, args ...any) (applied bool, state store.InteractionState, decider string, err error) {
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		n, err := execRows(ctx, tx, update, args...)
 		if err != nil || n > 0 {
@@ -40,12 +40,7 @@ func (s *Store) transition(ctx context.Context, id, update string, args ...any) 
 }
 
 // SubmitInteraction implements store.Interactions.
-func (s *Store) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.SubmitInteraction")
-	defer func() { finishStore(op, telemetryErr) }()
-	if id == "" || len(answer) == 0 || decider == "" || now.IsZero() {
-		return fmt.Errorf("submit interaction %q: ID, answer, decider and now are required: %w", id, store.ErrInvalid)
-	}
+func (s *adapter) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
 	applied, state, prev, err := s.transition(ctx, id, `UPDATE interactions SET state = 'answered', answer = ?, decider = ?,
 		decided_at = ? WHERE id = ? AND state = 'pending' AND deadline > ?`, answer, decider, ts(now), id, ts(now))
 	switch {
@@ -62,12 +57,7 @@ func (s *Store) SubmitInteraction(ctx context.Context, id string, answer []byte,
 }
 
 // ResolveInteraction implements store.Interactions.
-func (s *Store) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ResolveInteraction")
-	defer func() { finishStore(op, telemetryErr) }()
-	if id == "" || now.IsZero() || (state != store.InteractionTimedOut && state != store.InteractionCancelled) {
-		return fmt.Errorf("resolve interaction %q to %q: ID, now and a timed_out or cancelled state are required: %w", id, state, store.ErrInvalid)
-	}
+func (s *adapter) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) error {
 	applied, cur, _, err := s.transition(ctx, id, `UPDATE interactions SET state = ?, decided_at = ?
 		WHERE id = ? AND state = 'pending' AND (? = 'cancelled' OR deadline <= ?)`, string(state), ts(now), id, string(state), ts(now))
 	switch {
@@ -82,12 +72,7 @@ func (s *Store) ResolveInteraction(ctx context.Context, id string, state store.I
 }
 
 // SetInteractionMessageRef implements store.Interactions.
-func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.SetInteractionMessageRef")
-	defer func() { finishStore(op, telemetryErr) }()
-	if id == "" || ref == "" {
-		return fmt.Errorf("set message ref for interaction %q: ID and ref are required: %w", id, store.ErrInvalid)
-	}
+func (s *adapter) SetInteractionMessageRef(ctx context.Context, id, ref string) error {
 	if err := s.setMessageRef(ctx, interactionRefs, id, ref); err != nil {
 		return fmt.Errorf("set message ref for interaction %q: %w", id, err)
 	}
@@ -95,12 +80,7 @@ func (s *Store) SetInteractionMessageRef(ctx context.Context, id, ref string) (t
 }
 
 // MarkInteractionDelivered implements store.Interactions.
-func (s *Store) MarkInteractionDelivered(ctx context.Context, id string, at time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.MarkInteractionDelivered")
-	defer func() { finishStore(op, telemetryErr) }()
-	if id == "" || at.IsZero() {
-		return fmt.Errorf("mark interaction %q delivered: an ID and a time are required: %w", id, store.ErrInvalid)
-	}
+func (s *adapter) MarkInteractionDelivered(ctx context.Context, id string, at time.Time) error {
 	n, err := s.exec(ctx, `UPDATE interactions SET delivered_at = ? WHERE id = ? AND state = 'answered' AND delivered_at = 0`, ts(at), id)
 	if err != nil {
 		return fmt.Errorf("mark interaction %q delivered: %w", id, err)

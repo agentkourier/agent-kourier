@@ -33,7 +33,7 @@ type EndedStaleTask struct {
 type StaleTasks interface {
 	// ListStaleTasks returns at most limit sessions that are past their horizon (SessionHorizons) and record a task,
 	// the ones last active longest ago first. It reads, and changes nothing: a session inside its horizon is never
-	// listed, whatever it records. Every horizon must be set, and limit positive (ErrInvalid otherwise).
+	// listed, whatever it records. Every horizon must be set, and limit 1 to MaxLimit (ErrInvalid otherwise).
 	ListStaleTasks(ctx context.Context, h SessionHorizons, limit int) ([]StaleTask, error)
 	// EndStaleTask clears the task that t records, with the turn recorded for it (the context stays), and cancels the
 	// pending interactions of that task (those of the session that name it), recording now as when they were decided,

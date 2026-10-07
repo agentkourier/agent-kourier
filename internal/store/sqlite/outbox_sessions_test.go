@@ -21,15 +21,15 @@ func TestOutboxRoleTriggers(t *testing.T) {
 	if _, err := s.CreateOutbox(ctx, a); err != nil {
 		t.Fatalf("CreateOutbox: %v", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
+	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
 		VALUES ('raw', 'e', 'bogus', 'C', '', 1)`); err == nil || !strings.Contains(err.Error(), "invalid outbox role") {
 		t.Fatalf("insert with an invalid outbox role = %v; want the trigger's error", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE outbox SET role = 'bogus' WHERE id = ?`, a.ID); err == nil || !strings.Contains(err.Error(), "invalid outbox role") {
+	if _, err := s.a.write.ExecContext(ctx, `UPDATE outbox SET role = 'bogus' WHERE id = ?`, a.ID); err == nil || !strings.Contains(err.Error(), "invalid outbox role") {
 		t.Fatalf("update to an invalid outbox role = %v; want the trigger's error", err)
 	}
 	for _, role := range []store.OutboxRole{store.OutboxRoot, store.OutboxReply, store.OutboxDigest, store.OutboxNotice, store.OutboxReaction} {
-		if _, err := s.write.ExecContext(ctx, `UPDATE outbox SET role = ? WHERE id = ?`, role, a.ID); err != nil {
+		if _, err := s.a.write.ExecContext(ctx, `UPDATE outbox SET role = ? WHERE id = ?`, role, a.ID); err != nil {
 			t.Errorf("update to role %q = %v; want it allowed", role, err)
 		}
 	}
@@ -41,7 +41,7 @@ func TestMigrationsAreRecordedOnceAcrossReopens(t *testing.T) {
 	openAt(t, path)
 	s := openAt(t, path)
 	var n int
-	if err := s.read.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 22 {
+	if err := s.a.read.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 22 {
 		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 22", n, err)
 	}
 }
@@ -53,7 +53,7 @@ func TestInTxRollsBackOnPanic(t *testing.T) {
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		_ = s.inTx(ctx, func(*sql.Tx) error { panic("boom") })
+		_ = s.a.inTx(ctx, func(*sql.Tx) error { panic("boom") })
 	}()
 	if recovered == nil {
 		t.Fatal("inTx swallowed the panic")

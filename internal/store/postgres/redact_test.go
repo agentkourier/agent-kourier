@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // fakePassword is a made-up password, odd enough that it cannot appear in a message by chance.
@@ -149,12 +150,25 @@ func TestScrubKeepsWhatCallersTest(t *testing.T) {
 }
 
 // TestStoreOperationsScrubTheirErrors: the one exit of every operation scrubs, so an error that arrives
-// with the DSN in it (a driver that quotes it) leaves without.
+// with the DSN in it (a driver that quotes it) leaves without. The pool here never reaches a server: its
+// connect hook fails with an error that quotes the DSN, as a driver might.
 func TestStoreOperationsScrubTheirErrors(t *testing.T) {
 	dsn := "postgres://courier:" + url.QueryEscape(fakePassword) + "@db:5432/courier"
-	s := &Store{red: newRedactor(dsn)}
-	_, op := telemetry.Start(t.Context(), "courier.store.Test")
-	err := s.finish(op, fmt.Errorf("connect %s failed", dsn))
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.BeforeConnect = func(context.Context, *pgx.ConnConfig) error { return fmt.Errorf("connect %s failed", dsn) }
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	st := guard(&adapter{pool: pool, red: newRedactor(dsn)})
+	_, err = st.GetEvent(t.Context(), "e1")
+	if err == nil {
+		t.Fatal("GetEvent on a pool that cannot connect succeeded")
+	}
 	if found := leaks(err, dsn); len(found) > 0 {
 		t.Errorf("the error leaks: %v", found)
 	}

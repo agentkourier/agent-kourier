@@ -5,18 +5,16 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // RegisterMetrics exposes the pool's statistics and the durable backlog gauges, under the names the
 // SQLite store gives the gauges, so one dashboard reads either, and courier_store_deposed_total, which only this store has. The queries use a short deadline and
 // report invalid metrics on failure, rather than false zeros.
-func (s *Store) RegisterMetrics(reg prometheus.Registerer) error {
+func (s *Store) RegisterMetrics(reg prometheus.Registerer) error { return s.a.registerMetrics(reg) }
+
+func (s *adapter) registerMetrics(reg prometheus.Registerer) error {
 	for _, c := range []prometheus.Collector{&poolCollector{s: s}, &backlogCollector{s: s}, s.deposed} {
 		if err := reg.Register(c); err != nil {
 			return err
@@ -25,7 +23,7 @@ func (s *Store) RegisterMetrics(reg prometheus.Registerer) error {
 	return nil
 }
 
-type poolCollector struct{ s *Store }
+type poolCollector struct{ s *adapter }
 
 // poolMetric is one series of the pool's statistics.
 type poolMetric struct {
@@ -69,7 +67,7 @@ func (c *poolCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-type backlogCollector struct{ s *Store }
+type backlogCollector struct{ s *adapter }
 
 func backlogDescriptors() []*prometheus.Desc {
 	return []*prometheus.Desc{
@@ -116,25 +114,4 @@ func (c *backlogCollector) Collect(ch chan<- prometheus.Metric) {
 	for i, d := range ds {
 		ch <- prometheus.MustNewConstMetric(d, prometheus.GaugeValue, values[i])
 	}
-}
-
-// finish ends a store operation's span and duration observation with a bounded outcome, and returns
-// err with the DSN's secrets scrubbed from its text. Every exported method of the store ends this way.
-func (s *Store) finish(op *telemetry.Operation, err error) error {
-	err = s.red.scrub(err)
-	switch {
-	case errors.Is(err, store.ErrNotFound), errors.Is(err, pgx.ErrNoRows):
-		op.FinishOutcome(nil, "not_found")
-	case errors.Is(err, store.ErrConflict):
-		op.FinishOutcome(nil, "conflict")
-	case errors.Is(err, store.ErrExpired):
-		op.FinishOutcome(nil, "expired")
-	case errors.Is(err, store.ErrLimit):
-		op.FinishOutcome(nil, "limited")
-	case errors.Is(err, store.ErrInvalid):
-		op.FinishOutcome(nil, "invalid")
-	default:
-		op.Finish(err)
-	}
-	return err
 }

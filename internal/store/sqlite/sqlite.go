@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
-
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -20,13 +18,22 @@ import (
 // readConns is the size of the read-only connection pool.
 const readConns = 4
 
-// Store is a SQLite-backed store.Store.
+// Store is a SQLite-backed store.Store. It is the guarded store (store.Guarded: every argument checked and every
+// operation's telemetry recorded, once, for every backend) over the SQLite adapter, which is SQL and nothing else.
+// The adapter is not reachable from outside the package, so that a caller cannot hold a store that skips the checks.
+type Store struct {
+	*store.Guarded
+	a *adapter
+}
+
+// adapter is the SQLite backend: the SQL of every operation and the transactions it runs in. It can rely on its
+// arguments being legal and records no telemetry (see store.Guard).
 //
 // SQLite allows one writer at a time, so all writes go through a pool capped
 // at a single connection: writers queue in Go instead of contending for the
 // file lock and failing with "database is locked". Reads use a separate
 // read-only pool, which WAL mode lets run alongside the writer.
-type Store struct {
+type adapter struct {
 	write *sql.DB
 	read  *sql.DB
 }
@@ -37,8 +44,11 @@ type Store struct {
 // secure_delete overwrites deleted content in the database file, so that what a deleted press
 // held, or an agent's text, does not linger in a free page. The write-ahead log may still hold
 // the old pages until a checkpoint copies them over and the log is reused.
+//
+// The store it returns is the guarded one (see Store): its arguments are checked and its operations recorded before the
+// SQLite adapter runs.
 func Open(ctx context.Context, path string) (*Store, error) {
-	s := &Store{}
+	s := &adapter{}
 	var err error
 	if s.write, err = openPool(ctx, path, 1, "journal_mode(WAL)"); err != nil {
 		return nil, fmt.Errorf("open sqlite store %q (write pool): %w", path, err)
@@ -51,7 +61,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = s.Close()
 		return nil, fmt.Errorf("open sqlite store %q: %w", path, err)
 	}
-	return s, nil
+	return &Store{Guarded: store.Guard(s, store.WithNoRows(sql.ErrNoRows)), a: s}, nil
 }
 
 func openPool(ctx context.Context, path string, conns int, pragma string) (*sql.DB, error) {
@@ -70,7 +80,7 @@ func openPool(ctx context.Context, path string, conns int, pragma string) (*sql.
 }
 
 // Close closes both connection pools.
-func (s *Store) Close() error {
+func (s *adapter) Close() error {
 	return errors.Join(s.write.Close(), s.read.Close())
 }
 
@@ -93,7 +103,7 @@ func execRows(ctx context.Context, e execer, query string, args ...any) (int64, 
 }
 
 // exec runs a single-statement write on the write pool.
-func (s *Store) exec(ctx context.Context, query string, args ...any) (int64, error) {
+func (s *adapter) exec(ctx context.Context, query string, args ...any) (int64, error) {
 	return execRows(ctx, s.write, query, args...)
 }
 
@@ -101,7 +111,7 @@ func (s *Store) exec(ctx context.Context, query string, args ...any) (int64, err
 // nil and rolling back on an error or panic. The pool has one connection, so
 // fn must use tx and never s.write or s.exec, which would block until the
 // context ends.
-func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+func (s *adapter) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -125,15 +135,7 @@ func errIfUnchanged(n int64, err error, what string) error {
 }
 
 // AppendEvent implements store.Events.
-func (s *Store) AppendEvent(ctx context.Context, e store.Event) (telemetryResult0 bool, telemetryErr error) {
-	if e.TraceParent == "" {
-		e.TraceParent, e.TraceState = telemetry.Capture(ctx)
-	}
-	ctx, op := telemetry.Start(ctx, "courier.store.AppendEvent")
-	defer func() { finishStore(op, telemetryErr) }()
-	if e.ID == "" || e.ReceivedAt.IsZero() {
-		return false, fmt.Errorf("append event %q: ID and ReceivedAt are required: %w", e.ID, store.ErrInvalid)
-	}
+func (s *adapter) AppendEvent(ctx context.Context, e store.Event) (bool, error) {
 	if e.Payload == nil {
 		e.Payload = []byte{} // a nil slice would bind as NULL
 	}
@@ -147,9 +149,7 @@ func (s *Store) AppendEvent(ctx context.Context, e store.Event) (telemetryResult
 }
 
 // GetEvent implements store.Events.
-func (s *Store) GetEvent(ctx context.Context, id string) (telemetryResult0 store.Event, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.GetEvent")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) GetEvent(ctx context.Context, id string) (store.Event, error) {
 	var e store.Event
 	var received, next int64
 	err := s.read.QueryRowContext(ctx, `SELECT id, kind, binding_key, payload, received_at, status, attempts,
@@ -166,12 +166,7 @@ func (s *Store) GetEvent(ctx context.Context, id string) (telemetryResult0 store
 }
 
 // SetEventStatus implements store.Events.
-func (s *Store) SetEventStatus(ctx context.Context, id string, status store.EventStatus, lastError string) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.SetEventStatus")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !status.Valid() {
-		return fmt.Errorf("set event %q status %q: %w", id, status, store.ErrInvalid)
-	}
+func (s *adapter) SetEventStatus(ctx context.Context, id string, status store.EventStatus, lastError string) error {
 	n, err := s.exec(ctx, `UPDATE events SET status = ?, last_error = ? WHERE id = ?`, string(status), lastError, id)
 	return errIfUnchanged(n, err, fmt.Sprintf("set event %q status", id))
 }
@@ -190,7 +185,7 @@ const (
 // the read that tells a missing row from a conflict share one transaction, so
 // the answer reflects the state the UPDATE saw. An outbox row's payload is
 // cleared in the same UPDATE: once the message exists, its text lives in Slack.
-func (s *Store) setMessageRef(ctx context.Context, table refTable, id, ref string) error {
+func (s *adapter) setMessageRef(ctx context.Context, table refTable, id, ref string) error {
 	set := "message_ref = ?"
 	if table == outboxRefs {
 		set += ", payload = ''"

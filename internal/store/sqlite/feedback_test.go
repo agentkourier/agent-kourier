@@ -12,7 +12,7 @@ func TestTheDocumentedDecisionQueryCountsInvestigationsByMajority(t *testing.T) 
 	s := openTemp(t)
 	wantRated, wantUseful := storetest.SeedDecisionVotes(t, s)
 	var rated, useful int
-	if err := s.read.QueryRowContext(t.Context(), storetest.DecisionSQL(t)).Scan(&rated, &useful); err != nil {
+	if err := s.a.read.QueryRowContext(t.Context(), storetest.DecisionSQL(t)).Scan(&rated, &useful); err != nil {
 		t.Fatal(err)
 	}
 	if rated != wantRated || useful != wantUseful {

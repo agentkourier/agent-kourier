@@ -9,18 +9,13 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // RecordVote implements store.Feedback. The person's row is read with FOR UPDATE and written in one transaction, so two
 // votes of one person are applied one after the other. A first vote that another transaction inserted just before has no row
 // to lock yet: the insert then does nothing, and the vote starts again from the read, which now finds the row.
-func (s *Store) RecordVote(ctx context.Context, v store.FeedbackVote) (previous store.Verdict, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.RecordVote")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(v.Key) || v.Turn == "" || v.User == "" || v.Binding == "" || v.Agent == "" || !v.Kind.Valid() || !v.Verdict.Valid() || !afterEpoch(v.At) {
-		return "", fmt.Errorf("record vote: the session, turn, user, Binding, agent, a kind, a verdict and a time after the Unix epoch are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) RecordVote(ctx context.Context, v store.FeedbackVote) (store.Verdict, error) {
+	var previous store.Verdict
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		for range 2 {
 			previous = ""
@@ -53,12 +48,8 @@ func (s *Store) RecordVote(ctx context.Context, v store.FeedbackVote) (previous 
 }
 
 // ListVotes implements store.Feedback.
-func (s *Store) ListVotes(ctx context.Context, key store.ConversationKey) (votes []store.FeedbackVote, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListVotes")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(key) {
-		return nil, fmt.Errorf("list votes %+v: the key is incomplete: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) ListVotes(ctx context.Context, key store.ConversationKey) ([]store.FeedbackVote, error) {
+	var votes []store.FeedbackVote
 	rows, err := s.pool.Query(ctx, `SELECT turn_id, user_id, binding, agent, alert_name, kind, verdict, first_at, voted_at FROM feedback
 		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 ORDER BY first_at, turn_id, user_id`, key.Connection, key.Channel, key.Thread)
 	if err != nil {

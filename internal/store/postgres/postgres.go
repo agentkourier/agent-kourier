@@ -3,7 +3,7 @@
 //
 // # Pool and transactions
 //
-// A pgx pool serves every call. Reads go straight to the pool. Every write goes through Store.inTx,
+// A pgx pool serves every call. Reads go straight to the pool. Every write goes through adapter.inTx,
 // the only function that opens a write transaction, so that the one rule H4-5 adds (check the
 // leader's epoch first, refuse a stale one) has one place to live. TestWritesGoThroughInTx holds the
 // package to it.
@@ -115,8 +115,24 @@ const defaultStatementTimeout = 30 * time.Second
 // names another.
 const applicationName = "agent-courier"
 
-// Store is a PostgreSQL-backed store.Store. It is safe for concurrent use.
+// Store is a PostgreSQL-backed store.Store. It is safe for concurrent use. It is the guarded store (store.Guarded: every
+// argument checked and every operation's telemetry recorded, once, for every backend, with the DSN's secrets scrubbed
+// from the errors) over the Postgres adapter, which is SQL, transactions and the epoch fence and nothing else. The adapter
+// is not reachable from outside the package, so that a caller cannot hold a store that skips the checks.
 type Store struct {
+	*store.Guarded
+	a *adapter
+}
+
+var _ store.Fenced = (*Store)(nil)
+
+// Lead takes the next epoch for holder and keeps it: from here the writes of this store are checked against it (see
+// store.Fenced and the adapter's Lead). An empty holder is store.ErrInvalid.
+func (s *Store) Lead(ctx context.Context, holder string) (int64, error) { return s.a.Lead(ctx, holder) }
+
+// adapter is the Postgres backend: the SQL of every operation, the transactions it runs in and the epoch fence. It
+// can rely on its arguments being legal and records no telemetry (see store.Guard).
+type adapter struct {
 	pool *pgxpool.Pool
 	red  redactor
 	// epoch is the number Lead was given, 0 before it: a store with none refuses writes.
@@ -126,7 +142,7 @@ type Store struct {
 	onDeposed func()
 }
 
-var _ store.Store = (*Store)(nil)
+var _ store.Adapter = (*adapter)(nil)
 
 // Option changes how Open sets up the pool.
 type Option func(*options)
@@ -218,7 +234,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 	if err != nil {
 		return nil, red.scrub(fmt.Errorf("open postgres store: %w", err))
 	}
-	s := &Store{pool: pool, red: red, onDeposed: o.onDeposed, deposed: prometheus.NewCounter(prometheus.CounterOpts{
+	s := &adapter{pool: pool, red: red, onDeposed: o.onDeposed, deposed: prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "courier_store_deposed_total", Help: "Writes the store refused because another replica has led since: its epoch was stale."})}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
@@ -228,7 +244,12 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 		pool.Close()
 		return nil, red.scrub(fmt.Errorf("open postgres store: %w", err))
 	}
-	return s, nil
+	return guard(s), nil
+}
+
+// guard returns the store that callers hold: the guarded store over a, whose errors lose the DSN's secrets (a's red).
+func guard(a *adapter) *Store {
+	return &Store{Guarded: store.Guard(a, store.WithScrub(a.red.scrub), store.WithNoRows(pgx.ErrNoRows)), a: a}
 }
 
 // millis formats a timeout as the milliseconds Postgres reads, or "" for none.
@@ -241,7 +262,7 @@ func millis(d time.Duration) string {
 
 // Close closes the pool, waiting for the calls in flight to give their connections back. It may be
 // called more than once.
-func (s *Store) Close() error {
+func (s *adapter) Close() error {
 	s.pool.Close()
 	return nil
 }
@@ -254,7 +275,7 @@ func (s *Store) Close() error {
 // hold the epoch row, and a writer that waits for a lock while it holds that row gives up after writeLockTimeout.
 //
 // An error that means the data is not a legal value (text Postgres cannot store) is store.ErrInvalid.
-func (s *Store) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+func (s *adapter) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
@@ -271,7 +292,7 @@ func (s *Store) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 }
 
 // exec runs one statement as a write transaction and reports the rows it changed.
-func (s *Store) exec(ctx context.Context, query string, args ...any) (int64, error) {
+func (s *adapter) exec(ctx context.Context, query string, args ...any) (int64, error) {
 	var n int64
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, query, args...)

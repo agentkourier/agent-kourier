@@ -8,19 +8,10 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // CreateOutbox implements store.Outbox.
-func (s *Store) CreateOutbox(ctx context.Context, o store.OutboxEntry) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.CreateOutbox")
-	defer func() { finishStore(op, telemetryErr) }()
-	if o.TraceParent == "" {
-		o.TraceParent, o.TraceState = telemetry.Capture(ctx)
-	}
-	if o.ID == "" || o.EventID == "" || o.Channel == "" || o.CreatedAt.IsZero() || !o.Role.Valid() {
-		return false, fmt.Errorf("create outbox %q: ID, EventID, a valid Role, Channel and CreatedAt are required: %w", o.ID, store.ErrInvalid)
-	}
+func (s *adapter) CreateOutbox(ctx context.Context, o store.OutboxEntry) (bool, error) {
 	n, err := s.exec(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at, payload, trace_parent, trace_state)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		o.ID, o.EventID, o.Role, o.Channel, o.Thread, ts(o.CreatedAt), o.Payload, o.TraceParent, o.TraceState)
@@ -31,12 +22,7 @@ func (s *Store) CreateOutbox(ctx context.Context, o store.OutboxEntry) (telemetr
 }
 
 // RecordMessageRef implements store.Outbox.
-func (s *Store) RecordMessageRef(ctx context.Context, id, ref string) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.RecordMessageRef")
-	defer func() { finishStore(op, telemetryErr) }()
-	if id == "" || ref == "" {
-		return fmt.Errorf("record message ref for outbox %q: ID and ref are required: %w", id, store.ErrInvalid)
-	}
+func (s *adapter) RecordMessageRef(ctx context.Context, id, ref string) error {
 	if err := s.setMessageRef(ctx, outboxRefs, id, ref); err != nil {
 		return fmt.Errorf("record message ref for outbox %q: %w", id, err)
 	}
@@ -61,9 +47,7 @@ func scanOutbox(r interface{ Scan(...any) error }) (store.OutboxEntry, error) {
 }
 
 // GetOutbox implements store.Outbox.
-func (s *Store) GetOutbox(ctx context.Context, id string) (telemetryResult0 store.OutboxEntry, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.GetOutbox")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) GetOutbox(ctx context.Context, id string) (store.OutboxEntry, error) {
 	o, err := scanOutbox(s.read.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.OutboxEntry{}, fmt.Errorf("get outbox %q: %w", id, store.ErrNotFound)
@@ -75,9 +59,7 @@ func (s *Store) GetOutbox(ctx context.Context, id string) (telemetryResult0 stor
 }
 
 // ListUnposted implements store.Outbox.
-func (s *Store) ListUnposted(ctx context.Context) (telemetryResult0 []store.OutboxEntry, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListUnposted")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) ListUnposted(ctx context.Context) ([]store.OutboxEntry, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE message_ref = '' AND abandoned_at = 0 ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list unposted outbox: %w", err)
@@ -97,17 +79,8 @@ func (s *Store) ListUnposted(ctx context.Context) (telemetryResult0 []store.Outb
 	return out, nil
 }
 
-// abandonTime reports whether t can be stored as a time of abandoning: a stored 0 means "not
-// abandoned", so the zero time and anything at or before the Unix epoch are refused.
-func abandonTime(t time.Time) bool { return !t.IsZero() && t.UnixNano() > 0 }
-
 // AbandonOutbox implements store.Outbox.
-func (s *Store) AbandonOutbox(ctx context.Context, id string, at time.Time) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.AbandonOutbox")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !abandonTime(at) {
-		return false, fmt.Errorf("abandon outbox %q at %v: the time must be after the Unix epoch: %w", id, at, store.ErrInvalid)
-	}
+func (s *adapter) AbandonOutbox(ctx context.Context, id string, at time.Time) (bool, error) {
 	var abandoned bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		n, err := execRows(ctx, tx, `UPDATE outbox SET abandoned_at = ?, payload = '' WHERE id = ? AND message_ref = '' AND abandoned_at = 0`, ts(at), id)
@@ -133,12 +106,7 @@ func (s *Store) AbandonOutbox(ctx context.Context, id string, at time.Time) (tel
 }
 
 // AbandonOutboxBefore implements store.Outbox.
-func (s *Store) AbandonOutboxBefore(ctx context.Context, before, at time.Time) (telemetryResult0 []string, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.AbandonOutboxBefore")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !abandonTime(before) || !abandonTime(at) {
-		return nil, fmt.Errorf("abandon old outbox rows (before %v, at %v): both times must be after the Unix epoch: %w", before, at, store.ErrInvalid)
-	}
+func (s *adapter) AbandonOutboxBefore(ctx context.Context, before, at time.Time) ([]string, error) {
 	var ids []string
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `UPDATE outbox SET abandoned_at = ?, payload = ''

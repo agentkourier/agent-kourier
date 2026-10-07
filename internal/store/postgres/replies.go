@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // EnqueueReply implements store.ReplyQueue.
@@ -19,15 +18,8 @@ import (
 // the reply that gets the next Sequence cannot start before the one before it is committed and shown,
 // and a reader that walks the queue with NextReplyAfter never sees a Sequence without every lower one.
 // A duplicate takes the lock too, and changes nothing.
-func (s *Store) EnqueueReply(ctx context.Context, r store.Reply) (enqueued bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.EnqueueReply")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if r.TraceParent == "" {
-		r.TraceParent, r.TraceState = telemetry.Capture(ctx)
-	}
-	if r.ID == "" || !validKey(r.Key) || r.UserID == "" || r.MessageRef == "" || r.EnqueuedAt.IsZero() {
-		return false, fmt.Errorf("enqueue reply %q: ID, key, UserID, MessageRef and EnqueuedAt are required: %w", r.ID, store.ErrInvalid)
-	}
+func (s *adapter) EnqueueReply(ctx context.Context, r store.Reply) (bool, error) {
+	var enqueued bool
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if err := lock(ctx, tx, lockReplyQueue, sessionLockKey(r.Key)); err != nil {
 			return err
@@ -45,12 +37,8 @@ func (s *Store) EnqueueReply(ctx context.Context, r store.Reply) (enqueued bool,
 }
 
 // HasReply implements store.ReplyQueue.
-func (s *Store) HasReply(ctx context.Context, id string) (found bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.HasReply")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if id == "" {
-		return false, fmt.Errorf("has reply: an ID is required: %w", store.ErrInvalid)
-	}
+func (s *adapter) HasReply(ctx context.Context, id string) (bool, error) {
+	var found bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM reply_queue WHERE id = $1)`, id).Scan(&found); err != nil {
 		return false, fmt.Errorf("has reply %q: %w", id, err)
 	}
@@ -58,23 +46,16 @@ func (s *Store) HasReply(ctx context.Context, id string) (found bool, telemetryE
 }
 
 // NextReply implements store.ReplyQueue.
-func (s *Store) NextReply(ctx context.Context, key store.ConversationKey) (reply store.Reply, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.NextReply")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+func (s *adapter) NextReply(ctx context.Context, key store.ConversationKey) (store.Reply, error) {
 	return s.nextReplyAfter(ctx, key, 0)
 }
 
 // NextReplyAfter implements store.ReplyQueue.
-func (s *Store) NextReplyAfter(ctx context.Context, key store.ConversationKey, after int64) (reply store.Reply, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.NextReplyAfter")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+func (s *adapter) NextReplyAfter(ctx context.Context, key store.ConversationKey, after int64) (store.Reply, error) {
 	return s.nextReplyAfter(ctx, key, after)
 }
 
-func (s *Store) nextReplyAfter(ctx context.Context, key store.ConversationKey, after int64) (store.Reply, error) {
-	if !validKey(key) || after < 0 {
-		return store.Reply{}, fmt.Errorf("next reply %+v: key is required: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) nextReplyAfter(ctx context.Context, key store.ConversationKey, after int64) (store.Reply, error) {
 	r := store.Reply{Key: key}
 	var enqueued time.Time
 	err := s.pool.QueryRow(ctx, `SELECT id, sequence, user_id, message_ts, text, enqueued_at, interaction_id, trace_parent, trace_state FROM reply_queue
@@ -91,12 +72,7 @@ func (s *Store) nextReplyAfter(ctx context.Context, key store.ConversationKey, a
 }
 
 // PreviousReply implements store.ReplyQueue.
-func (s *Store) PreviousReply(ctx context.Context, key store.ConversationKey, sequence int64) (reply store.Reply, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PreviousReply")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(key) || sequence < 1 {
-		return store.Reply{}, fmt.Errorf("previous reply %+v below %d: a key and a sequence from 1 are required: %w", key, sequence, store.ErrInvalid)
-	}
+func (s *adapter) PreviousReply(ctx context.Context, key store.ConversationKey, sequence int64) (store.Reply, error) {
 	r := store.Reply{Key: key}
 	var enqueued time.Time
 	err := s.pool.QueryRow(ctx, `SELECT id, sequence, user_id, message_ts, text, enqueued_at, interaction_id, trace_parent, trace_state FROM reply_queue
@@ -114,22 +90,13 @@ func (s *Store) PreviousReply(ctx context.Context, key store.ConversationKey, se
 
 // MarkReplyDelivered implements store.ReplyQueue. COALESCE keeps the first delivery time, which makes
 // a repeat a no-op that still matches the row.
-func (s *Store) MarkReplyDelivered(ctx context.Context, id string, at time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.MarkReplyDelivered")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if id == "" || at.IsZero() {
-		return fmt.Errorf("mark reply %q delivered: ID and time are required: %w", id, store.ErrInvalid)
-	}
+func (s *adapter) MarkReplyDelivered(ctx context.Context, id string, at time.Time) error {
 	n, err := s.exec(ctx, `UPDATE reply_queue SET delivered_at = COALESCE(delivered_at, $1), text = '' WHERE id = $2`, at, id)
 	return errIfUnchanged(n, err, fmt.Sprintf("mark reply %q delivered", id))
 }
 
 // ClaimReplyInteraction pins a queued answer to one question; retries cannot answer another.
-func (s *Store) ClaimReplyInteraction(ctx context.Context, id, interaction string) (telemetryErr error) {
-	defer func() { telemetryErr = s.red.scrub(telemetryErr) }()
-	if id == "" || interaction == "" {
-		return store.ErrInvalid
-	}
+func (s *adapter) ClaimReplyInteraction(ctx context.Context, id, interaction string) error {
 	n, err := s.exec(ctx, `UPDATE reply_queue SET interaction_id = $1 WHERE id = $2 AND (interaction_id = '' OR interaction_id = $1)`, interaction, id)
 	return errIfUnchanged(n, err, "claim reply interaction")
 }
@@ -137,12 +104,7 @@ func (s *Store) ClaimReplyInteraction(ctx context.Context, id, interaction strin
 // AbandonStrandedReplies implements store.ReplyQueue. The session test is on the thread's row: a thread
 // with no session has no runner that will ever send the reply, and one whose session records a task keeps
 // the reply behind that task.
-func (s *Store) AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (abandoned int, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.AbandonStrandedReplies")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if now.IsZero() || age <= 0 {
-		return 0, fmt.Errorf("abandon stranded replies: a time and a positive age are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error) {
 	n, err := s.exec(ctx, `UPDATE reply_queue SET delivered_at = $1, text = ''
 		WHERE delivered_at IS NULL AND enqueued_at <= $2
 		AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.connection = reply_queue.connection AND s.channel = reply_queue.channel

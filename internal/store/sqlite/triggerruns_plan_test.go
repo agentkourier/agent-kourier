@@ -43,7 +43,7 @@ func TestTriggerRunQueriesUseAnIndex(t *testing.T) {
 // queryPlan is the detail lines of the plan SQLite makes for the query.
 func queryPlan(t *testing.T, s *Store, query string, args []any) []string {
 	t.Helper()
-	rows, err := s.read.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
+	rows, err := s.a.read.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}

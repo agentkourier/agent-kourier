@@ -93,7 +93,7 @@ type AuditRetention interface {
 	// returns how many it deleted; a count below limit means nothing older is left. The caller runs it
 	// again while it returns limit, so that no single call holds the log for long (Postgres's statement
 	// timeout, SQLite's one writer). It is the only way an entry is removed: the log stays append-only
-	// to every other path of the application. before must not be zero and limit must be positive
+	// to every other path of the application. before must not be zero and limit must be 1 to MaxLimit
 	// (ErrInvalid otherwise). It writes no entry of its own.
 	PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error)
 }

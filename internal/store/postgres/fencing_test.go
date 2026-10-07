@@ -115,7 +115,7 @@ func TestStandbyRefusesWrites(t *testing.T) {
 	dsn, _, _ := freshSchema(t)
 	s := openStandbyAt(t, dsn)
 	hooked := false
-	s.onDeposed = func() { hooked = true }
+	s.a.onDeposed = func() { hooked = true }
 
 	err := s.AppendAudit(t.Context(), auditEntry("standby", t0))
 
@@ -165,7 +165,7 @@ func TestStaleEpochIsDeposed(t *testing.T) {
 	if err := a.RegisterMetrics(reg); err != nil {
 		t.Fatal(err)
 	}
-	if got := testutil.ToFloat64(a.deposed); got != 1 {
+	if got := testutil.ToFloat64(a.a.deposed); got != 1 {
 		t.Errorf("courier_store_deposed_total = %v; want 1", got)
 	}
 	if err := b.AppendAudit(t.Context(), auditEntry("the new leader", t0)); err != nil {
@@ -180,7 +180,7 @@ func TestStaleEpochIsDeposed(t *testing.T) {
 // only there: the pool's connection reads its own setting again once the transaction ends.
 func TestWriteTransactionSetsLockTimeoutAfterTheCheck(t *testing.T) {
 	s, _ := openFresh(t)
-	if err := s.inTx(t.Context(), func(tx pgx.Tx) error {
+	if err := s.a.inTx(t.Context(), func(tx pgx.Tx) error {
 		var got string
 		if err := tx.QueryRow(t.Context(), `SHOW lock_timeout`).Scan(&got); err != nil {
 			return err

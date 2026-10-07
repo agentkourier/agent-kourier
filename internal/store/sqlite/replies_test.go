@@ -25,7 +25,7 @@ func TestDeliveredReplyKeepsATombstoneWithoutItsText(t *testing.T) {
 	}
 	var text string
 	var delivered int64
-	if err := s.read.QueryRowContext(ctx, `SELECT text, delivered_at FROM reply_queue WHERE id = 'r1'`).Scan(&text, &delivered); err != nil || text != "" || delivered != ts(t0) {
+	if err := s.a.read.QueryRowContext(ctx, `SELECT text, delivered_at FROM reply_queue WHERE id = 'r1'`).Scan(&text, &delivered); err != nil || text != "" || delivered != ts(t0) {
 		t.Fatalf("tombstone = %q, %d, %v; want no text and the first delivery time", text, delivered, err)
 	}
 }

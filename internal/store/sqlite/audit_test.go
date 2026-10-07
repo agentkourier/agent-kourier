@@ -19,7 +19,7 @@ func TestAuditIsAppendOnlyInTheDatabase(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	for _, q := range []string{`UPDATE audit SET outcome = 'edited'`, `DELETE FROM audit`} {
-		if _, err := s.write.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "append-only") {
+		if _, err := s.a.write.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "append-only") {
 			t.Errorf("%q = %v; want the append-only error", q, err)
 		}
 	}
@@ -45,11 +45,11 @@ func TestAuditPurgeLeavesTheLogAppendOnly(t *testing.T) {
 		t.Fatalf("purge = %d, %v; want the one entry before the cutoff", n, err)
 	}
 	var markers int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM audit_purge`).Scan(&markers); err != nil || markers != 0 {
+	if err := s.a.read.QueryRowContext(ctx, `SELECT count(*) FROM audit_purge`).Scan(&markers); err != nil || markers != 0 {
 		t.Fatalf("markers after the purge = %d, %v; want none: the purge must not leave the table open", markers, err)
 	}
 	for _, q := range []string{`UPDATE audit SET outcome = 'edited'`, `DELETE FROM audit`} {
-		if _, err := s.write.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "append-only") {
+		if _, err := s.a.write.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "append-only") {
 			t.Errorf("%q after the purge = %v; want the append-only error", q, err)
 		}
 	}
@@ -60,21 +60,21 @@ func TestAuditPurgeLeavesTheLogAppendOnly(t *testing.T) {
 	if _, err := s.PurgeAudit(cancelled, t0.Add(24*time.Hour), 10); err == nil {
 		t.Error("a purge with an ended context succeeded")
 	}
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM audit_purge`).Scan(&markers); err != nil || markers != 0 {
+	if err := s.a.read.QueryRowContext(ctx, `SELECT count(*) FROM audit_purge`).Scan(&markers); err != nil || markers != 0 {
 		t.Fatalf("markers after a failed purge = %d, %v; want none", markers, err)
 	}
 
 	// A marker, even one that is not meant to be there, frees only the entries before its cutoff, and no update.
-	if _, err := s.write.ExecContext(ctx, `INSERT INTO audit_purge (cutoff) VALUES (?)`, ts(t0.Add(90*time.Minute))); err != nil {
+	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO audit_purge (cutoff) VALUES (?)`, ts(t0.Add(90*time.Minute))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE audit SET outcome = 'edited'`); err == nil || !strings.Contains(err.Error(), "append-only") {
+	if _, err := s.a.write.ExecContext(ctx, `UPDATE audit SET outcome = 'edited'`); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Errorf("update with a marker present = %v; want the append-only error", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM audit WHERE subject = 'c'`); err == nil || !strings.Contains(err.Error(), "append-only") {
+	if _, err := s.a.write.ExecContext(ctx, `DELETE FROM audit WHERE subject = 'c'`); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Errorf("delete of an entry after the marker's cutoff = %v; want the append-only error", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM audit WHERE subject = 'b'`); err != nil {
+	if _, err := s.a.write.ExecContext(ctx, `DELETE FROM audit WHERE subject = 'b'`); err != nil {
 		t.Errorf("delete of an entry before the marker's cutoff: %v", err)
 	}
 	if l, err := s.ListAudit(ctx, time.Time{}, 0, 10); err != nil || len(l) != 1 || l[0].Subject != "c" {

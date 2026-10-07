@@ -15,7 +15,7 @@ import (
 func TestOutboxRowWithoutAPayloadColumnReadsEmpty(t *testing.T) {
 	ctx := t.Context()
 	s := openTemp(t)
-	if _, err := s.write.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
+	if _, err := s.a.write.ExecContext(ctx, `INSERT INTO outbox (id, event_id, role, channel, thread_ts, created_at)
 		VALUES ('old', 'e', 'root', 'C1', '', 1)`); err != nil {
 		t.Fatalf("raw insert: %v", err)
 	}

@@ -10,19 +10,13 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-var _ store.SessionRetention = (*Store)(nil)
+var _ store.SessionRetention = (*adapter)(nil)
 
 // PurgeExpiredSessions implements store.SessionRetention. The candidates are chosen and everything is deleted in one
 // transaction on the single write connection, so no other statement runs between the choice and the delete.
-func (s *Store) PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (telemetryResult0 store.PurgedSessions, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PurgeExpiredSessions")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !h.Valid() || limit < 1 {
-		return store.PurgedSessions{}, fmt.Errorf("purge expired sessions: every horizon and a positive limit are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error) {
 	var out store.PurgedSessions
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		keys, err := expiredSessions(ctx, tx, h, limit)

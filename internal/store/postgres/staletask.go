@@ -3,25 +3,19 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-var _ store.StaleTasks = (*Store)(nil)
+var _ store.StaleTasks = (*adapter)(nil)
 
 // ListStaleTasks implements store.StaleTasks. It is a read, and so is not fenced.
-func (s *Store) ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) (stale []store.StaleTask, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListStaleTasks")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !h.Valid() || limit < 1 || limit > math.MaxInt32 {
-		return nil, fmt.Errorf("list stale tasks: every horizon and a limit of 1 to %d are required: %w", math.MaxInt32, store.ErrInvalid)
-	}
+func (s *adapter) ListStaleTasks(ctx context.Context, h store.SessionHorizons, limit int) ([]store.StaleTask, error) {
+	var stale []store.StaleTask
 	past, args := pastHorizon(h)
 	args = append(args, limit)
 	rows, err := s.pool.Query(ctx, `SELECT s.connection, s.channel, s.thread_ts, s.binding, s.context_id, s.task_id FROM sessions s
@@ -47,12 +41,8 @@ func (s *Store) ListStaleTasks(ctx context.Context, h store.SessionHorizons, lim
 // EndStaleTask implements store.StaleTasks. It is a write like any other: the epoch is checked first, so only the leader
 // ends a task. The session row is locked by the update that clears it, and the interactions are cancelled in the same
 // transaction, so a session that moved on is left whole.
-func (s *Store) EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (ended store.EndedStaleTask, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.EndStaleTask")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !h.Valid() || !validKey(t.Key) || t.TaskID == "" || now.IsZero() {
-		return store.EndedStaleTask{}, fmt.Errorf("end stale task %+v: every horizon, a complete key, a task and a time are required: %w", t.Key, store.ErrInvalid)
-	}
+func (s *adapter) EndStaleTask(ctx context.Context, h store.SessionHorizons, t store.StaleTask, now time.Time) (store.EndedStaleTask, error) {
+	var ended store.EndedStaleTask
 	past, args := pastHorizon(h)
 	n := len(args)
 	args = append(args, t.Key.Connection, t.Key.Channel, t.Key.Thread, t.TaskID)

@@ -93,10 +93,10 @@ func TestOpenSetsTheJournalModeAndForeignKeys(t *testing.T) {
 	s := openTemp(t)
 	var mode string
 	var fk int
-	if err := s.read.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
+	if err := s.a.read.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v; want wal", mode, err)
 	}
-	if err := s.write.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {
+	if err := s.a.write.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {
 		t.Fatalf("foreign_keys = %d, %v; want 1", fk, err)
 	}
 }

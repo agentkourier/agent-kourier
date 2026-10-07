@@ -110,7 +110,10 @@ the original carrier. Existing rows without trace context still work. Migration
 `0012_trace_context.sql` adds columns with empty defaults.
 
 Each turn attempt, unary A2A operation and delivery attempt has a finite span.
-Store operations create child spans only when a valid parent trace context exists,
+Every store operation is named `courier.store.<Method>` and is recorded once, at the
+store seam (`store.Guard`), whichever store is configured; neither store records its
+own, and an operation the seam refuses for an illegal argument ends with the outcome
+`invalid`. Store operations create child spans only when a valid parent trace context exists,
 including restored durable context. Background store polling without a parent records
 duration metrics without creating standalone traces. A recovered active task starts
 a new execution trace linked to its saved task trace. A human answer follows its

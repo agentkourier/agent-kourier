@@ -59,6 +59,6 @@ type SessionRetention interface {
 	// no one has settled, survives even if its session does not. Rows that belong to no session (a trigger thread, a
 	// trigger run, the audit log, an outbox row of a digest) are not its to delete.
 	//
-	// Every horizon must be set, and limit positive (ErrInvalid otherwise).
+	// Every horizon must be set, and limit 1 to MaxLimit (ErrInvalid otherwise).
 	PurgeExpiredSessions(ctx context.Context, h SessionHorizons, limit int) (PurgedSessions, error)
 }

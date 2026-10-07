@@ -7,20 +7,11 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // RecordPress implements store.Presses. The counts and the insert are one transaction on the
 // single write connection, so the limits hold under concurrent presses.
-func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (telemetryResult0 int64, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.RecordPress")
-	defer func() { finishStore(op, telemetryErr) }()
-	if p.TraceParent == "" {
-		p.TraceParent, p.TraceState = telemetry.Capture(ctx)
-	}
-	if p.InteractionID == "" || p.User == "" || p.Channel == "" || p.MessageRef == "" || p.PressedAt.IsZero() || limits.Total < 1 || limits.PerUser < 1 {
-		return 0, fmt.Errorf("record press: the interaction, user, message, time and positive limits are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
 	if p.Inputs == nil {
 		p.Inputs = []byte{} // a nil slice would bind as NULL
 	}
@@ -48,9 +39,7 @@ func (s *Store) RecordPress(ctx context.Context, p store.Press, limits store.Pre
 }
 
 // ListPresses implements store.Presses.
-func (s *Store) ListPresses(ctx context.Context) (telemetryResult0 []store.Press, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListPresses")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) ListPresses(ctx context.Context) ([]store.Press, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT seq, interaction_id, user_id, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
 		FROM interaction_presses ORDER BY seq`)
 	if err != nil {
@@ -74,9 +63,7 @@ func (s *Store) ListPresses(ctx context.Context) (telemetryResult0 []store.Press
 }
 
 // DeletePress implements store.Presses.
-func (s *Store) DeletePress(ctx context.Context, seq int64) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.DeletePress")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) DeletePress(ctx context.Context, seq int64) error {
 	if _, err := s.exec(ctx, `DELETE FROM interaction_presses WHERE seq = ?`, seq); err != nil {
 		return fmt.Errorf("delete press %d: %w", seq, err)
 	}
@@ -84,12 +71,7 @@ func (s *Store) DeletePress(ctx context.Context, seq int64) (telemetryErr error)
 }
 
 // PurgePresses implements store.Presses.
-func (s *Store) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (telemetryResult0 int, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PurgePresses")
-	defer func() { finishStore(op, telemetryErr) }()
-	if now.IsZero() || grace < 0 {
-		return 0, fmt.Errorf("purge presses: now and a grace of at least zero are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (int, error) {
 	n, err := s.exec(ctx, `DELETE FROM interaction_presses WHERE seq IN (
 		SELECT p.seq FROM interaction_presses p LEFT JOIN interactions i ON i.id = p.interaction_id
 		WHERE COALESCE(i.deadline, p.pressed_at) + ? <= ?)`, grace.Nanoseconds(), ts(now))
@@ -100,12 +82,7 @@ func (s *Store) PurgePresses(ctx context.Context, now time.Time, grace time.Dura
 }
 
 // PendingPresses implements store.Presses.
-func (s *Store) PendingPresses(ctx context.Context, interactionID string, before time.Time) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PendingPresses")
-	defer func() { finishStore(op, telemetryErr) }()
-	if interactionID == "" || before.IsZero() {
-		return false, fmt.Errorf("pending presses: an interaction and a time are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) PendingPresses(ctx context.Context, interactionID string, before time.Time) (bool, error) {
 	var found bool
 	err := s.read.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM interaction_presses WHERE interaction_id = ? AND pressed_at <= ?)
 		OR EXISTS (SELECT 1 FROM reply_queue WHERE interaction_id = ? AND delivered_at IS NULL AND enqueued_at <= ?)

@@ -23,7 +23,7 @@ func refused(err error) bool {
 func countAudit(t *testing.T, s *Store) int {
 	t.Helper()
 	var n int
-	if err := s.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM audit`).Scan(&n); err != nil {
+	if err := s.a.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM audit`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -49,7 +49,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 		"delete":   `DELETE FROM audit`,
 		"truncate": `TRUNCATE audit`,
 	} {
-		if _, err := s.pool.Exec(ctx, sql); !refused(err) {
+		if _, err := s.a.pool.Exec(ctx, sql); !refused(err) {
 			t.Errorf("%s = %v; want the trigger's refusal", name, err)
 		}
 	}
@@ -59,7 +59,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 
 	// The setting that lets the purge delete is not a way to change an entry, and is gone after the purge.
 	for name, sql := range map[string]string{"update": `UPDATE audit SET outcome = 'changed'`, "truncate": `TRUNCATE audit`} {
-		tx, err := s.pool.Begin(ctx)
+		tx, err := s.a.pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 	}
 
 	var purged int64
-	if err := s.pool.QueryRow(ctx, `SELECT courier_audit_purge($1)`, old.Add(24*time.Hour)).Scan(&purged); err != nil {
+	if err := s.a.pool.QueryRow(ctx, `SELECT courier_audit_purge($1)`, old.Add(24*time.Hour)).Scan(&purged); err != nil {
 		t.Fatalf("courier_audit_purge: %v", err)
 	}
 	if purged != 2 {
@@ -83,7 +83,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 	if err != nil || len(l) != 1 || l[0].Subject != "c" {
 		t.Errorf("entries after the purge = %+v, %v; want the recent one", l, err)
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM audit`); !refused(err) {
+	if _, err := s.a.pool.Exec(ctx, `DELETE FROM audit`); !refused(err) {
 		t.Errorf("delete after the purge = %v; want the trigger's refusal: the purge must not leave the table open", err)
 	}
 
@@ -120,7 +120,7 @@ func TestAuditPurgeInBatchesLeavesTheLogAppendOnly(t *testing.T) {
 	if err := s.AppendAudit(ctx, auditEntry("f", old)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM audit`); !refused(err) {
+	if _, err := s.a.pool.Exec(ctx, `DELETE FROM audit`); !refused(err) {
 		t.Errorf("delete after the batched purge = %v; want the trigger's refusal", err)
 	}
 	if _, err := s.PurgeAudit(ctx, time.Time{}, 1); !errors.Is(err, store.ErrInvalid) {

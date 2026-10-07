@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 const interactionCols = `id, connection, channel, thread_ts, task_id, kind, state, request, message_ref,
@@ -34,16 +33,7 @@ func scanInteraction(row interface{ Scan(...any) error }) (store.Interaction, er
 }
 
 // CreateInteraction implements store.Interactions.
-func (s *Store) CreateInteraction(ctx context.Context, i store.Interaction) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.CreateInteraction")
-	defer func() { finishStore(op, telemetryErr) }()
-	if i.TraceParent == "" {
-		i.TraceParent, i.TraceState = telemetry.Capture(ctx)
-	}
-	if i.ID == "" || !validKey(i.Key) || i.TaskID == "" || !i.Kind.Valid() ||
-		i.CreatedAt.IsZero() || !i.Deadline.After(i.CreatedAt) {
-		return false, fmt.Errorf("create interaction %q: ID, key, TaskID, Kind, CreatedAt and a later Deadline are required: %w", i.ID, store.ErrInvalid)
-	}
+func (s *adapter) CreateInteraction(ctx context.Context, i store.Interaction) (bool, error) {
 	if i.Request == nil {
 		i.Request = []byte{} // a nil slice would bind as NULL
 	}
@@ -58,9 +48,7 @@ func (s *Store) CreateInteraction(ctx context.Context, i store.Interaction) (tel
 }
 
 // GetInteraction implements store.Interactions.
-func (s *Store) GetInteraction(ctx context.Context, id string) (telemetryResult0 store.Interaction, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.GetInteraction")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) GetInteraction(ctx context.Context, id string) (store.Interaction, error) {
 	i, err := scanInteraction(s.read.QueryRowContext(ctx, `SELECT `+interactionCols+` FROM interactions WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Interaction{}, fmt.Errorf("get interaction %q: %w", id, store.ErrNotFound)
@@ -72,12 +60,7 @@ func (s *Store) GetInteraction(ctx context.Context, id string) (telemetryResult0
 }
 
 // PendingTextQuestion implements store.Interactions. interactions_thread serves the lookup.
-func (s *Store) PendingTextQuestion(ctx context.Context, key store.ConversationKey) (telemetryResult0 store.Interaction, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PendingTextQuestion")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !validKey(key) {
-		return store.Interaction{}, fmt.Errorf("pending text question %+v: the key is required: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) PendingTextQuestion(ctx context.Context, key store.ConversationKey) (store.Interaction, error) {
 	i, err := scanInteraction(s.read.QueryRowContext(ctx, `SELECT `+interactionCols+` FROM interactions
 		WHERE connection = ? AND channel = ? AND thread_ts = ? AND state = 'pending' AND text_replies = 1
 		ORDER BY created_at DESC, id DESC LIMIT 1`, key.Connection, key.Channel, key.Thread))
@@ -91,12 +74,7 @@ func (s *Store) PendingTextQuestion(ctx context.Context, key store.ConversationK
 }
 
 // ListDueInteractions implements store.Interactions.
-func (s *Store) ListDueInteractions(ctx context.Context, now time.Time) (telemetryResult0 []store.Interaction, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListDueInteractions")
-	defer func() { finishStore(op, telemetryErr) }()
-	if now.IsZero() {
-		return nil, fmt.Errorf("list due interactions: now is required: %w", store.ErrInvalid)
-	}
+func (s *adapter) ListDueInteractions(ctx context.Context, now time.Time) ([]store.Interaction, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT `+interactionCols+` FROM interactions
 		WHERE state = 'pending' AND deadline <= ? ORDER BY deadline, id`, ts(now))
 	if err != nil {
@@ -118,12 +96,7 @@ func (s *Store) ListDueInteractions(ctx context.Context, now time.Time) (telemet
 }
 
 // ListDecidedInteractions implements store.Interactions.
-func (s *Store) ListDecidedInteractions(ctx context.Context, since time.Time) (telemetryResult0 []store.Interaction, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListDecidedInteractions")
-	defer func() { finishStore(op, telemetryErr) }()
-	if since.IsZero() {
-		return nil, fmt.Errorf("list decided interactions: since is required: %w", store.ErrInvalid)
-	}
+func (s *adapter) ListDecidedInteractions(ctx context.Context, since time.Time) ([]store.Interaction, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT `+interactionCols+` FROM interactions
 		WHERE state IN ('answered', 'timed_out', 'cancelled') AND decided_at >= ? ORDER BY decided_at, id`, ts(since))
 	if err != nil {
@@ -146,12 +119,7 @@ func (s *Store) ListDecidedInteractions(ctx context.Context, since time.Time) (t
 
 // ClearSettledInteractions implements store.Interactions. A cleared row has empty blobs, so the
 // length test is what keeps a second sweep from counting it again.
-func (s *Store) ClearSettledInteractions(ctx context.Context, now time.Time, grace, undeliveredGrace time.Duration) (telemetryResult0 int, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ClearSettledInteractions")
-	defer func() { finishStore(op, telemetryErr) }()
-	if now.IsZero() || grace < 0 || undeliveredGrace < grace {
-		return 0, fmt.Errorf("clear settled interactions: now, a grace of at least zero and an undelivered grace of at least the grace are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) ClearSettledInteractions(ctx context.Context, now time.Time, grace, undeliveredGrace time.Duration) (int, error) {
 	n, err := s.exec(ctx, `UPDATE interactions SET request = x'', answer = x''
 		WHERE state <> 'pending' AND decided_at > 0 AND (length(request) > 0 OR length(answer) > 0)
 		AND decided_at <= ? AND (state <> 'answered' OR delivered_at > 0 OR decided_at <= ?)`,

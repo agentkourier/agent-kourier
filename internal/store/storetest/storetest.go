@@ -10,6 +10,10 @@
 // A store may refuse text that it cannot store (a NUL, or bytes that are not valid UTF-8, which Postgres text
 // does not hold) with store.ErrInvalid; no test here depends on one being stored. IDs and keys are otherwise compared byte for byte.
 //
+// An implementation is run behind store.Guard, as every backend is used: the checks of arguments are the guard's,
+// not the backend's, so a bare backend is not held to them. The guard's own table of illegal arguments is in package
+// store; the cases here pin what the pair, guard and backend, answers.
+//
 // Implementation-specific tests (migrations, pragmas, query plans, a database trigger, file
 // handling) stay with the implementation: they say how a store keeps its promises, not what they are.
 package storetest
@@ -57,6 +61,8 @@ func Run(t *testing.T, open func(t *testing.T) Instance) {
 		{"Audit", su.audit},
 		{"Retention", su.retention},
 		{"StaleTasks", su.staleTasks},
+		{"Limits", su.limits},
+		{"Times", su.times},
 		{"TriggerThreads", su.triggerThreads},
 		{"TriggerRuns", su.triggerRuns},
 		{"Feedback", su.feedback},

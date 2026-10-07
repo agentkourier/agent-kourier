@@ -12,7 +12,7 @@ import (
 func show(t *testing.T, s *Store, setting string) string {
 	t.Helper()
 	var v string
-	if err := s.pool.QueryRow(t.Context(), `SHOW `+setting).Scan(&v); err != nil {
+	if err := s.a.pool.QueryRow(t.Context(), `SHOW `+setting).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
 	return v
@@ -51,7 +51,7 @@ func TestTimeoutsAreSetOnEveryConnection(t *testing.T) {
 func TestIdleTransactionIsEndedAndItsLockReleased(t *testing.T) {
 	s, _ := openFresh(t, WithIdleInTxTimeout(time.Second))
 	ctx := t.Context()
-	zombie, err := s.pool.Begin(ctx)
+	zombie, err := s.a.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

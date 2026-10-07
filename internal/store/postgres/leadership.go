@@ -32,13 +32,11 @@ const (
 	takeStatementTimeout = 6 * time.Second
 )
 
-var _ store.Fenced = (*Store)(nil)
-
 // Lead takes the next epoch for holder and keeps it: from here the store's writes are checked against it (see
 // store.Fenced). It is one attempt, a transaction that updates the one row of leadership under takeLockTimeout and
 // takeStatementTimeout; a lock timeout is an error the caller retries. It queues for a lock on the table before it
 // updates the row, so that a leader that is deposed but keeps writing cannot hold the takeover back indefinitely.
-func (s *Store) Lead(ctx context.Context, holder string) (int64, error) {
+func (s *adapter) Lead(ctx context.Context, holder string) (int64, error) {
 	if holder == "" {
 		return 0, fmt.Errorf("lead: %w: the holder is empty", store.ErrInvalid)
 	}
@@ -79,7 +77,7 @@ func (s *Store) Lead(ctx context.Context, holder string) (int64, error) {
 // checkEpoch is the first statement of every write transaction. It reads the leadership row FOR SHARE, so that the
 // new leader's update waits for this transaction to end: a write that passes the check commits before the epoch can
 // move, and every write after the move fails the check. A store with no epoch, a standby's, refuses without asking.
-func (s *Store) checkEpoch(ctx context.Context, tx pgx.Tx) error {
+func (s *adapter) checkEpoch(ctx context.Context, tx pgx.Tx) error {
 	mine := s.epoch.Load()
 	if mine == 0 {
 		return fmt.Errorf("%w: this store holds no epoch, so it is not the leader", store.ErrDeposed)

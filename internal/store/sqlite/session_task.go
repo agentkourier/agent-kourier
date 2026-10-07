@@ -9,12 +9,7 @@ import (
 )
 
 // SetSessionTask implements store.SessionTasks.
-func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, contextID, taskID string, turn store.TaskTurn) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.SetSessionTask")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !validKey(key) {
-		return fmt.Errorf("set session task %+v: the key is incomplete: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) SetSessionTask(ctx context.Context, key store.ConversationKey, contextID, taskID string, turn store.TaskTurn) error {
 	parent, state := telemetry.Capture(ctx)
 	turnID, turnUser, turnTask := turn.ID, turn.User, taskID
 	if taskID == "" || turnID == "" { // no task, no turn; and a turn is recorded for the task it is given with
@@ -27,12 +22,7 @@ func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, c
 }
 
 // ResetSession implements store.SessionTasks.
-func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ResetSession")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !validKey(key) {
-		return fmt.Errorf("reset session %+v: the key is incomplete: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) ResetSession(ctx context.Context, key store.ConversationKey) error {
 	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = '', turn_id = '', turn_user = '', turn_task = ''
 		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("reset session %+v", key))

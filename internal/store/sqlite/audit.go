@@ -7,20 +7,11 @@ import (
 	"math"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
-
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // AppendAudit implements store.Audit.
-func (s *Store) AppendAudit(ctx context.Context, e store.AuditEntry) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.AppendAudit")
-	defer func() { finishStore(op, telemetryErr) }()
-	e = e.Redacted()
-	if !e.Kind.Valid() || e.At.IsZero() || e.Subject == "" || e.Outcome == "" || len(e.Outcome) > store.MaxAuditOutcome {
-		return fmt.Errorf("append audit %q: valid Kind, At, Subject and an Outcome of 1 to %d bytes are required: %w",
-			e.Kind, store.MaxAuditOutcome, store.ErrInvalid)
-	}
+func (s *adapter) AppendAudit(ctx context.Context, e store.AuditEntry) error {
 	if _, err := s.exec(ctx, `INSERT INTO audit (at, kind, user_id, email, identity, binding, subject, outcome)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ts(e.At), string(e.Kind), e.User, e.Email, e.Identity, e.Binding, e.Subject, e.Outcome); err != nil {
 		return fmt.Errorf("append audit %q: %w", e.Kind, err)
@@ -29,12 +20,7 @@ func (s *Store) AppendAudit(ctx context.Context, e store.AuditEntry) (telemetryE
 }
 
 // ListAudit implements store.Audit.
-func (s *Store) ListAudit(ctx context.Context, since time.Time, afterSeq int64, limit int) (telemetryResult0 []store.AuditEntry, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListAudit")
-	defer func() { finishStore(op, telemetryErr) }()
-	if limit < 1 || limit > 1000 {
-		return nil, fmt.Errorf("list audit: limit %d outside 1 to 1000: %w", limit, store.ErrInvalid)
-	}
+func (s *adapter) ListAudit(ctx context.Context, since time.Time, afterSeq int64, limit int) ([]store.AuditEntry, error) {
 	from := int64(math.MinInt64)
 	if !since.IsZero() {
 		from = ts(since)
@@ -64,12 +50,7 @@ func (s *Store) ListAudit(ctx context.Context, since time.Time, afterSeq int64, 
 // PurgeAudit implements store.AuditRetention. The delete trigger of the audit table (migration 0020) lets a
 // DELETE through only while audit_purge has a row for it, so the marker goes in, the batch out and the marker
 // away again in one transaction; the single write connection keeps every other writer from seeing it.
-func (s *Store) PurgeAudit(ctx context.Context, before time.Time, limit int) (telemetryResult0 int, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PurgeAudit")
-	defer func() { finishStore(op, telemetryErr) }()
-	if before.IsZero() || limit < 1 {
-		return 0, fmt.Errorf("purge audit: a cutoff and a positive limit are required: %w", store.ErrInvalid)
-	}
+func (s *adapter) PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error) {
 	var purged int64
 	err := s.inTx(ctx, func(tx *sql.Tx) (err error) {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO audit_purge (cutoff) VALUES (?)`, ts(before)); err != nil {

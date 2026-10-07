@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // triggerTime reports whether t can be stored as one of a trigger thread's times: a stored 0 in closed_at
@@ -37,12 +36,7 @@ func scanTriggerThread(r interface{ Scan(...any) error }) (store.TriggerThread, 
 // OpenTriggerThread implements store.TriggerThreads. The upsert's WHERE is the rule for replacing a row, and
 // the write pool has one connection, so two starts of a key cannot both pass it. A new row has cooldown_until 0,
 // which is a turn that has not started (MarkTriggerStarted).
-func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread, stale store.TriggerStale) (telemetryResult0 store.TriggerThread, telemetryResult1 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.OpenTriggerThread")
-	defer func() { finishStore(op, telemetryErr) }()
-	if t.Binding == "" || t.KeyHash == "" || t.Thread == "" || !triggerTime(t.Opened) {
-		return store.TriggerThread{}, false, fmt.Errorf("open trigger thread of %q: the Binding, key hash, thread and an opening time after the Unix epoch are required: %w", t.Binding, store.ErrInvalid)
-	}
+func (s *adapter) OpenTriggerThread(ctx context.Context, t store.TriggerThread, stale store.TriggerStale) (store.TriggerThread, bool, error) {
 	var unstarted, idle int64 // no row was opened or seen before 0
 	if triggerTime(stale.Unstarted) {
 		unstarted = ts(stale.Unstarted)
@@ -74,12 +68,7 @@ func (s *Store) OpenTriggerThread(ctx context.Context, t store.TriggerThread, st
 }
 
 // MarkTriggerStarted implements store.TriggerThreads.
-func (s *Store) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, cooldownUntil time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.MarkTriggerStarted")
-	defer func() { finishStore(op, telemetryErr) }()
-	if binding == "" || keyHash == "" || thread == "" || !triggerTime(cooldownUntil) {
-		return fmt.Errorf("mark trigger thread of %q started: the Binding, key hash, thread and a cooldown end after the Unix epoch are required: %w", binding, store.ErrInvalid)
-	}
+func (s *adapter) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, cooldownUntil time.Time) error {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		n, err := execRows(ctx, tx, `UPDATE trigger_threads SET cooldown_until = ? WHERE binding = ? AND key_hash = ? AND thread = ?`, ts(cooldownUntil), binding, keyHash, thread)
 		if err != nil || n > 0 {
@@ -101,12 +90,7 @@ func (s *Store) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread
 }
 
 // ReleaseTriggerThread implements store.TriggerThreads.
-func (s *Store) ReleaseTriggerThread(ctx context.Context, binding, keyHash, thread string) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ReleaseTriggerThread")
-	defer func() { finishStore(op, telemetryErr) }()
-	if binding == "" || keyHash == "" || thread == "" {
-		return false, fmt.Errorf("release trigger thread of %q: the Binding, key hash and thread are required: %w", binding, store.ErrInvalid)
-	}
+func (s *adapter) ReleaseTriggerThread(ctx context.Context, binding, keyHash, thread string) (bool, error) {
 	n, err := s.exec(ctx, `DELETE FROM trigger_threads WHERE binding = ? AND key_hash = ? AND thread = ? AND cooldown_until = 0`, binding, keyHash, thread)
 	if err != nil {
 		return false, fmt.Errorf("release trigger thread of %q: %w", binding, err)
@@ -115,12 +99,7 @@ func (s *Store) ReleaseTriggerThread(ctx context.Context, binding, keyHash, thre
 }
 
 // GetTriggerThread implements store.TriggerThreads.
-func (s *Store) GetTriggerThread(ctx context.Context, binding, keyHash string) (telemetryResult0 store.TriggerThread, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.GetTriggerThread")
-	defer func() { finishStore(op, telemetryErr) }()
-	if binding == "" || keyHash == "" {
-		return store.TriggerThread{}, fmt.Errorf("get trigger thread of %q: the Binding and key hash are required: %w", binding, store.ErrInvalid)
-	}
+func (s *adapter) GetTriggerThread(ctx context.Context, binding, keyHash string) (store.TriggerThread, error) {
 	t, err := scanTriggerThread(s.read.QueryRowContext(ctx, `SELECT `+triggerThreadColumns+` FROM trigger_threads WHERE binding = ? AND key_hash = ?`, binding, keyHash))
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.TriggerThread{}, fmt.Errorf("get trigger thread of %q: %w", binding, store.ErrNotFound)
@@ -132,23 +111,13 @@ func (s *Store) GetTriggerThread(ctx context.Context, binding, keyHash string) (
 }
 
 // ReopenTriggerThread implements store.TriggerThreads.
-func (s *Store) ReopenTriggerThread(ctx context.Context, binding, keyHash string, at time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ReopenTriggerThread")
-	defer func() { finishStore(op, telemetryErr) }()
-	if binding == "" || keyHash == "" || !triggerTime(at) {
-		return fmt.Errorf("reopen trigger thread of %q: the Binding, key hash and a time after the Unix epoch are required: %w", binding, store.ErrInvalid)
-	}
+func (s *adapter) ReopenTriggerThread(ctx context.Context, binding, keyHash string, at time.Time) error {
 	n, err := s.exec(ctx, `UPDATE trigger_threads SET last_seen = MAX(last_seen, ?), closed_at = 0 WHERE binding = ? AND key_hash = ?`, ts(at), binding, keyHash)
 	return errIfUnchanged(n, err, fmt.Sprintf("reopen trigger thread of %q", binding))
 }
 
 // CloseTriggerThread implements store.TriggerThreads.
-func (s *Store) CloseTriggerThread(ctx context.Context, binding, keyHash string, at time.Time) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.CloseTriggerThread")
-	defer func() { finishStore(op, telemetryErr) }()
-	if binding == "" || keyHash == "" || !triggerTime(at) {
-		return false, fmt.Errorf("close trigger thread of %q: the Binding, key hash and a time after the Unix epoch are required: %w", binding, store.ErrInvalid)
-	}
+func (s *adapter) CloseTriggerThread(ctx context.Context, binding, keyHash string, at time.Time) (bool, error) {
 	var closed bool
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		n, err := execRows(ctx, tx, `UPDATE trigger_threads SET closed_at = ?, last_seen = MAX(last_seen, ?) WHERE binding = ? AND key_hash = ? AND closed_at = 0`, ts(at), ts(at), binding, keyHash)
@@ -172,12 +141,7 @@ func (s *Store) CloseTriggerThread(ctx context.Context, binding, keyHash string,
 }
 
 // PurgeTriggerThreads implements store.TriggerThreads.
-func (s *Store) PurgeTriggerThreads(ctx context.Context, now, idleBefore time.Time) (telemetryResult0 int, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PurgeTriggerThreads")
-	defer func() { finishStore(op, telemetryErr) }()
-	if !triggerTime(now) {
-		return 0, fmt.Errorf("purge trigger threads: the time must be after the Unix epoch: %w", store.ErrInvalid)
-	}
+func (s *adapter) PurgeTriggerThreads(ctx context.Context, now, idleBefore time.Time) (int, error) {
 	var idle int64 // no row was seen before 0
 	if triggerTime(idleBefore) {
 		idle = ts(idleBefore)

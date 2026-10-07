@@ -3,12 +3,20 @@
 // The interfaces speak in domain operations, never SQL, so a Postgres
 // implementation (spec D15) can sit beside the default SQLite one.
 //
+// The policy of the store is written once, above the backends: Guard wraps a backend (an Adapter) so that every
+// argument is checked and every operation's telemetry is recorded in one place. A backend renders SQL, runs its
+// transactions and, for Postgres, fences its writes with an epoch; it can rely on its arguments being legal. The
+// stores that Open of each backend returns are guarded.
+//
 // What every implementation does beyond what a method's comment says (package storetest holds each
 // one to all of it):
 //   - Times are kept to the microsecond (what Postgres keeps; a finer time is not promised) and
 //     returned in UTC; a time that was never set is the zero Time.
 //   - Text is compared byte for byte, so IDs and keys that differ in case or in spaces are different.
 //     Where a list orders rows, rows that tie come in any order.
+//   - A time that is set, where unset reads as 0 in SQLite (outbox abandonment, trigger runs and threads, votes), is after the Unix epoch and
+//     no later than time.Unix(0, math.MaxInt64), the latest time SQLite keeps; a call with another is ErrInvalid on either store.
+//   - A limit (the size of a batch) is 1 to MaxLimit, and a call with another is ErrInvalid, whichever backend holds the data.
 //   - A call whose context has ended returns an error wrapping the context's, and changes nothing.
 //   - A row that carries TraceParent and TraceState keeps the value the caller gave; with none it
 //     records the trace of the call's context. A duplicate insert changes nothing, so it leaves what

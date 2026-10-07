@@ -4,15 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
-
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // ListActiveSessions implements store.Recovery.
-func (s *Store) ListActiveSessions(ctx context.Context) (telemetryResult0 []store.Session, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListActiveSessions")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) ListActiveSessions(ctx context.Context) ([]store.Session, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state
 		FROM sessions WHERE task_id != '' ORDER BY last_activity, connection, channel, thread_ts`)
 	if err != nil {
@@ -36,9 +32,7 @@ func (s *Store) ListActiveSessions(ctx context.Context) (telemetryResult0 []stor
 }
 
 // ListQueuedSessions implements store.Recovery.
-func (s *Store) ListQueuedSessions(ctx context.Context) (telemetryResult0 []store.ConversationKey, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListQueuedSessions")
-	defer func() { finishStore(op, telemetryErr) }()
+func (s *adapter) ListQueuedSessions(ctx context.Context) ([]store.ConversationKey, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT connection, channel, thread_ts FROM reply_queue
 		WHERE delivered_at IS NULL GROUP BY connection, channel, thread_ts ORDER BY MIN(sequence)`)
 	if err != nil {

@@ -4,17 +4,15 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-var _ store.SessionRetention = (*Store)(nil)
+var _ store.SessionRetention = (*adapter)(nil)
 
 // settledOutbox is the outbox rows that are done with: posted, or given up on. A row that is neither may still be
 // delivered, and is not the sweep's to delete (it holds its session back).
@@ -24,12 +22,7 @@ const settledOutbox = `(o.message_ref <> '' OR o.abandoned_at IS NOT NULL)`
 // only the leader purges. The sessions are chosen and locked (a session that a writer holds is left for the next call)
 // and everything is deleted in one transaction, a statement for each table over all the keys, so a batch is a few
 // statements and none is longer than the statement timeout allows for the batch the caller sized.
-func (s *Store) PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (purged store.PurgedSessions, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.PurgeExpiredSessions")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !h.Valid() || limit < 1 || limit > math.MaxInt32 {
-		return store.PurgedSessions{}, fmt.Errorf("purge expired sessions: every horizon and a limit of 1 to %d are required: %w", math.MaxInt32, store.ErrInvalid)
-	}
+func (s *adapter) PurgeExpiredSessions(ctx context.Context, h store.SessionHorizons, limit int) (store.PurgedSessions, error) {
 	var out store.PurgedSessions
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		conns, channels, threads, err := expiredSessions(ctx, tx, h, limit)

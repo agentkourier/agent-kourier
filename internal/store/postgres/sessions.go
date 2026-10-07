@@ -12,20 +12,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
-func validKey(k store.ConversationKey) bool {
-	return k.Connection != "" && k.Channel != "" && k.Thread != ""
-}
-
 // UpsertSession implements store.Sessions.
-func (s *Store) UpsertSession(ctx context.Context, sess store.Session) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.UpsertSession")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if sess.TraceParent == "" {
-		sess.TraceParent, sess.TraceState = telemetry.Capture(ctx)
-	}
-	if !validKey(sess.Key) || sess.Binding == "" || sess.LastActivity.IsZero() {
-		return fmt.Errorf("upsert session %+v: key, Binding and LastActivity are required: %w", sess.Key, store.ErrInvalid)
-	}
+func (s *adapter) UpsertSession(ctx context.Context, sess store.Session) error {
 	_, err := s.exec(ctx, `INSERT INTO sessions (connection, channel, thread_ts, context_id, task_id, binding, alert_name, agent_name, last_activity, trace_parent, trace_state)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (connection, channel, thread_ts) DO UPDATE SET
@@ -41,12 +29,7 @@ func (s *Store) UpsertSession(ctx context.Context, sess store.Session) (telemetr
 }
 
 // GetSession implements store.Sessions.
-func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (session store.Session, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.GetSession")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(key) || ttl <= 0 || now.IsZero() {
-		return store.Session{}, fmt.Errorf("get session %+v: key, positive ttl and now are required: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (store.Session, error) {
 	sess := store.Session{Key: key}
 	var last time.Time
 	err := s.pool.QueryRow(ctx, `SELECT context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state FROM sessions
@@ -66,24 +49,14 @@ func (s *Store) GetSession(ctx context.Context, key store.ConversationKey, ttl t
 }
 
 // TouchSession implements store.Sessions.
-func (s *Store) TouchSession(ctx context.Context, key store.ConversationKey, at time.Time) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.TouchSession")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(key) || at.IsZero() {
-		return fmt.Errorf("touch session %+v: key and time are required: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) TouchSession(ctx context.Context, key store.ConversationKey, at time.Time) error {
 	n, err := s.exec(ctx, `UPDATE sessions SET last_activity = $1 WHERE connection = $2 AND channel = $3 AND thread_ts = $4`,
 		at, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("touch session %+v", key))
 }
 
 // SetSessionTask implements store.SessionTasks.
-func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, contextID, taskID string, turn store.TaskTurn) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.SetSessionTask")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(key) {
-		return fmt.Errorf("set session task %+v: the key is incomplete: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) SetSessionTask(ctx context.Context, key store.ConversationKey, contextID, taskID string, turn store.TaskTurn) error {
 	parent, state := telemetry.Capture(ctx)
 	turnID, turnUser, turnTask := turn.ID, turn.User, taskID
 	if taskID == "" || turnID == "" { // no task, no turn; and a turn is recorded for the task it is given with
@@ -99,21 +72,14 @@ func (s *Store) SetSessionTask(ctx context.Context, key store.ConversationKey, c
 }
 
 // ResetSession implements store.SessionTasks.
-func (s *Store) ResetSession(ctx context.Context, key store.ConversationKey) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ResetSession")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
-	if !validKey(key) {
-		return fmt.Errorf("reset session %+v: the key is incomplete: %w", key, store.ErrInvalid)
-	}
+func (s *adapter) ResetSession(ctx context.Context, key store.ConversationKey) error {
 	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = '', turn_id = '', turn_user = '', turn_task = ''
 		WHERE connection = $1 AND channel = $2 AND thread_ts = $3`, key.Connection, key.Channel, key.Thread)
 	return errIfUnchanged(n, err, fmt.Sprintf("reset session %+v", key))
 }
 
 // ListActiveSessions implements store.Recovery.
-func (s *Store) ListActiveSessions(ctx context.Context) (sessions []store.Session, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListActiveSessions")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+func (s *adapter) ListActiveSessions(ctx context.Context) ([]store.Session, error) {
 	rows, err := s.pool.Query(ctx, `SELECT connection, channel, thread_ts, context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state
 		FROM sessions WHERE task_id <> '' ORDER BY last_activity, connection, channel, thread_ts`)
 	if err != nil {
@@ -137,9 +103,7 @@ func (s *Store) ListActiveSessions(ctx context.Context) (sessions []store.Sessio
 }
 
 // ListQueuedSessions implements store.Recovery.
-func (s *Store) ListQueuedSessions(ctx context.Context) (keys []store.ConversationKey, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.store.ListQueuedSessions")
-	defer func() { telemetryErr = s.finish(op, telemetryErr) }()
+func (s *adapter) ListQueuedSessions(ctx context.Context) ([]store.ConversationKey, error) {
 	rows, err := s.pool.Query(ctx, `SELECT connection, channel, thread_ts FROM reply_queue
 		WHERE delivered_at IS NULL GROUP BY connection, channel, thread_ts ORDER BY MIN(sequence)`)
 	if err != nil {
