@@ -6,6 +6,9 @@ in a **real Slack sandbox workspace** (Socket Mode), answered by `sandbox-sre`, 
 model**, investigating **faults seeded** into the kind cluster.
 
 It is an overlay on the full tier (`kind-courier-full`), never a new cluster: only one full tier fits a Docker host.
+It does not carry over to another cluster as it is: the full tier's kind config turns on the pod-certificate feature gates
+and `certificates.k8s.io/v1beta1`, which Agent Substrate (and so kagent 1.0) needs and most clusters do not serve, managed
+EKS included. See the README's "Running kagent 1.0 off kind" and spec risk R19.
 
 ```
 Slack sandbox workspace  <-- wss/https -->  courier-sandbox (courier:dev, production image)

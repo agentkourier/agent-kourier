@@ -196,7 +196,7 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Chat platform | Slack over the Events API (HTTP) | Planned |
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
-| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Courier refuses a tool approval request and posts a notice | Implemented |
+| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Courier refuses a tool approval request and posts a notice. Needs a cluster that serves the pod-certificate APIs (see below) | Implemented |
 | Agent backend | Any A2A 1.0 agent whose card advertises streaming, `a2a` dialect. Questions arrive as text | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Agent backend | Tool approvals answered from Slack | Planned |
@@ -209,6 +209,24 @@ rejects an agent whose card does not advertise streaming. A team can change or a
 a runtime and keep the same messaging configuration. What a thread can do still
 depends on what the backend exposes. See [backend design](spec.md#63-backends) for
 the contract.
+
+### Running kagent 1.0 off kind
+
+kagent 1.0 runs every agent session on Agent Substrate, and Substrate needs the
+pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and
+`PodCertificateRequest` feature gates and `certificates.k8s.io/v1beta1`. They are off by
+default through Kubernetes 1.36, and the pinned Substrate (0.3.0-alpha1) still needs
+`certificates.k8s.io/v1beta1` on 1.37. Managed EKS cannot enable them. The kind tiers
+turn them on, so a cluster that kind runs fine may still not run kagent 1.0. Check the
+target cluster first:
+
+```sh
+kubectl api-resources --api-group=certificates.k8s.io   # lists clustertrustbundles and podcertificaterequests
+kubectl api-versions | grep certificates.k8s.io/v1beta1
+```
+
+Without them, use an agent that does not need Substrate, through the `a2a` dialect.
+See [risk R19](spec.md#14-risks).
 
 ## Status
 
