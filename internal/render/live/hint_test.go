@@ -114,7 +114,7 @@ func TestTheFinalMessageEndsWithTheHintOnlyInAMentionBinding(t *testing.T) {
 					h := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: sc.user, Output: sc.output, Feedback: feedback, ThreadReplies: mode})
 					sc.script(t, e, h)
 					eventually(t, "the turn to be shown", func() bool { e.clk.advance(throttle); return sc.settled(e) })
-					eventually(t, "the run to have nothing left to wait for", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+					e.drain(t, e.live)
 					blocks := string(e.reply().Blocks)
 					wantHint := sc.footer && mode == v1alpha1.ThreadRepliesMention
 					wantButtons := sc.footer && feedback != ""
@@ -154,7 +154,7 @@ func TestAStreamIsStoppedWithTheHintAndTheButtons(t *testing.T) {
 	h(text("a", "Hello world"))
 	h(agent.FinalEvent{})
 	eventually(t, "the stream to stop", func() bool { e.clk.advance(throttle); return shown("Hello world")(e) })
-	eventually(t, "the run to end", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+	e.drain(t, e.live)
 	stops := e.rec.sent("/chat.stopStream")
 	if b := stops[0].Get("blocks"); strings.Count(b, hint) != 1 || !strings.Contains(b, "feedback-useful") {
 		t.Fatalf("the stop carries blocks %s; want the hint once and the buttons", b)
@@ -211,7 +211,8 @@ func TestTheHintSurvivesTheOutboxRow(t *testing.T) {
 			cfg.Sender = sender
 			key := thread
 			key.Thread = e.root
-			h := live.NewSink(newRenderer(t, cfg), e.ob, slog.New(slog.NewTextHandler(io.Discard, nil))).Turn(t.Context(),
+			renderer := newRenderer(t, cfg)
+			h := live.NewSink(renderer, e.ob, slog.New(slog.NewTextHandler(io.Discard, nil))).Turn(t.Context(),
 				session.TurnRef{Key: key, MessageID: "turn-1", UserID: "U1", Output: v1alpha1.OutputFinal, Feedback: tc.feedback, ThreadReplies: v1alpha1.ThreadRepliesMention})
 			h(text("a", "the answer"))
 			h(agent.FinalEvent{})
@@ -240,7 +241,7 @@ func TestTheHintSurvivesTheOutboxRow(t *testing.T) {
 				t.Fatalf("the stored parts after the text are %v, in %s; want %v", got, payload, tc.want)
 			}
 			eventually(t, "the post to be made from the row", func() bool { e.clk.advance(throttle); return e.reply().Text == "the answer" })
-			eventually(t, "the run to end", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+			e.drain(t, renderer)
 			blocks := string(e.reply().Blocks)
 			if strings.Count(blocks, hint) != 1 || strings.Contains(blocks, "Was this useful?") != (tc.feedback != "") {
 				t.Fatalf("the posted message has blocks %s; want what the row held", blocks)

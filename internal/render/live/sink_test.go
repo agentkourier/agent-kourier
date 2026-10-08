@@ -315,7 +315,7 @@ func TestModeReachesTheRenderer(t *testing.T) {
 			handle(agent.FinalEvent{})
 			eventually(t, "the message", func() bool { return len(e.rec.sent("/chat.startStream"))+len(e.rec.sent("/chat.postMessage")) >= 1 })
 			eventually(t, "the turn to end", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" && !e.reply().Streaming })
-			eventually(t, "the run to have nothing left to wait for", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+			e.drain(t, e.live)
 			if streams, posts := len(e.rec.sent("/chat.startStream")), len(e.rec.sent("/chat.postMessage")); streams != tc.wantStreams || posts != tc.wantFirstPosts {
 				t.Fatalf("%d streams and %d posts; want %d and %d", streams, posts, tc.wantStreams, tc.wantFirstPosts)
 			}
@@ -554,8 +554,10 @@ func TestTurnRefDecidesTheFooter(t *testing.T) {
 			handle := e.sink(t, e.ob).Turn(t.Context(), session.TurnRef{Key: key, MessageID: "turn-1", UserID: tc.user, Feedback: tc.feedback, Output: v1alpha1.OutputLive})
 			handle(text("a", "hello"))
 			handle(agent.FinalEvent{})
-			eventually(t, "the turn to end", func() bool { e.clk.advance(throttle); return e.reply().Text == "hello" && !e.reply().Streaming })
-			eventually(t, "the run to have nothing left to wait for", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+			e.drain(t, e.live)
+			if r := e.reply(); r.Text != "hello" || r.Streaming {
+				t.Fatalf("the last message is %q (streaming %v); want the final text, ended", r.Text, r.Streaming)
+			}
 			blocks := string(e.reply().Blocks)
 			if tc.want == "" {
 				if strings.Contains(blocks, "feedback") {

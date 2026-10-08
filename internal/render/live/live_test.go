@@ -362,6 +362,36 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// drain turns the clock until every run r started has ended, which is when each has written what it owes. r is the
+// Renderer that started the turn under test: e.live for a turn made through e.sink, and the test's own for one it built.
+// It is how a test waits for the end of a turn. A quiet clock is not: a run that has not yet asked for its next window
+// has no timer waiting, and a timer the test has just fired is gone before the run has written for it. The wait ends
+// with eventually's deadline, so that a run that never ends fails the test rather than hanging the package.
+func (e *env) drain(t *testing.T, r *live.Renderer) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	over := make(chan error, 1)
+	go func() { over <- r.Wait(ctx) }()
+	eventually(t, "the runs to end", func() bool {
+		select {
+		case err := <-over:
+			if err != nil {
+				t.Fatalf("Wait = %v", err)
+			}
+			return true
+		default:
+			if e.clk.waiting() > 0 {
+				e.clk.advance(throttle)
+			}
+			return false
+		}
+	})
+	if runsAlive() { // Wait of a Renderer that did not start the turn returns at once: say so, rather than read a message too soon
+		t.Fatal("drain returned with a run still alive: it was given a Renderer that did not start it")
+	}
+}
+
 // finish turns the clock until the run is done.
 func (e *env) finish(t *testing.T, run *live.Run) {
 	t.Helper()

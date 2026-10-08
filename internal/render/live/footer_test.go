@@ -193,7 +193,7 @@ func TestAPausedTurnHasNoFooterAndTheContinuationAfterTheAnswerHasIt(t *testing.
 	answered(text("a", "Use PostgreSQL."))
 	answered(task(a2a.TaskStateCompleted))
 	eventually(t, "the continuation to be posted", func() bool { e.clk.advance(throttle); return e.reply().Text == "Use PostgreSQL." })
-	eventually(t, "the runs to end", func() bool { e.clk.advance(throttle); return e.clk.waiting() == 0 })
+	e.drain(t, e.live)
 	th := e.fake.Thread("C1", e.root)
 	var rated []string
 	for _, m := range th {
