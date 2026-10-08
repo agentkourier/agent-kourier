@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -38,16 +40,29 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:18083", "address to listen on; the spike's default -base is this")
 	tick := flag.Duration("tick", defaultTick, "pause between the text chunks of a turn; the spike's slow agent needs it long enough to act between chunks")
 	requireAuth := flag.Bool("require-auth", false, "answer 401 to a request with no bearer token, as kagent in OIDC mode does; the spike's -no-auth mode then fails")
+	uniqueIDs := flag.Bool("unique-ids", false, "put a tag of this start in every id, so that a restart never makes an id of an earlier run that a client stored; the ids then differ from run to run")
 	flag.Parse()
-	if err := run(*addr, *tick, *requireAuth); err != nil {
+	if err := run(*addr, *tick, *requireAuth, *uniqueIDs); err != nil {
 		fmt.Fprintln(os.Stderr, "stubagent:", err)
 		os.Exit(1)
 	}
 }
 
-// newStub returns the server with every agent the command serves.
-func newStub(tick time.Duration, requireAuth bool) *stubagent.Server {
-	opts := []stubagent.Option{stubagent.WithTick(tick)}
+// idTag is the tag that this start of the stub, and no other, puts in its ids when unique is set (-unique-ids), and none otherwise.
+func idTag(unique bool) (string, error) {
+	if !unique {
+		return "", nil
+	}
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("make an id tag: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// newStub returns the server with every agent the command serves. idTag, if not empty, is in every id it makes.
+func newStub(tick time.Duration, requireAuth bool, idTag string) *stubagent.Server {
+	opts := []stubagent.Option{stubagent.WithTick(tick), stubagent.WithIDTag(idTag)}
 	if requireAuth {
 		opts = append(opts, stubagent.WithRequiredAuth())
 	}
@@ -80,8 +95,12 @@ func withControl(stub *stubagent.Server) http.Handler {
 	})
 }
 
-func run(addr string, tick time.Duration, requireAuth bool) error {
-	stub := newStub(tick, requireAuth)
+func run(addr string, tick time.Duration, requireAuth, uniqueIDs bool) error {
+	tag, err := idTag(uniqueIDs)
+	if err != nil {
+		return err
+	}
+	stub := newStub(tick, requireAuth, tag)
 	defer stub.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

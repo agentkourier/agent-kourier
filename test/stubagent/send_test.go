@@ -46,6 +46,34 @@ func TestSendWithContextIDContinuesSession(t *testing.T) {
 	}
 }
 
+// TestAnIDTagSetsApartTheIdsOfOneRunFromAnother: the counter behind the ids starts again at 1 when the stub restarts, so two runs
+// of the same requests make the same ids, and a client that stored one (courier derives an interaction's ID from the task and
+// request ids) meets it again. A tag puts the run in the ids. Without one the ids stay plain, which the other tests count on.
+func TestAnIDTagSetsApartTheIdsOfOneRunFromAnother(t *testing.T) {
+	ids := func(opts ...stubagent.Option) (taskID, contextID any) {
+		t.Helper()
+		_, agent, c := newAgent(t, opts...)
+		agent.Next()
+		_, body := c.call("SendMessage", msg("m1", "hi", ""))
+		tk := task(t, body)
+		return tk["id"], tk["contextId"]
+	}
+	plainTask, plainCtx := ids()
+	againTask, againCtx := ids()
+	oneTask, oneCtx := ids(stubagent.WithIDTag("run1"))
+	otherTask, otherCtx := ids(stubagent.WithIDTag("run2"))
+
+	if plainTask != againTask || plainCtx != againCtx {
+		t.Errorf("two runs with no tag made task %v and context %v, then %v and %v; want the same ids", plainTask, plainCtx, againTask, againCtx)
+	}
+	if oneTask == otherTask || oneCtx == otherCtx {
+		t.Errorf("runs tagged run1 and run2 made task %v and context %v, then %v and %v; want ids that differ", oneTask, oneCtx, otherTask, otherCtx)
+	}
+	if !strings.Contains(oneTask.(string), "run1") || !strings.Contains(oneCtx.(string), "run1") {
+		t.Errorf("the ids of the run tagged run1 are %v and %v; want the tag in each", oneTask, oneCtx)
+	}
+}
+
 // oneMessage builds params with a message of the given parts, and the ID and role a message needs.
 func oneMessage(id string, parts ...obj) obj {
 	return obj{"message": obj{"messageId": id, "role": "ROLE_USER", "parts": parts}}

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,7 +28,7 @@ var scenarioAgents = map[string]string{
 // turns, so the server is not left waiting on their streams.
 func serve(t *testing.T, tick time.Duration, requireAuth bool) *httptest.Server {
 	t.Helper()
-	stub := newStub(tick, requireAuth)
+	stub := newStub(tick, requireAuth, "")
 	srv := httptest.NewServer(withControl(stub))
 	t.Cleanup(srv.Close)
 	t.Cleanup(stub.Close)
@@ -132,5 +133,71 @@ func TestControlSurfaceIsOnlyThePostedRelease(t *testing.T) {
 		if got := statusOf(t.Context(), t, tc.method, srv.URL+tc.path); got != tc.want {
 			t.Errorf("%s %s answered %d, want %d", tc.method, tc.path, got, tc.want)
 		}
+	}
+}
+
+// TestIDTagIsEmptyUnlessUniqueIDsIsSet: -unique-ids is what turns the tag on, and a start without it keeps the plain ids, which
+// the spike's oracle and the unit tests count on; with it each start gets a tag of its own.
+func TestIDTagIsEmptyUnlessUniqueIDsIsSet(t *testing.T) {
+	plain, err := idTag(false)
+	if err != nil || plain != "" {
+		t.Errorf("idTag(false) = %q, %v; want no tag", plain, err)
+	}
+	first, err := idTag(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := idTag(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == "" || second == "" || first == second {
+		t.Errorf("idTag(true) made %q, then %q; want a tag for each start, and not the same", first, second)
+	}
+}
+
+// TestEachStartMakesItsOwnIDs: two stubs built with a tag from idTag(true) answer the same request with different task ids. That
+// the command passes the tag to the stub is run()'s one line; the fast tier restarts the stub's pod while courier keeps its store,
+// and an id of the earlier run must not come again.
+func TestEachStartMakesItsOwnIDs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	idOf := func() string {
+		t.Helper()
+		tag, err := idTag(true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stub := newStub(0, false, tag)
+		srv := httptest.NewServer(withControl(stub))
+		t.Cleanup(srv.Close)
+		t.Cleanup(stub.Close)
+		send := `{"jsonrpc":"2.0","id":"1","method":"SendMessage","params":{"message":{"messageId":"m1","role":"ROLE_USER","parts":[{"text":"hi"}]}}}`
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/agents/kagent/scenario-memory", strings.NewReader(send))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var body struct {
+			Result struct {
+				Task struct {
+					ID string `json:"id"`
+				} `json:"task"`
+			} `json:"result"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Result.Task.ID == "" {
+			t.Fatalf("decode the task: %v (id %q)", err, body.Result.Task.ID)
+		}
+		return body.Result.Task.ID
+	}
+
+	first, second := idOf(), idOf()
+
+	if first == second {
+		t.Errorf("two starts of the stub made the task id %q both times", first)
 	}
 }

@@ -62,6 +62,7 @@ type Server struct {
 	stop        context.CancelFunc
 	wg          sync.WaitGroup // running turns
 	seq         atomic.Int64
+	idTag       string // in every id the stub makes, if not empty
 
 	mu     sync.Mutex
 	agents map[string]*Agent        // by "ns/name", guarded by mu
@@ -77,6 +78,13 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 // WithTick sets the pause between the text chunks of a turn. The default is none, so turns
 // run as fast as the client reads.
 func WithTick(d time.Duration) Option { return func(s *Server) { s.tick = d } }
+
+// WithIDTag puts tag in every id the stub makes ("task-<tag>-7"), so that the ids of one run of the
+// stub are not those of another. The counter behind the ids starts again at 1 when the stub restarts,
+// while a client keeps what it stored of the earlier run (courier derives the ID of an interaction from
+// the task and request ids, and reads a stored one as already decided), as it would not of an agent
+// whose ids are UUIDs. An empty tag, the default, keeps the plain "task-7", for tests that count.
+func WithIDTag(tag string) Option { return func(s *Server) { s.idTag = tag } }
 
 // NewHandler returns a Server for use as an http.Handler, with no listener of its own. Call
 // Close when done.
@@ -172,7 +180,12 @@ func (s *Server) gateLocked(gate string) chan struct{} {
 	return s.gates[gate]
 }
 
-func (s *Server) newID(kind string) string { return fmt.Sprintf("%s-%d", kind, s.seq.Add(1)) }
+func (s *Server) newID(kind string) string {
+	if s.idTag == "" {
+		return fmt.Sprintf("%s-%d", kind, s.seq.Add(1))
+	}
+	return fmt.Sprintf("%s-%s-%d", kind, s.idTag, s.seq.Add(1))
+}
 
 func (s *Server) stamp() string { return s.now().UTC().Format(time.RFC3339Nano) }
 
