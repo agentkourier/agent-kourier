@@ -1,6 +1,7 @@
 package interact_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -59,7 +61,7 @@ func TestTextReplyRetriesRecordedAnswerAndPinsQuestion(t *testing.T) {
 		t.Fatalf("sweeper missed in-time reply before claim: %v, %v", waiting, err)
 	}
 	r.sess.errs = []error{errBoom}
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || !errors.Is(err, errBoom) {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyRetry || !errors.Is(err, errBoom) {
 		t.Fatalf("failed delivery = %v, %v", done, err)
 	}
 	reply, err := r.st.NextReply(t.Context(), key)
@@ -69,7 +71,7 @@ func TestTextReplyRetriesRecordedAnswerAndPinsQuestion(t *testing.T) {
 	if waiting, err := r.st.PendingPresses(t.Context(), id, deadline); !waiting || err != nil {
 		t.Fatalf("sweeper lost queued answer: %v, %v", waiting, err)
 	}
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("retry = %v, %v", done, err)
 	}
 	if len(r.sess.answers()) != 2 || len(r.aud.got) != 1 {
@@ -77,7 +79,7 @@ func TestTextReplyRetriesRecordedAnswerAndPinsQuestion(t *testing.T) {
 	}
 	later := task.Status.Timestamp.Add(time.Second)
 	task.Status.Timestamp = &later
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("replay = %v, %v", done, err)
 	}
 	if len(r.sess.answers()) != 2 {
@@ -97,11 +99,11 @@ func TestTextReplyAuthorizationAndAuditFailure(t *testing.T) {
 			r.az.bots = map[string]bool{"UBOT": true}
 			reply.UserID = user
 			r.aud.err = errBoom
-			if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || !errors.Is(err, errBoom) {
+			if done, err := r.textReply(t, key, reply, task); done != session.TextReplyRetry || !errors.Is(err, errBoom) {
 				t.Fatalf("audit failure = %v, %v", done, err)
 			}
 			r.aud.err = nil
-			if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+			if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 				t.Fatalf("denial = %v, %v", done, err)
 			}
 			row, _ := r.st.GetInteraction(t.Context(), id)
@@ -116,7 +118,7 @@ func TestTextReplyAfterDeadlineDoesNotAnswer(t *testing.T) {
 	r := newPressRig(t)
 	task, reply, id := textQuestion(t, r)
 	reply.EnqueuedAt = deadline
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("late answer = %v, %v", done, err)
 	}
 	row, _ := r.st.GetInteraction(t.Context(), id)
@@ -129,7 +131,7 @@ func TestTextReplyBeforeQuestionRemainsUnclaimed(t *testing.T) {
 	r := newPressRig(t)
 	task, reply, id := textQuestion(t, r)
 	reply.EnqueuedAt = d0.Add(-time.Second)
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || !errors.Is(err, store.ErrReplyNotAnswer) {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNotAnswer || err != nil {
 		t.Fatalf("earlier reply = %v, %v", done, err)
 	}
 	queued, err := r.st.NextReply(t.Context(), key)
@@ -146,7 +148,7 @@ func TestTextReplyTriesTimelyAnswerAfterLongOutage(t *testing.T) {
 	r := newPressRig(t)
 	task, reply, id := textQuestion(t, r)
 	r.now = reply.EnqueuedAt.Add(time.Hour)
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("aged reply = %v, %v", done, err)
 	}
 	row, _ := r.st.GetInteraction(t.Context(), id)
@@ -158,7 +160,7 @@ func TestTextReplyTriesTimelyAnswerAfterLongOutage(t *testing.T) {
 func TestTextReplyWaitsForPromptBeforeClaiming(t *testing.T) {
 	r := newPressRig(t)
 	task, reply, id := textQuestionWithPrompt(t, r, false)
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyWait || err != nil {
 		t.Fatalf("unposted prompt = %v, %v", done, err)
 	}
 	queued, err := r.st.NextReply(t.Context(), key)
@@ -168,7 +170,7 @@ func TestTextReplyWaitsForPromptBeforeClaiming(t *testing.T) {
 	if err := r.st.SetInteractionMessageRef(t.Context(), id, "100.1"); err != nil {
 		t.Fatal(err)
 	}
-	if done, err := r.pl.TextReply(t.Context(), key, queued, task); !done || err != nil {
+	if done, err := r.textReply(t, key, queued, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("posted prompt = %v, %v", done, err)
 	}
 	queued, err = r.st.NextReply(t.Context(), key)
@@ -194,12 +196,12 @@ func TestTextReplyClosedUnpostedQuestionDoesNotBlockQueue(t *testing.T) {
 					reply.InteractionID = id
 					reply.EnqueuedAt = d0.Add(-time.Second) // legacy claims can predate the question
 				}
-				done, err := r.pl.TextReply(t.Context(), key, reply, task)
+				done, err := r.textReply(t, key, reply, task)
 				if claimed {
-					if !done || err != nil {
+					if done != session.TextReplyConsumed || err != nil {
 						t.Fatalf("closed claimed question = %v, %v", done, err)
 					}
-				} else if done || !errors.Is(err, store.ErrReplyNotAnswer) {
+				} else if done != session.TextReplyNotAnswer || err != nil {
 					t.Fatalf("closed unclaimed question = %v, %v", done, err)
 				}
 				if len(r.sess.answers()) != 0 || len(r.eph.got) != 0 || len(r.aud.got) != 0 {
@@ -221,11 +223,11 @@ func TestTextReplyLegacyUnpostedClaimRetainsRetryLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	reply.InteractionID = id
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyWait || err != nil {
 		t.Fatalf("pending legacy claim = %v, %v", done, err)
 	}
 	r.now = reply.EnqueuedAt.Add(time.Hour)
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("aged legacy claim = %v, %v", done, err)
 	}
 }
@@ -235,7 +237,7 @@ func TestTextReplyGivesUpOnlyAfterFailedAttempt(t *testing.T) {
 	task, reply, _ := textQuestion(t, r)
 	r.now = reply.EnqueuedAt.Add(time.Hour)
 	r.sess.errs = []error{errBoom}
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("failed aged reply = %v, %v", done, err)
 	}
 	if len(r.sess.answers()) != 1 {
@@ -271,8 +273,8 @@ func TestTextReplyPinnedAtEnqueueToAClosedQuestionIsConsumedAndTold(t *testing.T
 			task, reply, id := textQuestion(t, r)
 			reply.InteractionID = id // as EnqueueReply stores it
 			closeIt(t, r, id)
-			done, err := r.pl.TextReply(t.Context(), key, reply, task)
-			if !done || err != nil {
+			done, err := r.textReply(t, key, reply, task)
+			if done != session.TextReplyConsumed || err != nil {
 				t.Fatalf("TextReply = %v, %v; want it consumed, with no error", done, err)
 			}
 			if len(r.eph.got) != 1 || !strings.HasPrefix(r.eph.got[0], reply.UserID+":") {
@@ -287,15 +289,15 @@ func TestTextReplyPinnedAtEnqueueToAClosedQuestionIsConsumedAndTold(t *testing.T
 
 // A task that waits on a question that is no text question (a choice, or a tool's approval) is never decided by a
 // typed reply: the shape is session.IsTextQuestion's, and the reply is neither claimed nor audited.
-func TestTextReplyToAQuestionThatTakesNoTextIsRefused(t *testing.T) {
+func TestTextReplyToAQuestionThatTakesNoTextStaysQueued(t *testing.T) {
 	r := newPressRig(t) // the Binding's dialect is kagent's, whose questions offer choices
 	task := askUser("req-1")
 	reply := store.Reply{ID: "reply-1", Key: key, UserID: "UALICE1", MessageRef: "101.1", Text: "a", EnqueuedAt: r.now}
 	if _, err := r.st.EnqueueReply(t.Context(), reply); err != nil {
 		t.Fatal(err)
 	}
-	if done, err := r.pl.TextReply(t.Context(), key, reply, task); done || err == nil || errors.Is(err, store.ErrReplyNotAnswer) {
-		t.Fatalf("TextReply = %v, %v; want the refusal of a question that takes no text, which is no verdict that the reply is a turn", done, err)
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNotAnswer || err != nil {
+		t.Fatalf("TextReply = %v, %v; want not-an-answer for a question that takes no text", done, err)
 	}
 	queued, err := r.st.NextReply(t.Context(), key)
 	if err != nil || queued.InteractionID != "" || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
@@ -309,7 +311,7 @@ func TestTextReplyPinnedToAQuestionNeedsNoTask(t *testing.T) {
 	r := newPressRig(t)
 	_, reply, id := textQuestion(t, r)
 	reply.InteractionID = id // as EnqueueReply stores it
-	if done, err := r.pl.TextReply(t.Context(), key, reply, a2a.Task{}); !done || err != nil {
+	if done, err := r.textReply(t, key, reply, a2a.Task{}); done != session.TextReplyConsumed || err != nil {
 		t.Fatalf("TextReply = %v, %v; want the answer decided against its pinned question", done, err)
 	}
 	if row, _ := r.st.GetInteraction(t.Context(), id); row.State != store.InteractionAnswered || len(r.sess.answers()) != 1 {
@@ -325,12 +327,28 @@ func TestTextReplyToAClosedQuestionWithItsPromptSeenIsDecidedNotTurned(t *testin
 	if err := r.st.SubmitInteraction(t.Context(), id, []byte(`[["x"]]`), "UBOBBY1", r.now); err != nil {
 		t.Fatal(err)
 	}
-	done, err := r.pl.TextReply(t.Context(), key, reply, task)
-	if errors.Is(err, store.ErrReplyNotAnswer) {
+	done, err := r.textReply(t, key, reply, task)
+	if done == session.TextReplyNotAnswer || err != nil {
 		t.Fatalf("TextReply = %v, %v; want the answer decided, and not left as a turn", done, err)
 	}
 	queued, qerr := r.st.NextReply(t.Context(), key)
 	if qerr != nil || queued.InteractionID != id {
 		t.Fatalf("the reply was not claimed for its question: %+v, %v", queued, qerr)
 	}
+}
+
+// noPause isolates answer decisions in these tests; coordinator tests exercise real take-up.
+type noPause struct{}
+
+func (noPause) Paused(context.Context, interact.Pause) error { return nil }
+
+func (r *pressRig) textReply(t *testing.T, key store.ConversationKey, reply store.Reply, task a2a.Task) (session.TextReplyOutcome, error) {
+	t.Helper()
+	ready := make(chan struct{})
+	close(ready)
+	handler, err := interact.NewTextReplies(r.pl, noPause{}, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler.Decide(t.Context(), key, reply, task)
 }

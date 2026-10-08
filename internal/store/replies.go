@@ -2,12 +2,8 @@ package store
 
 import (
 	"context"
-	"errors"
 	"time"
 )
-
-// ErrReplyNotAnswer means a reply must remain queued as an ordinary turn.
-var ErrReplyNotAnswer = errors.New("store: reply is not an answer to this question")
 
 // Reply is a thread reply waiting for its session's active task to finish
 // (spec 8.2, D21).

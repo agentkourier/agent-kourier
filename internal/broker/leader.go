@@ -117,7 +117,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
 	parts := interactionDeps{st: st, ob: ob, platform: platform, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace}
-	tap, late, err := parts.newTap(sink)
+	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +127,11 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: tap, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section})
+	mgr, err := session.New(session.Config{Context: runCtx, Store: st, Questions: st, Bindings: bindings, Users: users{platform}, Sink: ix.tap, TextReply: ix.replies.Decide, Logger: log, Audit: auditor, OnTurnEnd: metrics.TurnOutcome, ThreadContext: threads.Section})
 	if err != nil {
 		return nil, fmt.Errorf("session manager: %w", err)
 	}
-	late.bind(mgr)
+	ix.late.bind(mgr)
 	sd.add(stepManager, func(c context.Context) {
 		if err := mgr.Close(c); err != nil {
 			log.Warn("closing the session manager", "error", err)
@@ -169,7 +169,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 		return nil, fmt.Errorf("store retention: %w", err)
 	}
 	stops.add("store-retention", startLoop(runCtx, retain.Run))
-	interactions, err := parts.start(runCtx, mgr, tap, &stops)
+	interactions, err := parts.start(runCtx, mgr, ix, &stops)
 	if err != nil {
 		return nil, err
 	}

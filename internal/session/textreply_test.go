@@ -46,12 +46,12 @@ func TestTextReplyCancellationEndsRetryAndDrainsQueue(t *testing.T) {
 		t.Run("decision_"+fmtError(result), func(t *testing.T) {
 			f, _ := textPauseFixture(t)
 			var calls atomic.Int32
-			f.m.SetTextReplyHandler(func(ctx context.Context, k Key, _ store.Reply, task a2a.Task) (bool, error) {
+			f.setTextReply(func(ctx context.Context, k Key, _ store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 				calls.Add(1)
 				if err := f.m.Cancel(ctx, k, task.ID, "refused question"); err != nil {
-					return false, err
+					return TextReplyWait, err
 				}
-				return false, result
+				return TextReplyWait, result
 			})
 			if _, err := f.submit(inbound("2")); err != nil {
 				t.Fatal(err)
@@ -83,9 +83,9 @@ func TestTextReplyEndedTaskDrainsQueueWithoutDecision(t *testing.T) {
 			}
 			f.agent.mu.Unlock()
 			var calls atomic.Int32
-			f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+			f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 				calls.Add(1)
-				return false, nil
+				return TextReplyWait, nil
 			})
 			if _, err := f.submit(inbound("2")); err != nil {
 				t.Fatal(err)
@@ -121,9 +121,9 @@ func TestTextReplyAuthRequiredWaitsAndCanBeStopped(t *testing.T) {
 	f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error {
 		return turn(h, 0, a2a.TaskStateAuthRequired)
 	}
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 		decisions.Add(1)
-		return false, nil
+		return TextReplyWait, nil
 	})
 	sink := f.live()
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -167,11 +167,11 @@ func TestTextReplyDeliveryWriteRetriesBeforeSendingAnswer(t *testing.T) {
 		return retry
 	}
 	var decisions atomic.Int32
-	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		decisions.Add(1)
 		msg := answerMsg(r.ID)
 		msg.TaskID = task.ID
-		return true, f.m.Answer(ctx, k, msg)
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
@@ -202,14 +202,14 @@ func TestTextReplyDeliveryWriteRetriesBeforeSendingAnswer(t *testing.T) {
 func TestTextReplySkipsEarlierTurnAndAnswersLaterReply(t *testing.T) {
 	f, _ := textPauseFixture(t)
 	var skipped atomic.Int32
-	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		if r.ID == inbound("2").MessageID {
 			skipped.Add(1)
-			return false, store.ErrReplyNotAnswer
+			return TextReplyNotAnswer, nil
 		}
 		msg := answerMsg(r.ID)
 		msg.TaskID = task.ID
-		return true, f.m.Answer(ctx, k, msg)
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	for _, id := range []string{"2", "3"} {
 		if _, err := f.submit(inbound(id)); err != nil {
@@ -241,12 +241,12 @@ func TestTextReplyRecoveredClaimNeverBecomesOrdinaryTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reconciled atomic.Int32
-	f.m.SetTextReplyHandler(func(_ context.Context, _ Key, got store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(_ context.Context, _ Key, got store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		if got.InteractionID != "delivered-question" || task.ID != "" {
 			t.Error("recovery did not reconcile the original claim")
 		}
 		reconciled.Add(1)
-		return true, nil // the persisted interaction already records this answer as delivered
+		return TextReplyConsumed, nil // the persisted interaction already records this answer as delivered
 	})
 	f.live()
 	f.m.start(key)
@@ -280,13 +280,13 @@ func TestQueuedTextReplyAnswersPauseAndLaterRepliesRemainTurns(t *testing.T) {
 		h(agent.FinalEvent{Task: &a2a.Task{ID: msg.TaskID, ContextID: msg.ContextID, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
 		return nil
 	}
-	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		decided.Add(1)
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
 		msg.ID = r.ID
 		msg.TaskID = task.ID
 		msg.ContextID = task.ContextID
-		return true, f.m.Answer(ctx, k, msg)
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	sink := f.live()
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -324,14 +324,14 @@ func TestTextReplyWaitsForPromptWithoutLosingQueue(t *testing.T) {
 		h(agent.FinalEvent{Task: &a2a.Task{ID: msg.TaskID, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
 		return nil
 	}
-	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		if tries.Add(1) < 3 {
-			return false, nil
+			return TextReplyWait, nil
 		}
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
 		msg.ID = r.ID
 		msg.TaskID = task.ID
-		return true, f.m.Answer(ctx, k, msg)
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	sink := f.live()
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -357,12 +357,12 @@ func TestTextReplyDrainsRejectedRepliesWhenWakesCoalesce(t *testing.T) {
 	f.agent.script = func(_ context.Context, n int, h agent.Handler) error { return turn(h, n, a2a.TaskStateInputRequired) }
 	var ready atomic.Bool
 	var consumed atomic.Int32
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 		if !ready.Load() {
-			return false, nil
+			return TextReplyWait, nil
 		}
 		consumed.Add(1)
-		return true, nil // a denied answer is consumed without resuming the task
+		return TextReplyConsumed, nil // a denied answer is consumed without resuming the task
 	})
 	sink := f.live()
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -386,27 +386,37 @@ func TestTextReplyDrainsRejectedRepliesWhenWakesCoalesce(t *testing.T) {
 	})
 }
 
-func TestInstallingTextHandlerWakesParkedReplyAndClearsReaction(t *testing.T) {
-	f, sink := textPauseFixture(t) // the recovered runner can park before broker startup installs its handler
+func TestRunnerWaitsForBlockingTextHandlerAndClearsReaction(t *testing.T) {
+	f, sink := textPauseFixture(t)
+	ready, entered := make(chan struct{}), make(chan struct{})
+	f.setTextReply(func(ctx context.Context, key Key, reply store.Reply, task a2a.Task) (TextReplyOutcome, error) {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return TextReplyRetry, ctx.Err()
+		case <-ready:
+		}
+		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(reply.Text))
+		msg.ID, msg.TaskID = reply.ID, task.ID
+		return TextReplyConsumed, f.m.Answer(ctx, key, msg)
+	})
 	in := inbound("2")
 	if _, err := f.submit(in); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "runner consumed the enqueue wake without a handler", func() bool {
-		f.m.mu.Lock()
-		defer f.m.mu.Unlock()
-		return len(f.m.convos[key].queued) == 0
-	})
-	f.m.SetTextReplyHandler(func(ctx context.Context, key Key, reply store.Reply, task a2a.Task) (bool, error) {
-		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(reply.Text))
-		msg.ID, msg.TaskID = reply.ID, task.ID
-		return true, f.m.Answer(ctx, key, msg)
-	})
-	eventually(t, "answer after handler installation", func() bool {
-		f.agent.mu.Lock()
-		defer f.agent.mu.Unlock()
-		return len(f.agent.answers) == 1
-	})
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("text handler not called")
+	}
+	f.agent.mu.Lock()
+	sent := len(f.agent.answers)
+	f.agent.mu.Unlock()
+	if sent != 0 {
+		t.Fatal("answer sent before readiness")
+	}
+	close(ready)
+	eventually(t, "answer after readiness", func() bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return len(f.agent.answers) == 1 })
 	f.retired(t)
 	if got := sink.dequeued(); len(got) != 1 || got[0] != queuedID(in.MessageID)+" "+in.MessageRef {
 		t.Fatalf("dequeued notices = %v", got)
@@ -414,7 +424,7 @@ func TestInstallingTextHandlerWakesParkedReplyAndClearsReaction(t *testing.T) {
 	f.m.mu.Lock()
 	defer f.m.mu.Unlock()
 	if _, waiting := f.m.marked[in.MessageID]; waiting {
-		t.Fatal("decided answer retained its queued reaction bookkeeping")
+		t.Fatal("consumed answer kept its queued bookkeeping")
 	}
 }
 
@@ -453,9 +463,9 @@ func TestTextReplyTaskLookupReportsRejectedCredentials(t *testing.T) {
 		waited <- struct{}{}
 		return retry
 	}
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 		t.Error("rejected lookup reached decision pipeline")
-		return false, nil
+		return TextReplyWait, nil
 	})
 	sink := f.live()
 	if _, err := f.submit(inbound("1")); err != nil {
@@ -504,8 +514,8 @@ func TestRecoveredTextReplyRetriesBackOff(t *testing.T) {
 	if err := claims.ClaimReplyInteraction(t.Context(), r.ID, "original-question"); err != nil {
 		t.Fatal(err)
 	}
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
-		return false, errors.New("membership unavailable")
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
+		return TextReplyWait, errors.New("membership unavailable")
 	})
 	c := f.m.newConvo(key)
 	for _, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
@@ -514,7 +524,9 @@ func TestRecoveredTextReplyRetriesBackOff(t *testing.T) {
 			t.Fatalf("recovery retry = %v, %v, %v; want %v", out, err, f.m.backoff(c.tries), want)
 		}
 	}
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) { return true, nil })
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
+		return TextReplyConsumed, nil
+	})
 	f.st.mu.Lock()
 	f.st.fail["mark"] = errors.New("delivery write unavailable")
 	f.st.mu.Unlock()
@@ -533,11 +545,12 @@ func TestTextReplyClearsReactionFromPreviousProcess(t *testing.T) {
 	if _, err := f.st.EnqueueReply(t.Context(), r); err != nil {
 		t.Fatal(err)
 	}
-	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, reply store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(ctx context.Context, k Key, reply store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		msg := answerMsg(reply.ID)
 		msg.TaskID = task.ID
-		return true, f.m.Answer(ctx, k, msg)
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
+	f.m.start(key) // a prior process’s queued reply is woken by recovery, not a handler setter
 	f.retired(t)
 	if got := sink.dequeued(); len(got) != 1 || got[0] != queuedID(r.ID)+" "+r.MessageRef {
 		t.Fatalf("recovered reply dequeued notices = %v", got)
@@ -564,9 +577,9 @@ func TestTextPauseRunningTaskLookupFailureRetriesWithoutCancellation(t *testing.
 		waiting <- struct{}{}
 		return retry
 	}
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 		t.Error("running task reached the question decider")
-		return false, nil
+		return TextReplyWait, nil
 	})
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
@@ -599,8 +612,8 @@ func TestSubmitAnswerInterruptsTextReplyBackoff(t *testing.T) {
 		waiting <- struct{}{}
 		return make(chan time.Time) // the answer must wake the runner without this timer firing
 	}
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
-		return false, errors.New("membership lookup unavailable")
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
+		return TextReplyWait, errors.New("membership lookup unavailable")
 	})
 	if _, err := f.submit(inbound("2")); err != nil {
 		t.Fatal(err)
@@ -630,11 +643,11 @@ func TestUnmentionedReplyDuringATextPauseIsPinnedAtEnqueueAndAnswers(t *testing.
 	f, _ := textPauseFixtureIn(t, v1alpha1.ThreadRepliesMention)
 	f.question("q1", true)
 	var seen atomic.Value // the reply the handler was given
-	f.m.SetTextReplyHandler(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (bool, error) {
+	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		seen.Store(r)
 		msg := answerMsg(r.ID)
 		msg.TaskID = task.ID
-		return true, f.m.Answer(ctx, k, msg)
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	in := reply("2", false)
 	if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
@@ -657,9 +670,9 @@ func TestUnmentionedReplyDuringATextPauseIsPinnedAtEnqueueAndAnswers(t *testing.
 func TestUnmentionedReplyDuringANonTextPauseIsUnmentioned(t *testing.T) {
 	f, _ := textPauseFixtureIn(t, v1alpha1.ThreadRepliesMention)
 	f.question("q1", false)
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 		t.Error("a reply that is no answer reached the text-reply handler")
-		return false, nil
+		return TextReplyWait, nil
 	})
 	if res, err := f.submitAny(reply("2", false)); err != nil || res.Disposition != Unmentioned {
 		t.Fatalf("Submit = %+v, %v; want Unmentioned", res, err)
@@ -690,9 +703,9 @@ func TestAReplyWaitingBehindAPauseWithNoTextQuestionsIsNeverOfferedToTheHandler(
 	}
 	waitFinal(t, sink)
 	var offered atomic.Int32
-	f.m.SetTextReplyHandler(func(context.Context, Key, store.Reply, a2a.Task) (bool, error) {
+	f.setTextReply(func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
 		offered.Add(1)
-		return false, nil
+		return TextReplyWait, nil
 	})
 	if _, err := f.submit(reply("2", true)); err != nil {
 		t.Fatal(err)
@@ -730,12 +743,12 @@ func TestPinnedReplyToAClosedQuestionIsConsumedAndBlocksNothing(t *testing.T) {
 		}
 		f.setTask("")
 		var consumed atomic.Int32
-		f.m.SetTextReplyHandler(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (bool, error) {
+		f.setTextReply(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (TextReplyOutcome, error) {
 			if r.ID != typed.MessageID || r.InteractionID != "q1" {
 				t.Errorf("the handler was given %+v; want only the pinned reply", r)
 			}
 			consumed.Add(1)
-			return true, nil // what the pipeline answers for a closed question: the person is told, the press is done
+			return TextReplyConsumed, nil // what the pipeline answers for a closed question: the person is told, the press is done
 		})
 		sink := f.live()
 		f.m.start(key)
@@ -756,12 +769,12 @@ func TestPinnedReplyToAClosedQuestionIsConsumedAndBlocksNothing(t *testing.T) {
 		f.question("q1", true)
 		typed, mention := reply("2", false), reply("3", true)
 		var consumed atomic.Int32
-		f.m.SetTextReplyHandler(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (bool, error) {
+		f.setTextReply(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (TextReplyOutcome, error) {
 			if r.InteractionID == "" {
-				return false, store.ErrReplyNotAnswer // the mention: not an answer to anything here
+				return TextReplyNotAnswer, nil // the mention: not an answer to anything here
 			}
 			consumed.Add(1)
-			return true, nil
+			return TextReplyConsumed, nil
 		})
 		for _, in := range []Inbound{typed, mention} {
 			if res, err := f.submitAny(in); err != nil || res.Disposition != Accepted {
@@ -797,12 +810,12 @@ func TestPinnedReplyIsNeverATurnWhateverTheDialectIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var consumed atomic.Int32
-	f.m.SetTextReplyHandler(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (bool, error) {
+	f.setTextReply(func(_ context.Context, _ Key, r store.Reply, _ a2a.Task) (TextReplyOutcome, error) {
 		if r.ID != pinned.ID || r.InteractionID != "q1" {
 			t.Errorf("the handler was given %+v; want only the pinned reply", r)
 		}
 		consumed.Add(1)
-		return true, nil
+		return TextReplyConsumed, nil
 	})
 	sink := f.live()
 	f.m.start(key)

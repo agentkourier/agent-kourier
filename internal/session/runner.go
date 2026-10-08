@@ -257,10 +257,7 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 		return m.answer(c, msg)
 	default:
 	}
-	m.mu.Lock()
-	textReply := m.cfg.TextReply
-	m.mu.Unlock()
-	if c.paused != nil && TakesTextReplies(c.paused.b.Dialect) && textReply != nil {
+	if c.paused != nil && TakesTextReplies(c.paused.b.Dialect) {
 		r, err := m.cfg.Store.NextReplyAfter(m.ctx, key, c.textAfter)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return m.waitTextReply(key, c, err)
@@ -291,13 +288,19 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 				m.unpark(c)
 				return m.resume(c)
 			}
-			done, err := textReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, *task)
-			if errors.Is(err, store.ErrReplyNotAnswer) {
+			verdict, err := m.cfg.TextReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, *task)
+			if err != nil {
+				return m.waitTextReply(key, c, err)
+			}
+			switch verdict {
+			case TextReplyNotAnswer:
 				c.textAfter = r.Sequence
 				return paused, nil
-			}
-			if err != nil || !done {
-				return m.waitTextReply(key, c, err)
+			case TextReplyWait:
+				return m.waitTextReply(key, c, nil)
+			case TextReplyConsumed:
+			default:
+				return m.waitTextReply(key, c, fmt.Errorf("text reply %s: invalid outcome %d without a retry cause", r.ID, verdict))
 			}
 			c.pendingReply = r
 			if err := m.flushTextReply(c); err != nil {
@@ -458,16 +461,12 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	// A claimed answer left by a crash, or one queued pinned by the intake, must be reconciled with its
 	// question, never sent as an ordinary turn, whatever the Binding's dialect is by now.
 	if Queued(r).Kind == AdmitAnswer {
-		m.mu.Lock()
-		textReply := m.cfg.TextReply
-		m.mu.Unlock()
-		if textReply == nil {
+		verdict, err := m.cfg.TextReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, a2a.Task{})
+		if err != nil || verdict != TextReplyConsumed {
 			c.tries++
-			return blocked, errors.New("session: claimed text reply has no handler")
-		}
-		done, err := textReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, a2a.Task{})
-		if err != nil || !done {
-			c.tries++
+			if err == nil && verdict != TextReplyWait {
+				err = fmt.Errorf("pinned text reply %s: invalid outcome %d", r.ID, verdict)
+			}
 			return blocked, err
 		}
 		c.pendingReply = r

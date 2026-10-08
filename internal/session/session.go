@@ -214,10 +214,26 @@ type Sink interface {
 // that fails there holds the turn back like any other store failure of the runner.
 func NoThreadContext(context.Context, Key, string, string, string) string { return "" }
 
-// Config configures a Manager. Store, Bindings, Audit, Users, Sink, Questions, ThreadContext and OnTurnEnd are required:
+// TextReplyOutcome says what the interaction module did with a queued reply.
+type TextReplyOutcome uint8
+
+// The outcomes of deciding a text reply. Errors always leave the reply queued for retry.
+const (
+	TextReplyRetry     TextReplyOutcome = iota
+	TextReplyConsumed                   // decided or discarded; persist consumption before sending an answer
+	TextReplyNotAnswer                  // leave an ordinary turn queued until the pause ends
+	TextReplyWait                       // the question's prompt is not ready yet
+)
+
+// NoTextReply leaves ordinary turns queued while a task is paused. It is only for setups
+// where no reply can be pinned to a question; pinned replies require the interaction module.
+func NoTextReply(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error) {
+	return TextReplyNotAnswer, nil
+}
+
+// Config configures a Manager. Store, Bindings, Audit, Users, Sink, Questions, TextReply, ThreadContext and OnTurnEnd are required:
 // New refuses a Config without them and names the field, so that a wiring that leaves one out fails at start-up and
-// not by doing nothing. Where nothing is a choice, there is a value that says so (NoThreadContext). TextReply is set
-// after construction (SetTextReplyHandler), the one hook New cannot ask for: it joins the rest when that goes (D2).
+// not by doing nothing. Where nothing is a choice, there is a value that says so (NoThreadContext, NoTextReply).
 type Config struct {
 	// Context supplies tracing and other values. Cancellation belongs to Close.
 	Context  context.Context
@@ -233,9 +249,10 @@ type Config struct {
 	// unmentioned reply.
 	Questions Questions
 	// TextReply durably decides a queued answer through the interaction policy and audit.
-	// False means the prompt is not ready; the queue remains intact.
-	// store.ErrReplyNotAnswer keeps the reply queued as an ordinary turn.
-	TextReply func(context.Context, Key, store.Reply, a2a.Task) (bool, error)
+	// It runs off the manager mutex and may hand an answer back through Answer. The answer channel
+	// holds one item, so that re-entrant handoff never waits for the runner calling this handler.
+	// A consumed reply is recorded before that answer is sent.
+	TextReply func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error)
 	// ThreadContext returns what a mentioned turn of a Binding with chat.threadReplies: mention carries of the
 	// thread (spec 8.2, D38): the replies posted between the previous turn's message (after) and this one's
 	// (before), both exclusive, already framed as untrusted data, or a fixed line saying they could not be read,
@@ -322,6 +339,8 @@ func New(cfg Config) (*Manager, error) {
 		return nil, errors.New("session: Sink is required")
 	case cfg.Questions == nil:
 		return nil, errors.New("session: Questions is required")
+	case cfg.TextReply == nil:
+		return nil, errors.New("session: TextReply is required (NoTextReply is only for setups without pinned replies)")
 	case cfg.ThreadContext == nil:
 		return nil, errors.New("session: ThreadContext is required (NoThreadContext adds nothing)")
 	case cfg.OnTurnEnd == nil:

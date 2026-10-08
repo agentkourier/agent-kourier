@@ -272,7 +272,7 @@ func TestRunStopsTheInteractionsLoopsBetweenTheIntakeAndTheManager(t *testing.T)
 	}
 }
 
-// newTap refuses a deps with a part left out, and the error names it: the interactions are built from these parts, and one
+// build refuses a deps with a part left out, and the error names it: the interactions are built from these parts, and one
 // that is nil would fail at its first use, or never.
 func TestInteractionDepsNameThePartThatIsMissing(t *testing.T) {
 	st, err := sqlite.Open(t.Context(), sqlitetest.Path(t))
@@ -299,8 +299,8 @@ func TestInteractionDepsNameThePartThatIsMissing(t *testing.T) {
 		t.Run(tc.part, func(t *testing.T) {
 			d := full
 			tc.clear(&d)
-			if _, _, err := d.newTap(nil); err == nil || !strings.Contains(err.Error(), tc.part+" is required") {
-				t.Fatalf("newTap = %v; want an error that names %s", err, tc.part)
+			if _, err := d.build(nil); err == nil || !strings.Contains(err.Error(), tc.part+" is required") {
+				t.Fatalf("build = %v; want an error that names %s", err, tc.part)
 			}
 		})
 	}

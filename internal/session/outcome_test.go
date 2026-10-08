@@ -653,7 +653,7 @@ func TestRefusedCredentialWithoutASourceIsAudited(t *testing.T) {
 }
 
 // New refuses a Config without what the manager must have, and the error names the field: a wiring that drops one
-// fails at start-up and not by doing nothing. TextReply is not in the list: it is set after construction.
+// fails at start-up and not by doing nothing. TextReply is required before recovery can start runners.
 func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 	f := newFixture(t)
 	full := f.m.cfg
@@ -667,6 +667,7 @@ func TestNewNamesTheFieldThatIsMissing(t *testing.T) {
 		{"Users", func(c *Config) { c.Users = nil }},
 		{"Sink", func(c *Config) { c.Sink = nil }},
 		{"Questions", func(c *Config) { c.Questions = nil }},
+		{"TextReply", func(c *Config) { c.TextReply = nil }},
 		{"ThreadContext", func(c *Config) { c.ThreadContext = nil }},
 		{"OnTurnEnd", func(c *Config) { c.OnTurnEnd = nil }},
 	} {

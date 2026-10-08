@@ -706,3 +706,65 @@ func TestRecoverAttachesToARunnerThatWokeFirst(t *testing.T) {
 		t.Errorf("%d sends, %d follows; want the reply sent once after t1 was followed", sends, follows)
 	}
 }
+
+// The handler exists when recovery starts. A pinned answer can wait for interaction startup
+// without a missing-handler error, then be consumed and sent once under its recorded question.
+func TestRecoverPinnedAnswerWaitsForInteractionsWithoutHandlerErrors(t *testing.T) {
+	f, sink := restarted(t)
+	f.textReplies = true
+	var logs bytes.Buffer
+	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}, nil
+	}
+	f.agent.follow = func(_ a2a.TaskID, h agent.Handler) error { return turn(h, 0, a2a.TaskStateInputRequired) }
+	f.agent.answer = func(_ *a2a.Message, h agent.Handler) error { return turn(h, 0, a2a.TaskStateCompleted) }
+	reply := store.Reply{ID: "recovered-answer", Key: key, InteractionID: "original-question", UserID: "U1", MessageRef: "2", Text: "answer", EnqueuedAt: t0}
+	if _, err := f.st.EnqueueReply(t.Context(), reply); err != nil {
+		t.Fatal(err)
+	}
+	ready, entered := make(chan struct{}), make(chan struct{})
+	var decisions atomic.Int32
+	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
+		if decisions.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-ctx.Done():
+			return TextReplyRetry, ctx.Err()
+		case <-ready:
+		}
+		if r.InteractionID != reply.InteractionID {
+			t.Errorf("question = %q; want %q", r.InteractionID, reply.InteractionID)
+		}
+		msg := answerMsg("original-question/answer")
+		msg.TaskID = task.ID
+		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
+	})
+	f.recover(t)
+	waitFinal(t, sink)
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("recovered answer never reached handler")
+	}
+	f.agent.mu.Lock()
+	sent := len(f.agent.answers)
+	f.agent.mu.Unlock()
+	if sent != 0 {
+		t.Fatal("answer sent before interaction startup")
+	}
+	close(ready)
+	waitFinal(t, sink)
+	f.retired(t)
+	f.agent.mu.Lock()
+	sent = len(f.agent.answers)
+	turns := len(f.agent.msgs)
+	f.agent.mu.Unlock()
+	if sent != 1 || turns != 0 || decisions.Load() != 1 || !f.queueEmpty() {
+		t.Fatalf("recovery sent %d answers, %d turns, decided %d; empty %v", sent, turns, decisions.Load(), f.queueEmpty())
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("recovery errors: %s", logs.String())
+	}
+}

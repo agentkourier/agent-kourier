@@ -192,16 +192,3 @@ func (m *Manager) Answer(ctx context.Context, key Key, msg *a2a.Message) error {
 	c.answers <- answerWork{msg: msg, parent: parent, state: state} // one per park, and the channel holds one: never blocks
 	return nil
 }
-
-// SetTextReplyHandler installs the interaction callback before chat intake starts.
-func (m *Manager) SetTextReplyHandler(h func(context.Context, Key, store.Reply, a2a.Task) (bool, error)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.cfg.TextReply = h
-	for _, c := range m.convos {
-		select {
-		case c.queued <- struct{}{}:
-		default:
-		}
-	}
-}

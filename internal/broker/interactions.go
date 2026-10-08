@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -20,7 +19,8 @@ import (
 )
 
 // errSessionNotReady is what a late-bound session answers until the session manager exists. A pause
-// cannot reach the interactions before then, and the tap tries again, so it is a safety and not a path.
+// cannot reach the intake or decider before then: the tap has no turns and text decisions wait for
+// interaction startup. It guards the shared handle rather than a production startup path.
 var errSessionNotReady = errors.New("broker: the session manager is not built yet")
 
 // lateSession is the session the interactions use, bound to the manager once that exists (D2): the manager
@@ -64,7 +64,7 @@ type interactionDeps struct {
 	trace    func(step string) // a test's: told as each step of startup is done. Optional.
 }
 
-// check refuses a deps with a part left out, and names it: the interactions are built from these in two steps (newTap,
+// check refuses a deps with a part left out, and names it: the interactions are built from these in two steps (build,
 // then start), and a part that is nil would fail in the first call that uses it, or not at all.
 func (d interactionDeps) check() error {
 	switch {
@@ -102,11 +102,23 @@ func (d interactionDeps) recovered(step string, fn func() error) error {
 	return nil
 }
 
-// newTap builds the intake of pauses, with a session that is bound later, and the tap that hands the
-// renderer's turns' pauses to it. The manager is built over the tap, and the session bound to the manager.
-func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession, error) {
+// interactionRuntime is constructed before the session manager. Both pause intake and answer
+// decisions share its one late session handle; no handler is installed after construction.
+type interactionRuntime struct {
+	tap      *interact.Tap
+	late     *lateSession
+	replies  *interact.TextReplies
+	pipeline *interact.Pipeline
+	votes    *feedback.Handler
+	replacer *interact.Replacer
+	worker   *interact.Worker
+	ready    chan struct{}
+}
+
+// build constructs the interaction graph without starting loops or accepting text decisions.
+func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) {
 	if err := d.check(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
@@ -114,27 +126,14 @@ func (d interactionDeps) newTap(inner session.Sink) (*interact.Tap, *lateSession
 		OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("interactions: the intake: %w", err)
+		return nil, fmt.Errorf("interactions: the intake: %w", err)
 	}
-	tap, err := interact.NewTap(interact.TapConfig{Sink: inner, Handler: intake, Lookup: d.bindings, Logger: d.log})
-	if err != nil {
-		return nil, nil, fmt.Errorf("interactions: the tap: %w", err)
-	}
-	return tap, late, nil
-}
-
-// start builds the parts that take a person's answer, finds again what an earlier run left, starts the
-// loops and registers every stop with stops. It returns the handler of the buttons that the Slack intake
-// takes. mgr has recovered its sessions: the sweeper starts after that, and the presses are recovered
-// after it, before the Slack intake opens, so that a press listed just before it finishes is not announced
-// after.
-func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *interact.Tap, stops *stopList) (func(context.Context, chat.Interaction) error, error) {
 	replacer, err := interact.NewReplacer(interact.ReplacerConfig{Store: d.st, Updater: d.platform, Logger: d.log})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the replacer: %w", err)
 	}
 	decider, err := interact.NewDecider(interact.DecideConfig{
-		Store: d.st, Auditor: d.auditor, Ephemerals: d.platform, Session: mgr, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
+		Store: d.st, Auditor: d.auditor, Ephemerals: d.platform, Session: late, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
 		OnDecision: d.metrics.InteractionDecision, Logger: d.log,
 	})
 	if err != nil {
@@ -148,18 +147,6 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the press pipeline: %w", err)
 	}
-	mgr.SetTextReplyHandler(func(ctx context.Context, key session.Key, reply store.Reply, task a2a.Task) (bool, error) {
-		if reply.InteractionID == "" {
-			sess, err := d.st.GetSession(ctx, key, 100*365*24*time.Hour, time.Now())
-			if err != nil {
-				return false, err
-			}
-			if err := tap.PauseNow(ctx, interact.Pause{Key: key, Binding: sess.Binding, Task: task}); err != nil {
-				return false, err
-			}
-		}
-		return pipeline.TextReply(ctx, key, reply, task)
-	})
 	votes, err := feedback.New(feedback.Config{
 		Store: d.st, Sessions: d.st, Authorizer: d.platform, Ephemerals: d.platform, Auditor: d.auditor,
 		Notify: func(p store.Press) { worker.Submit(p) }, Logger: d.log,
@@ -170,6 +157,23 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pressRouter{interactions: pipeline, feedback: votes}, Logger: d.log}); err != nil {
 		return nil, fmt.Errorf("interactions: the worker: %w", err)
 	}
+	tap, err := interact.NewTap(interact.TapConfig{Sink: inner, Handler: intake, Lookup: d.bindings, Logger: d.log})
+	if err != nil {
+		return nil, fmt.Errorf("interactions: the tap: %w", err)
+	}
+
+	ready := make(chan struct{})
+	replies, err := interact.NewTextReplies(pipeline, intake, ready)
+	if err != nil {
+		return nil, fmt.Errorf("interactions: text replies: %w", err)
+	}
+	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, ready: ready}, nil
+}
+
+// start recovers presses and starts the interaction loops after session recovery. Only then
+// may the already-constructed text handler decide replies. Stops retain their existing order.
+func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *interactionRuntime, stops *stopList) (func(context.Context, chat.Interaction) error, error) {
+	tap, pipeline, votes, replacer, worker := r.tap, r.pipeline, r.votes, r.replacer, r.worker
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
 		Store: d.st, Sessions: d.st, Session: mgr, Updater: d.platform, Outbox: d.ob, Auditor: d.auditor,
 		Presses: d.st, OnTimeout: d.metrics.InteractionTimeout, Logger: d.log,
@@ -202,6 +206,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, tap *i
 			d.log.Warn("closing the pause tap", "error", err)
 		}
 	})
+	close(r.ready) // every text handler exists before recovery, but decisions wait for these loops
 	d.traced("start-interactions")
 	return interactionsHandler(pipeline, votes, d.log), nil
 }

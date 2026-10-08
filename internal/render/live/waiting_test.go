@@ -113,7 +113,7 @@ func TestAReplyThatWaitedLosesItsHourglassWhenItIsSent(t *testing.T) {
 	m, err := session.New(session.Config{
 		Store: e.store, Bindings: oneBinding{session.Backend{ThreadTTL: time.Hour, Agent: ag}}, Audit: noAudit{},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Sink: noticeSink{e.sink(t, e.ob)},
-		Users: idOnly{}, Questions: e.store, ThreadContext: session.NoThreadContext, OnTurnEnd: func(string, session.TurnOutcome) {},
+		Users: idOnly{}, Questions: e.store, TextReply: session.NoTextReply, ThreadContext: session.NoThreadContext, OnTurnEnd: func(string, session.TurnOutcome) {},
 	})
 	if err != nil {
 		t.Fatal(err)

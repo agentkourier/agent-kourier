@@ -140,6 +140,8 @@ func (s *spyStore) EnqueueReply(ctx context.Context, r store.Reply) (bool, error
 }
 
 type fixture struct {
+	replyMu          sync.RWMutex
+	textReply        func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error)
 	t                *testing.T
 	st               *spyStore
 	raw              *sqlite.Store // the store under st, for what the manager does not write itself: interactions
@@ -217,7 +219,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { _ = s.Close() })
 	f := &fixture{t: t, st: &spyStore{Store: s, fail: map[string]error{}, stuck: map[string]error{}}, raw: s, qs: &spyQuestions{Questions: s}, agent: newFakeAgent()}
 	f.now.Store(t0.UnixNano())
-	f.m, err = New(Config{Store: f.st, Questions: f.qs, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
+	f.m, err = New(Config{Store: f.st, Questions: f.qs, TextReply: f.decideTextReply, Bindings: f, Audit: f, Users: idOnly{}, Sink: quietSink{}, ThreadContext: NoThreadContext, OnTurnEnd: noTurnEnd, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return time.Unix(0, f.now.Load()).UTC() }})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -932,4 +934,22 @@ func TestCarryOutRefusesAnAdmissionItDoesNotKnow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// setTextReply changes the fake decision, not the manager's constructed dependency. The mutex
+// only guards the fake; calls run outside it so a decision can re-enter Manager.Answer or Cancel.
+func (f *fixture) setTextReply(h func(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome, error)) {
+	f.replyMu.Lock()
+	f.textReply = h
+	f.replyMu.Unlock()
+}
+
+func (f *fixture) decideTextReply(ctx context.Context, key Key, reply store.Reply, task a2a.Task) (TextReplyOutcome, error) {
+	f.replyMu.RLock()
+	h := f.textReply
+	f.replyMu.RUnlock()
+	if h == nil {
+		return NoTextReply(ctx, key, reply, task)
+	}
+	return h(ctx, key, reply, task)
 }
