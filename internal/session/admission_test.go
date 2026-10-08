@@ -232,9 +232,9 @@ func TestAdmissionQueues(t *testing.T) {
 	}
 }
 
-// What the intake writes is what Queued and WasAdmitted read, for every kind of admission: a reply is in the queue
+// What the intake writes is what Queued and WereAdmitted read, for every kind of admission: a reply is in the queue
 // exactly when it was admitted as a turn or an answer, and it is read back as the same kind, pinned to the same question.
-func TestSubmitWritesWhatQueuedAndWasAdmittedRead(t *testing.T) {
+func TestSubmitWritesWhatQueuedAndWereAdmittedRead(t *testing.T) {
 	const live, expired = 0 * time.Hour, 2 * time.Hour
 	tests := []struct {
 		name      string
@@ -272,9 +272,9 @@ func TestSubmitWritesWhatQueuedAndWasAdmittedRead(t *testing.T) {
 			if err != nil || res.Admission != tt.want {
 				t.Fatalf("Submit = %+v, %v; want %+v", res, err, tt.want)
 			}
-			admitted, err := WasAdmitted(t.Context(), f.raw, in.MessageID)
-			if err != nil || admitted != tt.want.Queues() {
-				t.Fatalf("WasAdmitted = %v, %v; want %v", admitted, err, tt.want.Queues())
+			admitted, err := WereAdmitted(t.Context(), f.raw, []string{in.MessageID, "never-sent"})
+			if err != nil || admitted[in.MessageID] != tt.want.Queues() || admitted["never-sent"] {
+				t.Fatalf("WereAdmitted = %v, %v; want the message %v and the unknown one not", admitted, err, tt.want.Queues())
 			}
 			rows := f.drain()
 			if len(rows) != map[bool]int{true: 1, false: 0}[tt.want.Queues()] {
@@ -289,13 +289,15 @@ func TestSubmitWritesWhatQueuedAndWasAdmittedRead(t *testing.T) {
 
 type failingRecord struct{ err error }
 
-func (r failingRecord) HasReply(context.Context, string) (bool, error) { return false, r.err }
+func (r failingRecord) HasReplies(context.Context, []string) (map[string]bool, error) {
+	return nil, r.err
+}
 
 // A queue that cannot say is an error, never "not admitted": the reply would be shown to the agent a second time.
-func TestWasAdmittedPassesAStoreErrorOn(t *testing.T) {
+func TestWereAdmittedPassesAStoreErrorOn(t *testing.T) {
 	boom := errors.New("database is locked")
-	if admitted, err := WasAdmitted(t.Context(), failingRecord{boom}, "slack:slack:C1:1"); admitted || !errors.Is(err, boom) {
-		t.Errorf("WasAdmitted = %v, %v; want false and the store's error", admitted, err)
+	if admitted, err := WereAdmitted(t.Context(), failingRecord{boom}, []string{"slack:slack:C1:1"}); len(admitted) != 0 || !errors.Is(err, boom) {
+		t.Errorf("WereAdmitted = %v, %v; want nothing and the store's error", admitted, err)
 	}
 }
 

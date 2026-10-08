@@ -31,6 +31,10 @@ type Reply struct {
 	EnqueuedAt    time.Time
 }
 
+// MaxReplyIDs is the most IDs that one HasReplies call may ask about (ErrInvalid above it). It bounds the size of one
+// call, and so of the statement or the chunks of statements that an adapter runs for it, not the answer.
+const MaxReplyIDs = 10000
+
 // ReplyQueue persists per-session FIFO queues of replies. Delivery is
 // at-least-once: the sender takes the head with NextReply, sends it, then
 // marks it delivered. A delivered reply stays as a tombstone (its text is
@@ -55,6 +59,11 @@ type ReplyQueue interface {
 	// a tombstone). It is how a caller tells a turn that was durably taken from one that never was. ErrInvalid for an
 	// empty ID.
 	HasReply(ctx context.Context, id string) (bool, error)
+	// HasReplies is HasReply for many IDs in one round trip: it returns the set of the IDs that were ever enqueued,
+	// queued or delivered, as a map whose every entry is true. IDs that were never enqueued are absent, a repeated ID
+	// counts once, and no IDs give an empty map (never nil) without a query. ErrInvalid for an empty ID among them or
+	// more than MaxReplyIDs.
+	HasReplies(ctx context.Context, ids []string) (map[string]bool, error)
 	// NextReply returns the oldest undelivered reply of the session, or
 	// ErrNotFound if there is none.
 	NextReply(ctx context.Context, key ConversationKey) (Reply, error)

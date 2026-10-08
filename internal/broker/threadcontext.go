@@ -49,7 +49,7 @@ type threadContextConfig struct {
 	// thread is asked of it by a type assertion on this value, as the trigger start asks for chat.Permalinker, and never of
 	// builtPlatform, which hides it.
 	Platform chat.Platform
-	// Replies is the reply queue, which session.WasAdmitted reads to tell a reply that was a turn or an answer.
+	// Replies is the reply queue, which session.WereAdmitted reads to tell a reply that was a turn or an answer.
 	Replies session.ReplyRecord
 	Logger  *slog.Logger
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
@@ -151,18 +151,27 @@ func (t *threadContext) read(ctx context.Context, target chat.Target, after, bef
 // forward, which is not courier's own (its answers and notes), not a bot's (D36), has a user, has text once normalized (a
 // reply of zero-width characters is blank to the block, and must not take one of its newest fifty places or cost a lookup)
 // and was not itself a turn or an answer (the reply queue holds it, queued or delivered), so the agent is not told what it
-// has already been sent.
+// has already been sent. The checks that need no lookup come first, and the reply queue is asked once, about what is left.
 func (t *threadContext) eligible(ctx context.Context, msgs []chat.HistoryMessage) ([]chat.HistoryMessage, error) {
-	var out []chat.HistoryMessage
+	var people []chat.HistoryMessage
+	var ids []string
 	for _, m := range msgs {
 		if m.Own || m.Ignored || m.Message.Bot != nil || m.Message.User == "" || strings.TrimSpace(redact.Normalize(m.Message.Text)) == "" {
 			continue
 		}
-		admitted, err := session.WasAdmitted(ctx, t.replies, chat.MessageID(m.Message.At))
-		if err != nil {
-			return nil, err
-		}
-		if !admitted {
+		people = append(people, m)
+		ids = append(ids, chat.MessageID(m.Message.At))
+	}
+	if len(people) == 0 {
+		return nil, nil
+	}
+	admitted, err := session.WereAdmitted(ctx, t.replies, ids)
+	if err != nil {
+		return nil, err
+	}
+	var out []chat.HistoryMessage
+	for i, m := range people {
+		if !admitted[ids[i]] {
 			out = append(out, m)
 		}
 	}

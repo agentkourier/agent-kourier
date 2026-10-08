@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -79,19 +80,31 @@ func (w *windowReader) reads() []readCall {
 // noReads is a platform that cannot read a thread: it does not implement chat.ThreadReader, as a platform that predates it.
 type noReads struct{ chat.Platform }
 
-// turnSet is a reply queue that knows which messages were turns.
+// turnSet is a reply queue that knows which messages were turns. It counts the lookups: eligible asks once for the whole
+// window, by HasReplies (the interface it is held to has no other lookup).
 type turnSet struct {
-	mu    sync.Mutex
-	ids   map[string]bool
-	err   error
-	asked []string
+	mu      sync.Mutex
+	ids     map[string]bool
+	err     error
+	asked   []string // every ID asked about, in the order asked
+	batches int      // the calls of HasReplies
 }
 
-func (s *turnSet) HasReply(_ context.Context, id string) (bool, error) {
+func (s *turnSet) HasReplies(_ context.Context, ids []string) (map[string]bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.asked = append(s.asked, id)
-	return s.ids[id], s.err
+	s.batches++
+	s.asked = append(s.asked, ids...)
+	if s.err != nil {
+		return nil, s.err
+	}
+	found := map[string]bool{}
+	for _, id := range ids {
+		if s.ids[id] {
+			found[id] = true
+		}
+	}
+	return found, nil
 }
 
 // tcWorld is a thread context over a platform, with its reply queue, its clock, its log and its metrics.
@@ -326,6 +339,71 @@ func TestThreadContextLeavesOutWhatIsNotAPersonsReply(t *testing.T) {
 			t.Errorf("HasReply was asked about %v, want %v", w.turns.asked, want)
 		}
 	})
+}
+
+// The reply queue is asked once for a window, whatever its size and however many of its messages the cheap checks leave
+// out, and what is shown and counted as left out is what one lookup per message gave: the newest fifty of the replies that
+// were not turns, the cut ones and the platform's own count added.
+func TestThreadContextAsksTheReplyQueueOnceForTheWholeWindow(t *testing.T) {
+	w := newTCWorld(t)
+	var people []string // the texts of the replies that were not turns, oldest first
+	var candidates []string
+	const total = threadFetchLimit + 100 // the platform leaves 100 of them out
+	for i := range total {
+		m := msg(i, "U1", fmt.Sprintf("reply %04d", i))
+		switch i % 7 {
+		case 3: // courier's own, a bot's and an ignored one never reach the queue
+			m.Own = true
+		case 4:
+			m.Message.Bot = &chat.BotMessage{BotID: "B1"}
+		case 5:
+			m.Ignored = true
+		default:
+			if i >= total-threadFetchLimit {
+				candidates = append(candidates, idOf(m))
+			}
+			if i%3 == 0 { // a turn
+				w.turns.ids[idOf(m)] = true
+			} else if i >= total-threadFetchLimit {
+				people = append(people, m.Message.Text)
+			}
+		}
+		w.win.window = append(w.win.window, m)
+	}
+
+	got := w.section()
+
+	if w.turns.batches != 1 {
+		t.Errorf("the reply queue was asked %d times, want one batch", w.turns.batches)
+	}
+	if !sameTexts(w.turns.asked, candidates) {
+		t.Errorf("the batch holds %d IDs, want the %d candidates of the window that the cheap checks let through, in order", len(w.turns.asked), len(candidates))
+	}
+	if want := people[len(people)-render.MaxThreadReplies:]; !sameTexts(shownTexts(got), want) {
+		t.Errorf("the section shows %v, want the newest %d replies that were not turns: %v", shownTexts(got), render.MaxThreadReplies, want)
+	}
+	if want := fmt.Sprintf("\n%d earlier replies left out.\n", 100+len(people)-render.MaxThreadReplies); !strings.Contains(got, want) {
+		t.Errorf("the section lacks %q:\n%s", strings.TrimSpace(want), got[max(0, len(got)-200):])
+	}
+}
+
+// A window with no message for the queue to be asked about is not asked about at all.
+func TestThreadContextDoesNotAskTheReplyQueueWhenNothingIsLeftToAskAbout(t *testing.T) {
+	w := newTCWorld(t)
+	own := msg(1, "U1", "courier's own")
+	own.Own = true
+	w.win.window = []chat.HistoryMessage{own}
+	w.section()
+	if w.turns.batches != 0 {
+		t.Errorf("the reply queue was asked %d times, want no lookup", w.turns.batches)
+	}
+}
+
+// One lookup for the thread cannot be more than the store takes in one call.
+func TestThreadFetchLimitFitsOneReplyLookup(t *testing.T) {
+	if threadFetchLimit > store.MaxReplyIDs {
+		t.Errorf("threadFetchLimit = %d, above store.MaxReplyIDs = %d: a full window would be refused", threadFetchLimit, store.MaxReplyIDs)
+	}
 }
 
 // The platform's limit and its count of what it left out are of every message, so courier's own posts of the previous turn

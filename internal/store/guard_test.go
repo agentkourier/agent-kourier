@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +246,19 @@ func enqueueReply(f func(*store.Reply)) call {
 
 func hasReply(id string) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.HasReply(ctx, id); return err }
+}
+
+// replyIDs returns n different, non-empty IDs.
+func replyIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = "r" + strconv.Itoa(i)
+	}
+	return ids
+}
+
+func hasReplies(ids []string) call {
+	return func(ctx context.Context, s store.Store) error { _, err := s.HasReplies(ctx, ids); return err }
 }
 
 func nextReply(k store.ConversationKey) call {
@@ -530,6 +544,11 @@ func specs() []spec {
 				"no EnqueuedAt": enqueueReply(func(r *store.Reply) { r.EnqueuedAt = time.Time{} }),
 			})},
 		{"HasReply", hasReply("r1"), map[string]call{"no ID": hasReply("")}},
+		{"HasReplies", hasReplies([]string{"r1", "r2"}), map[string]call{
+			"an empty ID among others": hasReplies([]string{"r1", "", "r2"}),
+			"only an empty ID":         hasReplies([]string{""}),
+			"over MaxReplyIDs":         hasReplies(replyIDs(store.MaxReplyIDs + 1)),
+		}},
 		{"NextReply", nextReply(key), withKeys(nextReply)},
 		{"NextReplyAfter", nextReplyAfter(key, 0), with(
 			withKeys(func(k store.ConversationKey) call { return nextReplyAfter(k, 0) }),
@@ -822,5 +841,29 @@ func TestCloseGoesToTheAdapter(t *testing.T) {
 	a := &fakeAdapter{}
 	if err := store.Guard(a).Close(); err != nil || !slices.Equal(a.calls, []string{"Close"}) {
 		t.Errorf("Close = %v, adapter calls %v; want one Close", err, a.calls)
+	}
+}
+
+// TestHasRepliesAcceptsNoIDsAndUpToTheBound: the edges of the one rule that is about how many IDs, tried on both sides.
+func TestHasRepliesAcceptsNoIDsAndUpToTheBound(t *testing.T) {
+	for name, c := range map[string]struct {
+		ids []string
+		ok  bool
+	}{
+		"nil":                {nil, true},
+		"none":               {[]string{}, true},
+		"MaxReplyIDs":        {replyIDs(store.MaxReplyIDs), true},
+		"one more than that": {replyIDs(store.MaxReplyIDs + 1), false},
+		"a repeated ID":      {[]string{"r1", "r1"}, true},
+		"MaxReplyIDs and an empty one at the end": {append(replyIDs(store.MaxReplyIDs-1), ""), false},
+	} {
+		a := &fakeAdapter{}
+		err := hasReplies(c.ids)(t.Context(), store.Guard(a))
+		if c.ok && (err != nil || len(a.calls) != 1) {
+			t.Errorf("%s: HasReplies = %v, adapter calls %v; want it legal and passed on", name, err, a.calls)
+		}
+		if !c.ok && (!errors.Is(err, store.ErrInvalid) || len(a.calls) != 0) {
+			t.Errorf("%s: HasReplies = %v, adapter calls %v; want ErrInvalid and no call", name, err, a.calls)
+		}
 	}
 }

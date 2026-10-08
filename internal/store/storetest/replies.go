@@ -48,6 +48,85 @@ func (su suite) replyQueue(t *testing.T) {
 		isErr(t, err, store.ErrInvalid, "HasReply with no ID")
 	})
 
+	su.run(t, "HasReplies returns the set of the IDs that were enqueued, queued or delivered", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		found := func(ids ...string) map[string]bool {
+			t.Helper()
+			got, err := s.HasReplies(ctx, ids)
+			noErr(t, err, fmt.Sprintf("HasReplies(%q)", ids))
+			if got == nil {
+				t.Fatalf("HasReplies(%q) returned a nil map; want an empty one when nothing was found", ids)
+			}
+			return got
+		}
+		sameSet := func(what string, got map[string]bool, want ...string) {
+			t.Helper()
+			if len(got) != len(want) {
+				t.Errorf("%s = %v; want %v", what, got, want)
+			}
+			for _, id := range want {
+				if !got[id] {
+					t.Errorf("%s = %v; want %v", what, got, want)
+				}
+			}
+		}
+		sameSet("no IDs", found())
+		sameSet("an empty slice", found([]string{}...))
+		sameSet("IDs never enqueued", found("r1", "r2"))
+
+		other := keyOf("2.2")
+		for id, k := range map[string]store.ConversationKey{"r1": key, "r2": key, "x1": other} {
+			_, err := s.EnqueueReply(ctx, newReply(id, k))
+			noErr(t, err, "enqueue "+id)
+		}
+		noErr(t, s.MarkReplyDelivered(ctx, "r2", t0), "mark delivered")
+		sameSet("queued, delivered, missing and another session's, in any order", found("zz", "x1", "r2", "nope", "r1"), "r1", "r2", "x1")
+		sameSet("a repeated ID", found("r1", "r1", "zz", "r1", "zz"), "r1")
+		sameSet("only missing IDs, repeated", found("zz", "zz"))
+		for _, id := range []string{"r1", "r2", "x1"} { // the batch and the single lookup tell the same
+			if one, err := s.HasReply(ctx, id); err != nil || !one || !found(id)[id] {
+				t.Errorf("HasReply(%s) = %v, %v; want the batch to agree", id, one, err)
+			}
+		}
+
+		_, err := s.HasReplies(ctx, []string{"r1", "", "r2"})
+		isErr(t, err, store.ErrInvalid, "HasReplies with an empty ID among others")
+		ids := make([]string, store.MaxReplyIDs+1)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("m%d", i)
+		}
+		_, err = s.HasReplies(ctx, ids)
+		isErr(t, err, store.ErrInvalid, "HasReplies with more than MaxReplyIDs IDs")
+	})
+
+	su.run(t, "HasReplies finds every ID of a list longer than one statement can carry", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		const total = 2500 // above SQLite's old limit of 999 variables and several times any chunk the adapters use
+		// The enqueued IDs sit on both sides of every multiple of 500 and 1000, so that a list cut into chunks of
+		// any size from 100 to 1000 puts some at the start and the end of a chunk.
+		at := []int{0, 1, 99, 100, 101, 499, 500, 501, 998, 999, 1000, 1001, 1499, 1500, 1999, 2000, 2499}
+		ids := make([]string, total)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("bulk-%d", i)
+		}
+		want := map[string]bool{}
+		for _, i := range at {
+			_, err := s.EnqueueReply(ctx, newReply(ids[i], key))
+			noErr(t, err, "enqueue "+ids[i])
+			want[ids[i]] = true
+		}
+		got, err := s.HasReplies(ctx, append(ids, ids[:50]...)) // 50 of them twice
+		noErr(t, err, "HasReplies")
+		if len(got) != len(want) {
+			t.Fatalf("HasReplies found %d of %d IDs", len(got), len(want))
+		}
+		for id := range want {
+			if !got[id] {
+				t.Errorf("HasReplies missed %s", id)
+			}
+		}
+	})
+
 	su.run(t, "replies of a session come back first in, first out, and sessions do not touch one another", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		other := keyOf("2.2")

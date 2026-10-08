@@ -121,6 +121,11 @@ press trace, with a link from the decision to the interaction that produced the
 prompt. Courier does not hold a conversation span
 open while waiting for human input.
 
+A lookup of many rows is one store operation, not one for each row: `courier.store.HasReplies`
+asks which of up to 10000 message IDs are in the reply queue (one query on Postgres, one
+for each 500 IDs on SQLite; the thread context of a mentioned turn uses it for the messages
+of a thread window), where `courier.store.HasReply` asks about one.
+
 Important span attributes include:
 
 - `courier.binding`, `courier.backend`, `courier.agent.name`, `courier.dialect`

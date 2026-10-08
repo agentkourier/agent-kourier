@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -28,6 +30,43 @@ func (s *adapter) HasReply(ctx context.Context, id string) (bool, error) {
 		return false, fmt.Errorf("has reply %q: %w", id, err)
 	}
 	return found, nil
+}
+
+// hasRepliesChunk is how many IDs one HasReplies statement carries: well under the 999 variables that older SQLite
+// builds allow, and a longer list (up to store.MaxReplyIDs) is asked in several statements.
+const hasRepliesChunk = 500
+
+// HasReplies implements store.ReplyQueue: one statement for each chunk of the IDs, which the unique index on id serves.
+func (s *adapter) HasReplies(ctx context.Context, ids []string) (map[string]bool, error) {
+	found := make(map[string]bool, len(ids))
+	for chunk := range slices.Chunk(ids, hasRepliesChunk) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		//nolint:gosec // G202: the text is "?" placeholders; every ID is an argument
+		rows, err := s.read.QueryContext(ctx, `SELECT id FROM reply_queue WHERE id IN (?`+strings.Repeat(`, ?`, len(chunk)-1)+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("has replies: %w", err)
+		}
+		if err := scanFound(rows, found); err != nil {
+			return nil, fmt.Errorf("has replies: %w", err)
+		}
+	}
+	return found, nil
+}
+
+// scanFound adds the IDs that rows holds to found, and closes rows.
+func scanFound(rows *sql.Rows, found map[string]bool) error {
+	defer func() { _ = rows.Close() }() // rows.Err below reports read failures
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		found[id] = true
+	}
+	return rows.Err()
 }
 
 // NextReply implements store.ReplyQueue.

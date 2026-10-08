@@ -16,7 +16,7 @@ import (
 // acknowledges the event and posts the notice.
 //
 // The decision is made once, at the intake, and read back from what it left, never made again: Queued says what a
-// reply in the queue was admitted as (the runner), and WasAdmitted whether a message was admitted at all (thread
+// reply in the queue was admitted as (the runner), and WereAdmitted which messages were admitted at all (thread
 // context). The one question left open at the intake is whether a reply queued as a turn is, now, the answer to the
 // question the paused task waits on: JudgeAnswer decides it for the runner, through the text-reply handler, and
 // IsTextQuestion is the shape of a question that a typed reply can answer.
@@ -63,7 +63,7 @@ type Admission struct {
 
 // Queues says the admission leaves a row in the reply queue: only a turn and an answer do, and every other kind
 // writes nothing (Manager.carryOut). That row, which stays as a tombstone once the reply is delivered, is the durable
-// record of the admission that WasAdmitted reads.
+// record of the admission that WereAdmitted reads.
 func (a Admission) Queues() bool { return a.Kind == AdmitTurn || a.Kind == AdmitAnswer }
 
 // Queued says what the reply r in the queue was admitted as: an answer to the question it was enqueued pinned to
@@ -76,18 +76,20 @@ func Queued(r store.Reply) Admission {
 	return Admission{Kind: AdmitTurn}
 }
 
-// ReplyRecord is the reply queue as WasAdmitted reads it (store.ReplyQueue).
+// ReplyRecord is the reply queue as WereAdmitted reads it (store.ReplyQueue).
 type ReplyRecord interface {
-	// HasReply reports whether a reply with this ID was ever enqueued, queued or delivered.
-	HasReply(ctx context.Context, id string) (bool, error)
+	// HasReplies reports which of the IDs were ever enqueued, queued or delivered, as a map whose every entry is true.
+	HasReplies(ctx context.Context, ids []string) (map[string]bool, error)
 }
 
-// WasAdmitted says whether the message with the ID messageID, a person's reply in a thread, was admitted as a turn or
-// an answer: the agent was sent it, or is to be. Every other reply (ignored, answered with a notice) left no row
-// (Admission.Queues). The decision itself cannot be made again from here: the question it depended on, and the mode,
-// are not the facts of the time the reply was written.
-func WasAdmitted(ctx context.Context, record ReplyRecord, messageID string) (bool, error) {
-	return record.HasReply(ctx, messageID)
+// WereAdmitted says which of the messages with the IDs messageIDs, people's replies in a thread, were admitted as a turn
+// or an answer: the agent was sent them, or is to be. It returns them as a map whose every entry is true; a message that
+// is not in it was not admitted. Every other reply (ignored, answered with a notice) left no row (Admission.Queues). The
+// decision itself cannot be made again from here: the question it depended on, and the mode, are not the facts of the
+// time the reply was written. A queue that cannot say is an error, never "not admitted": the reply would be shown to the
+// agent a second time.
+func WereAdmitted(ctx context.Context, record ReplyRecord, messageIDs []string) (map[string]bool, error) {
+	return record.HasReplies(ctx, messageIDs)
 }
 
 // IsTextQuestion says whether the interaction in is a question that a typed reply can answer: the agent asks the

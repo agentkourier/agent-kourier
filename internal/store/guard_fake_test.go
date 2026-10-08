@@ -147,6 +147,11 @@ func (f *fakeAdapter) HasReply(_ context.Context, _ string) (bool, error) {
 	return zero[bool](), f.err
 }
 
+func (f *fakeAdapter) HasReplies(_ context.Context, _ []string) (map[string]bool, error) {
+	f.record("HasReplies")
+	return zero[map[string]bool](), f.err
+}
+
 func (f *fakeAdapter) ListActiveSessions(_ context.Context) ([]store.Session, error) {
 	f.record("ListActiveSessions")
 	return zero[[]store.Session](), f.err

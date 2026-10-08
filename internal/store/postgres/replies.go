@@ -45,6 +45,30 @@ func (s *adapter) HasReply(ctx context.Context, id string) (bool, error) {
 	return found, nil
 }
 
+// HasReplies implements store.ReplyQueue: one statement for all the IDs, as an array that the unique index on id serves.
+func (s *adapter) HasReplies(ctx context.Context, ids []string) (map[string]bool, error) {
+	found := make(map[string]bool, len(ids))
+	if len(ids) == 0 {
+		return found, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM reply_queue WHERE id = ANY($1::text[])`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("has replies: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("has replies: %w", err)
+		}
+		found[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("has replies: %w", err)
+	}
+	return found, nil
+}
+
 // NextReply implements store.ReplyQueue.
 func (s *adapter) NextReply(ctx context.Context, key store.ConversationKey) (store.Reply, error) {
 	return s.nextReplyAfter(ctx, key, 0)

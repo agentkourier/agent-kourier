@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -28,6 +29,19 @@ func (g *Guarded) HasReply(ctx context.Context, id string) (found bool, err erro
 		}
 		var err error
 		found, err = g.a.HasReply(ctx, id)
+		return err
+	})
+	return found, err
+}
+
+// HasReplies implements ReplyQueue.
+func (g *Guarded) HasReplies(ctx context.Context, ids []string) (found map[string]bool, err error) {
+	err = g.run(ctx, "courier.store.HasReplies", func(ctx context.Context) error {
+		if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
+			return fmt.Errorf("has replies: %d IDs, none empty and at most %d, are required: %w", len(ids), MaxReplyIDs, ErrInvalid)
+		}
+		var err error
+		found, err = g.a.HasReplies(ctx, ids)
 		return err
 	})
 	return found, err
