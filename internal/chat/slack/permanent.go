@@ -8,7 +8,7 @@ import (
 
 // permanentCode returns the Slack error code in err if it says that the same post will never
 // succeed, and "" otherwise (including for an error that is not Slack's own). Those codes are a
-// channel that is gone, archived or that courier is not in, text that is too long, and blocks Slack
+// channel that is gone, archived or that Agent Kourier is not in, text that is too long, and blocks Slack
 // refuses; a rate limit, a server error or a timeout may pass on another try, and a rejected token is
 // the restart policy's. It reads the code scrub keeps, through any wrapping.
 //
@@ -16,7 +16,7 @@ import (
 // invalid_blocks and invalid_blocks_format for blocks it refuses, invalid_chunks for a chunk it refuses, and
 // streaming_mode_mismatch and cannot_provide_both_markdown_text_and_chunks for a stream that mixes the two modes
 // (documented, with chat.appendStream), and that no other code is
-// permanent for a post (a channel that is not found can be a private one courier was removed from).
+// permanent for a post (a channel that is not found can be a private one Agent Kourier was removed from).
 func permanentCode(err error) string {
 	var resp slackgo.SlackErrorResponse
 	if !errors.As(err, &resp) {
@@ -32,7 +32,7 @@ func permanentCode(err error) string {
 
 // reactionPermanentCode returns the Slack error code in err if it says that the same reaction will
 // never be made, and "" otherwise: a message, a name or a channel that is not there or is archived,
-// courier not in the channel, no item or a bad ts given, a thread that is locked, a message that
+// Agent Kourier not in the channel, no item or a bad ts given, a thread that is locked, a message that
 // takes no reactions, or a limit on reactions or emoji reached (which a retry does not lift). It is
 // not permanentCode, which is for posts; the two sets differ
 // (a reaction has no text to be too long). A rate limit, a server error or a timeout may pass on
@@ -40,7 +40,7 @@ func permanentCode(err error) string {
 // text merely mentions a code.
 //
 // UNCONFIRMED(WP-04): that these are the codes Slack answers with, in particular for a message that
-// was deleted and for a channel courier was removed from, that thread_locked, not_reactable,
+// was deleted and for a channel Agent Kourier was removed from, that thread_locked, not_reactable,
 // too_many_reactions, too_many_emoji and bad_timestamp are Slack's codes and none passes on a
 // retry, and that no other is permanent.
 func reactionPermanentCode(err error) string {

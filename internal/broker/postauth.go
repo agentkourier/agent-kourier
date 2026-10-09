@@ -19,7 +19,7 @@ type authWatch struct {
 // WatchAuth returns p with one addition: when a Post, a Find or a React fails with an error that the platform
 // classifies as a credential it rejects (chat.FatalAuth), report is called with the platform's code. The error and
 // the result are returned unchanged. The outbox treats such an error as transient, so a bot token revoked while
-// the connection is up would otherwise leave courier running and posting nothing; the report is how the post side
+// the connection is up would otherwise leave Agent Kourier running and posting nothing; the report is how the post side
 // tells the run policy (see WithAuthFailure). The edits, the stream calls and the ephemerals are not watched yet
 // (hardening).
 func WatchAuth(p outbox.Platform, report func(code string)) outbox.Platform {

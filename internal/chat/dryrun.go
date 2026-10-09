@@ -13,7 +13,7 @@ type HistoryMessage struct {
 	// Message is what the adapter would hand the Sink. For an Ignored message only At is set: where it was,
 	// so that a listing can show it.
 	Message Inbound
-	// Own says courier itself posted it. The adapter never forwards such a message, whatever a trigger names.
+	// Own says Agent Kourier itself posted it. The adapter never forwards such a message, whatever a trigger names.
 	Own bool
 	// Ignored says the adapter would drop it before the Sink: an edit, a deletion or any other subtype that
 	// starts nothing, and a bot's message with no content.
@@ -28,17 +28,17 @@ const (
 	// ReplayMatched is a bot message that a botMessage trigger took: it would be handed on for a turn.
 	ReplayMatched ReplayOutcome = "matched"
 	// ReplayUnmatched is a message of a bot that a trigger names, which no trigger took: a match regex, or
-	// an extract, failed. It is counted as courier_trigger_unmatched_total.
+	// an extract, failed. It is counted as agentkourier_trigger_unmatched_total.
 	ReplayUnmatched ReplayOutcome = "unmatched"
 	// ReplayExcluded is a message of a bot that a trigger names, whose match regexes all matched and whose
 	// exclude regex turned it away.
 	ReplayExcluded ReplayOutcome = "excluded"
 	// ReplayOtherBot is a message of a bot that no botMessage trigger names: the adapter drops it.
 	ReplayOtherBot ReplayOutcome = "other_bot"
-	// ReplayOwn is courier's own post, which is never forwarded.
+	// ReplayOwn is Agent Kourier's own post, which is never forwarded.
 	ReplayOwn ReplayOutcome = "own"
 	// ReplayPerson is a person's message, which no botMessage trigger sees: only a mention, or a reply
-	// in a thread courier owns, makes a turn of it.
+	// in a thread Agent Kourier owns, makes a turn of it.
 	ReplayPerson ReplayOutcome = "person"
 	// ReplayIgnored is a message the intake leaves alone whoever sent it: one the adapter drops, and a bot's
 	// reply inside a thread.
@@ -85,7 +85,7 @@ func NewReplay(b *v1alpha1.Binding) (*Replay, error) {
 }
 
 // Classify says what the intake would make of h.
-//   - A message the adapter drops, and courier's own post, never reach a trigger.
+//   - A message the adapter drops, and Agent Kourier's own post, never reach a trigger.
 //   - A person's message is no input of a botMessage trigger.
 //   - A bot that no trigger names is dropped by the adapter; a bot's reply inside a thread is ignored by the intake.
 //   - Any other bot message is tried against the triggers in order, by the intake's own matcher: the first match

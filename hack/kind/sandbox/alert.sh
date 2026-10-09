@@ -6,13 +6,13 @@
 # with the labels and annotations a kube-prometheus rule would give it for one of the faults seeded in namespace shop
 # (alertmanager/alerts.json, the presets). With the sandbox up, Alertmanager sends it to the owner's REAL alert channel,
 # tagged [kind], through the receiver slack-critical-kind (alertmanager/config.yaml); hack/kind/sandbox/README.md, Alert trial.
-# ALERT must be a preset: nothing else is ever posted. Every alert it posts carries the label courier_trial="true", which the receiver's
+# ALERT must be a preset: nothing else is ever posted. Every alert it posts carries the label agentkourier_trial="true", which the receiver's
 # route requires (alertmanager/config.yaml), so nothing else in the cluster can reach the production channel through it.
 #
 # A firing alert carries an end an hour away, so that one that is forgotten resolves itself; resolved posts the same alert,
 # with the same labels, with an end in the past. Pod names are read from the live pod, so a pod that was replaced between a
 # fire and its resolve makes the resolve a different alert: resolve before the pod is replaced, or let the hour pass.
-# Prints "sent: <alertname> <state>" and nothing else of the alert. Every kubectl call names --context kind-courier-full.
+# Prints "sent: <alertname> <state>" and nothing else of the alert. Every kubectl call names --context kind-agent-kourier-full.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) # hack/kind, which lib.sh's functions expect
@@ -37,8 +37,8 @@ for tool in kubectl kind; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 assert_context full
-[ "$("${K[@]}" -n monitoring get alertmanager courier -o 'jsonpath={.spec.configSecret}' 2>/dev/null || true)" = "${CONFIG_SECRET}" ] ||
-  die "the alert source is not configured: the full tier's Alertmanager is not the sandbox's (its configSecret is not ${CONFIG_SECRET}). Put the webhook URL in ~/.config/agent-courier/alertmanager-webhook-url and run: make sandbox-up (README, Alert trial)"
+[ "$("${K[@]}" -n monitoring get alertmanager agent-kourier -o 'jsonpath={.spec.configSecret}' 2>/dev/null || true)" = "${CONFIG_SECRET}" ] ||
+  die "the alert source is not configured: the full tier's Alertmanager is not the sandbox's (its configSecret is not ${CONFIG_SECRET}). Put the webhook URL in ~/.config/agent-kourier/alertmanager-webhook-url and run: make sandbox-up (README, Alert trial)"
 
 # The pod the alert is about, for the presets that name one: the live pod of the fault's app, which the agent can then look at.
 pod=
@@ -54,7 +54,7 @@ fi
 body=$(jq -c --arg a "${alert}" --arg pod "${pod}" --arg state "${state}" --argjson ttl "${FIRING_FOR}" '
   .[$a] | walk(if type == "string" then gsub("__POD__"; $pod) else . end) as $p
   | (now | floor) as $now
-  | [{labels: ($p.labels + {courier_trial: "true"}), annotations: $p.annotations,
+  | [{labels: ($p.labels + {agentkourier_trial: "true"}), annotations: $p.annotations,
       startsAt: (if $state == "resolved" then $now - 120 else $now end | todate),
       endsAt: (if $state == "resolved" then $now - 1 else $now + $ttl end | todate)}]' "${PRESETS}")
 

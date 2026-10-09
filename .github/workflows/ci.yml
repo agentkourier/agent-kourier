@@ -51,14 +51,14 @@ jobs:
           go-version-file: go.mod
           cache: true
       # The chart tests (test/chart) render with helm and skip without it, so CI installs it and
-      # COURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
+      # AGENTKOURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           # The version test/chart passes with; release.yml pins the same one.
           version: v4.3.0
       - run: make test-race
         env:
-          COURIER_REQUIRE_HELM: "1"
+          AGENTKOURIER_REQUIRE_HELM: "1"
       - run: make test-scripts
 
   # The same packages as the first pass but under ./internal/..., built with the testhooks tag: it did not finish in the

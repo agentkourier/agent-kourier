@@ -8,7 +8,7 @@ import (
 // Message content limits, from the Block Kit reference
 // (https://docs.slack.dev/reference/block-kit/blocks/ and the pages under it
 // for each block and element) and the chat.postMessage method page
-// (https://docs.slack.dev/reference/methods/chat.postMessage/). Courier's main
+// (https://docs.slack.dev/reference/methods/chat.postMessage/). Agent Kourier's main
 // output is long model text in section and markdown blocks, and WP-33 renders
 // interactions with buttons, so these must bite in tests before they bite in
 // the pilot.
@@ -231,7 +231,7 @@ func actionElementOK(raw json.RawMessage) bool {
 	return ok && n >= 1 && n <= maxButtonText && runes(e.Value) <= maxButtonValue
 }
 
-// knownBlock reports whether t is a block type Slack has. A type courier misspells, such as
+// knownBlock reports whether t is a block type Slack has. A type Agent Kourier misspells, such as
 // "markdownx", must fail here as it does there, not be stored.
 //
 // UNCONFIRMED(WP-04): the list, which is the block types the Block Kit reference names, and

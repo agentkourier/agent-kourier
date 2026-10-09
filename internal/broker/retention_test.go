@@ -313,7 +313,7 @@ func TestRunPurgesAuditEntriesPastTheConfiguredRetention(t *testing.T) {
 			r := start(t, c)
 			r.until("/readyz", 200)
 			for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the loop ran
-				if _, body := r.get("/metrics"); strings.Contains(body, `operation="courier.store.AbandonStrandedReplies"`) {
+				if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.AbandonStrandedReplies"`) {
 					break
 				}
 				if time.Now().After(deadline) {
@@ -322,7 +322,7 @@ func TestRunPurgesAuditEntriesPastTheConfiguredRetention(t *testing.T) {
 			}
 			if tc.retention > 0 { // the abandon ran first in a tick, so give the purge, which follows it, its turn
 				for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-					if _, body := r.get("/metrics"); strings.Contains(body, `operation="courier.store.PurgeAudit"`) {
+					if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeAudit"`) {
 						break
 					}
 					if time.Now().After(deadline) {
@@ -575,7 +575,7 @@ func TestRunDeletesSessionsExpiredForGood(t *testing.T) {
 	r := start(t, c)
 	r.until("/readyz", 200)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
-		if _, body := r.get("/metrics"); strings.Contains(body, `operation="courier.store.PurgeExpiredSessions"`) {
+		if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeExpiredSessions"`) {
 			break
 		}
 		if time.Now().After(deadline) {

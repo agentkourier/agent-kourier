@@ -1,4 +1,4 @@
-// Package chat is courier's chat-neutral model: what a conversation platform has to be for courier to
+// Package chat is Agent Kourier's chat-neutral model: what a conversation platform has to be for Agent Kourier to
 // run on it. A platform (Slack today) is one implementation of Platform, in its own package, and no
 // session, interact, render, outbox or store code names it (spec 13: adding a platform requires
 // implementing one interface).
@@ -22,7 +22,7 @@
 //     limit (Caps.Limit) with Truncated, and a single-line field on one line.
 //
 // What is left to this package's callers is what no platform differs on: redaction of secrets,
-// truncation policy for what to show, and the fixed texts courier wrote itself.
+// truncation policy for what to show, and the fixed texts Agent Kourier wrote itself.
 package chat
 
 // Ref locates a message. Only the adapter that made it reads its parts: Channel and ID mean what the
@@ -75,7 +75,7 @@ const (
 	WhereStream                  // the markdown a Stream appends: rich, like Body
 	WhereStepTitle               // Step.Title
 	WhereStepDetail              // Step.Detail
-	WhereUser                    // Ending.By, a user ID courier verified, shown as a mention only if it is one
+	WhereUser                    // Ending.By, a user ID Agent Kourier verified, shown as a mention only if it is one
 	wherePast                    // one past the last, for loops
 )
 

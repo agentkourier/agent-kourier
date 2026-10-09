@@ -38,7 +38,7 @@ const (
 	lanePrefix   = valueVersion + valueSep
 
 	// MaxAlertLabels is how many distinct alert names a Binding has a series of its own for in
-	// courier_investigation_feedback_total: the votes on any other name are counted under "other". The names of a
+	// agentkourier_investigation_feedback_total: the votes on any other name are counted under "other". The names of a
 	// Binding whose trigger allowlists its alerts are few; this is the bound for one that does not.
 	MaxAlertLabels = 100
 
@@ -90,7 +90,7 @@ func ParseValue(s string) (Value, bool) {
 
 // maxIDs is the most that the thread and the turn of a button take of its value, in bytes. A button's value has a bound of its
 // own on a platform (2000 characters on Slack), and a message that the platform refuses is lost whole: the buttons are left off
-// a message that is named by more than any ID courier makes (a message ID is about 40 bytes), and never cost its text.
+// a message that is named by more than any ID Agent Kourier makes (a message ID is about 40 bytes), and never cost its text.
 const maxIDs = 500
 
 // Parts are the parts that a final message of the kind, the output of turn in thread, gets under its text: the question and the
@@ -206,7 +206,7 @@ type pressInputs struct {
 // order they were made and the later one wins. It starts with lanePrefix, which no interaction's ID does.
 func laneOf(turn string) string { return lanePrefix + turn }
 
-// Press records a press of a feedback button and returns, at courier's own clock. It returns ErrNotFeedback for a button that
+// Press records a press of a feedback button and returns, at Agent Kourier's own clock. It returns ErrNotFeedback for a button that
 // is not one, and store.ErrLimit when too many presses wait. A press that names no person or message is acknowledged and
 // dropped.
 func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
@@ -301,7 +301,7 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 	if err := h.cfg.Auditor.FeedbackVote(ctx, actor, audit.FeedbackVote{Turn: v.Turn, Channel: press.Channel, Thread: v.Thread, Verdict: v.Verdict, Changed: previous != ""}); err != nil {
 		h.cfg.Logger.WarnContext(ctx, "feedback: a vote was not audited", "binding", sess.Binding, "err", err)
 	}
-	telemetry.Count(ctx, "courier_investigation_feedback_total", sess.Binding, agent, h.label(sess.Binding, v.Kind, sess.Alert), string(v.Verdict))
+	telemetry.Count(ctx, "agentkourier_investigation_feedback_total", sess.Binding, agent, h.label(sess.Binding, v.Kind, sess.Alert), string(v.Verdict))
 	return h.finish(ctx, press, to, "Thanks, your vote is recorded as "+words(v.Verdict)+". To change it, press the other button.")
 }
 

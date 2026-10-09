@@ -157,7 +157,7 @@ func (t *Tap) run(caller context.Context, id string, p Pause) {
 	defer func() { t.mu.Lock(); delete(t.flying, id); t.mu.Unlock() }()
 	deadline := t.deadline(p.Binding, p.Task)
 	for tries := 1; ; tries++ {
-		attemptCtx, op := telemetry.Start(ctx, "courier.interaction.pause")
+		attemptCtx, op := telemetry.Start(ctx, "agentkourier.interaction.pause")
 		err := t.cfg.Handler.Paused(attemptCtx, p)
 		op.Finish(err)
 		switch {

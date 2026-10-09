@@ -31,7 +31,7 @@ func flushOne(t *testing.T, c Config, attrs ...attribute.KeyValue) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, op := Start(WithObserver(t.Context(), obs), "courier.intake", attrs...)
+	_, op := Start(WithObserver(t.Context(), obs), "agentkourier.intake", attrs...)
 	op.Finish(nil)
 	flush, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -53,13 +53,13 @@ func TestSpanAttributeValuesAreBounded(t *testing.T) {
 	}))
 	defer collector.Close()
 	flushOne(t, Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "test", SampleRatio: 1},
-		attribute.String("courier.task.id", strings.Repeat("x", 4096)), attribute.String("courier.context.id", "short"))
+		attribute.String("agentkourier.task.id", strings.Repeat("x", 4096)), attribute.String("agentkourier.context.id", "short"))
 	got := map[string]string{}
 	for _, a := range (<-received).ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes {
 		got[a.Key] = a.Value.GetStringValue()
 	}
-	if len(got["courier.task.id"]) != 256 || got["courier.context.id"] != "short" {
-		t.Fatalf("task id has %d bytes, want 256; context id %q", len(got["courier.task.id"]), got["courier.context.id"])
+	if len(got["agentkourier.task.id"]) != 256 || got["agentkourier.context.id"] != "short" {
+		t.Fatalf("task id has %d bytes, want 256; context id %q", len(got["agentkourier.task.id"]), got["agentkourier.context.id"])
 	}
 }
 

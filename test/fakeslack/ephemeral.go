@@ -29,7 +29,7 @@ func (s *Server) Ephemerals(channel string) []Ephemeral {
 }
 
 // postEphemeral implements chat.postEphemeral
-// (https://docs.slack.dev/reference/methods/chat.postEphemeral/), which courier
+// (https://docs.slack.dev/reference/methods/chat.postEphemeral/), which Agent Kourier
 // uses to tell one user, say, that an answer was incomplete. The message is
 // kept apart from the channel's messages, since nobody else could read it.
 //

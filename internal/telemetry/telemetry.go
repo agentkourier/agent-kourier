@@ -1,4 +1,4 @@
-// Package telemetry records courier operations without capturing message contents or credentials.
+// Package telemetry records Agent Kourier operations without capturing message contents or credentials.
 // Each broker owns its tracer and registry; there is no global provider.
 package telemetry
 
@@ -31,14 +31,14 @@ type Observer struct {
 	gauges     map[string]*prometheus.GaugeVec
 }
 
-// New registers courier's operation and domain instruments in reg.
+// New registers Agent Kourier's operation and domain instruments in reg.
 func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, error) {
 	if provider == nil {
 		provider = noop.NewTracerProvider()
 	}
 	o := &Observer{tracer: provider.Tracer("github.com/agentkourier/agent-kourier"),
 		counts: map[string]*prometheus.CounterVec{}, histograms: map[string]*prometheus.HistogramVec{}, gauges: map[string]*prometheus.GaugeVec{}}
-	o.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "courier_operation_duration_seconds", Help: "Duration of finite courier operations, including failed attempts.", Buckets: durationBuckets()}, []string{"operation", "outcome"})
+	o.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_operation_duration_seconds", Help: "Duration of finite Agent Kourier operations, including failed attempts.", Buckets: durationBuckets()}, []string{"operation", "outcome"})
 	if err := reg.Register(o.duration); err != nil {
 		return nil, err
 	}
@@ -46,19 +46,19 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		name, help string
 		labels     []string
 	}{
-		{"courier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition"}},
-		{"courier_thread_unmentioned_total", "Replies in a thread courier owns that a mention-only Binding ignored because they did not mention courier, by Binding.", []string{"binding"}},
-		{"courier_thread_context_total", "Thread contexts a mentioned turn of a mention-only Binding asked for, by Binding and outcome (read, empty, cut, failed, unsupported).", []string{"binding", "outcome"}},
-		{"courier_trigger_matched_total", "Bot messages a botMessage trigger matched, by Binding.", []string{"binding"}},
-		{"courier_trigger_unmatched_total", "Bot messages the platform passed on that matched none of the Binding's triggers, by Binding.", []string{"binding"}},
-		{"courier_trigger_decisions_total", "What a matched bot message did to its key's thread, by Binding and decision (started, repeat, closed, close_unknown, dedup, empty_key, not_started, limited).", []string{"binding", "decision"}},
-		{"courier_trigger_limited_total", "Trigger starts a limit stopped, so no investigation began, by Binding, trigger index and the limit (rate, concurrent, daily).", []string{"binding", "trigger", "limit"}},
-		{"courier_trigger_refused_total", "Trigger starts whose first prompt was refused, so no turn started, by Binding, trigger index, the value that failed its check (ref) and why (reason).", []string{"binding", "trigger", "ref", "reason"}},
-		{"courier_investigation_feedback_total", "Votes cast on the final message of an investigation or an answer, by Binding, agent, alert name (none for a thread no alert started, unknown for an alert with no name, other past 100 names for a Binding) and verdict (useful, not_useful). A vote that changes another is one more vote, under its new verdict.", []string{"binding", "agent", "alertname", "verdict"}},
-		{"courier_stream_reconnects_total", "Stream reconnect attempts by outcome.", []string{"outcome"}},
-		{"courier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
-		{"courier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},
-		{"courier_chat_api_calls_total", "Chat API operations, including logical errors over HTTP 200.", []string{"operation", "outcome"}},
+		{"agentkourier_intake_total", "Inbound messages and presses by intake disposition.", []string{"source", "disposition"}},
+		{"agentkourier_thread_unmentioned_total", "Replies in a thread Agent Kourier owns that a mention-only Binding ignored because they did not mention courier, by Binding.", []string{"binding"}},
+		{"agentkourier_thread_context_total", "Thread contexts a mentioned turn of a mention-only Binding asked for, by Binding and outcome (read, empty, cut, failed, unsupported).", []string{"binding", "outcome"}},
+		{"agentkourier_trigger_matched_total", "Bot messages a botMessage trigger matched, by Binding.", []string{"binding"}},
+		{"agentkourier_trigger_unmatched_total", "Bot messages the platform passed on that matched none of the Binding's triggers, by Binding.", []string{"binding"}},
+		{"agentkourier_trigger_decisions_total", "What a matched bot message did to its key's thread, by Binding and decision (started, repeat, closed, close_unknown, dedup, empty_key, not_started, limited).", []string{"binding", "decision"}},
+		{"agentkourier_trigger_limited_total", "Trigger starts a limit stopped, so no investigation began, by Binding, trigger index and the limit (rate, concurrent, daily).", []string{"binding", "trigger", "limit"}},
+		{"agentkourier_trigger_refused_total", "Trigger starts whose first prompt was refused, so no turn started, by Binding, trigger index, the value that failed its check (ref) and why (reason).", []string{"binding", "trigger", "ref", "reason"}},
+		{"agentkourier_investigation_feedback_total", "Votes cast on the final message of an investigation or an answer, by Binding, agent, alert name (none for a thread no alert started, unknown for an alert with no name, other past 100 names for a Binding) and verdict (useful, not_useful). A vote that changes another is one more vote, under its new verdict.", []string{"binding", "agent", "alertname", "verdict"}},
+		{"agentkourier_stream_reconnects_total", "Stream reconnect attempts by outcome.", []string{"outcome"}},
+		{"agentkourier_session_recovery_total", "Session recovery and reconciliation outcomes.", []string{"outcome"}},
+		{"agentkourier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},
+		{"agentkourier_chat_api_calls_total", "Chat API operations, including logical errors over HTTP 200.", []string{"operation", "outcome"}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {
@@ -71,11 +71,11 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		labels     []string
 	}{
 		{"http_client_request_duration_seconds", "HTTP client duration through response EOF or close.", []string{"http_request_method", "server_address", "http_response_status_code", "error_type"}},
-		{"courier_slack_ack_duration_seconds", "Envelope receipt to acknowledgement attempt completion.", []string{"outcome"}},
-		{"courier_turn_queue_wait_seconds", "Enqueue to the first execution attempt in this process.", []string{"binding"}},
-		{"courier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
-		{"courier_outbox_delivery_duration_seconds", "Durable row creation to successful delivery or adoption.", []string{"role", "mode"}},
-		{"courier_interaction_wait_seconds", "Interaction creation to its first durable resolution.", []string{"kind", "outcome"}},
+		{"agentkourier_slack_ack_duration_seconds", "Envelope receipt to acknowledgement attempt completion.", []string{"outcome"}},
+		{"agentkourier_turn_queue_wait_seconds", "Enqueue to the first execution attempt in this process.", []string{"binding"}},
+		{"agentkourier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
+		{"agentkourier_outbox_delivery_duration_seconds", "Durable row creation to successful delivery or adoption.", []string{"role", "mode"}},
+		{"agentkourier_interaction_wait_seconds", "Interaction creation to its first durable resolution.", []string{"kind", "outcome"}},
 	} {
 		h := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: d.name, Help: d.help, Buckets: durationBuckets()}, d.labels)
 		if err := reg.Register(h); err != nil {
@@ -87,8 +87,8 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		name, help string
 		labels     []string
 	}{
-		{"courier_sessions_active", "Conversation runners currently active in this process.", nil},
-		{"courier_sessions_paused", "Conversation runners currently awaiting input in this process.", nil},
+		{"agentkourier_sessions_active", "Conversation runners currently active in this process.", nil},
+		{"agentkourier_sessions_paused", "Conversation runners currently awaiting input in this process.", nil},
 	} {
 		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(g); err != nil {
@@ -138,8 +138,8 @@ func Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (conte
 // parent span context, so background polling records metrics without creating root traces.
 func StartKind(ctx context.Context, name string, kind trace.SpanKind, attrs ...attribute.KeyValue) (context.Context, *Operation) {
 	o := observer(ctx)
-	tracer := noop.NewTracerProvider().Tracer("courier")
-	if o != nil && (!strings.HasPrefix(name, "courier.store.") || trace.SpanContextFromContext(ctx).IsValid()) {
+	tracer := noop.NewTracerProvider().Tracer("agent-kourier")
+	if o != nil && (!strings.HasPrefix(name, "agentkourier.store.") || trace.SpanContextFromContext(ctx).IsValid()) {
 		tracer = o.tracer
 	}
 	ctx, span := tracer.Start(ctx, name, trace.WithSpanKind(kind), trace.WithAttributes(attrs...))
@@ -158,7 +158,7 @@ func (op *Operation) FinishOutcome(err error, outcome string) {
 				op.span.SetStatus(codes.Error, outcome)
 			}
 		}
-		op.span.SetAttributes(attribute.String("courier.outcome", outcome))
+		op.span.SetAttributes(attribute.String("agentkourier.outcome", outcome))
 		if op.observer != nil {
 			op.observer.duration.WithLabelValues(op.name, outcome).Observe(time.Since(op.started).Seconds())
 			if op.httpMethod != "" {

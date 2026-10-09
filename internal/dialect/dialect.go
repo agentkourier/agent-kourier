@@ -1,4 +1,4 @@
-// Package dialect defines how courier talks to one kind of agent backend: where an agent
+// Package dialect defines how Agent Kourier talks to one kind of agent backend: where an agent
 // lives, how a request proves the Binding's identity, and how the acting chat user is
 // attributed. Implementations live in subpackages (kagentv1).
 package dialect

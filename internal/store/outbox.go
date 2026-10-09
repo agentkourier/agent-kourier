@@ -46,7 +46,7 @@ type OutboxEntry struct {
 	// Payload is the message to post, as JSON the store never interprets. It is cleared when
 	// the ref is recorded: from then on the text lives on the platform, not in the database too.
 	Payload string
-	// AbandonedAt is when courier gave up on posting the message; zero if it did not (see
+	// AbandonedAt is when Agent Kourier gave up on posting the message; zero if it did not (see
 	// AbandonOutbox).
 	AbandonedAt time.Time
 }

@@ -1,0 +1,19 @@
+# S16 (failover), case 2: the leader is killed between posting a reply and recording that it did (the testhooks fault of S5, armed on
+# both replicas), and the standby that takes over finds the post by its tag and does not post it again. The output is final, as S5's:
+# only a post through the outbox reaches the hook. A channel of its own; the identity token is the same Secret as fast-chat's. The
+# channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go. Fast tier on Postgres with two replicas only.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s16b, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: test-agent
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS16B
+    output: final

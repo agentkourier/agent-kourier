@@ -34,12 +34,12 @@ func TestFaultHookChild(t *testing.T) {
 	fmt.Println("recorded", ts.ID, err)
 }
 
-// child runs TestFaultHookChild in a new process on the database at path, with COURIER_FAULT set to
+// child runs TestFaultHookChild in a new process on the database at path, with AGENTKOURIER_FAULT set to
 // fault, and returns its output and how it ended.
 func child(t *testing.T, path, fault string) (string, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestFaultHookChild$")
-	cmd.Env = append(os.Environ(), "OUTBOX_CRASH_DB="+path, "COURIER_FAULT="+fault)
+	cmd.Env = append(os.Environ(), "OUTBOX_CRASH_DB="+path, "AGENTKOURIER_FAULT="+fault)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -65,7 +65,7 @@ func TestFaultHookKillsBetweenPostAndRecord(t *testing.T) {
 	for _, fault := range []string{"", "no-such-fault"} {
 		out, err := child(t, filepath.Join(dir, "calm"+fault+".db"), fault)
 		if err != nil || !strings.Contains(out, "recorded 100.001 <nil>") {
-			t.Errorf("child with COURIER_FAULT=%q: %v, output %q; want it to record", fault, err, out)
+			t.Errorf("child with AGENTKOURIER_FAULT=%q: %v, output %q; want it to record", fault, err, out)
 		}
 	}
 }

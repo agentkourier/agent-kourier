@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 }
 
 // TestSmoke proves the framework reaches every double from inside the cluster: an alert goes
-// through Alertmanager's routing to the sink, a fake Slack user mentions courier, which acks it, and
+// through Alertmanager's routing to the sink, a fake Slack user mentions Agent Kourier, which acks it, and
 // the thread reads back, and the sink pod restarts through the pod-control helpers.
 func TestSmoke(t *testing.T) {
 	env, ctx := NewEnv(os.Getenv), t.Context()
@@ -49,22 +49,22 @@ func TestSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A fake Slack user mentions courier, which is connected to the fake as it would be to Slack: the
+	// A fake Slack user mentions Agent Kourier, which is connected to the fake as it would be to Slack: the
 	// test opens no Socket Mode client of its own, because the fake sends envelopes to the newest
-	// connection and a second one would take them from courier. Both tiers have courier, and a missing or
+	// connection and a second one would take them from Agent Kourier. Both tiers have Agent Kourier, and a missing or
 	// rejected Deployment is a failure here, not a reason to skip.
 	sl := NewSlack(env.SlackURL)
 	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
 	}
-	deployed, err := pods.List(ctx, kube.CourierNamespace, "app.kubernetes.io/name=courier")
+	deployed, err := pods.List(ctx, kube.AgentKourierNamespace, "app.kubernetes.io/name=agent-kourier")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(deployed) == 0 {
-		t.Fatal("the tier has no courier pod: its Deployment is missing or was rejected")
+		t.Fatal("the tier has no Agent Kourier pod: its Deployment is missing or was rejected")
 	}
-	err = Wait(ctx, 2*time.Minute, "courier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
+	err = Wait(ctx, 2*time.Minute, "Agent Kourier to connect to the fake Slack", func(ctx context.Context) (bool, error) {
 		n, err := sl.Connections(ctx)
 		return n > 0, err
 	})
@@ -77,7 +77,7 @@ func TestSmoke(t *testing.T) {
 	}
 	for _, id := range mention.Envelopes {
 		if _, err := sl.AckWait(ctx, 15*time.Second, id); err != nil {
-			t.Fatalf("courier never acked the mention's event: %v", err)
+			t.Fatalf("Agent Kourier never acked the mention's event: %v", err)
 		}
 	}
 	thread, err := sl.Thread(ctx, mention.Channel, mention.TS)

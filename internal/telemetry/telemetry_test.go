@@ -35,11 +35,11 @@ func traced(t *testing.T) (context.Context, *tracetest.InMemoryExporter, *promet
 
 func TestDurableContextAndIsolation(t *testing.T) {
 	ctx, exporter, reg := traced(t)
-	root, op := Start(ctx, "courier.intake")
+	root, op := Start(ctx, "agentkourier.intake")
 	parent, state := Capture(root)
 	op.Finish(nil)
 	worker := Restore(ctx, parent, state)
-	child, attempt := Start(worker, "courier.turn.attempt")
+	child, attempt := Start(worker, "agentkourier.turn.attempt")
 	if trace.SpanContextFromContext(child).TraceID() != trace.SpanContextFromContext(root).TraceID() {
 		t.Fatal("durable work started a different trace")
 	}
@@ -50,7 +50,7 @@ func TestDurableContextAndIsolation(t *testing.T) {
 		t.Fatalf("span ancestry = %+v", spans)
 	}
 	_, other, otherReg := traced(t)
-	Count(ctx, "courier_intake_total", "message", "accepted")
+	Count(ctx, "agentkourier_intake_total", "message", "accepted")
 	if len(other.GetSpans()) != 0 {
 		t.Fatal("broker instances shared a provider")
 	}
@@ -59,7 +59,7 @@ func TestDurableContextAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range families {
-		if m.GetName() == "courier_operation_duration_seconds" {
+		if m.GetName() == "agentkourier_operation_duration_seconds" {
 			for _, series := range m.Metric {
 				if series.Histogram.GetSampleCount() != 1 {
 					t.Fatal("Finish counted twice")
@@ -72,7 +72,7 @@ func TestDurableContextAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range families {
-		if m.GetName() == "courier_intake_total" {
+		if m.GetName() == "agentkourier_intake_total" {
 			t.Fatal("metric crossed broker instances")
 		}
 	}
@@ -83,7 +83,7 @@ func TestDurableContextAndIsolation(t *testing.T) {
 
 func TestErrorTelemetryAndLogsExcludeContents(t *testing.T) {
 	ctx, exporter, _ := traced(t)
-	ctx, op := Start(ctx, "courier.agent.send")
+	ctx, op := Start(ctx, "agentkourier.agent.send")
 	const canary = "secret-token-and-prompt"
 	var logs bytes.Buffer
 	log := slog.New(LogHandler{Handler: slog.NewJSONHandler(&logs, nil)})
@@ -106,11 +106,11 @@ func TestErrorTelemetryAndLogsExcludeContents(t *testing.T) {
 	}
 }
 
-// Every operation is one observation of courier_operation_duration_seconds and of no other
+// Every operation is one observation of agentkourier_operation_duration_seconds and of no other
 // operation histogram: agent and store calls used to be counted again in a histogram of their own.
 func TestAnOperationIsOneDurationObservation(t *testing.T) {
 	ctx, _, reg := traced(t)
-	for _, name := range []string{"courier.agent.send", "courier.store.GetSession", "courier.outbox.deliver"} {
+	for _, name := range []string{"agentkourier.agent.send", "agentkourier.store.GetSession", "agentkourier.outbox.deliver"} {
 		_, op := Start(ctx, name)
 		op.Finish(nil)
 	}
@@ -121,7 +121,7 @@ func TestAnOperationIsOneDurationObservation(t *testing.T) {
 	observations := 0
 	for _, f := range families {
 		if strings.HasSuffix(f.GetName(), "operation_duration_seconds") {
-			if f.GetName() != "courier_operation_duration_seconds" {
+			if f.GetName() != "agentkourier_operation_duration_seconds" {
 				t.Errorf("a second operation histogram: %s", f.GetName())
 			}
 			for _, m := range f.Metric {
@@ -136,10 +136,10 @@ func TestAnOperationIsOneDurationObservation(t *testing.T) {
 
 func TestRecoveryLinksDoNotReplaceParent(t *testing.T) {
 	ctx, exporter, _ := traced(t)
-	original, op := Start(ctx, "courier.turn.attempt")
+	original, op := Start(ctx, "agentkourier.turn.attempt")
 	parent, state := Capture(original)
 	op.Finish(nil)
-	recovered, recovery := Start(ctx, "courier.turn.attempt")
+	recovered, recovery := Start(ctx, "agentkourier.turn.attempt")
 	Link(recovered, parent, state)
 	recovery.Finish(nil)
 	spans := exporter.GetSpans()
@@ -152,7 +152,7 @@ func TestHTTPPropagationAndResponseLifecycle(t *testing.T) {
 	for _, propagate := range []bool{true, false} {
 		t.Run(map[bool]string{true: "backend", false: "slack"}[propagate], func(t *testing.T) {
 			ctx, exporter, _ := traced(t)
-			ctx, root := Start(ctx, "courier.turn.attempt", attribute.String("courier.binding", "ns/b"))
+			ctx, root := Start(ctx, "agentkourier.turn.attempt", attribute.String("agentkourier.binding", "ns/b"))
 			expectedID := trace.SpanContextFromContext(ctx).TraceID()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if got := r.Header.Get("traceparent"); (got != "") != propagate {

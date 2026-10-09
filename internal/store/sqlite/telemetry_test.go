@@ -28,7 +28,7 @@ func TestPollingStoreSpansRequireParentAndKeepMetrics(t *testing.T) {
 	}
 	base := telemetry.WithObserver(t.Context(), obs)
 	s := openTemp(t)
-	parent, root := telemetry.Start(base, "courier.intake")
+	parent, root := telemetry.Start(base, "agentkourier.intake")
 	parentSC := trace.SpanContextFromContext(parent)
 	carrier, state := telemetry.Capture(parent)
 	for i, ctx := range []context.Context{base, parent, telemetry.Restore(base, carrier, state)} {
@@ -58,11 +58,11 @@ func TestPollingStoreSpansRequireParentAndKeepMetrics(t *testing.T) {
 	}
 	series := 0
 	for _, f := range families {
-		if f.GetName() != "courier_operation_duration_seconds" {
+		if f.GetName() != "agentkourier_operation_duration_seconds" {
 			continue
 		}
 		for _, m := range f.Metric {
-			if !strings.HasPrefix(m.Label[0].GetValue(), "courier.store.") {
+			if !strings.HasPrefix(m.Label[0].GetValue(), "agentkourier.store.") {
 				continue
 			}
 			series++
@@ -104,7 +104,7 @@ func TestBacklogsAndFirstInteractionResolution(t *testing.T) {
 	if _, err := s.AbandonOutbox(ctx, "abandoned", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := testutil.GatherAndCount(reg, "courier_reply_queue_depth", "courier_outbox_pending"); err != nil || n != 2 {
+	if n, err := testutil.GatherAndCount(reg, "agentkourier_reply_queue_depth", "agentkourier_outbox_pending"); err != nil || n != 2 {
 		t.Fatalf("backlog collectors: %d %v", n, err)
 	}
 	families, err := reg.Gather()
@@ -113,7 +113,7 @@ func TestBacklogsAndFirstInteractionResolution(t *testing.T) {
 	}
 	for _, f := range families {
 		switch f.GetName() {
-		case "courier_reply_queue_depth", "courier_outbox_pending":
+		case "agentkourier_reply_queue_depth", "agentkourier_outbox_pending":
 			if f.Metric[0].Gauge.GetValue() != 1 {
 				t.Errorf("%s=%v", f.GetName(), f.Metric[0].Gauge.GetValue())
 			}
@@ -135,7 +135,7 @@ func TestBacklogsAndFirstInteractionResolution(t *testing.T) {
 	}
 	found := false
 	for _, f := range families {
-		if f.GetName() == "courier_interaction_wait_seconds" {
+		if f.GetName() == "agentkourier_interaction_wait_seconds" {
 			found = true
 			if h := f.Metric[0].Histogram; h.GetSampleCount() != 1 || h.GetSampleSum() != 60 {
 				t.Fatalf("interaction wait=%v", h)

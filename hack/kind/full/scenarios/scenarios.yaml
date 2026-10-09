@@ -1,5 +1,5 @@
 # The Phase 1 scenario agents of the full tier (WP-36h), the kagent side of the stub agents the fast tier has by the
-# same names, so the scenario Bindings are the same in both tiers (full/courier/agentbackend.yaml). Each agent's
+# same names, so the scenario Bindings are the same in both tiers (full/agent-kourier/agentbackend.yaml). Each agent's
 # model is the scenario model (scenariollm.py), which plays the agent its ModelConfig header names; S5 and the
 # smoke test use test-agent on mockllm (agent.yaml). The tools are scenariomcp.py's: add_numbers is the S11
 # agent's, and needs approval before it runs; check_status and restart_service are the S13 agent's, which runs them

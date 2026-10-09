@@ -17,10 +17,10 @@ import (
 const followUpHint = "Mention me in this thread to ask a follow-up."
 
 // TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn: in a Binding with threadReplies mention, a reply in a
-// thread courier owns that does not mention courier is ignored: no message, no reaction, and the agent is not woken. The next
+// thread Agent Kourier owns that does not mention Agent Kourier is ignored: no message, no reaction, and the agent is not woken. The next
 // mention carries the replies since the previous turn, in a block of their own after its text, which the scenario agent
 // reports ("Turn N. Replies: K. Block: <tag>."): in a thread a mention started (case 1), and in one an alert started, where
-// courier's own note ("Fired again") is not a reply (case 2). A mention sent while the agent is held is queued, and an unmentioned
+// Agent Kourier's own note ("Fired again") is not a reply (case 2). A mention sent while the agent is held is queued, and an unmentioned
 // reply between the two is in the second one's window only: none lost, none sent twice (case 3). The ignored replies and the
 // contexts are counted (case 4). The final message of each turn ends with the follow-up hint, and nothing else does.
 //
@@ -30,12 +30,12 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 	if s.env.Tier != "fast" {
 		t.Skipf("scenario-context is a stub agent of the fast tier; the %s tier has no such agent", s.env.Tier)
 	}
-	const binding = "courier/fast-s18"
+	const binding = "agent-kourier/fast-s18"
 	unmentioned := func() float64 {
-		return s.counter("courier_thread_unmentioned_total", map[string]string{"binding": binding})
+		return s.counter("agentkourier_thread_unmentioned_total", map[string]string{"binding": binding})
 	}
 	contexts := func(outcome string) float64 {
-		return s.counter("courier_thread_context_total", map[string]string{"binding": binding, "outcome": outcome})
+		return s.counter("agentkourier_thread_context_total", map[string]string{"binding": binding, "outcome": outcome})
 	}
 	unmentionedBefore := unmentioned()
 	contextsBefore := map[string]float64{}
@@ -43,9 +43,9 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 		contextsBefore[outcome] = contexts(outcome)
 	}
 
-	// answers are courier's messages of a thread that hold an answer of the scenario agent, oldest first, once they end with
+	// answers are Agent Kourier's messages of a thread that hold an answer of the scenario agent, oldest first, once they end with
 	// the follow-up hint: a stream that has stopped is not yet the final message, whose footer comes with it (S17 waits for its
-	// buttons for the same reason). The bot's alert and a note of courier's are none.
+	// buttons for the same reason). The bot's alert and a note of Agent Kourier's are none.
 	isAnswer := func(m fakeslack.MessageView) bool {
 		return m.BotID != BotS18 && strings.Contains(m.Text, "Turn ") && finished(m) && strings.Contains(string(m.Blocks), followUpHint)
 	}
@@ -66,7 +66,7 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 			return len(got) >= n && re.MatchString(got[n-1].Text)
 		})
 	}
-	// quiet checks, for 5 seconds, that the unmentioned replies woke nothing: the thread holds no more of courier's messages than
+	// quiet checks, for 5 seconds, that the unmentioned replies woke nothing: the thread holds no more of Agent Kourier's messages than
 	// it did, and none of the replies has a reaction (the hourglass of a queued reply, or any other).
 	quiet := func(channel, ts string, replies ...fakeslack.UserMessage) {
 		t.Helper()
@@ -92,7 +92,7 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 			t.Fatalf("%v\nthe thread: %s", err, describe(th))
 		}
 	}
-	// hinted checks that the follow-up hint ends each answer once, and is on no other message of courier's.
+	// hinted checks that the follow-up hint ends each answer once, and is on no other message of Agent Kourier's.
 	hinted := func(th []fakeslack.MessageView) {
 		t.Helper()
 		for _, m := range BotMessages(th) {
@@ -117,9 +117,9 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 		t.Errorf("the thread holds %d answers; want the two turns' and none for the ignored replies", n)
 	}
 
-	// Case 2: an alert starts a thread through the bot's trigger. A reply without a mention is ignored, a fire again is courier's
+	// Case 2: an alert starts a thread through the bot's trigger. A reply without a mention is ignored, a fire again is Agent Kourier's
 	// note, and the next mention carries the one reply and not the note.
-	// The channel, the stub and courier's database outlive a run, and a key holds its thread for the cooldown, so the alert is
+	// The channel, the stub and Agent Kourier's database outlive a run, and a key holds its thread for the cooldown, so the alert is
 	// one no earlier run posted.
 	name := fmt.Sprintf("AlertS18x%d", time.Now().UnixNano()%1_000_000_000)
 	post := func(state string) fakeslack.UserMessage {
@@ -137,7 +137,7 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 	th = says(ChannelS18, alert.TS, 1, `Turn 1\. Replies: 0\. Block: none\.`)
 	hinted(th)
 	r3 := s.reply(ChannelS18, alert.TS, bob, "the pod restarted twice before this")
-	post("FIRING") // courier's note in the alert's thread, "Fired again at", is its own post and no reply of a person
+	post("FIRING") // Agent Kourier's note in the alert's thread, "Fired again at", is its own post and no reply of a person
 	s.thread(ChannelS18, alert.TS, "the note of the repeat", func(th []fakeslack.MessageView) bool {
 		for _, b := range BotMessages(th) {
 			if strings.Contains(b.Text, "Fired again at") && finished(b) {
@@ -192,7 +192,7 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 	hourglass(queued, false)
 	hinted(th)
 	// The reply came before the second mention and is sent with it: a third mention, after both, carries none of it again, and
-	// has no block (the window holds courier's own answer alone).
+	// has no block (the window holds Agent Kourier's own answer alone).
 	s.reply(ChannelS18, first.TS, cy, botMention+"anything new")
 	th = says(ChannelS18, first.TS, 3, `Turn 3\. Replies: 0\. Block: none\.`)
 	hinted(th)
@@ -206,12 +206,12 @@ func TestS18_OnlyAMentionIsATurnInAThreadAndItCarriesTheRepliesSinceTheLastTurn(
 		got  float64
 		diff float64
 	}{
-		{"courier_thread_context_total{outcome=cut}", contexts("cut") - contextsBefore["cut"], 0},
-		{"courier_thread_context_total{outcome=failed}", contexts("failed") - contextsBefore["failed"], 0},
-		{"courier_thread_context_total{outcome=unsupported}", contexts("unsupported") - contextsBefore["unsupported"], 0},
-		{"courier_thread_unmentioned_total", unmentioned() - unmentionedBefore, 4},
-		{"courier_thread_context_total{outcome=read}", contexts("read") - contextsBefore["read"], 3},
-		{"courier_thread_context_total{outcome=empty}", contexts("empty") - contextsBefore["empty"], 1},
+		{"agentkourier_thread_context_total{outcome=cut}", contexts("cut") - contextsBefore["cut"], 0},
+		{"agentkourier_thread_context_total{outcome=failed}", contexts("failed") - contextsBefore["failed"], 0},
+		{"agentkourier_thread_context_total{outcome=unsupported}", contexts("unsupported") - contextsBefore["unsupported"], 0},
+		{"agentkourier_thread_unmentioned_total", unmentioned() - unmentionedBefore, 4},
+		{"agentkourier_thread_context_total{outcome=read}", contexts("read") - contextsBefore["read"], 3},
+		{"agentkourier_thread_context_total{outcome=empty}", contexts("empty") - contextsBefore["empty"], 1},
 	} {
 		if want.got != want.diff {
 			t.Errorf("%s rose by %v; want %v", want.name, want.got, want.diff)

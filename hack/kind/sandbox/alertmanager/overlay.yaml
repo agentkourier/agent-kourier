@@ -4,7 +4,7 @@
 apiVersion: monitoring.coreos.com/v1
 kind: Alertmanager
 metadata:
-  name: courier
+  name: agent-kourier
   namespace: monitoring
 spec:
   # The base configuration (config.yaml), made by up.sh from the file there.

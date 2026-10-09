@@ -47,7 +47,7 @@ func run() error {
 	}
 	stateDir := os.Getenv("STATE_DIR")
 	if stateDir == "" {
-		stateDir = "/workspace/courier-state"
+		stateDir = "/workspace/agent-kourier-state"
 	}
 	server, err := agent.New(ctx, agent.Config{StateDir: stateDir, Model: &bedrock.Model{ID: model, Client: bedrockruntime.NewFromConfig(awsConfig)}, Authenticate: verify})
 	if err != nil {

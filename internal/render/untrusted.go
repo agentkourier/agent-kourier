@@ -37,7 +37,7 @@ import (
 // A caller hands over a field's value as it came. The module cleans it by the field's kind (see fieldKind: no kind
 // leaves text as it is), writes it escaped (escapeCut) and cut to the field's cap, and so no "<" of a value survives.
 // A field's name, an item's wrapper, the tag's prefix and the caller's clauses (Opening, Order, the noun of the last
-// line) are courier's own constants, never text of a message: do not build one from a label key or any other text of
+// line) are Agent Kourier's own constants, never text of a message: do not build one from a label key or any other text of
 // a sender. The module holds the caller to it. A name or a wrapper is a letter and then letters and digits, or its field
 // (its item, for a wrapper) is not written; a prefix is lower-case words and hyphens that end in a hyphen, or the
 // block's tag is named by fallbackTagPrefix; and the clauses are escaped as a value is, whatever they hold.
@@ -63,7 +63,7 @@ const (
 	// through its first Window bytes and cut at a character, not at white space, so that a body with none
 	// (Japanese, a long link) keeps its start.
 	kindWindow
-	// kindIdentifier is redact.IdentifierText: a line of identifiers, such as the footer "courier-key: ns/alertname",
+	// kindIdentifier is redact.IdentifierText: a line of identifiers, such as the footer "agent-kourier-key: ns/alertname",
 	// in which only what has the shape of a token is taken out and a "name: value" pair is kept.
 	kindIdentifier
 )
@@ -128,7 +128,7 @@ type oldestPolicy struct {
 type untrustedBlock struct {
 	// Opening is the caller's clause that says what the content is, the subject of the sentence that names the tag:
 	// "The message that triggered this", "Replies that people wrote in this thread since the previous turn,
-	// without mentioning courier". It is a constant of the caller's, and is escaped as text is all the same.
+	// without mentioning Agent Kourier". It is a constant of the caller's, and is escaped as text is all the same.
 	Opening string
 	// Plural says that Opening is plural, for the verbs of the lead.
 	Plural bool

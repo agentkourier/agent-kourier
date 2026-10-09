@@ -6,7 +6,7 @@ import (
 )
 
 // TriggerLimit names the limit that stopped a start (spec 8.2). It is the limit label of
-// courier_trigger_limited_total.
+// agentkourier_trigger_limited_total.
 type TriggerLimit string
 
 // The limits of a trigger. When more than one is reached the daily cap is reported first, then the rate, then the

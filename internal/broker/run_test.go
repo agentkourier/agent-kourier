@@ -48,7 +48,7 @@ func startConfig(t *testing.T) RunConfig {
 }
 
 // unmade is the path of a database that does not exist, for a test that shows Run left it so.
-func unmade(t *testing.T) string { return filepath.Join(t.TempDir(), "courier.db") }
+func unmade(t *testing.T) string { return filepath.Join(t.TempDir(), "agent-kourier.db") }
 
 // idleSlack is a Slack client that holds its connection until its context ends and calls nothing.
 type idleSlack struct{}
@@ -265,7 +265,7 @@ func TestRunAnswersHealthzWhileReadyzIsStillStarting(t *testing.T) {
 }
 
 // Before the first config load nothing is known to be fresh, so the gauge says stale: exporting 0 there
-// would claim a state courier has not reached, and an alert could key on it.
+// would claim a state Agent Kourier has not reached, and an alert could key on it.
 func TestRunExportsTheConfigAsStaleUntilItHasLoaded(t *testing.T) {
 	gate := make(chan struct{})
 	var open sync.Once
@@ -278,13 +278,13 @@ func TestRunExportsTheConfigAsStaleUntilItHasLoaded(t *testing.T) {
 	t.Cleanup(func() { open.Do(func() { close(gate) }) })
 
 	r.until("/healthz", http.StatusOK)
-	if _, body := r.get("/metrics"); !strings.Contains(body, "courier_config_stale 1\n") {
-		t.Errorf("a scrape before Bootstrap finishes lacks courier_config_stale 1:\n%s", body)
+	if _, body := r.get("/metrics"); !strings.Contains(body, "agentkourier_config_stale 1\n") {
+		t.Errorf("a scrape before Bootstrap finishes lacks agentkourier_config_stale 1:\n%s", body)
 	}
 	open.Do(func() { close(gate) })
 	r.until("/readyz", http.StatusOK)
-	if _, body := r.get("/metrics"); !strings.Contains(body, "courier_config_stale 0\n") {
-		t.Errorf("a scrape after the first load lacks courier_config_stale 0:\n%s", body)
+	if _, body := r.get("/metrics"); !strings.Contains(body, "agentkourier_config_stale 0\n") {
+		t.Errorf("a scrape after the first load lacks agentkourier_config_stale 0:\n%s", body)
 	}
 }
 
@@ -336,16 +336,16 @@ func TestRunReturnsNilWhenItsContextEndsAndLeavesNothingRunning(t *testing.T) {
 func TestRunRefusesTwoConnectionsBeforeItOpensTheStore(t *testing.T) {
 	c := startConfig(t)
 	c.DBPath = unmade(t)
-	second := `apiVersion: agentcourier.dev/v1alpha1
+	second := `apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
-metadata: { name: slack-two, namespace: courier-system }
+metadata: { name: slack-two, namespace: agent-kourier-system }
 spec: { platform: slack, mode: socket, credentialsSecretRef: { name: slack-two } }
 `
 	if err := os.WriteFile(filepath.Join(c.ConfigDir, "second.yaml"), []byte(second), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c.Client = fake.NewClientset(secretOf("courier-system", "slack-main", "botToken", "appToken"), secretOf("courier-system", "slack-two", "botToken", "appToken"),
-		secretOf("sre", "courier-sre-alerts-oidc", "token"), secretOf("sre", "courier-webhook-token", "token"))
+	c.Client = fake.NewClientset(secretOf("agent-kourier-system", "slack-main", "botToken", "appToken"), secretOf("agent-kourier-system", "slack-two", "botToken", "appToken"),
+		secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"), secretOf("sre", "agent-kourier-webhook-token", "token"))
 	r := start(t, c)
 
 	if err := r.wait(); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "slack-two") {

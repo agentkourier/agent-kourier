@@ -28,7 +28,7 @@ func (s *fakeSink) noticesOf(kind NoticeKind) (out []Notice) {
 }
 
 // A send that never left (ErrNotSent) is retried, the same messageId, after a backoff, and
-// the thread is told once that courier is retrying (spec 11).
+// the thread is told once that Agent Kourier is retrying (spec 11).
 func TestNotSentIsRetriedWithOneNotice(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
@@ -61,7 +61,7 @@ func TestNotSentIsRetriedWithOneNotice(t *testing.T) {
 
 // The first failed send of a turn is retried silently, after the usual backoff: the first call of a
 // new pod can fail and the next one work, and the thread need not hear of it. The notice that
-// courier is retrying goes out once, when the second send in a row has failed too (spec 11), for a
+// Agent Kourier is retrying goes out once, when the second send in a row has failed too (spec 11), for a
 // send that never left and for one of unknown outcome alike.
 func TestFirstFailedSendIsRetriedSilently(t *testing.T) {
 	notSent := func() error { return fmt.Errorf("%w: the agent is down", agent.ErrNotSent) }
@@ -422,11 +422,11 @@ func TestLostStreamIsFollowedUntilTheTaskEnds(t *testing.T) {
 
 // A task WORKING for longer than maxWorkingAge is presumed wedged (R17): it is cancelled, the
 // thread is told, the call is audited, and the queue goes on. The age is the agent's own
-// timestamp of the state, on courier's clock.
+// timestamp of the state, on Agent Kourier's clock.
 func TestWedgedTaskIsCancelledAfterMaxWorkingAge(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		now  time.Duration // how far past t0 courier's clock is when the stream drops
+		now  time.Duration // how far past t0 Agent Kourier's clock is when the stream drops
 		get  func(f *fixture) func(a2a.TaskID) (*a2a.Task, error)
 	}{
 		{"by the task's timestamp and its last event", 2 * time.Hour, func(*fixture) func(a2a.TaskID) (*a2a.Task, error) { return working(t0.Add(-2 * time.Hour)) }},
@@ -493,7 +493,7 @@ func TestLostStreamWithRefusedCredentialsIsNotFollowed(t *testing.T) {
 	}
 }
 
-// The agent no longer knows the task, or the session: the thread is told, the courier's record
+// The agent no longer knows the task, or the session: the thread is told, the Agent Kourier's record
 // of the agent's session is reset (and only that, so the thread stays owned), and the next turn
 // starts without a contextId, a fresh session (spec 8.2). UNCONFIRMED against kagent: what it
 // answers for a session it dropped.
@@ -604,7 +604,7 @@ func TestBusyResetsTheGiveUpClock(t *testing.T) {
 	}
 }
 
-// The thread is told once that courier is retrying, whatever failed first: a busy session, then
+// The thread is told once that Agent Kourier is retrying, whatever failed first: a busy session, then
 // two not-sent, is one run of trouble with one notice; a later turn's trouble gets its own. The
 // busy answer is no failed send to retry: the notice still waits for the second not-sent.
 func TestRetryingNoticeIsSentOncePerTurn(t *testing.T) {
@@ -807,7 +807,7 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 }
 
 // The age of a WORKING task counts from the later of its status timestamp and the last event
-// courier saw for it (R17): a healthy task that streamed for an hour and then dropped is
+// Agent Kourier saw for it (R17): a healthy task that streamed for an hour and then dropped is
 // followed, not cancelled. A state with no timestamp, or one in the future, says nothing about
 // age, and is not cancelled either.
 func TestTaskWithRecentLifeIsNotPresumedWedged(t *testing.T) {
@@ -844,7 +844,7 @@ func TestTaskWithRecentLifeIsNotPresumedWedged(t *testing.T) {
 	}
 }
 
-// A reply that keeps getting -32004 from a task courier never recorded is queued behind it,
+// A reply that keeps getting -32004 from a task Agent Kourier never recorded is queued behind it,
 // though nothing recorded says so (Submit answered Queued=false): the thread is told once, with
 // the same stable ID Submit's own queued notice has, so a renderer posts it at most once.
 func TestBusyFromAnUnrecordedBlockerTellsTheThread(t *testing.T) {
@@ -983,7 +983,7 @@ func TestSessionGoneSurvivesAFailedResetWithOneTurn(t *testing.T) {
 
 // A silent task that is WORKING but does nothing is presumed wedged even though every follow
 // begins by replaying its snapshot (R17). What a snapshot replays is not new life: only an event
-// that differs from what courier already holds (a new state, new text, a new tool call) is.
+// that differs from what Agent Kourier already holds (a new state, new text, a new tool call) is.
 func TestSilentTaskIsCancelledDespiteSnapshotsReplayedByEachFollow(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()

@@ -9,7 +9,7 @@ import (
 )
 
 // A message of the history is decoded by the code that decodes a live event, so the same messages are dropped, the same
-// ones are courier's own, and a bot's attachment is flattened the same way.
+// ones are Agent Kourier's own, and a bot's attachment is flattened the same way.
 func TestHistoryMessageDecodesAsALiveEventDoes(t *testing.T) {
 	me := self{user: "UME", bot: "BME"}
 	attach := []slackgo.Attachment{{Title: "FIRING (1) - A", TitleLink: "http://am", Fallback: "[FIRING:1] A | http://am", Text: "t", Footer: "f"}, {Title: "second"}}
@@ -26,10 +26,10 @@ func TestHistoryMessageDecodesAsALiveEventDoes(t *testing.T) {
 				Bot: &chat.BotMessage{BotID: "B1", Title: "FIRING (1) - A", TitleLink: "http://am", Fallback: "[FIRING:1] A | http://am", Footer: "f", AttachmentText: "t"}}},
 		{"a reply in a thread", slackgo.Message{Msg: slackgo.Msg{User: "U1", Text: "and now?", Timestamp: "1.4", ThreadTimestamp: "1.1"}}, false, false,
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", Thread: "1.1", ID: "1.4"}, User: "U1", Text: "and now?"}},
-		{"courier's own post, by bot ID", slackgo.Message{Msg: slackgo.Msg{BotID: "BME", SubType: "bot_message", Timestamp: "1.3", Attachments: attach[:1]}}, true, false,
+		{"agent-kourier's own post, by bot ID", slackgo.Message{Msg: slackgo.Msg{BotID: "BME", SubType: "bot_message", Timestamp: "1.3", Attachments: attach[:1]}}, true, false,
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.3"},
 				Bot: &chat.BotMessage{BotID: "BME", Title: "FIRING (1) - A", TitleLink: "http://am", Fallback: "[FIRING:1] A | http://am", Footer: "f", AttachmentText: "t"}}},
-		{"courier's own post, by user ID", slackgo.Message{Msg: slackgo.Msg{User: "UME", BotID: "BME", Text: "on it", Timestamp: "1.5"}}, true, false,
+		{"agent-kourier's own post, by user ID", slackgo.Message{Msg: slackgo.Msg{User: "UME", BotID: "BME", Text: "on it", Timestamp: "1.5"}}, true, false,
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.5"}, User: "UME", Text: "on it", Bot: &chat.BotMessage{BotID: "BME"}}},
 		{"a subtype that starts nothing", slackgo.Message{Msg: slackgo.Msg{User: "U1", SubType: "channel_join", Text: "joined", Timestamp: "1.6"}}, false, true, chat.Inbound{}},
 		{"a bot's message with no content", slackgo.Message{Msg: slackgo.Msg{BotID: "B1", SubType: "bot_message", Timestamp: "1.7"}}, false, true, chat.Inbound{}},

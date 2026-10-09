@@ -21,7 +21,7 @@ type Pods struct {
 	now    func() time.Time
 }
 
-// ErrDeleteRefused is returned, wrapped, for a pod delete outside namespace [Namespace]. Courier's
+// ErrDeleteRefused is returned, wrapped, for a pod delete outside namespace [Namespace]. Agent Kourier's
 // Deployment uses strategy: Recreate on one SQLite volume, and a pod delete bypasses it; a fault is
 // set through the Deployment instead ([Pods.SetFault]).
 var ErrDeleteRefused = errors.New("kube: refusing to delete pods outside " + Namespace)
@@ -58,8 +58,8 @@ func (p *Pods) Kill(ctx context.Context, namespace, name string) error {
 // UID to be Ready and returns it. The old pod never satisfies the wait, even Ready and still
 // shutting down. It fails if the selector matches zero or several pods.
 //
-// Use it on the test doubles, never on courier: deleting a pod bypasses the Deployment's
-// strategy: Recreate, so two courier pods could share the SQLite volume.
+// Use it on the test doubles, never on Agent Kourier: deleting a pod bypasses the Deployment's
+// strategy: Recreate, so two Agent Kourier pods could share the SQLite volume.
 func (p *Pods) Restart(ctx context.Context, namespace, selector string) (*corev1.Pod, error) {
 	if namespace != Namespace {
 		return nil, fmt.Errorf("%w: %s", ErrDeleteRefused, namespace)

@@ -156,7 +156,7 @@ func (w *Worker) Run(ctx context.Context) error {
 // during the drain is still recorded.
 func (w *Worker) settle(ctx context.Context, e store.Event) (telemetryErr error) {
 	ctx = telemetry.Restore(ctx, e.TraceParent, e.TraceState)
-	ctx, op := telemetry.Start(ctx, "courier.queue.process", attribute.String("courier.event.id", e.ID), attribute.Int("courier.attempt", e.Attempts))
+	ctx, op := telemetry.Start(ctx, "agentkourier.queue.process", attribute.String("agentkourier.event.id", e.ID), attribute.Int("agentkourier.attempt", e.Attempts))
 	defer func() { op.Finish(telemetryErr) }()
 	log := w.cfg.Logger.With("event", e.ID, "attempt", e.Attempts)
 	q, maxAttempts := w.cfg.Queue, w.cfg.MaxAttempts
@@ -225,7 +225,7 @@ func (w *Worker) runHandler(ctx context.Context, e store.Event, log *slog.Logger
 // handle calls the handler, converting a panic into an error so that a buggy
 // handler dead-letters its event instead of taking down the process.
 func (w *Worker) handle(ctx context.Context, e store.Event, log *slog.Logger) (err error) {
-	ctx, op := telemetry.Start(ctx, "courier.queue.handle")
+	ctx, op := telemetry.Start(ctx, "agentkourier.queue.handle")
 	defer func() { op.Finish(err) }()
 	defer func() {
 		if r := recover(); r != nil {

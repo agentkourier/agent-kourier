@@ -48,10 +48,10 @@ func TestLoadConfig(t *testing.T) {
 		{"mixed-case Http trace endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "Http://collector/t", "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "Authorization=x"}, "", true},
 		{"mixed-case Http trace endpoint over an https base, with headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://base", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "Http://collector/t", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x"}, "", true},
 		{"https trace endpoint over an http base, with headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://base", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "HTTPS://collector/t", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x"}, "HTTPS://collector/t", false},
-		{"upper-case HTTP endpoint with headers, opted in", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "HTTP://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "true"}, "HTTP://collector:4318/v1/traces", false},
-		{"http endpoint with headers, opted in", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "true"}, "http://collector:4318/v1/traces", false},
-		{"http endpoint with headers, opt-in false", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "false"}, "", true},
-		{"opt-in is only exactly true", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "COURIER_OTLP_ALLOW_INSECURE_HEADERS": "canary"}, "", true},
+		{"upper-case HTTP endpoint with headers, opted in", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "HTTP://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS": "true"}, "HTTP://collector:4318/v1/traces", false},
+		{"http endpoint with headers, opted in", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS": "true"}, "http://collector:4318/v1/traces", false},
+		{"http endpoint with headers, opt-in false", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS": "false"}, "", true},
+		{"opt-in is only exactly true", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x", "AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS": "canary"}, "", true},
 		{"http endpoint without headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}, "http://collector:4318/v1/traces", false},
 		{"https endpoint with headers", map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=x"}, "https://collector/v1/traces", false},
 	} {
@@ -105,7 +105,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 		w.Header().Set("Content-Type", "application/x-protobuf")
 	}))
 	defer collector.Close()
-	c := Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "courier-test", Environment: "test", SampleRatio: 1, Headers: map[string]string{"Authorization": "Bearer fake"}}
+	c := Config{Endpoint: collector.URL + "/v1/traces", ServiceName: "agent-kourier-test", Environment: "test", SampleRatio: 1, Headers: map[string]string{"Authorization": "Bearer fake"}}
 	provider, shutdown, err := c.Provider(t.Context(), "test-version", slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, op := Start(WithObserver(t.Context(), o), "courier.intake")
+	_, op := Start(WithObserver(t.Context(), o), "agentkourier.intake")
 	op.Finish(nil)
 	flush, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -130,7 +130,7 @@ func TestOTLPHTTPExportAndBoundedShutdown(t *testing.T) {
 		for _, a := range req.ResourceSpans[0].Resource.Attributes {
 			attrs[a.Key] = a.Value.GetStringValue()
 		}
-		if attrs["service.name"] != "courier-test" || attrs["service.version"] != "test-version" || attrs["deployment.environment.name"] != "test" {
+		if attrs["service.name"] != "agent-kourier-test" || attrs["service.version"] != "test-version" || attrs["deployment.environment.name"] != "test" {
 			t.Fatalf("resource=%v", attrs)
 		}
 	default:
@@ -156,7 +156,7 @@ func TestUnsampledRootsKeepMetricsAndRespectSampledParents(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := WithObserver(t.Context(), obs)
-	root, op := Start(base, "courier.intake")
+	root, op := Start(base, "agentkourier.intake")
 	if trace.SpanFromContext(root).IsRecording() {
 		t.Fatal("zero root sampling ratio recorded a root")
 	}
@@ -167,7 +167,7 @@ func TestUnsampledRootsKeepMetricsAndRespectSampledParents(t *testing.T) {
 	}
 	found := false
 	for _, f := range families {
-		if f.GetName() == "courier_operation_duration_seconds" {
+		if f.GetName() == "agentkourier_operation_duration_seconds" {
 			found = f.Metric[0].Histogram.GetSampleCount() == 1
 		}
 	}
@@ -175,7 +175,7 @@ func TestUnsampledRootsKeepMetricsAndRespectSampledParents(t *testing.T) {
 		t.Fatal("unsampled operation lost its metric")
 	}
 	parent := Restore(base, "00-11111111111111111111111111111111-2222222222222222-01", "")
-	child, childOp := Start(parent, "courier.intake")
+	child, childOp := Start(parent, "agentkourier.intake")
 	if !trace.SpanFromContext(child).IsRecording() {
 		t.Fatal("sampled remote parent was ignored")
 	}

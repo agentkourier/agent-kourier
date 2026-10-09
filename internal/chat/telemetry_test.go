@@ -39,8 +39,8 @@ func TestIntakeTelemetryExcludesMessageAndErrorText(t *testing.T) {
 				t.Fatalf("Message = %v, want error %v", err, tc.wantErr)
 			}
 			h.RequireNone(t, prompt, failure)
-			if got := h.Counter(t, "courier_intake_total", map[string]string{"source": "message", "disposition": tc.disposition}); got != 1 {
-				t.Fatalf("courier_intake_total{disposition=%s} = %v, want 1: %s", tc.disposition, got, h.Exported(t))
+			if got := h.Counter(t, "agentkourier_intake_total", map[string]string{"source": "message", "disposition": tc.disposition}); got != 1 {
+				t.Fatalf("agentkourier_intake_total{disposition=%s} = %v, want 1: %s", tc.disposition, got, h.Exported(t))
 			}
 		})
 	}

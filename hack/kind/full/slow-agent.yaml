@@ -1,5 +1,5 @@
 # A test agent whose model streams one chunk a second for five seconds, so verify.sh can tell an
-# SSE stream that reaches courier incrementally from one a proxy buffered (mockllm cannot delay
+# SSE stream that reaches Agent Kourier incrementally from one a proxy buffered (mockllm cannot delay
 # chunks). The model server is inline Python: nothing to build.
 apiVersion: v1
 kind: ConfigMap

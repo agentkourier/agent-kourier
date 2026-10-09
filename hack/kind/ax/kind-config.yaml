@@ -2,7 +2,7 @@
 # (feature gates that Substrate's pod identity needs) and Substrate's create-kind-cluster.sh.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-name: courier-ax
+name: agent-kourier-ax
 networking:
   apiServerAddress: "127.0.0.1"
 featureGates:
@@ -14,4 +14,4 @@ runtimeConfig:
 nodes:
   - role: control-plane
     labels:
-      courier.agent-courier.dev/owner: up-ax
+      agentkourier.agent-kourier.dev/owner: up-ax

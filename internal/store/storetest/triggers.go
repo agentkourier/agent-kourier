@@ -16,7 +16,7 @@ const (
 	tBinding = "sre/sre-alerts"
 	tKey     = "7d1c0f3a9b" // a key hash; the store reads it as an opaque string
 	tCool    = 4 * time.Hour
-	rConn    = "courier/slack-main"
+	rConn    = "agent-kourier/slack-main"
 	rChannel = "C0ALERTS"
 )
 

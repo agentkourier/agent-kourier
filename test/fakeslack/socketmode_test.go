@@ -29,7 +29,7 @@ func leakCheck(t *testing.T) {
 }
 
 // newSocket starts a fake Slack and a slack-go Socket Mode client running
-// against it, the way courier connects. The client is stopped on cleanup.
+// against it, the way Agent Kourier connects. The client is stopped on cleanup.
 func newSocket(t *testing.T, opts ...fakeslack.Option) (*fakeslack.Server, *socketmode.Client) {
 	t.Helper()
 	leakCheck(t)

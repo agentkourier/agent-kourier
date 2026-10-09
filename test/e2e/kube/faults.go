@@ -14,11 +14,11 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
-// SetFault sets COURIER_FAULT to fault, on the named container of the Deployment, and returns once
+// SetFault sets AGENTKOURIER_FAULT to fault, on the named container of the Deployment, and returns once
 // the rollout has finished (an empty fault disarms). A test image reads the variable at startup, so
-// arming a fault is a rollout, never a pod delete: courier's Deployment uses strategy: Recreate on
-// one SQLite volume, and Kill and Restart refuse courier's namespace. Other env vars and containers
-// are left alone (a strategic merge patch). The container, and courier's Deployment name and
+// arming a fault is a rollout, never a pod delete: Agent Kourier's Deployment uses strategy: Recreate on
+// one SQLite volume, and Kill and Restart refuse Agent Kourier's namespace. Other env vars and containers
+// are left alone (a strategic merge patch). The container, and Agent Kourier's Deployment name and
 // namespace, are UNCONFIRMED(WP-35g). The runner's Role needs get and patch on deployments there
 // (hack/kind/e2e/runner.yaml).
 //

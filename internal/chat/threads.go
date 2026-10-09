@@ -14,7 +14,7 @@ import (
 )
 
 // TriggerDecision is what a matched bot message does to the thread of its key (spec 8.2). It is the decision
-// label of courier_trigger_decisions_total.
+// label of agentkourier_trigger_decisions_total.
 type TriggerDecision string
 
 // The decisions. A fire is a message whose extracted fields do not satisfy the trigger's closeWhen; a close is
@@ -287,7 +287,7 @@ func (in *Intake) startThread(ctx context.Context, m TriggerMatch, hash string, 
 	return out, nil
 }
 
-// note asks for a short note of courier's own in the thread: its kind and the time of the match, and nothing the
+// note asks for a short note of Agent Kourier's own in the thread: its kind and the time of the match, and nothing the
 // message said. Its ID names the message and the kind, so asking again, as a redelivery does, is the same row of
 // the outbox. Without a Notice sink there is no note, and that is logged.
 func (in *Intake) note(ctx context.Context, m TriggerMatch, thread string, kind session.NoticeKind) error {

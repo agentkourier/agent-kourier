@@ -21,7 +21,7 @@
 //   - the audit log takes one lock for the whole log, as its sequence spans all of it.
 //
 // A per-session counter row, updated in the same transaction, would also serialise the enqueues and
-// number a session's replies without gaps. It was not chosen: courier orders by Sequence and never
+// number a session's replies without gaps. It was not chosen: Agent Kourier orders by Sequence and never
 // needs it dense, the counter costs a hot row, an update's dead tuple and a second table for every
 // enqueue, and the advisory lock leaves the one identity column and the one insert. The lock key is a
 // hash of the session, so two sessions that collide only wait for one another; that costs nothing but
@@ -39,7 +39,7 @@
 // A call whose context has ended returns an error that wraps the context's, and changes nothing. A
 // context that ends while a transaction is committing leaves it unknown whether it committed, as
 // with any database; so does a connection that is lost then. Nothing here retries a write for that
-// reason: what courier writes is idempotent or fenced (an event ID, a claim's attempt, an outbox ID), and
+// reason: what Agent Kourier writes is idempotent or fenced (an event ID, a claim's attempt, an outbox ID), and
 // its callers retry. The pool replaces a connection the server dropped, so the call after a loss works.
 //
 // # Versions
@@ -63,8 +63,8 @@
 // The idle-in-transaction and statement timeouts are sent as startup parameters, and they are what
 // ends a stalled leader's transaction and frees its locks (spec D37). PgBouncer in transaction mode
 // rejects them ("unsupported startup parameter"), and listing them in ignore_startup_parameters
-// silently drops that protection. Connect courier directly or through a pooler in session mode, or set
-// both timeouts on the role (ALTER ROLE courier SET idle_in_transaction_session_timeout = '10s', and
+// silently drops that protection. Connect Agent Kourier directly or through a pooler in session mode, or set
+// both timeouts on the role (ALTER ROLE Agent Kourier SET idle_in_transaction_session_timeout = '10s', and
 // the same for statement_timeout) and pass WithIdleInTxTimeout(0) and WithStatementTimeout(0).
 package postgres
 
@@ -111,9 +111,9 @@ const defaultIdleInTxTimeout = 10 * time.Second
 // anyway. Migrations are exempt (see applyMigration).
 const defaultStatementTimeout = 30 * time.Second
 
-// applicationName is what courier's connections call themselves in pg_stat_activity, unless the DSN
+// applicationName is what Agent Kourier's connections call themselves in pg_stat_activity, unless the DSN
 // names another.
-const applicationName = "agent-courier"
+const applicationName = "agent-kourier"
 
 // Store is a PostgreSQL-backed store.Store. It is safe for concurrent use. It is the guarded store (store.Guarded: every
 // argument checked and every operation's telemetry recorded, once, for every backend, with the DSN's secrets scrubbed
@@ -137,7 +137,7 @@ type adapter struct {
 	red  redactor
 	// epoch is the number Lead was given, 0 before it: a store with none refuses writes.
 	epoch atomic.Int64
-	// deposed counts the writes that found the epoch stale (courier_store_deposed_total), and onDeposed is told of each.
+	// deposed counts the writes that found the epoch stale (agentkourier_store_deposed_total), and onDeposed is told of each.
 	deposed   prometheus.Counter
 	onDeposed func()
 }
@@ -188,7 +188,7 @@ func WithLogger(l *slog.Logger) Option {
 
 // WithOnDeposed sets a function that the store calls when a write finds its epoch stale, that is, when another
 // replica has led since. It runs in the goroutine of the write, before the write returns store.ErrDeposed, and must
-// not call the store. Courier ends its process in it (spec D37): the error alone would be handled by whichever caller
+// not call the store. Agent Kourier ends its process in it (spec D37): the error alone would be handled by whichever caller
 // the write happened to be made for. It is not called for a store that has no epoch yet.
 func WithOnDeposed(fn func()) Option { return func(o *options) { o.onDeposed = fn } }
 
@@ -235,7 +235,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 		return nil, red.scrub(fmt.Errorf("open postgres store: %w", err))
 	}
 	s := &adapter{pool: pool, red: red, onDeposed: o.onDeposed, deposed: prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "courier_store_deposed_total", Help: "Writes the store refused because another replica has led since: its epoch was stale."})}
+		Name: "agentkourier_store_deposed_total", Help: "Writes the store refused because another replica has led since: its epoch was stale."})}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, red.scrub(fmt.Errorf("open postgres store: connect: %w", err))

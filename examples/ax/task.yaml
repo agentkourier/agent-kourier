@@ -1,17 +1,17 @@
 # Apply with AX's `ax apply`, after substituting image and OIDC settings.
 apiVersion: ax.io/v1alpha1
 kind: Workspace
-metadata: {name: courier-state, atespace: courier-ax}
+metadata: {name: agent-kourier-state, atespace: agent-kourier-ax}
 spec: {}
 ---
 apiVersion: ax.io/v1alpha1
 kind: Task
-metadata: {name: assistant, atespace: courier-ax}
+metadata: {name: assistant, atespace: agent-kourier-ax}
 spec:
-  image: YOUR_REGISTRY/courier-ax:dev
-  command: [/usr/local/bin/courier-ax-agent]
+  image: YOUR_REGISTRY/agent-kourier-ax:dev
+  command: [/usr/local/bin/agent-kourier-ax-agent]
   debug: false
-  workspaces: [{name: courier-state}]
+  workspaces: [{name: agent-kourier-state}]
   env:
     - {name: MODEL_PROVIDER, value: bedrock}
     - {name: MODEL_REGION, value: us-east-1}
@@ -19,9 +19,9 @@ spec:
     # Placeholder only: the egress gateway replaces Authorization with the real key.
     - {name: AWS_BEARER_TOKEN_BEDROCK, value: substrate-injected}
     - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
-    - {name: STATE_DIR, value: /workspace/courier-state}
+    - {name: STATE_DIR, value: /workspace/agent-kourier-state}
     - {name: OIDC_ISSUER, value: https://YOUR_ISSUER}
-    - {name: OIDC_AUDIENCE, value: courier-binding}
-    - {name: OIDC_SUBJECT, value: YOUR_COURIER_SERVICE_SUBJECT}
+    - {name: OIDC_AUDIENCE, value: agent-kourier-binding}
+    - {name: OIDC_SUBJECT, value: YOUR_AGENTKOURIER_SERVICE_SUBJECT}
     - {name: SSL_CERT_FILE, value: /run/ate/trust-bundle.pem}
     - {name: SSL_CERT_DIR, value: /run/ate}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove, against a running courier-fast cluster, that each component answers from inside it and
+# Prove, against a running agent-kourier-fast cluster, that each component answers from inside it and
 # that the unauthenticated /_control/ surfaces, the fake Slack's and the stub agent's release
 # endpoint, are published nowhere (spec 12.1).
 # Every check prints "ok: ..." or "FAIL: ..." (exit 1). Two groups:
@@ -7,11 +7,11 @@
 #     selects the fake Slack's or the stub agent's pods is ClusterIP with no nodePort, external IP
 #     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
 #     hostNetwork; the kind node publishes only the API server, on loopback;
-#  2. courier: its pods (one, or two with E2E_REPLICAS=2), ready (the Deployment's rollout has finished and the API server can reach
-#     /healthz and /readyz on each, through its proxy), exactly one of them the leader (courier_leader, which a lone replica says too), and,
+#  2. Agent Kourier: its pods (one, or two with E2E_REPLICAS=2), ready (the Deployment's rollout has finished and the API server can reach
+#     /healthz and /readyz on each, through its proxy), exactly one of them the leader (agentkourier_leader, which a lone replica says too), and,
 #     on the Postgres store (E2E_STORE=postgres), a Postgres that is published nowhere, and with two replicas a container signaler that
 #     is published nowhere either;
-#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows courier
+#  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections, which shows Agent Kourier
 #     connected over Socket Mode (at least one connection, waited for); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
 #     (204, with no token, as the fake Slack's); Alertmanager's API; the
@@ -35,48 +35,48 @@ done
 assert_context fast
 assert_never_published
 
-echo "== courier: ready"
-# The testhooks image starts, and reaches ready. A courier that does not is shown with its own log, which
+echo "== agent-kourier: ready"
+# The testhooks image starts, and reaches ready. An Agent Kourier that does not is shown with its own log, which
 # holds no token or Secret value, and its pod's events.
-courier_fail() {
+agentkourier_fail() {
   echo "FAIL: $1" >&2
-  "${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o wide >&2 || true
-  "${K[@]}" -n courier logs deploy/courier --tail=60 >&2 || true
-  "${K[@]}" -n courier describe pods -l app.kubernetes.io/name=courier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o wide >&2 || true
+  "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=60 >&2 || true
+  "${K[@]}" -n agent-kourier describe pods -l app.kubernetes.io/name=agent-kourier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
   exit 1
 }
-"${K[@]}" -n courier rollout status deploy/courier --timeout=180s || courier_fail "courier's rollout did not finish"
+"${K[@]}" -n agent-kourier rollout status deploy/agent-kourier --timeout=180s || agentkourier_fail "agent-kourier's rollout did not finish"
 # A pod that is shutting down does not count: on Postgres the Deployment rolls with a surge, and the old pod, which hands its Lease over as it
 # stops, may still be listed (Terminating) when the rollout has finished.
-want=$("${K[@]}" -n courier get deploy/courier -o 'jsonpath={.spec.replicas}')
-pods=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
-[ "$(wc -w <<<"${pods}")" -eq "${want}" ] || courier_fail "want ${want} courier pod(s), have: ${pods:-none}"
-echo "ok: ${want} courier pod(s), ${pods}, rolled out"
+want=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.replicas}')
+pods=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name] | join(" ")')
+[ "$(wc -w <<<"${pods}")" -eq "${want}" ] || agentkourier_fail "want ${want} Agent Kourier pod(s), have: ${pods:-none}"
+echo "ok: ${want} Agent Kourier pod(s), ${pods}, rolled out"
 for pod in ${pods}; do
   for path in healthz readyz; do
-    "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/${path}" >/dev/null || courier_fail "${pod}'s /${path} does not answer 200"
+    "${K[@]}" get --raw "/api/v1/namespaces/agent-kourier/pods/${pod}:8080/proxy/${path}" >/dev/null || agentkourier_fail "${pod}'s /${path} does not answer 200"
     echo "ok: ${pod}'s /${path} answers 200"
   done
 done
-# Exactly one pod does courier's work: the one that holds the Lease (a lone replica leads at once). Waited for, since a standby that has
+# Exactly one pod does Agent Kourier's work: the one that holds the Lease (a lone replica leads at once). Waited for, since a standby that has
 # just taken over a Lease from a pod that was replaced is a few seconds behind the rollout.
 leaders=
 for _ in $(seq 60); do
   leaders=
   for pod in ${pods}; do
-    metrics=$("${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${pod}:8080/proxy/metrics" 2>/dev/null || true) # not grep -q on the pipe: pipefail would see its SIGPIPE
-    ! grep -q '^courier_leader 1$' <<<"${metrics}" || leaders="${leaders} ${pod}"
+    metrics=$("${K[@]}" get --raw "/api/v1/namespaces/agent-kourier/pods/${pod}:8080/proxy/metrics" 2>/dev/null || true) # not grep -q on the pipe: pipefail would see its SIGPIPE
+    ! grep -q '^agentkourier_leader 1$' <<<"${metrics}" || leaders="${leaders} ${pod}"
   done
   [ "$(wc -w <<<"${leaders}")" -eq 1 ] && break
   sleep 1
 done
-[ "$(wc -w <<<"${leaders}")" -eq 1 ] || courier_fail "want exactly one courier leader (courier_leader 1), have:${leaders:- none}"
+[ "$(wc -w <<<"${leaders}")" -eq 1 ] || agentkourier_fail "want exactly one Agent Kourier leader (agentkourier_leader 1), have:${leaders:- none}"
 echo "ok: exactly one leader,${leaders}"
 
-# The store courier runs on (E2E_STORE of up-fast.sh), as the chart set it. Postgres is a credentialed database that nothing outside the
+# The store Agent Kourier runs on (E2E_STORE of up-fast.sh), as the chart set it. Postgres is a credentialed database that nothing outside the
 # cluster may reach: like the doubles' control surfaces, it is published nowhere.
-store=$("${K[@]}" -n courier get deploy/courier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="COURIER_STORE")].value}')
-echo "ok: courier runs on the ${store:-unknown} store"
+store=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_STORE")].value}')
+echo "ok: Agent Kourier runs on the ${store:-unknown} store"
 if [ "${store}" = postgres ]; then
   assert_app_unpublished e2e postgres
 fi
@@ -110,7 +110,7 @@ for _ in $(seq 30); do
   [ "${conns:-0}" -ge 1 ] && break
   sleep 1
 done
-assert "courier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+assert "Agent Kourier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 
 jwt="$(b64 '{"alg":"none"}').$(b64 '{"email":"verify@example.test"}')."
 card=$(curl -s -m 10 -H "Authorization: Bearer $jwt" "$AGENT/.well-known/agent-card.json")

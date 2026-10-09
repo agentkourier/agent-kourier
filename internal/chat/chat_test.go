@@ -12,8 +12,8 @@ import (
 )
 
 func TestMessageIDIsTheStringSlackAlreadyStores(t *testing.T) {
-	got := chat.MessageID(chat.Ref{Platform: "slack", Conn: "courier-system/slack-main", Channel: "C0123456789", ID: "1699999999.000100"})
-	if want := "slack:courier-system/slack-main:C0123456789:1699999999.000100"; got != want {
+	got := chat.MessageID(chat.Ref{Platform: "slack", Conn: "agent-kourier-system/slack-main", Channel: "C0123456789", ID: "1699999999.000100"})
+	if want := "slack:agent-kourier-system/slack-main:C0123456789:1699999999.000100"; got != want {
 		t.Errorf("MessageID = %q, want %q: the A2A messageId of a message must not change", got, want)
 	}
 	if chat.MessageID(chat.Ref{Platform: "other", Conn: "a/b", Channel: "c", ID: "d"}) == chat.MessageID(chat.Ref{Platform: "slack", Conn: "a/b", Channel: "c", ID: "d"}) {

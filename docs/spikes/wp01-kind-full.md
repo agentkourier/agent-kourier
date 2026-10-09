@@ -24,7 +24,7 @@ ok: card served and mock answer returned
 curl exit 28
 ok: unlabelled pod cannot reach the controller
 proxy: real=200 forged=403; controller: forged=200
-full tier up in 180s (context kind-courier-full)
+full tier up in 180s (context kind-agent-kourier-full)
 ```
 
 The `Platform: systrap` line is from the worker pod's runsc log.
@@ -34,7 +34,7 @@ The `Platform: systrap` line is from the worker pod's runsc log.
 Caveats:
 
 - **Memory is measured, headroom is a guess.** The whole environment used 1.9 to 2.1 GiB
-  of the 7.65 GiB VM across five samples (measured). That courier, Alertmanager, and fake
+  of the 7.65 GiB VM across five samples (measured). That Agent Kourier, Alertmanager, and fake
   Slack add little is inference, not measurement; the fast tier plus this one on the same
   VM has not been tried.
 - **Microvm sandboxes are unavailable** (no `/dev/kvm` in Docker Desktop). Not needed;
@@ -67,7 +67,7 @@ Findings that change the design, in order of importance:
      signature with an altered payload; `alg: none` with the real payload) are refused.
 2. **Port 8083 is not only the A2A port.** The actors' private TaskStore gRPC lands on the
    same listener, arriving from Substrate's `atenet-egress` pod. A policy admitting only
-   courier makes every send fail with `KAGENT_SEND_NOT_ACCEPTED` (measured). The shipped
+   Agent Kourier makes every send fail with `KAGENT_SEND_NOT_ACCEPTED` (measured). The shipped
    policy admits the front door, the kagent UI, and `atenet-egress`. Also:
    kagent's e2e README says TaskStore currently trusts an unsigned identity header in every
    deployment (#1660), so any pod that can reach 8083 is trusted. This sharpens R11.
@@ -93,7 +93,7 @@ Findings that change the design, in order of importance:
 | kagent | chart and images `1.0.0-alpha5` (published 2026-09-27); Go ADK runtime pinned by index digest in `agent.yaml` |
 | oauth2-proxy | `v7.15.3` (chart dependency of kagent) |
 | Dex | `ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd6...808462` (tag and digest) |
-| mockllm | `kagent-dev/mockllm` commit `35792a0` (tag `v0.1.0`), built locally as `courier-e2e/mockllm:v0.1.0`; build image `golang:1.25.14@sha256:69933...dc80`, runtime image `gcr.io/distroless/static-debian12@sha256:d75cdd...43f2` |
+| mockllm | `kagent-dev/mockllm` commit `35792a0` (tag `v0.1.0`), built locally as `agent-kourier-e2e/mockllm:v0.1.0`; build image `golang:1.25.14@sha256:69933...dc80`, runtime image `gcr.io/distroless/static-debian12@sha256:d75cdd...43f2` |
 | CNI | kindnet `v20251212-v0.29.0-alpha-105-g20ccfc88`, bundled in the node image |
 | Front door | `quay.io/oauth2-proxy/oauth2-proxy:v7.15.3@sha256:10a11657...f1f561` (index digest; the chart's tag) |
 | Streaming test model | `python:3.13-alpine@sha256:79e7a9b9...120e6f` (tag and digest), serving `slow-agent`'s model from a ConfigMap |
@@ -120,7 +120,7 @@ Substrate's newest tag (v0.3.0-alpha3): kagent has not been tested against later
 kindnet enforces NetworkPolicy in this node image, so no CNI was installed. Evidence: with
 no policy an unlabelled pod reached the controller; with the controller policy
 applied the same probe exits 28 (timeout) while an admitted pod still gets the card and the
-answer (WP-01 used `controller-admit-courier-only`; WP-01b's policies are described below). Established
+answer (WP-01 used `controller-admit-agent-kourier-only`; WP-01b's policies are described below). Established
 connections survive a new policy (conntrack): restart the controller and `atenet-egress`
 before believing a negative result. Send `messageId` must be unique per test run; kagent
 replays the stored task for a repeated one, which hid a blocked path once.
@@ -153,18 +153,18 @@ are covered by the WP-01b section.
 
 ```
 make e2e-full-up   # about 4 minutes; runs hack/kind/full/verify.sh last
-make e2e-full-down # deletes only the courier-full cluster and the mockllm image (e2e-down also removes the fast tier)
+make e2e-full-down # deletes only the agent-kourier-full cluster and the mockllm image (e2e-down also removes the fast tier)
 ```
 
-Both scripts refuse to touch a `courier-full` cluster whose node lacks the label
-`courier.agent-courier.dev/owner=up-full`. They ask the cluster through kind's own kubeconfig
+Both scripts refuse to touch an `agent-kourier-full` cluster whose node lacks the label
+`agentkourier.agent-kourier.dev/owner=up-full`. They ask the cluster through kind's own kubeconfig
 and tell "API server unreachable" (delete it yourself) apart from "not created by this
 script"; both messages were exercised against a decoy cluster and a stopped node. One full
 tier fits a Docker host: the node is annotated with the creating checkout, and both scripts
 warn when another checkout reuses or deletes it. Not removed by `e2e-down`: the host's
 `kindest/node` image and the cached `bin/kubectl-ate-*`.
 
-## WP-01b: courier's verifying front door
+## WP-01b: Agent Kourier's verifying front door
 
 Run 2026-09-30 on the same host: a clean `make e2e-full-up` (223 s), then a re-run (95 s).
 Everything is **measured** unless marked *inferred*.
@@ -173,13 +173,13 @@ Everything is **measured** unless marked *inferred*.
 version) in front of `kagent-controller:8083`. The chart's `extraArgs` map cannot repeat
 `upstream`, hence a separate instance; agentgateway was not chosen because the image and the
 token logic are already in this cluster, and the Binding needs one route. It runs with
-`--skip-jwt-bearer-tokens`, `--client-id=courier-binding` as the only audience,
+`--skip-jwt-bearer-tokens`, `--client-id=agent-kourier-binding` as the only audience,
 `--force-json-errors` (a JSON 401 instead of a login redirect), `--pass-authorization-header`,
 `--flush-interval=100ms`, and `--upstream=http://kagent-controller...:8083/agents/`. The
 proxy logged `mapping path "/agents/" => upstream ".../agents/"`, so anything else (`/api/`,
 `/mcp`, `/`) is a 404 at the door (`/api/agents` is asserted; the others were seen while building). Three NetworkPolicies (`full/networkpolicy.yaml`):
 the controller admits the front door, the UI nginx, and `atenet-egress`; the UI (8080) admits
-only the UI's oauth2-proxy; the front door admits only courier pods.
+only the UI's oauth2-proxy; the front door admits only Agent Kourier pods.
 
 **`verify.sh` from the clean run** (every line is an assertion on a body, a status code, or a
 curl exit code; only exit 28, a timeout, counts as "refused"):
@@ -206,7 +206,7 @@ ok: UI door refuses the Binding's token
 ok: UI door serves a UI-audience token through the fenced UI   (reworded in WP-01c, see below)
 == canary: the controller does not verify JWTs (kagent 1.0.0-alpha5)
 ok: controller accepted both forgeries (expected at alpha5)
-== courier-labelled pod in another namespace: no route to the controller, the front door, or the UI
+== agent-kourier-labelled pod in another namespace: no route to the controller, the front door, or the UI
 ok: control: the pod itself has network (Dex answers)
 ok: no route to http://kagent-controller.kagent.svc.cluster.local:8083/agents/kagent/test-agent/.well-known/agent-card.json
 ok: no route to http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/test-agent/.well-known/agent-card.json
@@ -248,14 +248,14 @@ ok: no route to http://kagent-ui.kagent.svc.cluster.local:8080/mcp
   route that answers with a body; see "WP-01c" below (a POST `initialize` gets 200 with a
   forged `alg: none` token and 401 with none, through the unfenced relay and directly on
   8083). With the policy, requests to the UI time out. `verify.sh` asserts exit 28 to the UI
-  for a courier pod, a courier-labelled pod in `default`, and an unlabelled pod, and the Dex
+  for an Agent Kourier pod, an agent-kourier-labelled pod in `default`, and an unlabelled pod, and the Dex
   control request in each probe shows the pod itself had network.
-- *Label spoofing.* A pod labelled `app.kubernetes.io/name=courier` in `default` reaches
-  neither 8083 (no policy admits a courier pod there) nor the front door (its policy selects
-  the `courier` namespace as well as the label).
+- *Label spoofing.* A pod labelled `app.kubernetes.io/name=agent-kourier` in `default` reaches
+  neither 8083 (no policy admits an Agent Kourier pod there) nor the front door (its policy selects
+  the `agent-kourier` namespace as well as the label).
 
 **A second door, closed.** The UI's oauth2-proxy accepted the Binding's token because
-`kagent-values.yaml` set `oidc-extra-audience: courier-binding`, which would have let courier
+`kagent-values.yaml` set `oidc-extra-audience: agent-kourier-binding`, which would have let Agent Kourier
 reach `/api/`, `/mcp`, and `/a2a/` through the UI. That line is removed; the UI door now
 answers 403 to the Binding's token and 200 to a `kagent-ui` token (both asserted). That 200
 proves only that the token passed the UI door and the fence and the request reached the
@@ -264,7 +264,7 @@ authenticated API call (WP-01c reworded the assertion).
 
 **Residual risk (not fixed here).**
 - The trust set is labels: a pod that can be created in `kagent` with the controller-admitted
-  labels, or in `courier` with the courier label, is trusted. Namespace RBAC has to keep both
+  labels, or in `agent-kourier` with the Agent Kourier label, is trusted. Namespace RBAC has to keep both
   small. **Requirement:** the pilot cluster's CNI must enforce NetworkPolicy. Both fences and
   the front door's admission rule are only policy objects; on a CNI that ignores them
   (some do, silently) every check in `verify.sh` that expects exit 28 would fail, and in
@@ -275,7 +275,7 @@ authenticated API call (WP-01c reworded the assertion).
 - `kubectl port-forward` reaches 8083 without passing a NetworkPolicy (WP-02 relied on it);
   whoever holds that RBAC can already act as anyone.
 - The card advertises `http://kagent-controller.kagent.svc:8083/agents/...` as its interface
-  URL, so an SDK client that follows the card lands on the blocked port. Courier must
+  URL, so an SDK client that follows the card lands on the blocked port. Agent Kourier must
   replace the URL with the front door's (WP-25).
 
 ## WP-01c: front-door proof hardening
@@ -316,7 +316,7 @@ treats a decoded, unverified token as authentication. `GET /mcp` gives 405 (POST
 `/api/agents` through the relay was 200 with an empty body, the catch-all discussed above.
 
 **Mutation check.** With `ui-admit-oauth2-proxy-only` deleted from the running cluster,
-`verify.sh` fails at `FAIL: no route to the kagent UI relay on 8080` (the courier pod's
+`verify.sh` fails at `FAIL: no route to the kagent UI relay on 8080` (the Agent Kourier pod's
 request to the UI is no longer dropped); the policy was re-applied and the full run passed.
 
 **Requirement, not inference.** The pilot's CNI must enforce NetworkPolicy (see Residual risk).
@@ -366,7 +366,7 @@ ok: UI door passes a UI-audience token through the fence (200 is the controller'
 ok: controller /mcp initialize: forged token accepted
 ok: controller /mcp initialize: no token refused
 ok: controller accepted both forgeries (expected at alpha5)
-== courier-labelled pod in another namespace: no route to the controller, the front door, or the UI
+== agent-kourier-labelled pod in another namespace: no route to the controller, the front door, or the UI
 ok: control: the pod itself has network (Dex answers)
 ok: no route to http://kagent-controller.kagent.svc.cluster.local:8083/agents/kagent/test-agent/.well-known/agent-card.json
 ok: no route to http://kagent-frontdoor.kagent.svc.cluster.local:4180/agents/kagent/test-agent/.well-known/agent-card.json

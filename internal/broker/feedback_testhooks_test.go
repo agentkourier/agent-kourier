@@ -50,7 +50,7 @@ func TestRunRecordsTheVotesOnAnInvestigationsFinalMessage(t *testing.T) {
 			t.Fatalf("the press of %s was not acknowledged: %v", user, err)
 		}
 	}
-	const counted = `courier_investigation_feedback_total{agent="kagent/k8s-agent",alertname="KubePodCrashLooping",binding="sre/sre-alerts",verdict="%s"} 1`
+	const counted = `agentkourier_investigation_feedback_total{agent="kagent/k8s-agent",alertname="KubePodCrashLooping",binding="sre/sre-alerts",verdict="%s"} 1`
 	click("U1", "feedback-useful", value)
 	a.r.waitMetric(strings.Replace(counted, "%s", "useful", 1))
 	click("U1", "feedback-not-useful", notUseful) // U1 changes their mind
@@ -84,7 +84,7 @@ func TestRunRecordsTheVotesOnAnInvestigationsFinalMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
-	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: alertChannel, Thread: alert.TS}
+	key := store.ConversationKey{Connection: "agent-kourier-system/slack-main", Channel: alertChannel, Thread: alert.TS}
 	votes, err := st.ListVotes(t.Context(), key)
 	if err != nil {
 		t.Fatal(err)

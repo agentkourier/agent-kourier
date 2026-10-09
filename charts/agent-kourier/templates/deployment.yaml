@@ -1,0 +1,132 @@
+{{- include "agentkourier.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentkourier.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if include "agentkourier.sqlite" . }}
+  # The SQLite volume is never mounted by two pods: the old one is gone before the new one starts.
+  strategy: {type: Recreate}
+  {{- else }}
+  # With Postgres more than one pod may run, and a Lease says which works: the new pod starts as a standby beside the old one,
+  # and takes over when the old one stops. One pod is never taken away before its replacement is Ready.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "agentkourier.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentkourier.selectorLabels" . | nindent 8 }}
+        {{- with omit .Values.podLabels "app.kubernetes.io/name" "app.kubernetes.io/instance" }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.podAnnotations (and .Values.config.rollOnChange (not .Values.config.existingConfigMap)) }}
+      annotations:
+        {{- if and .Values.config.rollOnChange (not .Values.config.existingConfigMap) }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentkourier.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: agent-kourier
+          image: {{ include "agentkourier.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # cmd/agent-kourier takes no arguments: it is configured by this environment.
+          env:
+            - {name: AGENTKOURIER_CONFIG_DIR, value: /etc/agent-kourier}
+            - {name: AGENTKOURIER_STORE, value: {{ .Values.store.type | quote }}}
+            {{- if include "agentkourier.sqlite" . }}
+            - {name: AGENTKOURIER_DB_PATH, value: {{ printf "/data/%s" .Values.persistence.dbFile | quote }}}
+            {{- else }}
+            {{- /* A reference to the Secret, which Agent Kourier reads through the API: the DSN is never in the pod spec. */}}
+            - {name: AGENTKOURIER_POSTGRES_DSN_SECRET, value: {{ printf "%s/%s/%s" .Release.Namespace .Values.store.postgres.dsnSecret.name .Values.store.postgres.dsnSecret.key | quote }}}
+            - {name: AGENTKOURIER_POSTGRES_TIMEOUTS, value: {{ .Values.store.postgres.timeouts | quote }}}
+            {{- /* The election: the Lease is in the release namespace, and the pod's name says who holds it. */}}
+            - {name: AGENTKOURIER_LEASE_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+            - {name: AGENTKOURIER_LEASE_NAME, value: {{ include "agentkourier.leaseName" . | quote }}}
+            - name: AGENTKOURIER_POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            {{- with .Values.leaderElection.leaseDuration }}
+            - {name: AGENTKOURIER_LEASE_DURATION, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.leaderElection.renewDeadline }}
+            - {name: AGENTKOURIER_LEASE_RENEW_DEADLINE, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.leaderElection.retryPeriod }}
+            - {name: AGENTKOURIER_LEASE_RETRY_PERIOD, value: {{ . | quote }}}
+            {{- end }}
+            {{- end }}
+            - {name: AGENTKOURIER_LISTEN, value: {{ printf ":%d" (int .Values.listen.port) | quote }}}
+            - {name: AGENTKOURIER_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
+            - {name: AGENTKOURIER_KLOG_V, value: {{ .Values.klogVerbosity | quote }}}
+            {{- with .Values.syncTimeout }}
+            - {name: AGENTKOURIER_SYNC_TIMEOUT, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.auditRetention }}
+            - {name: AGENTKOURIER_AUDIT_RETENTION, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports: [{name: http, containerPort: {{ int .Values.listen.port }}}]
+          # Bootstrap waits up to 30 s (AGENTKOURIER_SYNC_TIMEOUT) for the Secret caches, so startup is allowed 80 s before
+          # the other probes begin. /healthz says the process is alive. /readyz says it is configured and its store and
+          # Secret caches answer; it does NOT say Slack is connected, by design (agentkourier_chat_connected is the metric
+          # for that), so a Slack outage never takes Agent Kourier out of its Service or restarts it. Nor does it depend on the
+          # lease: a standby is Ready, and idle until it leads.
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 40}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: {{ int .Values.livenessProbe.periodSeconds }}, failureThreshold: {{ int .Values.livenessProbe.failureThreshold }}}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/agent-kourier, readOnly: true}
+            {{- if include "agentkourier.sqlite" . }}
+            - {name: data, mountPath: /data}
+            {{- end }}
+            - {name: tmp, mountPath: /tmp}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "agentkourier.configMapName" . }}}
+        {{- if include "agentkourier.sqlite" . }}
+        - name: data
+          persistentVolumeClaim: {claimName: {{ include "agentkourier.pvcName" . }}}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}

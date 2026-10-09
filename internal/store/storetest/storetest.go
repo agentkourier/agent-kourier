@@ -134,7 +134,7 @@ func isErr(t *testing.T, err, want error, what string) {
 }
 
 // inTieGroups reports whether got is groups one after another, each group in any order: rows that tie on what
-// a list is ordered by come in no particular order, and nothing of courier's reads them in one.
+// a list is ordered by come in no particular order, and nothing of Agent Kourier's reads them in one.
 func inTieGroups(got []string, groups ...[]string) bool {
 	for _, g := range groups {
 		if len(got) < len(g) {

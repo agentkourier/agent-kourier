@@ -157,7 +157,7 @@ func TestIDTagIsEmptyUnlessUniqueIDsIsSet(t *testing.T) {
 }
 
 // TestEachStartMakesItsOwnIDs: two stubs built with a tag from idTag(true) answer the same request with different task ids. That
-// the command passes the tag to the stub is run()'s one line; the fast tier restarts the stub's pod while courier keeps its store,
+// the command passes the tag to the stub is run()'s one line; the fast tier restarts the stub's pod while Agent Kourier keeps its store,
 // and an id of the earlier run must not come again.
 func TestEachStartMakesItsOwnIDs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

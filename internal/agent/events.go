@@ -1,4 +1,4 @@
-// Package agent is courier's runtime layer for talking to an A2A agent: it sends a message
+// Package agent is Agent Kourier's runtime layer for talking to an A2A agent: it sends a message
 // and streams the reply as typed events, reconnects a dropped stream without repeating text,
 // and cancels tasks (spec 8.2, 8.3). The session manager drives it; it holds no session state.
 package agent

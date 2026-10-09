@@ -28,7 +28,7 @@ func connected(t *testing.T) (*fakeslack.Server, *socketmode.Client) {
 	return fake, smc
 }
 
-// nextInner waits for an Events API event, acks it as courier would, and
+// nextInner waits for an Events API event, acks it as Agent Kourier would, and
 // returns its envelope_id, event_id and inner event.
 func nextInner(t *testing.T, smc *socketmode.Client) (envelope, eventID string, inner any) {
 	t.Helper()

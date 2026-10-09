@@ -106,7 +106,7 @@ func TestFiltersInteractions(t *testing.T) {
 		kept bool
 	}{
 		{"press", press(nil), true},
-		{"by courier itself", press(map[string]any{"user": map[string]any{"id": "UFAKEBOT"}}), false},
+		{"by Agent Kourier itself", press(map[string]any{"user": map[string]any{"id": "UFAKEBOT"}}), false},
 		{"by no one", press(map[string]any{"user": map[string]any{}}), false},
 		{"no action", press(map[string]any{"actions": []any{}}), false},
 		{"not on a message", press(map[string]any{"container": map[string]any{"type": "view", "view_id": "V1"}}), false},
@@ -123,8 +123,8 @@ func TestFiltersInteractions(t *testing.T) {
 	}
 }
 
-// TestInputsAreReadByType sends the state of one input element, as the types courier renders
-// and as shapes that must not be read as answers: a field of another type's, or a type courier
+// TestInputsAreReadByType sends the state of one input element, as the types Agent Kourier renders
+// and as shapes that must not be read as answers: a field of another type's, or a type Agent Kourier
 // does not render. Each element gives only its own type's answer, or none.
 // UNCONFIRMED(WP-04): the shape of each element's state, which is the fake's guess.
 func TestInputsAreReadByType(t *testing.T) {

@@ -117,11 +117,11 @@ func newSlackWorld(t *testing.T, botToken string) *slackWorld {
 func rejectedWorld(t *testing.T) *slackWorld {
 	t.Helper()
 	w := newSlackWorld(t, "xoxb-fake-bot")
-	conn := secretOf("courier-system", "slack-main", "appToken")
+	conn := secretOf("agent-kourier-system", "slack-main", "appToken")
 	conn.Data["botToken"], conn.Data["appToken"] = []byte("xoxb-fake-bot"), []byte("xapp-fake-app")
-	oidc := secretOf("sre", "courier-sre-alerts-oidc", "token")
+	oidc := secretOf("sre", "agent-kourier-sre-alerts-oidc", "token")
 	oidc.Data["token"] = []byte("not-a-jwt")
-	w.cfg.Client = fake.NewClientset(conn, oidc, secretOf("sre", "courier-webhook-token", "token"))
+	w.cfg.Client = fake.NewClientset(conn, oidc, secretOf("sre", "agent-kourier-webhook-token", "token"))
 	return w
 }
 
@@ -141,7 +141,7 @@ func TestRunShowsTheSlackConnectionUpOnceItIsConnected(t *testing.T) {
 	w := newSlackWorld(t, "xoxb-fake-bot")
 	r := start(t, w.cfg)
 
-	r.waitMetric(`courier_chat_connected{connection="courier-system/slack-main"} 1`)
+	r.waitMetric(`agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} 1`)
 }
 
 func TestRunCountsACredentialTheAgentRejected(t *testing.T) {
@@ -150,7 +150,7 @@ func TestRunCountsACredentialTheAgentRejected(t *testing.T) {
 
 	w.mention(t, r)
 
-	r.waitMetric(`courier_credential_rejections_total{binding="sre/sre-alerts"} 1`)
+	r.waitMetric(`agentkourier_credential_rejections_total{binding="sre/sre-alerts"} 1`)
 }
 
 // failingAudit is a store whose audit writes fail, which a metric must say.
@@ -167,7 +167,7 @@ func TestRunCountsAnAuditWriteThatFailed(t *testing.T) {
 
 	w.mention(t, r)
 
-	r.waitMetric(`courier_audit_write_failures_total{kind="agent_call"} 1`)
+	r.waitMetric(`agentkourier_audit_write_failures_total{kind="agent_call"} 1`)
 }
 
 // The output mode of the Binding's spec is what the sink is told of a turn, from the config file to the
@@ -304,7 +304,7 @@ func TestRunTakesAPauseToAPromptAndAPressToTheAgent(t *testing.T) {
 	}
 
 	w.waitFor(t, "the agent's continuation", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "deploying to prod") })
-	r.waitMetric(`courier_interaction_decisions_total{result="answered"} 1`)
+	r.waitMetric(`agentkourier_interaction_decisions_total{result="answered"} 1`)
 }
 
 // A Binding that does not allow questions has the pause refused, through the intake's session, which is
@@ -324,7 +324,7 @@ func TestRunRefusesAQuestionOnABindingThatAllowsNone(t *testing.T) {
 
 	w.waitFor(t, "the refusal", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "does not allow questions") })
 	// The notice is queued before the cancel, so only a counted refusal is one whose cancel was made.
-	r.waitMetric(`courier_approval_outcomes_total{binding="sre/sre-alerts",outcome="ask_user_cancelled"} 1`)
+	r.waitMetric(`agentkourier_approval_outcomes_total{binding="sre/sre-alerts",outcome="ask_user_cancelled"} 1`)
 }
 
 // With no sink of its own, Run renders turns itself, through the Slack client and its own outbox: the
@@ -360,7 +360,7 @@ func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", Thread: thread}
+	key := store.ConversationKey{Connection: "agent-kourier-system/slack-main", Channel: "C0123456789", Thread: thread}
 	if err := st.TouchSession(t.Context(), key, time.Now().Add(-10000*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -406,12 +406,12 @@ func waitConnected(t *testing.T, f *fakeslack.Server) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); f.Connections() == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("courier never connected to Slack")
+			t.Fatal("Agent Kourier never connected to Slack")
 		}
 	}
 }
 
-// A rejected token ends Run with ErrSlackAuth, which cmd/courier exits 1 on: no retry can mend it.
+// A rejected token ends Run with ErrSlackAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
 func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 	w := newSlackWorld(t, "wrong-bot-token") // the fake accepts only well-formed tokens
 	r := start(t, w.cfg)

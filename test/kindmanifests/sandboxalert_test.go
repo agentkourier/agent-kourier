@@ -271,12 +271,12 @@ func TestAlertRouting(t *testing.T) {
 		t.Fatalf("routes %+v; want the one for slack-critical-kind", cfg.Route.Routes)
 	}
 	r := cfg.Route.Routes[0]
-	wantMatchers := []string{`severity="critical"`, `courier_trial="true"`, `alertname!="Watchdog"`}
+	wantMatchers := []string{`severity="critical"`, `agentkourier_trial="true"`, `alertname!="Watchdog"`}
 	if r.Receiver != "slack-critical-kind" || !reflect.DeepEqual(r.Matchers, wantMatchers) || !r.Continue {
 		t.Errorf("the route is %+v; want slack-critical-kind for %v, with continue", r, wantMatchers)
 	}
 	// What the route lets through: an alert that alert.sh posts, and nothing else. The production channel is behind it.
-	trial := map[string]string{"alertname": "KubePodCrashLooping", "severity": "critical", "namespace": "shop", "courier_trial": "true"}
+	trial := map[string]string{"alertname": "KubePodCrashLooping", "severity": "critical", "namespace": "shop", "agentkourier_trial": "true"}
 	without := func(m map[string]string, k string) map[string]string {
 		out := map[string]string{}
 		for key, v := range m {
@@ -291,10 +291,10 @@ func TestAlertRouting(t *testing.T) {
 		want   bool
 	}{
 		"a trial alert":                      {trial, true},
-		"a critical alert of anyone's":       {without(trial, "courier_trial"), false},
-		"the trial label set to false":       {map[string]string{"alertname": "X", "severity": "critical", "courier_trial": "false"}, false},
-		"a trial alert that is a Watchdog":   {map[string]string{"alertname": "Watchdog", "severity": "critical", "courier_trial": "true"}, false},
-		"a trial alert that is not critical": {map[string]string{"alertname": "X", "severity": "warning", "courier_trial": "true"}, false},
+		"a critical alert of anyone's":       {without(trial, "agentkourier_trial"), false},
+		"the trial label set to false":       {map[string]string{"alertname": "X", "severity": "critical", "agentkourier_trial": "false"}, false},
+		"a trial alert that is a Watchdog":   {map[string]string{"alertname": "Watchdog", "severity": "critical", "agentkourier_trial": "true"}, false},
+		"a trial alert that is not critical": {map[string]string{"alertname": "X", "severity": "warning", "agentkourier_trial": "true"}, false},
 	} {
 		if got := routeMatches(t, r.Matchers, tc.labels); got != tc.want {
 			t.Errorf("%s: the route matches: %t, want %t", name, got, tc.want)
@@ -369,7 +369,7 @@ func TestAlertSourceHoldsNoWebhookURL(t *testing.T) {
 		"apply_secret monitoring alertmanager-slack-secret webhook-url=ALERTMANAGER_WEBHOOK_URL\n",
 		"apply_secret monitoring alertmanager-kind-config alertmanager.yaml=ALERTMANAGER_CONFIG\n",
 		`webhook_url_load "${ALERTMANAGER_WEBHOOK_FILE}"`,
-		`apply --server-side --force-conflicts --field-manager=courier-sandbox -f "${SBX}/alertmanager/overlay.yaml"`,
+		`apply --server-side --force-conflicts --field-manager=agent-kourier-sandbox -f "${SBX}/alertmanager/overlay.yaml"`,
 	} {
 		if !strings.Contains(string(up), want) {
 			t.Errorf("up.sh lacks %q", want)
@@ -655,7 +655,7 @@ func TestUpAlertSourceStepOnlyRunsWhenConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bin, logs := recorders(t)
 			script := `set -eu
-K=(kubectl --context kind-courier-full)
+K=(kubectl --context kind-agent-kourier-full)
 SBX=$1
 step() { :; }
 . "$2"
@@ -677,9 +677,9 @@ ALERTMANAGER_WEBHOOK_URL=$4
 				return
 			}
 			lines := strings.Split(argv, "\n")
-			onStdin := "--context kind-courier-full apply --server-side --force-conflicts --field-manager=courier-sandbox -f -"
+			onStdin := "--context kind-agent-kourier-full apply --server-side --force-conflicts --field-manager=agent-kourier-sandbox -f -"
 			if len(lines) != 3 || lines[0] != onStdin || lines[1] != onStdin ||
-				lines[2] != "--context kind-courier-full apply --server-side --force-conflicts --field-manager=courier-sandbox -f "+overlay {
+				lines[2] != "--context kind-agent-kourier-full apply --server-side --force-conflicts --field-manager=agent-kourier-sandbox -f "+overlay {
 				t.Errorf("kubectl was run as %q; want two applies on stdin and then the overlay's", lines)
 			}
 			stdin := readLog(t, logs, "kubectl.stdin")
@@ -764,8 +764,8 @@ func TestAlertPresets(t *testing.T) {
 		if p.Labels["alertname"] != name || p.Labels["severity"] != "critical" || p.Labels["namespace"] != "shop" {
 			t.Errorf("%s: labels %v; want its alertname, severity=critical and namespace=shop (the route matches on the severity)", name, p.Labels)
 		}
-		if _, ok := p.Labels["courier_trial"]; ok {
-			t.Errorf("%s sets courier_trial: alert.sh adds it, so that no preset can leave it out or set it otherwise", name)
+		if _, ok := p.Labels["agentkourier_trial"]; ok {
+			t.Errorf("%s sets agentkourier_trial: alert.sh adds it, so that no preset can leave it out or set it otherwise", name)
 		}
 		if p.Annotations["summary"] == "" || p.Annotations["description"] == "" {
 			t.Errorf("%s: annotations %v; want a summary and a description, which the receiver's text prints", name, p.Annotations)
@@ -818,9 +818,9 @@ pods() { # APP LIVE-POD
   esac
 }
 case "$*" in
-  *"contexts[0].name"*) echo kind-courier-full ;;
+  *"contexts[0].name"*) echo kind-agent-kourier-full ;;
   *"clusters[0].cluster.server"*) echo https://127.0.0.1:6443 ;;
-  *"get alertmanager courier"*) printf %s '` + configSecret + `' ;;
+  *"get alertmanager agent-kourier"*) printf %s '` + configSecret + `' ;;
   *"get pods -l app=checkout -o json"*) pods checkout checkout-7d9f8c6b5-abcde ;;
   *"get pods -l app=search -o json"*) pods search search-5f6b9d-xyz12 ;;
   *"get pods -l app=catalog -o json"*) pods catalog catalog-6c7d8e-qwert ;;
@@ -892,7 +892,7 @@ func TestAlertShFiresEachPreset(t *testing.T) {
 				}
 				a := posted[0]
 				// The preset's labels with the live pod's name in, and the one label alert.sh adds, which the route requires.
-				wantLabels := map[string]string{"courier_trial": "true"}
+				wantLabels := map[string]string{"agentkourier_trial": "true"}
 				for k, v := range presets[name].Labels {
 					wantLabels[k] = strings.ReplaceAll(v, "__POD__", pod)
 				}
@@ -934,12 +934,12 @@ func TestAlertShResolves(t *testing.T) {
 	if !a.EndsAt.Before(time.Now()) || !a.StartsAt.Before(a.EndsAt) {
 		t.Errorf("startsAt %v, endsAt %v; want an end in the past and after the start", a.StartsAt, a.EndsAt)
 	}
-	if a.Labels["pod"] != "checkout-7d9f8c6b5-abcde" || a.Labels["alertname"] != "KubePodCrashLooping" || a.Labels["courier_trial"] != "true" {
+	if a.Labels["pod"] != "checkout-7d9f8c6b5-abcde" || a.Labels["alertname"] != "KubePodCrashLooping" || a.Labels["agentkourier_trial"] != "true" {
 		t.Errorf("labels %v: a resolve must carry the labels of the firing alert", a.Labels)
 	}
 }
 
-// TestAlertShNamesTheContextAndTheProbe: every kubectl call names --context kind-courier-full; the probe pod runs the pinned
+// TestAlertShNamesTheContextAndTheProbe: every kubectl call names --context kind-agent-kourier-full; the probe pod runs the pinned
 // curl image, in namespace monitoring, and reaches Alertmanager's v2 API by its Service name; the body is on the pod's
 // stdin and on no argument list.
 func TestAlertShNamesTheContextAndTheProbe(t *testing.T) {
@@ -953,7 +953,7 @@ func TestAlertShNamesTheContextAndTheProbe(t *testing.T) {
 		if strings.HasPrefix(line, "config view --kubeconfig ") {
 			continue // the check of kind's own server, which names no context by design (lib.sh's assert_context)
 		}
-		if !strings.Contains(line, "--context kind-courier-full") {
+		if !strings.Contains(line, "--context kind-agent-kourier-full") {
 			t.Errorf("kubectl was run without the context: %q", line)
 		}
 		if strings.Contains(line, " run ") {
@@ -988,7 +988,7 @@ func TestAlertShRefuses(t *testing.T) {
 		"a JSON key's cousin":   {[]string{`KubePodCrashLooping" or true or "`}, "alertmanager-kind-config", "not a preset", false},
 		"an unknown state":      {[]string{"TargetDown", "pending"}, "alertmanager-kind-config", "STATE must be firing or resolved", false},
 		"not the sandbox's one": {[]string{"TargetDown"}, "", "the alert source is not configured", true},
-		"the tier's own one":    {[]string{"TargetDown"}, "alertmanager-courier", "the alert source is not configured", true},
+		"the tier's own one":    {[]string{"TargetDown"}, "alertmanager-agent-kourier", "the alert source is not configured", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bin, logs := alertStubs(t, tc.configSecret)
@@ -1128,16 +1128,16 @@ func TestDownRemovesTheAlertSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	patch := strings.Index(s, `patch alertmanager courier --type=merge -p '{"spec":{"configSecret":null,"secrets":null,"externalUrl":null}}'`)
+	patch := strings.Index(s, `patch alertmanager agent-kourier --type=merge -p '{"spec":{"configSecret":null,"secrets":null,"externalUrl":null}}'`)
 	del := strings.Index(s, "delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found")
-	guard := strings.Index(s, "get alertmanager courier --ignore-not-found")
+	guard := strings.Index(s, "get alertmanager agent-kourier --ignore-not-found")
 	if guard < 0 || patch < guard || del < patch {
 		t.Errorf("down.sh: the guard at %d, the patch at %d, the delete at %d; want them in that order (the patch is only made when the Alertmanager is there)", guard, patch, del)
 	}
 	// Run as down.sh has it, with a kubectl that answers what the Alertmanager's configSecret is: the Alertmanager is patched only when
 	// it is the alert source, the Secrets are deleted either way (and ignore-not-found makes that safe to repeat), and nothing is
 	// asked of a cluster that has no Alertmanager at all.
-	start := strings.Index(s, "if [ \"$(\"${K[@]}\" -n monitoring get alertmanager courier")
+	start := strings.Index(s, "if [ \"$(\"${K[@]}\" -n monitoring get alertmanager agent-kourier")
 	endMarker := `delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found >/dev/null` + "\n"
 	end := strings.Index(s, endMarker)
 	if start < 0 || end < start {
@@ -1161,25 +1161,25 @@ func TestDownRemovesTheAlertSource(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			bin, logs := t.TempDir(), t.TempDir()
-			stub := "#!/bin/sh\necho \"$*\" >> " + logs + "/argv\ncase \"$*\" in\n  *\"get alertmanager courier\"*) printf %s \"$CONFIG_SECRET\" ;;\n" +
-				"  *\"get pod alertmanager-courier-0\"*)\n    case \"$POD_MODE\" in\n" +
+			stub := "#!/bin/sh\necho \"$*\" >> " + logs + "/argv\ncase \"$*\" in\n  *\"get alertmanager agent-kourier\"*) printf %s \"$CONFIG_SECRET\" ;;\n" +
+				"  *\"get pod alertmanager-agent-kourier-0\"*)\n    case \"$POD_MODE\" in\n" +
 				"      kind-then-gone) n=$(cat " + logs + "/n 2>/dev/null || echo 0); n=$((n + 1)); echo \"$n\" > " + logs + "/n\n" +
 				"        [ \"$n\" -gt 1 ] || printf '%s' '[\"--web.external-url=http://alertmanager.kind.local\"]' ;;\n" +
 				"      other) printf '%s' '[\"--web.external-url=http://other.example\"]' ;;\n    esac ;;\nesac\n"
 			if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(stub), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			script := "set -eu\nK=(kubectl --context kind-courier-full)\ndie() { echo \"error: $*\" >&2; exit 1; }\n" + block
+			script := "set -eu\nK=(kubectl --context kind-agent-kourier-full)\ndie() { echo \"error: $*\" >&2; exit 1; }\n" + block
 			cmd := exec.CommandContext(t.Context(), "bash", "-c", script)
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "CONFIG_SECRET="+tc.configSecret, "POD_MODE="+tc.podMode)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
 			argv := readLog(t, logs, "argv")
-			if got := strings.Count(argv, " get pod alertmanager-courier-0 "); got != tc.podLooks {
+			if got := strings.Count(argv, " get pod alertmanager-agent-kourier-0 "); got != tc.podLooks {
 				t.Errorf("the pod's arguments were read %d times, want %d\n%s", got, tc.podLooks, argv)
 			}
-			if got := strings.Contains(argv, " patch alertmanager courier "); got != tc.patched {
+			if got := strings.Contains(argv, " patch alertmanager agent-kourier "); got != tc.patched {
 				t.Errorf("patched: %t, want %t\n%s", got, tc.patched, argv)
 			}
 			if got := strings.Contains(argv, " wait "); got != tc.patched {
@@ -1189,7 +1189,7 @@ func TestDownRemovesTheAlertSource(t *testing.T) {
 				t.Errorf("the Secrets were not deleted (with ignore-not-found):\n%s", argv)
 			}
 			for _, line := range strings.Split(strings.TrimSpace(argv), "\n") {
-				if !strings.HasPrefix(line, "--context kind-courier-full ") {
+				if !strings.HasPrefix(line, "--context kind-agent-kourier-full ") {
 					t.Errorf("kubectl was run without the context: %q", line)
 				}
 			}

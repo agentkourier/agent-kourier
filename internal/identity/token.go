@@ -3,7 +3,7 @@
 // values may come from Secrets.
 //
 // Nothing here caches a value. Every call reads the Secret again, through a reader that is
-// itself served from a watch, so a token rotated outside courier is used by the next call. A
+// itself served from a watch, so a token rotated outside Agent Kourier is used by the next call. A
 // value stays a secret.Value until it is put in dialect.Credentials, and no error, log line or
 // audit row carries one.
 package identity

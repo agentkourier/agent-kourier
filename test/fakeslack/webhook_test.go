@@ -24,7 +24,7 @@ func alertPost() fakeslack.WebhookPost {
 		Title:      "FIRING (1) - KubeAPIErrorBudgetBurn",
 		TitleLink:  "http://am/#/alerts?receiver=slack-critical",
 		Text:       "*KubeAPIErrorBudgetBurn* - critical",
-		Footer:     "courier-key: KubeAPIErrorBudgetBurn/kube-system",
+		Footer:     "agent-kourier-key: KubeAPIErrorBudgetBurn/kube-system",
 		MarkdownIn: []string{"text", "fields"},
 	}}}
 }
@@ -142,7 +142,7 @@ func TestWebhookWithNoClientIsRefused(t *testing.T) {
 	}
 }
 
-// The webhook may post as the fake's own bot, which is how a test shows courier ignoring itself.
+// The webhook may post as the fake's own bot, which is how a test shows Agent Kourier ignoring itself.
 func TestWebhookMayPostAsTheFakesOwnBot(t *testing.T) {
 	fake, smc := connected(t)
 	p := alertPost()

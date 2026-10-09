@@ -1,8 +1,8 @@
-# The container signaler (test/signaler), for S16, the failover scenario: it freezes, resumes or kills the processes of one courier container,
-# by container ID, as a paused node and a crash do. The fast tier runs it only with two courier replicas (E2E_STORE=postgres E2E_REPLICAS=2
+# The container signaler (test/signaler), for S16, the failover scenario: it freezes, resumes or kills the processes of one Agent Kourier container,
+# by container ID, as a paused node and a crash do. The fast tier runs it only with two Agent Kourier replicas (E2E_STORE=postgres E2E_REPLICAS=2
 # make e2e-fast-up; lib.sh's apply_signaler), and takes it away again with one.
 #
-# From inside the cluster there is no other way to do it: courier is PID 1 of its own PID namespace, where the kernel drops a SIGSTOP or
+# From inside the cluster there is no other way to do it: Agent Kourier is PID 1 of its own PID namespace, where the kernel drops a SIGSTOP or
 # SIGKILL that its own namespace sends. So this pod shares the node's PID namespace (hostPID) and runs as root with the one capability that
 # signalling another user's process needs (KILL), and nothing else: not privileged, a read-only root filesystem, no service account token.
 # It has no authentication and can end any process of the node. Its Service is ClusterIP and stays that way, like every double's, and
@@ -27,7 +27,7 @@ spec:
       securityContext: {runAsUser: 0, runAsGroup: 0, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: signaler
-          image: courier-e2e/fast-doubles:dev
+          image: agent-kourier-e2e/fast-doubles:dev
           imagePullPolicy: Never
           command: ["/signaler", "-addr", "0.0.0.0:8080"]
           ports: [{containerPort: 8080}]

@@ -40,12 +40,12 @@ func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 	if s.env.Tier != "fast" {
 		t.Skipf("scenario-alert is a stub agent of the fast tier; the %s tier has no such agent", s.env.Tier)
 	}
-	// The channel, the stub and courier's database outlive a run, and a key holds its thread for the cooldown, so the
+	// The channel, the stub and Agent Kourier's database outlive a run, and a key holds its thread for the cooldown, so the
 	// alert is one no earlier run posted.
 	name := fmt.Sprintf("AlertS14x%d", time.Now().UnixNano()%1_000_000_000)
 	group := name + " shop"
 	decisions := func(decision string) float64 {
-		return s.counter("courier_trigger_decisions_total", map[string]string{"binding": "courier/fast-s14", "decision": decision})
+		return s.counter("agentkourier_trigger_decisions_total", map[string]string{"binding": "agent-kourier/fast-s14", "decision": decision})
 	}
 	startedBefore, repeatBefore, closedBefore := decisions("started"), decisions("repeat"), decisions("closed")
 
@@ -89,7 +89,7 @@ func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 		}
 	}
 	// The scenario agent says the first line of the prompt it was given, which is the preset's template output over the
-	// alert, and the tag of the untrusted block courier appended.
+	// alert, and the tag of the untrusted block Agent Kourier appended.
 	wantFirst := fmt.Sprintf("Investigating: An alert is FIRING in channel %s: %s. Block: untrusted-data-", ChannelS14, name)
 	if reply.ThreadTS != alert.TS || !strings.Contains(reply.Text, wantFirst) {
 		t.Errorf("the investigation is %q in thread %q; want it in the alert's thread, saying %q and a block", reply.Text, reply.ThreadTS, wantFirst)
@@ -115,7 +115,7 @@ func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 
 	for decision, before := range map[string]float64{"started": startedBefore, "repeat": repeatBefore, "closed": closedBefore} {
 		if got := decisions(decision); got != before+1 {
-			t.Errorf("courier_trigger_decisions_total{decision=%q} went from %v to %v; want one more", decision, before, got)
+			t.Errorf("agentkourier_trigger_decisions_total{decision=%q} went from %v to %v; want one more", decision, before, got)
 		}
 	}
 }

@@ -49,7 +49,7 @@ func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	issuer = server.URL
-	verify, err := OIDCAuthenticate(context.Background(), issuer, "courier", "service")
+	verify, err := OIDCAuthenticate(context.Background(), issuer, "agent-kourier", "service")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 		}
 		return "Bearer " + payload + "." + base64.RawURLEncoding.EncodeToString(signature)
 	}
-	good := token(issuer, "courier", "service", time.Now().Add(time.Hour))
+	good := token(issuer, "agent-kourier", "service", time.Now().Add(time.Hour))
 	if _, err := verify(t.Context(), good); !errors.Is(err, ErrAuthenticationUnavailable) {
 		t.Fatalf("unavailable issuer error = %v, want retryable authentication outage", err)
 	}
@@ -132,10 +132,10 @@ func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 		name, iss, aud, sub string
 		expiry              time.Time
 	}{
-		{"issuer", issuer + "/other", "courier", "service", time.Now().Add(time.Hour)},
+		{"issuer", issuer + "/other", "agent-kourier", "service", time.Now().Add(time.Hour)},
 		{"audience", issuer, "other", "service", time.Now().Add(time.Hour)},
-		{"subject", issuer, "courier", "other", time.Now().Add(time.Hour)},
-		{"expiry", issuer, "courier", "service", time.Now().Add(-time.Hour)},
+		{"subject", issuer, "agent-kourier", "other", time.Now().Add(time.Hour)},
+		{"expiry", issuer, "agent-kourier", "service", time.Now().Add(-time.Hour)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bad := token(tc.iss, tc.aud, tc.sub, tc.expiry)

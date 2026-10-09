@@ -18,7 +18,7 @@ import (
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
 // (ctx ended, even while it was still starting), and otherwise an error: one wrapping ErrWiring is a usage error, one wrapping
-// k8ssecrets.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/courier
+// k8ssecrets.ErrAccessDenied is missing RBAC, and any other is a failure of a dependency. cmd/agent-kourier
 // maps them to exit codes.
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
@@ -115,7 +115,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	go func() { served <- Serve(serveCtx, cfg.Listener, NewHandler(metrics, ready)); close(servedDone) }()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
 
-	var extraNamespaces []string // the Postgres DSN's Secret is courier's own, so no resource of the config names its namespace
+	var extraNamespaces []string // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names its namespace
 	if cfg.Store.kind() == StorePostgres {
 		extraNamespaces = append(extraNamespaces, cfg.Store.PostgresDSN.Namespace)
 	}
@@ -166,7 +166,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 
 	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
-	// lease, since nothing routes traffic to courier in Socket Mode, and a standby is healthy (spec 11).
+	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11).
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
 	log.InfoContext(ctx, "ready")
 

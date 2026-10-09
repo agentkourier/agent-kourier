@@ -18,7 +18,7 @@ func fallbackWorld(t *testing.T, code string) (*slack.Platform, chat.Target, *co
 	c, fake, calls, root := updateClient(t)
 	fake.RefuseChunkMode(code)
 	logs := &bytes.Buffer{}
-	p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+	p := slack.NewPlatform(c, "agent-kourier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
 	warns := func() int { return strings.Count(logs.String(), "level=WARN") }
 	return p, chat.Target{Channel: "C1", Thread: root}, calls, logs, warns
 }
@@ -110,7 +110,7 @@ func TestAStreamOfAnotherRunInMarkdownModeIsStoppedByItsFirstTextInTheOtherMode(
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
-	p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+	p := slack.NewPlatform(c, "agent-kourier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
 	at := p.StreamAt(p.RefAt("C1", root, ts))
 	if err := at.Stop(ctx, "lo", chat.Message{}, "ob-1"); err != nil {
 		t.Fatalf("Stop = %v; want the text, sent in the stream's own mode after the first try was a mismatch", err)
@@ -140,7 +140,7 @@ func TestAnOrdinaryFailureLeavesTheChunksModeAlone(t *testing.T) {
 				t.Fatal(err)
 			}
 			logs := &bytes.Buffer{}
-			p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+			p := slack.NewPlatform(c, "agent-kourier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
 			target := chat.Target{Channel: "C1", Thread: root}
 			fail(calls)
 			if _, err := p.Stream(ctx, target, "U1", "x"); err == nil {
@@ -162,7 +162,7 @@ func TestAnOrdinaryFailureLeavesTheChunksModeAlone(t *testing.T) {
 			c, _, calls, root := updateClient(t)
 			ctx := t.Context()
 			logs := &bytes.Buffer{}
-			p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+			p := slack.NewPlatform(c, "agent-kourier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
 			st, err := p.Stream(ctx, chat.Target{Channel: "C1", Thread: root}, "U1", "Hel")
 			if err != nil {
 				t.Fatal(err)
@@ -194,7 +194,7 @@ func TestAStartRefusedInBothModesDoesNotLatchTheFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
-	p := slack.NewPlatform(c, "courier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
+	p := slack.NewPlatform(c, "agent-kourier-system/slack-main").WithLogger(slog.New(slog.NewTextHandler(logs, nil)))
 	calls.status, calls.body = http.StatusOK, `{"ok":false,"error":"invalid_arguments"}`
 	if _, err := p.Stream(ctx, chat.Target{Channel: "C1", Thread: root}, "U1", "x"); err == nil {
 		t.Fatal("Stream succeeded though Slack refused both")

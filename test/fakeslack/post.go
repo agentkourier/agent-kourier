@@ -12,7 +12,7 @@ import (
 // since the fake has no channel registry. Content limits are in validate.go.
 //
 // UNCONFIRMED(WP-04): a reply must target a top-level message; the response
-// echoes the message without its metadata, so courier must not depend on it
+// echoes the message without its metadata, so Agent Kourier must not depend on it
 // there; blocks=[] with text stores no blocks.
 func (s *Server) postMessage(form url.Values) (response, string) {
 	channel := form.Get("channel")

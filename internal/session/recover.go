@@ -117,6 +117,6 @@ func (m *Manager) recoverKey(key Key) {
 	if !headIsTask && sess.TurnTask == sess.TaskID { // no turn of the queue is the task's: the session says whose output it is, if it does for this task
 		t.began = sess.Turn // (a turn recorded for another task is a binary's that did not know of turns: it starts tasks and leaves it)
 	}
-	telemetry.Count(m.ctx, "courier_session_recovery_total", "adopted")
+	telemetry.Count(m.ctx, "agentkourier_session_recovery_total", "adopted")
 	m.adopt(key, t)
 }

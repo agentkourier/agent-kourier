@@ -46,7 +46,7 @@ var template = sync.OnceValues(func() ([]byte, error) {
 // sqlite.Open, which finds nothing to migrate, and the directory is removed when the test ends.
 func Path(t testing.TB) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	Seed(t, path)
 	return path
 }

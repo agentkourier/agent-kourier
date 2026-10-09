@@ -17,7 +17,7 @@ import (
 
 // dsnEnv names the variable that holds the DSN of the database the tests run against. make
 // test-postgres starts a throwaway container and sets it; without it the tests that need a database skip.
-const dsnEnv = "COURIER_POSTGRES_DSN"
+const dsnEnv = "AGENTKOURIER_POSTGRES_DSN"
 
 func randHex(t *testing.T) string {
 	t.Helper()
@@ -57,8 +57,8 @@ func admin(t *testing.T) *pgx.Conn {
 func freshSchema(t *testing.T) (dsn, schema, application string) {
 	t.Helper()
 	base := serverDSN(t)
-	schema = "courier_test_" + randHex(t)
-	application = "courier-test-" + randHex(t)
+	schema = "agentkourier_test_" + randHex(t)
+	application = "agent-kourier-test-" + randHex(t)
 	if _, err := admin(t).Exec(t.Context(), `CREATE SCHEMA `+schema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}

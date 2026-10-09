@@ -18,7 +18,7 @@ import (
 const fakeMention = "<@UFAKEBOT> investigate"
 
 // fixture is a fake Slack behind the control client, and the bot's own API client (for the posts
-// courier would make).
+// Agent Kourier would make).
 type fixture struct {
 	sl   *Slack
 	fake *fakeslack.Server
@@ -35,7 +35,7 @@ func newFixture(t *testing.T) fixture {
 
 func (f fixture) connect(t *testing.T, ack bool) { t.Helper(); connectSocket(t, f.bot, ack) }
 
-// connectSocket runs a Socket Mode client for bot, as courier does, and returns once the fake has
+// connectSocket runs a Socket Mode client for bot, as Agent Kourier does, and returns once the fake has
 // sent this client its hello. The fake registers a connection before it says hello and sends each
 // envelope to its newest connection only, so after hello this client is the one that gets the next
 // event; counting connections would not tell it from an older one. It acks every envelope if ack is

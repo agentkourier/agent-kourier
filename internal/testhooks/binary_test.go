@@ -22,29 +22,29 @@ func assertTraces(t *testing.T, name, bin string, want bool) {
 	}
 }
 
-// TestBinaryHasNoHooks proves of one production binary, $COURIER_BINARY, what TestImageHasNeitherHook proves
-// of the local image: it carries neither test hook. $COURIER_HOOKED_BINARY is the control, the same
+// TestBinaryHasNoHooks proves of one production binary, $AGENTKOURIER_BINARY, what TestImageHasNeitherHook proves
+// of the local image: it carries neither test hook. $AGENTKOURIER_HOOKED_BINARY is the control, the same
 // source and platform built with the testhooks tag, which must show every trace or the check is vacuous.
 // The Dockerfile's verify stage runs this on each platform's binary before the image is assembled, so a
 // release image of any architecture cannot exist with a hook in it. Both variables are required: a
 // run without them is a wiring mistake, not a pass.
 func TestBinaryHasNoHooks(t *testing.T) {
-	prod, hooked := os.Getenv("COURIER_BINARY"), os.Getenv("COURIER_HOOKED_BINARY")
+	prod, hooked := os.Getenv("AGENTKOURIER_BINARY"), os.Getenv("AGENTKOURIER_HOOKED_BINARY")
 	if prod == "" || hooked == "" {
-		t.Fatal("set COURIER_BINARY (the production binary) and COURIER_HOOKED_BINARY (the testhooks build of it)")
+		t.Fatal("set AGENTKOURIER_BINARY (the production binary) and AGENTKOURIER_HOOKED_BINARY (the testhooks build of it)")
 	}
-	assertTraces(t, "COURIER_BINARY", prod, false)
-	assertTraces(t, "COURIER_HOOKED_BINARY", hooked, true)
+	assertTraces(t, "AGENTKOURIER_BINARY", prod, false)
+	assertTraces(t, "AGENTKOURIER_HOOKED_BINARY", hooked, true)
 }
 
-// TestBinaryIdentity proves of the same binary that it is a linux ELF for $COURIER_GOARCH (amd64 or arm64)
-// and that main.version in it is $COURIER_VERSION. It reads the symbol table and the string the linker's -X
+// TestBinaryIdentity proves of the same binary that it is a linux ELF for $AGENTKOURIER_GOARCH (amd64 or arm64)
+// and that main.version in it is $AGENTKOURIER_VERSION. It reads the symbol table and the string the linker's -X
 // wrote, so it works on a binary of any architecture, which the build host cannot run. The Dockerfile's
 // verify stage runs it with the build's own platform and version.
 func TestBinaryIdentity(t *testing.T) {
-	bin, version, arch := os.Getenv("COURIER_BINARY"), os.Getenv("COURIER_VERSION"), os.Getenv("COURIER_GOARCH")
+	bin, version, arch := os.Getenv("AGENTKOURIER_BINARY"), os.Getenv("AGENTKOURIER_VERSION"), os.Getenv("AGENTKOURIER_GOARCH")
 	if bin == "" || version == "" || arch == "" {
-		t.Fatal("set COURIER_BINARY, COURIER_VERSION and COURIER_GOARCH")
+		t.Fatal("set AGENTKOURIER_BINARY, AGENTKOURIER_VERSION and AGENTKOURIER_GOARCH")
 	}
 	f, err := elf.Open(bin)
 	if err != nil {

@@ -70,7 +70,7 @@ func findAction(blocks json.RawMessage, actionID, typ string) bool {
 	return walk(v)
 }
 
-// OutboxID is the outbox ID courier tagged the message with, which the outbox looks a post up by after a
+// OutboxID is the outbox ID Agent Kourier tagged the message with, which the outbox looks a post up by after a
 // crash, or "" if the message carries no such tag.
 func OutboxID(m fakeslack.MessageView) string {
 	if m.Metadata == nil || m.Metadata.EventType != chatslack.MetadataEventType {

@@ -60,7 +60,7 @@ type Sessions interface {
 	// no row exists. A session whose last activity is more than ttl (spec D28,
 	// threadTTL) before now is returned together with an error wrapping
 	// ErrExpired, so the caller can tell an expired thread (post the notice)
-	// from one courier never owned (ignore); a session exactly ttl old is live.
+	// from one Agent Kourier never owned (ignore); a session exactly ttl old is live.
 	// ttl must be positive.
 	GetSession(ctx context.Context, key ConversationKey, ttl time.Duration, now time.Time) (Session, error)
 	// TouchSession sets the session's last activity to at. It returns

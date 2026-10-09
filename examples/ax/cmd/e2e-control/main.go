@@ -1,4 +1,4 @@
-// e2e-control provisions Courier-owned AX fixtures and exposes cluster-local test controls.
+// e2e-control provisions Agent Kourier-owned AX fixtures and exposes cluster-local test controls.
 // It uses public AX and Substrate APIs; it is never compiled into the Bedrock image.
 package main
 
@@ -31,7 +31,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const space = "courier-ax"
+const space = "agent-kourier-ax"
 
 var scenarios = []string{"default", "gated", "memory", "ask", "fails"}
 
@@ -168,7 +168,7 @@ func provision(ctx context.Context, client ax.AXClient, control ate.ControlClien
 			existing = nil
 		}
 		if existing == nil {
-			task := &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Metadata: &ax.ObjectMeta{Name: name, Atespace: space, CreationTimestamp: timestamppb.Now()}, Spec: &ax.TaskSpec{Image: os.Getenv("AX_FIXTURE_IMAGE"), Command: []string{"/usr/local/bin/ax-e2e-agent"}, Env: []*ax.EnvVar{{Name: "AX_SCENARIO", Value: name}, {Name: "OIDC_ISSUER", Value: "http://dex.dex.svc.cluster.local:5556/dex"}, {Name: "OIDC_AUDIENCE", Value: "courier-binding"}, {Name: "OIDC_SUBJECT", Value: os.Getenv("OIDC_SUBJECT")}}}}
+			task := &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Metadata: &ax.ObjectMeta{Name: name, Atespace: space, CreationTimestamp: timestamppb.Now()}, Spec: &ax.TaskSpec{Image: os.Getenv("AX_FIXTURE_IMAGE"), Command: []string{"/usr/local/bin/ax-e2e-agent"}, Env: []*ax.EnvVar{{Name: "AX_SCENARIO", Value: name}, {Name: "OIDC_ISSUER", Value: "http://dex.dex.svc.cluster.local:5556/dex"}, {Name: "OIDC_AUDIENCE", Value: "agent-kourier-binding"}, {Name: "OIDC_SUBJECT", Value: os.Getenv("OIDC_SUBJECT")}}}}
 			if task.Spec.Image == "" || os.Getenv("OIDC_SUBJECT") == "" {
 				return errors.New("AX_FIXTURE_IMAGE and OIDC_SUBJECT required")
 			}
@@ -235,7 +235,7 @@ func template(task *ax.Task) (*ate.ActorTemplate, error) {
 		"metadata":        map[string]string{"atespace": space, "name": name},
 		"containers":      []any{map[string]any{"name": "guest", "image": task.Spec.Image, "command": []string{"/usr/local/bin/ax-task-runner"}, "env": vars, "readyz": map[string]any{"httpGet": map[string]any{"path": "/readyz", "port": 80}}, "volumeMounts": []any{map[string]string{"name": "workspace", "mountPath": "/workspace"}}}},
 		"volumes":         []any{map[string]any{"name": "workspace", "durableDir": map[string]any{}}},
-		"snapshotsConfig": map[string]any{"storageLocation": "gs://ate-snapshots/courier-ax/", "onPause": "SNAPSHOT_CONTENT_SCOPE_DATA", "onCommit": "SNAPSHOT_CONTENT_SCOPE_DATA", "onResume": map[string]string{"fromData": "RESUME_SOURCE_COLD_BOOT"}},
+		"snapshotsConfig": map[string]any{"storageLocation": "gs://ate-snapshots/agent-kourier-ax/", "onPause": "SNAPSHOT_CONTENT_SCOPE_DATA", "onCommit": "SNAPSHOT_CONTENT_SCOPE_DATA", "onResume": map[string]string{"fromData": "RESUME_SOURCE_COLD_BOOT"}},
 		"sandboxConfig":   map[string]string{"sandboxClass": "SANDBOX_CLASS_GVISOR", "configName": "gvisor-default"},
 	}
 	encoded, err := json.Marshal(obj)

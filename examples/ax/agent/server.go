@@ -84,7 +84,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return fail(err)
 	}
-	executor := &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: "courier-ax", Agent: root, SessionService: sessions}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent})}
+	executor := &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: "agent-kourier-ax", Agent: root, SessionService: sessions}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent})}
 	base := a2asrv.NewHandler(executor, a2asrv.WithTaskStore(tasks))
 	handler := &a2asrv.InterceptedHandler{Handler: &replayHandler{RequestHandler: base, store: tasks}, Interceptors: []a2asrv.CallInterceptor{&authentication{}}}
 	mux := http.NewServeMux()

@@ -10,7 +10,7 @@ import (
 
 // answeredWord is what a free-text answer is shown as once the prompt is replaced. What the person typed may
 // be a secret, and the channel keeps what it is shown (the owner's decision), so only that there is an answer
-// is said, in courier's own word.
+// is said, in Agent Kourier's own word.
 const answeredWord = "(answered)"
 
 // These builders make the messages of an interaction in the chat-neutral model (package chat): the prompt that
@@ -39,7 +39,7 @@ func questionsOf(id string, in dialect.Interaction, deadline time.Time) chat.Pro
 	return p
 }
 
-// endingOf is the neutral ending of a prompt: how it ended, who decided (by, as courier verified it, or ""),
+// endingOf is the neutral ending of a prompt: how it ended, who decided (by, as Agent Kourier verified it, or ""),
 // and when. For an answered one, answers is what was answered to each question, in order; the ending shows
 // the chosen choices and, for a free-text question, only that it was answered. The prompt of an ending is
 // the question as asked, which has no deadline of its own to show.

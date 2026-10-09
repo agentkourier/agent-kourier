@@ -152,8 +152,8 @@ func TestConnectIdentityOnTheWire(t *testing.T) {
 		creds              dialect.Credentials
 		wantAuth, wantUser string
 	}{
-		{"oidc", dialect.Credentials{Token: secret.New(canary), UserID: "courier-sre"}, "Bearer " + canary, ""},
-		{"insecure", dialect.Credentials{UserID: "courier-sre"}, "", "courier-sre"},
+		{"oidc", dialect.Credentials{Token: secret.New(canary), UserID: "agent-kourier-sre"}, "Bearer " + canary, ""},
+		{"insecure", dialect.Credentials{UserID: "agent-kourier-sre"}, "", "agent-kourier-sre"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fd := newFrontDoor(t, true, nil, nil)

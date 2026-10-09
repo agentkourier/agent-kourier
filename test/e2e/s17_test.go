@@ -22,7 +22,7 @@ var feedbackValue = regexp.MustCompile(`fb1\|investigation\|useful\|[^"]+`)
 // Useful is counted and told so in an ephemeral, alone; pressing Not useful instead changes their vote, which is one more vote
 // under its new verdict, and pressing it again changes nothing and counts nothing. A second member's vote is their own. The
 // press of a bot, and of a person who is not in the channel, count for nothing and are told nothing, and no vote is a message
-// in the channel. A press after courier has been restarted still records, on the same message: the buttons carry what they rate.
+// in the channel. A press after Agent Kourier has been restarted still records, on the same message: the buttons carry what they rate.
 //
 // The fast tier only, as S14: the full tier's kagent and the AX tier have no scenario-alert agent.
 func TestS17_PeopleRateAnInvestigationAndChangeTheirVote(t *testing.T) {
@@ -32,7 +32,7 @@ func TestS17_PeopleRateAnInvestigationAndChangeTheirVote(t *testing.T) {
 	}
 	const (
 		ada, bob, bot, outsider = "US17ADA", "US17BOB", "UBOT17", "US17OUT"
-		binding                 = "courier/fast-s17"
+		binding                 = "agent-kourier/fast-s17"
 		agent                   = "kagent/scenario-alert"
 	)
 	if err := s.slack.AddUser(s.ctx, fakeslack.User{ID: bot, Name: "helper17", RealName: "Helper bot", IsBot: true}); err != nil {
@@ -45,7 +45,7 @@ func TestS17_PeopleRateAnInvestigationAndChangeTheirVote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The channel, the stub and courier's database outlive a run, and a key holds its thread for the cooldown, so the alert is
+	// The channel, the stub and Agent Kourier's database outlive a run, and a key holds its thread for the cooldown, so the alert is
 	// one no earlier run posted.
 	name := fmt.Sprintf("AlertS17x%d", time.Now().UnixNano()%1_000_000_000)
 	p := alertPost("FIRING", name, name+" shop")
@@ -84,7 +84,9 @@ func TestS17_PeopleRateAnInvestigationAndChangeTheirVote(t *testing.T) {
 	label := func(verdict string) map[string]string {
 		return map[string]string{"binding": binding, "agent": agent, "alertname": name, "verdict": verdict}
 	}
-	counted := func(verdict string) float64 { return s.counter("courier_investigation_feedback_total", label(verdict)) }
+	counted := func(verdict string) float64 {
+		return s.counter("agentkourier_investigation_feedback_total", label(verdict))
+	}
 	click := func(user, action, value string) {
 		t.Helper()
 		id, err := s.slack.Click(s.ctx, user, reply.TS, action, value)
@@ -92,12 +94,12 @@ func TestS17_PeopleRateAnInvestigationAndChangeTheirVote(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := s.slack.AckWait(s.ctx, 15*time.Second, id); err != nil {
-			t.Fatalf("courier never acked the press of %s: %v", user, err)
+			t.Fatalf("Agent Kourier never acked the press of %s: %v", user, err)
 		}
 	}
 	waitCount := func(verdict string, want float64) {
 		t.Helper()
-		err := Wait(s.ctx, stepTimeout, fmt.Sprintf("%s{verdict=%s} to be %v", "courier_investigation_feedback_total", verdict, want), func(context.Context) (bool, error) {
+		err := Wait(s.ctx, stepTimeout, fmt.Sprintf("%s{verdict=%s} to be %v", "agentkourier_investigation_feedback_total", verdict, want), func(context.Context) (bool, error) {
 			return counted(verdict) == want, nil
 		})
 		if err != nil {
@@ -167,7 +169,7 @@ func TestS17_PeopleRateAnInvestigationAndChangeTheirVote(t *testing.T) {
 	// A press after a restart records, on the same message.
 	restart, cancel := context.WithTimeout(s.ctx, 3*time.Minute) // a stuck rollout fails here, with its reason
 	defer cancel()
-	if err := s.pods.RolloutRestart(restart, kube.CourierNamespace, kube.CourierDeployment); err != nil {
+	if err := s.pods.RolloutRestart(restart, kube.AgentKourierNamespace, kube.AgentKourierDeployment); err != nil {
 		t.Fatal(err)
 	}
 	s.connected()

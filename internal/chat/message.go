@@ -11,7 +11,7 @@ import (
 // the outbox abandons it as invalid.
 const OutgoingVersion = 1
 
-// Outgoing is what courier says in a conversation: one of a Message, a Prompt (a question with controls)
+// Outgoing is what Agent Kourier says in a conversation: one of a Message, a Prompt (a question with controls)
 // or an Ending (a prompt's replacement). It is what the outbox stores, and what an adapter turns into its
 // platform's own form at delivery. Exactly one of the three is set.
 type Outgoing struct {
@@ -99,7 +99,7 @@ type Body struct{ Markdown string }
 // Context is a line of small print: literal text, one line.
 type Context struct{ Text string }
 
-// Note is a sentence courier wrote itself, such as a notice: literal text, which may run to several lines.
+// Note is a sentence Agent Kourier wrote itself, such as a notice: literal text, which may run to several lines.
 type Note struct{ Text string }
 
 // ToolLine is the status line of a tool call: the tool's name and a summary of its arguments. The caller redacts
@@ -111,7 +111,7 @@ type ToolLine struct {
 }
 
 // Mention is a line that names a person, and says something of them: User, as a mention where the platform has them,
-// and then Text, literal text of courier's own on one line, such as "answered this question first.". User is a
+// and then Text, literal text of Agent Kourier's own on one line, such as "answered this question first.". User is a
 // platform's own user ID, which the adapter checks against the shape of the platform's IDs before it makes a
 // mention of it; anything else is shown as "someone", and never as markup, whatever it holds.
 type Mention struct{ User, Text string }
@@ -119,7 +119,7 @@ type Mention struct{ User, Text string }
 // Buttons is a row of buttons. A press comes back as an Interaction whose PromptID is the button's Value.
 type Buttons struct{ Buttons []Button }
 
-// Button is one button: Label is literal text on one line, and ID and Value are courier's own, never text
+// Button is one button: Label is literal text on one line, and ID and Value are Agent Kourier's own, never text
 // the agent wrote.
 type Button struct {
 	ID      string `json:"id"`

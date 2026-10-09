@@ -11,7 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-// TestS1_AReplyStreamsIntoANewThread: a user mentions courier; the reply appears in a new thread under the
+// TestS1_AReplyStreamsIntoANewThread: a user mentions Agent Kourier; the reply appears in a new thread under the
 // mention while the agent is still working, as one message that grows, and ends as one message. The agent,
 // scenario-gated, holds its task on a gate the test releases, so what the thread shows while it is held
 // does not depend on timing.

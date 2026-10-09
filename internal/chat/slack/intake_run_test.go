@@ -19,7 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-const intakeConn = "courier-system/slack-main"
+const intakeConn = "agent-kourier-system/slack-main"
 
 // submitter records what the session manager is asked to submit.
 type submitter struct {
@@ -54,18 +54,18 @@ func startIntake(t *testing.T) (*fakeslack.Server, *submitter) {
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	allow := []string{"sre"}
 	snap, err := config.Resolve(t.Context(), &config.Set{
-		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
-		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
+		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("agent-kourier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("agent-kourier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
 		Bindings: []v1alpha1.Binding{{ObjectMeta: meta("sre", "sre-alerts"), Spec: v1alpha1.BindingSpec{
-			Agent: v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "kagent"}},
-			Chat:  v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: "C1"}}}},
+			Agent: v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}},
+			Chat:  v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: "C1"}}}},
 	}, allKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sub := &submitter{}
 	intake := chat.NewIntake(chat.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
+		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	fake := newFake(t)
@@ -93,8 +93,8 @@ func TestPairCollapses(t *testing.T) {
 	}
 }
 
-// TestNoLoop runs a reply cycle: a mention, courier's answer in the thread, and a user's
-// reply. Slack sends courier's own post back as an event, and it must start no turn.
+// TestNoLoop runs a reply cycle: a mention, Agent Kourier's answer in the thread, and a user's
+// reply. Slack sends Agent Kourier's own post back as an event, and it must start no turn.
 func TestNoLoop(t *testing.T) {
 	fake, sub := startIntake(t)
 	root, err := fake.Mention("C1", "U1", botMark+" why?")
@@ -108,7 +108,7 @@ func TestNoLoop(t *testing.T) {
 	}
 	own := fake.OwnEventEnvelopes("C1", answer)
 	if len(own) != 1 {
-		t.Fatalf("the fake sent %d events for courier's post; want 1", len(own))
+		t.Fatalf("the fake sent %d events for Agent Kourier's post; want 1", len(own))
 	}
 	reply, _ := fake.Reply("C1", root.TS, "U2", "and then?")
 	waitAck(t, fake, slices.Concat(root.Envelopes, own, reply.Envelopes)...)
@@ -118,6 +118,6 @@ func TestNoLoop(t *testing.T) {
 	}
 	want := []string{"slack:" + intakeConn + ":C1:" + root.TS, "slack:" + intakeConn + ":C1:" + reply.TS}
 	if !slices.Equal(ids, want) {
-		t.Fatalf("submitted turns %v; want the mention and the reply, not courier's own post %s", ids, answer)
+		t.Fatalf("submitted turns %v; want the mention and the reply, not Agent Kourier's own post %s", ids, answer)
 	}
 }

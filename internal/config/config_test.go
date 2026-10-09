@@ -14,22 +14,22 @@ import (
 )
 
 const (
-	backendDoc = `apiVersion: agentcourier.dev/v1alpha1
+	backendDoc = `apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
-metadata: { name: kagent-pilot, namespace: courier-system }
+metadata: { name: kagent-pilot, namespace: agent-kourier-system }
 spec: { dialect: kagent-v1, url: "http://kagent.example:8083" }
 `
-	connectionDoc = `apiVersion: agentcourier.dev/v1alpha1
+	connectionDoc = `apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
-metadata: { name: slack-main, namespace: courier-system }
+metadata: { name: slack-main, namespace: agent-kourier-system }
 spec: { platform: slack, credentialsSecretRef: { name: slack-main } }
 `
-	bindingDoc = `apiVersion: agentcourier.dev/v1alpha1
+	bindingDoc = `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: sre-alerts, namespace: sre }
 spec:
   agent: { backendRef: { name: kagent-pilot }, name: k8s-agent, namespace: kagent }
-  identity: { userId: courier-sre-alerts }
+  identity: { userId: agent-kourier-sre-alerts }
   chat: { connectionRef: { name: slack-main }, channel: C0123456789 }
 `
 )
@@ -205,8 +205,8 @@ func TestLoadRejects(t *testing.T) {
 	}{
 		{
 			name:  "wrong apiVersion",
-			files: map[string]string{"b.yaml": strings.Replace(bindingDoc, "agentcourier.dev/v1alpha1", "agentcourier.dev/v1", 1)},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: apiVersion "agentcourier.dev/v1" is not supported, must be agentcourier.dev/v1alpha1`},
+			files: map[string]string{"b.yaml": strings.Replace(bindingDoc, "agentkourier.dev/v1alpha1", "agentkourier.dev/v1", 1)},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: apiVersion "agentkourier.dev/v1" is not supported, must be agentkourier.dev/v1alpha1`},
 		},
 		{
 			name:  "unknown kind",
@@ -215,7 +215,7 @@ func TestLoadRejects(t *testing.T) {
 		},
 		{
 			name:  "unknown field",
-			files: map[string]string{"b.yaml": strings.NewReplacer("userId: courier-sre-alerts", "nope: 1", ", channel: C0123456789", "").Replace(bindingDoc) + "  bogus: 1\n"},
+			files: map[string]string{"b.yaml": strings.NewReplacer("userId: agent-kourier-sre-alerts", "nope: 1", ", channel: C0123456789", "").Replace(bindingDoc) + "  bogus: 1\n"},
 			want: []string{
 				`b.yaml#1 Binding sre/sre-alerts: spec.bogus: unknown field`,
 				`b.yaml#1 Binding sre/sre-alerts: spec.identity.nope: unknown field`,
@@ -271,7 +271,7 @@ func TestLoadRejects(t *testing.T) {
 			},
 			want: []string{
 				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`,
-				`b.yaml#1 AgentBackend courier-system/kagent-pilot: spec.dialect: unsupported value "grpc", must be one of a2a, kagent-v1`,
+				`b.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: spec.dialect: unsupported value "grpc", must be one of a2a, kagent-v1`,
 			},
 		},
 		{

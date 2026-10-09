@@ -1,4 +1,4 @@
-// Package broker composes courier's parts into the running broker (WP-35). This file holds the
+// Package broker composes Agent Kourier's parts into the running broker (WP-35). This file holds the
 // Bindings the session manager resolves each Binding's backend through.
 package broker
 
@@ -124,7 +124,7 @@ func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
 // Backend returns the backend of the Binding named "namespace/name". An error wrapping
 // session.ErrUnknownBinding means the config has no such Binding. Any other error means the
 // Binding cannot be served now: no config has loaded yet, or its backend speaks a dialect
-// courier has not built.
+// Agent Kourier has not built.
 func (b *Bindings) Backend(name string) (session.Backend, error) {
 	rb, k, err := b.resolve(name)
 	if err != nil {

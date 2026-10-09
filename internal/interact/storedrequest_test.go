@@ -51,7 +51,7 @@ func contains(b []byte, secrets []string) []string {
 
 // TestNoSecretOfAToolCallIsStored: the arguments of a tool call, and a secret anywhere in the hint, are redacted
 // before the request is stored (what is stored is never more than render.Tool shows), while the answer the agent
-// receives is the one the original pause makes: nothing courier sends changes.
+// receives is the one the original pause makes: nothing Agent Kourier sends changes.
 func TestNoSecretOfAToolCallIsStored(t *testing.T) {
 	r, task := newRig(t, nil), secretApproval()
 	if err := r.paused(t, task); err != nil {
@@ -83,7 +83,7 @@ func TestNoSecretOfAToolCallIsStored(t *testing.T) {
 	if len(approvals) != 1 {
 		t.Fatalf("the answer sent = %v; want one decision", payload)
 	}
-	reason, _ := approvals[0].(map[string]any)["rejection_reason"].(string) // courier's own words, whatever they are
+	reason, _ := approvals[0].(map[string]any)["rejection_reason"].(string) // Agent Kourier's own words, whatever they are
 	answer := dialect.Answer{RequestID: original.RequestID, Decisions: []dialect.Decision{{ToolID: "t1", Reason: reason}}}
 	want, err := interact.AnswerMessage(kagentv1.New(0), row.ID, *original, answer, "")
 	if err != nil {

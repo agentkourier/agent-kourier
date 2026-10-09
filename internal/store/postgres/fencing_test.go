@@ -166,7 +166,7 @@ func TestStaleEpochIsDeposed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := testutil.ToFloat64(a.a.deposed); got != 1 {
-		t.Errorf("courier_store_deposed_total = %v; want 1", got)
+		t.Errorf("agentkourier_store_deposed_total = %v; want 1", got)
 	}
 	if err := b.AppendAudit(t.Context(), auditEntry("the new leader", t0)); err != nil {
 		t.Errorf("the new leader's write: %v", err)

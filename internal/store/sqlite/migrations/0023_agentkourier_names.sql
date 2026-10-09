@@ -1,0 +1,4 @@
+-- The project is now Agent Kourier. The names that carried the old project name, the audit purge functions and the
+-- setting that lets the delete trigger through, exist only in Postgres (its 0023 adds them under the new names beside
+-- the old ones). SQLite's audit_purge table and its triggers never held the name, so there is nothing to do here. The
+-- file keeps the two stores' migration numbers in step (TestMigrationsInStepWithSQLite).

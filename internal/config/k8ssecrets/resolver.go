@@ -3,14 +3,14 @@
 //
 // # RBAC
 //
-// Courier reads Secrets only in the namespaces it is given, never cluster-wide. The Helm
-// chart grants this Role and a RoleBinding to Courier's ServiceAccount in each of them.
+// Agent Kourier reads Secrets only in the namespaces it is given, never cluster-wide. The Helm
+// chart grants this Role and a RoleBinding to Agent Kourier's ServiceAccount in each of them.
 // The informer needs list and watch; it never issues a get.
 //
 //	apiVersion: rbac.authorization.k8s.io/v1
 //	kind: Role
 //	metadata:
-//	  name: agent-courier-secrets
+//	  name: agent-kourier-secrets
 //	  namespace: <each watched namespace>
 //	rules:
 //	  - apiGroups: [""]
@@ -64,7 +64,7 @@ import (
 
 var (
 	// ErrNamespaceNotWatched is returned for a namespace the Resolver was not given. It is
-	// distinct from config.ErrSecretNotFound: the Secret may exist, but Courier may not read it.
+	// distinct from config.ErrSecretNotFound: the Secret may exist, but Agent Kourier may not read it.
 	ErrNamespaceNotWatched = errors.New("namespace not watched")
 	// ErrNotSynced is returned while a namespace's cache has not synced, when an empty cache
 	// would otherwise be indistinguishable from a missing Secret.

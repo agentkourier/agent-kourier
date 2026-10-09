@@ -8,13 +8,13 @@ import (
 
 // Enumerations. Each type's values are also listed in its field's Enum marker.
 type (
-	// Dialect selects how courier speaks to an agent backend.
+	// Dialect selects how Agent Kourier speaks to an agent backend.
 	Dialect string
-	// ChatMode selects how courier receives chat events.
+	// ChatMode selects how Agent Kourier receives chat events.
 	ChatMode string
 	// OutputMode selects how an agent's output is rendered into a thread.
 	OutputMode string
-	// ThreadReplies selects which replies in a thread courier owns are turns (spec 8.2).
+	// ThreadReplies selects which replies in a thread Agent Kourier owns are turns (spec 8.2).
 	ThreadReplies string
 )
 
@@ -44,7 +44,7 @@ type ObjectRef struct {
 	Name string `json:"name"`
 }
 
-// NamespacedName returns the "namespace/name" by which courier names a resource in a conversation
+// NamespacedName returns the "namespace/name" by which Agent Kourier names a resource in a conversation
 // key, a message ID, an audit row or a log line. It does no defaulting: callers resolve a
 // reference with an empty namespace to the referrer's namespace first.
 func NamespacedName(namespace, name string) string { return namespace + "/" + name }
@@ -231,8 +231,8 @@ type ChatBinding struct {
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`
-	// ThreadReplies defaults to all: any person's reply in a thread courier owns is a turn.
-	// With mention, only a reply that mentions courier is a turn, whether a mention or a
+	// ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn.
+	// With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a
 	// trigger started the thread; the next mentioned turn carries the other replies as
 	// context. A typed answer to a pending question that takes text replies (spec 8.4)
 	// needs no mention, and neither does a direct message.

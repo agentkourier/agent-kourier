@@ -68,7 +68,7 @@ func (m StreamMode) text(markdown string) slackgo.MsgOption {
 // that a stream may start with no content at all (slack-go's example does), and then be in the
 // mode of its first append.
 func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUser, markdown string, mode StreamMode) (telemetryResult0 string, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.StartStream")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.StartStream")
 	defer func() { finishChat(ctx, op, "StartStream", telemetryErr) }()
 	team, err := c.TeamID(ctx)
 	if err != nil {
@@ -88,7 +88,7 @@ func (c *Client) StartStream(ctx context.Context, channel, threadTS, recipientUs
 // AppendStream adds markdown, in the mode of the stream, to the end of the streaming message ts. The error holds no
 // token.
 func (c *Client) AppendStream(ctx context.Context, channel, ts, markdown string, mode StreamMode) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.AppendStream")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.AppendStream")
 	defer func() { finishChat(ctx, op, "AppendStream", telemetryErr) }()
 	if _, _, err := c.api.AppendStreamContext(ctx, channel, ts, append(inertOptions(), mode.text(markdown))...); err != nil {
 		return c.scrub("chat.appendStream", err)
@@ -111,7 +111,7 @@ type TaskUpdate struct {
 // that it replaces and does not merge, and how Slack renders details and output (the documentation lists them, with
 // no more than "additional descriptive information" and "results or completion data").
 func (c *Client) AppendStep(ctx context.Context, channel, ts string, u TaskUpdate) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.AppendStep")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.AppendStep")
 	defer func() { finishChat(ctx, op, "AppendStep", telemetryErr) }()
 	chunk := slackgo.NewTaskUpdateChunk(u.ID, u.Title)
 	chunk.Status, chunk.Details, chunk.Output = slackgo.TaskCardStatus(u.Status), u.Details, u.Output
@@ -124,7 +124,7 @@ func (c *Client) AppendStep(ctx context.Context, channel, ts string, u TaskUpdat
 // StopStream adds the last markdown, if any, and ends the streaming message ts, appending blocks,
 // if any, under the text that was streamed (Slack keeps that text and does not replace it:
 // confirmed in dogfood, 2026-10-03), and tagging it with metadata that names outboxID: a
-// message found by that tag is one courier posted (spec 8.6). Like Post, it refuses an empty
+// message found by that tag is one Agent Kourier posted (spec 8.6). Like Post, it refuses an empty
 // outboxID. The error holds no token.
 //
 // It takes markdown and blocks, not a Content: a stream's text is appended as markdown_text (in the mode of the
@@ -133,7 +133,7 @@ func (c *Client) AppendStep(ctx context.Context, channel, ts string, u TaskUpdat
 // UNCONFIRMED(WP-04): that chat.stopStream accepts blocks and metadata, which chat.startStream
 // and chat.appendStream do not.
 func (c *Client) StopStream(ctx context.Context, channel, ts, markdown string, blocks json.RawMessage, outboxID string, mode StreamMode) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.StopStream")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.StopStream")
 	defer func() { finishChat(ctx, op, "StopStream", telemetryErr) }()
 	tag, err := outboxTag(outboxID)
 	if err != nil {

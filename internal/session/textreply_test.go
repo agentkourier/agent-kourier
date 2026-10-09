@@ -636,7 +636,7 @@ func TestSubmitAnswerInterruptsTextReplyBackoff(t *testing.T) {
 	}
 }
 
-// In a mention-only Binding a reply that does not mention courier is, while the agent waits on a question that
+// In a mention-only Binding a reply that does not mention Agent Kourier is, while the agent waits on a question that
 // takes text replies, that question's answer: it is enqueued pinned to the question, goes through the text-reply
 // handler (membership, bot checks, audit), and is never sent as a turn (D38, decision 3).
 func TestUnmentionedReplyDuringATextPauseIsPinnedAtEnqueueAndAnswers(t *testing.T) {

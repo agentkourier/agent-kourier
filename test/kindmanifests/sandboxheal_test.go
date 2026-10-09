@@ -21,15 +21,15 @@ import (
 const healStub = `#!/bin/sh
 echo "$*" >> "$HEAL_STUB/argv"
 case "$1 $2" in
-  "--context kind-courier-full") ;;
-  *) echo "stub kubectl: a call without --context kind-courier-full first: $*" >&2; exit 98 ;;
+  "--context kind-agent-kourier-full") ;;
+  *) echo "stub kubectl: a call without --context kind-agent-kourier-full first: $*" >&2; exit 98 ;;
 esac
 case "$*" in
-  "--context kind-courier-full -n ate-system get pods -l app=atenet-egress -o json") cat "$HEAL_STUB/pods.json" ;;
-  "--context kind-courier-full -n ate-system logs deploy/atenet-egress "*) cat "$HEAL_STUB/gateway.log" ;;
-  "--context kind-courier-full -n kagent logs deploy/kagent-default "*) cat "$HEAL_STUB/pool.log" ;;
-  "--context kind-courier-full -n ate-system rollout restart deploy/atenet-egress") ;;
-  "--context kind-courier-full -n ate-system rollout status deploy/atenet-egress --timeout=180s") exit "${HEAL_STATUS_EXIT:-0}" ;;
+  "--context kind-agent-kourier-full -n ate-system get pods -l app=atenet-egress -o json") cat "$HEAL_STUB/pods.json" ;;
+  "--context kind-agent-kourier-full -n ate-system logs deploy/atenet-egress "*) cat "$HEAL_STUB/gateway.log" ;;
+  "--context kind-agent-kourier-full -n kagent logs deploy/kagent-default "*) cat "$HEAL_STUB/pool.log" ;;
+  "--context kind-agent-kourier-full -n ate-system rollout restart deploy/atenet-egress") ;;
+  "--context kind-agent-kourier-full -n ate-system rollout status deploy/atenet-egress --timeout=180s") exit "${HEAL_STATUS_EXIT:-0}" ;;
   *) echo "stub kubectl: unexpected call: $*" >&2; exit 99 ;;
 esac
 `
@@ -68,7 +68,7 @@ func runHeal(t *testing.T, podList, gatewayLog, poolLog string, env ...string) (
 	cmd := exec.CommandContext(t.Context(), "bash", "-c", `set -eEuo pipefail
 . "$1"
 . "$2"
-K=(kubectl --context kind-courier-full)
+K=(kubectl --context kind-agent-kourier-full)
 heal_egress_gateway`, "bash", "../../hack/kind/lib.sh", sandboxDir+"heal.sh")
 	cmd.Env = append(os.Environ(), "HEAL_STUB="+stub, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Env = append(cmd.Env, env...)
@@ -82,8 +82,8 @@ heal_egress_gateway`, "bash", "../../hack/kind/lib.sh", sandboxDir+"heal.sh")
 // either log does not; a young pod with one in the worker pool's log, or in its own, does. The restart is waited for.
 func TestHealRestartsTheEgressGatewayWhenItsCertificateIsStale(t *testing.T) {
 	const (
-		restart = "--context kind-courier-full -n ate-system rollout restart deploy/atenet-egress"
-		status  = "--context kind-courier-full -n ate-system rollout status deploy/atenet-egress --timeout=180s"
+		restart = "--context kind-agent-kourier-full -n ate-system rollout restart deploy/atenet-egress"
+		status  = "--context kind-agent-kourier-full -n ate-system rollout status deploy/atenet-egress --timeout=180s"
 		fine    = "ok: the egress gateway's certificate is fine"
 		deleted = "2026-10-04T00:00:00Z"
 	)
@@ -135,7 +135,7 @@ func TestHealReadsOnlyTheLogsSinceThePodStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, l := range []struct{ ns, deploy string }{{"ate-system", "atenet-egress"}, {"kagent", "kagent-default"}} {
-		call := regexp.MustCompile(`(?m)^--context kind-courier-full -n ` + l.ns + ` logs deploy/` + l.deploy + ` .*$`).FindString(argv)
+		call := regexp.MustCompile(`(?m)^--context kind-agent-kourier-full -n ` + l.ns + ` logs deploy/` + l.deploy + ` .*$`).FindString(argv)
 		if !strings.Contains(call+" ", " --since-time="+created+" ") || !regexp.MustCompile(` --tail=\d+`).MatchString(call) {
 			t.Errorf("the log of %s was read as %q; want it since the pod's creation, %s, and with a --tail", l.deploy, call, created)
 		}
@@ -159,8 +159,8 @@ func TestHealAsksOnlyThroughTheContextAndStopsWhereItCannotGo(t *testing.T) {
 		t.Errorf("with a rollout that fails: err %v, output %q; want an error that says it did not finish", err, out)
 	}
 	for _, call := range strings.Split(strings.TrimSpace(argv), "\n") {
-		if !strings.HasPrefix(call, "--context kind-courier-full ") {
-			t.Errorf("kubectl was called as %q; every call must name --context kind-courier-full", call)
+		if !strings.HasPrefix(call, "--context kind-agent-kourier-full ") {
+			t.Errorf("kubectl was called as %q; every call must name --context kind-agent-kourier-full", call)
 		}
 	}
 }
@@ -277,7 +277,7 @@ func TestMakeSandboxHealRunsTheHealScript(t *testing.T) {
 }
 
 // TestSandboxReadmeNamesTheHealAndWhatToLookAt: the README names the heal target and the certificate error it answers, and
-// names the log lines and metrics of the turn, the Slack connection and the stream, each of which courier does log or export
+// names the log lines and metrics of the turn, the Slack connection and the stream, each of which Agent Kourier does log or export
 // (so the README cannot name one that is gone). What dogfood confirmed is marked, and what it did not is still marked UNCONFIRMED.
 func TestSandboxReadmeNamesTheHealAndWhatToLookAt(t *testing.T) {
 	raw, err := os.ReadFile(sandboxDir + "README.md")
@@ -294,8 +294,8 @@ func TestSandboxReadmeNamesTheHealAndWhatToLookAt(t *testing.T) {
 	for want, source := range map[string]string{
 		"session turn started":                           "../../internal/session/turnlog.go",
 		"session turn ended":                             "../../internal/session/turnlog.go",
-		"courier_turn_outcomes_total":                    "../../internal/broker/metrics.go",
-		"courier_chat_connected":                         "../../internal/broker/metrics.go",
+		"agentkourier_turn_outcomes_total":               "../../internal/broker/metrics.go",
+		"agentkourier_chat_connected":                    "../../internal/broker/metrics.go",
 		"slack: socket mode connected":                   "../../internal/chat/slack/connwatch.go",
 		"slack: socket mode reconnecting":                "../../internal/chat/slack/connwatch.go",
 		"slack: the chunks mode of a stream was refused": "../../internal/chat/slack/platform.go",

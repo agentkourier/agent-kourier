@@ -48,5 +48,5 @@ oauth2-proxy:
     redirect-url: http://localhost:4180/oauth2/callback
     upstream: http://kagent-ui:8080
     # No oidc-extra-audience: this UI door takes only the UI's own tokens. The Binding's token
-    # (audience courier-binding) belongs to the front door, which forwards /agents/ alone.
+    # (audience agent-kourier-binding) belongs to the front door, which forwards /agents/ alone.
     cookie-secure: false

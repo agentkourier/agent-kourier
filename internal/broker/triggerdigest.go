@@ -137,7 +137,7 @@ func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 
 // digestText is the line: how many alerts were not investigated, in how long, and which limit stopped them
 // ("7 alert messages not investigated in the last 10m (rate limit)."). When more than one limit did, each is counted. It is
-// courier's own wording and numbers, and names no alert.
+// Agent Kourier's own wording and numbers, and names no alert.
 func digestText(dg store.TriggerDigest) string {
 	reasons := []struct {
 		limit store.TriggerLimit

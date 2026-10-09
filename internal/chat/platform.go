@@ -8,22 +8,22 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
-// Inbound is a message written in a conversation courier is in: by a person, or, if Bot is set, by a bot.
+// Inbound is a message written in a conversation Agent Kourier is in: by a person, or, if Bot is set, by a bot.
 type Inbound struct {
 	// At is the message, with its thread in At.Thread.
 	At Ref
 	// User is who wrote it. A message of a bot that has no user of its own (an incoming webhook's) has none.
 	User string
-	// Text is what they wrote, verbatim, with any mention of courier in it. For a bot's message it is the
+	// Text is what they wrote, verbatim, with any mention of Agent Kourier in it. For a bot's message it is the
 	// message's own text, which is often empty: its content is in Bot.
 	Text string
-	// Mentioned says the message mentions courier. Direct says it is in a conversation of its own with
-	// courier, a direct message, where no mention is needed. The adapter decides both, so the routing
+	// Mentioned says the message mentions Agent Kourier. Direct says it is in a conversation of its own with
+	// Agent Kourier, a direct message, where no mention is needed. The adapter decides both, so the routing
 	// that uses them knows nothing of a platform's syntax. A bot's message is never Mentioned: only a
 	// person's mention starts a session (D36).
 	Mentioned, Direct bool
 	// Bot is set when a bot posted the message, and only then. A platform forwards a bot's message only
-	// if the Sink takes it (BotFilter), and never courier's own.
+	// if the Sink takes it (BotFilter), and never Agent Kourier's own.
 	Bot *BotMessage
 }
 
@@ -78,11 +78,11 @@ type Permalinker interface {
 type ThreadReader interface {
 	// ThreadBetween returns the messages of the thread t.Thread whose IDs are strictly after after and strictly before
 	// before, oldest first, each decoded as the adapter decodes a live message: a message that Run would drop is Ignored,
-	// and courier's own post is Own. The thread's root is never among them. An empty bound is no bound on that side.
+	// and Agent Kourier's own post is Own. The thread's root is never among them. An empty bound is no bound on that side.
 	// A window that is empty or inverted (after is not before before) returns nothing and makes no call.
 	//
 	// At most limit messages come back, the newest of the window, and dropped says how many were left out: exactly the
-	// older ones over limit. Both count every message, courier's own, Ignored ones and other bots' included, so a caller
+	// older ones over limit. Both count every message, Agent Kourier's own, Ignored ones and other bots' included, so a caller
 	// that wants N eligible replies passes a larger limit and filters. A window the platform cannot read to its end in
 	// one call is no partial answer: it is an error wrapping ErrThreadTooLong, so a nil error always means the newest
 	// of the whole window. Check ErrThreadTooLong and ErrNoThreadReads with errors.Is before Classify, which does not
@@ -102,7 +102,7 @@ type Sink interface {
 // BotFilter is an optional interface of a Sink that takes the messages of bots. A platform asks it before it
 // forwards one, so a bot that no trigger can match is dropped at the adapter and never reaches the Sink (D36),
 // and a Sink that does not implement it is given none: a platform fails closed. The platform never forwards
-// courier's own messages, whatever the answer. The answer is a routing question, so the adapter holds no copy
+// Agent Kourier's own messages, whatever the answer. The answer is a routing question, so the adapter holds no copy
 // of the config.
 type BotFilter interface {
 	// AcceptsBot says whether a botMessage trigger of the Binding that owns channel names botID.
@@ -156,7 +156,7 @@ var (
 	ErrThreadTooLong = errors.New("chat: the window of the thread is too long to read")
 )
 
-// Platform is a chat platform: Slack today. An adapter implements it, and nothing else in courier names
+// Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
 // the platform it adapts. Every method is safe for concurrent use.
 //
 // Every method that sends text keeps the contract of the package comment, and the adapter passes
@@ -241,7 +241,7 @@ type Reason string
 
 // The reasons. Other is every reason not named, and the platform's own code goes in Verdict.Code.
 const (
-	ReasonChannelGone    Reason = "channel_gone"    // the conversation or message is gone, archived, or courier is not in it
+	ReasonChannelGone    Reason = "channel_gone"    // the conversation or message is gone, archived, or Agent Kourier is not in it
 	ReasonTooLong        Reason = "too_long"        // the text is longer than the platform takes
 	ReasonInvalidContent Reason = "invalid_content" // the platform refuses the content's form
 	ReasonOther          Reason = "other"           // permanent, for a reason not named

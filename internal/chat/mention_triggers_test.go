@@ -10,7 +10,7 @@ import (
 
 // Spec 8.2: an empty trigger list is [mention], and a list that names triggers is the whole list. A Binding that
 // lists triggers and leaves out the mention one starts no session from an @mention, in or out of a thread, while a
-// reply in a thread courier owns still continues it: that is the table's other row, which no trigger gates.
+// reply in a thread Agent Kourier owns still continues it: that is the table's other row, which no trigger gates.
 func TestMentionsFollowTheBindingsTriggers(t *testing.T) {
 	mention := v1alpha1.Trigger{Type: v1alpha1.TriggerMention}
 	tests := []struct {
@@ -25,8 +25,8 @@ func TestMentionsFollowTheBindingsTriggers(t *testing.T) {
 		{"explicit mention trigger: a mention starts a thread", []v1alpha1.Trigger{mention, kindOnly()}, inbound("C1", "5.5", "", true), true, true},
 		{"explicit mention trigger after another: a mention in a thread", []v1alpha1.Trigger{kindOnly(), mention}, inbound("C1", "5.5", "4.4", true), true, true},
 		{"no mention trigger: a mention starts nothing", []v1alpha1.Trigger{kindOnly()}, inbound("C1", "5.5", "", true), false, false},
-		{"no mention trigger: a mention in a thread creates no session, and only asks whether courier owns the thread", []v1alpha1.Trigger{kindOnly()}, inbound("C1", "5.5", "4.4", true), false, true},
-		{"no mention trigger: a reply in a thread courier owns continues it", []v1alpha1.Trigger{kindOnly()}, inbound("C1", "5.5", "4.4", false), false, true},
+		{"no mention trigger: a mention in a thread creates no session, and only asks whether Agent Kourier owns the thread", []v1alpha1.Trigger{kindOnly()}, inbound("C1", "5.5", "4.4", true), false, true},
+		{"no mention trigger: a reply in a thread Agent Kourier owns continues it", []v1alpha1.Trigger{kindOnly()}, inbound("C1", "5.5", "4.4", false), false, true},
 		{"no mention trigger: a message outside a thread is ignored", []v1alpha1.Trigger{kindOnly()}, inbound("C1", "5.5", "", false), false, false},
 	}
 	for _, tt := range tests {
@@ -65,16 +65,16 @@ func TestABindingWithoutAMentionTriggerSaysSoOnce(t *testing.T) {
 	}
 }
 
-// The notice that a Binding has no mention trigger says that a reply in a thread courier owns still continues it,
+// The notice that a Binding has no mention trigger says that a reply in a thread Agent Kourier owns still continues it,
 // which is true only when the Binding takes all replies: in mention mode it says that a reply needs a mention.
 func TestTheNoMentionTriggerNoticeTellsTheTruthAboutReplies(t *testing.T) {
 	for _, tt := range []struct {
 		mode        v1alpha1.ThreadReplies
 		want, avoid string
 	}{
-		{v1alpha1.ThreadRepliesAll, "replies in a thread courier owns still continue it", "only a reply that mentions courier"},
-		{"", "replies in a thread courier owns still continue it", "only a reply that mentions courier"},
-		{v1alpha1.ThreadRepliesMention, "only a reply that mentions courier continues it", "replies in a thread courier owns still continue it"},
+		{v1alpha1.ThreadRepliesAll, "replies in a thread Agent Kourier owns still continue it", "only a reply that mentions courier"},
+		{"", "replies in a thread Agent Kourier owns still continue it", "only a reply that mentions courier"},
+		{v1alpha1.ThreadRepliesMention, "only a reply that mentions courier continues it", "replies in a thread Agent Kourier owns still continue it"},
 	} {
 		h := newTriggered(t, kindOnly())
 		rb, _ := h.snap.Load().Binding("sre", "sre-alerts")

@@ -1,4 +1,4 @@
-// Package slack is courier's Slack adapter. This part connects over Socket Mode, decodes
+// Package slack is Agent Kourier's Slack adapter. This part connects over Socket Mode, decodes
 // message events and hands those that may be turns to a Sink (spec 6.1, 8.2). Behavior the
 // fake Slack guesses carries the tag UNCONFIRMED(WP-04).
 package slack
@@ -53,7 +53,7 @@ type Config struct {
 	AuthzTimeout time.Duration
 }
 
-// Client is courier's connection to one Slack workspace. It is safe for concurrent use.
+// Client is Agent Kourier's connection to one Slack workspace. It is safe for concurrent use.
 type Client struct {
 	api      *slackgo.Client
 	log      *slog.Logger
@@ -73,7 +73,7 @@ type Client struct {
 	team  string                // the workspace ID, from auth.test; guarded by mu
 	url   string                // the workspace's origin, from auth.test, once Run has asked; guarded by mu
 
-	// ownNamed makes the warning that a trigger names courier's own bot ID one, however many of its posts arrive.
+	// ownNamed makes the warning that a trigger names Agent Kourier's own bot ID one, however many of its posts arrive.
 	ownNamed sync.Once
 }
 
@@ -112,7 +112,7 @@ func New(cfg Config) *Client {
 // and tells Config.OnConnection whether the connection is up.
 //
 // A bot's message is given to the sink only if the sink is a BotFilter that takes the bot in the message's
-// channel, and courier's own posts never are (decode, takes).
+// channel, and Agent Kourier's own posts never are (decode, takes).
 //
 // An events_api or interactive envelope is acknowledged only after the sink returns nil, so
 // a message the sink could not take is sent again by Slack; a press probably is not
@@ -125,7 +125,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	if err != nil {
 		return c.scrub("auth.test", err)
 	}
-	if auth.UserID == "" { // without it courier cannot tell its own posts that arrive with no bot_id
+	if auth.UserID == "" { // without it Agent Kourier cannot tell its own posts that arrive with no bot_id
 		return errors.New("slack auth.test: no bot user ID")
 	}
 	c.mu.Lock()
@@ -154,10 +154,10 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 		return
 	}
 	started := time.Now()
-	ctx, op := telemetry.Start(ctx, "courier.slack.envelope", attribute.String("courier.platform", "slack"))
+	ctx, op := telemetry.Start(ctx, "agentkourier.slack.envelope", attribute.String("agentkourier.platform", "slack"))
 	outcome := "withheld"
 	defer func() {
-		telemetry.Observe(ctx, "courier_slack_ack_duration_seconds", time.Since(started), outcome)
+		telemetry.Observe(ctx, "agentkourier_slack_ack_duration_seconds", time.Since(started), outcome)
 		op.FinishOutcome(nil, outcome)
 	}()
 	switch ev.Type {
@@ -196,8 +196,8 @@ func (c *Client) handle(ctx context.Context, smc *socketmode.Client, me self, si
 
 // takes says whether the sink is given m, which decode made a v of. A person's message always is. A bot's is
 // only if the sink says, for the message's channel and bot ID, that a trigger names the bot (BotFilter), and a sink
-// that cannot say is given none. Courier's own post never is, even if a trigger names its bot ID, which load
-// cannot know is courier's: that misconfiguration is logged once, at WARN, the first time it would have
+// that cannot say is given none. Agent Kourier's own post never is, even if a trigger names its bot ID, which load
+// cannot know is Agent Kourier's: that misconfiguration is logged once, at WARN, the first time it would have
 // mattered. The sink may route on the answer at once, so it is asked per message and nothing is kept.
 func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) bool {
 	if v == dropped {
@@ -208,7 +208,7 @@ func (c *Client) takes(ctx context.Context, sink Sink, m Message, v verdict) boo
 	if v == ownPost {
 		if named {
 			c.ownNamed.Do(func() {
-				c.log.WarnContext(ctx, "slack: a botMessage trigger names courier's own bot ID; courier's own messages are never forwarded, so it matches nothing",
+				c.log.WarnContext(ctx, "slack: a botMessage trigger names Agent Kourier's own bot ID; Agent Kourier's own messages are never forwarded, so it matches nothing",
 					"channel", m.Channel, "bot", m.Bot.ID)
 			})
 		}

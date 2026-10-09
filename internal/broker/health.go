@@ -90,8 +90,8 @@ func (r *Readiness) current() []Check {
 //
 // Slack is not one of the checks, on purpose (WP-35f1, and WP-39b weighed it again): a pod that is not ready leaves its
 // Services, and the same pod is to take the Alertmanager webhook (spec 6), so a Slack outage would turn alerts away that
-// courier can queue and post later; and Socket Mode runs on the leader alone (spec 11), so a replica that is not the
-// leader could never be ready. The connection's state is courier_chat_connected, and the log lines of the Slack adapter.
+// Agent Kourier can queue and post later; and Socket Mode runs on the leader alone (spec 11), so a replica that is not the
+// leader could never be ready. The connection's state is agentkourier_chat_connected, and the log lines of the Slack adapter.
 func NewHandler(m *Metrics, r *Readiness) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") })
@@ -122,7 +122,7 @@ const shutdownTimeout = 10 * time.Second
 
 func newHTTPServer(h http.Handler) *http.Server {
 	// net/http reports on the standard logger, which would write plain text to stderr: it goes through slog's default
-	// handler, courier's, as warnings.
+	// handler, Agent Kourier's, as warnings.
 	return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
 		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn)}

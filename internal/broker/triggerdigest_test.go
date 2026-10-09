@@ -21,7 +21,7 @@ import (
 
 const (
 	digestBinding = "sre/sre-alerts"
-	digestConn    = "courier-system/slack-main"
+	digestConn    = "agent-kourier-system/slack-main"
 	digestChannel = "C0EXAMPLE01"
 )
 

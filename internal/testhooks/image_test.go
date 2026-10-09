@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// imageBinary copies the courier binary out of a Docker image, which is built, not run: the image has no shell.
+// imageBinary copies the Agent Kourier binary out of a Docker image, which is built, not run: the image has no shell.
 func imageBinary(t *testing.T, image string) string {
 	t.Helper()
 	out, err := exec.CommandContext(t.Context(), "docker", "create", image).Output()
@@ -22,22 +22,22 @@ func imageBinary(t *testing.T, image string) string {
 	id := strings.TrimSpace(string(out))
 	// t.Context has ended by the time cleanup runs.
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", id).Run() })
-	bin := filepath.Join(t.TempDir(), "courier")
-	if out, err := exec.CommandContext(t.Context(), "docker", "cp", id+":/courier", bin).CombinedOutput(); err != nil {
+	bin := filepath.Join(t.TempDir(), "agent-kourier")
+	if out, err := exec.CommandContext(t.Context(), "docker", "cp", id+":/agent-kourier", bin).CombinedOutput(); err != nil {
 		t.Fatalf("docker cp: %v\n%s", err, out)
 	}
 	return bin
 }
 
-// TestImageHasNeitherHook proves, on the binary the production Dockerfile builds into courier:dev (or
-// $COURIER_IMAGE), that the default build carries neither test hook: not the crash function, and not
+// TestImageHasNeitherHook proves, on the binary the production Dockerfile builds into agent-kourier:dev (or
+// $AGENTKOURIER_IMAGE), that the default build carries neither test hook: not the crash function, and not
 // the names of the environment variables that arm it or move the Slack API URL. The probe test in
 // buildcheck_test.go proves the same of a probe; this proves it of the shipped command line, with
 // GOFLAGS cleared as the Dockerfile does. Run it with `make image-check`.
 func TestImageHasNeitherHook(t *testing.T) {
-	image := os.Getenv("COURIER_IMAGE")
+	image := os.Getenv("AGENTKOURIER_IMAGE")
 	if image == "" {
-		image = "courier:dev"
+		image = "agent-kourier:dev"
 	}
 	user, err := exec.CommandContext(t.Context(), "docker", "image", "inspect", "--format", "{{.Config.User}}", image).Output()
 	if err != nil || strings.TrimSpace(string(user)) != "65532:65532" {
@@ -45,8 +45,8 @@ func TestImageHasNeitherHook(t *testing.T) {
 	}
 	assertTraces(t, image, imageBinary(t, image), false)
 	// The control: the testhooks image (make image-testhooks) must show every trace, or the checks
-	// above prove nothing, as they would not if cmd/courier stopped linking the hooks at all.
-	const testImage = "courier-e2e/courier-testhooks:dev"
+	// above prove nothing, as they would not if cmd/agent-kourier stopped linking the hooks at all.
+	const testImage = "agent-kourier-e2e/agent-kourier-testhooks:dev"
 	assertTraces(t, testImage, imageBinary(t, testImage), true)
 }
 

@@ -15,7 +15,7 @@ import (
 const maxLog = 64 << 20
 
 // Sink reads the receiver that Alertmanager routes every test alert to, which is how a scenario
-// sees that an alert still arrives while courier is down (D22).
+// sees that an alert still arrives while Agent Kourier is down (D22).
 type Sink struct{ c *client }
 
 // NewSink returns a client for the sink at baseURL.

@@ -55,7 +55,7 @@ func (e *TextExecutor) Execute(ctx context.Context, req *a2asrv.ExecutorContext)
 				return
 			}
 			copyMsg.Parts = []*a2a.Part{responsePart}
-			// ADK validates the original function call, not the text displayed to Courier.
+			// ADK validates the original function call, not the text displayed to Agent Kourier.
 			callPart, err := adka2a.ToA2APart(&genai.Part{FunctionCall: call}, []string{call.ID})
 			if err != nil {
 				yield(nil, err)
@@ -106,7 +106,7 @@ func (e *TextExecutor) Execute(ctx context.Context, req *a2asrv.ExecutorContext)
 				if status.Metadata == nil {
 					status.Metadata = map[string]any{}
 				}
-				status.Metadata["agentcourier.dev/ask-user"] = map[string]any{"id": call.ID, "name": call.Name, "args": call.Args}
+				status.Metadata["agentkourier.dev/ask-user"] = map[string]any{"id": call.ID, "name": call.Name, "args": call.Args}
 			}
 			if !yield(event, nil) {
 				return
@@ -115,7 +115,7 @@ func (e *TextExecutor) Execute(ctx context.Context, req *a2asrv.ExecutorContext)
 	}
 }
 func pendingCall(task *a2a.Task) (*genai.FunctionCall, error) {
-	data, ok := task.Metadata["agentcourier.dev/ask-user"].(map[string]any)
+	data, ok := task.Metadata["agentkourier.dev/ask-user"].(map[string]any)
 	if !ok {
 		return nil, errors.New("missing persisted question")
 	}

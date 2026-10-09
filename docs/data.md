@@ -1,9 +1,9 @@
-# What courier stores, and for how long
+# What Agent Kourier stores, and for how long
 
-Courier encrypts nothing itself. At rest it relies on the volume (an encrypted EBS volume for SQLite) or the database (RDS
+Agent Kourier encrypts nothing itself. At rest it relies on the volume (an encrypted EBS volume for SQLite) or the database (RDS
 with a KMS key). What it does control is how long a piece of content is kept, and that an agent's secrets never reach the
 store. Both stores (SQLite and Postgres) keep the same promises: the store conformance suite (`internal/store/storetest`)
-holds each to them. What courier logs is a separate matter, covered with the telemetry in [observability.md](observability.md).
+holds each to them. What Agent Kourier logs is a separate matter, covered with the telemetry in [observability.md](observability.md).
 
 Agent text that streams to a thread is never stored. Spans, metric labels and the trace context sent to the agent
 (`traceparent` and `tracestate`, baggage removed) carry no content.
@@ -21,7 +21,7 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. | Until the session has been expired for 90 days, then all deleted together (below). |
 | `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept for the pilot's review (D33). No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
 | `sessions.alert_name`, `sessions.agent_name` | The alert name a trigger started the thread for, in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) or empty, and the agent of the Binding when the session was made. A vote is stored and counted under them, whatever the Binding says later. | As long as the session row, which is deleted with its thread (below). |
-| `audit` | IDs, codes, outcomes and lengths, never message text. | For ever, unless `COURIER_AUDIT_RETENTION` is set (below). |
+| `audit` | IDs, codes, outcomes and lengths, never message text. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
 | `events.payload` | Nothing writes it yet. The Alertmanager receiver comes with its own purge. | n/a |
 
 ### Feedback
@@ -38,7 +38,7 @@ The useful and not-useful buttons (spec 8.7) store one row for each person and m
 | `verdict` | `useful` or `not_useful`. A later press of the other button replaces it. |
 | `first_at`, `voted_at` | The first vote, and the latest. |
 
-No free text is stored: courier asks for none, and the alert name is kept only in the name shape (an alert's title is
+No free text is stored: Agent Kourier asks for none, and the alert name is kept only in the name shape (an alert's title is
 untrusted text; a value outside the shape is stored as empty). A vote counts only from a member of the bound channel and
 never from a bot. **Retention: rows are kept.** The pilot's exit decision is computed from them, and a later review reads
 them; no retention loop touches the table, the deletion of expired sessions (DP-3) included. A vote on a message whose session
@@ -46,7 +46,7 @@ has been deleted is told that the message can no longer be rated. The voter's ID
 rows of a person with `DELETE FROM feedback WHERE user_id = ...` on the operator's own request.
 
 Each vote is also an audit entry of kind `event` whose subject names the turn, channel and thread and whose outcome is the verdict
-(`feedback: verdict=useful changed=false`), and it is counted in `courier_investigation_feedback_total`
+(`feedback: verdict=useful changed=false`), and it is counted in `agentkourier_investigation_feedback_total`
 ([observability.md](observability.md)); the table, not the metric, is the record D33 is computed from.
 
 The pilot's exit decision (D33) counts investigations, not votes: an investigation (the thread a trigger started) is rated if any
@@ -119,7 +119,7 @@ bytes (4000 for a reply), cut at a character and marked, so its first 3000 UTF-1
 redacted, instead of the whole field being replaced by "… (truncated)" (the last run of a cut
 field, back to its last white space, is left out, so that no start of a secret the cut went through is shown; and the text
 is read as it came only up to four times that window, so the work is bounded whatever is sent); the footer is an identifier,
-so its `name: value` pairs (`courier-key: ns/alertname`) stay and only its tokens are taken out. A token or credential is
+so its `name: value` pairs (`agent-kourier-key: ns/alertname`) stay and only its tokens are taken out. A token or credential is
 matched both in the text as it came and in the normalized text, so that a word or an invisible character that
 normalization closes up cannot hide one. The same set of characters is deleted from the text that is shown in
 Slack (`chat.Clean`), so display and redaction cannot disagree on it.
@@ -199,20 +199,20 @@ days** with no active task on its session is dropped, as a turn is when its Bind
 is marked delivered, so a replayed chat event is not queued again, and it is never sent. A reply whose session records an
 active task is never dropped, however old: it waits behind that task by design (a long task, a pause that waits for an
 answer, a busy or not-ready session that is waited out without limit). 30 days is far longer than any of those, and a third
-of the default `threadTTL`, after which a session is expired and recovery skips it. A drop is logged at WARN, with a count, and counted in `courier_retention_removed_total{what="stranded_replies"}`. The queued
+of the default `threadTTL`, after which a session is expired and recovery skips it. A drop is logged at WARN, with a count, and counted in `agentkourier_retention_removed_total{what="stranded_replies"}`. The queued
 reaction (the hourglass) stays on the dropped reply's message, since nothing takes it off.
 
 ### Thread replies in a mention-only Binding
 
-With `chat.threadReplies: mention` (spec 8.2, D38), a reply in a thread that does not mention courier is not a turn. It is
-not stored: no reply row, no reaction, no change to the session's last activity. Slack delivers every reply's event, and courier
+With `chat.threadReplies: mention` (spec 8.2, D38), a reply in a thread that does not mention Agent Kourier is not a turn. It is
+not stored: no reply row, no reaction, no change to the session's last activity. Slack delivers every reply's event, and Agent Kourier
 drops an unmentioned one at intake; two counters, which hold no content, are all that remains of it
-(`courier_thread_unmentioned_total` and `courier_intake_total{disposition="unmentioned"}`). Courier reads the text again from
-Slack only when someone later mentions courier in the thread, and then only the replies since the session's previous turn.
+(`agentkourier_thread_unmentioned_total` and `agentkourier_intake_total{disposition="unmentioned"}`). Agent Kourier reads the text again from
+Slack only when someone later mentions Agent Kourier in the thread, and then only the replies since the session's previous turn.
 They are cleaned, redacted and cut (spec 8.2), and go to the agent, and so to its model provider, as part of that turn's text.
 Before that they reach neither the agent nor its provider (with `all`, every reply does). Nothing new is stored: the section is built when the turn is
 sent and held in memory while that turn is the head of its session's queue, `reply_queue.text` holds only what the person who
-mentioned courier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
+mentioned Agent Kourier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
 mention: it is queued pinned to the question and kept as its answer (`interactions.answer`, above).
 
 ### Sessions and what belongs to them
@@ -253,7 +253,7 @@ a shorter reckoning than it would have kept them by. Nothing is deleted before a
 
 Whatever held a session back, once it is resolved, the next sweep takes the session.
 
-**A task that a crash left.** A session is deleted only when it holds no task, but a task that was recorded when courier crashed
+**A task that a crash left.** A session is deleted only when it holds no task, but a task that was recorded when Agent Kourier crashed
 is not always found again: recovery follows the tasks of sessions that are live, and leaves an expired session exactly as it is,
 so a session that expired after the crash, with its `task_id` still set, would be kept for ever. The retention loop ends such a
 task. Each tick, before anything is dropped or deleted, it lists the sessions that are **past their horizon** (the same
@@ -285,17 +285,17 @@ Nothing inside the horizon is touched: a task on a session that is live, or expi
 recovery may still follow. The session is deleted by the purge that follows in the same tick, or by the next, as any session
 whose work has ended. It is bounded as the purge is: 50 sessions to a listing and at most 10 listings (500 tasks) to a tick;
 with Postgres each ending checks the leader's epoch first (D37). It counts `stale_tasks` and `stale_task_interactions` in
-`courier_retention_removed_total`.
+`agentkourier_retention_removed_total`.
 
-**What a person sees.** A reply in a thread whose session is deleted is a reply in a thread courier never owned, and is ignored
-(spec 8.2). An @mention in it starts a new session anchored to that thread, as it does in any thread courier does not own.
+**What a person sees.** A reply in a thread whose session is deleted is a reply in a thread Agent Kourier never owned, and is ignored
+(spec 8.2). An @mention in it starts a new session anchored to that thread, as it does in any thread Agent Kourier does not own.
 Until then, as before, a reply gets the expiry notice.
 
 **How it runs.** The sweep belongs to the store retention loop (hourly, with the replies and the audit purge) and only the
 leader runs it. It deletes 100 sessions to a call, in a transaction, and at most 100 calls (10 000 sessions) to a tick: the first
 sweep after an upgrade finds every old session, and works them down over several ticks. With Postgres each write checks the
 leader's epoch first (D37), and a session that a writer holds locked is left for the next call. It logs a count at INFO and counts in
-`courier_retention_removed_total`: `expired_sessions`, and the rows that went with them as `session_replies`,
+`agentkourier_retention_removed_total`: `expired_sessions`, and the rows that went with them as `session_replies`,
 `session_interactions`, `session_presses` and `session_outbox` (and, for a stale task, as above). Migration 0022 adds the indexes the sweep reads by (a session's
 last activity; a thread's replies, interactions and outbox rows; an outbox row's source, in the C collation with Postgres).
 
@@ -303,24 +303,24 @@ Not deleted here: `feedback` rows, which are kept until the pilot's review of th
 
 ### Audit
 
-The audit table is append-only against the application: no path of courier updates or deletes an entry, and a trigger in
+The audit table is append-only against the application: no path of Agent Kourier updates or deletes an entry, and a trigger in
 both stores refuses it. The single exception is the retention purge.
 
-Set `COURIER_AUDIT_RETENTION` (chart: `auditRetention`) to a duration of at least 24h, such as `8760h` (a year), and entries
+Set `AGENTKOURIER_AUDIT_RETENTION` (chart: `auditRetention`) to a duration of at least 24h, such as `8760h` (a year), and entries
 older than it are purged, hourly, in batches of 1000 (at most a million entries in one run; a log far past its retention is
 worked down over several runs). The default is `keep`: nothing is purged until an operator sets it. The purge writes nothing
-to the audit; it logs a count at INFO and counts in `courier_retention_removed_total` (`audit_entries`; settled interactions
+to the audit; it logs a count at INFO and counts in `agentkourier_retention_removed_total` (`audit_entries`; settled interactions
 that are cleared count as `cleared_interactions`, and deleted sessions as above).
 
 How each store lets the purge through the trigger:
 
-- **Postgres**: `courier_audit_purge(cutoff, batch)` (migration 0020, beside 0006's `courier_audit_purge(cutoff)`) sets
-  `courier.audit_retention` for its own transaction, deletes the oldest `batch` entries before the cutoff, and switches the
+- **Postgres**: `agentkourier_audit_purge(cutoff, batch)` (migration 0023, beside its `agentkourier_audit_purge(cutoff)`; `courier_audit_purge` of 0006 and 0020 stays for the release before the rename) sets
+  `agentkourier.audit_retention` for its own transaction, deletes the oldest `batch` entries before the cutoff, and switches the
   setting off before it returns. Only the leader purges (every write checks the epoch).
 - **SQLite**: the delete trigger permits a `DELETE` only while the table `audit_purge` holds a cutoff later than the entry
   (migration 0020). The purge inserts that row, deletes a batch and removes the row in one transaction, on the single write
   connection, so no other statement can see it; a rollback or a crash leaves no row.
 
-Threat model, the same in both: the log is protected from a bug in courier, which cannot edit or erase it. It is not
+Threat model, the same in both: the log is protected from a bug in Agent Kourier, which cannot edit or erase it. It is not
 tamper-evident. Whoever owns the database file or the table can drop the trigger, insert the SQLite marker row, or set the
 Postgres setting, and nothing in the log would show it.

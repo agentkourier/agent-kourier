@@ -130,7 +130,7 @@ apply_secret() {
       var=${pair#*=}
       printf '  %s: %s\n' "${pair%%=*}" "$(printf %s "${!var}" | base64 | tr -d '\n')"
     done
-  } | "${K[@]}" apply --server-side --force-conflicts --field-manager=courier-sandbox -f - >/dev/null
+  } | "${K[@]}" apply --server-side --force-conflicts --field-manager=agent-kourier-sandbox -f - >/dev/null
 }
 
 # render FILE: FILE with its __MODEL_NAME__, __MODEL_REGION__, __SLACK_CHANNEL_ID__ and __ALERT_CHANNEL_ID__ filled in, on stdout. By parameter
@@ -144,14 +144,14 @@ render() {
   printf '%s\n' "${content//__SLACK_CHANNEL_ID__/${SLACK_CHANNEL_ID}}"
 }
 
-# render_courier_config DIR: the sandbox courier's config in DIR, which up.sh makes the ConfigMap from: the files of courier/config, rendered, and the
-# full tier's AgentBackend (the verifying front door). With ALERT_SOURCE=1 it also holds the alert trial's Binding (courier/alert-trial), which is not in
+# render_agentkourier_config DIR: the sandbox Agent Kourier's config in DIR, which up.sh makes the ConfigMap from: the files of agent-kourier/config, rendered, and the
+# full tier's AgentBackend (the verifying front door). With ALERT_SOURCE=1 it also holds the alert trial's Binding (agent-kourier/alert-trial), which is not in
 # it at all otherwise. SBX is hack/kind/sandbox and HERE is hack/kind: the caller's, as K is for apply_secret.
-render_courier_config() {
+render_agentkourier_config() {
   local dir=$1 f
-  for f in "${SBX}"/courier/config/*.yaml; do render "${f}" >"${dir}/$(basename "${f}")"; done
-  cp "${HERE}/full/courier/agentbackend.yaml" "${dir}/agentbackend.yaml"
+  for f in "${SBX}"/agent-kourier/config/*.yaml; do render "${f}" >"${dir}/$(basename "${f}")"; done
+  cp "${HERE}/full/agent-kourier/agentbackend.yaml" "${dir}/agentbackend.yaml"
   if [ "${ALERT_SOURCE}" = 1 ]; then
-    for f in "${SBX}"/courier/alert-trial/*.yaml; do render "${f}" >"${dir}/$(basename "${f}")"; done
+    for f in "${SBX}"/agent-kourier/alert-trial/*.yaml; do render "${f}" >"${dir}/$(basename "${f}")"; done
   fi
 }

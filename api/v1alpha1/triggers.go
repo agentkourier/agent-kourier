@@ -57,7 +57,7 @@ func messageFields() []MessageField {
 // Trigger is one way an event in the bound channel starts or continues a turn (spec 8.2).
 // Triggers are tried in order and the first that matches handles the event.
 type Trigger struct {
-	// Type is mention, a person @mentioning courier, or botMessage, a message a bot posts.
+	// Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts.
 	// A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
 	// on as the boolean true, and the loader's decoder follows it.
 	// +kubebuilder:validation:Enum=mention;botMessage
@@ -91,7 +91,7 @@ type Trigger struct {
 
 // BotSource identifies the bot whose messages a trigger accepts.
 type BotSource struct {
-	// BotID is the Slack bot ID, never a display name. Courier's own bot ID is refused at
+	// BotID is the Slack bot ID, never a display name. Agent Kourier's own bot ID is refused at
 	// runtime: the load cannot know it.
 	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
 	BotID string `json:"botId"`
@@ -118,7 +118,7 @@ type TriggerThread struct {
 	// and between 1m and 168h.
 	// +optional
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
-	// MaxIdle is how long an open thread may go without a message of its key before courier counts it
+	// MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
 	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
 	// resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
 	// means the larger of 24h and twice the cooldown (EffectiveMaxIdle). It must be longer than the
@@ -129,7 +129,7 @@ type TriggerThread struct {
 	// above it.
 	// +optional
 	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
-	// CloseWhen maps an extracted field to the value that closes the thread: courier posts a
+	// CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
 	// note and starts no turn. Every entry must equal.
 	// +optional
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
@@ -257,8 +257,8 @@ checked, and the next steps a person should take.
 // here must get a rule there (the renderer refuses a field that has none).
 //
 // Fields, State and Key come out of an attacker's message (spec R2). Channel, Source and Link
-// are courier's own: the channel from the Binding, the source from the preset, and the link the
-// Slack permalink that courier builds from the channel and the ts of the triggering message. Link
+// are Agent Kourier's own: the channel from the Binding, the source from the preset, and the link the
+// Slack permalink that Agent Kourier builds from the channel and the ts of the triggering message. Link
 // is never a field of the message such as titleLink, which the sender wrote. The renderer checks
 // all of them anyway, as defence in depth. It writes a value into the instruction part only if
 // the template reads it and it passes its rule; a value that fails refuses the render with a
@@ -282,7 +282,7 @@ type PromptView struct {
 	State string
 	// Key is the extracted "key" value, empty if the trigger extracts none.
 	Key string
-	// Link is the Slack permalink of the triggering message, built by courier from the channel
+	// Link is the Slack permalink of the triggering message, built by Agent Kourier from the channel
 	// and the message's ts. It is not taken from the message: never a field such as titleLink.
 	Link string
 	// Source names what sent the message, such as the preset.

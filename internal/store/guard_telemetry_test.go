@@ -16,7 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 )
 
-// operationCount returns how many observations courier_operation_duration_seconds holds for the operation and outcome.
+// operationCount returns how many observations agentkourier_operation_duration_seconds holds for the operation and outcome.
 func operationCount(t *testing.T, h *telemetrytest.Harness, operation, outcome string) uint64 {
 	t.Helper()
 	families, err := h.Registry.Gather()
@@ -25,7 +25,7 @@ func operationCount(t *testing.T, h *telemetrytest.Harness, operation, outcome s
 	}
 	var n uint64
 	for _, f := range families {
-		if f.GetName() != "courier_operation_duration_seconds" {
+		if f.GetName() != "agentkourier_operation_duration_seconds" {
 			continue
 		}
 		for _, m := range f.Metric {
@@ -45,13 +45,13 @@ func operationCount(t *testing.T, h *telemetrytest.Harness, operation, outcome s
 // duration.
 func inTrace(t *testing.T, h *telemetrytest.Harness) context.Context {
 	t.Helper()
-	ctx, root := telemetry.Start(h.Ctx, "courier.test.root")
+	ctx, root := telemetry.Start(h.Ctx, "agentkourier.test.root")
 	t.Cleanup(func() { root.Finish(nil) })
 	return ctx
 }
 
 // TestEveryOperationRecordsOneSpanAndOneObservation: the telemetry of the store is the guard's, one operation named
-// courier.store.<Method> per call, with the outcome "success". The names are the ones the dashboards and the
+// agentkourier.store.<Method> per call, with the outcome "success". The names are the ones the dashboards and the
 // observability guide use; a method that drops its telemetry, or renames it, fails here.
 func TestEveryOperationRecordsOneSpanAndOneObservation(t *testing.T) {
 	for _, sp := range specs() {
@@ -60,14 +60,14 @@ func TestEveryOperationRecordsOneSpanAndOneObservation(t *testing.T) {
 			if err := sp.valid(inTrace(t, h), store.Guard(&fakeAdapter{})); err != nil {
 				t.Fatal(err)
 			}
-			name := "courier.store." + sp.method
+			name := "agentkourier.store." + sp.method
 			h.Span(t, name) // exactly one
 			if n := operationCount(t, h, name, "success"); n != 1 {
 				t.Errorf("%s observed %d times as success; want 1", name, n)
 			}
 			var spans []string
 			for _, s := range h.Exporter.GetSpans() {
-				if strings.HasPrefix(s.Name, "courier.store.") {
+				if strings.HasPrefix(s.Name, "agentkourier.store.") {
 					spans = append(spans, s.Name)
 				}
 			}
@@ -86,8 +86,8 @@ func TestARefusedCallIsAnOperationWithTheOutcomeInvalid(t *testing.T) {
 	if err := completeEvent("", 1)(inTrace(t, h), store.Guard(a)); !errors.Is(err, store.ErrInvalid) {
 		t.Fatalf("CompleteEvent with no ID = %v", err)
 	}
-	h.Span(t, "courier.store.CompleteEvent")
-	if n := operationCount(t, h, "courier.store.CompleteEvent", "invalid"); n != 1 {
+	h.Span(t, "agentkourier.store.CompleteEvent")
+	if n := operationCount(t, h, "agentkourier.store.CompleteEvent", "invalid"); n != 1 {
 		t.Errorf("observed %d times as invalid; want 1", n)
 	}
 }
@@ -119,7 +119,7 @@ func TestTheOutcomeOfAnOperationIsClassifiedOnce(t *testing.T) {
 			if !errors.Is(err, c.err) {
 				t.Fatalf("GetEvent = %v; want %v", err, c.err)
 			}
-			if n := operationCount(t, h, "courier.store.GetEvent", c.outcome); n != 1 {
+			if n := operationCount(t, h, "agentkourier.store.GetEvent", c.outcome); n != 1 {
 				t.Errorf("observed %d times as %s; want 1", n, c.outcome)
 			}
 		})
@@ -131,7 +131,7 @@ func TestADriverErrorIsNotNotFoundUnlessTheBackendSaysSo(t *testing.T) {
 	h := telemetrytest.New(t)
 	g := store.Guard(&fakeAdapter{err: sql.ErrNoRows})
 	_, _ = g.GetEvent(inTrace(t, h), "e1")
-	if n := operationCount(t, h, "courier.store.GetEvent", "not_found"); n != 0 {
+	if n := operationCount(t, h, "agentkourier.store.GetEvent", "not_found"); n != 0 {
 		t.Errorf("a driver's error counted as not found without WithNoRows")
 	}
 }
@@ -211,7 +211,7 @@ func TestARowKeepsTheTraceTheCallerGaveAndOtherwiseTakesTheCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 			p, _ := c.got(a.row)
-			stored := h.Span(t, "courier.store."+c.method)
+			stored := h.Span(t, "agentkourier.store."+c.method)
 			want := caller.SpanID()
 			if c.ownSpan {
 				want = stored.SpanContext.SpanID()

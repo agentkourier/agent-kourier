@@ -21,7 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 )
 
-// configDir copies spec 7's example config, which refers to Secrets in courier-system and sre.
+// configDir copies spec 7's example config, which refers to Secrets in agent-kourier-system and sre.
 func configDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,9 +42,9 @@ func secretOf(namespace, name string, keys ...string) *corev1.Secret {
 // cluster holds the Secrets that the example config refers to.
 func cluster() *fake.Clientset {
 	return fake.NewClientset(
-		secretOf("courier-system", "slack-main", "botToken", "appToken"),
-		secretOf("sre", "courier-sre-alerts-oidc", "token"),
-		secretOf("sre", "courier-webhook-token", "token"),
+		secretOf("agent-kourier-system", "slack-main", "botToken", "appToken"),
+		secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"),
+		secretOf("sre", "agent-kourier-webhook-token", "token"),
 	)
 }
 
@@ -55,7 +55,7 @@ func options(dir string) BootstrapOptions {
 	}
 }
 
-// The example config needs courier-system and sre. Starting with those derived, and only those,
+// The example config needs agent-kourier-system and sre. Starting with those derived, and only those,
 // loads it: a missing namespace would fail the first load with ErrNamespaceNotWatched.
 func TestBootstrapWatchesTheNamespacesTheConfigNames(t *testing.T) {
 	c, err := Bootstrap(t.Context(), cluster(), options(configDir(t)))
@@ -72,9 +72,9 @@ func TestBootstrapWatchesTheNamespacesTheConfigNames(t *testing.T) {
 // informers outlive the failed start.
 func TestBootstrapStopsTheResolverWhenTheConfigDoesNotResolve(t *testing.T) {
 	before := goleak.IgnoreCurrent()
-	client := fake.NewClientset( // the Binding's token Secret, sre/courier-sre-alerts-oidc, is missing
-		secretOf("courier-system", "slack-main", "botToken", "appToken"),
-		secretOf("sre", "courier-webhook-token", "token"),
+	client := fake.NewClientset( // the Binding's token Secret, sre/agent-kourier-sre-alerts-oidc, is missing
+		secretOf("agent-kourier-system", "slack-main", "botToken", "appToken"),
+		secretOf("sre", "agent-kourier-webhook-token", "token"),
 	)
 
 	c, err := Bootstrap(t.Context(), client, options(configDir(t)))
@@ -82,7 +82,7 @@ func TestBootstrapStopsTheResolverWhenTheConfigDoesNotResolve(t *testing.T) {
 	if err == nil || c != nil {
 		t.Fatalf("Bootstrap = %v, %v; want an error and no Config", c, err)
 	}
-	if !strings.Contains(err.Error(), "courier-sre-alerts-oidc") {
+	if !strings.Contains(err.Error(), "agent-kourier-sre-alerts-oidc") {
 		t.Errorf("Bootstrap = %v, want it to name the missing Secret", err)
 	}
 	goleak.VerifyNone(t, before)
@@ -129,13 +129,13 @@ func TestReloadThatAddsAnUnwatchedNamespaceKeepsTheSnapshot(t *testing.T) {
 	t.Cleanup(c.Stop)
 	before := c.Reloader.Current()
 
-	added := `apiVersion: agentcourier.dev/v1alpha1
+	added := `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: pay, namespace: payments }
 spec:
-  agent: { backendRef: { namespace: courier-system, name: kagent-pilot }, name: k8s-agent, namespace: kagent }
+  agent: { backendRef: { namespace: agent-kourier-system, name: kagent-pilot }, name: k8s-agent, namespace: kagent }
   identity: { tokenSecretRef: { name: pay-token } }
-  chat: { connectionRef: { namespace: courier-system, name: slack-main }, channel: C0PAYMENTS01 }
+  chat: { connectionRef: { namespace: agent-kourier-system, name: slack-main }, channel: C0PAYMENTS01 }
 `
 	// The file appears whole. A plain WriteFile truncates first, and the reloader, polling every
 	// 5 ms, can load the empty file (a good reload, which replaces the snapshot with an equal one,
@@ -174,10 +174,10 @@ spec:
 // namespace is asked for; otherwise the namespace is not watched.
 func TestBootstrapWatchesTheExtraNamespaces(t *testing.T) {
 	client := cluster()
-	if _, err := client.CoreV1().Secrets("courier").Create(t.Context(), secretOf("courier", "courier-pg", "dsn"), metav1.CreateOptions{}); err != nil {
+	if _, err := client.CoreV1().Secrets("agent-kourier").Create(t.Context(), secretOf("agent-kourier", "agent-kourier-pg", "dsn"), metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	for name, extra := range map[string][]string{"asked": {"courier", "sre"}, "not asked": nil} {
+	for name, extra := range map[string][]string{"asked": {"agent-kourier", "sre"}, "not asked": nil} {
 		t.Run(name, func(t *testing.T) {
 			o := options(configDir(t))
 			o.ExtraNamespaces = extra
@@ -186,11 +186,11 @@ func TestBootstrapWatchesTheExtraNamespaces(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(c.Stop)
-			_, err = c.Secrets.Value(t.Context(), "courier", "courier-pg", "dsn")
+			_, err = c.Secrets.Value(t.Context(), "agent-kourier", "agent-kourier-pg", "dsn")
 			if (extra != nil) != (err == nil) || (extra == nil && !errors.Is(err, k8ssecrets.ErrNamespaceNotWatched)) {
 				t.Errorf("Value of the extra namespace's Secret = %v, with extra namespaces %v", err, extra)
 			}
-			if extra != nil && len(c.namespaces) != 3 { // courier-system and sre from the config, courier; sre once
+			if extra != nil && len(c.namespaces) != 3 { // agent-kourier-system and sre from the config, Agent Kourier; sre once
 				t.Errorf("namespaces = %v, want the config's two and the extra one, each once", c.namespaces)
 			}
 		})

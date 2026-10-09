@@ -19,7 +19,7 @@ import (
 
 var (
 	// ErrSlackAuth is wrapped by the error RunPlatform returns when the chat platform rejected the credentials for good
-	// (Slack, in v1, which the name keeps for the exit code that cmd/courier maps it to):
+	// (Slack, in v1, which the name keeps for the exit code that cmd/agent-kourier maps it to):
 	// the process exits, with the code in the error, because no retry would help.
 	ErrSlackAuth = errors.New("slack rejected the tokens")
 	// ErrWiring is wrapped by an error that means the broker was put together wrongly, or its

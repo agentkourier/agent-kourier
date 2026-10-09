@@ -17,10 +17,10 @@ import (
 // updated; stop the stream first. The error holds no token.
 //
 // UNCONFIRMED(WP-04): that chat.update keeps the message's metadata (the outbox looks a message
-// up only before its ts is recorded, so courier does not need it to), and the error code for a
+// up only before its ts is recorded, so Agent Kourier does not need it to), and the error code for a
 // message still streaming (the fake says cant_update_message).
 func (c *Client) Update(ctx context.Context, channel, ts string, content Content) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.Update")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Update")
 	defer func() { finishChat(ctx, op, "Update", telemetryErr) }()
 	opts, err := blockOptions(content.Blocks)
 	if err != nil {
@@ -33,7 +33,7 @@ func (c *Client) Update(ctx context.Context, channel, ts string, content Content
 	return nil
 }
 
-// inertOptions returns the options every post, update and stream of courier carries, so that
+// inertOptions returns the options every post, update and stream of Agent Kourier carries, so that
 // agent-written text stays text (spec 8.4): no parse, which would turn @here and @channel into
 // broadcasts, no link_names, and no unfurling, which makes Slack's servers fetch a URL the agent
 // wrote with no one clicking it. A method that sends a message must include them.

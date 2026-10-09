@@ -14,9 +14,9 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 )
 
-// TestInstallCourierPassesFurtherArgumentsToHelm: the fast tier on two replicas layers an overlay of values over the Postgres ones
-// (install_courier VALUES -f OVERLAY), which helm applies after the first, so that the overlay wins.
-func TestInstallCourierPassesFurtherArgumentsToHelm(t *testing.T) {
+// TestInstallAgentKourierPassesFurtherArgumentsToHelm: the fast tier on two replicas layers an overlay of values over the Postgres ones
+// (install_agentkourier VALUES -f OVERLAY), which helm applies after the first, so that the overlay wins.
+func TestInstallAgentKourierPassesFurtherArgumentsToHelm(t *testing.T) {
 	bin, logs := t.TempDir(), t.TempDir()
 	for _, tool := range []string{"kubectl", "helm"} {
 		stub := "#!/bin/sh\necho \"$*\" >> \"$STUB_LOG/" + tool + "\"\n"
@@ -24,19 +24,19 @@ func TestInstallCourierPassesFurtherArgumentsToHelm(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	script := `set -eu; . "$1"; ROOT=/repo; K=(kubectl --context kind-courier-fast); H=(helm --kube-context kind-courier-fast); install_courier /v/base.yaml -f /v/overlay.yaml`
+	script := `set -eu; . "$1"; ROOT=/repo; K=(kubectl --context kind-agent-kourier-fast); H=(helm --kube-context kind-agent-kourier-fast); install_agentkourier /v/base.yaml -f /v/overlay.yaml`
 	cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", "../../hack/kind/lib.sh")
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+logs)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("install_courier: %v\n%s", err, out)
+		t.Fatalf("install_agentkourier: %v\n%s", err, out)
 	}
 	got := readLog(t, logs, "helm")
-	const want = "upgrade --install courier /repo/charts/courier --namespace courier -f /v/base.yaml --force-conflicts -f /v/overlay.yaml"
+	const want = "upgrade --install agent-kourier /repo/charts/agent-kourier --namespace agent-kourier -f /v/base.yaml --force-conflicts -f /v/overlay.yaml"
 	if !strings.Contains(got, want) {
 		t.Errorf("helm was asked:\n%s\nwant it to take the overlay after the base values: %s", got, want)
 	}
-	if !strings.Contains(readLog(t, logs, "kubectl"), "-n courier rollout restart deploy/courier") {
-		t.Error("install_courier did not restart the Deployment, which picks up a rebuilt image")
+	if !strings.Contains(readLog(t, logs, "kubectl"), "-n agent-kourier rollout restart deploy/agent-kourier") {
+		t.Error("install_agentkourier did not restart the Deployment, which picks up a rebuilt image")
 	}
 }
 

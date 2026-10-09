@@ -15,7 +15,7 @@ import (
 
 const leakCanary = "LEAKCANARY"
 
-// captureDiagnostics installs the courier diagnostics over a buffer-backed logger and puts
+// captureDiagnostics installs the Agent Kourier diagnostics over a buffer-backed logger and puts
 // OpenTelemetry's globals back when the test ends.
 func captureDiagnostics(t *testing.T) *bytes.Buffer {
 	t.Helper()
@@ -53,7 +53,7 @@ func TestExporterDiagnosticsNeverCarryEnvironmentValues(t *testing.T) {
 			}
 			defer func() { _ = shutdown(context.Background()) }()
 			if !strings.Contains(buf.String(), `"msg":"otel: `) {
-				t.Fatalf("the exporter's complaint did not reach the courier logger: %q", buf.String())
+				t.Fatalf("the exporter's complaint did not reach the Agent Kourier logger: %q", buf.String())
 			}
 			if strings.Contains(buf.String(), leakCanary) {
 				t.Fatalf("a variable's value reached the log: %s", buf.String())

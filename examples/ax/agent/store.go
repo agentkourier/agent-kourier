@@ -210,7 +210,7 @@ func (s *TaskStore) FindMessage(ctx context.Context, id string) (*a2a.Task, erro
 	return stored.Task, nil
 }
 
-// List returns stable ID-ordered pages with message history for Courier's recovery lookup.
+// List returns stable ID-ordered pages with message history for Agent Kourier's recovery lookup.
 func (s *TaskStore) List(ctx context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
 	user, err := owner(ctx)
 	if err != nil {

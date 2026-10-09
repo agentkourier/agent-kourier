@@ -32,7 +32,7 @@ const maxListPages = 100
 // once. UNCONFIRMED: WP-03 measured the lookup on a context of three tasks; paging past
 // kagent's page size of 50 is not measured.
 func (a *Agent) FindTask(ctx context.Context, contextID, messageID string) (telemetryResult0 *a2a.Task, telemetryResult1 []a2a.TaskID, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.agent.find")
+	ctx, op := telemetry.Start(ctx, "agentkourier.agent.find")
 	defer func() { finishAgent(op, telemetryErr) }()
 	if contextID == "" || messageID == "" {
 		return nil, nil, errors.New("find task: a contextId and a messageId are both required")
@@ -97,7 +97,7 @@ func preferred(holders []*a2a.Task) (*a2a.Task, []a2a.TaskID, error) {
 }
 
 func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequest) (telemetryResult0 *a2a.ListTasksResponse, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.agent.list")
+	ctx, op := telemetry.Start(ctx, "agentkourier.agent.list")
 	defer func() { finishAgent(op, telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()

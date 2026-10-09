@@ -60,7 +60,7 @@ func databaseAt(t *testing.T, path string, last int) {
 // TestMigration0007KeepsExistingRows opens a database migrated to 0006 with outbox rows in it:
 // 0007 runs over existing rows and must keep them.
 func TestMigration0007KeepsExistingRows(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	databaseAt(t, path, 6)
 	s := openAt(t, path) // applies 0007
 	ctx := context.Background()
@@ -76,7 +76,7 @@ func TestMigration0007KeepsExistingRows(t *testing.T) {
 // outbox rows in it: 0010 replaces the role triggers over existing rows, which must read back, and
 // the reaction role, which 0009's triggers refused, is accepted from then on.
 func TestMigration0010KeepsExistingRowsAndTakesTheReactionRole(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	databaseAt(t, path, 9)
 	s := openAt(t, path) // applies 0010
 	ctx := context.Background()

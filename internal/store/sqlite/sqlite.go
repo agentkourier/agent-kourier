@@ -1,5 +1,5 @@
 // Package sqlite implements store.Store on SQLite using the pure-Go
-// modernc.org/sqlite driver, so the courier binary stays CGO-free.
+// modernc.org/sqlite driver, so the Agent Kourier binary stays CGO-free.
 package sqlite
 
 import (

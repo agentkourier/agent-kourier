@@ -39,7 +39,7 @@ func run() error {
 	model := &e2emodel.Model{Scenario: scenario}
 	stateDir := os.Getenv("STATE_DIR")
 	if stateDir == "" {
-		stateDir = "/workspace/courier-state"
+		stateDir = "/workspace/agent-kourier-state"
 	}
 	server, err := agent.New(ctx, agent.Config{StateDir: stateDir, Model: model, Authenticate: verify})
 	if err != nil {

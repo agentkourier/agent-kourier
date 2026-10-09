@@ -1,4 +1,4 @@
-// Package store defines courier's persistence interfaces and domain types.
+// Package store defines Agent Kourier's persistence interfaces and domain types.
 //
 // The interfaces speak in domain operations, never SQL, so a Postgres
 // implementation (spec D15) can sit beside the default SQLite one.

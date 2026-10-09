@@ -54,7 +54,7 @@ const (
 // erase the log a day at a time.
 const MinAuditRetention = 24 * time.Hour
 
-// What the retention loop counts as removed (courier_retention_removed_total, label what). The interactions the
+// What the retention loop counts as removed (agentkourier_retention_removed_total, label what). The interactions the
 // interact package clears are counted by its own hook, under RemovedClearedInteractions. A deleted session is counted
 // under RemovedExpiredSessions, and each kind of row that went with it under its own. A task that a crash left on a
 // session that was past its horizon, which the loop ended so that the session could be deleted, is counted under

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Prove, against a running courier-full cluster, that courier reaches kagent only through the
+# Prove, against a running agent-kourier-full cluster, that Agent Kourier reaches kagent only through the
 # verifying front door (spec D32, R4). Every check asserts a response body, a status code, or a
 # curl exit code, and prints "ok: ..." or "FAIL: ..." (exit 1). Groups, one probe pod each:
-#  1. a courier pod gets the card, answers, HITL payloads, and an incremental SSE stream through
+#  1. an Agent Kourier pod gets the card, answers, HITL payloads, and an incremental SSE stream through
 #     the front door, and has no route to the controller (8083) or the kagent UI (8080);
 #     and path-traversal probes through the door never reach a controller route;
 #  2. the front door refuses forged (well-formed), foreign-audience, and missing tokens, and so
@@ -13,17 +13,17 @@
 #  4. canary: the controller itself still accepts a forged token on /mcp, lets the same spoof
 #     through, and reads X-Share-Token (alpha5 does not verify); group 3 means something only
 #     because of this;
-#  5. a courier-labelled pod in another namespace, an unlabelled pod, and pods in that namespace
+#  5. an agent-kourier-labelled pod in another namespace, an unlabelled pod, and pods in that namespace
 #     carrying the labels the 8083 and 8080 policies trust, reach nothing.
 set -euo pipefail
 
-CTX=kind-courier-full
+CTX=kind-agent-kourier-full
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=../lib.sh
 . "${HERE}/../lib.sh"
 CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
 K=(kubectl --context "${CTX}")
-NODE=courier-full-control-plane
+NODE=agent-kourier-full-control-plane
 for tool in kubectl docker jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
@@ -47,8 +47,8 @@ token() { # CLIENT SECRET [USER]: an ID token for that Dex user (default: the Bi
 }
 A_EMAIL=binding-test@example.test
 B_EMAIL=identity-b@example.test # a second person: a different owner of kagent sessions
-binding_token() { token courier-binding fake-courier-binding-secret; }
-b_token() { token courier-binding fake-courier-binding-secret "$B_EMAIL"; }
+binding_token() { token agent-kourier-binding fake-agent-kourier-binding-secret; }
+b_token() { token agent-kourier-binding fake-agent-kourier-binding-secret "$B_EMAIL"; }
 b64() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
 # forge TOKEN sets two forgeries of a real token: A keeps the real header and signature but
 # changes the payload's email; B is {"alg":"none"} with the real payload and no signature. It also
@@ -145,7 +145,7 @@ probe() {
       --labels="$2" --command -- sh -s
 }
 
-"${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null
+"${K[@]}" get namespace agent-kourier >/dev/null 2>&1 || "${K[@]}" create namespace agent-kourier >/dev/null
 
 assert_never_published
 # The full tier's own unauthenticated test surfaces: the scenario model's /_control/release/ and the MCP tool server.
@@ -154,8 +154,8 @@ for app in scenariollm scenariomcp; do
   assert_app_unpublished kagent "${app}"
 done
 
-echo "== courier pod: A2A through the front door, nothing else reachable"
-probe courier app.kubernetes.io/name=courier <<'EOF'
+echo "== Agent Kourier pod: A2A through the front door, nothing else reachable"
+probe agent-kourier app.kubernetes.io/name=agent-kourier <<'EOF'
 tok=$(binding_token)
 card=$(curl -s -m 20 -H "Authorization: Bearer $tok" "$FD$CARD")
 assert "card served through the front door" has "$card" '"name":"test_agent"'
@@ -190,8 +190,8 @@ assert "no route to the controller on 8083" refused "$CTRL$CARD"
 assert "no route to the kagent UI relay on 8080" refused "$UI/mcp"
 EOF
 
-echo "== courier pod: forged, foreign-audience, and missing tokens"
-probe courier app.kubernetes.io/name=courier <<'EOF'
+echo "== Agent Kourier pod: forged, foreign-audience, and missing tokens"
+probe agent-kourier app.kubernetes.io/name=agent-kourier <<'EOF'
 tok=$(binding_token)
 forge "$tok"
 assert "forgery A has a different payload" has "$altered" mallory@evil.test
@@ -210,8 +210,8 @@ assert "UI door refuses the Binding's token" eq "$(code "$tok" "$UIDOOR/api/agen
 assert "UI door passes a UI-audience token through the fence (200 is the controller's catch-all)" eq "$(code "$(token kagent-ui fake-oauth2-proxy-secret)" "$UIDOOR/api/agents")" 200
 EOF
 
-echo "== courier pod: the spoof is refused at the door; X-Share-Token is dropped"
-probe courier app.kubernetes.io/name=courier <<'EOF'
+echo "== Agent Kourier pod: the spoof is refused at the door; X-Share-Token is dropped"
+probe agent-kourier app.kubernetes.io/name=agent-kourier <<'EOF'
 tokA=$(binding_token)
 tokB=$(b_token)
 r=$(a2a "$FD" "$tokA" '' "$(send_body 'What is 2+2?')")
@@ -256,7 +256,7 @@ spoof_all "$CTRL" TASK_STATE_COMPLETED
 assert "controller: a bogus X-Share-Token is read (403); the door drops it" eq "$(curl -s -o /dev/null -m 15 -w '%{http_code}' -H "Authorization: Bearer $tokA" -H 'X-Share-Token: bogus' "$CTRL$CARD")" 403
 EOF
 
-# fenced NAMESPACE LABELS DESCRIPTION: a pod that is not courier reaches none of the three.
+# fenced NAMESPACE LABELS DESCRIPTION: a pod that is not Agent Kourier reaches none of the three.
 fenced() {
   echo "== $3: no route to the controller, the front door, or the UI"
   probe "$1" "$2" <<'EOF'
@@ -264,34 +264,34 @@ assert "control: the pod itself has network (Dex answers)" curl -sf -m 8 -o /dev
 for url in "$CTRL$CARD" "$FD$CARD" "$UI/mcp"; do assert "no route to $url" refused "$url"; done
 EOF
 }
-fenced default app.kubernetes.io/name=courier "courier-labelled pod in another namespace"
-fenced courier app=intruder "unlabelled pod"
+fenced default app.kubernetes.io/name=agent-kourier "agent-kourier-labelled pod in another namespace"
+fenced agent-kourier app=intruder "unlabelled pod"
 fenced e2e app=e2e-runner "pod in e2e, where the test doubles and the runner run"
 # The labels the policies trust, on pods outside the namespace those policies select.
 fenced default app.kubernetes.io/component=ui,app.kubernetes.io/name=kagent-frontdoor "pod in default labelled as the UI and the front door (8083 trust)"
 fenced default app.kubernetes.io/name=oauth2-proxy "pod in default labelled as the UI's oauth2-proxy (8080 trust)"
 
-# Courier itself, last: the checks above show the door and the fences, and this shows courier going through
+# Agent Kourier itself, last: the checks above show the door and the fences, and this shows Agent Kourier going through
 # them. It is the fast tier's Deployment, ready and connected to the fake Slack, and a mention of it in C1 comes
-# back answered by kagent: courier read the Binding's Dex token from its Secret, the door verified it, kagent ran
+# back answered by kagent: Agent Kourier read the Binding's Dex token from its Secret, the door verified it, kagent ran
 # the turn on mockllm, and the reply streamed into the thread.
-echo "== courier: ready, connected to the fake Slack, and a turn through the front door"
-courier_fail() {
+echo "== agent-kourier: ready, connected to the fake Slack, and a turn through the front door"
+agentkourier_fail() {
   echo "FAIL: $1" >&2
-  "${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o wide >&2 || true
-  "${K[@]}" -n courier logs deploy/courier --tail=60 >&2 || true
-  "${K[@]}" -n courier describe pods -l app.kubernetes.io/name=courier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
+  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o wide >&2 || true
+  "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=60 >&2 || true
+  "${K[@]}" -n agent-kourier describe pods -l app.kubernetes.io/name=agent-kourier 2>&1 | sed -n '/^Events:/,$p' >&2 || true
   exit 1
 }
-"${K[@]}" -n courier rollout status deploy/courier --timeout=180s || courier_fail "courier's rollout did not finish"
-courier_pod=$("${K[@]}" -n courier get pods -l app.kubernetes.io/name=courier -o jsonpath='{.items[*].metadata.name}')
-[[ -n "${courier_pod}" && "${courier_pod}" != *" "* ]] || courier_fail "want exactly one courier pod, have: ${courier_pod:-none}"
-echo "ok: one courier pod, ${courier_pod}, rolled out"
+"${K[@]}" -n agent-kourier rollout status deploy/agent-kourier --timeout=180s || agentkourier_fail "agent-kourier's rollout did not finish"
+agentkourier_pod=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier -o jsonpath='{.items[*].metadata.name}')
+[[ -n "${agentkourier_pod}" && "${agentkourier_pod}" != *" "* ]] || agentkourier_fail "want exactly one Agent Kourier pod, have: ${agentkourier_pod:-none}"
+echo "ok: one Agent Kourier pod, ${agentkourier_pod}, rolled out"
 for path in healthz readyz; do
-  "${K[@]}" get --raw "/api/v1/namespaces/courier/pods/${courier_pod}:8080/proxy/${path}" >/dev/null || courier_fail "courier's /${path} does not answer 200"
-  echo "ok: courier's /${path} answers 200"
+  "${K[@]}" get --raw "/api/v1/namespaces/agent-kourier/pods/${agentkourier_pod}:8080/proxy/${path}" >/dev/null || agentkourier_fail "agent-kourier's /${path} does not answer 200"
+  echo "ok: Agent Kourier's /${path} answers 200"
 done
-probe e2e app=verify-courier <<'EOS'
+probe e2e app=verify-agent-kourier <<'EOS'
 FS=http://fakeslack.e2e.svc.cluster.local:8080
 conns=0
 for _ in $(seq 60); do
@@ -299,16 +299,16 @@ for _ in $(seq 60); do
   [ "${conns:-0}" -ge 1 ] && break
   sleep 1
 done
-assert "courier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+assert "Agent Kourier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 mark=verify-$(date +%s)
 sent=$(curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"channel":"C1","user":"UVERIFY","text":"<@UFAKEBOT> What is 2+2? '"$mark"'"}' "$FS/_control/mention")
 ts=$(printf %s "$sent" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
-assert "a mention of courier in C1 was delivered (ts ${ts:-none})" test -n "$ts"
+assert "a mention of Agent Kourier in C1 was delivered (ts ${ts:-none})" test -n "$ts"
 thread=
 for _ in $(seq 90); do
   thread=$(curl -s -m 10 "$FS/_control/thread?channel=C1&ts=$ts")
   has "$thread" 'The answer is 4.' && break
   sleep 2
 done
-assert "courier's turn went through the front door to kagent and back: the thread has the answer" has "$thread" 'The answer is 4.'
+assert "agent-kourier's turn went through the front door to kagent and back: the thread has the answer" has "$thread" 'The answer is 4.'
 EOS

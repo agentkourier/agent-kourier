@@ -42,13 +42,13 @@ type IgnoreReason string
 
 // The reasons a reply is ignored.
 const (
-	// IgnoredNotOwned: courier owns no such thread and the reply may not create one (spec 8.2).
+	// IgnoredNotOwned: Agent Kourier owns no such thread and the reply may not create one (spec 8.2).
 	IgnoredNotOwned IgnoreReason = "not_owned"
-	// IgnoredUnmentioned: the mode is mention, the reply does not mention courier, and it answers nothing (D38). It is
+	// IgnoredUnmentioned: the mode is mention, the reply does not mention Agent Kourier, and it answers nothing (D38). It is
 	// counted, and an expired thread gets no notice for it either.
 	IgnoredUnmentioned IgnoreReason = "unmentioned"
 	// IgnoredBindingGone: the session's Binding is gone, the Binding that now owns the channel takes mentioned
-	// replies only, and this one does not mention courier. It is not counted: no Binding of the thread is left to
+	// replies only, and this one does not mention Agent Kourier. It is not counted: no Binding of the thread is left to
 	// count it for.
 	IgnoredBindingGone IgnoreReason = "binding_gone"
 )
@@ -158,14 +158,14 @@ type PendingQuestion struct {
 }
 
 // ReplyFacts is everything the decision depends on. Manager.admit fills it in; the zero value is a reply in a
-// thread courier does not own.
+// thread Agent Kourier does not own.
 type ReplyFacts struct {
 	// Owned: the thread has a session.
 	Owned bool
 	// Create: the reply may make the session, and is no reply to be gated: an @mention, a DM, a trigger's start, an
 	// alert's prompt.
 	Create bool
-	// Mentioned: the reply mentions courier, or is in a direct message, where none is needed.
+	// Mentioned: the reply mentions Agent Kourier, or is in a direct message, where none is needed.
 	Mentioned bool
 	// BindingGone: the session's Binding has left the config. Nothing else of the session's Binding is known then,
 	// and expiry cannot be judged.
@@ -193,7 +193,7 @@ type ReplyFacts struct {
 // an answer.
 func TakesTextReplies(name string) bool { return name == string(v1alpha1.DialectA2A) }
 
-// gated says the mode holds this reply back: in mention mode a reply that does not mention courier is no turn (D38).
+// gated says the mode holds this reply back: in mention mode a reply that does not mention Agent Kourier is no turn (D38).
 // The mode is the session's Binding's, and only a session whose Binding is gone has the channel's current Binding's
 // instead. Create is no reply and is held to nothing.
 func (f ReplyFacts) gated() bool {

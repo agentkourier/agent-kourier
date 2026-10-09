@@ -49,7 +49,7 @@ func TestStreamLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := reply()
-	if m.Text != "Hello!" || m.Streaming || len(m.Blocks) == 0 || m.Metadata == nil || m.Metadata.EventType != "courier_message" || m.Metadata.EventPayload["outbox_id"] != "ob-1" {
+	if m.Text != "Hello!" || m.Streaming || len(m.Blocks) == 0 || m.Metadata == nil || m.Metadata.EventType != "agentkourier_message" || m.Metadata.EventPayload["outbox_id"] != "ob-1" {
 		t.Fatalf("after StopStream: %+v; want the whole text, blocks, and the outbox metadata", m)
 	}
 	// Once stopped the message can be edited: new text and blocks replace the old, and empty

@@ -187,7 +187,7 @@ func TestRunSweepsTheRowsOfOldTriggerThreads(t *testing.T) {
 	r := start(t, c)
 	r.until("/readyz", 200)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // the store's own metric says the sweep ran
-		if _, body := r.get("/metrics"); strings.Contains(body, `operation="courier.store.PurgeTriggerThreads"`) {
+		if _, body := r.get("/metrics"); strings.Contains(body, `operation="agentkourier.store.PurgeTriggerThreads"`) {
 			break
 		}
 		if time.Now().After(deadline) {

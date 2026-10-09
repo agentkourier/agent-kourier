@@ -50,10 +50,12 @@ func newStubEnv(t *testing.T, opts ...stubagent.Option) *stubEnv {
 	pool := agent.NewPool(kagentv1.New(0), agent.Config{})
 	t.Cleanup(pool.Close)
 	ag := &countingAgent{Agent: pool.Agent(agent.Target{
-		Binding:     "ns/b1",
-		Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL()}},
-		Agent:       v1alpha1.AgentRef{Namespace: "kagent", Name: "test"},
-		Credentials: func(context.Context) (dialect.Credentials, error) { return dialect.Credentials{UserID: "courier"}, nil },
+		Binding: "ns/b1",
+		Backend: &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL()}},
+		Agent:   v1alpha1.AgentRef{Namespace: "kagent", Name: "test"},
+		Credentials: func(context.Context) (dialect.Credentials, error) {
+			return dialect.Credentials{UserID: "agent-kourier"}, nil
+		},
 	})}
 	f := newFixture(t)
 	f.real = ag
@@ -151,7 +153,7 @@ func TestStubFirstSendCarriesTheHITLHeader(t *testing.T) {
 	pausedOn(t, task)
 }
 
-// A session busy with a task courier never saw answers -32004. The turn stays queued and is
+// A session busy with a task Agent Kourier never saw answers -32004. The turn stays queued and is
 // resent, after a lookup each time, until the session is free; the resend carries the HITL
 // header too. Nothing is dropped, and the turn runs once.
 func TestStubBusySessionIsRetriedUntilItIsFree(t *testing.T) {
@@ -301,7 +303,7 @@ func TestStubBadAnswerWedgesAndIsCancelled(t *testing.T) {
 	}
 }
 
-// S2, from the session's side: courier restarts while a task runs. A new manager over the same
+// S2, from the session's side: Agent Kourier restarts while a task runs. A new manager over the same
 // store, and the same agent, recovers: it follows the task, renders its output once, marked
 // recovered, and the conversation then continues in the same context with a reply.
 func TestStubRestartMidTask(t *testing.T) {
@@ -312,13 +314,13 @@ func TestStubRestartMidTask(t *testing.T) {
 	}
 	eventually(t, "the task to run", func() bool { return e.taskID() != "" })
 	before, _ := e.session()
-	if err := e.close(); err != nil { // courier goes down; the agent's task does not
+	if err := e.close(); err != nil { // Agent Kourier goes down; the agent's task does not
 		t.Fatal(err)
 	}
 	sink := &fakeSink{finals: make(chan struct{}, 16)}
 	cfg := e.m.cfg
 	cfg.Sink = sink
-	m2, err := New(cfg) // courier comes back, over the same store and the same agent
+	m2, err := New(cfg) // Agent Kourier comes back, over the same store and the same agent
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +355,7 @@ func TestStubRestartMidTask(t *testing.T) {
 	}
 }
 
-// S2 with a reply queued behind the running task: courier restarts, recovers the task, and then the
+// S2 with a reply queued behind the running task: Agent Kourier restarts, recovers the task, and then the
 // reply, which a process that died may or may not have sent, is looked up once against the stub's
 // ListTasks, found absent, and sent once, in the same context: exactly one task holds it.
 func TestStubRestartWithAReplyQueuedBehindTheTask(t *testing.T) {

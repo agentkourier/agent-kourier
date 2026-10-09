@@ -23,14 +23,14 @@ const (
 
 // PostEphemeral shows content to user alone in channel (chat.postEphemeral), in the thread threadTS
 // if set (a prompt lives in a thread, and a notice outside it shows in the channel's main view where
-// the person may never see it), with the inert options every message of courier carries. Nothing else
+// the person may never see it), with the inert options every message of Agent Kourier carries. Nothing else
 // sees it, and Slack gives it no event and no way to update it. A user outside the channel is refused
 // by Slack. Bad blocks are store.ErrInvalid. The error holds no token. The app needs the chat:write scope.
 //
 // UNCONFIRMED(WP-04): that chat.postEphemeral accepts the unfurl and parse options and thread_ts, and
 // the error code for a recipient outside the channel (the fake says user_not_in_channel).
 func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user string, content Content) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.PostEphemeral")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.PostEphemeral")
 	defer func() { finishChat(ctx, op, "PostEphemeral", telemetryErr) }()
 	opts, err := blockOptions(content.Blocks)
 	if err != nil {
@@ -54,11 +54,11 @@ func (c *Client) PostEphemeral(ctx context.Context, channel, threadTS, user stri
 // channels:read scope, and groups:read for private channels.
 //
 // UNCONFIRMED(WP-04): that the member list holds bots, deactivated users and Slack Connect external
-// members as courier assumes (a bot or a deactivated user is told apart by IsBot, not here); that a
+// members as Agent Kourier assumes (a bot or a deactivated user is told apart by IsBot, not here); that a
 // private channel lists its members only to a bot that is in it; and that its pages follow
 // next_cursor to an empty one.
 func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.IsChannelMember")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.IsChannelMember")
 	defer func() { finishChat(ctx, op, "IsChannelMember", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()
@@ -88,7 +88,7 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 // UNCONFIRMED(WP-04): that is_bot is set for every kind of bot user, workflow and app bots included,
 // and what users.info says of a deactivated user.
 func (c *Client) IsBot(ctx context.Context, user string) (telemetryResult0 bool, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.IsBot")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.IsBot")
 	defer func() { finishChat(ctx, op, "IsBot", telemetryErr) }()
 	ctx, cancel := context.WithTimeout(ctx, c.authz)
 	defer cancel()

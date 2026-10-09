@@ -40,9 +40,9 @@ data:
         name: kagent oauth2-proxy
         secret: fake-oauth2-proxy-secret
         redirectURIs: [http://localhost:4180/oauth2/callback]
-      - id: courier-binding
-        name: courier test Binding
-        secret: fake-courier-binding-secret
+      - id: agent-kourier-binding
+        name: Agent Kourier test Binding
+        secret: fake-agent-kourier-binding-secret
         redirectURIs: [http://localhost/unused]
 ---
 apiVersion: apps/v1

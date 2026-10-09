@@ -86,7 +86,7 @@ type SweepConfig struct {
 
 // Sweeper times out the interactions nobody answered (spec 8.4 step 6).
 //
-// UNCONFIRMED: a task that resumes outside courier (from kagent's own UI, say) and pauses again is a
+// UNCONFIRMED: a task that resumes outside Agent Kourier (from kagent's own UI, say) and pauses again is a
 // new pause, and becomes a new interaction while the old one is still pending. The old one is swept
 // when it is due, and its cancel names the old pause's task, which is the task that is paused now. Every step before the
 // timeout is recorded can be repeated, so a sweep that dies halfway is finished by the next, and

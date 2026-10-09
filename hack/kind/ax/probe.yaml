@@ -3,8 +3,8 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: '@NAME@'
-  namespace: courier
-  labels: {app.kubernetes.io/name: courier}
+  namespace: agent-kourier
+  labels: {app.kubernetes.io/name: agent-kourier}
 spec:
   restartPolicy: Never
   activeDeadlineSeconds: 300
@@ -20,7 +20,7 @@ spec:
             for attempt in 1 2 3 4 5 6; do
               status=$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
                 curl --config - -s -m 20 -o /dev/null -w '%{http_code}' \
-                  -H "ate-target-actor: courier-ax/$actor" \
+                  -H "ate-target-actor: agent-kourier-ax/$actor" \
                   http://atenet-router.ate-system.svc.cluster.local/a2a/.well-known/agent-card.json) || status=000
               if [ "$status" = 200 ]; then ok=yes; break; fi
               sleep 2
@@ -28,4 +28,4 @@ spec:
             [ "$ok" = yes ] || { echo "AX authenticated card failed: $actor (HTTP $status)" >&2; exit 1; }
           done
       volumeMounts: [{name: identity, mountPath: /run/identity, readOnly: true}]
-  volumes: [{name: identity, secret: {secretName: courier-agent-token}}]
+  volumes: [{name: identity, secret: {secretName: agent-kourier-agent-token}}]

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Build the multi-architecture release image of courier, and with PUSH=1 push it. Behind
+# Build the multi-architecture release image of Agent Kourier, and with PUSH=1 push it. Behind
 # `make release-image` and .github/workflows/release.yml, so a human and the workflow build the same artifact.
 #
 #   VERSION   the release tag, vX.Y.Z or vX.Y.Z-rc.1 (required); it becomes main.version and the image tag
-#   REGISTRY  the image repository, e.g. ghcr.io/agentkourier/agent-courier; required to push, no default
+#   REGISTRY  the image repository, e.g. ghcr.io/agentkourier/agent-kourier; required to push, no default
 #   PUSH      1 to push; anything else (the default) builds to a local OCI archive and pushes nothing
 #   PLATFORMS comma-separated, default linux/amd64,linux/arm64
 #   CHART_REGISTRY  where the chart is pushed, e.g. oci://ghcr.io/agentkourier/charts; required to push, no default
 #   OUT       the output directory, default bin/release
 #   BUILDER   a buildx builder name, if the current one cannot build multi-platform images with attestations
 #
-# After the image it packages charts/courier with the version stamped and the image's digest as the default
+# After the image it packages charts/agent-kourier with the version stamped and the image's digest as the default
 # image (package-chart.sh), and with PUSH=1 pushes the chart; the digests are written to OUT/digest and
 # OUT/chart-digest.
 #
@@ -45,7 +45,7 @@ DIRTY=$(git -C "${ROOT}" status --porcelain)
 if [ "${PUSH}" = 1 ]; then
   [ -n "${REGISTRY}" ] || die "PUSH=1 needs an explicit REGISTRY (there is no default)"
   [[ "${REGISTRY}" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]] ||
-    die "REGISTRY must be a repository without a tag or scheme, such as ghcr.io/agentkourier/agent-courier (got '${REGISTRY}')"
+    die "REGISTRY must be a repository without a tag or scheme, such as ghcr.io/agentkourier/agent-kourier (got '${REGISTRY}')"
   [[ "${CHART_REGISTRY}" =~ ^oci://[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]] ||
     die "PUSH=1 needs an explicit CHART_REGISTRY such as oci://ghcr.io/agentkourier/charts (got '${CHART_REGISTRY}')"
   [ -z "${DIRTY}" ] || die "refusing to push from a working tree with uncommitted or untracked files"
@@ -55,7 +55,7 @@ fi
 [ -z "${DIRTY}" ] || REVISION="${REVISION}-dirty"
 # The commit's own time, not the clock: the label is the same on every build of a commit.
 CREATED=$(TZ=UTC git -C "${ROOT}" show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd HEAD)
-NAME=${REGISTRY:-courier-release}:${VERSION}
+NAME=${REGISTRY:-agent-kourier-release}:${VERSION}
 
 # Passed to every build: the pinned bases, the version, the OCI labels. TAGS is never passed, so the binary
 # is the production build, and no test-hooks label is ever added here.
@@ -87,7 +87,7 @@ trap cleanup EXIT
 # verify stage runs for it: no test hook in the binary, an ELF of this architecture, main.version set to
 # VERSION), then die unless the image is the one to release: no test-hooks label, non-root, this platform.
 check_platform() {
-  local platform=$1 ref="courier-release-check:${1//\//-}"
+  local platform=$1 ref="agent-kourier-release-check:${1//\//-}"
   CHECKS+=("${ref}")
   echo "==> ${platform}: build and check"
   "${BUILD[@]}" --platform "${platform}" --load -t "${ref}" "${ROOT}"
@@ -110,7 +110,7 @@ if [ "${PUSH}" = 1 ]; then
   "${BUILD[@]}" --platform "${PLATFORMS}" --provenance=mode=max --sbom=true ${ANNOTATIONS[@]+"${ANNOTATIONS[@]}"} \
     --metadata-file "${OUT}/metadata.json" --push -t "${NAME}" "${ROOT}"
 else
-  archive="${OUT}/courier-${VERSION}.oci.tar"
+  archive="${OUT}/agent-kourier-${VERSION}.oci.tar"
   echo "==> building ${NAME} (${PLATFORMS}) to ${archive}; nothing is pushed"
   "${BUILD[@]}" --platform "${PLATFORMS}" --provenance=mode=max --sbom=true ${ANNOTATIONS[@]+"${ANNOTATIONS[@]}"} \
     --metadata-file "${OUT}/metadata.json" --output "type=oci,dest=${archive}" -t "${NAME}" "${ROOT}"
@@ -120,14 +120,14 @@ digest=$(jq -r '."containerimage.digest" // empty' "${OUT}/metadata.json")
 [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "the build did not report an image digest"
 echo "${digest}" >"${OUT}/digest"
 
-echo "==> packaging the chart with image ${REGISTRY:-courier-release}@${digest}"
-chart=$("${HERE}/package-chart.sh" "${VERSION}" "${REGISTRY:-courier-release}" "${digest}" "${OUT}")
+echo "==> packaging the chart with image ${REGISTRY:-agent-kourier-release}@${digest}"
+chart=$("${HERE}/package-chart.sh" "${VERSION}" "${REGISTRY:-agent-kourier-release}" "${digest}" "${OUT}")
 if [ "${PUSH}" = 1 ]; then
   pushed=$(helm push "${chart}" "${CHART_REGISTRY}" 2>&1) || die "helm push failed: ${pushed}"
   chart_digest=$(sed -n 's/^Digest: //p' <<<"${pushed}")
   [[ "${chart_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "helm push did not report a chart digest: ${pushed}"
   echo "${chart_digest}" >"${OUT}/chart-digest"
-  echo "pushed ${CHART_REGISTRY#oci://}/courier@${chart_digest} (version ${VERSION#v})"
+  echo "pushed ${CHART_REGISTRY#oci://}/agent-kourier@${chart_digest} (version ${VERSION#v})"
   echo "pushed ${REGISTRY}@${digest} (tag ${VERSION})"
 else
   echo "packaged ${chart}; nothing is pushed"

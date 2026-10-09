@@ -26,17 +26,17 @@ import (
 
 // postgresDSNEnv names the variable that holds the DSN of the database these tests run against: the one the Postgres
 // store's tests use. make test-postgres starts a throwaway container and sets it; without it the tests that need a database skip.
-const postgresDSNEnv = "COURIER_POSTGRES_DSN"
+const postgresDSNEnv = "AGENTKOURIER_POSTGRES_DSN"
 
-// postgresConfig is startConfig on the Postgres store: the DSN is in a Secret of namespace courier, which no resource of the
+// postgresConfig is startConfig on the Postgres store: the DSN is in a Secret of namespace agent-kourier, which no resource of the
 // example config names, and DBPath names a file that must stay unmade.
 func postgresConfig(t *testing.T, dsn string) RunConfig {
 	t.Helper()
 	c := startConfig(t)
 	c.DBPath = unmade(t)
-	s := secretOf("courier", "courier-pg", "dsn")
+	s := secretOf("agent-kourier", "agent-kourier-pg", "dsn")
 	s.Data["dsn"] = []byte(dsn)
-	if _, err := c.Client.(*fake.Clientset).CoreV1().Secrets("courier").Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
+	if _, err := c.Client.(*fake.Clientset).CoreV1().Secrets("agent-kourier").Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef}
@@ -56,7 +56,7 @@ func freshSchema(t *testing.T) (dsn, schema string) {
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
 	}
-	schema = "courier_broker_test_" + hex.EncodeToString(b)
+	schema = "agentkourier_broker_test_" + hex.EncodeToString(b)
 	exec := func(ctx context.Context, sql string) error {
 		conn, err := pgx.Connect(ctx, base)
 		if err != nil {
@@ -104,7 +104,7 @@ func TestRunServesOnPostgresWithTheDSNFromASecret(t *testing.T) {
 			t.Errorf("%s shows the DSN or its password", path)
 		}
 	}
-	if _, body := r.get("/metrics"); !strings.Contains(body, "courier_store_pool_acquired_conns") {
+	if _, body := r.get("/metrics"); !strings.Contains(body, "agentkourier_store_pool_acquired_conns") {
 		t.Error("/metrics lacks the store's pool metrics: RegisterMetrics did not run on the Postgres store")
 	}
 	var tables int
@@ -133,7 +133,7 @@ func TestRunRefusesAPostgresDSNSecretThatCannotBeUsed(t *testing.T) {
 	}{
 		"empty":   {"", "", secret.ErrEmptyValue},
 		"no key":  {"postgres://x", "other", secret.ErrKeyNotFound},
-		"garbage": {"postgres://courier:" + fakePassword + "@127.0.0.1:notaport/courier", "", nil},
+		"garbage": {"postgres://agentkourier:" + fakePassword + "@127.0.0.1:notaport/agentkourier", "", nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := postgresConfig(t, tc.dsn)
@@ -147,7 +147,7 @@ func TestRunRefusesAPostgresDSNSecretThatCannotBeUsed(t *testing.T) {
 			if err == nil || strings.Contains(err.Error(), fakePassword) || strings.Contains(err.Error(), "postgres://") {
 				t.Fatalf("Run = %v, want an error without the DSN", err)
 			}
-			if tc.want != nil && (!errors.Is(err, ErrWiring) || !errors.Is(err, tc.want) || !strings.Contains(err.Error(), "courier/courier-pg")) {
+			if tc.want != nil && (!errors.Is(err, ErrWiring) || !errors.Is(err, tc.want) || !strings.Contains(err.Error(), "agent-kourier/agent-kourier-pg")) {
 				t.Errorf("Run = %v, want ErrWiring wrapping %v and naming the Secret", err, tc.want)
 			}
 			if _, statErr := os.Stat(c.DBPath); !errors.Is(statErr, os.ErrNotExist) {
@@ -204,8 +204,8 @@ func TestRunOnPostgresLeadsWithTheEpochAndAStandbyTakesOver(t *testing.T) {
 	b.running = start(t, cb)
 	b.until("/readyz", 200)
 	time.Sleep(5 * testElection.RetryPeriod)
-	if b.built.Load() != 0 || !b.metric("courier_leader 0") {
-		t.Errorf("the standby built %d platforms, or lacks courier_leader 0: it must do none of the leader's work", b.built.Load())
+	if b.built.Load() != 0 || !b.metric("agentkourier_leader 0") {
+		t.Errorf("the standby built %d platforms, or lacks agentkourier_leader 0: it must do none of the leader's work", b.built.Load())
 	}
 
 	a.cancel()

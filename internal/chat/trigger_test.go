@@ -226,16 +226,16 @@ func snapshotOf(t *testing.T, triggers []v1alpha1.Trigger) *config.Snapshot {
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string, triggers []v1alpha1.Trigger) v1alpha1.Binding {
 		b := v1alpha1.Binding{ObjectMeta: meta(ns, name), Spec: v1alpha1.BindingSpec{
-			Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
-			Identity: v1alpha1.Identity{UserID: "courier-sre"},
-			Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: channel, Triggers: triggers}}}
+			Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
+			Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
+			Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: channel, Triggers: triggers}}}
 		b.Default() // as the loader does: the presets are applied, and no triggers means the mention trigger
 		return b
 	}
 	allow := []string{"sre", "payments"}
 	snap, err := config.Resolve(t.Context(), &config.Set{
-		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
-		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
+		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("agent-kourier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("agent-kourier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
 		Bindings:        []v1alpha1.Binding{bind("sre", "sre-alerts", "C1", triggers), bind("payments", "pay", "G1", nil)},
 	}, allKeys{})
 	if err != nil {
@@ -272,7 +272,7 @@ func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 	h.snap.Store(snapshotOf(t, triggers))
 	h.reopenStore(t)
 	h.cfg = chat.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
+		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Snapshot:   h.snap.Load, Submitter: h.sub, OnStart: h.hook,
 		TriggerThreads: h.st, Notice: h.notes.take, Now: h.clk.Now,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
@@ -360,13 +360,13 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 			}), msg(func(b *chat.BotMessage) { b.Footer = "key: disk/ns1" }), true, map[string]string{"key": "disk"}},
 		{"an extract that does not match is no match",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-				tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `courier-key: (?P<key>\S+)`}}
+				tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `agent-kourier-key: (?P<key>\S+)`}}
 			}), msg(nil), false, nil},
 		{"one extract that misses spoils the rest",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 				tr.Extract = map[string]v1alpha1.Extract{
 					"state": {Field: title, Regex: `^(?P<state>FIRING)`},
-					"key":   {Field: v1alpha1.FieldFooter, Regex: `courier-key: (?P<key>\S+)`},
+					"key":   {Field: v1alpha1.FieldFooter, Regex: `agent-kourier-key: (?P<key>\S+)`},
 				}
 			}), msg(nil), false, nil},
 		{"extract and match work together",
@@ -390,7 +390,7 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 			if tt.match && !maps.Equal(got[0].Fields, tt.fields) {
 				t.Errorf("fields = %v, want %v", got[0].Fields, tt.fields)
 			}
-			unmatched := h.counter(t, "courier_trigger_unmatched_total", "sre/sre-alerts")
+			unmatched := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts")
 			if tt.match != (unmatched == 0) {
 				t.Errorf("unmatched count = %v for a message that matched: %v", unmatched, tt.match)
 			}
@@ -411,7 +411,7 @@ func TestTheFirstTriggerThatMatchesTakesTheMessage(t *testing.T) {
 	}
 	needsKey := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldFooter: "^"}
-		tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `courier-key: (?P<key>\S+)`}}
+		tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `agent-kourier-key: (?P<key>\S+)`}}
 	})
 	optionalKey := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldAttachmentText: "^"}
@@ -474,8 +474,8 @@ func TestAMatchCarriesTheBindingTheIndexTheFieldsAndTheMessage(t *testing.T) {
 	if g.Fields["state"] != "FIRING" || g.Fields["key"] != "KubePodCrashLooping shop" || g.Fields["alertname"] != "KubePodCrashLooping" {
 		t.Errorf("fields = %v; want state, key and alertname of the alert", g.Fields)
 	}
-	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
-		t.Errorf("courier_trigger_matched_total = %v, want 1", n)
+	if n := h.counter(t, "agentkourier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
+		t.Errorf("agentkourier_trigger_matched_total = %v, want 1", n)
 	}
 	if len(h.sub.submitted()) != 0 {
 		t.Errorf("a match started a session: %+v (the Intake hands the start on, and CT-4 starts the session)", h.sub.submitted())
@@ -595,11 +595,11 @@ func TestAnUnmatchedBotMessageIsCountedAndLoggedWithoutItsText(t *testing.T) {
 	if err := h.in.Message(h.ctx, botInbound("C1", "9.10", prodFiring)); err != nil {
 		t.Fatal(err)
 	}
-	if n := h.counter(t, "courier_trigger_unmatched_total", "sre/sre-alerts"); n != 2 {
-		t.Errorf("courier_trigger_unmatched_total = %v, want 2", n)
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 2 {
+		t.Errorf("agentkourier_trigger_unmatched_total = %v, want 2", n)
 	}
-	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 0 {
-		t.Errorf("courier_trigger_matched_total = %v for messages that matched nothing", n)
+	if n := h.counter(t, "agentkourier_trigger_matched_total", "sre/sre-alerts"); n != 0 {
+		t.Errorf("agentkourier_trigger_matched_total = %v for messages that matched nothing", n)
 	}
 	logs := h.logs.String()
 	if !strings.Contains(logs, `"level":"DEBUG"`) || !strings.Contains(logs, webhookBot) || !strings.Contains(logs, "9.9") {
@@ -622,7 +622,7 @@ func TestABotMessageInAChannelWithOnlyMentionTriggersIsUnmatched(t *testing.T) {
 	if err := h.in.Message(h.ctx, botInbound("C1", "9.9", kindFiring)); err != nil {
 		t.Fatal(err)
 	}
-	if n := h.counter(t, "courier_trigger_unmatched_total", "sre/sre-alerts"); n != 1 || len(h.got()) != 0 {
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 1 || len(h.got()) != 0 {
 		t.Errorf("unmatched = %v, matches %+v; want one unmatched message", n, h.got())
 	}
 }
@@ -642,14 +642,14 @@ func TestABotMessageInAnUnboundChannelIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range families {
-		if f.GetName() == "courier_trigger_unmatched_total" || f.GetName() == "courier_trigger_matched_total" {
+		if f.GetName() == "agentkourier_trigger_unmatched_total" || f.GetName() == "agentkourier_trigger_matched_total" {
 			t.Errorf("a series of %s exists for a message in an unbound channel", f.GetName())
 		}
 	}
 }
 
 // A bot's reply inside a thread is never a trigger: a bot must not continue, or hijack, a thread of people
-// or of courier's. It is ignored and not counted, since no template is to blame.
+// or of Agent Kourier's. It is ignored and not counted, since no template is to blame.
 func TestABotReplyInAThreadIsIgnored(t *testing.T) {
 	h := newTriggered(t, kindOnly())
 	m := botInbound("C1", "9.9", kindFiring)
@@ -660,7 +660,7 @@ func TestABotReplyInAThreadIsIgnored(t *testing.T) {
 	if len(h.got()) != 0 || len(h.sub.submitted()) != 0 {
 		t.Fatalf("a bot's thread reply was handled: matches %+v, submits %+v", h.got(), h.sub.submitted())
 	}
-	if n := h.counter(t, "courier_trigger_unmatched_total", "sre/sre-alerts"); n != 0 {
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 0 {
 		t.Errorf("a thread reply counted as unmatched: %v", n)
 	}
 	// A message that is the parent of its own thread (thread equal to its ID) is top-level.
@@ -671,14 +671,14 @@ func TestABotReplyInAThreadIsIgnored(t *testing.T) {
 	}
 }
 
-// A bot that mentions courier starts nothing: a mention is a person's. Without a matching trigger the
+// A bot that mentions Agent Kourier starts nothing: a mention is a person's. Without a matching trigger the
 // message is unmatched; with one it is taken as a bot message and no session is asked for.
 func TestABotMessageNeverStartsAMentionTurn(t *testing.T) {
 	for name, triggers := range map[string][]v1alpha1.Trigger{"no trigger takes it": nil, "a trigger takes it": {botTrigger(webhookBot, nil)}} {
 		t.Run(name, func(t *testing.T) {
 			h := newTriggered(t, triggers...)
 			m := botInbound("C1", "9.9", kindFiring)
-			m.Mentioned, m.Text = true, "<@UCOURIER> look at this"
+			m.Mentioned, m.Text = true, "<@UAGENTKOURIER> look at this"
 			if err := h.in.Message(h.ctx, m); err != nil {
 				t.Fatal(err)
 			}
@@ -703,7 +703,7 @@ func TestARedeliveredBotMessageIsHandledOnce(t *testing.T) {
 	if n := len(h.got()); n != 1 {
 		t.Errorf("matched %d times for one message delivered three times", n)
 	}
-	if n := h.counter(t, "courier_trigger_unmatched_total", "sre/sre-alerts"); n != 1 {
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 1 {
 		t.Errorf("unmatched counted %v times for one message delivered three times", n)
 	}
 }
@@ -717,15 +717,15 @@ func TestAFailingHookLeavesTheEventToBeRedelivered(t *testing.T) {
 	if err := h.in.Message(h.ctx, m); !errors.Is(err, h.hookErr) {
 		t.Fatalf("Message = %v; want the hook's error", err)
 	}
-	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 0 {
-		t.Fatalf("courier_trigger_matched_total = %v after the hook failed; want 0, the match was not taken", n)
+	if n := h.counter(t, "agentkourier_trigger_matched_total", "sre/sre-alerts"); n != 0 {
+		t.Fatalf("agentkourier_trigger_matched_total = %v after the hook failed; want 0, the match was not taken", n)
 	}
 	h.hookErr = nil
 	if err := h.in.Message(h.ctx, m); err != nil || len(h.got()) != 2 {
 		t.Fatalf("redelivery: %v, hook called %d times; want it tried again and taken", err, len(h.got()))
 	}
-	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
-		t.Fatalf("courier_trigger_matched_total = %v after the redelivery; want 1", n)
+	if n := h.counter(t, "agentkourier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
+		t.Fatalf("agentkourier_trigger_matched_total = %v after the redelivery; want 1", n)
 	}
 	if err := h.in.Message(h.ctx, m); err != nil || len(h.got()) != 2 {
 		t.Fatalf("third delivery: %v, hook called %d times; want it remembered", err, len(h.got()))
@@ -741,8 +741,8 @@ func TestAMatchWithNoHookIsLoggedAndCounted(t *testing.T) {
 	if err := in.Message(h.ctx, botInbound("C1", "9.9", kindFiring)); err != nil {
 		t.Fatal(err)
 	}
-	if n := h.counter(t, "courier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
-		t.Errorf("courier_trigger_matched_total = %v, want 1", n)
+	if n := h.counter(t, "agentkourier_trigger_matched_total", "sre/sre-alerts"); n != 1 {
+		t.Errorf("agentkourier_trigger_matched_total = %v, want 1", n)
 	}
 	logs := h.logs.String()
 	if !strings.Contains(logs, `"level":"INFO"`) || !strings.Contains(logs, "matched a trigger") || strings.Contains(logs, "KubePodCrashLooping") {

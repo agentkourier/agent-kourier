@@ -85,7 +85,7 @@ func (a *answerer) Cancel(ctx context.Context, _ store.ConversationKey, id a2a.T
 }
 
 // TestADenialReachesTheAgent runs the stub's spike-approve scenario: the agent pauses to approve
-// add_numbers(3, 5), courier denies it, and the agent resumes with "Resumed after the tool result."
+// add_numbers(3, 5), Agent Kourier denies it, and the agent resumes with "Resumed after the tool result."
 // (S11), where an approval would have it say that the tool ran.
 func TestADenialReachesTheAgent(t *testing.T) {
 	srv := stubagent.New()
@@ -94,8 +94,10 @@ func TestADenialReachesTheAgent(t *testing.T) {
 	pool := agent.NewPool(kagentv1.New(0), agent.Config{})
 	t.Cleanup(pool.Close)
 	ag := pool.Agent(agent.Target{Binding: "ns/b", Agent: v1alpha1.AgentRef{Namespace: "kagent", Name: "spike-approve"},
-		Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL()}},
-		Credentials: func(context.Context) (dialect.Credentials, error) { return dialect.Credentials{UserID: "courier"}, nil }})
+		Backend: &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: srv.URL()}},
+		Credentials: func(context.Context) (dialect.Credentials, error) {
+			return dialect.Credentials{UserID: "agent-kourier"}, nil
+		}})
 	var paused *a2a.Task
 	if err := ag.Send(t.Context(), a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("go")), func(e agent.Event) {
 		if fe, ok := e.(agent.FinalEvent); ok {
@@ -118,7 +120,7 @@ func TestADenialReachesTheAgent(t *testing.T) {
 	}
 }
 
-// TestAReusedToolIDIsRefusedAsUnusable: an approval under tool IDs courier has seen, but for other
+// TestAReusedToolIDIsRefusedAsUnusable: an approval under tool IDs Agent Kourier has seen, but for other
 // calls, is not the denied one again (UNCONFIRMED(WP-02)); it is cancelled as unusable, not answered.
 func TestAReusedToolIDIsRefusedAsUnusable(t *testing.T) {
 	r := newRig(t, nil)

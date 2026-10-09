@@ -1,10 +1,10 @@
-// Package redact takes secrets out of text that is shown, stored, logged or sent to an agent: courier's one
+// Package redact takes secrets out of text that is shown, stored, logged or sent to an agent: Agent Kourier's one
 // place that knows what a token, a credential or a secret value looks like (spec 8.4, 8.6 step 7).
 //
 // It has two kinds of entry point, free text (FreeText, FreeTextCut, and FreeTextLine and FreeTextCutLine for text that is
 // shown on one line) and IdentifierText, and all return normalized text (see Normalize): the invisible characters
 // deleted and the line breaks written "\n" before any secret is matched, so that no caller can get the order of
-// cleaning and redacting wrong. The package imports no other package of courier.
+// cleaning and redacting wrong. The package imports no other package of Agent Kourier.
 package redact
 
 import (

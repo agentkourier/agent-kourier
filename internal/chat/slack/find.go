@@ -12,7 +12,7 @@ import (
 )
 
 // lookupSkew is how far before since Find looks: Slack stamps a message with its own clock,
-// which may run behind courier's.
+// which may run behind Agent Kourier's.
 const lookupSkew = 5 * time.Minute
 
 // Find looks for the message Post tagged with outboxID, in channel history or, if threadTS is
@@ -21,7 +21,7 @@ const lookupSkew = 5 * time.Minute
 // It reads every page to the end: it does not rely on the order Slack pages in, and a
 // message anywhere in the window is found. It fails, instead of reporting "not found", when it
 // cannot reach the end (Slack promises more and gives no cursor, or repeats one), because a
-// wrong "not found" posts a duplicate. Only a message from courier's own bot user counts:
+// wrong "not found" posts a duplicate. Only a message from Agent Kourier's own bot user counts:
 // another bot in the channel could forge the tag, and the ID is guessable.
 //
 // UNCONFIRMED(WP-04): the order Slack pages in (never relied on); that history and replies return
@@ -31,7 +31,7 @@ const lookupSkew = 5 * time.Minute
 // as chat.postMessage returns it (if not, a lookup right after a crash can miss it); and
 // that five minutes allows for the clock skew.
 func (c *Client) Find(ctx context.Context, channel, threadTS, outboxID string, since time.Time) (ts string, found bool, err error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.Find")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Find")
 	defer func() { finishChat(ctx, op, "Find", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {

@@ -21,12 +21,12 @@ const fakePassword = "pw-Zq9!x@/:%y"
 func dsnForms(host string) map[string]string {
 	esc := url.QueryEscape(fakePassword)
 	return map[string]string{
-		"url":                     "postgres://courier:" + esc + "@" + host + "/courier?sslmode=disable",
-		"postgresql scheme":       "postgresql://courier:" + esc + "@" + host + "/courier",
-		"url, password parameter": "postgres://courier@" + host + "/courier?password=" + esc,
-		"url, ssl password":       "postgres://courier@" + host + "/courier?sslpassword=" + esc,
-		"key/value":               "host=" + strings.Split(host, ":")[0] + " port=" + strings.Split(host, ":")[1] + " user=courier password=" + fakePassword + " dbname=courier",
-		"key/value, quoted":       "host=" + strings.Split(host, ":")[0] + " port=" + strings.Split(host, ":")[1] + " user=courier password='" + strings.ReplaceAll(fakePassword, `'`, `\'`) + "' dbname=courier",
+		"url":                     "postgres://agentkourier:" + esc + "@" + host + "/agentkourier?sslmode=disable",
+		"postgresql scheme":       "postgresql://agentkourier:" + esc + "@" + host + "/agentkourier",
+		"url, password parameter": "postgres://agentkourier@" + host + "/agentkourier?password=" + esc,
+		"url, ssl password":       "postgres://agentkourier@" + host + "/agentkourier?sslpassword=" + esc,
+		"key/value":               "host=" + strings.Split(host, ":")[0] + " port=" + strings.Split(host, ":")[1] + " user=agentkourier password=" + fakePassword + " dbname=agentkourier",
+		"key/value, quoted":       "host=" + strings.Split(host, ":")[0] + " port=" + strings.Split(host, ":")[1] + " user=agentkourier password='" + strings.ReplaceAll(fakePassword, `'`, `\'`) + "' dbname=agentkourier",
 	}
 }
 
@@ -72,11 +72,11 @@ func closedPort(t *testing.T) string {
 func TestOpenErrorsNeverCarryTheDSN(t *testing.T) {
 	addr := closedPort(t)
 	cases := map[string]string{
-		"a port that is not a number":    "postgres://courier:" + url.QueryEscape(fakePassword) + "@127.0.0.1:port/courier",
-		"a parameter the driver rejects": "postgres://courier:" + url.QueryEscape(fakePassword) + "@" + addr + "/courier?sslmode=bogus",
-		"a bad connect_timeout":          "postgres://courier:" + url.QueryEscape(fakePassword) + "@" + addr + "/courier?connect_timeout=soon",
-		"a password that is not escaped": "postgres://courier:" + fakePassword + "@" + addr + "/courier",
-		"a host that is not closed":      "postgres://courier:" + url.QueryEscape(fakePassword) + "@[::1/courier",
+		"a port that is not a number":    "postgres://agentkourier:" + url.QueryEscape(fakePassword) + "@127.0.0.1:port/agentkourier",
+		"a parameter the driver rejects": "postgres://agentkourier:" + url.QueryEscape(fakePassword) + "@" + addr + "/agentkourier?sslmode=bogus",
+		"a bad connect_timeout":          "postgres://agentkourier:" + url.QueryEscape(fakePassword) + "@" + addr + "/agentkourier?connect_timeout=soon",
+		"a password that is not escaped": "postgres://agentkourier:" + fakePassword + "@" + addr + "/agentkourier",
+		"a host that is not closed":      "postgres://agentkourier:" + url.QueryEscape(fakePassword) + "@[::1/agentkourier",
 	}
 	for name, dsn := range dsnForms(addr) {
 		cases["refused, "+name] = dsn
@@ -121,7 +121,7 @@ func TestOpenAgainstAServerThatRefusesThePassword(t *testing.T) {
 // TestScrubKeepsWhatCallersTest: an error that holds a secret is scrubbed and still says what it is; one
 // that does not is returned as it was, so that errors.As keeps working on the common error.
 func TestScrubKeepsWhatCallersTest(t *testing.T) {
-	dsn := "postgres://courier:" + url.QueryEscape(fakePassword) + "@db:5432/courier"
+	dsn := "postgres://agentkourier:" + url.QueryEscape(fakePassword) + "@db:5432/agentkourier"
 	r := newRedactor(dsn)
 
 	clean := errors.New("nothing secret")
@@ -153,7 +153,7 @@ func TestScrubKeepsWhatCallersTest(t *testing.T) {
 // with the DSN in it (a driver that quotes it) leaves without. The pool here never reaches a server: its
 // connect hook fails with an error that quotes the DSN, as a driver might.
 func TestStoreOperationsScrubTheirErrors(t *testing.T) {
-	dsn := "postgres://courier:" + url.QueryEscape(fakePassword) + "@db:5432/courier"
+	dsn := "postgres://agentkourier:" + url.QueryEscape(fakePassword) + "@db:5432/agentkourier"
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)

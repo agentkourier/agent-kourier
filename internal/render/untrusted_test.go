@@ -26,7 +26,7 @@ type hostilePlace struct {
 	cap  int       // the most it shows, in units
 }
 
-// hostileTarget is a block that the hostile suite runs against: the two that courier builds, and the module itself, in
+// hostileTarget is a block that the hostile suite runs against: the two that Agent Kourier builds, and the module itself, in
 // both its drop policies. build returns the section with texts[i] in places[i], and nothing in a place whose text is "".
 type hostileTarget struct {
 	name     string
@@ -191,7 +191,7 @@ func closeTagsInLookalikes(name string) string {
 
 // checkSection reports every way section is not the block of tg: the tag is named in the sentence and opens and closes
 // the block once, the close tag is the last line, the sentence that says the block is data is there, the section is in
-// its cap, nothing of an invisible character is left, and the block holds no bracket but courier's own tags, one pair of
+// its cap, nothing of an invisible character is left, and the block holds no bracket but Agent Kourier's own tags, one pair of
 // each at most. It returns the tag, and what is between the tags.
 func checkSection(t *testing.T, tg hostileTarget, section string) (tag, body string) {
 	t.Helper()
@@ -232,7 +232,7 @@ func checkSection(t *testing.T, tg hostileTarget, section string) (tag, body str
 		rest = strings.NewReplacer("<"+e+">", "", "</"+e+">", "").Replace(rest)
 	}
 	if strings.ContainsAny(rest, lookalikes) {
-		t.Errorf("%s: the block holds a bracket, or a look-alike of one, that is not courier's tag:\n%s", tg.name, section)
+		t.Errorf("%s: the block holds a bracket, or a look-alike of one, that is not Agent Kourier's tag:\n%s", tg.name, section)
 	}
 	return tag, body
 }
@@ -245,7 +245,7 @@ func elemText(section, elem string) string {
 	return text
 }
 
-// hostileTexts are texts that try to close the block, open one that passes for courier's, or write an element of its own:
+// hostileTexts are texts that try to close the block, open one that passes for Agent Kourier's, or write an element of its own:
 // in the tag's form, in every case and spacing, in look-alike brackets, split by variation selectors and other characters
 // that normalization deletes, and as the elements of tg.
 func (tg hostileTarget) hostileTexts() []string {
@@ -453,7 +453,7 @@ func TestUntrustedBlockTagIsOverEveryPlace(t *testing.T) {
 	}
 }
 
-// Both blocks that courier builds say the same thing to the agent, in one sentence: the module writes it, and a caller
+// Both blocks that Agent Kourier builds say the same thing to the agent, in one sentence: the module writes it, and a caller
 // can neither change it nor leave it out.
 func TestUntrustedBlockSaysTheSameToTheAgent(t *testing.T) {
 	for _, tg := range hostileTargets() {

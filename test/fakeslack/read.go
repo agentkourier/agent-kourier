@@ -30,7 +30,7 @@ const (
 // include_all_metadata=1 is a deliberately strict choice: the message metadata
 // page (https://docs.slack.dev/messaging/message-metadata/) says apps see only
 // the event types they registered for otherwise, and the fake has no
-// registration, so it hides metadata unless asked. Courier must always ask.
+// registration, so it hides metadata unless asked. Agent Kourier must always ask.
 func (s *Server) history(form url.Values) (response, string) {
 	channel := form.Get("channel")
 	if channel == "" {

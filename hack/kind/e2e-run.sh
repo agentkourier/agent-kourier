@@ -8,8 +8,8 @@
 # whole suite, when unset), to run one scenario again. The tier must be up (make e2e-fast-up or e2e-full-up); both tiers
 # have the same doubles in namespaces e2e and monitoring, so the same tests run in both.
 #
-# Every kubectl call names --context kind-courier-<tier> and every kind call names
-# --name courier-<tier>; assert_context aborts unless the context is that local kind cluster.
+# Every kubectl call names --context kind-agent-kourier-<tier> and every kind call names
+# --name agent-kourier-<tier>; assert_context aborts unless the context is that local kind cluster.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -20,10 +20,10 @@ tier=${1:-}
 use_tier "${tier}"
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
-IMAGE=courier-e2e/runner:dev
+IMAGE=agent-kourier-e2e/runner:dev
 JOB=e2e-runner
 # How long to wait for the Job (the test binary's own timeout is 20 minutes, for the scenarios, which roll
-# courier out and wait on it); its own activeDeadlineSeconds (1500) is the backstop.
+# Agent Kourier out and wait on it); its own activeDeadlineSeconds (1500) is the backstop.
 WAIT_SECONDS=${E2E_WAIT_SECONDS:-1320}
 [[ "${WAIT_SECONDS}" =~ ^[0-9]+$ ]] || die "E2E_WAIT_SECONDS must be a whole number of seconds"
 # E2E_RUN goes into the Job's YAML as a string, and into a sed command: letters, digits and what a Go regexp of test names needs, and no
@@ -41,7 +41,7 @@ refuse_while_sandbox_up
 # On any exit: the scratch build directory (made below), the Job and any probe or token pod (the cluster itself is never torn down
 # here). Set before the network policy check, whose probe pod a Ctrl-C would otherwise leave behind.
 BUILD=
-trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_courier_pod "${DEX_TOKEN_POD:-}"; delete_netpol_probes' EXIT
+trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_agentkourier_pod "${DEX_TOKEN_POD:-}"; delete_netpol_probes' EXIT
 trap 'exit 130' INT TERM
 # The full tier's tests lean on its NetworkPolicy, which kindnet stops applying when it loses the API server (lib.sh): refuse
 # a run on a tier where it is not live. The fast tier has no kagent and no NetworkPolicy, and the AX tier has no kagent
@@ -74,8 +74,8 @@ kind load docker-image "${IMAGE}" --name "${CLUSTER}"
 echo "==> run the Job in ${CTX}"
 # A Job's pod template cannot change, so a leftover Job from an interrupted run goes first.
 "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found >/dev/null
-# The runner's Role in courier's namespace needs the namespace to exist.
-"${K[@]}" get namespace courier >/dev/null 2>&1 || "${K[@]}" create namespace courier >/dev/null
+# The runner's Role in Agent Kourier's namespace needs the namespace to exist.
+"${K[@]}" get namespace agent-kourier >/dev/null 2>&1 || "${K[@]}" create namespace agent-kourier >/dev/null
 # The scenarios release their gates (Stub.Release) where the tier holds them: the stub agent in the fast tier, and
 # the scenario model in the full one, which has the stub's release path.
 case "${tier}" in

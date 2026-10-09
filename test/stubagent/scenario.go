@@ -14,9 +14,9 @@ const gateName = `[\w-]+`
 var (
 	gatePattern   = regexp.MustCompile(`gate:(` + gateName + `)`) // finds the gate a prompt names
 	validGatePatt = regexp.MustCompile(`^` + gateName + `$`)
-	// blockTag finds the name of the untrusted block courier appends to a trigger's first prompt.
+	// blockTag finds the name of the untrusted block Agent Kourier appends to a trigger's first prompt.
 	blockTag = regexp.MustCompile(`untrusted-data-[0-9a-f]{12}`)
-	// threadBlockOpen finds the opening line of the block of thread replies courier appends to a mentioned turn in a
+	// threadBlockOpen finds the opening line of the block of thread replies Agent Kourier appends to a mentioned turn in a
 	// Binding whose chat.threadReplies is mention: the tag alone on its line. The sentence before the block names the tag
 	// inline, so a match on the line is the block's own.
 	threadBlockOpen = regexp.MustCompile(`(?m)^<(thread-replies-[0-9a-f]{12})>$`)
@@ -38,7 +38,7 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //     free-text one), then echoes exactly what it received, one entry per answered question:
 //     `Answers: "PostgreSQL, MySQL" | "blue".`, an empty entry shown as (none).
 //   - scenario-fails ends its task FAILED with no output, and a provider's masked-key error as its status
-//     message ("Incorrect API key provided: sk-proj-...wxyz. HTTP 401"), which courier must not show. A prompt
+//     message ("Incorrect API key provided: sk-proj-...wxyz. HTTP 401"), which Agent Kourier must not show. A prompt
 //     that says "empty" ends it COMPLETED with no output at all.
 //   - scenario-tools says "Checking the service.", calls check_status(service="api"), which succeeds, says
 //     "It is up, so I will restart it.", calls restart_service(service="api"), whose result is an error
@@ -54,17 +54,17 @@ func ValidGate(name string) bool { return validGatePatt.MatchString(name) }
 //	                      release it through cmd/stubagent's /_control/release/{gate}. (spike-slow
 //	                      takes 2.1 s at the 300 ms default tick, about the 2 s edit throttle, so
 //	                      it shows the final text and at most one update)
-//	S2   scenario-memory  "Message 3" with the earlier texts after a courier restart proves the
+//	S2   scenario-memory  "Message 3" with the earlier texts after an Agent Kourier restart proves the
 //	                      contextId was kept; "Message 1" with none proves it was lost
 //	S3   scenario-ask     "Answers: ... | (none)." means an incomplete answer reached the agent.
 //	                      Neither the stub nor spike-ask rejects one (spike-ask says "Both
-//	                      answered." to [[x], []]), so courier's check is the only guard
+//	                      answered." to [[x], []]), so Agent Kourier's check is the only guard
 //	S4   scenario-gated   mention with "gate:G1", reply with "gate:G2" while G1 is held, so the
 //	                      reply is queued; release G1, then G2. Neither depends on timing
 //	S5   test-agent       one instant chunk, so the kill lands between post and record
-//	S11  spike-approve    "I have added 3 and 5..." would mean the tool ran; courier's denial
+//	S11  spike-approve    "I have added 3 and 5..." would mean the tool ran; Agent Kourier's denial
 //	                      gives "Resumed after the tool result."
-//	S12  scenario-fails   the thread gets courier's notice that the task failed (or finished with no
+//	S12  scenario-fails   the thread gets Agent Kourier's notice that the task failed (or finished with no
 //	                      output), and none of the status message
 //	S13  scenario-tools   the reply's tool steps: check_status done, restart_service an error, none left
 //	                      in progress, and each text once
@@ -85,7 +85,7 @@ func ScenarioAgents(s *Server) {
 	s.Agent(ns, "scenario-context").ReplyWithHistory(func(prior []string, prompt string) []Step {
 		tag, replies, said := "none", 0, prompt
 		if all := threadBlockOpen.FindAllStringSubmatchIndex(prompt, -1); len(all) > 0 {
-			open := all[len(all)-1] // the last: the person's own text comes before the block courier appends
+			open := all[len(all)-1] // the last: the person's own text comes before the block Agent Kourier appends
 			tag, replies, said = prompt[open[2]:open[3]], strings.Count(prompt[open[1]:], "<reply>"), prompt[:open[0]]
 		}
 		steps := []Step{Text(fmt.Sprintf("Turn %d. Replies: %d. Block: %s.", len(prior)+1, replies, tag))}

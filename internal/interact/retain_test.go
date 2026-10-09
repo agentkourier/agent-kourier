@@ -89,7 +89,7 @@ func startRetention(t *testing.T, cfg interact.RetentionConfig) (stop func() err
 }
 
 // TestRetentionPurgesOnEveryTickWithItsGraceAndTheClock: the backstop asks the store, again and again, to
-// delete the presses past their interaction's deadline plus the grace, as of courier's own clock.
+// delete the presses past their interaction's deadline plus the grace, as of Agent Kourier's own clock.
 func TestRetentionPurgesOnEveryTickWithItsGraceAndTheClock(t *testing.T) {
 	p := &purges{}
 	startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond, Grace: 90 * time.Minute, Now: func() time.Time { return d0 },
@@ -103,7 +103,7 @@ func TestRetentionPurgesOnEveryTickWithItsGraceAndTheClock(t *testing.T) {
 }
 
 // TestRetentionClearsSettledInteractionsOnEveryTickWithItsGracesAndTheClock: beside the presses, the loop asks the
-// store to clear what settled interactions hold, with the configured graces, as of courier's own clock.
+// store to clear what settled interactions hold, with the configured graces, as of Agent Kourier's own clock.
 func TestRetentionClearsSettledInteractionsOnEveryTickWithItsGracesAndTheClock(t *testing.T) {
 	p := &purges{}
 	startRetention(t, interact.RetentionConfig{Store: p, Interval: 5 * time.Millisecond, ClearGrace: 30 * time.Hour, UndeliveredGrace: 50 * time.Hour,

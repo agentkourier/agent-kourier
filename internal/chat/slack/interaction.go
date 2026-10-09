@@ -24,13 +24,13 @@ type Input struct {
 	Type string // the element type, such as "plain_text_input" or "static_select"
 	// Values is what was entered or chosen: one value for a text input or a select, several
 	// for a multi-select. An unanswered element, which Slack sends as null or empty, has none.
-	// Only the types courier renders (text input, selects, radio buttons, checkboxes) have
+	// Only the types Agent Kourier renders (text input, selects, radio buttons, checkboxes) have
 	// values, each from its own field; any other type reads as unanswered.
 	Values []string
 }
 
 // decodeInteraction returns the Interaction a callback carries, and whether it is one:
-// the press of a button on a message by a person. A press by courier itself, by no one,
+// the press of a button on a message by a person. A press by Agent Kourier itself, by no one,
 // of another kind (a modal's submission or close), or with no action is dropped.
 // UNCONFIRMED(WP-04): the payload's fields, and that state.values holds null or empty for
 // an unanswered input.
@@ -59,7 +59,7 @@ func decodeInteraction(botUser string, cb slackgo.InteractionCallback) (Interact
 }
 
 // inputValues returns the non-empty answers of an input's state, from the one field its type
-// answers in: a mix of fields, or a type courier does not render, is not read, so that an
+// answers in: a mix of fields, or a type Agent Kourier does not render, is not read, so that an
 // answer is never one the person did not give.
 func inputValues(a slackgo.BlockAction) []string {
 	var answers, out []string

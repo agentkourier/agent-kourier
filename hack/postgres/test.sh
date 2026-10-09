@@ -14,7 +14,7 @@ set -euo pipefail
 POSTGRES_IMAGE="postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f"
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-name="courier-pg-test-$$-$RANDOM"
+name="agent-kourier-pg-test-$$-$RANDOM"
 envfile=$(mktemp)
 
 cleanup() {
@@ -35,11 +35,11 @@ else
 	password=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
 fi
 chmod 600 "$envfile"
-printf 'POSTGRES_USER=courier\nPOSTGRES_DB=courier\nPOSTGRES_PASSWORD=%s\n' "$password" >"$envfile"
+printf 'POSTGRES_USER=agentkourier\nPOSTGRES_DB=agentkourier\nPOSTGRES_PASSWORD=%s\n' "$password" >"$envfile"
 
 # The throwaway server trades durability for speed: nothing in it outlives the run. The data directory
 # is a tmpfs, so no volume is left behind either.
-docker run -d --name "$name" --label agent-courier.test=postgres \
+docker run -d --name "$name" --label agent-kourier.test=postgres \
 	--env-file "$envfile" \
 	-p 127.0.0.1::5432 \
 	--tmpfs /var/lib/postgresql/data:rw,size=1g \
@@ -59,7 +59,7 @@ for _ in $(seq 1 120); do
 		docker logs "$name" 2>&1 | tail -n 20 >&2
 		exit 1
 	fi
-	if docker exec "$name" pg_isready -q -h 127.0.0.1 -U courier -d courier; then
+	if docker exec "$name" pg_isready -q -h 127.0.0.1 -U agentkourier -d agentkourier; then
 		ready=1
 		break
 	fi
@@ -70,7 +70,7 @@ if [ "$ready" != 1 ]; then
 	exit 1
 fi
 
-export COURIER_POSTGRES_DSN="postgres://courier:${password}@127.0.0.1:${port}/courier?sslmode=disable"
+export AGENTKOURIER_POSTGRES_DSN="postgres://agentkourier:${password}@127.0.0.1:${port}/agentkourier?sslmode=disable"
 cd "$root"
 # The broker's tests: Run reads the DSN from a Secret and serves on the store it opens, and two replicas elect a leader and fence its writes.
 go test -race -count=1 -timeout 5m ./internal/broker/ -run 'TestRun(ServesOn|On)Postgres' &

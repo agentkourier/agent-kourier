@@ -1,0 +1,10 @@
+# The sandbox's Slack connection: a real Slack workspace, over Socket Mode. The Secret sandbox-slack holds botToken and
+# appToken, which up.sh makes from the secrets file (SLACK_BOT_TOKEN, SLACK_APP_TOKEN); they are never in this file.
+# There is no AGENTKOURIER_SLACK_API_URL on this tier's Agent Kourier, so the client talks to slack.com.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: sandbox-slack, namespace: agent-kourier}
+spec:
+  platform: slack
+  mode: socket
+  credentialsSecretRef: {name: sandbox-slack}

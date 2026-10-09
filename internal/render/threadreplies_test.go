@@ -14,8 +14,8 @@ import (
 // threadTagRE finds the block's tag, as the sentence before the block names it first.
 var threadTagRE = regexp.MustCompile(`<(thread-replies-[0-9a-f]{12})>`)
 
-// threadCourierTag matches the tags courier writes inside the block.
-var threadCourierTag = regexp.MustCompile(`</?(?:reply|from|id|text)>`)
+// threadAgentKourierTag matches the tags Agent Kourier writes inside the block.
+var threadAgentKourierTag = regexp.MustCompile(`</?(?:reply|from|id|text)>`)
 
 // threadParts is a section cut into what the shape of the block gives.
 type threadParts struct {
@@ -27,7 +27,7 @@ type threadParts struct {
 
 // splitThread cuts a section into its parts and checks the shape of the block: the tag is named in the sentence (twice),
 // opens the block once, on a line of its own, and closes it once, at the very end; every line of the block is an entry,
-// except at most a last one; and what the entries hold has no "<" but courier's own tags.
+// except at most a last one; and what the entries hold has no "<" but Agent Kourier's own tags.
 func splitThread(t *testing.T, section string) threadParts {
 	t.Helper()
 	m := threadTagRE.FindStringSubmatch(section)
@@ -74,10 +74,10 @@ func splitThread(t *testing.T, section string) threadParts {
 		t.Fatalf("an entry is never closed: %q", pending)
 	}
 	for _, e := range p.entries {
-		// Everything a reply wrote is escaped: no "<" is left but courier's own tags, one each.
-		rest := threadCourierTag.ReplaceAllString(e, "")
+		// Everything a reply wrote is escaped: no "<" is left but Agent Kourier's own tags, one each.
+		rest := threadAgentKourierTag.ReplaceAllString(e, "")
 		if strings.ContainsAny(rest, "<>") {
-			t.Fatalf("an entry holds a bracket that is not courier's tag: %q", e)
+			t.Fatalf("an entry holds a bracket that is not Agent Kourier's tag: %q", e)
 		}
 		for _, tg := range []string{"<reply>", "</reply>", "<from>", "</from>", "<id>", "</id>", "<text>", "</text>"} {
 			if n := strings.Count(e, tg); n != 1 {

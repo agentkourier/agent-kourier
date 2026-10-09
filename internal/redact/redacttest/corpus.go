@@ -1,8 +1,8 @@
-// Package redacttest is the one corpus of split-secret text that every place courier stores, logs or sends text
+// Package redacttest is the one corpus of split-secret text that every place Agent Kourier stores, logs or sends text
 // is held to, and the checks that read what such a place returned. It is for tests only: it imports the testing
-// package, and nothing courier runs may import it (TestRedacttestIsOnlyForTests).
+// package, and nothing Agent Kourier runs may import it (TestRedacttestIsOnlyForTests).
 //
-// It imports no courier package, so any package's tests, redact's own among them, can use it.
+// It imports no Agent Kourier package, so any package's tests, redact's own among them, can use it.
 package redacttest
 
 import (

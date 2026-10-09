@@ -33,7 +33,7 @@ func (a *alerts) limitedBinding(t *testing.T) {
 	a.cfg.digestEvery = 50 * time.Millisecond
 }
 
-// topLevel returns the messages courier posted in the alert channel outside any thread.
+// topLevel returns the messages Agent Kourier posted in the alert channel outside any thread.
 func (a *alerts) topLevel() (out []fakeslack.Message) {
 	for _, m := range a.fake.Messages(alertChannel) {
 		if m.BotID == "BFAKEBOT" && m.ThreadTS == "" {
@@ -60,9 +60,9 @@ func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
 	for _, m := range posted[:2] {
 		a.inThread(t, m.TS, "the agent's answer", hasText("investigated"))
 	}
-	a.r.waitMetric(`courier_trigger_decisions_total{binding="sre/sre-alerts",decision="limited"} 3`)
-	a.r.waitMetric(`courier_trigger_decisions_total{binding="sre/sre-alerts",decision="started"} 2`)
-	a.r.waitMetric(`courier_trigger_limited_total{binding="sre/sre-alerts",limit="rate",trigger="1"} 3`)
+	a.r.waitMetric(`agentkourier_trigger_decisions_total{binding="sre/sre-alerts",decision="limited"} 3`)
+	a.r.waitMetric(`agentkourier_trigger_decisions_total{binding="sre/sre-alerts",decision="started"} 2`)
+	a.r.waitMetric(`agentkourier_trigger_limited_total{binding="sre/sre-alerts",limit="rate",trigger="1"} 3`)
 	settle()
 	if got := a.agent.asked(); len(got) != 2 {
 		t.Errorf("the agent was asked %d times for a storm of %d alerts with two places; want 2", len(got), alerts)
@@ -73,7 +73,7 @@ func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
 		}
 	}
 	if got := a.topLevel(); len(got) != 0 {
-		t.Fatalf("courier posted %+v in the channel before the window ended; want the digest only then", got)
+		t.Fatalf("Agent Kourier posted %+v in the channel before the window ended; want the digest only then", got)
 	}
 
 	// The window ends ten seconds after the first limited alert. One line says so, and no other is posted.
@@ -92,7 +92,7 @@ func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
 	}
 	time.Sleep(time.Second) // a second line would be posted within a few passes
 	if got := a.topLevel(); len(got) != 1 {
-		t.Errorf("courier posted %d lines in the channel; want the one digest: %+v", len(got), got)
+		t.Errorf("Agent Kourier posted %d lines in the channel; want the one digest: %+v", len(got), got)
 	}
 	for _, w := range append(alertWords, "KubePodCrashLooping0") {
 		if strings.Contains(line.Text, w) || strings.Contains(a.logs.String(), w) {
@@ -101,7 +101,7 @@ func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
 	}
 }
 
-// The digest of a window that ended while courier was down is posted once it is up: the windows and their counts are in
+// The digest of a window that ended while Agent Kourier was down is posted once it is up: the windows and their counts are in
 // the database, not in memory.
 func TestRunPostsTheDigestOfAWindowThatEndedDuringARestart(t *testing.T) {
 	a := newAlerts(t)
@@ -111,7 +111,7 @@ func TestRunPostsTheDigestOfAWindowThatEndedDuringARestart(t *testing.T) {
 		a.fire(t, post("FIRING", fmt.Sprintf("KubePodCrashLooping%d", i)))
 	}
 	a.waitPrompts(t, 2)
-	a.r.waitMetric(`courier_trigger_limited_total{binding="sre/sre-alerts",limit="rate",trigger="1"} 1`)
+	a.r.waitMetric(`agentkourier_trigger_limited_total{binding="sre/sre-alerts",limit="rate",trigger="1"} 1`)
 	a.r.cancel()
 	if err := a.r.wait(); err != nil {
 		t.Fatal(err)

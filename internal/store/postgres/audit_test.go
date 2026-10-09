@@ -33,7 +33,7 @@ func countAudit(t *testing.T, s *Store) int {
 // whatever UPDATE, DELETE or TRUNCATE the application issues; the one way to remove entries is the
 // retention purge, which removes only what it is asked to and leaves the table as strict as it was. As
 // with SQLite's triggers (migration 0006) this guards against the application's bugs, and not against a
-// session that sets courier.audit_retention itself or disables the trigger: that takes the table's owner.
+// session that sets agentkourier.audit_retention itself or disables the trigger: that takes the table's owner.
 func TestAuditIsAppendOnly(t *testing.T) {
 	s, _ := openFresh(t)
 	ctx := t.Context()
@@ -63,7 +63,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec(ctx, `SELECT set_config('courier.audit_retention', 'on', true)`); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT set_config('agentkourier.audit_retention', 'on', true)`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := tx.Exec(ctx, sql); !refused(err) {
@@ -73,8 +73,8 @@ func TestAuditIsAppendOnly(t *testing.T) {
 	}
 
 	var purged int64
-	if err := s.a.pool.QueryRow(ctx, `SELECT courier_audit_purge($1)`, old.Add(24*time.Hour)).Scan(&purged); err != nil {
-		t.Fatalf("courier_audit_purge: %v", err)
+	if err := s.a.pool.QueryRow(ctx, `SELECT agentkourier_audit_purge($1)`, old.Add(24*time.Hour)).Scan(&purged); err != nil {
+		t.Fatalf("agentkourier_audit_purge: %v", err)
 	}
 	if purged != 2 {
 		t.Errorf("the purge removed %d entries; want the 2 from before the cutoff", purged)
@@ -96,7 +96,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 	}
 }
 
-// PurgeAudit deletes in batches through courier_audit_purge(cutoff, batch) (migration 0020), and like the
+// PurgeAudit deletes in batches through agentkourier_audit_purge(cutoff, batch) (migration 0023, from 0020's courier_audit_purge), and like the
 // unbatched function leaves the table as strict as it was: the setting that lets the trigger through is gone
 // when the call returns, and the call gives no way to change an entry.
 func TestAuditPurgeInBatchesLeavesTheLogAppendOnly(t *testing.T) {

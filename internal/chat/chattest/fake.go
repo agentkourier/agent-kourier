@@ -424,7 +424,7 @@ func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error
 
 var _ chat.ThreadReader = (*FakePlatform)(nil)
 
-// ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (courier's own,
+// ThreadBetween implements chat.ThreadReader over what the fake holds of the thread: what was posted in it (Agent Kourier's own,
 // Own) and what Say delivered to it, by their IDs, which it compares as a platform's timestamps ("seconds.fraction"; the
 // IDs of its own posts are "n.000"). The window is exclusive on both sides, an empty bound is none, and the thread's root is
 // no reply. It has no page cap, so it never returns chat.ErrThreadTooLong. A message posted as a stream is its streamed text.

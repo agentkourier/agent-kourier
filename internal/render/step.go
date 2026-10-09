@@ -7,7 +7,7 @@ import (
 
 // Step returns the progress step of a tool call in the state given: the tool's name as its title and the redacted summary
 // of its arguments as its detail. They are the name and summary of the tool line (Tool), the same redacted summary that
-// the status line of the update path shows, put on one line and capped as it is: the raw arguments never reach a step. id is courier's own name for the step in its stream, never the agent's call ID.
+// the status line of the update path shows, put on one line and capped as it is: the raw arguments never reach a step. id is Agent Kourier's own name for the step in its stream, never the agent's call ID.
 func Step(id string, call agent.ToolCallEvent, state chat.StepState) chat.Step {
 	line := Tool(call.Name, call.Args)
 	return chat.Step{ID: id, Title: line.Name, Detail: line.Summary, State: state}

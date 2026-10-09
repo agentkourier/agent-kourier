@@ -58,17 +58,17 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	b := v1alpha1.Binding{ObjectMeta: meta("sre", "sre-alerts"), Spec: v1alpha1.BindingSpec{
-		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
-		Identity: v1alpha1.Identity{UserID: "courier-sre"},
-		Chat: v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: "C0EXAMPLE01",
+		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
+		Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
+		Chat: v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: "C0EXAMPLE01",
 			Triggers: []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0EXAMPLE01"}, Preset: v1alpha1.PresetAlertmanager}}}}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := config.Resolve(t.Context(), &config.Set{
-		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: []string{"sre"}}}},
-		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: []string{"sre"}}}},
+		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("agent-kourier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: []string{"sre"}}}},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("agent-kourier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: []string{"sre"}}}},
 		Bindings:        []v1alpha1.Binding{b},
 	}, everyKey{})
 	if err != nil {
@@ -83,7 +83,7 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	s := newStarter(t)
 	w := &alertWorld{sub: s.sub, notes: s.notes, aud: s.aud, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}
 	cfg := chat.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Snapshot: func() *config.Snapshot { return snap },
+		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Snapshot: func() *config.Snapshot { return snap },
 		Submitter: s.sub, Notice: s.notes.take, TriggerThreads: st, OnStart: s.OnStart, Now: w.clock, Logger: s.log,
 	}
 	if tune != nil {

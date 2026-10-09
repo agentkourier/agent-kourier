@@ -101,7 +101,7 @@ func extract(q dialect.Question, given []string) (vals []string, why ProblemKind
 	return out, 0, true
 }
 
-// position parses s as a whole number in [lo, hi), written the one way courier writes it: no sign,
+// position parses s as a whole number in [lo, hi), written the one way Agent Kourier writes it: no sign,
 // no leading zero, no space.
 func position(s string, lo, hi int) (int, bool) {
 	n, err := strconv.Atoi(s)

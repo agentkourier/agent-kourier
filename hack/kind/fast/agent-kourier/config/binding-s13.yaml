@@ -1,0 +1,19 @@
+# S13: the agent's reply has two tool calls, the second failing; the reply shows each as a step card, done and error.
+# A channel of its own on the fake Slack, so scenarios never share a thread; the identity token is the same
+# Secret as fast-chat's. The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
+# Both tiers load this Binding: the full tier's kagent has a scenario-tools agent of the same name (full/scenarios).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s13, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-tools
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS13
+    output: live

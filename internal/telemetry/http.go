@@ -23,7 +23,7 @@ type tracedTransport struct {
 }
 
 func (t tracedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, op := StartKind(req.Context(), "courier.http.client", trace.SpanKindClient,
+	ctx, op := StartKind(req.Context(), "agentkourier.http.client", trace.SpanKindClient,
 		attribute.String("http.request.method", req.Method), attribute.String("server.address", req.URL.Hostname()))
 	op.httpMethod, op.httpServer = req.Method, req.URL.Hostname()
 	copyReq := req.Clone(ctx)

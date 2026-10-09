@@ -195,7 +195,7 @@ func TestFiltersEvents(t *testing.T) {
 		{"plain message", message(nil), true},
 		{"thread broadcast", message(map[string]any{"subtype": "thread_broadcast", "thread_ts": "1.0"}), true},
 		{"file share", message(map[string]any{"subtype": "file_share"}), true},
-		{"courier's own, by user ID alone", message(map[string]any{"user": "UFAKEBOT"}), false},
+		{"agent-kourier's own, by user ID alone", message(map[string]any{"user": "UFAKEBOT"}), false},
 		{"another bot", message(map[string]any{"user": "UOTHER", "bot_id": "BOTHER"}), false},
 		{"bot_message subtype", message(map[string]any{"subtype": "bot_message"}), false},
 		{"user edit", message(map[string]any{"subtype": "message_changed", "user": "", "text": "", "message": edit, "previous_message": edit}), false},
@@ -205,7 +205,7 @@ func TestFiltersEvents(t *testing.T) {
 		{"empty text", message(map[string]any{"text": ""}), false},
 		{"mention in an edit", message(map[string]any{"type": "app_mention", "edited": map[string]any{"user": "U1", "ts": "1.2"}}), false},
 		{"mention by a bot", message(map[string]any{"type": "app_mention", "bot_id": "BOTHER"}), false},
-		{"courier's own mention, by user ID alone", message(map[string]any{"type": "app_mention", "user": "UFAKEBOT", "text": botMark + " hi"}), false},
+		{"agent-kourier's own mention, by user ID alone", message(map[string]any{"type": "app_mention", "user": "UFAKEBOT", "text": botMark + " hi"}), false},
 	}
 	for _, tt := range tests {
 		before := len(sk.messages())
@@ -216,7 +216,7 @@ func TestFiltersEvents(t *testing.T) {
 	}
 }
 
-// TestOwnPostsAreIgnored has courier post, then edit, a message that mentions itself. Slack
+// TestOwnPostsAreIgnored has Agent Kourier post, then edit, a message that mentions itself. Slack
 // sends an event for each; neither may come back as a turn.
 func TestOwnPostsAreIgnored(t *testing.T) {
 	fake, sk := setup(t)
@@ -234,7 +234,7 @@ func TestOwnPostsAreIgnored(t *testing.T) {
 	}
 	waitAck(t, fake, events...)
 	if got := sk.messages(); len(got) != 0 {
-		t.Fatalf("courier's own messages reached the sink: %+v", got)
+		t.Fatalf("agent-kourier's own messages reached the sink: %+v", got)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestRunEnds(t *testing.T) {
 	}
 }
 
-// TestRunFailsClosedWithoutABotUserID: with no user ID from auth.test, courier could not
+// TestRunFailsClosedWithoutABotUserID: with no user ID from auth.test, Agent Kourier could not
 // recognise its own posts that arrive with no bot_id, so it must not run.
 func TestRunFailsClosedWithoutABotUserID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // so that a Run that does not refuse fails the test, not hangs it

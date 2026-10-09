@@ -1,5 +1,5 @@
 // Package stubagent is an in-process A2A server that behaves like kagent 1.0.0-alpha5, for
-// courier's unit and fast-tier tests (spec 12.1). It speaks A2A 1.0 JSON-RPC at kagent's
+// Agent Kourier's unit and fast-tier tests (spec 12.1). It speaks A2A 1.0 JSON-RPC at kagent's
 // paths: POST /agents/{ns}/{name}, with the card at
 // /agents/{ns}/{name}/.well-known/agent-card.json.
 //
@@ -81,7 +81,7 @@ func WithTick(d time.Duration) Option { return func(s *Server) { s.tick = d } }
 
 // WithIDTag puts tag in every id the stub makes ("task-<tag>-7"), so that the ids of one run of the
 // stub are not those of another. The counter behind the ids starts again at 1 when the stub restarts,
-// while a client keeps what it stored of the earlier run (courier derives the ID of an interaction from
+// while a client keeps what it stored of the earlier run (Agent Kourier derives the ID of an interaction from
 // the task and request ids, and reads a stored one as already decided), as it would not of an agent
 // whose ids are UUIDs. An empty tag, the default, keeps the plain "task-7", for tests that count.
 func WithIDTag(tag string) Option { return func(s *Server) { s.idTag = tag } }

@@ -12,7 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 )
 
-// metricsServer serves what courier's /metrics says of leadership and the chat connection; a nil leader is a process that
+// metricsServer serves what Agent Kourier's /metrics says of leadership and the chat connection; a nil leader is a process that
 // does not answer (frozen) and is a server that hangs until the test ends.
 func leadershipServer(t *testing.T, leader, connected int, hang <-chan struct{}) string {
 	t.Helper()
@@ -24,7 +24,7 @@ func leadershipServer(t *testing.T, leader, connected int, hang <-chan struct{})
 			}
 			return
 		}
-		_, _ = fmt.Fprintf(w, "# TYPE courier_leader gauge\ncourier_leader %d\ncourier_chat_connected{connection=\"courier/slack-fast\"} %d\n", leader, connected)
+		_, _ = fmt.Fprintf(w, "# TYPE agentkourier_leader gauge\nagentkourier_leader %d\nagentkourier_chat_connected{connection=\"agent-kourier/slack-fast\"} %d\n", leader, connected)
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
@@ -85,16 +85,16 @@ func TestWaitLeaderDoesNotAcceptALeaderWhoseChatIsNotConnected(t *testing.T) {
 func TestCounterReadsOneReplicasMetric(t *testing.T) {
 	urls := map[string]string{"a": leadershipServer(t, 1, 1, nil)}
 	reps := replicasOf(urls, func() []kube.Replica { return nil })
-	v, err := reps.Counter(t.Context(), rep("a", "1"), "courier_leader", nil)
+	v, err := reps.Counter(t.Context(), rep("a", "1"), "agentkourier_leader", nil)
 	if err != nil || v != 1 {
 		t.Errorf("Counter = %v, %v; want 1", v, err)
 	}
-	if _, err := reps.Counter(t.Context(), rep("zz", "1"), "courier_leader", nil); err == nil {
+	if _, err := reps.Counter(t.Context(), rep("zz", "1"), "agentkourier_leader", nil); err == nil {
 		t.Error("Counter of a replica with no address succeeded")
 	}
 }
 
-func TestReplicaURLIsThePodIPOnCourierPort(t *testing.T) {
+func TestReplicaURLIsThePodIPOnAgentKourierPort(t *testing.T) {
 	if got := replicaURL(kube.Replica{IP: "10.1.2.3"}); got != "http://10.1.2.3:8080" {
 		t.Errorf("replicaURL = %q", got)
 	}

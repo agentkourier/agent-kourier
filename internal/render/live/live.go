@@ -295,11 +295,11 @@ func (u *Run) run(ctx context.Context) {
 	finalOutcome := "cancelled"
 	defer func() {
 		if finalOp == nil && u.isFinal() {
-			finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "courier.render.finalize", attribute.String("courier.render.mode", string(u.turn.Mode)), attribute.String("courier.turn.id", u.turn.Source))
+			finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 		}
 		if finalOp != nil {
-			trace.SpanFromContext(finalCtx).SetAttributes(attribute.Int("courier.render.attempts", writes))
-			telemetry.Count(ctx, "courier_render_final_total", finalOutcome)
+			trace.SpanFromContext(finalCtx).SetAttributes(attribute.Int("agentkourier.render.attempts", writes))
+			telemetry.Count(ctx, "agentkourier_render_final_total", finalOutcome)
 			var failure error
 			switch finalOutcome {
 			case "deadline_exceeded", "permanent_failure", "retry_exhausted":
@@ -321,7 +321,7 @@ func (u *Run) run(ctx context.Context) {
 		}
 		for {
 			if u.isFinal() && finalOp == nil {
-				finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "courier.render.finalize", attribute.String("courier.render.mode", string(u.turn.Mode)), attribute.String("courier.turn.id", u.turn.Source))
+				finalCtx, finalOp = telemetry.Start(context.WithoutCancel(ctx), "agentkourier.render.finalize", attribute.String("agentkourier.render.mode", string(u.turn.Mode)), attribute.String("agentkourier.turn.id", u.turn.Source))
 			}
 			if d := next.Sub(u.cfg.Now()); d > 0 && !u.sleep(ctx, d) {
 				if u.isFinal() {
@@ -451,7 +451,7 @@ func stepsKey(steps []chat.Step) string {
 // write posts the message the first time, through the outbox, and updates it after, or, on the
 // stream path, takes the next step of the stream.
 func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.render.write", attribute.Bool("courier.render.final", v.final), attribute.Bool("courier.render.streaming", u.streaming))
+	ctx, op := telemetry.Start(ctx, "agentkourier.render.write", attribute.Bool("agentkourier.render.final", v.final), attribute.Bool("agentkourier.render.streaming", u.streaming))
 	defer func() { op.Finish(telemetryErr) }()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout) // see WriteTimeout
 	defer cancel()

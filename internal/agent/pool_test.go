@@ -284,7 +284,9 @@ func TestBackendURLChangeGetsANewClient(t *testing.T) {
 // whatever the provider returns.
 func TestTokenRequiredRefusesAnEmptyToken(t *testing.T) {
 	fa, p := newFakeAgent(t, liveStream(t)), newPool(t)
-	tg := targetFor(fa, "team/sre", func(context.Context) (dialect.Credentials, error) { return dialect.Credentials{UserID: "courier"}, nil })
+	tg := targetFor(fa, "team/sre", func(context.Context) (dialect.Credentials, error) {
+		return dialect.Credentials{UserID: "agent-kourier"}, nil
+	})
 	tg.TokenRequired = true
 	if err := p.Agent(tg).Send(t.Context(), message("hi"), nil); !errors.Is(err, ErrTokenRequired) || len(fa.auths()) != 0 {
 		t.Errorf("err = %v, requests = %q; want ErrTokenRequired and nothing sent", err, fa.auths())

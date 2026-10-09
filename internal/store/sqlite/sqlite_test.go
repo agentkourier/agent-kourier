@@ -74,7 +74,7 @@ func seededPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("migrate the template: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}

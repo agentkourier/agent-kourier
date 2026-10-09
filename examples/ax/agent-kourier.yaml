@@ -1,0 +1,26 @@
+# These are Agent Kourier's file-loaded resources. Reuse your existing ChatConnection and refreshed ID token Secret.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: https://YOUR_AX_GATEWAY/a2a
+  headers:
+    - {name: ate-target-actor, value: agent-kourier-ax/assistant}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: ax-assistant, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: ax}
+    namespace: agent-kourier-ax
+    name: assistant
+  identity:
+    userId: agent-kourier-ax
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: sandbox-slack}
+    channel: C_REPLACE_WITH_CHANNEL_ID
+    output: live
+  interactions: {askUser: true, toolApprovals: false}

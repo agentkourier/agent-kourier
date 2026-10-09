@@ -22,7 +22,7 @@ type BootstrapOptions struct {
 	// Dir is the config directory.
 	Dir string
 	// ExtraNamespaces are namespaces whose Secrets are watched although no resource of the config refers to one: the
-	// namespace of the Postgres DSN's Secret, which belongs to courier and not to a resource.
+	// namespace of the Postgres DSN's Secret, which belongs to Agent Kourier and not to a resource.
 	ExtraNamespaces []string
 	// SyncTimeout bounds the wait for the Secret caches to sync; zero means 30 s.
 	SyncTimeout time.Duration

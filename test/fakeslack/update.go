@@ -13,7 +13,7 @@ import (
 // no_text.
 //
 // UNCONFIRMED(WP-04): invalid_arguments for a missing ts; fields the request
-// omits are kept, though real Slack may clear omitted blocks, so courier should
+// omits are kept, though real Slack may clear omitted blocks, so Agent Kourier should
 // always send text and blocks together; blocks=[] alongside text clears the
 // message's blocks, as slack-go v0.29.0's MsgOptionBlocks() with no arguments
 // intends; a message that is still streaming cannot be updated

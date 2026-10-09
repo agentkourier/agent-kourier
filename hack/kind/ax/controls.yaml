@@ -26,7 +26,7 @@ spec:
       serviceAccountName: ax-gates
       containers:
         - name: ax-gates
-          image: courier-e2e/ax:dev
+          image: agent-kourier-e2e/ax:dev
           command: ["/usr/local/bin/e2e-control"]
           imagePullPolicy: Never
           env:

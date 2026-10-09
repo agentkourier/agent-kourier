@@ -1,16 +1,16 @@
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: sre-alerts, namespace: sre }
 spec:
   agent:
-    backendRef: { namespace: courier-system, name: kagent-pilot }
+    backendRef: { namespace: agent-kourier-system, name: kagent-pilot }
     name: k8s-agent
     namespace: kagent
   identity:                          # every turn in this binding runs as this identity
-    userId: courier-sre-alerts       # insecure mode: sent as X-User-Id
-    tokenSecretRef: { name: courier-sre-alerts-oidc }  # OIDC mode (pilot default, D32)
+    userId: agent-kourier-sre-alerts       # insecure mode: sent as X-User-Id
+    tokenSecretRef: { name: agent-kourier-sre-alerts-oidc }  # OIDC mode (pilot default, D32)
   chat:
-    connectionRef: { namespace: courier-system, name: slack-main }
+    connectionRef: { namespace: agent-kourier-system, name: slack-main }
     channel: C0123456789             # investigation channel ID, not name
     output: live                     # live | final
     threadReplies: all               # all | mention; see 8.2
@@ -26,7 +26,7 @@ spec:
         limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
   alerts:
     type: alertmanager
-    tokenSecretRef: { name: courier-webhook-token }  # same namespace as the Binding
+    tokenSecretRef: { name: agent-kourier-webhook-token }  # same namespace as the Binding
     promptTemplate: |                # Go template over the normalized AlertEvent
       Investigate this alert and report likely cause and next steps.
     rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }

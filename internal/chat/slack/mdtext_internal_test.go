@@ -12,7 +12,7 @@ import (
 )
 
 // The rows are those of the table in tasks/plans/slack-code-rendering.md: Slack's behaviour as measured in the probe of
-// the sandbox workspace, 2026-10-04. Each case is what the agent wrote and the exact text courier sends.
+// the sandbox workspace, 2026-10-04. Each case is what the agent wrote and the exact text Agent Kourier sends.
 //
 // Raw strings are used for the text of cases that hold backslashes.
 var markdownCases = []struct {
@@ -220,7 +220,7 @@ func TestMarkdownCutLeavesTheStateAsSent(t *testing.T) {
 	}
 }
 
-// Every cut of every case, with the rest of the document after it, is still a document that Slack reads as courier does.
+// Every cut of every case, with the rest of the document after it, is still a document that Slack reads as Agent Kourier does.
 func TestMarkdownAfterACutIsStillSafe(t *testing.T) {
 	for _, tc := range markdownCases {
 		for limit := 0; limit < 80; limit += 3 {
@@ -238,7 +238,7 @@ func TestMarkdownAfterACutIsStillSafe(t *testing.T) {
 }
 
 // slackReading reads text as Slack reads a markdown document, as the probe measured it (CommonMark fences, and spans of one
-// line, rows 08 to 17 and 32 to 44), and returns what breaks the invariant: Slack sees only the code courier writes.
+// line, rows 08 to 17 and 32 to 44), and returns what breaks the invariant: Slack sees only the code Agent Kourier writes.
 //
 //   - in prose: no "<", ">", "[" or "]", no backtick that is not escaped (or in a span), no run of three tildes that is
 //     not escaped, and no "&" that does not start "&amp;", "&lt;" or "&gt;";
@@ -413,7 +413,7 @@ func runeBoundary(s string, i int) int {
 }
 
 // FuzzMarkdownReading is the invariant: whatever the agent writes, in one piece or in two with the first cut short,
-// Slack sees only the code courier writes. Run it for longer than the seeds with
+// Slack sees only the code Agent Kourier writes. Run it for longer than the seeds with
 // go test -fuzz=FuzzMarkdownReading -fuzztime=2m ./internal/chat/slack/
 func FuzzMarkdownReading(f *testing.F) {
 	for _, s := range markdownSeeds() {

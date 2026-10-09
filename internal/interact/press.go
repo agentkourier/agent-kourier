@@ -111,7 +111,7 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 	return &Pipeline{cfg}, nil
 }
 
-// Press records a press of an interaction's button and returns. PressedAt is courier's own clock now,
+// Press records a press of an interaction's button and returns. PressedAt is Agent Kourier's own clock now,
 // not Slack's, and is the time of the decision whenever it is made (WP-33e contract). It returns
 // ErrNotInteraction for a button that is not an interaction's, and store.ErrLimit when too many presses
 // wait.

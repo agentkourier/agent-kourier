@@ -2,8 +2,8 @@
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: courier-ax
-  namespace: courier-ax
+  name: agent-kourier-ax
+  namespace: agent-kourier-ax
 spec:
   replicas: 1
   sandboxClass: gvisor

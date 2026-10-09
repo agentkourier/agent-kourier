@@ -46,7 +46,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
-// ErrAbandoned is returned for a post that courier has given up on, and wraps its cause.
+// ErrAbandoned is returned for a post that Agent Kourier has given up on, and wraps its cause.
 var ErrAbandoned = errors.New("outbox: the post was abandoned")
 
 // The reasons OnAbandon is given besides the neutral reasons of chat.Reason.
@@ -482,12 +482,12 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 		return o.cfg.Platform.RefAt(row.Channel, row.Thread, row.MessageRef), nil
 	}
 	ctx = telemetry.Restore(ctx, row.TraceParent, row.TraceState)
-	ctx, op := telemetry.Start(ctx, "courier.outbox.deliver", attribute.String("courier.outbox.id", id), attribute.String("courier.outbox.role", string(row.Role)))
+	ctx, op := telemetry.Start(ctx, "agentkourier.outbox.deliver", attribute.String("agentkourier.outbox.id", id), attribute.String("agentkourier.outbox.role", string(row.Role)))
 	mode := "posted"
 	defer func() {
-		trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.delivery.mode", mode))
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.delivery.mode", mode))
 		if telemetryErr == nil && telemetryRef.ID != "" {
-			telemetry.Observe(ctx, "courier_outbox_delivery_duration_seconds", o.cfg.Now().Sub(row.CreatedAt), string(row.Role), mode)
+			telemetry.Observe(ctx, "agentkourier_outbox_delivery_duration_seconds", o.cfg.Now().Sub(row.CreatedAt), string(row.Role), mode)
 		}
 		op.Finish(telemetryErr)
 	}()
@@ -520,7 +520,7 @@ func (o *Outbox) deliver(ctx context.Context, id string, lookup bool) (telemetry
 		}
 		if found {
 			mode = "adopted"
-			trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("courier.delivery.adopted", true))
+			trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("agentkourier.delivery.adopted", true))
 			o.cfg.Logger.InfoContext(ctx, "outbox: adopted a message posted before a crash", "outbox_id", id, "channel", row.Channel, "ts", ref.ID)
 			return o.record(ctx, id, ref)
 		}

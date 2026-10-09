@@ -44,7 +44,7 @@ func axTextQuestion(t *testing.T, s *scenario) {
 	}
 	restart, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
 	defer cancel()
-	if err := s.pods.RolloutRestart(restart, kube.CourierNamespace, kube.CourierDeployment); err != nil {
+	if err := s.pods.RolloutRestart(restart, kube.AgentKourierNamespace, kube.AgentKourierDeployment); err != nil {
 		t.Fatal(err)
 	}
 	s.connected()

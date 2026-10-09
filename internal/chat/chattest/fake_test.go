@@ -13,7 +13,7 @@ import (
 
 var (
 	ctx = context.Background()
-	tgt = chat.Target{Conn: "courier-system/slack-main", Channel: "C1", Thread: "1.1"}
+	tgt = chat.Target{Conn: "agent-kourier-system/slack-main", Channel: "C1", Thread: "1.1"}
 )
 
 func say(text string) chat.Outgoing { return chat.Say(chat.Message{Fallback: text}) }

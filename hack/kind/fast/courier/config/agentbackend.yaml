@@ -1,9 +1,0 @@
-# The fast tier's agents: the stub agent, which answers as kagent's A2A front door does (-require-auth: a bearer
-# token is needed). The kagent-v1 dialect adds /agents/<namespace>/<name> to the URL. The full tier has the same
-# Bindings and its own file of this name (hack/kind/full/courier/agentbackend.yaml), for kagent.
-apiVersion: agentcourier.dev/v1alpha1
-kind: AgentBackend
-metadata: {name: agents, namespace: courier}
-spec:
-  dialect: kagent-v1
-  url: http://stubagent.e2e.svc.cluster.local:8080

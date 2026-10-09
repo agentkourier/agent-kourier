@@ -1,0 +1,108 @@
+# Everything the chart can switch on at one replica (the PodDisruptionBudget cannot: see values.yaml), for the pilot's shape: the production image by digest, a connection and a backend in
+# the release namespace and a Binding in the team's own, with the alert trigger and the token-refresh CronJob, metrics
+# scraped by prometheus-operator, and a NetworkPolicy that fences egress to Slack, DNS, the API server and the front door.
+fullnameOverride: agent-kourier
+
+image:
+  repository: registry.example.test/platform/agent-kourier
+  tag: v0.1.0 # ignored: the digest wins
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+imagePullSecrets:
+  - name: registry-pull
+
+logLevel: debug
+syncTimeout: 45s
+auditRetention: 8760h
+extraEnv:
+  - {name: AGENTKOURIER_ENVIRONMENT, value: production}
+  - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "https://otel-collector.observability.svc.cluster.local:4318"}
+  - name: OTEL_EXPORTER_OTLP_HEADERS
+    valueFrom: {secretKeyRef: {name: agent-kourier-otlp, key: headers}}
+
+serviceAccount:
+  annotations: {example.test/owner: platform}
+
+config:
+  chatConnections:
+    slack-main:
+      spec:
+        platform: slack
+        mode: socket
+        credentialsSecretRef: {name: slack-main}
+        allowedNamespaces: [sre]
+  agentBackends:
+    agents:
+      spec:
+        dialect: kagent-v1
+        url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
+        headers:
+          - name: X-Request-Source
+            valueSecretRef: {name: agent-kourier-source, key: source}
+        allowedNamespaces: [sre]
+  bindings:
+    sre-alerts:
+      namespace: sre
+      spec:
+        agent:
+          backendRef: {name: agents}
+          namespace: kagent
+          name: k8s-agent
+        identity:
+          userId: agent-kourier-sre-alerts
+          tokenSecretRef: {name: agent-kourier-agent-token}
+        chat:
+          connectionRef: {name: slack-main}
+          channel: C0123456789
+          output: live
+          triggers:
+            - type: botMessage
+              from: {botId: B0123456789}
+              preset: alertmanager
+              match: {titleLink: 'receiver=slack-critical$'}
+        interactions: {askUser: false}
+
+persistence:
+  size: 5Gi
+  storageClassName: gp3
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 512Mi}
+
+podAnnotations: {example.test/scrape: "false"}
+podLabels: {example.test/team: platform}
+priorityClassName: system-cluster-critical
+nodeSelector: {kubernetes.io/os: linux}
+tolerations:
+  - {key: dedicated, operator: Equal, value: platform, effect: NoSchedule}
+
+service:
+  enabled: true
+
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  labels: {release: kube-prometheus-stack}
+
+networkPolicy:
+  enabled: true
+  kubeApiServer:
+    cidrs: ["10.100.0.10/32", "10.100.1.20/32"]
+  metricsFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+      podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}}
+  extraEgress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: kagent-frontdoor}}
+      ports: [{port: 4180, protocol: TCP}]
+
+tokenRefresh:
+  enabled: true
+  schedule: "*/30 * * * *"
+  targetSecret: agent-kourier-agent-token
+  targetNamespace: sre # the Binding's
+  dex:
+    tokenURL: https://dex.example.test/dex/token
+    clientId: agent-kourier-binding
+    credentialsSecret: agent-kourier-dex-client

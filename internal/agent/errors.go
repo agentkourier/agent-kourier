@@ -87,9 +87,9 @@ func (e *StreamLostError) Error() string {
 // Unwrap lets errors.Is find ErrStreamLost and the cause.
 func (e *StreamLostError) Unwrap() []error { return []error{ErrStreamLost, e.Err} }
 
-// agentRPCError is an error the agent answered with, as courier says it: the class of the failure and nothing the
+// agentRPCError is an error the agent answered with, as Agent Kourier says it: the class of the failure and nothing the
 // agent wrote. An a2a.Error's text is the agent's own message, which kagent fills with the exception of a failed model
-// call or tool, and so may quote model output, a tool's input or a credential; courier's errors reach its logs, so
+// call or tool, and so may quote model output, a tool's input or a credential; Agent Kourier's errors reach its logs, so
 // they never carry it. It unwraps to the whole error it stands for, so errors.Is and errors.As still find the
 // a2a.Error, its sentinel and its details (typed, isProtocol and the dialects' NotReady rely on that). The agent's own
 // text is in the agent's logs, under the task and context IDs.

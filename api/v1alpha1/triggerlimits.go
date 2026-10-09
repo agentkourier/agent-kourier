@@ -6,7 +6,7 @@ import (
 )
 
 // Bounds of a trigger's limits. A rate window is held to them so that every count the limits need can be
-// answered from the last MaxLimitWindow of starts, which is also how long courier keeps them (the daily cap is
+// answered from the last MaxLimitWindow of starts, which is also how long Agent Kourier keeps them (the daily cap is
 // a window of this length).
 const (
 	// MinRateWindow is the shortest rateLimit.per. A shorter one is a typo for a longer unit, and it would

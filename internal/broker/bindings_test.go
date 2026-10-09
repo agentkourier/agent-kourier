@@ -197,7 +197,7 @@ func TestBackendCarriesWhatTheSessionNeeds(t *testing.T) {
 	}
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
 	be.Attribute(msg, dialect.User{ID: "U1", Name: "Ada"})
-	if _, ok := msg.Metadata["agentcourier.dev/actor"]; !ok {
+	if _, ok := msg.Metadata["agentkourier.dev/actor"]; !ok {
 		t.Errorf("Attribute left no actor in %v: it is not the kagent-v1 dialect's", msg.Metadata)
 	}
 }

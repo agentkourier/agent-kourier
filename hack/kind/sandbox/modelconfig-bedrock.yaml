@@ -22,6 +22,6 @@ spec:
   model: __MODEL_NAME__
   apiKeySecret: sandbox-model
   defaultHeaders:
-    X-Courier-Egress-Host: https://bedrock-runtime.__MODEL_REGION__.amazonaws.com
+    X-Agent-Kourier-Egress-Host: https://bedrock-runtime.__MODEL_REGION__.amazonaws.com
   bedrock:
     region: __MODEL_REGION__

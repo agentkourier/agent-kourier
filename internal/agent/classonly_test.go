@@ -24,7 +24,7 @@ func rpcFailure(code int, message string) func(rpc, http.ResponseWriter) {
 }
 
 // An error the agent answered with says its class and nothing the agent wrote: kagent puts the exception of a failed
-// model call or tool in a -32603, and that may quote model output, a tool's input or a credential, and courier's
+// model call or tool in a -32603, and that may quote model output, a tool's input or a credential, and Agent Kourier's
 // errors are logged. The error still is the agent's error to errors.Is and errors.As (the typing, isProtocol and the
 // dialect's NotReady need that), and an answer's -32603 is still a rejected answer. This is the real client over the
 // fake agent, through Send, Answer and the unary calls.

@@ -14,7 +14,7 @@ import (
 // be known undelivered, and none is made a cause for a notice: they are marked delivered when they
 // were decided. A pending or timed-out interaction has none.
 func TestMigration0011TakesExistingAnswersAsDelivered(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	databaseAt(t, path, 10)
 	db, err := openPool(context.Background(), path, 1, "journal_mode(WAL)")
 	if err != nil {

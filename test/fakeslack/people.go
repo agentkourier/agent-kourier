@@ -47,7 +47,7 @@ func (s *Server) SetMembers(channel string, users ...string) {
 //
 // UNCONFIRMED(WP-04): invalid_arguments for a missing user. The email is
 // always returned; real Slack returns it only to apps with the
-// users:read.email scope, so confirm the scope courier needs.
+// users:read.email scope, so confirm the scope Agent Kourier needs.
 func (s *Server) usersInfo(form url.Values) (response, string) {
 	id := form.Get("user")
 	if id == "" {

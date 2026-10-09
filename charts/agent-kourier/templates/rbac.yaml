@@ -1,0 +1,58 @@
+{{- if .Values.rbac.create }}
+{{- /* The resolver caches the Secrets of each namespace its config refers to with an informer: list and watch, never get.
+       Those verbs cannot be limited by resourceName, so the Role reads every Secret in the namespace, and Agent Kourier keeps
+       the Opaque ones in memory (internal/config/k8ssecrets). Keep those namespaces to ones that hold Agent Kourier's. */ -}}
+{{- range $ns := include "agentkourier.secretNamespaces" . | fromJsonArray }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agentkourier.fullname" $ }}-secrets
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentkourier.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agentkourier.fullname" $ }}-secrets
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentkourier.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agentkourier.fullname" $ }}-secrets}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "agentkourier.serviceAccountName" $ }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- end }}
+{{- /* The leader election's Lease is made by the chart (lease.yaml), so Agent Kourier only reads and renews it: get and update on the
+       one Lease. No create, which cannot be limited by name. */}}
+{{- if and .Values.rbac.create (not (include "agentkourier.sqlite" .)) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agentkourier.fullname" . }}-leader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ include "agentkourier.leaseName" . }}]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agentkourier.fullname" . }}-leader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agentkourier.fullname" . }}-leader}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "agentkourier.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
+{{- end }}

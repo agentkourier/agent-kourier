@@ -11,7 +11,7 @@ import (
 )
 
 // ScanCommonMark reads CommonMark, as in Slack's markdown block and a stream's markdown_text, with goldmark, the
-// standard CommonMark parser for Go (strict, no extensions; used by tests only: go list -deps ./cmd/courier does
+// standard CommonMark parser for Go (strict, no extensions; used by tests only: go list -deps ./cmd/agent-kourier does
 // not hold it). The structure is its: links inline and by reference, images, angle autolinks, raw HTML, emphasis,
 // code, headings, quotes and lists, with every backslash escape, entity and label rule as CommonMark has it, which
 // a hand-written reader got wrong one hole at a time. What goldmark does not know is read as the platform might:

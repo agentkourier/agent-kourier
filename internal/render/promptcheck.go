@@ -8,7 +8,7 @@ import (
 // The rules a value of a PromptView must pass to reach a prompt's instruction part (spec R2).
 // The text of a message is attacker-influenced, and a value extracted from it is part of it, so
 // it may be written into the instructions only if it is too narrow to carry any: a name or a
-// key, and never a sentence. Link is not from the message: courier builds it (see checkLink).
+// key, and never a sentence. Link is not from the message: Agent Kourier builds it (see checkLink).
 // A value that fails refuses the whole render.
 const (
 	// maxNameBytes bounds a Fields value, State, Channel and Source.
@@ -104,7 +104,7 @@ func checkShape(s string, limit int, extra string) Reason {
 // so a link holds no credentials.
 const linkExtra = "-._~:/?#=&"
 
-// checkLink is the rule of Link, which is courier's own: the Slack permalink of the triggering
+// checkLink is the rule of Link, which is Agent Kourier's own: the Slack permalink of the triggering
 // message, built from the channel and the message's ts. It is never a field of the message (not
 // titleLink, which the sender wrote), so the rule is a second line of defence, narrow enough
 // for a permalink and for little else. The link is at most 256 bytes of letters, digits and the

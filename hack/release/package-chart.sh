@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# package-chart.sh VERSION REPOSITORY DIGEST OUTDIR: package charts/courier as OUTDIR/courier-<VERSION without v>.tgz,
+# package-chart.sh VERSION REPOSITORY DIGEST OUTDIR: package charts/agent-kourier as OUTDIR/agent-kourier-<VERSION without v>.tgz,
 # version VERSION without the v and appVersion VERSION, with the chart's default image set to
 # REPOSITORY@DIGEST (values.yaml leaves image.repository empty and image.digest unset until a release stamps them).
 # It works on a copy, so the tree is untouched, and prints the path of the package. Run by release.sh.
@@ -18,7 +18,7 @@ command -v helm >/dev/null || die "helm is required"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
-cp -R "${ROOT}/charts/courier" "${WORK}/courier"
+cp -R "${ROOT}/charts/agent-kourier" "${WORK}/agent-kourier"
 
 # Only the top-level image: block (the token-refresh image further down has its own repository and digest).
 awk -v repo="${REPOSITORY}" -v digest="${DIGEST}" '
@@ -27,13 +27,13 @@ awk -v repo="${REPOSITORY}" -v digest="${DIGEST}" '
   inimage && /^  digest: ""$/ { print "  digest: " digest; d++; next }
   { print }
   END { if (r != 1 || d != 1) exit 1 }
-' "${WORK}/courier/values.yaml" >"${WORK}/values.yaml" ||
-  die "charts/courier/values.yaml no longer has exactly one empty image.repository and image.digest to stamp"
-mv "${WORK}/values.yaml" "${WORK}/courier/values.yaml"
+' "${WORK}/agent-kourier/values.yaml" >"${WORK}/values.yaml" ||
+  die "charts/agent-kourier/values.yaml no longer has exactly one empty image.repository and image.digest to stamp"
+mv "${WORK}/values.yaml" "${WORK}/agent-kourier/values.yaml"
 
 mkdir -p "${OUTDIR}"
-helm package "${WORK}/courier" --version "${VERSION#v}" --app-version "${VERSION}" --destination "${OUTDIR}" >/dev/null
-pkg="${OUTDIR}/courier-${VERSION#v}.tgz"
+helm package "${WORK}/agent-kourier" --version "${VERSION#v}" --app-version "${VERSION}" --destination "${OUTDIR}" >/dev/null
+pkg="${OUTDIR}/agent-kourier-${VERSION#v}.tgz"
 [ -f "${pkg}" ] || die "helm package did not write ${pkg}"
 
 # Read back what shipped: the default image and the versions.

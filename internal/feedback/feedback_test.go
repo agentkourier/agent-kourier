@@ -27,13 +27,13 @@ import (
 
 var (
 	t0  = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
-	key = store.ConversationKey{Connection: "courier/slack", Channel: "C1", Thread: "100.1"}
+	key = store.ConversationKey{Connection: "agent-kourier/slack", Channel: "C1", Thread: "100.1"}
 )
 
 const (
-	turn      = "slack:courier/slack:C1:100.1"
-	counter   = "courier_investigation_feedback_total"
-	bindingID = "courier/sre"
+	turn      = "slack:agent-kourier/slack:C1:100.1"
+	counter   = "agentkourier_investigation_feedback_total"
+	bindingID = "agent-kourier/sre"
 	agentID   = "kagent/sre"
 )
 
@@ -296,14 +296,14 @@ func TestParseValueTakesNothingButAFeedbackValue(t *testing.T) {
 
 // The press is recorded and the person's checks wait for the worker: the press is on Slack's acknowledgement path, where a
 // call to Slack is not allowed, and the check of who pressed is two.
-func TestPressRecordsAtCouriersTimeAndDoesNoneOfTheWork(t *testing.T) {
+func TestPressRecordsAtAgentKouriersTimeAndDoesNoneOfTheWork(t *testing.T) {
 	r := newRig(t)
 	if err := r.h.Press(t.Context(), press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)); err != nil {
 		t.Fatal(err)
 	}
 	presses, _ := r.st.ListPresses(t.Context())
 	if len(presses) != 1 || !presses[0].PressedAt.Equal(t0) || len(r.seen) != 1 || r.seen[0].Seq != presses[0].Seq {
-		t.Fatalf("presses %+v, announced %+v; want one, at courier's own time, announced to the worker", presses, r.seen)
+		t.Fatalf("presses %+v, announced %+v; want one, at Agent Kourier's own time, announced to the worker", presses, r.seen)
 	}
 	if r.az.asked != 0 || len(r.eph.list()) != 0 || len(r.votes(t)) != 0 {
 		t.Error("recording the press did the work of processing it")
@@ -519,17 +519,17 @@ func TestAPressOnAThreadThatIsGoneIsToldSoAndRecordsNothing(t *testing.T) {
 // config, or has another agent now, neither blocks nor relabels a vote on an earlier investigation.
 func TestAVoteOnAThreadWhoseBindingIsGoneIsRecordedUnderWhatTheSessionHolds(t *testing.T) {
 	r := newRig(t)
-	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "courier/removed", Alert: "KubePodCrashLooping", Agent: "kagent/old-agent", LastActivity: t0}); err != nil {
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "agent-kourier/removed", Alert: "KubePodCrashLooping", Agent: "kagent/old-agent", LastActivity: t0}); err != nil {
 		t.Fatal(err)
 	}
 	if res, err := r.vote(t, press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)); err != nil || res != interact.Done {
 		t.Fatalf("Process = %v, %v; want Done", res, err)
 	}
 	got := r.votes(t)
-	if len(got) != 1 || got[0].Binding != "courier/removed" || got[0].Agent != "kagent/old-agent" {
+	if len(got) != 1 || got[0].Binding != "agent-kourier/removed" || got[0].Agent != "kagent/old-agent" {
 		t.Fatalf("votes = %+v; want one under the session's Binding and agent", got)
 	}
-	if n := r.tel.Counter(t, counter, map[string]string{"binding": "courier/removed", "agent": "kagent/old-agent", "alertname": "KubePodCrashLooping", "verdict": "useful"}); n != 1 {
+	if n := r.tel.Counter(t, counter, map[string]string{"binding": "agent-kourier/removed", "agent": "kagent/old-agent", "alertname": "KubePodCrashLooping", "verdict": "useful"}); n != 1 {
 		t.Errorf("%s under the session's Binding and agent = %v; want 1", counter, n)
 	}
 }
@@ -714,7 +714,7 @@ func TestTheAlertnameLabelIsBounded(t *testing.T) {
 	}
 
 	// The bound is each Binding's: one that has used its names up leaves another its own.
-	const second = "courier/second"
+	const second = "agent-kourier/second"
 	r := newRig(t)
 	seen := map[string]bool{}
 	for i := range feedback.MaxAlertLabels + 5 {

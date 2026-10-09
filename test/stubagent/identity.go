@@ -9,7 +9,7 @@ import (
 
 // WithRequiredAuth makes the stub answer HTTP 401 to a request with no bearer token, card
 // included, as kagent in OIDC mode does. The default accepts requests with no token, which all
-// share one anonymous owner. The fast E2E tier sets it, so that courier is tested sending a
+// share one anonymous owner. The fast E2E tier sets it, so that Agent Kourier is tested sending a
 // token as it must against kagent.
 // UNCONFIRMED: the card's 401 was seen with curl in WP-02, and there is no fixture. The
 // anonymous owner matches no real kagent mode: with OIDC on a request with no token is refused,

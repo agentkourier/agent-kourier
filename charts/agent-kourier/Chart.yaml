@@ -1,0 +1,9 @@
+apiVersion: v2
+name: agent-kourier
+description: agent-kourier, a broker between Alertmanager, Slack and A2A agents (one replica; SQLite on a PVC, or Postgres)
+type: application
+# A release (hack/release/package-chart.sh) stamps version, appVersion, image.repository and image.digest and pushes the
+# chart to oci://ghcr.io/agentkourier/charts. In the source tree they are unstamped, so image.repository has no default.
+version: 0.1.0
+appVersion: dev
+home: https://github.com/agentkourier/agent-kourier

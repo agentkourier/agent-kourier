@@ -1,0 +1,16 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-timeout, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: ax-ask}
+    namespace: agent-kourier-ax
+    name: ask
+  identity:
+    userId: agent-kourier-ax
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CAXTIMEOUT
+    output: live
+  interactions: {timeout: 5s, askUser: true, toolApprovals: false}

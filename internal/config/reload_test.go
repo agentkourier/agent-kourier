@@ -141,7 +141,7 @@ func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 		t.Errorf("forced: not rebuilt (%d more reads)", secrets.reads-reads)
 	}
 	kept := r.Current()
-	delete(secrets.fakeSecrets, "sre/courier-webhook-token") // Secrets change without a file change
+	delete(secrets.fakeSecrets, "sre/agent-kourier-webhook-token") // Secrets change without a file change
 	if err := r.reload(context.Background(), true); err == nil || r.Current() != kept || r.Status().Errors != 1 {
 		t.Errorf("a vanished Secret: err %v, status %+v", err, r.Status())
 	}
@@ -291,7 +291,7 @@ func TestReloaderLoop(t *testing.T) {
 	path := filepath.Join(dir, "binding.yaml")
 	writeFile(t, path, strings.Replace(mustRead(t, path), "C0123456789", "C0999999999", 1))
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		if _, ok := r.Current().BindingForChannel("courier-system", "slack-main", "C0999999999"); ok {
+		if _, ok := r.Current().BindingForChannel("agent-kourier-system", "slack-main", "C0999999999"); ok {
 			break
 		}
 		if time.Now().After(deadline) {

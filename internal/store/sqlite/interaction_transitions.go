@@ -33,7 +33,7 @@ func (s *adapter) transition(ctx context.Context, id, update string, args ...any
 		var kind, outcome string
 		var created, decided int64
 		if e := s.read.QueryRowContext(ctx, `SELECT kind,state,created_at,decided_at FROM interactions WHERE id = ?`, id).Scan(&kind, &outcome, &created, &decided); e == nil {
-			telemetry.Observe(ctx, "courier_interaction_wait_seconds", time.Duration(decided-created), kind, outcome)
+			telemetry.Observe(ctx, "agentkourier_interaction_wait_seconds", time.Duration(decided-created), kind, outcome)
 		}
 	}
 	return applied, state, decider, err

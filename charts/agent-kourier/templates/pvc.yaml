@@ -1,0 +1,22 @@
+{{- if and (include "agentkourier.sqlite" .) (not .Values.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agentkourier.pvcName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+  {{- if .Values.persistence.retainOnUninstall }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- with .Values.persistence.storageClassName }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . | quote }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+{{- end }}

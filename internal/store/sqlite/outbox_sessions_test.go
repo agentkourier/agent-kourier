@@ -37,12 +37,12 @@ func TestOutboxRoleTriggers(t *testing.T) {
 
 // Every migration is recorded once, however many times the file is opened.
 func TestMigrationsAreRecordedOnceAcrossReopens(t *testing.T) {
-	path := t.TempDir() + "/courier.db"
+	path := t.TempDir() + "/agent-kourier.db"
 	openAt(t, path)
 	s := openAt(t, path)
 	var n int
-	if err := s.a.read.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 22 {
-		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 22", n, err)
+	if err := s.a.read.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 23 {
+		t.Fatalf("schema_migrations rows after reopen = %d, %v; want 23", n, err)
 	}
 }
 

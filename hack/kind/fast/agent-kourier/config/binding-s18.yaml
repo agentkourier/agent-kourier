@@ -1,0 +1,28 @@
+# S18: a thread Agent Kourier owns takes only the replies that mention it (spec 8.2, D38). A mention starts a thread, and so does an
+# alert from the bot the scenario posts as (S14's trigger); in either, a reply without a mention is ignored, and a mention
+# carries the replies posted since the previous turn. The agent, scenario-context, says which turn it is and what the turn
+# carried. A channel of its own on the fake Slack, so scenarios never share a thread; the identity token is the same Secret as
+# fast-chat's. The channel, the bot and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go. Like S14 it runs
+# in the fast tier only: the full tier's kagent has no scenario-context agent.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s18, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-context
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS18
+    output: live
+    threadReplies: mention
+    triggers:
+      - type: mention
+      - type: botMessage
+        from: {botId: B0S18ALERT1}
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}

@@ -58,26 +58,26 @@ func grants(roles []rbacv1.Role) map[string]bool {
 }
 
 // TestRunnerRoles pins what the runner's service account may do: restart the doubles in e2e, and in
-// courier only read pods and their logs and patch the Deployment. A pod delete there would bypass strategy:
+// Agent Kourier only read pods and their logs and patch the Deployment. A pod delete there would bypass strategy:
 // Recreate, so the API must refuse it as well as Kill and Restart.
 func TestRunnerRoles(t *testing.T) {
 	roles := runnerRoles(t)
-	if got, want := grants(roles["courier"]), map[string]bool{"pods:get": true, "pods:list": true, "pods/log:get": true, "deployments:get": true, "deployments:patch": true}; len(got) != len(want) {
-		t.Errorf("Role in courier grants %v, want exactly %v", got, want)
+	if got, want := grants(roles["agent-kourier"]), map[string]bool{"pods:get": true, "pods:list": true, "pods/log:get": true, "deployments:get": true, "deployments:patch": true}; len(got) != len(want) {
+		t.Errorf("Role in agent-kourier grants %v, want exactly %v", got, want)
 	} else {
 		for g := range want {
 			if !got[g] {
-				t.Errorf("Role in courier lacks %s", g)
+				t.Errorf("Role in agent-kourier lacks %s", g)
 			}
 		}
 	}
-	// Patching a Deployment is limited to courier's own: a runner that could patch any would be able to
+	// Patching a Deployment is limited to Agent Kourier's own: a runner that could patch any would be able to
 	// change the test doubles' images or arguments.
-	for _, r := range roles["courier"] {
+	for _, r := range roles["agent-kourier"] {
 		for _, rule := range r.Rules {
 			named := fmt.Sprint(rule.ResourceNames)
-			if isDeployments := slices.Contains(rule.Resources, "deployments"); isDeployments && named != "[courier]" || !isDeployments && named != "[]" {
-				t.Errorf("rule %v in courier has resourceNames %s; want deployments limited to [courier], and pods and their logs unlimited", rule.Resources, named)
+			if isDeployments := slices.Contains(rule.Resources, "deployments"); isDeployments && named != "[agent-kourier]" || !isDeployments && named != "[]" {
+				t.Errorf("rule %v in agent-kourier has resourceNames %s; want deployments limited to [agent-kourier], and pods and their logs unlimited", rule.Resources, named)
 			}
 		}
 	}
@@ -85,6 +85,6 @@ func TestRunnerRoles(t *testing.T) {
 		t.Errorf("Role in %s grants %v, want pods list and delete only", Namespace, got)
 	}
 	if len(roles) != 2 {
-		t.Errorf("the manifest has Roles in %d namespaces, want e2e and courier only", len(roles))
+		t.Errorf("the manifest has Roles in %d namespaces, want e2e and agent-kourier only", len(roles))
 	}
 }

@@ -10,7 +10,7 @@ import (
 func (g *Guarded) AppendEvent(ctx context.Context, e Event) (inserted bool, err error) {
 	// The producer's trace, not the span of this call: the queue worker continues the trace of whoever appended the event.
 	stamp(ctx, &e.TraceParent, &e.TraceState)
-	err = g.run(ctx, "courier.store.AppendEvent", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.AppendEvent", func(ctx context.Context) error {
 		if e.ID == "" || e.ReceivedAt.IsZero() {
 			return fmt.Errorf("append event %q: ID and ReceivedAt are required: %w", e.ID, ErrInvalid)
 		}
@@ -23,7 +23,7 @@ func (g *Guarded) AppendEvent(ctx context.Context, e Event) (inserted bool, err 
 
 // GetEvent implements Events.
 func (g *Guarded) GetEvent(ctx context.Context, id string) (e Event, err error) {
-	err = g.run(ctx, "courier.store.GetEvent", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.GetEvent", func(ctx context.Context) error {
 		var err error
 		e, err = g.a.GetEvent(ctx, id)
 		return err
@@ -33,7 +33,7 @@ func (g *Guarded) GetEvent(ctx context.Context, id string) (e Event, err error) 
 
 // SetEventStatus implements Events.
 func (g *Guarded) SetEventStatus(ctx context.Context, id string, status EventStatus, lastError string) error {
-	return g.run(ctx, "courier.store.SetEventStatus", func(ctx context.Context) error {
+	return g.run(ctx, "agentkourier.store.SetEventStatus", func(ctx context.Context) error {
 		if !status.Valid() {
 			return fmt.Errorf("set event %q status %q: %w", id, status, ErrInvalid)
 		}
@@ -43,7 +43,7 @@ func (g *Guarded) SetEventStatus(ctx context.Context, id string, status EventSta
 
 // ClaimEvent implements Queue.
 func (g *Guarded) ClaimEvent(ctx context.Context, now time.Time, lease time.Duration) (e Event, err error) {
-	err = g.run(ctx, "courier.store.ClaimEvent", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.ClaimEvent", func(ctx context.Context) error {
 		if now.IsZero() || lease <= 0 {
 			return fmt.Errorf("claim event: now must be set and lease positive: %w", ErrInvalid)
 		}
@@ -56,7 +56,7 @@ func (g *Guarded) ClaimEvent(ctx context.Context, now time.Time, lease time.Dura
 
 // CompleteEvent implements Queue.
 func (g *Guarded) CompleteEvent(ctx context.Context, id string, attempt int) error {
-	return g.run(ctx, "courier.store.CompleteEvent", func(ctx context.Context) error {
+	return g.run(ctx, "agentkourier.store.CompleteEvent", func(ctx context.Context) error {
 		if id == "" || attempt < 1 {
 			return fmt.Errorf("complete event %q: ID and attempt are required: %w", id, ErrInvalid)
 		}
@@ -66,7 +66,7 @@ func (g *Guarded) CompleteEvent(ctx context.Context, id string, attempt int) err
 
 // FailEvent implements Queue.
 func (g *Guarded) FailEvent(ctx context.Context, id string, attempt int, retryAt time.Time, maxAttempts int, errText string) error {
-	return g.run(ctx, "courier.store.FailEvent", func(ctx context.Context) error {
+	return g.run(ctx, "agentkourier.store.FailEvent", func(ctx context.Context) error {
 		if id == "" || attempt < 1 || retryAt.IsZero() || maxAttempts < 1 {
 			return fmt.Errorf("fail event %q: ID and retryAt are required and attempt and maxAttempts must be at least 1: %w", id, ErrInvalid)
 		}

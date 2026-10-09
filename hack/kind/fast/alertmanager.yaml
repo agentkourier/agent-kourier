@@ -1,11 +1,11 @@
 # The fast tier's Alertmanager, run by prometheus-operator, and the route that sends every alert
-# to the sink receiver (spec 12.1): tests assert the sink still gets alerts while courier is
-# down (D22). A test posts alerts to alertmanager.monitoring.svc:9093/api/v2/alerts. Courier's
+# to the sink receiver (spec 12.1): tests assert the sink still gets alerts while Agent Kourier is
+# down (D22). A test posts alerts to alertmanager.monitoring.svc:9093/api/v2/alerts. Agent Kourier's
 # own route joins this one as another AlertmanagerConfig (WP-14, WP-47).
 apiVersion: monitoring.coreos.com/v1
 kind: Alertmanager
 metadata:
-  name: courier
+  name: agent-kourier
   namespace: monitoring
 spec:
   replicas: 1
@@ -24,7 +24,7 @@ metadata:
 spec:
   route:
     receiver: sink
-    # Short timers keep a test fast; `continue` lets a later route (courier's) see the alert too.
+    # Short timers keep a test fast; `continue` lets a later route (Agent Kourier's) see the alert too.
     continue: true
     groupBy: [alertname]
     groupWait: 1s
@@ -43,5 +43,5 @@ metadata:
   namespace: monitoring
 spec:
   type: ClusterIP
-  selector: {app.kubernetes.io/name: alertmanager, alertmanager: courier}
+  selector: {app.kubernetes.io/name: alertmanager, alertmanager: agent-kourier}
   ports: [{name: web, port: 9093, targetPort: web}]

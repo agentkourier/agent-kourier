@@ -187,7 +187,7 @@ func TestAPinnedReplyTakesNoThreadContext(t *testing.T) {
 }
 
 // The section comes after the person's text, so the attribution the dialect puts in front of the one text part
-// names only the person who mentioned courier.
+// names only the person who mentioned Agent Kourier.
 func TestThreadContextComesAfterTheAttribution(t *testing.T) {
 	f, sink, _ := threadedFixture(t, v1alpha1.ThreadRepliesMention)
 	f.attr = (&kagentv1.Dialect{}).Attribute

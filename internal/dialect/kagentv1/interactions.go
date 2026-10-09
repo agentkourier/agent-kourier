@@ -51,7 +51,7 @@ type hitlRequest struct {
 	Nested    *wireNested    `json:"nested"`
 }
 
-// The most a pause may ask, so that a broken or hostile agent cannot make courier render
+// The most a pause may ask, so that a broken or hostile agent cannot make Agent Kourier render
 // an unbounded prompt. Slack's own select menus stop at 100 options.
 const (
 	maxQuestions = 20

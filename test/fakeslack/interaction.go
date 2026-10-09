@@ -43,7 +43,7 @@ func (s *Server) Click(user, messageTS, actionID, value string) (string, error) 
 //
 // A message is not a modal, so Slack sends its inputs' state with the click on
 // the button, in state.values, and never a view_submission, which belongs to
-// views.open. That is the only way courier's inline ask-user in a thread (spec
+// views.open. That is the only way Agent Kourier's inline ask-user in a thread (spec
 // 8.4) can be answered, so this fake has no view_submission at all.
 func (s *Server) Submit(user, messageTS, submitActionID string, values StateValues) (string, error) {
 	channel, m, blocks, err := s.findMessage(messageTS)
@@ -59,7 +59,7 @@ func (s *Server) Submit(user, messageTS, submitActionID string, values StateValu
 
 // blockActions delivers the block_actions payload for a press of btn.
 //
-// UNCONFIRMED(WP-04): the payload's fields, which are the ones courier needs
+// UNCONFIRMED(WP-04): the payload's fields, which are the ones Agent Kourier needs
 // and slack-go parses (no response_url, trigger_id, token or team domain); the
 // message in it, which omits metadata; the envelope's accepts_response_payload
 // being false; and that Submit answers with block_actions and not

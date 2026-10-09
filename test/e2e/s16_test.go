@@ -19,7 +19,7 @@ import (
 // TestS16_FailoverLosesNoEventAndDuplicatesNone is the Phase 4 exit test (spec 12): two replicas on Postgres, a leader and a standby,
 // pass a failover test with no lost or duplicated events. Its cases, one after another, each leaving the tier healthy for the next: the
 // leader is killed mid-turn, mid-post and mid-storm, and frozen past its lease and then resumed. In each another process takes the
-// leadership, which courier counts, and the fake Slack's record shows every reply once. (After a kill the standby and the killed leader's
+// leadership, which Agent Kourier counts, and the fake Slack's record shows every reply once. (After a kill the standby and the killed leader's
 // own container, which the kubelet restarts within seconds, race for the lease, and either may win it: both are a failover. Only a freeze
 // leaves the standby alone to take over.)
 //
@@ -40,7 +40,7 @@ func TestS16_FailoverLosesNoEventAndDuplicatesNone(t *testing.T) {
 	}
 }
 
-// exitLeadershipLost is the exit code of a courier that was the leader and no longer is (broker.ExitLeadershipLost): its lease
+// exitLeadershipLost is the exit code of an Agent Kourier that was the leader and no longer is (broker.ExitLeadershipLost): its lease
 // lapsed or could not be renewed, or a write found that another replica has led since. exitCrashAfterPost is the testhooks fault's.
 const (
 	exitLeadershipLost = 5
@@ -55,8 +55,8 @@ type failover struct {
 	want int
 }
 
-// requireReplicas skips the test unless it runs in the fast tier with two courier replicas on Postgres
-// (E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up), and nowhere else is there a leader to lose: the full tier's courier is one
+// requireReplicas skips the test unless it runs in the fast tier with two Agent Kourier replicas on Postgres
+// (E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up), and nowhere else is there a leader to lose: the full tier's Agent Kourier is one
 // SQLite replica, and the AX tier's too. It returns the environment, the pod client and how many replicas run.
 func requireReplicas(t *testing.T) (Env, *kube.Pods, int) {
 	t.Helper()
@@ -65,13 +65,13 @@ func requireReplicas(t *testing.T) (Env, *kube.Pods, int) {
 		t.Fatal(err)
 	}
 	if env.Tier != "fast" {
-		t.Skipf("S16 runs in the fast tier with two courier replicas on Postgres; the %s tier runs one courier on SQLite and has no standby to take over", env.Tier)
+		t.Skipf("S16 runs in the fast tier with two Agent Kourier replicas on Postgres; the %s tier runs one Agent Kourier on SQLite and has no standby to take over", env.Tier)
 	}
 	pods, err := kube.NewInCluster()
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, err := pods.List(t.Context(), kube.CourierNamespace, courierPods)
+	running, err := pods.List(t.Context(), kube.AgentKourierNamespace, agentKourierPods)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func requireReplicas(t *testing.T) (Env, *kube.Pods, int) {
 		}
 	}
 	if n < 2 {
-		t.Skipf("S16 needs two courier replicas, a leader and a standby, on Postgres; this tier runs %d (SQLite is one replica). Bring it up with: E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up", n)
+		t.Skipf("S16 needs two Agent Kourier replicas, a leader and a standby, on Postgres; this tier runs %d (SQLite is one replica). Bring it up with: E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up", n)
 	}
 	return env, pods, n
 }
@@ -105,12 +105,12 @@ func (f *failover) settle() {
 	f.t.Helper()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.ctx), 8*time.Minute)
 	defer cancel()
-	err := Wait(ctx, 8*time.Minute, fmt.Sprintf("%d courier replicas to run, Ready, with one connected leader", f.want), func(ctx context.Context) (bool, error) {
+	err := Wait(ctx, 8*time.Minute, fmt.Sprintf("%d Agent Kourier replicas to run, Ready, with one connected leader", f.want), func(ctx context.Context) (bool, error) {
 		all, err := f.reps.All(ctx)
 		if err != nil || len(all) != f.want {
 			return false, err
 		}
-		if err := f.pods.WaitReady(ctx, kube.CourierNamespace, courierPods); err != nil {
+		if err := f.pods.WaitReady(ctx, kube.AgentKourierNamespace, agentKourierPods); err != nil {
 			return false, err
 		}
 		_, err = f.reps.WaitLeader(ctx, 30*time.Second)
@@ -169,7 +169,7 @@ func (f *failover) leader() kube.Replica {
 }
 
 // takeover waits for a leader that is not the process old, which is dead or frozen, and returns it, once it has counted its takeover:
-// courier_leader_takeovers_total is 1 in a process that took the leadership once, as the new leader did, and the standby has not led before.
+// agentkourier_leader_takeovers_total is 1 in a process that took the leadership once, as the new leader did, and the standby has not led before.
 // The new leader may be the other pod or, after a kill, the old pod's restarted container, which is another process: they race for the
 // lease. It takes the lease duration of the tier (9 s) after the last renewal, and a start-up.
 func (f *failover) takeover(old kube.Replica) kube.Replica {
@@ -179,7 +179,7 @@ func (f *failover) takeover(old kube.Replica) kube.Replica {
 	if err != nil {
 		f.t.Fatalf("no replica took over from %s: %v", old.ID(), err)
 	}
-	took, err := f.reps.Counter(f.ctx, next, "courier_leader_takeovers_total", nil)
+	took, err := f.reps.Counter(f.ctx, next, "agentkourier_leader_takeovers_total", nil)
 	if err != nil || took != 1 {
 		f.t.Errorf("the new leader %s counts %v takeovers (%v); want 1", next.ID(), took, err)
 	}
@@ -196,7 +196,7 @@ func (f *failover) takeover(old kube.Replica) kube.Replica {
 // that the new leader recovers and finishes is counted once there, and a turn it handled twice would be counted twice.
 func (f *failover) completedTurns(leader kube.Replica, binding string) float64 {
 	f.t.Helper()
-	v, err := f.reps.Counter(f.ctx, leader, "courier_turn_outcomes_total", map[string]string{"binding": binding, "outcome": "completed"})
+	v, err := f.reps.Counter(f.ctx, leader, "agentkourier_turn_outcomes_total", map[string]string{"binding": binding, "outcome": "completed"})
 	if err != nil && !errors.Is(err, ErrNoSample) {
 		f.t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func s16KillMidTurn(t *testing.T) {
 	f := newFailover(t)
 	old := f.leader()
 	before := f.restarts()
-	const binding = "courier/fast-s16"
+	const binding = "agent-kourier/fast-s16"
 
 	gate := f.gate("S16a")
 	m := f.mention(ChannelS16, "US16A", "answer me gate:"+gate)
@@ -294,7 +294,7 @@ func s16KillMidPost(t *testing.T) {
 	arm := func(ctx context.Context, fault string) error {
 		rollout, cancel := context.WithTimeout(ctx, 4*time.Minute) // a stuck rollout fails here, with its reason
 		defer cancel()
-		return f.pods.SetFault(rollout, kube.CourierNamespace, kube.CourierDeployment, courierContainer, fault)
+		return f.pods.SetFault(rollout, kube.AgentKourierNamespace, kube.AgentKourierDeployment, agentKourierContainer, fault)
 	}
 	t.Cleanup(func() { // runs before settle: the fault must be gone for the tier to be left healthy
 		if err := arm(context.WithoutCancel(f.ctx), ""); err != nil {
@@ -309,7 +309,7 @@ func s16KillMidPost(t *testing.T) {
 
 	tok := f.stub.Gate("S16b")
 	m := f.mention(ChannelS16B, "US16B", "answer once "+tok)
-	crash, err := f.pods.WaitExit(f.ctx, kube.CourierNamespace, old.Name, courierContainer, old.ContainerID)
+	crash, err := f.pods.WaitExit(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, old.ContainerID)
 	if err != nil {
 		t.Fatalf("the leader never crashed after posting: %v", err)
 	}
@@ -359,7 +359,7 @@ func stormAlertGated(name, group, gate string) fakeslack.WebhookPost {
 }
 
 // s16KillMidStorm (case 3): six distinct alerts through the incoming webhook to a
-// channel whose trigger allows three starts in 10 seconds, S15's, with an agent that holds each investigation on a gate. Courier takes all
+// channel whose trigger allows three starts in 10 seconds, S15's, with an agent that holds each investigation on a gate. Agent Kourier takes all
 // six in (each is acknowledged) and the leader is killed with the first three investigations running. The standby takes over: each
 // started investigation ends in its own thread, once; the other three start nothing and get no reply; and one line in the channel, at the
 // top level, says that three were not investigated: once, though the limits, the window and the digest are the dead leader's state, in the
@@ -374,7 +374,7 @@ func s16KillMidStorm(t *testing.T) {
 	old := f.leader()
 	before := f.restarts()
 
-	// The channel and courier's database outlive a run, and a key holds its thread for the cooldown: the alerts are ones no earlier run
+	// The channel and Agent Kourier's database outlive a run, and a key holds its thread for the cooldown: the alerts are ones no earlier run
 	// posted, each with a key of its own.
 	suffix := fmt.Sprintf("x%d", time.Now().UnixNano()%1_000_000_000)
 	gates := make([]string, storm)
@@ -386,13 +386,13 @@ func s16KillMidStorm(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.acked(m) // courier takes them in the order they were posted, so the first three are the ones that start
+		f.acked(m) // Agent Kourier takes them in the order they were posted, so the first three are the ones that start
 		alerts = append(alerts, m)
 	}
 	// What the leader decided before it dies: the first three started and the other three were limited, which are the numbers that the
 	// new leader must keep to.
 	for decision, want := range map[string]float64{"started": started, "limited": storm - started} {
-		got, err := f.reps.Counter(f.ctx, old, "courier_trigger_decisions_total", map[string]string{"binding": "courier/fast-s16c", "decision": decision})
+		got, err := f.reps.Counter(f.ctx, old, "agentkourier_trigger_decisions_total", map[string]string{"binding": "agent-kourier/fast-s16c", "decision": decision})
 		if err != nil || got != want {
 			t.Errorf("the leader counts %v %q decisions (%v) before it is killed; want %v", got, decision, err, want)
 		}
@@ -473,7 +473,7 @@ func s16KillMidStorm(t *testing.T) {
 // does: it neither runs nor answers, and its connections stay open) while its turn is held, and the task ends meanwhile (its gate opens).
 // The standby takes over and renders the finished task, with the old leader still frozen: the thread has the whole reply, once. Then the
 // old leader is resumed. It must not lead again, nor write: it ends at once with the exit code of a lost leadership (5), and the reason it
-// logs must be a fence's (a store write refused for a stale epoch, or, once courier fences them, a refused chat write), not the loss of
+// logs must be a fence's (a store write refused for a stale epoch, or, once Agent Kourier fences them, a refused chat write), not the loss of
 // the lease alone, which refuses nothing. The new leader stays the leader.
 //
 // What the design accepts (D37) is the one Slack call that the paused process has in flight when it is resumed: an edit to a message that
@@ -484,7 +484,7 @@ func s16StalledLeader(t *testing.T) {
 	f := newFailover(t)
 	old := f.leader()
 	restarts := f.restarts()
-	const binding = "courier/fast-s16"
+	const binding = "agent-kourier/fast-s16"
 
 	gate := f.gate("S16d")
 	m := f.mention(ChannelS16, "US16D", "answer me gate:"+gate)
@@ -518,7 +518,7 @@ func s16StalledLeader(t *testing.T) {
 	if err := f.sig.Cont(f.ctx, old.ContainerID); err != nil {
 		t.Fatal(err)
 	}
-	exit, err := f.pods.WaitExit(f.ctx, kube.CourierNamespace, old.Name, courierContainer, old.ContainerID)
+	exit, err := f.pods.WaitExit(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, old.ContainerID)
 	if err != nil {
 		t.Fatalf("the old leader, resumed after %s, did not end: %v", asleep.Round(time.Second), err)
 	}
@@ -529,7 +529,7 @@ func s16StalledLeader(t *testing.T) {
 	// Exit 5 is also what a lost lease gives, which refuses no write: so the reason it gave is read, and it must be a fence's. The resumed
 	// process meets its renewal deadline and its first store write together, and either may end it first, so a run whose lease loss came
 	// first fails here with that reason; with the lease at nine seconds the write has won every time it was run.
-	logs, err := f.pods.Logs(f.ctx, kube.CourierNamespace, old.Name, courierContainer, exit.Previous, 400)
+	logs, err := f.pods.Logs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, exit.Previous, 400)
 	if err != nil {
 		t.Fatalf("the old leader's log is not readable, so why it stopped is not known: %v", err)
 	}

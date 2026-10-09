@@ -1,6 +1,6 @@
 # AX agent with ADK and Bedrock
 
-Courier's `a2a` dialect connects to an exact JSON-RPC endpoint and fetches its card at
+Agent Kourier's `a2a` dialect connects to an exact JSON-RPC endpoint and fetches its card at
 `<endpoint>/.well-known/agent-card.json`. The `kagent-v1` dialect retains its existing
 agent-path and HITL-extension behavior. This example runs an ADK agent inside an AX
 Task and uses Bedrock Converse/ConverseStream, with the same model settings as the
@@ -10,7 +10,7 @@ The reference is experimental. Local A2A/database recovery and AWS event streams
 have automated tests; an actual AX pause/resume deployment still needs the acceptance
 procedure below. It has one long-running `ask_user` tool and no mutation tools.
 Questions become plain text `input-required` statuses. Thread replies and Submit
-answers use Courier's existing membership checks, bot exclusion, audit and timeout
+answers use Agent Kourier's existing membership checks, bot exclusion, audit and timeout
 policy. Structured tool approvals are unsupported.
 
 ## Build and test
@@ -24,7 +24,7 @@ make ax-smoke
 ```
 
 The example is a separate Go module so ADK, AX and AWS dependencies do not enter the
-Courier binary. AX is pinned to `ac2332829f22360ff97b0ba34d94dd0dd782f17e`, ADK to
+Agent Kourier binary. AX is pinned to `ac2332829f22360ff97b0ba34d94dd0dd782f17e`, ADK to
 v2.5.0 and the A2A SDK to v2.6.0. `ax-smoke` parses the existing mode-600 sandbox
 credentials file (`SANDBOX_ENV` overrides its path), performs a real model question,
 answer and replay through a loopback A2A server, and prints no credentials. It incurs
@@ -42,9 +42,9 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
    its immutable digest, model settings and OIDC settings in `task.yaml`. Use the
    same `MODEL_NAME` and `MODEL_REGION` as your kagent sandbox. The sample is a Haiku
    inference profile; your account must have access in that region.
-2. Provision the `courier-ax` atespace and AX control plane following the pinned
+2. Provision the `agent-kourier-ax` atespace and AX control plane following the pinned
    [AX setup](https://github.com/google/ax/tree/ac2332829f22360ff97b0ba34d94dd0dd782f17e).
-   The Task runs `/usr/local/bin/courier-ax-agent`; AX itself starts the fixed
+   The Task runs `/usr/local/bin/agent-kourier-ax-agent`; AX itself starts the fixed
    `/usr/local/bin/ax-task-runner` path. This image replaces that runner with the
    pinned Go runner on metadata port 8081 for running Tasks (port 80 during the
    command-free golden-template build). The agent owns port 80 and proxies
@@ -71,11 +71,11 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
    actor is paused; the agent fails closed until issuer and egress are available.
 6. Expose the router through a TLS gateway. `gateway.conf` forwards only the A2A
    endpoint/card, overrides the actor header to one fixed actor, and disables
-   buffering for SSE. Restrict access to Courier with a NetworkPolicy. The reference
+   buffering for SSE. Restrict access to Agent Kourier with a NetworkPolicy. The reference
    actor verifies the service ID token itself and rejects requests from other
    subjects; for protection before actor wake-up, put the existing OIDC-verifying
    front door in front of this proxy as well.
-7. Load `courier.yaml` into Courier's configuration directory, substituting gateway,
+7. Load `agent-kourier.yaml` into Agent Kourier's configuration directory, substituting gateway,
    channel, ChatConnection and refreshed ID token Secret. The token audience and
    subject must match the agent. Each binding identity owns its A2A tasks; Slack
    attribution text does not select the authenticated owner.
@@ -83,7 +83,7 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
 ## Persistence and acceptance
 
 ADK sessions, A2A task snapshots and owner/message-ID deduplication share
-`/workspace/courier-state/agent.db` (WAL, FULL synchronous). Include the complete
+`/workspace/agent-kourier-state/agent.db` (WAL, FULL synchronous). Include the complete
 directory, including WAL files, in the actor's durable data snapshot. Run one agent
 process per database. Completed tasks and unanswered questions survive reopening.
 Work that was `submitted` or `working` at restart becomes `failed`; model/tool work

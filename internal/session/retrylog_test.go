@@ -95,7 +95,7 @@ func TestRealFailureStillLogsAtError(t *testing.T) {
 	}
 }
 
-// An answer the agent refuses with -32004 is not delivered, and courier does not send it again: the thread is told
+// An answer the agent refuses with -32004 is not delivered, and Agent Kourier does not send it again: the thread is told
 // so, in words of the reason (a session not ready is no busy task), and the task is followed, or the pause
 // reopens for the person to answer again, as it does for a busy one.
 func TestRefusedAnswerSaysWhy(t *testing.T) {

@@ -28,12 +28,12 @@ import (
 // slackCluster is a cluster whose connection Secret holds botToken and whose Binding token is one the
 // stub agent accepts.
 func slackCluster(botToken string) *fake.Clientset {
-	conn := secretOf("courier-system", "slack-main", "appToken")
+	conn := secretOf("agent-kourier-system", "slack-main", "appToken")
 	conn.Data["botToken"] = []byte(botToken)
 	conn.Data["appToken"] = []byte("xapp-fake-app")
-	oidc := secretOf("sre", "courier-sre-alerts-oidc", "token")
-	oidc.Data["token"] = []byte(jwt("courier@example.test"))
-	return fake.NewClientset(conn, oidc, secretOf("sre", "courier-webhook-token", "token"))
+	oidc := secretOf("sre", "agent-kourier-sre-alerts-oidc", "token")
+	oidc.Data["token"] = []byte(jwt("agentkourier@example.test"))
+	return fake.NewClientset(conn, oidc, secretOf("sre", "agent-kourier-webhook-token", "token"))
 }
 
 // stepTrace records the shutdown steps of a Run in the order they began.
@@ -275,7 +275,7 @@ func TestRunRecoversTheSessionsAnEarlierRunLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := store.ConversationKey{Connection: "courier-system/slack-main", Channel: "C0123456789", Thread: "1.1"}
+	key := store.ConversationKey{Connection: "agent-kourier-system/slack-main", Channel: "C0123456789", Thread: "1.1"}
 	if err := seed.UpsertSession(t.Context(), store.Session{Key: key, Binding: "sre/sre-alerts", ContextID: "ctx-1", TaskID: "task-1", LastActivity: time.Now()}); err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@ data:
         "name": "two-plus-two",
         "match": {"match_type": "contains", "message": {"role": "user", "content": "What is 2+2?"}},
         "response": {
-          "id": "chatcmpl-courier-1", "object": "chat.completion", "created": 1677652288,
+          "id": "chatcmpl-agent-kourier-1", "object": "chat.completion", "created": 1677652288,
           "model": "gpt-4.1-mini",
           "choices": [{"index": 0, "finish_reason": "stop",
                        "message": {"role": "assistant", "content": "The answer is 4."}}],
@@ -24,7 +24,7 @@ data:
         "name": "ask-database",
         "match": {"match_type": "contains", "message": {"role": "user", "content": "Which database"}},
         "response": {
-          "id": "chatcmpl-courier-2", "object": "chat.completion", "created": 1677652288,
+          "id": "chatcmpl-agent-kourier-2", "object": "chat.completion", "created": 1677652288,
           "model": "gpt-4.1-mini",
           "choices": [{"index": 0, "finish_reason": "tool_calls",
                        "message": {"role": "assistant", "content": null, "tool_calls": [{
@@ -36,7 +36,7 @@ data:
         "name": "any-user-message",
         "match": {"match_type": "contains", "message": {"role": "user", "content": ""}},
         "response": {
-          "id": "chatcmpl-courier-3", "object": "chat.completion", "created": 1677652288,
+          "id": "chatcmpl-agent-kourier-3", "object": "chat.completion", "created": 1677652288,
           "model": "gpt-4.1-mini",
           "choices": [{"index": 0, "finish_reason": "stop",
                        "message": {"role": "assistant", "content": "The answer is 4."}}],
@@ -60,7 +60,7 @@ spec:
     spec:
       containers:
         - name: mockllm
-          image: courier-e2e/mockllm:v0.1.0
+          image: agent-kourier-e2e/mockllm:v0.1.0
           imagePullPolicy: Never
           args: ["--config", "/etc/mockllm/config.json", "--listen-addr", "0.0.0.0:8080"]
           ports: [{containerPort: 8080}]

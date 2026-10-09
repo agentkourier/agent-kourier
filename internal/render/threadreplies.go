@@ -1,7 +1,7 @@
 package render
 
 // The thread context of a mentioned turn (spec 8.2, D38; design: tasks/plans/thread-reply-mentions.md). In a Binding
-// with chat.threadReplies: mention, the replies that people wrote in a thread without mentioning courier are not turns;
+// with chat.threadReplies: mention, the replies that people wrote in a thread without mentioning Agent Kourier are not turns;
 // a mentioned turn carries the ones since the previous turn, after the person's text, as
 //
 //	<thread-replies-0123456789ab>
@@ -17,7 +17,7 @@ package render
 // normalized (the invisible characters deleted), has its secrets taken out and is escaped: the name and the ID go through
 // redact.FreeTextLine, as one line read with its lines and joined, and the text through redact.FreeTextCut, which keeps
 // the start of a reply that has no white space in it. No "<" of a reply survives, so nothing in it can close the block
-// early or open a tag that passes for courier's.
+// early or open a tag that passes for Agent Kourier's.
 
 // Caps on the thread context, in UTF-16 units as chat.Truncate counts them. Anything cut ends in chat.Truncated, and what is
 // left out as a whole is counted in the block's last line. They are not configurable in v1.

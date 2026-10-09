@@ -1,19 +1,19 @@
 # A dry-run Binding for production: the owner's alert channel, replayed through the trigger that production would run.
 # Same as trial.yaml, with the receiver anchored at slack-critical: it takes production's alerts and not the kind ones.
 # See trial.yaml for what loads it and why the $ matters.
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
-metadata: {name: production, namespace: courier}
+metadata: {name: production, namespace: agent-kourier}
 spec:
   agent:
-    backendRef: {namespace: courier, name: agents}
+    backendRef: {namespace: agent-kourier, name: agents}
     namespace: kagent
     name: sandbox-sre
   identity:
-    userId: courier-sandbox
-    tokenSecretRef: {name: courier-agent-token}
+    userId: agent-kourier-sandbox
+    tokenSecretRef: {name: agent-kourier-agent-token}
   chat:
-    connectionRef: {namespace: courier, name: sandbox-slack}
+    connectionRef: {namespace: agent-kourier, name: sandbox-slack}
     channel: C0EXAMPLE01 # #alerts-critical
     output: live
     triggers:

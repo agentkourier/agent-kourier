@@ -25,7 +25,7 @@ func startIn(api *slack.Client, channel, thread string, opts ...slack.MsgOption)
 func TestStreamLifecycle(t *testing.T) {
 	fake, api := newFake(t)
 	parent := post(t, api, text("question"))
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-9"}}
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{"outbox_id": "ob-9"}}
 	section := slack.NewSectionBlock(mrkdwn("done"), nil, nil)
 
 	ts, err := startIn(api, "C1", parent, append(recipients(), slack.MsgOptionChunks(slack.NewMarkdownTextChunk("Hel")))...)
@@ -119,7 +119,7 @@ func blockSummary(t *testing.T, raw json.RawMessage) []string {
 }
 
 // A stop that sends no blocks leaves the streamed text as the message's one block; one that sends the text
-// again, as a courier does that takes the stop to replace the stream, shows it twice. A stream that carried no
+// again, as an Agent Kourier does that takes the stop to replace the stream, shows it twice. A stream that carried no
 // text has no block of its own.
 func TestStopStreamKeepsTheStreamedTextAsABlock(t *testing.T) {
 	for _, tc := range []struct {

@@ -1,7 +1,7 @@
 # Releasing
 
-A release is a pushed tag `vX.Y.Z` (or `vX.Y.Z-rc.1`). It publishes the image `ghcr.io/agentkourier/agent-courier`
-(linux/amd64 and linux/arm64) and the Helm chart `oci://ghcr.io/agentkourier/charts/courier`, whose default image
+A release is a pushed tag `vX.Y.Z` (or `vX.Y.Z-rc.1`). It publishes the image `ghcr.io/agentkourier/agent-kourier`
+(linux/amd64 and linux/arm64) and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`, whose default image
 is that image by digest. Nothing is released by hand.
 
 ## Cut a release
@@ -21,11 +21,11 @@ is that image by digest. Nothing is released by hand.
   `internal/testhooks` (the traces `make image-check` looks for, with a testhooks build of the same
   platform as the control) and checks the binary is an ELF of that architecture with the tag as its
   version; the image is not assembled if it fails. The script then checks each platform's image has no
-  `dev.agent-courier.testhooks` label, runs as 65532:65532, and is that platform.
+  `dev.agent-kourier.testhooks` label, runs as 65532:65532, and is that platform.
 - Pushes one multi-platform image tagged `vX.Y.Z` with the workflow's `GITHUB_TOKEN` (`packages: write`),
   with an SBOM and a max-mode provenance attestation attached, and the OCI labels source, revision, version
   and created (the commit's time).
-- Packages `charts/courier` (`hack/release/package-chart.sh`) with version `X.Y.Z`, appVersion `vX.Y.Z`, and
+- Packages `charts/agent-kourier` (`hack/release/package-chart.sh`) with version `X.Y.Z`, appVersion `vX.Y.Z`, and
   `image.repository` and `image.digest` stamped with the pushed image, reads the package back to check them,
   and pushes it to `oci://ghcr.io/agentkourier/charts`.
 - In a second job that runs no repository code (the only one with `id-token: write`), signs the image digest
@@ -39,8 +39,8 @@ The job summary lists both digests. The chart's `tag` stays empty: the digest wi
 archive and the chart package to `bin/release/`. It pushes nothing, and needs helm and jq. It needs a buildx builder that can make multi-platform
 images with attestations, which Docker's default `docker` driver without the containerd image store cannot:
 
-    docker buildx create --name courier-release --driver docker-container
-    BUILDER=courier-release make release-image VERSION=v0.0.0-rc.1
+    docker buildx create --name agent-kourier-release --driver docker-container
+    BUILDER=agent-kourier-release make release-image VERSION=v0.0.0-rc.1
 
 `PUSH=1` also pushes, and only with explicit `REGISTRY=<repository>` and `CHART_REGISTRY=oci://<repository>` (no
 defaults), a version tag that exists at a clean `HEAD`, and a registry login you made yourself. The workflow is the
@@ -48,7 +48,7 @@ normal way.
 
 ## Verify a release
 
-    IMAGE=ghcr.io/agentkourier/agent-courier
+    IMAGE=ghcr.io/agentkourier/agent-kourier
     DIGEST=sha256:...   # from the job summary, or: docker buildx imagetools inspect $IMAGE:vX.Y.Z
 
     cosign verify "$IMAGE@$DIGEST" \
@@ -61,7 +61,7 @@ normal way.
 The provenance names the commit and the workflow run; the image's `org.opencontainers.image.revision`
 label names the same commit. The chart is signed by the same identity, and its default image is the image:
 
-    CHART=ghcr.io/agentkourier/charts/courier
+    CHART=ghcr.io/agentkourier/charts/agent-kourier
     CHART_DIGEST=sha256:...   # from the job summary
     cosign verify "$CHART@$CHART_DIGEST" <the same two flags>
     helm show values oci://$CHART --version X.Y.Z | grep -A8 '^image:'   # repository and digest stamped
@@ -94,14 +94,14 @@ do. They are the real control, and they are settings, not code: the owner applie
 3. Actions: Workflow permissions "Read repository contents" by default (the workflows ask for more by job).
    Optionally add a `release` environment with required reviewers and move the `build` job into it, which
    puts a human approval between a tag and a push.
-4. After the first release: Packages, `agent-courier` and `charts/courier`, link them to this repository and set
+4. After the first release: Packages, `agent-kourier` and `charts/agent-kourier`, link them to this repository and set
    visibility (public if the cluster pulls without a pull secret).
 
 ## CI
 
 `.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
 runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
-(`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `COURIER_REQUIRE_HELM=1`
+(`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
 so the chart tests cannot skip. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions, and the pinned node and base images pulled (the tiers

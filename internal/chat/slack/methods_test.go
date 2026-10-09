@@ -220,7 +220,7 @@ func (r *recorder) wait(t *testing.T, what string, done func() bool) {
 }
 
 // Run hands the neutral sink what people write, as the model has it: where the message is and its thread, who wrote
-// it, whether it mentions courier and whether it is a direct message; and what they press, with the answers read from
+// it, whether it mentions Agent Kourier and whether it is a direct message; and what they press, with the answers read from
 // the controls' state.
 func TestRunGivesTheNeutralSinkMessagesAndPresses(t *testing.T) {
 	w := newWorld(t)
@@ -255,7 +255,7 @@ func TestRunGivesTheNeutralSinkMessagesAndPresses(t *testing.T) {
 	for _, m := range rec.msgs {
 		byTS[m.At.ID] = m
 	}
-	if m := byTS[mention.TS]; !m.Mentioned || m.Direct || m.User != "U1" || m.At.Channel != "C1" || m.At.Platform != "slack" || m.At.Conn != "courier-system/slack-main" || !strings.Contains(m.Text, "why?") {
+	if m := byTS[mention.TS]; !m.Mentioned || m.Direct || m.User != "U1" || m.At.Channel != "C1" || m.At.Platform != "slack" || m.At.Conn != "agent-kourier-system/slack-main" || !strings.Contains(m.Text, "why?") {
 		t.Errorf("the mention = %+v", m)
 	}
 	if m := byTS[reply.TS]; m.Mentioned || m.At.Thread != w.target.Thread || m.User != "U2" || m.Text != "more" {

@@ -30,7 +30,7 @@ func build(t *testing.T, tagged bool) string {
 func run(t *testing.T, bin string) (string, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), bin)
-	cmd.Env = append(os.Environ(), "COURIER_FAULT=crash-after-post", "COURIER_SLACK_API_URL=http://fake.test")
+	cmd.Env = append(os.Environ(), "AGENTKOURIER_FAULT=crash-after-post", "AGENTKOURIER_SLACK_API_URL=http://fake.test")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -48,9 +48,9 @@ func traces(t *testing.T, bin string) map[string]bool {
 		t.Fatal(err)
 	}
 	return map[string]bool{
-		"the crash function (symbol)":    strings.Contains(string(nm), "testhooks.crashSelf"),
-		"the COURIER_FAULT name":         bytes.Contains(raw, []byte("COURIER_FAULT")),
-		"the COURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("COURIER_SLACK_API_URL")),
+		"the crash function (symbol)":         strings.Contains(string(nm), "testhooks.crashSelf"),
+		"the AGENTKOURIER_FAULT name":         bytes.Contains(raw, []byte("AGENTKOURIER_FAULT")),
+		"the AGENTKOURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("AGENTKOURIER_SLACK_API_URL")),
 	}
 }
 

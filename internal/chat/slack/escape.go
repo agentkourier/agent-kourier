@@ -22,20 +22,20 @@ import (
 // escape (it drops one before "[" or "]" in a span), and no link, image or token is made (probe of the sandbox
 // workspace, 2026-10-04; the rows are in tasks/plans/slack-code-rendering.md). Escaping there only shows as
 // "\[" and "&lt;" in a command that cannot be pasted. So the contract for markdown is that Slack sees only the code
-// that courier writes (mdtext.go):
+// that Agent Kourier writes (mdtext.go):
 //
-//   - courier decides what is code, and writes every fence and every code span itself, in one form, so a fence the
+//   - Agent Kourier decides what is code, and writes every fence and every code span itself, in one form, so a fence the
 //     agent indented in a list item is a block, and a span is one pair of backticks;
 //   - every other backtick, and every tilde of a run of three or more, is escaped with a backslash, which Slack
-//     honours in prose, so it can never open code by itself, and courier's view of what is code and Slack's
+//     honours in prose, so it can never open code by itself, and Agent Kourier's view of what is code and Slack's
 //     cannot differ, whatever the agent wrote;
 //   - code is raw, but for "<" before "!", "@" or "#", so that no broadcast, mention or channel token is in it even
 //     if some other path of Slack (a notification, the text fallback) parsed it;
 //   - a stream is one document to Slack, so the state of that reading is kept across Stream, Append and Stop; a
-//     stream that courier did not start in this process escapes everything, as prose is escaped.
+//     stream that Agent Kourier did not start in this process escapes everything, as prose is escaped.
 //
 // Literal places are plain_text objects, which carry no emphasis, code or list, and the only text that
-// is mrkdwn is what courier wrote itself (a status line built from a verified user ID and a time).
+// is mrkdwn is what Agent Kourier wrote itself (a status line built from a verified user ID and a time).
 // What Slack does that no escape stops is listed with the adapter's concessions in platform_test.go.
 //
 // UNCONFIRMED(WP-04): that Slack shows "&amp;", "&lt;" and "&gt;" in a plain_text object as the

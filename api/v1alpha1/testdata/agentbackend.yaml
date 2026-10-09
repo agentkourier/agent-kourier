@@ -1,6 +1,6 @@
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
-metadata: { name: kagent-pilot, namespace: courier-system }
+metadata: { name: kagent-pilot, namespace: agent-kourier-system }
 spec:
   dialect: kagent-v1                 # a2a | kagent-v1
   url: http://kagent-controller.kagent-pilot:8083

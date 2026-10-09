@@ -93,7 +93,7 @@ func TestRunCountsAnAbandonedPost(t *testing.T) {
 	seedPost(t, c)
 	r := start(t, c)
 
-	r.waitMetric(`courier_outbox_abandoned_total{reason="channel_gone"} 1`)
+	r.waitMetric(`agentkourier_outbox_abandoned_total{reason="channel_gone"} 1`)
 }
 
 func TestRunCountsAFailedConfigReload(t *testing.T) {
@@ -110,8 +110,8 @@ func TestRunCountsAFailedConfigReload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r.waitMetric("courier_config_reload_errors_total 1")
-	r.waitMetric("courier_config_stale 1") // and the config is stale while it fails
+	r.waitMetric("agentkourier_config_reload_errors_total 1")
+	r.waitMetric("agentkourier_config_stale 1") // and the config is stale while it fails
 }
 
 // The hooks that the interactions (WP-33) call exist on Metrics with the signatures of the fields they
@@ -131,11 +131,11 @@ func TestInteractionDecisionCountsByResultAndFoldsTheRest(t *testing.T) {
 
 	got := strings.Join(samples(t, m), "\n")
 	for _, want := range []string{
-		`courier_interaction_decisions_total{result=answered} 2`,
-		`courier_interaction_decisions_total{result=superseded} 1`,
-		`courier_interaction_decisions_total{result=late} 1`,
-		`courier_interaction_decisions_total{result=invalid} 1`,
-		`courier_interaction_decisions_total{result=other} 2`,
+		`agentkourier_interaction_decisions_total{result=answered} 2`,
+		`agentkourier_interaction_decisions_total{result=superseded} 1`,
+		`agentkourier_interaction_decisions_total{result=late} 1`,
+		`agentkourier_interaction_decisions_total{result=invalid} 1`,
+		`agentkourier_interaction_decisions_total{result=other} 2`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the series lack %q:\n%s", want, got)
@@ -157,10 +157,10 @@ func TestApprovalOutcomeAndTimeoutHooksMoveTheirCounters(t *testing.T) {
 
 	got := strings.Join(samples(t, m), "\n")
 	for _, want := range []string{
-		`courier_approval_outcomes_total{binding=sre/sre-alerts,outcome=auto_denied} 2`,
-		`courier_approval_outcomes_total{binding=sre/sre-alerts,outcome=ask_user_cancelled} 1`,
-		`courier_approval_outcomes_total{binding=sre/sre-alerts,outcome=other} 1`, // an unknown outcome cannot grow the series
-		`courier_interaction_timeouts_total{} 2`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=auto_denied} 2`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=ask_user_cancelled} 1`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=other} 1`, // an unknown outcome cannot grow the series
+		`agentkourier_interaction_timeouts_total{} 2`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the series lack %q:\n%s", want, got)
@@ -190,11 +190,11 @@ func (s upSlack) Run(ctx context.Context, _ slack.Sink) error {
 	return ctx.Err()
 }
 
-// courier_chat_connected is 0 from the moment the connection is chosen, since a connection that never came up must
+// agentkourier_chat_connected is 0 from the moment the connection is chosen, since a connection that never came up must
 // say so, and then follows the adapter: 1 when it is up, 0 when it drops. The label is the ChatConnection's name.
 func TestRunShowsWhetherTheChatConnectionIsUp(t *testing.T) {
-	const name = "courier-system/slack-main"
-	up, down := `courier_chat_connected{connection="`+name+`"} 1`, `courier_chat_connected{connection="`+name+`"} 0`
+	const name = "agent-kourier-system/slack-main"
+	up, down := `agentkourier_chat_connected{connection="`+name+`"} 1`, `agentkourier_chat_connected{connection="`+name+`"} 0`
 	t.Run("never connected", func(t *testing.T) {
 		r := start(t, startConfig(t)) // idleSlack calls nothing
 		r.until("/readyz", http.StatusOK)
@@ -213,11 +213,11 @@ func TestRunShowsWhetherTheChatConnectionIsUp(t *testing.T) {
 	})
 }
 
-// Slack being down does not make courier unready: /readyz holds what courier needs to serve, and the gauge says the rest.
+// Slack being down does not make Agent Kourier unready: /readyz holds what Agent Kourier needs to serve, and the gauge says the rest.
 func TestReadyzDoesNotWaitForTheChatConnection(t *testing.T) {
 	r := start(t, startConfig(t)) // idleSlack never connects
 
 	r.until("/readyz", http.StatusOK)
 
-	r.waitMetric(`courier_chat_connected{connection="courier-system/slack-main"} 0`)
+	r.waitMetric(`agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} 0`)
 }

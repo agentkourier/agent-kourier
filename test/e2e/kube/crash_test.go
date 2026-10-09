@@ -20,17 +20,17 @@ import (
 
 var podsGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 
-const courierSel = "app.kubernetes.io/name=courier"
+const agentKourierSel = "app.kubernetes.io/name=agent-kourier"
 
-// courierPod is a courier pod with the given UID whose container "courier" has restarted restarts times,
+// agentKourierPod is an Agent Kourier pod with the given UID whose container "agent-kourier" has restarted restarts times,
 // with last as its last termination and now as its state, either of which may be nil.
-func courierPod(uid string, restarts int32, last, now *corev1.ContainerStateTerminated) *corev1.Pod {
-	return courierPodNamed(uid, "courier-abc", restarts, last, now)
+func agentKourierPod(uid string, restarts int32, last, now *corev1.ContainerStateTerminated) *corev1.Pod {
+	return agentKourierPodNamed(uid, "agent-kourier-abc", restarts, last, now)
 }
 
-// courierPodNamed is courierPod under another name, so that two can exist at once.
-func courierPodNamed(uid, name string, restarts int32, last, now *corev1.ContainerStateTerminated) *corev1.Pod {
-	status := corev1.ContainerStatus{Name: "courier", RestartCount: restarts}
+// agentKourierPodNamed is agentKourierPod under another name, so that two can exist at once.
+func agentKourierPodNamed(uid, name string, restarts int32, last, now *corev1.ContainerStateTerminated) *corev1.Pod {
+	status := corev1.ContainerStatus{Name: "agent-kourier", RestartCount: restarts}
 	if last != nil {
 		status.LastTerminationState = corev1.ContainerState{Terminated: last}
 	}
@@ -38,7 +38,7 @@ func courierPodNamed(uid, name string, restarts int32, last, now *corev1.Contain
 		status.State = corev1.ContainerState{Terminated: now}
 	}
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "courier", Name: name, UID: types.UID(uid), Labels: map[string]string{"app.kubernetes.io/name": "courier"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agent-kourier", Name: name, UID: types.UID(uid), Labels: map[string]string{"app.kubernetes.io/name": "agent-kourier"}},
 		Status:     corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "sidecar", RestartCount: 9}, status}},
 	}
 }
@@ -72,7 +72,7 @@ func expect(t *testing.T, cs *fake.Clientset, since Baseline, change func()) (Te
 		}
 		return false, nil, nil
 	})
-	got, err := newPodsPolling(cs).WaitCrash(soon(t), "courier", courierSel, "courier", since)
+	got, err := newPodsPolling(cs).WaitCrash(soon(t), "agent-kourier", agentKourierSel, "agent-kourier", since)
 	if change != nil && lists.Load() < 4 {
 		t.Errorf("WaitCrash answered after %d lists, before the change that makes a crash", lists.Load())
 	}
@@ -81,7 +81,7 @@ func expect(t *testing.T, cs *fake.Clientset, since Baseline, change func()) (Te
 
 func replace(cs *fake.Clientset, pod *corev1.Pod) func() {
 	return func() {
-		_ = cs.Tracker().Delete(podsGVR, "courier", "courier-abc")
+		_ = cs.Tracker().Delete(podsGVR, "agent-kourier", "agent-kourier-abc")
 		_ = cs.Tracker().Add(pod)
 	}
 }
@@ -91,26 +91,26 @@ func replace(cs *fake.Clientset, pod *corev1.Pod) func() {
 // the same restart count, nor a state that was already terminated.
 func TestWaitCrash_IgnoresWhatTheBaselineShowed(t *testing.T) {
 	for name, old := range map[string]*corev1.Pod{
-		"a last termination":   courierPod("u1", 2, killed(100), nil),
-		"a terminated state":   courierPod("u1", 2, nil, killed(100)),
-		"both, and a restart":  courierPod("u1", 3, killed(100), killed(100)),
-		"no container ID":      courierPod("u1", 2, &corev1.ContainerStateTerminated{ExitCode: 137, FinishedAt: metav1.NewTime(time.Unix(100, 0))}, nil),
-		"an earlier exit, too": courierPod("u1", 4, &corev1.ContainerStateTerminated{ExitCode: 1, FinishedAt: metav1.NewTime(time.Unix(50, 0))}, killed(100)),
+		"a last termination":   agentKourierPod("u1", 2, killed(100), nil),
+		"a terminated state":   agentKourierPod("u1", 2, nil, killed(100)),
+		"both, and a restart":  agentKourierPod("u1", 3, killed(100), killed(100)),
+		"no container ID":      agentKourierPod("u1", 2, &corev1.ContainerStateTerminated{ExitCode: 137, FinishedAt: metav1.NewTime(time.Unix(100, 0))}, nil),
+		"an earlier exit, too": agentKourierPod("u1", 4, &corev1.ContainerStateTerminated{ExitCode: 1, FinishedAt: metav1.NewTime(time.Unix(50, 0))}, killed(100)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			cs := fake.NewClientset(old)
-			since, err := newPodsPolling(cs).Baseline(t.Context(), "courier", courierSel, "courier")
+			since, err := newPodsPolling(cs).Baseline(t.Context(), "agent-kourier", agentKourierSel, "agent-kourier")
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Nothing new: the wait must not answer on what was there, so it ends with ctx.
 			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-			if _, err := newPodsPolling(cs).WaitCrash(ctx, "courier", courierSel, "courier", since); !errors.Is(err, context.DeadlineExceeded) {
+			if _, err := newPodsPolling(cs).WaitCrash(ctx, "agent-kourier", agentKourierSel, "agent-kourier", since); !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("on the baseline's own termination: %v; want it not to answer", err)
 			}
 			cancel()
 			// A new crash of the same pod finishes later, and answers.
-			got, err := expect(t, cs, since, replace(cs, courierPod("u1", 5, killed(200), nil)))
+			got, err := expect(t, cs, since, replace(cs, agentKourierPod("u1", 5, killed(200), nil)))
 			if err != nil || got.ExitCode != 137 || got.FinishedAt.Unix() != 200 || got.Restarts != 5 {
 				t.Errorf("WaitCrash = %+v, %v; want the crash that finished at 200", got, err)
 			}
@@ -122,15 +122,15 @@ func TestWaitCrash_IgnoresWhatTheBaselineShowed(t *testing.T) {
 // baseline taken from the old pod (restarted 3 times) is not a count to pass. Any crash of the new pod
 // counts, and the old pod's terminations do not.
 func TestWaitCrash_AnswersForTheCrashOfARolloutsNewPod(t *testing.T) {
-	cs := fake.NewClientset(courierPod("old", 3, killed(100), nil))
-	since, err := newPodsPolling(cs).Baseline(t.Context(), "courier", courierSel, "courier")
+	cs := fake.NewClientset(agentKourierPod("old", 3, killed(100), nil))
+	since, err := newPodsPolling(cs).Baseline(t.Context(), "agent-kourier", agentKourierSel, "agent-kourier")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The new pod is running, then crashes once, in the same second as the old one's last termination:
 	// Kubernetes times are in seconds, and that second is not the baseline's to ignore in another pod.
-	cs2 := fake.NewClientset(courierPod("new", 0, nil, nil))
-	got, err := expect(t, cs2, since, replace(cs2, courierPod("new", 1, killed(100), nil)))
+	cs2 := fake.NewClientset(agentKourierPod("new", 0, nil, nil))
+	got, err := expect(t, cs2, since, replace(cs2, agentKourierPod("new", 1, killed(100), nil)))
 	if err != nil || got.ExitCode != 137 || got.Restarts != 1 {
 		t.Fatalf("WaitCrash = %+v, %v; want the new pod's first crash, though its count is below the old pod's", got, err)
 	}
@@ -139,15 +139,15 @@ func TestWaitCrash_AnswersForTheCrashOfARolloutsNewPod(t *testing.T) {
 // A container that has crashed and not yet been restarted shows the crash in its state, not in its
 // last state, and is an answer too; a clean exit is not a crash.
 func TestWaitCrash_SeesACrashThatIsStillTheState(t *testing.T) {
-	cs := fake.NewClientset(courierPod("u1", 0, nil, killed(100)))
-	got, err := newPodsPolling(cs).WaitCrash(soon(t), "courier", courierSel, "courier", Baseline{})
+	cs := fake.NewClientset(agentKourierPod("u1", 0, nil, killed(100)))
+	got, err := newPodsPolling(cs).WaitCrash(soon(t), "agent-kourier", agentKourierSel, "agent-kourier", Baseline{})
 	if err != nil || got.ExitCode != 137 {
 		t.Fatalf("WaitCrash = %+v, %v; want exit 137", got, err)
 	}
 	exited := &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}
-	for name, pod := range map[string]*corev1.Pod{"in its last state": courierPod("u1", 1, exited, nil), "as its state": courierPod("u1", 0, nil, exited)} {
+	for name, pod := range map[string]*corev1.Pod{"in its last state": agentKourierPod("u1", 1, exited, nil), "as its state": agentKourierPod("u1", 0, nil, exited)} {
 		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-		if _, err := newPodsPolling(fake.NewClientset(pod)).WaitCrash(ctx, "courier", courierSel, "courier", Baseline{}); !errors.Is(err, context.DeadlineExceeded) {
+		if _, err := newPodsPolling(fake.NewClientset(pod)).WaitCrash(ctx, "agent-kourier", agentKourierSel, "agent-kourier", Baseline{}); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("a clean exit %s: %v; want it not to count as a crash", name, err)
 		}
 		cancel()
@@ -159,11 +159,11 @@ func TestWaitCrash_SeesACrashThatIsStillTheState(t *testing.T) {
 func TestWaitCrash_ReportsWhatItSawAndStopsOnAListError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	_, err := newPodsPolling(fake.NewClientset(courierPod("u1", 0, nil, nil))).WaitCrash(ctx, "courier", courierSel, "courier", Baseline{})
+	_, err := newPodsPolling(fake.NewClientset(agentKourierPod("u1", 0, nil, nil))).WaitCrash(ctx, "agent-kourier", agentKourierSel, "agent-kourier", Baseline{})
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "has not crashed") {
 		t.Errorf("WaitCrash = %v; want a deadline error saying the container has not crashed", err)
 	}
-	_, err = newPodsPolling(fake.NewClientset()).WaitCrash(ctx, "courier", "app=other", "nosuch", Baseline{})
+	_, err = newPodsPolling(fake.NewClientset()).WaitCrash(ctx, "agent-kourier", "app=other", "nosuch", Baseline{})
 	if err == nil || !strings.Contains(err.Error(), "no pod") {
 		t.Errorf("no pod: %v; want an error naming it", err)
 	}
@@ -172,7 +172,7 @@ func TestWaitCrash_ReportsWhatItSawAndStopsOnAListError(t *testing.T) {
 		return true, nil, errors.New("pods is forbidden")
 	})
 	started := time.Now()
-	if _, err := newPodsPolling(forbidden).WaitCrash(soon(t), "courier", courierSel, "courier", Baseline{}); err == nil || !strings.Contains(err.Error(), "forbidden") || time.Since(started) > 5*time.Second {
+	if _, err := newPodsPolling(forbidden).WaitCrash(soon(t), "agent-kourier", agentKourierSel, "agent-kourier", Baseline{}); err == nil || !strings.Contains(err.Error(), "forbidden") || time.Since(started) > 5*time.Second {
 		t.Errorf("a forbidden list: %v after %v; want the error at once", err, time.Since(started))
 	}
 }
@@ -183,26 +183,26 @@ func newPodsPolling(cs *fake.Clientset) *Pods {
 	return p
 }
 
-// Only the named container counts: another container of the pod that crashed is not courier's crash.
+// Only the named container counts: another container of the pod that crashed is not Agent Kourier's crash.
 func TestWaitCrash_WatchesOnlyTheNamedContainer(t *testing.T) {
-	pod := courierPod("u1", 0, nil, nil)
+	pod := agentKourierPod("u1", 0, nil, nil)
 	pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: killed(100)} // the sidecar
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := newPodsPolling(fake.NewClientset(pod)).WaitCrash(ctx, "courier", courierSel, "courier", Baseline{}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a crashed sidecar: %v; want it not to answer for courier", err)
+	if _, err := newPodsPolling(fake.NewClientset(pod)).WaitCrash(ctx, "agent-kourier", agentKourierSel, "agent-kourier", Baseline{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a crashed sidecar: %v; want it not to answer for Agent Kourier", err)
 	}
 }
 
 // A container run is told from another by its ID, not by when it ended: Kubernetes times are whole seconds, and
 // a pod that crashes again within the second of a crash the baseline showed has crashed again.
 func TestWaitCrash_TellsTwoCrashesOfTheSameSecondApart(t *testing.T) {
-	cs := fake.NewClientset(courierPod("u1", 2, killedAs("first", 100), nil))
-	since, err := newPodsPolling(cs).Baseline(t.Context(), "courier", courierSel, "courier")
+	cs := fake.NewClientset(agentKourierPod("u1", 2, killedAs("first", 100), nil))
+	since, err := newPodsPolling(cs).Baseline(t.Context(), "agent-kourier", agentKourierSel, "agent-kourier")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := expect(t, cs, since, replace(cs, courierPod("u1", 3, killedAs("second", 100), nil)))
+	got, err := expect(t, cs, since, replace(cs, agentKourierPod("u1", 3, killedAs("second", 100), nil)))
 	if err != nil || got.ExitCode != 137 || got.Restarts != 3 {
 		t.Errorf("WaitCrash = %+v, %v; want the second crash, though it finished in the first one's second", got, err)
 	}
@@ -211,17 +211,17 @@ func TestWaitCrash_TellsTwoCrashesOfTheSameSecondApart(t *testing.T) {
 // A pod that is being deleted ends its container as a rollout stops it: that exit is not a crash, whether
 // the baseline was taken before the rollout or not.
 func TestWaitCrash_IgnoresThePodThatIsBeingDeleted(t *testing.T) {
-	gone := courierPod("old", 0, nil, killed(100))
+	gone := agentKourierPod("old", 0, nil, killed(100))
 	deleted := metav1.NewTime(time.Unix(99, 0))
 	gone.DeletionTimestamp = &deleted
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := newPodsPolling(fake.NewClientset(gone)).WaitCrash(ctx, "courier", courierSel, "courier", Baseline{}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := newPodsPolling(fake.NewClientset(gone)).WaitCrash(ctx, "agent-kourier", agentKourierSel, "agent-kourier", Baseline{}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("a terminating pod's exit: %v; want it not to answer", err)
 	}
 	// The pod that replaces it is the one whose crash counts.
 	cs := fake.NewClientset(gone)
-	got, err := expect(t, cs, Baseline{}, func() { _ = cs.Tracker().Add(courierPodNamed("new", "courier-def", 1, killed(200), nil)) })
+	got, err := expect(t, cs, Baseline{}, func() { _ = cs.Tracker().Add(agentKourierPodNamed("new", "agent-kourier-def", 1, killed(200), nil)) })
 	if err != nil || got.FinishedAt.Unix() != 200 {
 		t.Errorf("WaitCrash = %+v, %v; want the new pod's crash, with the old one still terminating", got, err)
 	}

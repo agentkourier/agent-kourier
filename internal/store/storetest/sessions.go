@@ -383,7 +383,7 @@ func (su suite) recovery(t *testing.T) {
 		}
 	})
 
-	// Courier needs each key once; the order of the keys is nobody's.
+	// Agent Kourier needs each key once; the order of the keys is nobody's.
 	su.run(t, "ListQueuedSessions lists each session with an undelivered reply once, in any order", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		if got, err := s.ListQueuedSessions(ctx); err != nil || len(got) != 0 {

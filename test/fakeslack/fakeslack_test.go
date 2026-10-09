@@ -50,7 +50,7 @@ func rawBody(t *testing.T, fake *fakeslack.Server, method string, form url.Value
 func TestPostMessageStoresTextBlocksAndMetadata(t *testing.T) {
 	fake, api := newFake(t)
 	blocks := slack.NewSectionBlock(slack.NewTextBlockObject("mrkdwn", "*bold*", false, false), nil, nil)
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-1"}}
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{"outbox_id": "ob-1"}}
 
 	channel, ts, err := api.PostMessage("C1", text("hello"), slack.MsgOptionBlocks(blocks), slack.MsgOptionMetadata(meta))
 	if err != nil || channel != "C1" || ts == "" {
@@ -63,7 +63,7 @@ func TestPostMessageStoresTextBlocksAndMetadata(t *testing.T) {
 	}
 	m := msgs[0]
 	if m.TS != ts || m.Text != "hello" || m.ThreadTS != "" || m.Metadata == nil ||
-		m.Metadata.EventType != "courier_message" || m.Metadata.EventPayload["outbox_id"] != "ob-1" {
+		m.Metadata.EventType != "agentkourier_message" || m.Metadata.EventPayload["outbox_id"] != "ob-1" {
 		t.Fatalf("stored message = %+v", m)
 	}
 	// Blocks are stored opaquely, byte for byte as the client sent them.

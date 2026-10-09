@@ -1,11 +1,11 @@
-# agent-courier
+# Agent Kourier
 
 **Declarative chat gateway for Kubernetes agents.**
 
-agent-courier puts your A2A agents in Slack. A team commits a `Binding` next to its
+Agent Kourier puts your A2A agents in Slack. A team commits a `Binding` next to its
 agent's manifests, and the agent answers mentions, follows up in threads, and
 investigates the alerts Alertmanager already posts to the channel. The broker holds
-the Slack connection, the reply queue and the delivery state, so a courier restart
+the Slack connection, the reply queue and the delivery state, so an Agent Kourier restart
 loses no message.
 
 [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
@@ -34,19 +34,19 @@ a note there.
 
 ## Why a broker
 
-- **Conversations survive a restart.** Courier persists sessions, queued replies and
+- **Conversations survive a restart.** Agent Kourier persists sessions, queued replies and
   pending questions. After a restart it continues each conversation where it stopped.
 - **A crash does not repeat a post.** Posts go through a durable outbox. After a
-  crash between posting and recording, courier finds the message it already posted
-  and does not post it again. A streamed reply is the exception: if courier dies
+  crash between posting and recording, Agent Kourier finds the message it already posted
+  and does not post it again. A streamed reply is the exception: if Agent Kourier dies
   between starting a stream and recording it, the partial stream stays and the
   recovered turn posts the whole answer as a new message.
 - **Questions are answered in the thread.** With `interactions.askUser` set on the
-  `Binding`, courier renders the agent's question in the thread and resumes the same
+  `Binding`, Agent Kourier renders the agent's question in the thread and resumes the same
   agent task with the answer.
 - **Alerts become conversations.** A `botMessage` trigger reads the message
   Alertmanager posts to Slack and starts an investigation in that alert's thread,
-  with a cooldown per alert, a rate limit and a daily cap. Courier reads what is
+  with a cooldown per alert, a rate limit and a daily cap. Agent Kourier reads what is
   already posted, so it is never in the paging path.
 - **Any streaming A2A 1.0 backend.** A kagent 1.0 agent, an agent running in Google AX
   and any other A2A 1.0 agent whose card advertises streaming use the same `Binding`.
@@ -60,22 +60,22 @@ a note there.
 ```mermaid
 flowchart LR
     Slack["Slack channel<br/>People and alert messages"]
-    Courier["agent-courier<br/>Bindings, sessions, delivery"]
+    AgentKourier["agent-kourier<br/>Bindings, sessions, delivery"]
     Agents["A2A agents<br/>kagent, Google AX, any streaming A2A 1.0 agent"]
 
-    Slack <-->|Messages, answers| Courier
-    Courier <-->|A2A| Agents
+    Slack <-->|Messages, answers| AgentKourier
+    AgentKourier <-->|A2A| Agents
 
     classDef human fill:#f8fafc,stroke:#64748b,color:#0f172a
     classDef broker fill:#0f766e,stroke:#115e59,color:#ffffff
     classDef runtime fill:#ecfdf5,stroke:#059669,color:#064e3b
     class Slack human
-    class Courier broker
+    class AgentKourier broker
     class Agents runtime
 ```
 
 Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
-The runtime's own manifests or operator deploy and run the agent. Courier supplies
+The runtime's own manifests or operator deploy and run the agent. Agent Kourier supplies
 the messaging wiring. See the [detailed architecture](docs/architecture.md) for the
 configuration, execution, persistence, and interaction paths.
 
@@ -97,29 +97,29 @@ For example, this configuration connects a payments agent hosted by kagent to a
 Slack channel through shared infrastructure:
 
 ```yaml
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
   name: kagent
-  namespace: courier-system
+  namespace: agent-kourier-system
 spec:
   dialect: kagent-v1
   url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
   allowedNamespaces: [payments]
 ---
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata:
   name: slack
-  namespace: courier-system
+  namespace: agent-kourier-system
 spec:
   platform: slack
   mode: socket
   credentialsSecretRef:
-    name: courier-slack
+    name: agent-kourier-slack
   allowedNamespaces: [payments]
 ---
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
   name: payments-assistant
@@ -127,7 +127,7 @@ metadata:
 spec:
   agent:
     backendRef:
-      namespace: courier-system
+      namespace: agent-kourier-system
       name: kagent
     namespace: payments
     name: payments-agent
@@ -137,16 +137,16 @@ spec:
       key: token
   chat:
     connectionRef:
-      namespace: courier-system
+      namespace: agent-kourier-system
       name: slack
     channel: C0123456789
     output: live
-    threadReplies: all   # the default; "mention" ignores thread replies that do not @mention courier
+    threadReplies: all   # the default; "mention" ignores thread replies that do not @mention Agent Kourier
 ```
 
 This example assumes the agent and authenticated backend endpoint already exist.
 Replace the endpoint, agent reference, and channel ID for your deployment. The
-`courier-slack` Secret belongs in `courier-system` with `botToken` and `appToken`
+`agent-kourier-slack` Secret belongs in `agent-kourier-system` with `botToken` and `appToken`
 keys; `payments-agent-token` belongs in `payments` with a `token` key. Each binding
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
@@ -154,7 +154,7 @@ backend's authorization identity.
 To have the agent investigate the alerts Alertmanager posts to that channel, list the
 triggers in the Binding's `chat` block. `botId` is the `bot_id` carried by the alert
 messages themselves, which starts with `B`. It is not the Slack app ID, which starts
-with `A`, and courier rejects a name. The dry run in the
+with `A`, and Agent Kourier rejects a name. The dry run in the
 [sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is
 one way to read it. The `alertmanager` preset supplies the matching, the thread
 rules, the limits and the prompt, and the [trigger reference](spec.md#82-chat) has
@@ -163,7 +163,7 @@ the fields a Binding can override.
 ```yaml
   chat:
     connectionRef:
-      namespace: courier-system
+      namespace: agent-kourier-system
       name: slack
     channel: C0123456789
     output: live
@@ -184,8 +184,8 @@ title to the shape above, or override the preset's `match` and `extract` entries
 your own template.
 
 In the current pilot, these are **configuration files**, loaded from
-`COURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
-custom resources reconciled by a Courier controller. GitOps can manage the
+`AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
+custom resources reconciled by an Agent Kourier controller. GitOps can manage the
 ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 
 ## Integrations
@@ -196,15 +196,15 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Chat platform | Slack over the Events API (HTTP) | Planned |
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
-| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Courier refuses a tool approval request and posts a notice. Needs a cluster that serves the pod-certificate APIs (see below) | Implemented |
+| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Agent Kourier refuses a tool approval request and posts a notice. Needs a cluster that serves the pod-certificate APIs (see below) | Implemented |
 | Agent backend | Any A2A 1.0 agent whose card advertises streaming, `a2a` dialect. Questions arrive as text | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Agent backend | Tool approvals answered from Slack | Planned |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full | Implemented |
-| Alert source | Alertmanager webhook, received by courier directly | Planned |
+| Alert source | Alertmanager webhook, received by Agent Kourier directly | Planned |
 
-The common interface to an agent is streaming A2A 1.0 over JSON-RPC, and courier
+The common interface to an agent is streaming A2A 1.0 over JSON-RPC, and Agent Kourier
 rejects an agent whose card does not advertise streaming. A team can change or add
 a runtime and keep the same messaging configuration. What a thread can do still
 depends on what the backend exposes. See [backend design](spec.md#63-backends) for
@@ -232,52 +232,52 @@ See [risk R19](spec.md#14-risks).
 
 The project is in an internal-first pilot and has no tagged release. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
-and fencing, installed with the [Helm chart](charts/courier/README.md). Courier writes
+and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
 [observability](docs/observability.md), and [stored data](docs/data.md) for what
-courier keeps and for how long.
+Agent Kourier keeps and for how long.
 
 Start with the [sandbox deployment guide](hack/kind/sandbox/README.md), which runs
-courier against a real Slack workspace and a kagent agent in kind. The
+Agent Kourier against a real Slack workspace and a kagent agent in kind. The
 [specification](spec.md) records the detailed behaviour, and the
 [roadmap](ROADMAP.md) lists what comes next.
 
 ## Using Google AX
 
-Courier does not call AX's own API. It speaks A2A to an agent that runs inside an AX
+Agent Kourier does not call AX's own API. It speaks A2A to an agent that runs inside an AX
 Task, through AX's router, with the generic `a2a` dialect. What that needs:
 
 - **Your own A2A agent.** AX ships no A2A agent, so you build and run one as an AX
   Task. [`examples/ax`](examples/ax/README.md) is the reference: an ADK agent on
   Bedrock Haiku.
-- **The agent verifies courier's token.** Courier sends the Binding's service ID
+- **The agent verifies Agent Kourier's token.** Agent Kourier sends the Binding's service ID
   token as a bearer token. With kagent the front door checks it; with AX nothing
   does unless your agent does (the reference checks issuer, audience and subject),
   or you put an OIDC-verifying proxy in front of the router.
 - **A TLS gateway in front of the router** that forwards only the A2A endpoint and
-  card and fixes the actor header, reachable from courier only.
+  card and fixes the actor header, reachable from Agent Kourier only.
 - **Questions are plain text.** The agent's question appears in the thread and a
   person answers by replying there. Structured tool approvals and tool step cards
   are kagent-only.
-- **AX's lifecycle stays with the operator.** Courier creates, pauses or resumes no
+- **AX's lifecycle stays with the operator.** Agent Kourier creates, pauses or resumes no
   task.
 
 The `AgentBackend` points at the gateway, and the header names the actor
-(`<atespace>/<actor>`). Courier fetches the agent's card at the URL plus
+(`<atespace>/<actor>`). Agent Kourier fetches the agent's card at the URL plus
 `/.well-known/agent-card.json`:
 
 ```yaml
-apiVersion: agentcourier.dev/v1alpha1
+apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
   name: ax
-  namespace: courier-system
+  namespace: agent-kourier-system
 spec:
   dialect: a2a
   url: https://ax-gateway.example.internal/a2a
   headers:
     - name: ate-target-actor
-      value: courier-ax/assistant
+      value: agent-kourier-ax/assistant
 ```
 
 The [AX example guide](examples/ax/README.md) has the deployment steps (the gateway,
@@ -296,7 +296,7 @@ Use the Go version declared in [go.mod](go.mod). Build and check the project wit
 make fmt lint test build
 ```
 
-The build produces `bin/courier`. Kubernetes test environments and the real-Slack
+The build produces `bin/agent-kourier`. Kubernetes test environments and the real-Slack
 sandbox are available through the Makefile; run `make` to list the targets.
 
 ## License

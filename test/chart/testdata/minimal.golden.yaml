@@ -2,20 +2,20 @@
 apiVersion: v1
 data:
   agentbackend-agents.yaml: |
-    apiVersion: agentcourier.dev/v1alpha1
+    apiVersion: agentkourier.dev/v1alpha1
     kind: AgentBackend
     metadata:
       name: agents
-      namespace: courier
+      namespace: agent-kourier
     spec:
       dialect: kagent-v1
       url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
   binding-sre.yaml: |
-    apiVersion: agentcourier.dev/v1alpha1
+    apiVersion: agentkourier.dev/v1alpha1
     kind: Binding
     metadata:
       name: sre
-      namespace: courier
+      namespace: agent-kourier
     spec:
       agent:
         backendRef:
@@ -29,14 +29,14 @@ data:
         output: live
       identity:
         tokenSecretRef:
-          name: courier-agent-token
-        userId: courier-sre
+          name: agent-kourier-agent-token
+        userId: agent-kourier-sre
   chatconnection-slack-main.yaml: |
-    apiVersion: agentcourier.dev/v1alpha1
+    apiVersion: agentkourier.dev/v1alpha1
     kind: ChatConnection
     metadata:
       name: slack-main
-      namespace: courier
+      namespace: agent-kourier
     spec:
       credentialsSecretRef:
         name: slack-main
@@ -45,56 +45,56 @@ data:
 kind: ConfigMap
 metadata:
   labels:
-    app.kubernetes.io/instance: courier
+    app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
+    app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier-config
-  namespace: courier
+    helm.sh/chart: agent-kourier-0.1.0
+  name: agent-kourier-config
+  namespace: agent-kourier
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/instance: courier
+    app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
+    app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier
-  namespace: courier
+    helm.sh/chart: agent-kourier-0.1.0
+  name: agent-kourier
+  namespace: agent-kourier
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/instance: courier
-      app.kubernetes.io/name: courier
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier
   strategy:
     type: Recreate
   template:
     metadata:
       annotations:
-        checksum/config: 705d678521ffe741bb9971610d7f9132c0e71a1e8bbd54f2fa49b339970abd61
+        checksum/config: dcdce6f177eeba3e658320921720eadc2e63277f289fc763e560789cb4204525
       labels:
-        app.kubernetes.io/instance: courier
-        app.kubernetes.io/name: courier
+        app.kubernetes.io/instance: agent-kourier
+        app.kubernetes.io/name: agent-kourier
     spec:
       containers:
       - env:
-        - name: COURIER_CONFIG_DIR
-          value: /etc/courier
-        - name: COURIER_STORE
+        - name: AGENTKOURIER_CONFIG_DIR
+          value: /etc/agent-kourier
+        - name: AGENTKOURIER_STORE
           value: sqlite
-        - name: COURIER_DB_PATH
+        - name: AGENTKOURIER_DB_PATH
           value: /data/courier.db
-        - name: COURIER_LISTEN
+        - name: AGENTKOURIER_LISTEN
           value: :8080
-        - name: COURIER_LOG_LEVEL
+        - name: AGENTKOURIER_LOG_LEVEL
           value: info
-        - name: COURIER_KLOG_V
+        - name: AGENTKOURIER_KLOG_V
           value: "0"
-        image: registry.example.test/courier:v0.1.0
+        image: registry.example.test/agent-kourier:v0.1.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3
@@ -102,7 +102,7 @@ spec:
             path: /healthz
             port: http
           periodSeconds: 10
-        name: courier
+        name: agent-kourier
         ports:
         - containerPort: 8080
           name: http
@@ -130,7 +130,7 @@ spec:
             port: http
           periodSeconds: 2
         volumeMounts:
-        - mountPath: /etc/courier
+        - mountPath: /etc/agent-kourier
           name: config
           readOnly: true
         - mountPath: /data
@@ -144,15 +144,15 @@ spec:
         runAsUser: 65532
         seccompProfile:
           type: RuntimeDefault
-      serviceAccountName: courier
+      serviceAccountName: agent-kourier
       terminationGracePeriodSeconds: 40
       volumes:
       - configMap:
-          name: courier-config
+          name: agent-kourier-config
         name: config
       - name: data
         persistentVolumeClaim:
-          claimName: courier-data
+          claimName: agent-kourier-data
       - emptyDir: {}
         name: tmp
 ---
@@ -162,13 +162,13 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
   labels:
-    app.kubernetes.io/instance: courier
+    app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
+    app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier-data
-  namespace: courier
+    helm.sh/chart: agent-kourier-0.1.0
+  name: agent-kourier-data
+  namespace: agent-kourier
 spec:
   accessModes:
   - ReadWriteOnce
@@ -180,13 +180,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
-    app.kubernetes.io/instance: courier
+    app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
+    app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier-secrets
-  namespace: courier
+    helm.sh/chart: agent-kourier-0.1.0
+  name: agent-kourier-secrets
+  namespace: agent-kourier
 rules:
 - apiGroups:
   - ""
@@ -200,31 +200,31 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   labels:
-    app.kubernetes.io/instance: courier
+    app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
+    app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier-secrets
-  namespace: courier
+    helm.sh/chart: agent-kourier-0.1.0
+  name: agent-kourier-secrets
+  namespace: agent-kourier
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: courier-secrets
+  name: agent-kourier-secrets
 subjects:
 - kind: ServiceAccount
-  name: courier
-  namespace: courier
+  name: agent-kourier
+  namespace: agent-kourier
 ---
 apiVersion: v1
 automountServiceAccountToken: true
 kind: ServiceAccount
 metadata:
   labels:
-    app.kubernetes.io/instance: courier
+    app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: courier
+    app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: courier-0.1.0
-  name: courier
-  namespace: courier
+    helm.sh/chart: agent-kourier-0.1.0
+  name: agent-kourier
+  namespace: agent-kourier

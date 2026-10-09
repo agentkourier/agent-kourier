@@ -12,14 +12,14 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-// TestS2_AThreadKeepsItsContextAcrossACourierRestart: two users take turns in one thread, courier is
+// TestS2_AThreadKeepsItsContextAcrossAnAgentKourierRestart: two users take turns in one thread, Agent Kourier is
 // restarted through its Deployment between turns, and the next reply shows that the agent still has the
 // earlier ones, which only the same context ID gives it. The agent, scenario-memory, says which turn it
 // has had and quotes the earlier ones; "Message 1" would mean the context was lost.
 //
-// UNCONFIRMED(WP-02): what text of a mention courier sends the agent (it may keep or drop the mention). The
+// UNCONFIRMED(WP-02): what text of a mention Agent Kourier sends the agent (it may keep or drop the mention). The
 // assertions look for each earlier turn's own words, not for the agent's exact quoting.
-func TestS2_AThreadKeepsItsContextAcrossACourierRestart(t *testing.T) {
+func TestS2_AThreadKeepsItsContextAcrossAnAgentKourierRestart(t *testing.T) {
 	s := newScenario(t)
 	tok := s.stub.Gate("S2") // unique to this run, and plain text
 	one, two, three := "alpha-"+tok, "bravo-"+tok, "charlie-"+tok
@@ -47,7 +47,7 @@ func TestS2_AThreadKeepsItsContextAcrossACourierRestart(t *testing.T) {
 
 	restart, cancel := context.WithTimeout(s.ctx, 3*time.Minute) // a stuck rollout fails here, with its reason
 	defer cancel()
-	if err := s.pods.RolloutRestart(restart, kube.CourierNamespace, kube.CourierDeployment); err != nil {
+	if err := s.pods.RolloutRestart(restart, kube.AgentKourierNamespace, kube.AgentKourierDeployment); err != nil {
 		t.Fatal(err)
 	}
 	s.connected()

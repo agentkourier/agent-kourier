@@ -28,11 +28,11 @@ type backlogCollector struct{ s *adapter }
 
 func backlogDescriptors() []*prometheus.Desc {
 	return []*prometheus.Desc{
-		prometheus.NewDesc("courier_reply_queue_depth", "Undelivered replies in the durable queue.", nil, nil),
-		prometheus.NewDesc("courier_reply_queue_oldest_age_seconds", "Age of the oldest undelivered reply.", nil, nil),
-		prometheus.NewDesc("courier_outbox_pending", "Unposted, nonabandoned durable outbound rows, including streams.", nil, nil),
-		prometheus.NewDesc("courier_outbox_oldest_age_seconds", "Age of the oldest unposted, nonabandoned outbound row.", nil, nil),
-		prometheus.NewDesc("courier_interactions_pending", "Durable interactions awaiting a decision.", nil, nil),
+		prometheus.NewDesc("agentkourier_reply_queue_depth", "Undelivered replies in the durable queue.", nil, nil),
+		prometheus.NewDesc("agentkourier_reply_queue_oldest_age_seconds", "Age of the oldest undelivered reply.", nil, nil),
+		prometheus.NewDesc("agentkourier_outbox_pending", "Unposted, nonabandoned durable outbound rows, including streams.", nil, nil),
+		prometheus.NewDesc("agentkourier_outbox_oldest_age_seconds", "Age of the oldest unposted, nonabandoned outbound row.", nil, nil),
+		prometheus.NewDesc("agentkourier_interactions_pending", "Durable interactions awaiting a decision.", nil, nil),
 	}
 }
 func (c *backlogCollector) Describe(ch chan<- *prometheus.Desc) {

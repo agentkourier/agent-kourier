@@ -15,7 +15,7 @@ func TestDeliveryContinuesTheTraceOfTheRowAcrossARestart(t *testing.T) {
 	h := telemetrytest.New(t)
 	path := filepath.Join(t.TempDir(), "c.db")
 	st := openStore(t, path)
-	enqueueCtx, enqueue := telemetry.Start(h.Ctx, "courier.turn.attempt")
+	enqueueCtx, enqueue := telemetry.Start(h.Ctx, "agentkourier.turn.attempt")
 	if _, err := newOutbox(t, st, &poster{}).Enqueue(enqueueCtx, reply("ev-1")); err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestDeliveryContinuesTheTraceOfTheRowAcrossARestart(t *testing.T) {
 	if err := newOutbox(t, st, &poster{}).Reconcile(h.Ctx); err != nil {
 		t.Fatal(err)
 	}
-	turn, write, deliver := h.Span(t, "courier.turn.attempt"), h.Span(t, "courier.store.CreateOutbox"), h.Span(t, "courier.outbox.deliver")
+	turn, write, deliver := h.Span(t, "agentkourier.turn.attempt"), h.Span(t, "agentkourier.store.CreateOutbox"), h.Span(t, "agentkourier.outbox.deliver")
 	if deliver.SpanContext.TraceID() != turn.SpanContext.TraceID() || deliver.Parent.SpanID() != write.SpanContext.SpanID() {
 		t.Fatalf("delivery: trace %s parent %s; want trace %s parent %s, the span that wrote the row",
 			deliver.SpanContext.TraceID(), deliver.Parent.SpanID(), turn.SpanContext.TraceID(), write.SpanContext.SpanID())

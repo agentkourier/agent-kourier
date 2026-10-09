@@ -13,7 +13,7 @@ import (
 // Ref), or "" where the statement has no alias.
 
 // PendingOutbox is the outbox rows that are neither posted nor abandoned: those that may still be delivered. They are
-// the backlog (courier_outbox_pending), what the sender picks up, and, for the session they belong to, what holds it
+// the backlog (agentkourier_outbox_pending), what the sender picks up, and, for the session they belong to, what holds it
 // back from deletion.
 func PendingOutbox(o Ref) Fixed {
 	return func(d Dialect) string {
@@ -30,7 +30,7 @@ func SettledOutbox(o Ref) Fixed {
 }
 
 // UndeliveredReplies is the replies of the reply queue that were never delivered: the backlog
-// (courier_reply_queue_depth), and, for the session they belong to, what holds it back from deletion.
+// (agentkourier_reply_queue_depth), and, for the session they belong to, what holds it back from deletion.
 func UndeliveredReplies(r Ref) Fixed {
 	return func(Dialect) string { return r.col("delivered_at") + " IS NULL" }
 }
@@ -41,7 +41,7 @@ func DeliveredReplies(r Ref) Fixed {
 	return func(Dialect) string { return r.col("delivered_at") + " IS NOT NULL" }
 }
 
-// PendingInteractions is the interactions that await a decision (courier_interactions_pending), and, for the session
+// PendingInteractions is the interactions that await a decision (agentkourier_interactions_pending), and, for the session
 // they belong to, what holds it back from deletion.
 func PendingInteractions(i Ref) Fixed {
 	return func(Dialect) string { return i.col("state") + " = " + quote(InteractionPending) }

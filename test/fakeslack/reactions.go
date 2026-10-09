@@ -44,15 +44,15 @@ func validReactionName(name string) bool {
 }
 
 // addReaction implements reactions.add (https://docs.slack.dev/reference/methods/reactions.add/),
-// which courier uses to mark a reply that waits for the active task. The reaction is the bot's.
+// which Agent Kourier uses to mark a reply that waits for the active task. The reaction is the bot's.
 //
 // Error codes from the docs: already_reacted, message_not_found, no_item_specified, invalid_name.
 //
-// UNCONFIRMED(WP-04): already_reacted for a second add of one name by the same user, which courier
+// UNCONFIRMED(WP-04): already_reacted for a second add of one name by the same user, which Agent Kourier
 // counts as success; message_not_found for a ts that is in no message of the channel, and which
 // code Slack gives for a message that was deleted; that a name with a colon, an upper-case letter
-// or a space is invalid_name (courier sends the bare name); no limit on the reactions of a
-// message or of a user; and that no event is sent, which courier would not subscribe to.
+// or a space is invalid_name (Agent Kourier sends the bare name); no limit on the reactions of a
+// message or of a user; and that no event is sent, which Agent Kourier would not subscribe to.
 func (s *Server) addReaction(form url.Values) (response, string) {
 	channel, ts, name := form.Get("channel"), form.Get("timestamp"), form.Get("name")
 	switch {
@@ -78,12 +78,12 @@ func (s *Server) addReaction(form url.Values) (response, string) {
 }
 
 // removeReaction implements reactions.remove (https://docs.slack.dev/reference/methods/reactions.remove/),
-// which courier uses to take the queued marker off a reply when its turn is sent. Only the bot's own
+// which Agent Kourier uses to take the queued marker off a reply when its turn is sent. Only the bot's own
 // reaction can be removed, and the bot is the only user that reacts here.
 //
 // Error codes from the docs: no_reaction, message_not_found, no_item_specified, invalid_name.
 //
-// UNCONFIRMED(WP-04): no_reaction for a name that is not on the message, which courier counts as
+// UNCONFIRMED(WP-04): no_reaction for a name that is not on the message, which Agent Kourier counts as
 // success; message_not_found for a ts that is in no message of the channel; and that a reaction by
 // another user, which the fake never has, is not the bot's to remove.
 func (s *Server) removeReaction(form url.Values) (response, string) {

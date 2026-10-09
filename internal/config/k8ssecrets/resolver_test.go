@@ -197,7 +197,7 @@ func TestValue(t *testing.T) {
 	}
 }
 
-// TestValueOnlyForOpaque: Courier's own tokens live in Opaque Secrets. Any other type (a Helm
+// TestValueOnlyForOpaque: Agent Kourier's own tokens live in Opaque Secrets. Any other type (a Helm
 // release, a service account token, TLS keys) keeps its key names for Keys, but its values
 // never enter the cache and Value refuses it.
 func TestValueOnlyForOpaque(t *testing.T) {

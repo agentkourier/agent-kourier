@@ -37,7 +37,7 @@ const (
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
 // so an AgentBackend must not set it. Dialects refuse it too. The kagent alpha5 headers
 // are reserved per D32 (WP-03, WP-20c review): X-Agent-Name selects the acting user via
-// X-User-Id or ?user_id=; X-Share-Token grants the session owner's sessions on courier's
+// X-User-Id or ?user_id=; X-Share-Token grants the session owner's sessions on Agent Kourier's
 // route; X-Kagent-Insecure-Runtime-Identity is an unsigned actor identity kagent forwards
 // as auth metadata.
 func IsReservedHeader(name string) bool {

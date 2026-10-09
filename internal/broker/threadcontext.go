@@ -21,8 +21,8 @@ import (
 // leave out what is not a person's unmentioned reply, name the authors, and render the block (render.ThreadRepliesCounted).
 const (
 	// threadFetchLimit is how many messages of the window the read asks for. The platform's limit and its count of what it
-	// left out are of every message, courier's own, other bots' and those that were turns included, so a window holds
-	// courier's own posts for the previous turn besides the people's replies: asking for only the newest few would let that
+	// left out are of every message, Agent Kourier's own, other bots' and those that were turns included, so a window holds
+	// Agent Kourier's own posts for the previous turn besides the people's replies: asking for only the newest few would let that
 	// noise crowd the people out. It is the most that the Slack adapter reads of a window in any case (5 pages of 200); a
 	// window longer than that is chat.ErrThreadTooLong.
 	threadFetchLimit = 1000
@@ -30,10 +30,10 @@ const (
 	// limited for longer, or again after the wait, is a read that failed.
 	threadRateWaitMax = 5 * time.Second
 	// threadReadFailed is what a turn carries when the earlier replies could not be read: fixed text, no content.
-	threadReadFailed = "Courier could not read the earlier replies in this thread."
+	threadReadFailed = "Agent Kourier could not read the earlier replies in this thread."
 )
 
-// The outcomes of courier_thread_context_total.
+// The outcomes of agentkourier_thread_context_total.
 const (
 	threadRead        = "read"        // a block of replies went with the turn
 	threadEmpty       = "empty"       // there was nothing to add
@@ -92,7 +92,7 @@ func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 // never fails, and it logs no content (DP-2): a failure is counted and logged by Binding and error alone.
 func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string) string {
 	section, outcome := t.build(ctx, key, binding, after, before)
-	telemetry.Count(ctx, "courier_thread_context_total", binding, outcome)
+	telemetry.Count(ctx, "agentkourier_thread_context_total", binding, outcome)
 	return section
 }
 
@@ -148,7 +148,7 @@ func (t *threadContext) read(ctx context.Context, target chat.Target, after, bef
 }
 
 // eligible returns the replies of msgs that the context shows, oldest first: a person's message that the adapter would
-// forward, which is not courier's own (its answers and notes), not a bot's (D36), has a user, has text once normalized (a
+// forward, which is not Agent Kourier's own (its answers and notes), not a bot's (D36), has a user, has text once normalized (a
 // reply of zero-width characters is blank to the block, and must not take one of its newest fifty places or cost a lookup)
 // and was not itself a turn or an answer (the reply queue holds it, queued or delivered), so the agent is not told what it
 // has already been sent. The checks that need no lookup come first, and the reply queue is asked once, about what is left.

@@ -1,7 +1,7 @@
 package e2e
 
-// The channels the Phase 1 scenarios drive: each is bound, in the fast tier's courier config
-// (hack/kind/fast/courier/config/binding-s*.yaml), to the stub agent its scenario needs, so that
+// The channels the Phase 1 scenarios drive: each is bound, in the fast tier's Agent Kourier config
+// (hack/kind/fast/agent-kourier/config/binding-s*.yaml), to the stub agent its scenario needs, so that
 // scenarios never share a thread. test/kindmanifests pins the pairing, so a change on either side fails
 // `make test`. The full tier's config is the same, with the AgentBackend of its front door.
 const (
@@ -9,7 +9,7 @@ const (
 	ChannelSmoke = "C1"
 	// ChannelS1 is S1's: scenario-gated, live output.
 	ChannelS1 = "CS1"
-	// ChannelS2 is S2's: scenario-memory, across a courier restart.
+	// ChannelS2 is S2's: scenario-memory, across an Agent Kourier restart.
 	ChannelS2 = "CS2"
 	// ChannelS3 is S3's: scenario-ask, with askUser on.
 	ChannelS3 = "CS3"
@@ -38,7 +38,7 @@ const (
 )
 
 // The channels of the scenarios run again through the generic a2a dialect against the stub agent in its plain pod (the fast tier
-// only, hack/kind/fast/courier/a2a/binding-a2a-*.yaml): the same agents as the kagent-v1 channels above, each reached at its
+// only, hack/kind/fast/agent-kourier/a2a/binding-a2a-*.yaml): the same agents as the kagent-v1 channels above, each reached at its
 // exact agent URL as an agent in a plain Deployment would be. Only the text scenarios run, since the stub's questions are
 // kagent's structured ones. test/kindmanifests pins the dialect and the URL of each.
 const (
@@ -71,7 +71,7 @@ const (
 	BotS18 = "B0S18ALERT1"
 )
 
-// The failover scenario's channels (S16, the fast tier on Postgres with two courier replicas only), one for each kind of Binding
+// The failover scenario's channels (S16, the fast tier on Postgres with two Agent Kourier replicas only), one for each kind of Binding
 // its cases need.
 const (
 	// ChannelS16 is S16's cases 1 and 4: scenario-gated, live output, a mention.

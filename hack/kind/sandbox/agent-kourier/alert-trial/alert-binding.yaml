@@ -1,0 +1,36 @@
+# The alert trial's Binding: the owner's real alert channel (#alerts-critical), watched for the [kind] alerts of the full tier's
+# Alertmanager and nothing else. up.sh adds this file to the Agent Kourier config only when the alert source is configured (the webhook file is there;
+# render_agentkourier_config in env.sh), and fills __ALERT_CHANNEL_ID__ with ALERT_CHANNEL_ID, the one constant in webhook.sh, which it checked first.
+#
+# What keeps it from acting on production's channel:
+# - triggers is authoritative, and it holds one botMessage trigger and no mention one: nobody can @mention Agent Kourier into this channel. (Left empty it
+#   would default to a mention trigger.) A reply in a thread Agent Kourier started still continues that thread's session.
+# - the trigger takes the incoming webhook's bot (B0EXAMPLE01, by ID, never by name) and only the receiver slack-critical-kind. The $ anchors it:
+#   production's alerts say receiver=slack-critical, and without the $ the pattern for the kind receiver would match longer names too. Grafana's alerts and
+#   the Watchdog heartbeat share the bot and the channel, and fail the preset's title and fallback checks; the exclude names the heartbeat as well.
+# - askUser is off, written out: the agent asks nobody anything in the production channel (interactions.askUser is the field that lets it).
+# No limits are set; they are CT-5's.
+#
+# The agent, the identity and the connection are the dogfood Binding's (binding.yaml): the config has no rule of one Binding per identity.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: alert-trial, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: sandbox-sre
+  identity:
+    userId: agent-kourier-sandbox
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: sandbox-slack}
+    channel: __ALERT_CHANNEL_ID__
+    output: live
+    triggers:
+      - type: botMessage
+        from: {botId: B0EXAMPLE01} # the incoming webhook's bot: production's Alertmanager, Grafana, the heartbeat, and kind's Alertmanager
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}
+        exclude: {title: '^Prometheus heartbeat$'}
+  interactions: {askUser: false}

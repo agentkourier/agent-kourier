@@ -15,7 +15,7 @@ type Response struct {
 }
 
 // PostWebhook posts body as JSON to url, with a bearer token unless token is empty, for fixtures
-// sent straight to courier (a bad token, a malformed or oversized body). Any HTTP status is the
+// sent straight to Agent Kourier (a bad token, a malformed or oversized body). Any HTTP status is the
 // Response; only a failure to get an answer is an error, and the token is never in it.
 func PostWebhook(ctx context.Context, url, token string, body []byte) (Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

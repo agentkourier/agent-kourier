@@ -155,7 +155,7 @@ func TestParseInteraction(t *testing.T) {
 	checkParse(t, notAnObject, nil, "malformed")
 }
 
-// The caps keep a hostile or broken agent from making courier render an unbounded prompt:
+// The caps keep a hostile or broken agent from making Agent Kourier render an unbounded prompt:
 // at the limit a pause parses, past it the pause is unusable.
 func TestParseInteractionCaps(t *testing.T) {
 	texts := func(n int) []any {

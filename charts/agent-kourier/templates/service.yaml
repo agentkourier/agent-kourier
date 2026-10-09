@@ -1,0 +1,20 @@
+{{- if .Values.service.enabled }}
+# Agent Kourier's health and metrics port, and nothing else: the Alertmanager receiver is not served yet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentkourier.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agentkourier.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ int .Values.service.port }}, targetPort: http}
+{{- end }}

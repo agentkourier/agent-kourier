@@ -47,7 +47,7 @@ const (
 // (Postgres) and not with SQLite, and then needs every field but the timings. The replicas of one Deployment name the
 // same Lease.
 type ElectionConfig struct {
-	// Namespace and Name are the Lease's: courier's own namespace, and one Lease for the Deployment.
+	// Namespace and Name are the Lease's: Agent Kourier's own namespace, and one Lease for the Deployment.
 	Namespace, Name string
 	// Identity says who holds the Lease, and is the holder recorded in the database (leadership.holder). It must be
 	// unique to this process, not only to its pod: a container that restarts in the same pod must not take the

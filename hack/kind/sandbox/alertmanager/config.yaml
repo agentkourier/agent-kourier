@@ -1,12 +1,12 @@
-# The Alertmanager configuration of the sandbox's alert source (CT-7a): what the full tier's Alertmanager (monitoring/courier,
+# The Alertmanager configuration of the sandbox's alert source (CT-7a): what the full tier's Alertmanager (monitoring/agent-kourier,
 # run by prometheus-operator) is given by `make sandbox-up`, as the Secret alertmanager-kind-config (the Alertmanager's
 # configSecret, overlay.yaml). It posts alerts to the owner's real Slack alert channel through a copy of the production
-# receiver `slack-critical` (cluster-apps, templates/prometheus-operator.yaml), so courier's chat trigger sees the
+# receiver `slack-critical` (cluster-apps, templates/prometheus-operator.yaml), so Agent Kourier's chat trigger sees the
 # messages that the real template makes. test/kindmanifests pins the copy: the same slack_configs as the owner's, except
-# that the title is prefixed `[kind] `, and the receiver is named slack-critical-kind, which is what courier's trial trigger
+# that the title is prefixed `[kind] `, and the receiver is named slack-critical-kind, which is what Agent Kourier's trial trigger
 # matches (Alertmanager puts the receiver's name in the title_link, `<externalUrl>/#/alerts?receiver=<name>`, and in no
 # other place a trigger can read it). The webhook URL is not here: api_url_file reads it from the Secret
-# alertmanager-slack-secret that up.sh makes from ~/.config/agent-courier/alertmanager-webhook-url, mounted by the
+# alertmanager-slack-secret that up.sh makes from ~/.config/agent-kourier/alertmanager-webhook-url, mounted by the
 # Alertmanager's `secrets` (overlay.yaml), the way production does it.
 #
 # Why this is the base configuration and not an AlertmanagerConfig resource: that resource cannot say api_url_file (its Slack
@@ -26,12 +26,12 @@ route:
   repeat_interval: 4h
   routes:
     # This receiver posts to the production channel, so only what `make sandbox-alert` sends reaches it: alert.sh puts
-    # courier_trial="true" on every alert it posts, and nothing else in the cluster carries it. Production's own route takes any
+    # agentkourier_trial="true" on every alert it posts, and nothing else in the cluster carries it. Production's own route takes any
     # critical alert; this one does not. The Watchdog exclusion is belt and braces: the heartbeat is production's, not this tier's.
     - receiver: slack-critical-kind
       matchers:
         - severity="critical"
-        - courier_trial="true"
+        - agentkourier_trial="true"
         - alertname!="Watchdog"
       continue: true
 receivers:

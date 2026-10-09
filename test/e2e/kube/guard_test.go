@@ -28,7 +28,7 @@ func TestNewInCluster_Guard(t *testing.T) {
 		wantErr error // nil means the guard must pass
 	}{
 		{name: "not in cluster", config: outside, ns: "e2e", wantErr: ErrNotInCluster},
-		{name: "wrong namespace", config: inCluster, ns: "courier\n", wantErr: ErrWrongNamespace},
+		{name: "wrong namespace", config: inCluster, ns: "agent-kourier\n", wantErr: ErrWrongNamespace},
 		{name: "e2e namespace", config: inCluster, ns: "e2e\n"},
 	}
 	for _, tc := range tests {

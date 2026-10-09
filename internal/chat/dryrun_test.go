@@ -74,11 +74,11 @@ func TestReplayClassifiesTheOwnersChannel(t *testing.T) {
 			tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`}
 		}), history("1.9", &heartbeat), chat.ReplayVerdict{Outcome: chat.ReplayExcluded, Why: "trigger 0: exclude title"}},
 		{"an extract that misses", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-			tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^courier-key: (?P<key>\S+)$`}}
+			tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^agent-kourier-key: (?P<key>\S+)$`}}
 		}), history("1.10", &kindFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: extract key"}},
 		{"another bot", exclude(trialTrigger()), history("2.1", &otherBot), chat.ReplayVerdict{Outcome: chat.ReplayOtherBot}},
 		{"a person", exclude(trialTrigger()), person("2.2"), chat.ReplayVerdict{Outcome: chat.ReplayPerson}},
-		{"courier's own post", exclude(trialTrigger()), own, chat.ReplayVerdict{Outcome: chat.ReplayOwn}},
+		{"agent-kourier's own post", exclude(trialTrigger()), own, chat.ReplayVerdict{Outcome: chat.ReplayOwn}},
 		{"a message the adapter drops", exclude(trialTrigger()), chat.HistoryMessage{Ignored: true}, chat.ReplayVerdict{Outcome: chat.ReplayIgnored}},
 		{"a bot's reply in a thread", exclude(trialTrigger()), reply, chat.ReplayVerdict{Outcome: chat.ReplayIgnored}},
 	}
@@ -124,12 +124,12 @@ func TestReplayAgreesWithTheIntake(t *testing.T) {
 		r := replayOf(t, h)
 		for i, m := range msgs {
 			id := strconv.Itoa(i+1) + ".0"
-			started, matched, unmatched := len(h.got()), h.counter(t, "courier_trigger_matched_total", binding), h.counter(t, "courier_trigger_unmatched_total", binding)
+			started, matched, unmatched := len(h.got()), h.counter(t, "agentkourier_trigger_matched_total", binding), h.counter(t, "agentkourier_trigger_unmatched_total", binding)
 			if err := h.in.Message(h.ctx, botInbound("C1", id, m)); err != nil {
 				t.Fatal(err)
 			}
-			intakeMatched := h.counter(t, "courier_trigger_matched_total", binding)-matched == 1
-			intakeUnmatched := h.counter(t, "courier_trigger_unmatched_total", binding)-unmatched == 1
+			intakeMatched := h.counter(t, "agentkourier_trigger_matched_total", binding)-matched == 1
+			intakeUnmatched := h.counter(t, "agentkourier_trigger_unmatched_total", binding)-unmatched == 1
 			got := r.Classify(history(id, &m))
 			// Both ways: what replay calls matched is what the intake matched, and what it calls unmatched or excluded is
 			// what the intake counted as unmatched, so that a message cannot be lost to some other outcome.

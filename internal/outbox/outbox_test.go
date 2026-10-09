@@ -384,7 +384,7 @@ func TestSlackCallsAreBounded(t *testing.T) {
 	}
 }
 
-// failingRecord is a store whose RecordMessageRef fails, as if courier died between the post and
+// failingRecord is a store whose RecordMessageRef fails, as if Agent Kourier died between the post and
 // the record: the message is in Slack and the row has no ref.
 type failingRecord struct{ store.Outbox }
 
@@ -392,7 +392,7 @@ func (failingRecord) RecordMessageRef(context.Context, string, string) error {
 	return errors.New("killed before recording")
 }
 
-// TestCrashAfterPost kills courier between posting and recording, then restarts it: against the
+// TestCrashAfterPost kills Agent Kourier between posting and recording, then restarts it: against the
 // fake Slack and a real client, there is exactly one message afterwards.
 func TestCrashAfterPost(t *testing.T) {
 	fake := fakeslack.New()
@@ -415,7 +415,7 @@ func TestCrashAfterPost(t *testing.T) {
 		if got := len(fake.Messages("C1")); got != before+1 {
 			t.Fatalf("the message was not posted: %d messages", got)
 		}
-		// Courier restarts: a new Outbox over the reopened store reconciles.
+		// Agent Kourier restarts: a new Outbox over the reopened store reconciles.
 		if err := st.Close(); err != nil {
 			t.Fatal(err)
 		}

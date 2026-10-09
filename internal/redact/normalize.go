@@ -7,7 +7,7 @@ import (
 )
 
 // Normalize returns s as redaction reads it, and as a reader sees it: with the invisible characters deleted and
-// every kind of line break written "\n". It is the one deletion set of courier (chat.Clean deletes the same
+// every kind of line break written "\n". It is the one deletion set of Agent Kourier (chat.Clean deletes the same
 // set for display), so what a pattern matches and what a person reads cannot disagree.
 //
 // The invisible characters are control characters (Cc) except the line breaks and tab, format characters (Cf:

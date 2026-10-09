@@ -20,7 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-const conn = "courier-system/slack-main"
+const conn = "agent-kourier-system/slack-main"
 
 // The session manager is what Submit goes to.
 var _ chat.Submitter = (*session.Manager)(nil)
@@ -80,7 +80,7 @@ func inbound(channel, id, thread string, mentioned bool) chat.Inbound {
 // and the private channel G1 to payments/pay.
 func newIntake(t *testing.T) (*chat.Intake, *submitter) { return newIntakeNotifying(t, nil) }
 
-// newIntakeNotifying is newIntake with the func that takes a notice for a thread courier cannot continue.
+// newIntakeNotifying is newIntake with the func that takes a notice for a thread Agent Kourier cannot continue.
 func newIntakeNotifying(t *testing.T, notice func(context.Context, session.Key, session.Notice) error) (*chat.Intake, *submitter) {
 	t.Helper()
 	return newIntakeModes(t, notice, "", "")
@@ -92,13 +92,13 @@ func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, sess
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	bind := func(ns, name, channel string, mode v1alpha1.ThreadReplies) v1alpha1.Binding {
 		return v1alpha1.Binding{ObjectMeta: meta(ns, name), Spec: v1alpha1.BindingSpec{
-			Agent: v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "kagent"}},
-			Chat:  v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: channel, ThreadReplies: mode}}}
+			Agent: v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}},
+			Chat:  v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: channel, ThreadReplies: mode}}}
 	}
 	allow := []string{"sre", "payments"}
 	snap, err := config.Resolve(t.Context(), &config.Set{
-		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
-		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
+		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("agent-kourier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("agent-kourier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
 		Bindings:        []v1alpha1.Binding{bind("sre", "sre-alerts", "C1", c1), bind("payments", "pay", "G1", g1)},
 	}, allKeys{})
 	if err != nil {
@@ -106,7 +106,7 @@ func newIntakeModes(t *testing.T, notice func(context.Context, session.Key, sess
 	}
 	sub := &submitter{}
 	return chat.NewIntake(chat.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
+		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Notice: notice,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}), sub
 }
@@ -257,10 +257,10 @@ func (n *notices) take(_ context.Context, key session.Key, notice session.Notice
 	return err
 }
 
-// A reply in a thread courier cannot continue, past its threadTTL or with its Binding gone, is
+// A reply in a thread Agent Kourier cannot continue, past its threadTTL or with its Binding gone, is
 // answered with a notice (spec 8.2). Its ID is built from the message, so the two events of a
 // mention are one notice; the thread it goes to is the one the reply is in.
-func TestAThreadCourierCannotContinueGetsOneNotice(t *testing.T) {
+func TestAThreadAgentKourierCannotContinueGetsOneNotice(t *testing.T) {
 	for name, tc := range map[string]struct {
 		disposition session.Disposition
 		kind        session.NoticeKind
@@ -295,9 +295,9 @@ func TestAThreadCourierCannotContinueGetsOneNotice(t *testing.T) {
 	}
 }
 
-// Nothing else is noticed: a turn that was taken, a thread courier does not own, a reply that fails
+// Nothing else is noticed: a turn that was taken, a thread Agent Kourier does not own, a reply that fails
 // to submit. And a thread that cannot be continued is quiet, not a crash, when no one takes notices.
-func TestOnlyAThreadCourierCannotContinueIsNoticed(t *testing.T) {
+func TestOnlyAThreadAgentKourierCannotContinueIsNoticed(t *testing.T) {
 	disposition := func(d session.Disposition) func(session.Inbound) (session.Result, error) {
 		return func(session.Inbound) (session.Result, error) { return resultOf(d), nil }
 	}
@@ -356,7 +356,7 @@ func TestAFailedNoticeLeavesTheEventToBeRedelivered(t *testing.T) {
 
 // The adapter decides what is a mention; the Intake passes it on with a direct message, which needs none, as
 // Inbound.Mentioned, for the session manager's gate (D38).
-func TestIntakeTellsTheSessionWhetherAReplyMentionsCourier(t *testing.T) {
+func TestIntakeTellsTheSessionWhetherAReplyMentionsAgentKourier(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		mentioned, direct bool

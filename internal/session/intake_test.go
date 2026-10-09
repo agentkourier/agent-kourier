@@ -424,8 +424,8 @@ func TestSubmitExistingSession(t *testing.T) {
 }
 
 // An expired session is kept, so that a reply in its thread is told so (D28); once retention has deleted it (DP-3), the
-// thread is one that courier never owned: a reply is ignored, writing and waking nothing, and an @mention starts a new
-// session anchored to the thread, as it does in any thread courier does not own (8.2).
+// thread is one that Agent Kourier never owned: a reply is ignored, writing and waking nothing, and an @mention starts a new
+// session anchored to the thread, as it does in any thread Agent Kourier does not own (8.2).
 func TestSubmitInAThreadWhoseSessionWasDeleted(t *testing.T) {
 	f := newFixture(t)
 	if err := f.st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "c1", Binding: "ns/b1", LastActivity: t0.Add(-2 * time.Hour)}); err != nil {
@@ -606,8 +606,8 @@ func reply(ts string, mentioned bool) Inbound {
 }
 
 // TestSubmitThreadReplyGate is the intake gate (spec 8.2, D38) over the Binding's mode, whether the
-// reply mentions courier, and the state of the thread. In mention mode a reply that does not mention
-// courier is Unmentioned: nothing is written, queued, touched or woken, whether the thread is live or
+// reply mentions Agent Kourier, and the state of the thread. In mention mode a reply that does not mention
+// Agent Kourier is Unmentioned: nothing is written, queued, touched or woken, whether the thread is live or
 // expired (so no expiry notice either). Everything else is as it is in all mode.
 func TestSubmitThreadReplyGate(t *testing.T) {
 	const (
@@ -688,14 +688,14 @@ func TestSubmitBindingGoneFollowsTheModeOfTheChannelsBinding(t *testing.T) {
 			if got, _ := f.session(); err != nil || res.Disposition != BindingGone || res.Admission != tt.want || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
 				t.Errorf("Submit = %+v, %v; session %+v, %d touches, woke %d; want BindingGone, %+v and no change", res, err, got, f.st.touches, f.woke, tt.want)
 			}
-			if got := counter(t, reg, "courier_thread_unmentioned_total", map[string]string{"binding": "ns/gone"}); got != 0 {
-				t.Errorf("courier_thread_unmentioned_total = %v; want 0", got)
+			if got := counter(t, reg, "agentkourier_thread_unmentioned_total", map[string]string{"binding": "ns/gone"}); got != 0 {
+				t.Errorf("agentkourier_thread_unmentioned_total = %v; want 0", got)
 			}
 		})
 	}
 }
 
-// A reply that does not mention courier is taken in mention mode when the thread has a pending question that takes
+// A reply that does not mention Agent Kourier is taken in mention mode when the thread has a pending question that takes
 // text replies: it is that question's answer, enqueued already pinned to it, so it is never an ordinary turn
 // (decision 3). Any other pending question, or none, leaves it Unmentioned.
 func TestSubmitUnmentionedReplyToATextQuestion(t *testing.T) {
@@ -814,8 +814,8 @@ func TestSubmitUnmentionedReplyToATextQuestionEdges(t *testing.T) {
 		if _, err := f.m.Submit(ctx, reply("1700.02", false)); err != nil {
 			t.Fatal(err)
 		}
-		if got := counter(t, reg, "courier_thread_unmentioned_total", map[string]string{"binding": "ns/b1"}); got != 0 {
-			t.Errorf("courier_thread_unmentioned_total = %v; want 0: a typed answer is a turn of the question", got)
+		if got := counter(t, reg, "agentkourier_thread_unmentioned_total", map[string]string{"binding": "ns/b1"}); got != 0 {
+			t.Errorf("agentkourier_thread_unmentioned_total = %v; want 0: a typed answer is a turn of the question", got)
 		}
 	})
 	t.Run("a redelivered answer is one reply, still pinned", func(t *testing.T) {
@@ -845,8 +845,8 @@ func TestSubmitCountsUnmentionedReplies(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := counter(t, reg, "courier_thread_unmentioned_total", map[string]string{"binding": "ns/b1"}); got != 2 {
-		t.Errorf("courier_thread_unmentioned_total{binding=ns/b1} = %v; want 2: the mentioned reply is a turn, not counted", got)
+	if got := counter(t, reg, "agentkourier_thread_unmentioned_total", map[string]string{"binding": "ns/b1"}); got != 2 {
+		t.Errorf("agentkourier_thread_unmentioned_total{binding=ns/b1} = %v; want 2: the mentioned reply is a turn, not counted", got)
 	}
 }
 

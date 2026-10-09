@@ -1,0 +1,25 @@
+# Agent Kourier in the AX kind tier (hack/kind/up-ax.sh): the fast tier's Agent Kourier (fast-values.yaml: the testhooks image on the fake
+# Slack, the tier's own ConfigMap), with the config of hack/kind/ax/agent-kourier/config, installed as release "agent-kourier" in namespace
+# "agent-kourier".
+image:
+  repository: agent-kourier-e2e/agent-kourier-testhooks
+  tag: dev
+  pullPolicy: Never
+
+extraEnv:
+  - {name: AGENTKOURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
+
+config:
+  existingConfigMap: agent-kourier-config
+rbac:
+  secretNamespaces: [agent-kourier]
+
+persistence:
+  # A database file of its own, so that a development cluster's older fixture database, whose experimental migration 12
+  # predates main's trace migration, is left intact in the volume.
+  dbFile: agent-kourier-ax.db
+  storageClassName: standard
+  retainOnUninstall: false
+
+service:
+  enabled: true

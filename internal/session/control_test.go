@@ -221,7 +221,7 @@ func TestRejectedAnswerIsReportedAndTheQueueGoesOn(t *testing.T) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	// The answer's rejection, and the cancel Agent.Answer made of the wedged task, are two rows:
-	// the cancel is a call courier's agent layer made, under no person.
+	// the cancel is a call Agent Kourier's agent layer made, under no person.
 	if len(f.audits) != 2 || f.audits[0].Op != audit.OpAnswer || !errors.Is(f.audits[0].Err, agent.ErrAnswerRejected) ||
 		f.audits[1].Op != audit.OpCancel || f.audits[1].Err != nil || f.actors[1].User != "" {
 		t.Errorf("audits = %+v by %+v; want the rejected answer, then the cancel, by no person", f.audits, f.actors)
@@ -254,7 +254,7 @@ func TestAnswerRejectedAfterTheTaskIsNamedAgainIsNotALostStream(t *testing.T) {
 }
 
 // If Agent.Answer's own cancel of the wedged task failed too (ErrCancelFailed), the task is still
-// wedged: it stays recorded, and courier cancels it again, classified and bounded, until it is
+// wedged: it stays recorded, and Agent Kourier cancels it again, classified and bounded, until it is
 // gone. Clearing it would leave every send getting -32004 for ever.
 func TestWedgeWithAFailedAutoCancelIsCancelledAgain(t *testing.T) {
 	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error {
@@ -284,8 +284,8 @@ func TestWedgeWithAFailedAutoCancelIsCancelledAgain(t *testing.T) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
 	for i, a := range f.audits {
-		if a.Op == audit.OpCancel && (f.actors[i].User != "" || a.MessageID != "") { // courier's own cancels
-			t.Errorf("cancel row %+v by %+v; want no person and no turn: courier made the cancel", a, f.actors[i])
+		if a.Op == audit.OpCancel && (f.actors[i].User != "" || a.MessageID != "") { // Agent Kourier's own cancels
+			t.Errorf("cancel row %+v by %+v; want no person and no turn: Agent Kourier made the cancel", a, f.actors[i])
 		}
 	}
 }

@@ -149,7 +149,7 @@ func TestBotPostsCarryBotIdentity(t *testing.T) {
 }
 
 // assertOnTheWire reads message ts back through conversations.replies of the
-// thread root and checks the identity fields courier would see. slack-go does
+// thread root and checks the identity fields Agent Kourier would see. slack-go does
 // not decode app_id, so that one is read from the raw response.
 func assertOnTheWire(t *testing.T, fake *fakeslack.Server, api *slack.Client, root, ts, user, bot, app string) {
 	t.Helper()

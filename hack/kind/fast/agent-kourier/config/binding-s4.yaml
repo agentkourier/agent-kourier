@@ -1,0 +1,18 @@
+# S4: a reply sent while a task runs is queued, then answered in order.
+# A channel of its own on the fake Slack, so scenarios never share a thread; the identity token is the same
+# Secret as fast-chat's. The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s4, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS4
+    output: live

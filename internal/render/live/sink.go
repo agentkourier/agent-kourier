@@ -31,7 +31,7 @@ type Reactions struct {
 	Queued string
 }
 
-// DefaultReactions returns the reactions courier uses unless it is told otherwise.
+// DefaultReactions returns the reactions Agent Kourier uses unless it is told otherwise.
 func DefaultReactions() Reactions { return Reactions{Queued: "hourglass_flowing_sand"} }
 
 // of says what a notice of kind does to the reactions of the message it is about: put an emoji on, or take it
@@ -82,8 +82,8 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 }
 
 // FollowUpHint is the line that ends the final message of a turn in a Binding whose chat.threadReplies is mention (D38): there, a
-// reply that does not mention courier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
-// mention syntax of any platform: the neutral model has no way to name courier, and a line that said who to mention could not
+// reply that does not mention Agent Kourier is ignored, and nothing else tells a person how to ask a follow-up. It is plain text, with no
+// mention syntax of any platform: the neutral model has no way to name Agent Kourier, and a line that said who to mention could not
 // be wrong about it.
 const FollowUpHint = "Mention me in this thread to ask a follow-up."
 
@@ -144,7 +144,7 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 	return err
 }
 
-// noticeText is what a notice of the kind says, which courier wrote; a notice's Detail is added after
+// noticeText is what a notice of the kind says, which Agent Kourier wrote; a notice's Detail is added after
 // it. There is none for a kind that is not a message.
 func noticeText(kind session.NoticeKind) (string, bool) {
 	switch kind {

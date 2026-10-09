@@ -1,8 +1,8 @@
-# The courier front door: a second oauth2-proxy that verifies the Binding's Dex token (signature
-# by the issuer's keys, issuer, audience = courier-binding, expiry) and forwards only /agents/ to
+# The Agent Kourier front door: a second oauth2-proxy that verifies the Binding's Dex token (signature
+# by the issuer's keys, issuer, audience = agent-kourier-binding, expiry) and forwards only /agents/ to
 # the kagent controller. Signature and audience are measured by verify.sh; the issuer and expiry
 # checks are INFERRED from oauth2-proxy's OIDC verifier and not yet tested (WP-03 tests expiry).
-# kagent's own OIDC mode decodes JWTs without verifying them, so courier
+# kagent's own OIDC mode decodes JWTs without verifying them, so Agent Kourier
 # must never reach port 8083 except through this pod (spec D32, R4). A separate instance because
 # the chart's oauth2-proxy has one `upstream` (the UI) and its extraArgs map cannot repeat it.
 # Chosen over agentgateway because the image and the token logic are already in this cluster.
@@ -34,7 +34,7 @@ data:
         # case-insensitively and with _ read as - (pkg/middleware/headers.go).
         - name: X-Agent-Name # selects kagent's agent-call path, where the acting user is caller-supplied
         - name: X-User-Id # the acting user on that path; defence in depth while X-Agent-Name is stripped
-        - name: X-Share-Token # grants access to another owner's session; courier never uses one
+        - name: X-Share-Token # grants access to another owner's session; Agent Kourier never uses one
         # Read only by the controller's runtime (TaskStore) RPCs, which /agents/ cannot reach;
         # stripped anyway because it is an unsigned identity claim.
         - name: X-Kagent-Insecure-Runtime-Identity
@@ -66,7 +66,7 @@ data:
                 prefix: 'Bearer '
     metricsServer: {}
     providers:
-        - clientID: courier-binding # the only accepted audience: no --oidc-extra-audience
+        - clientID: agent-kourier-binding # the only accepted audience: no --oidc-extra-audience
           clientSecretFile: /etc/oauth2-proxy-secret/client-secret
           azureConfig:
             tenant: common
@@ -88,7 +88,7 @@ data:
             userIDClaim: email
             audienceClaims:
                 - aud
-          id: oidc=courier-binding
+          id: oidc=agent-kourier-binding
           provider: oidc
           useSystemTrustStore: false
           loginURLParameters:

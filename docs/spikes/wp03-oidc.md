@@ -1,4 +1,4 @@
-# WP-03 spike: identity through courier's front door (Q3, Q9)
+# WP-03 spike: identity through Agent Kourier's front door (Q3, Q9)
 
 Run 2026-09-30 against the full tier (kagent 1.0.0-alpha5, Dex v2.45.1, oauth2-proxy v7.15.3 as
 the front door) with `spike/a2a/run-oidc.sh`, which runs `go run ./spike/a2a -suite oidc`. Every
@@ -134,7 +134,7 @@ nothing. Not measurable with Dex, *source* only (oauth2-proxy v7.15.3 `providers
 
 - **The token must be a JWT.** The door verifies it as an ID token, and kagent decodes the payload
   itself; an opaque access token fails at both.
-- **Audience.** `aud` must contain the door's client ID (`courier-binding` here) or an
+- **Audience.** `aud` must contain the door's client ID (`agent-kourier-binding` here) or an
   `--oidc-extra-audience`. Some providers put the client in `azp` and not `aud`;
   `--oidc-audience-claim` chooses the claim.
 - **`email_verified`.** If the token carries `email` and `email_verified: false`, the door refuses
@@ -155,7 +155,7 @@ rotated key.
 
 - Fresh token: accepted (`COMPLETED`).
 - After 75 s, through the door: `SendMessage` and `GetTask` both get **HTTP 401 with the body
-  `{}`** (`--force-json-errors`): no JSON-RPC envelope, no reason. A courier client sees a bare 401.
+  `{}`** (`--force-json-errors`): no JSON-RPC envelope, no reason. An Agent Kourier client sees a bare 401.
 - The door's log names the reason: `oidc: token is expired (Token Expiry: ...)` (saved in the
   fixture `06-frontdoor-log.txt`, two lines, no tokens).
 - The same expired token **at the controller** completes a turn: the controller never checks
@@ -171,13 +171,13 @@ restarts I checked (observed, not asserted), the door answered 401 to a token si
 keys for about 30 s: its fetch of Dex's keys hit a 30 s `i/o timeout` (its log: `fetching keys oidc: get keys failed ... dial tcp
 ... i/o timeout`), then recovered by itself. A first run without a wait failed for this reason;
 the spike now polls until a fresh token passes the door. This is a test artifact of restarting
-Dex, not a courier concern, but a pilot IdP that rotates its keys will produce the same short
+Dex, not an Agent Kourier concern, but a pilot IdP that rotates its keys will produce the same short
 window of 401s at the door (*inferred*).
 
 ## E. Replay with a `contextId` (`oidc-replay`; WP-28 depends on it)
 
 The crash window of a thread reply: the context exists, a task runs, the stream drops, and
-courier (which has not recorded the task) sends the same message again. The slow agent (eight
+Agent Kourier (which has not recorded the task) sends the same message again. The slow agent (eight
 one-second ticks) is used, as in WP-02.
 
 | Step | Result |
@@ -186,7 +186,7 @@ one-second ticks) is used, as in WP-02.
 | m1 replayed with no `contextId`, task done | one `COMPLETED` snapshot of **task 1** (WP-02's result, reproduced on this agent as the control) |
 | m1 replayed **with** C, task done | **a new task** in C runs to `COMPLETED` (full eight ticks): a duplicate turn. `ListTasks` shows two tasks whose history holds m1's `messageId` |
 | m2 sent with C, stream dropped at the first tick, m2 replayed **with** C while it runs | **`-32004` "resource conflict"**, reason `UNSUPPORTED_OPERATION`, one event, HTTP 200. Not a live join |
-| `ListTasks` `{contextId: C}` while m2 runs | the running task (`WORKING`) with m2's `messageId` in its history, so courier can find it without a task ID |
+| `ListTasks` `{contextId: C}` while m2 runs | the running task (`WORKING`) with m2's `messageId` in its history, so Agent Kourier can find it without a task ID |
 | `SubscribeToTask` on that task | `WORKING` snapshot, deltas, `lastChunk`, `COMPLETED` |
 | m2 replayed with C after it completed | **a new task** again; two `COMPLETED` tasks carry m2's `messageId` |
 
@@ -196,7 +196,7 @@ runs and returning one snapshot after (WP-02). With a `contextId` it does not de
 remembered" (busy case) is the same behaviour seen from the other side.
 
 For WP-28: a crash-recovery resend into an existing context must **not** be a blind replay.
-Courier should first call `ListTasks` with the `contextId` and look for a task whose history holds
+Agent Kourier should first call `ListTasks` with the `contextId` and look for a task whose history holds
 its `messageId`: found and running, `SubscribeToTask`; found and done, `GetTask` and render;
 absent, send. On `-32004`, treat the context as busy (queue per D21) and repeat the lookup when
 the active task ends (*inferred* rule, matching spec 8.2; the lookup finding the task is not

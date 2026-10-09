@@ -124,7 +124,7 @@ func TestMetricsEndpointServesTheRegistry(t *testing.T) {
 	m := mustMetrics(t, func() bool { return true })
 	m.CredentialRejected("sre/sre-alerts")
 	code, body := get(t, NewHandler(m, &Readiness{}), "/metrics")
-	if code != http.StatusOK || !strings.Contains(body, `courier_credential_rejections_total{binding="sre/sre-alerts"} 1`) || !strings.Contains(body, "courier_config_stale 1") {
+	if code != http.StatusOK || !strings.Contains(body, `agentkourier_credential_rejections_total{binding="sre/sre-alerts"} 1`) || !strings.Contains(body, "agentkourier_config_stale 1") {
 		t.Errorf("/metrics = %d\n%s", code, body)
 	}
 }

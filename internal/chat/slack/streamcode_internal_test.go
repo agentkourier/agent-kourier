@@ -96,7 +96,7 @@ func TestStreamAppendSendsNothingWhileAllOfItIsHeldBack(t *testing.T) {
 	}
 }
 
-// A stream of an earlier run may be in a block that courier cannot see, so it escapes everything, for good.
+// A stream of an earlier run may be in a block that Agent Kourier cannot see, so it escapes everything, for good.
 func TestStreamAtEscapesEverything(t *testing.T) {
 	api := &textAPI{}
 	st := NewPlatform(api, "t/s").StreamAt(chat.Ref{Platform: PlatformName, Channel: "C1", ID: "1.1"})
@@ -175,7 +175,7 @@ func TestStreamKeepsItsReadingInStepWithSlack(t *testing.T) {
 
 // Chunks mode refused, and the markdown_text try lost with no answer: the first error, which is a refusal, is what the
 // caller sees, but the text may be in Slack, and the caller sends it again. The stream must not take that for a text that
-// was not applied (it would be in Slack twice and in courier's reading once, and code and prose would be swapped).
+// was not applied (it would be in Slack twice and in Agent Kourier's reading once, and code and prose would be swapped).
 func TestStreamIsBlindWhenTheRetryInAnotherModeIsLost(t *testing.T) {
 	api, st := newTextStream(t, "")
 	ctx := t.Context()

@@ -14,7 +14,7 @@ import (
 )
 
 // Slack drives the fake Slack through its /_control/ surface, so a scenario acts as Slack users
-// and reads what courier posted. The surface has no authentication, so this client is only for
+// and reads what Agent Kourier posted. The surface has no authentication, so this client is only for
 // tests inside the cluster, and the fake is never published.
 type Slack struct {
 	c     *client
@@ -93,7 +93,7 @@ func (s *Slack) AddUser(ctx context.Context, u fakeslack.User) error {
 }
 
 // Know registers user with the fake, once for this client, with a name made from the ID: a user that
-// writes a message must be one the fake can answer users.info for, or courier logs a warning for the
+// writes a message must be one the fake can answer users.info for, or Agent Kourier logs a warning for the
 // lookup. A later call for the same user does nothing; AddUser is for a user with more to say.
 func (s *Slack) Know(ctx context.Context, user string) error {
 	s.mu.Lock()
@@ -138,7 +138,7 @@ func (s *Slack) read(ctx context.Context, path string) ([]fakeslack.MessageView,
 	return msgs, err
 }
 
-// acked reports at once whether courier has acked the envelope, and the ack's payload. An
+// acked reports at once whether Agent Kourier has acked the envelope, and the ack's payload. An
 // unknown envelope is a 404.
 func (s *Slack) acked(ctx context.Context, envelopeID string) (bool, json.RawMessage, error) {
 	var out struct {
@@ -149,7 +149,7 @@ func (s *Slack) acked(ctx context.Context, envelopeID string) (bool, json.RawMes
 	return out.Acked, out.Payload, err
 }
 
-// AckWait waits up to timeout for courier to ack the envelope and returns the ack's payload. It
+// AckWait waits up to timeout for Agent Kourier to ack the envelope and returns the ack's payload. It
 // polls acked rather than holding a request open.
 func (s *Slack) AckWait(ctx context.Context, timeout time.Duration, envelopeID string) (json.RawMessage, error) {
 	var payload json.RawMessage

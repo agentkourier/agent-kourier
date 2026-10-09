@@ -600,7 +600,7 @@ func TestRunEndsATaskThatACrashLeftOnAnExpiredSession(t *testing.T) {
 	r.until("/readyz", 200)
 	// The ending, and the deletion that follows it in the same tick: the session of the example's Binding that is inside its
 	// horizon is the only other one there, so one session is counted as deleted.
-	for _, line := range []string{`courier_retention_removed_total{what="stale_tasks"} 1`, `courier_retention_removed_total{what="expired_sessions"} 1`} {
+	for _, line := range []string{`agentkourier_retention_removed_total{what="stale_tasks"} 1`, `agentkourier_retention_removed_total{what="expired_sessions"} 1`} {
 		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 			if _, body := r.get("/metrics"); strings.Contains(body, line+"\n") {
 				break

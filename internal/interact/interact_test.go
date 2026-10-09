@@ -312,9 +312,9 @@ func TestAStoredQuestionWithOtherUntrustedFieldsIsStillTheSame(t *testing.T) {
 	}
 }
 
-// TestTheDeadlineNeverRunsPastCouriersClock: a task timestamp ahead of courier's clock (kagent's
+// TestTheDeadlineNeverRunsPastAgentKouriersClock: a task timestamp ahead of Agent Kourier's clock (kagent's
 // clock is UNCONFIRMED(WP-02)) cannot push the deadline out.
-func TestTheDeadlineNeverRunsPastCouriersClock(t *testing.T) {
+func TestTheDeadlineNeverRunsPastAgentKouriersClock(t *testing.T) {
 	r, task := newRig(t, nil), askUser("req-1")
 	future := t0.Add(3 * time.Hour) // the rig's clock is t0 plus one hour
 	task.Status.Timestamp = &future
@@ -322,6 +322,6 @@ func TestTheDeadlineNeverRunsPastCouriersClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if row := r.row(t, task); !row.CreatedAt.Equal(t0.Add(time.Hour)) || !row.Deadline.Equal(t0.Add(time.Hour+timeout)) {
-		t.Errorf("created %v, due %v; want courier's own time plus the timeout", row.CreatedAt, row.Deadline)
+		t.Errorf("created %v, due %v; want Agent Kourier's own time plus the timeout", row.CreatedAt, row.Deadline)
 	}
 }

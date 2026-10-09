@@ -49,7 +49,7 @@ type SessionRetention interface {
 	// (the delivered tombstones), their interactions and those interactions' presses, and their outbox rows (a row
 	// made for the thread, or one whose source is derived from one of the session's reply IDs as that ID and a "/"
 	// and a suffix, as the queued reaction's is: "<reply ID>/queued"). It returns what it deleted;
-	// fewer sessions than limit says nothing more is due. A thread whose session is gone is one that courier never
+	// fewer sessions than limit says nothing more is due. A thread whose session is gone is one that Agent Kourier never
 	// owned.
 	//
 	// A session is never deleted, whatever its age, while it has an active or paused task, a pending interaction, a

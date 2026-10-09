@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	startConn    = "courier-system/slack-main"
+	startConn    = "agent-kourier-system/slack-main"
 	startBinding = "sre/sre-alerts"
 	alertTS      = "1759560000.123456"
 	alertLink    = "https://example.slack.com/archives/C0EXAMPLE01/p1759560000123456"
@@ -195,9 +195,9 @@ func TestOnStartKeepsTheAlertNameOnlyIfItIsNameShaped(t *testing.T) {
 	}
 }
 
-// .Link is the permalink courier builds from the channel and ts, never a field of the message: a sender's titleLink
+// .Link is the permalink Agent Kourier builds from the channel and ts, never a field of the message: a sender's titleLink
 // that says otherwise is only text in the block.
-func TestOnStartLinkIsTheCourierBuiltPermalinkNotTheTitleLink(t *testing.T) {
+func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheTitleLink(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
 	m.PromptTemplate = "Alert {{ .Fields.alertname }}: {{ .Link }}"
@@ -325,8 +325,8 @@ func TestOnStartRefusesAValueThatFailsItsCheck(t *testing.T) {
 	}
 
 	labels := map[string]string{"binding": startBinding, "trigger": "1", "ref": "Fields.alertname", "reason": "characters"}
-	if got := s.tel.Counter(t, "courier_trigger_refused_total", labels); got != 1 {
-		t.Errorf("courier_trigger_refused_total%v = %v; want 1", labels, got)
+	if got := s.tel.Counter(t, "agentkourier_trigger_refused_total", labels); got != 1 {
+		t.Errorf("agentkourier_trigger_refused_total%v = %v; want 1", labels, got)
 	}
 
 	for name, text := range map[string]string{"the log": s.logs.String(), "the metrics": s.tel.Exported(t), "the notice": fmt.Sprint(n, key), "the audit": fmt.Sprintf("%+v", s.aud.got)} {
@@ -370,7 +370,7 @@ func TestOnStartRefusalNamesTheValueAndTheReason(t *testing.T) {
 				t.Errorf("notices %+v; want the detail %q", s.notes.got, tc.detail)
 			}
 			labels := map[string]string{"binding": startBinding, "trigger": "1", "ref": tc.ref, "reason": tc.reason}
-			if got := s.tel.Counter(t, "courier_trigger_refused_total", labels); got != 1 {
+			if got := s.tel.Counter(t, "agentkourier_trigger_refused_total", labels); got != 1 {
 				t.Errorf("counter %v = %v; want 1", labels, got)
 			}
 		})
@@ -402,7 +402,7 @@ func TestOnStartARenderErrorIsRefusedLikeACheck(t *testing.T) {
 				t.Errorf("notices %+v; want the fixed detail of a render error", s.notes.got)
 			}
 			labels := map[string]string{"binding": startBinding, "trigger": "1", "ref": "template", "reason": "render_error"}
-			if got := s.tel.Counter(t, "courier_trigger_refused_total", labels); got != 1 {
+			if got := s.tel.Counter(t, "agentkourier_trigger_refused_total", labels); got != 1 {
 				t.Errorf("counter %v = %v; want 1", labels, got)
 			}
 		})
@@ -420,7 +420,7 @@ func TestOnStartARefusalWhoseNoteFailedIsAnErrorAndNotYetCounted(t *testing.T) {
 	if err == nil || errors.Is(err, chat.ErrNotStarted) {
 		t.Fatalf("OnStart = %v; want the note's error, not a refusal", err)
 	}
-	if len(s.aud.got) != 0 || s.tel.Counter(t, "courier_trigger_refused_total", map[string]string{"binding": startBinding, "trigger": "1", "ref": "Fields.alertname", "reason": "characters"}) != 0 {
+	if len(s.aud.got) != 0 || s.tel.Counter(t, "agentkourier_trigger_refused_total", map[string]string{"binding": startBinding, "trigger": "1", "ref": "Fields.alertname", "reason": "characters"}) != 0 {
 		t.Errorf("audited %+v or counted a refusal that was not made", s.aud.got)
 	}
 }

@@ -65,6 +65,6 @@ func (in *Intake) stopThread(ctx context.Context, m TriggerMatch, hash string, o
 // countLimited counts and logs a start a limit stopped. The log names the Binding, the trigger and the limit and
 // where the alert was, and never what it said.
 func (in *Intake) countLimited(ctx context.Context, m TriggerMatch, limit store.TriggerLimit) {
-	telemetry.Count(ctx, "courier_trigger_limited_total", m.Binding, strconv.Itoa(m.Index), string(limit))
+	telemetry.Count(ctx, "agentkourier_trigger_limited_total", m.Binding, strconv.Itoa(m.Index), string(limit))
 	in.log.InfoContext(ctx, "chat: a trigger's start was not made; a limit is reached", "binding", m.Binding, "trigger", m.Index, "limit", limit, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 }

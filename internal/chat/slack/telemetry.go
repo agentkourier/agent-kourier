@@ -31,8 +31,8 @@ func finishChat(ctx context.Context, op *telemetry.Operation, operation string, 
 			outcome = "api_error"
 		}
 	}
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.platform", "slack"), attribute.String("courier.chat.operation", operation))
-	telemetry.Count(ctx, "courier_chat_api_calls_total", operation, outcome)
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.platform", "slack"), attribute.String("agentkourier.chat.operation", operation))
+	telemetry.Count(ctx, "agentkourier_chat_api_calls_total", operation, outcome)
 	if outcome == "not_streaming" {
 		op.FinishOutcome(nil, outcome)
 	} else {

@@ -4,13 +4,13 @@
 // rest.InClusterConfig and nothing else (no kubeconfig loader, so a developer's current context
 // is unreachable), and construction refuses unless the service account's namespace is e2e.
 //
-// The runner must never carry the label app.kubernetes.io/name=courier (UNCONFIRMED(WP-35):
-// courier's real label and namespace). The full-tier NetworkPolicy
-// (hack/kind/full/networkpolicy.yaml) admits any pod with that label in courier's namespace to
-// the kagent front door, so a runner wearing it would be trusted as courier.
+// The runner must never carry the label app.kubernetes.io/name=agent-kourier (UNCONFIRMED(WP-35):
+// Agent Kourier's real label and namespace). The full-tier NetworkPolicy
+// (hack/kind/full/networkpolicy.yaml) admits any pod with that label in Agent Kourier's namespace to
+// the kagent front door, so a runner wearing it would be trusted as Agent Kourier.
 //
 // The runner's Role needs list and delete on pods in each namespace it controls; that Role,
-// including the one in courier's namespace, is UNCONFIRMED(WP-35).
+// including the one in Agent Kourier's namespace, is UNCONFIRMED(WP-35).
 package kube
 
 import (

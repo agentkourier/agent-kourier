@@ -12,7 +12,7 @@ import (
 )
 
 // RegisterMetrics exposes the pool's statistics and the durable backlog gauges, under the names the
-// SQLite store gives the gauges, so one dashboard reads either, and courier_store_deposed_total, which only this store has. The queries use a short deadline and
+// SQLite store gives the gauges, so one dashboard reads either, and agentkourier_store_deposed_total, which only this store has. The queries use a short deadline and
 // report invalid metrics on failure, rather than false zeros.
 func (s *Store) RegisterMetrics(reg prometheus.Registerer) error { return s.a.registerMetrics(reg) }
 
@@ -37,21 +37,21 @@ type poolMetric struct {
 func poolMetrics() []poolMetric {
 	d := func(name, help string) *prometheus.Desc { return prometheus.NewDesc(name, help, nil, nil) }
 	return []poolMetric{
-		{d("courier_store_pool_acquired_conns", "Connections of the store's pool in use."), prometheus.GaugeValue,
+		{d("agentkourier_store_pool_acquired_conns", "Connections of the store's pool in use."), prometheus.GaugeValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.AcquiredConns()) }},
-		{d("courier_store_pool_idle_conns", "Idle connections of the store's pool."), prometheus.GaugeValue,
+		{d("agentkourier_store_pool_idle_conns", "Idle connections of the store's pool."), prometheus.GaugeValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.IdleConns()) }},
-		{d("courier_store_pool_conns", "Connections of the store's pool, in use, idle or being made."), prometheus.GaugeValue,
+		{d("agentkourier_store_pool_conns", "Connections of the store's pool, in use, idle or being made."), prometheus.GaugeValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.TotalConns()) }},
-		{d("courier_store_pool_max_conns", "Largest size of the store's pool."), prometheus.GaugeValue,
+		{d("agentkourier_store_pool_max_conns", "Largest size of the store's pool."), prometheus.GaugeValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.MaxConns()) }},
-		{d("courier_store_pool_acquires_total", "Connections taken from the store's pool."), prometheus.CounterValue,
+		{d("agentkourier_store_pool_acquires_total", "Connections taken from the store's pool."), prometheus.CounterValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.AcquireCount()) }},
-		{d("courier_store_pool_empty_acquires_total", "Takes that had to wait for a connection."), prometheus.CounterValue,
+		{d("agentkourier_store_pool_empty_acquires_total", "Takes that had to wait for a connection."), prometheus.CounterValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.EmptyAcquireCount()) }},
-		{d("courier_store_pool_canceled_acquires_total", "Takes that a context ended before they got a connection."), prometheus.CounterValue,
+		{d("agentkourier_store_pool_canceled_acquires_total", "Takes that a context ended before they got a connection."), prometheus.CounterValue,
 			func(st *pgxpool.Stat) float64 { return float64(st.CanceledAcquireCount()) }},
-		{d("courier_store_pool_acquire_seconds_total", "Time spent taking connections from the store's pool."), prometheus.CounterValue,
+		{d("agentkourier_store_pool_acquire_seconds_total", "Time spent taking connections from the store's pool."), prometheus.CounterValue,
 			func(st *pgxpool.Stat) float64 { return st.AcquireDuration().Seconds() }},
 	}
 }
@@ -73,11 +73,11 @@ type backlogCollector struct{ s *adapter }
 
 func backlogDescriptors() []*prometheus.Desc {
 	return []*prometheus.Desc{
-		prometheus.NewDesc("courier_reply_queue_depth", "Undelivered replies in the durable queue.", nil, nil),
-		prometheus.NewDesc("courier_reply_queue_oldest_age_seconds", "Age of the oldest undelivered reply.", nil, nil),
-		prometheus.NewDesc("courier_outbox_pending", "Unposted, nonabandoned durable outbound rows, including streams.", nil, nil),
-		prometheus.NewDesc("courier_outbox_oldest_age_seconds", "Age of the oldest unposted, nonabandoned outbound row.", nil, nil),
-		prometheus.NewDesc("courier_interactions_pending", "Durable interactions awaiting a decision.", nil, nil),
+		prometheus.NewDesc("agentkourier_reply_queue_depth", "Undelivered replies in the durable queue.", nil, nil),
+		prometheus.NewDesc("agentkourier_reply_queue_oldest_age_seconds", "Age of the oldest undelivered reply.", nil, nil),
+		prometheus.NewDesc("agentkourier_outbox_pending", "Unposted, nonabandoned durable outbound rows, including streams.", nil, nil),
+		prometheus.NewDesc("agentkourier_outbox_oldest_age_seconds", "Age of the oldest unposted, nonabandoned outbound row.", nil, nil),
+		prometheus.NewDesc("agentkourier_interactions_pending", "Durable interactions awaiting a decision.", nil, nil),
 	}
 }
 

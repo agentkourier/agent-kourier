@@ -14,7 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// leaderHalf is what courier runs only as the leader (spec 11, D37): the Binding pool and the chat platform, the
+// leaderHalf is what Agent Kourier runs only as the leader (spec 11, D37): the Binding pool and the chat platform, the
 // outbox, the session manager and its recovery, the sweeps and digests, the interactions' loops and the chat
 // connection (Socket Mode). With SQLite, or with Postgres once a replica holds the lease, Run starts it, in the
 // order a start-up has always had; what every replica runs (the health server, the config and the Secret caches,
@@ -69,7 +69,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 
 	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
 	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
-	// courier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
+	// agentkourier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
 	metrics.ChatConnected(connName, false)
 	platform, err := h.openPlatform(conn, func(up bool) { metrics.ChatConnected(connName, up) })
 	if err != nil {

@@ -42,7 +42,7 @@ func tracingFixture(t *testing.T) (*fixture, context.Context, *tracetest.InMemor
 func TestRunnerPreservesIntakeTraceAndCancellationLifetime(t *testing.T) {
 	f, base, exporter, reg := tracingFixture(t)
 	sink := f.live()
-	ctx, intake := telemetry.Start(base, "courier.intake")
+	ctx, intake := telemetry.Start(base, "agentkourier.intake")
 	id := trace.SpanContextFromContext(ctx).TraceID()
 	observed := make(chan trace.TraceID, 1)
 	f.agent.script = func(ctx context.Context, n int, h agent.Handler) error {
@@ -63,7 +63,7 @@ func TestRunnerPreservesIntakeTraceAndCancellationLifetime(t *testing.T) {
 	}
 	found := false
 	for _, s := range exporter.GetSpans() {
-		if s.Name == "courier.turn.attempt" {
+		if s.Name == "agentkourier.turn.attempt" {
 			found = true
 			if s.SpanContext.TraceID() != id {
 				t.Fatal("turn detached from intake")
@@ -79,10 +79,10 @@ func TestRunnerPreservesIntakeTraceAndCancellationLifetime(t *testing.T) {
 	}
 	waits := false
 	for _, f := range families {
-		if f.GetName() == "courier_sessions_active" && f.Metric[0].Gauge.GetValue() != 0 {
+		if f.GetName() == "agentkourier_sessions_active" && f.Metric[0].Gauge.GetValue() != 0 {
 			t.Fatal("active gauge leaked")
 		}
-		if f.GetName() == "courier_turn_queue_wait_seconds" {
+		if f.GetName() == "agentkourier_turn_queue_wait_seconds" {
 			waits = true
 			if f.Metric[0].Histogram.GetSampleCount() != 1 {
 				t.Fatal("queue wait counted repeatedly")
@@ -97,7 +97,7 @@ func TestRunnerPreservesIntakeTraceAndCancellationLifetime(t *testing.T) {
 func TestRecoveredTaskLinksToStoredTrace(t *testing.T) {
 	f, base, exporter, _ := tracingFixture(t)
 	sink := f.live()
-	original, op := telemetry.Start(base, "courier.intake")
+	original, op := telemetry.Start(base, "agentkourier.intake")
 	f.seed("ns/b1", 0)
 	if err := f.st.SetSessionTask(original, key, "c1", "t1", store.TaskTurn{}); err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestRecoveredTaskLinksToStoredTrace(t *testing.T) {
 	}
 	found := false
 	for _, s := range exporter.GetSpans() {
-		if s.Name == "courier.turn.attempt" {
+		if s.Name == "agentkourier.turn.attempt" {
 			found = true
 			if len(s.Links) != 1 || s.Links[0].SpanContext.TraceID() != originalID {
 				t.Fatalf("recovered turn links=%v", s.Links)

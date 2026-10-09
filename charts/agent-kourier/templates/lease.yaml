@@ -1,0 +1,16 @@
+{{- if not (include "agentkourier.sqlite" .) }}
+{{- /* The leader election's Lease, made here so that Agent Kourier's ServiceAccount needs no right to create one (a create cannot be
+       limited by name, so it would be the right to create any Lease in the namespace). Empty: the first replica to win it
+       writes the holder. Kept on uninstall, as it is Agent Kourier's record of who led; a reinstall under the same release adopts it. Deleting it while
+       Agent Kourier runs stops leadership until helm upgrade recreates it: Agent Kourier may not create a Lease. */}}
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: {{ include "agentkourier.leaseName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec: {}
+{{- end }}

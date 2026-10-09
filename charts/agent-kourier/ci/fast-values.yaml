@@ -1,0 +1,24 @@
+# Agent Kourier in the fast and full kind tiers (hack/kind), as chart values: hack/kind/lib.sh's install_agentkourier installs it as
+# release "agent-kourier" in namespace "agent-kourier". The two tiers run the same Agent Kourier; they differ in the AgentBackend of the config
+# (the stub agent's in the fast tier, kagent's front door in the full one). The config is the tier's own ConfigMap, made by
+# lib.sh's deploy_agentkourier from the tier's files, and its Secrets are in namespace agent-kourier. test/chart pins the objects this
+# renders (the names and labels the tier's scripts and the E2E tests rely on), and loads the config it renders like the tier's.
+image:
+  repository: agent-kourier-e2e/agent-kourier-testhooks # the test image: it has AGENTKOURIER_SLACK_API_URL, the production one does not
+  tag: dev
+  pullPolicy: Never # kind loads it; nothing pulls it
+
+extraEnv:
+  - {name: AGENTKOURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
+
+config:
+  existingConfigMap: agent-kourier-config
+rbac:
+  secretNamespaces: [agent-kourier]
+
+persistence:
+  storageClassName: standard
+  retainOnUninstall: false # a tier's volume goes with it
+
+service:
+  enabled: true

@@ -1,9 +1,0 @@
-# The Slack connection: the fake Slack, over Socket Mode. The Secret slack-fast holds botToken and
-# appToken (fake values, created by up-fast.sh); COURIER_SLACK_API_URL points the client at the fake.
-apiVersion: agentcourier.dev/v1alpha1
-kind: ChatConnection
-metadata: {name: slack-fast, namespace: courier}
-spec:
-  platform: slack
-  mode: socket
-  credentialsSecretRef: {name: slack-fast}

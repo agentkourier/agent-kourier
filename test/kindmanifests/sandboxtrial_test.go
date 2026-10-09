@@ -19,10 +19,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// These tests pin the alert trial's Binding (hack/kind/sandbox/courier/alert-trial): the second Binding of the sandbox's courier, which
+// These tests pin the alert trial's Binding (hack/kind/sandbox/agent-kourier/alert-trial): the second Binding of the sandbox's Agent Kourier, which
 // watches the owner's real alert channel and investigates the [kind] alerts of kind's Alertmanager, and nothing else. A Binding that
 // strays (a mention trigger, a looser receiver, another bot, a question to people) acts in the production channel, so each rule is a test.
-// Every test builds the config with up.sh's own render_courier_config (env.sh), not a copy of its steps.
+// Every test builds the config with up.sh's own render_agentkourier_config (env.sh), not a copy of its steps.
 
 const (
 	// The owner's alert channel and the incoming webhook's bot, as the trial is meant to be pointed at them (chat-triggers.md, "The trial channel").
@@ -32,7 +32,7 @@ const (
 	trialReceiver = `receiver=slack-critical-kind$`
 )
 
-// trialConfig renders the sandbox's courier config as up.sh does, with the alert source on ("1") or off ("0"), and returns the directory.
+// trialConfig renders the sandbox's Agent Kourier config as up.sh does, with the alert source on ("1") or off ("0"), and returns the directory.
 func trialConfig(t *testing.T, alertSource string) string {
 	t.Helper()
 	sbx, err := filepath.Abs(strings.TrimSuffix(sandboxDir, "/"))
@@ -48,12 +48,12 @@ HERE=$(dirname "$1")
 MODEL_NAME=claude-fake-model
 SLACK_CHANNEL_ID=C0SANDBOX01
 ALERT_SOURCE=$2
-render_courier_config "$3"`
+render_agentkourier_config "$3"`
 	var out bytes.Buffer
 	cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", sbx, alertSource, dir)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("render_courier_config: %v\n%s", err, out.String())
+		t.Fatalf("render_agentkourier_config: %v\n%s", err, out.String())
 	}
 	return dir
 }
@@ -81,23 +81,23 @@ func TestTrialBindingLoadsThroughTheRealLoader(t *testing.T) {
 	if len(set.Bindings) != 2 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
 		t.Fatalf("Load = %d Bindings, %d connections, %d backends; want 2, 1, 1", len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
-	if b.Namespace != "courier" || b.Spec.Chat.Channel != trialChannel {
-		t.Errorf("trial Binding %s/%s on %q; want courier/alert-trial on %s", b.Namespace, b.Name, b.Spec.Chat.Channel, trialChannel)
+	if b.Namespace != "agent-kourier" || b.Spec.Chat.Channel != trialChannel {
+		t.Errorf("trial Binding %s/%s on %q; want agent-kourier/alert-trial on %s", b.Namespace, b.Name, b.Spec.Chat.Channel, trialChannel)
 	}
-	snap, err := config.Resolve(t.Context(), set, secrets{"courier/sandbox-slack": {"botToken", "appToken"}, "courier/courier-agent-token": {"token"}})
+	snap, err := config.Resolve(t.Context(), set, secrets{"agent-kourier/sandbox-slack": {"botToken", "appToken"}, "agent-kourier/agent-kourier-agent-token": {"token"}})
 	if err != nil {
 		t.Fatalf("the config does not resolve: %v", err)
 	}
-	if rb, ok := snap.BindingForChannel("courier", "sandbox-slack", trialChannel); !ok || rb.Binding.Name != "alert-trial" {
+	if rb, ok := snap.BindingForChannel("agent-kourier", "sandbox-slack", trialChannel); !ok || rb.Binding.Name != "alert-trial" {
 		t.Errorf("the alert channel resolves to %+v (%t); want the Binding alert-trial", rb.Binding, ok)
 	}
-	if rb, ok := snap.BindingForChannel("courier", "sandbox-slack", "C0SANDBOX01"); !ok || rb.Binding.Name != "sandbox" {
+	if rb, ok := snap.BindingForChannel("agent-kourier", "sandbox-slack", "C0SANDBOX01"); !ok || rb.Binding.Name != "sandbox" {
 		t.Errorf("the dogfood channel resolves to %+v (%t); want the Binding sandbox, as before", rb.Binding, ok)
 	}
 }
 
 // TestTrialBindingHasNoMentionTrigger: the trigger list is authoritative, so a list of one botMessage trigger and no mention means nobody can
-// @mention courier into the production channel.
+// @mention Agent Kourier into the production channel.
 func TestTrialBindingHasNoMentionTrigger(t *testing.T) {
 	b, _ := trialBinding(t)
 	ts := b.Spec.Chat.Triggers
@@ -202,9 +202,9 @@ func TestTrialBindingUsesTheDogfoodAgentAndIdentity(t *testing.T) {
 }
 
 // trialFile is the trial Binding's manifest.
-const trialFile = sandboxDir + "courier/alert-trial/alert-binding.yaml"
+const trialFile = sandboxDir + "agent-kourier/alert-trial/alert-binding.yaml"
 
-// TestTrialIsAppliedOnlyWithTheAlertSource: without the alert source (no webhook file) the courier config is byte for byte what it was before the
+// TestTrialIsAppliedOnlyWithTheAlertSource: without the alert source (no webhook file) the Agent Kourier config is byte for byte what it was before the
 // trial existed; with it, the trial's Binding is added and nothing else changes.
 func TestTrialIsAppliedOnlyWithTheAlertSource(t *testing.T) {
 	read := func(dir string) map[string]string {
@@ -238,20 +238,20 @@ func TestTrialIsAppliedOnlyWithTheAlertSource(t *testing.T) {
 	if strings.Contains(strings.Join(slices.Collect(maps.Values(without)), "\n"), trialChannel) || strings.Contains(strings.Join(slices.Collect(maps.Values(with)), "\n"), "__") {
 		t.Error("the alert channel is in the config without the alert source, or a placeholder is left after rendering")
 	}
-	// up.sh builds the ConfigMap from render_courier_config, after the alert source is decided and not before.
+	// up.sh builds the ConfigMap from render_agentkourier_config, after the alert source is decided and not before.
 	raw, err := os.ReadFile(sandboxDir + "up.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	if n := strings.Count(s, `render_courier_config "${SCRATCH}"`); n != 1 {
-		t.Errorf("up.sh calls render_courier_config %d times; want once, into SCRATCH, which the ConfigMap is made from", n)
+	if n := strings.Count(s, `render_agentkourier_config "${SCRATCH}"`); n != 1 {
+		t.Errorf("up.sh calls render_agentkourier_config %d times; want once, into SCRATCH, which the ConfigMap is made from", n)
 	}
-	if strings.Index(s, `render_courier_config "${SCRATCH}"`) < strings.Index(s, "ALERT_SOURCE=1") {
+	if strings.Index(s, `render_agentkourier_config "${SCRATCH}"`) < strings.Index(s, "ALERT_SOURCE=1") {
 		t.Error("up.sh renders the config before it has decided on the alert source")
 	}
-	if strings.Contains(s, "alert-trial") && !strings.Contains(s, "render_courier_config") {
-		t.Error("up.sh renders the trial's files itself instead of through render_courier_config")
+	if strings.Contains(s, "alert-trial") && !strings.Contains(s, "render_agentkourier_config") {
+		t.Error("up.sh renders the trial's files itself instead of through render_agentkourier_config")
 	}
 }
 
@@ -297,7 +297,7 @@ func TestDryRunVetsTheTriggerThatRuns(t *testing.T) {
 }
 
 // TestTrialChannelIsValidated: the alert channel is a channel ID (not a name, and not empty), and it is not the dogfood channel, which the
-// dogfood Binding already holds: two Bindings cannot share a channel, and courier would refuse the config.
+// dogfood Binding already holds: two Bindings cannot share a channel, and Agent Kourier would refuse the config.
 func TestTrialChannelIsValidated(t *testing.T) {
 	for name, tc := range map[string]struct {
 		alert, dogfood string
@@ -372,7 +372,7 @@ func TestTrialChannelIsOneConstantEverywhere(t *testing.T) {
 	if n := len(regexp.MustCompile(`(?m)^\s+channel: __ALERT_CHANNEL_ID__(\s+#.*)?$`).FindAll(manifest, -1)); n != 1 || strings.Contains(string(manifest), trialChannel) {
 		t.Errorf("%s: want the channel as the one value __ALERT_CHANNEL_ID__ and the ID itself nowhere (webhook.sh holds it)", trialFile)
 	}
-	dogfood, err := os.ReadFile(sandboxDir + "courier/config/binding.yaml")
+	dogfood, err := os.ReadFile(sandboxDir + "agent-kourier/config/binding.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,14 +437,14 @@ func TestTrialTriggerOverTheChannelsMessages(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			v := replay.Classify(chat.HistoryMessage{Message: chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "courier/sandbox-slack", Channel: trialChannel, ID: "1.1"}, Bot: &tc.msg}})
+			v := replay.Classify(chat.HistoryMessage{Message: chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "agent-kourier/sandbox-slack", Channel: trialChannel, ID: "1.1"}, Bot: &tc.msg}})
 			if v.Outcome != tc.want || !reflect.DeepEqual(v.Fields, tc.keys) {
 				t.Errorf("outcome %s with %v (%s); want %s with %v", v.Outcome, v.Fields, v.Why, tc.want, tc.keys)
 			}
 		})
 	}
-	// A person's message, and an @mention of courier in the channel, are no input of the trial: there is no mention trigger.
-	if v := replay.Classify(chat.HistoryMessage{Message: chat.Inbound{At: chat.Ref{Platform: "slack", Channel: trialChannel, ID: "2.1"}, User: "U1", Text: "<@UCOURIER> look at this"}}); v.Outcome != chat.ReplayPerson {
+	// A person's message, and an @mention of Agent Kourier in the channel, are no input of the trial: there is no mention trigger.
+	if v := replay.Classify(chat.HistoryMessage{Message: chat.Inbound{At: chat.Ref{Platform: "slack", Channel: trialChannel, ID: "2.1"}, User: "U1", Text: "<@UAGENTKOURIER> look at this"}}); v.Outcome != chat.ReplayPerson {
 		t.Errorf("a person's message: outcome %s; want %s", v.Outcome, chat.ReplayPerson)
 	}
 }
@@ -467,8 +467,8 @@ func TestAlertTrialRunbook(t *testing.T) {
 	for _, want := range []string{
 		"real alert channel", "make sandbox-up", "make sandbox-alert ALERT=KubePodCrashLooping", "STATE=resolved", "slack: socket mode connected",
 		"Fired again at", "Resolved at", "[kind] FIRING (1) - KubePodCrashLooping", "dedup", "repeat_interval",
-		"session turn started", "chat: trigger decided", "courier_trigger_decisions_total", "courier_trigger_refused_total", "courier_trigger_unmatched_total",
-		"courier dry-run", "courier/trial", "make sandbox-down", "alertmanager-webhook-url", "regenerate", "invite", "no mention", "askUser",
+		"session turn started", "chat: trigger decided", "agentkourier_trigger_decisions_total", "agentkourier_trigger_refused_total", "agentkourier_trigger_unmatched_total",
+		"agent-kourier dry-run", "agent-kourier/trial", "make sandbox-down", "alertmanager-webhook-url", "regenerate", "invite", "no mention", "askUser",
 		"step", "separate thread", "KubePodNotReady",
 	} {
 		if !strings.Contains(section, want) {

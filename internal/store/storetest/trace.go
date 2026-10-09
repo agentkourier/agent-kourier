@@ -32,7 +32,7 @@ func (su suite) traceContext(t *testing.T) {
 
 	su.run(t, "a row written inside a trace remembers it, for whoever reads it later", func(t *testing.T, s store.Store) {
 		h := telemetrytest.New(t)
-		ctx, op := telemetry.Start(h.Ctx, "courier.intake")
+		ctx, op := telemetry.Start(h.Ctx, "agentkourier.intake")
 		defer op.Finish(nil)
 		id := trace.SpanContextFromContext(ctx).TraceID()
 
@@ -84,7 +84,7 @@ func (su suite) traceContext(t *testing.T) {
 
 	su.run(t, "trace headers a caller gives are stored as given, and win over the trace of the call", func(t *testing.T, s store.Store) {
 		h := telemetrytest.New(t)
-		ctx, op := telemetry.Start(h.Ctx, "courier.intake")
+		ctx, op := telemetry.Start(h.Ctx, "agentkourier.intake")
 		defer op.Finish(nil)
 
 		e := newEvent("ev", t0)
@@ -195,7 +195,7 @@ func (su suite) traceContext(t *testing.T) {
 	// trace is the session's current ancestry, and one set outside any trace leaves it.
 	su.run(t, "setting a session's task inside a trace records the trace, and outside one leaves it", func(t *testing.T, s store.Store) {
 		h := telemetrytest.New(t)
-		ctx, op := telemetry.Start(h.Ctx, "courier.turn")
+		ctx, op := telemetry.Start(h.Ctx, "agentkourier.turn")
 		defer op.Finish(nil)
 		id := trace.SpanContextFromContext(ctx).TraceID()
 		sess := store.Session{Key: key, Binding: "ns/b", LastActivity: t0, TraceParent: carrierA, TraceState: stateA}

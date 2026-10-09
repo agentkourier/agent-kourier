@@ -14,7 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 )
 
-// StoreKind says which store courier keeps its state in (spec D15).
+// StoreKind says which store Agent Kourier keeps its state in (spec D15).
 type StoreKind string
 
 // The stores. The zero StoreKind is SQLite, the default.
@@ -38,15 +38,15 @@ func (k SecretKey) complete() bool { return k.Namespace != "" && k.Name != "" &&
 // no value.
 func (k SecretKey) String() string { return k.Namespace + "/" + k.Name + "/" + k.Key }
 
-// StoreConfig chooses the store. Courier cannot see how many replicas run, so the one rule about them, that SQLite
-// is for one, is the chart's to enforce (charts/courier refuses replicaCount above 1 with SQLite).
+// StoreConfig chooses the store. Agent Kourier cannot see how many replicas run, so the one rule about them, that SQLite
+// is for one, is the chart's to enforce (charts/agent-kourier refuses replicaCount above 1 with SQLite).
 type StoreConfig struct {
 	// Kind is StoreSQLite (also what the empty Kind means) or StorePostgres.
 	Kind StoreKind
 	// PostgresDSN is the Secret key that holds the Postgres DSN: required with StorePostgres, and refused with
 	// SQLite. The DSN is read through the same Secret caches as the config's Secrets, so its namespace is watched.
 	PostgresDSN SecretKey
-	// PostgresRoleTimeouts says that the database role sets the idle-in-transaction and statement timeouts, so courier
+	// PostgresRoleTimeouts says that the database role sets the idle-in-transaction and statement timeouts, so Agent Kourier
 	// sends none: for a connection pooler in transaction mode, which refuses them as startup parameters.
 	PostgresRoleTimeouts bool
 }

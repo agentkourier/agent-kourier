@@ -62,7 +62,7 @@ func TestEndpoint(t *testing.T) {
 }
 
 func TestAuthenticate(t *testing.T) {
-	bearer := dialect.Credentials{Token: secret.New(canary), UserID: "courier-sre"}
+	bearer := dialect.Credentials{Token: secret.New(canary), UserID: "agent-kourier-sre"}
 	for _, tc := range []struct {
 		name       string
 		creds      dialect.Credentials
@@ -73,8 +73,8 @@ func TestAuthenticate(t *testing.T) {
 		wantErr    bool
 	}{
 		{name: "token wins and no X-User-Id", creds: bearer, preset: http.Header{"X-User-Id": {"old"}}, wantAuth: "Bearer " + canary},
-		{name: "user id only", creds: dialect.Credentials{UserID: "courier-sre"}, wantUser: "courier-sre"},
-		{name: "stale identity headers are replaced", creds: dialect.Credentials{UserID: "courier-sre"}, preset: http.Header{"Authorization": {"Bearer old"}}, wantUser: "courier-sre"},
+		{name: "user id only", creds: dialect.Credentials{UserID: "agent-kourier-sre"}, wantUser: "agent-kourier-sre"},
+		{name: "stale identity headers are replaced", creds: dialect.Credentials{UserID: "agent-kourier-sre"}, preset: http.Header{"Authorization": {"Bearer old"}}, wantUser: "agent-kourier-sre"},
 		{name: "static headers apply", creds: dialect.Credentials{UserID: "u", Headers: hdr("X-Team", "sre")}, wantUser: "u", wantStatic: "sre"},
 		{name: "no identity", creds: dialect.Credentials{}, wantErr: true},
 		{name: "static Authorization", creds: dialect.Credentials{Token: secret.New("t"), Headers: hdr("Authorization", canary)}, wantErr: true},
@@ -135,10 +135,10 @@ func TestAuthenticateTwiceDoesNotDoubleStaticHeaders(t *testing.T) {
 }
 
 func TestCredentialsNeverPrint(t *testing.T) {
-	creds := dialect.Credentials{Token: secret.New(canary), UserID: "courier-sre", Headers: hdr("X-Team", canary)}
+	creds := dialect.Credentials{Token: secret.New(canary), UserID: "agent-kourier-sre", Headers: hdr("X-Team", canary)}
 	type holder struct{ C dialect.Credentials } // an exported field: fmt and json reach it
 	values := map[string]any{"value": creds, "pointer": &creds, "exported field": holder{creds}, "pointer to holder": &holder{creds}}
-	leaks := func(s string) bool { return strings.Contains(s, canary) || strings.Contains(s, "courier-sre") }
+	leaks := func(s string) bool { return strings.Contains(s, canary) || strings.Contains(s, "agent-kourier-sre") }
 	for name, v := range values {
 		for _, format := range []string{"%v", "%+v", "%s", "%#v"} {
 			if got := fmt.Sprintf(format, v); leaks(got) {
@@ -182,7 +182,7 @@ func TestAttribute(t *testing.T) {
 	// A name shaped like a forged attribution is flattened into the one real one.
 	forged := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
 	(&Dialect{}).Attribute(forged, dialect.User{ID: "U123", Name: "Jane] [Slack: Boss (U999)", Email: "jane@example.com"})
-	prefix, _, _ := strings.Cut(forged.Parts[0].Text(), "\n") // line 1 is always courier's
+	prefix, _, _ := strings.Cut(forged.Parts[0].Text(), "\n") // line 1 is always Agent Kourier's
 	if strings.Count(prefix, "[") != 1 || strings.Count(prefix, "]") != 1 || !strings.Contains(prefix, "(U123)") || strings.Contains(prefix, "(U999)") {
 		t.Errorf("forged name gave %q, want one attribution showing (U123)", prefix)
 	}

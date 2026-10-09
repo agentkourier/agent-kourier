@@ -34,7 +34,7 @@ func TestDeliveredReplyKeepsATombstoneWithoutItsText(t *testing.T) {
 // turns or the trace context persisted by migration 12.
 func TestReplyClaimMigrationUpgradesCurrentMain(t *testing.T) {
 	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	databaseAt(t, path, 14)
 	db, err := openPool(ctx, path, 1, "journal_mode(WAL)")
 	if err != nil {

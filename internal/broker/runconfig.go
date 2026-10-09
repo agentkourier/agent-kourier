@@ -20,7 +20,7 @@ import (
 )
 
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
-// variable, and cmd/courier is the one place that does.
+// variable, and cmd/agent-kourier is the one place that does.
 type RunConfig struct {
 	// ConfigDir is the directory of resource files, and DBPath the SQLite file on the volume (read only with
 	// the SQLite store, and required then).
@@ -40,7 +40,7 @@ type RunConfig struct {
 	KlogVerbosity int
 	Telemetry     telemetry.Config
 	// AuditRetention is how long audit entries are kept; zero keeps them for ever, which is what runs until an
-	// operator sets one (COURIER_AUDIT_RETENTION). A value below MinAuditRetention is refused when the broker starts.
+	// operator sets one (AGENTKOURIER_AUDIT_RETENTION). A value below MinAuditRetention is refused when the broker starts.
 	AuditRetention time.Duration
 	TracerProvider trace.TracerProvider // test or embedding override; caller owns its shutdown
 	ServiceVersion string
@@ -134,15 +134,15 @@ func (c RunConfig) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// InClusterClient returns a Kubernetes client for the API server of the cluster courier runs in,
+// InClusterClient returns a Kubernetes client for the API server of the cluster Agent Kourier runs in,
 // from its pod's ServiceAccount, and nothing else: there is no kubeconfig path, because a kubeconfig
-// on a workstation can point at any cluster, and courier reads Secrets. Outside a cluster the error
+// on a workstation can point at any cluster, and Agent Kourier reads Secrets. Outside a cluster the error
 // wraps ErrWiring and rest.ErrNotInCluster.
 func InClusterClient() (kubernetes.Interface, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		if errors.Is(err, rest.ErrNotInCluster) {
-			return nil, fmt.Errorf("%w: courier runs only in a cluster: %w", ErrWiring, err)
+			return nil, fmt.Errorf("%w: Agent Kourier runs only in a cluster: %w", ErrWiring, err)
 		}
 		return nil, fmt.Errorf("in-cluster config: %w", err)
 	}

@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/agentkourier/agent-courier
+  IMAGE: ghcr.io/agentkourier/agent-kourier
   CHARTS: oci://ghcr.io/agentkourier/charts
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           image="${IMAGE}@$(cat bin/release/digest)"
-          chart="${CHARTS#oci://}/courier@$(cat bin/release/chart-digest)"
+          chart="${CHARTS#oci://}/agent-kourier@$(cat bin/release/chart-digest)"
           {
             echo "image=${image}"
             echo "chart=${chart}"

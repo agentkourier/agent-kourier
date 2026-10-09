@@ -1,0 +1,23 @@
+# Agent Kourier in the fast kind tier on Postgres (E2E_STORE=postgres make e2e-fast-up): fast-values.yaml with the state in the tier's
+# Postgres instead of a volume. hack/kind/lib.sh's install_agentkourier installs it as release "agent-kourier" in namespace agent-kourier; the DSN
+# Secret agent-kourier-pg (key dsn) is made there, by the script, with a password generated for the cluster and never on an argument list.
+image:
+  repository: agent-kourier-e2e/agent-kourier-testhooks # the test image: it has AGENTKOURIER_SLACK_API_URL, the production one does not
+  tag: dev
+  pullPolicy: Never # kind loads it; nothing pulls it
+
+extraEnv:
+  - {name: AGENTKOURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
+
+config:
+  existingConfigMap: agent-kourier-config
+rbac:
+  secretNamespaces: [agent-kourier]
+
+store:
+  type: postgres
+  postgres:
+    dsnSecret: {name: agent-kourier-pg, key: dsn}
+
+service:
+  enabled: true

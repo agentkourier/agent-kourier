@@ -5,7 +5,7 @@ import (
 )
 
 // Attachment is a legacy Slack attachment, the one an incoming webhook posts its content in, with the
-// fields courier reads. The JSON names are Slack's, so a control request and the message the fake stores
+// fields Agent Kourier reads. The JSON names are Slack's, so a control request and the message the fake stores
 // and delivers have the same shape.
 type Attachment struct {
 	// ID is the attachment's position in its message, from 1. Slack assigns it, and so does the fake:
@@ -28,7 +28,7 @@ type Attachment struct {
 type WebhookPost struct {
 	Channel string `json:"channel"`
 	// BotID is the bot the webhook posts as, such as B0EXAMPLE01. It may be the fake's own bot, which is how
-	// a test shows courier ignoring itself.
+	// a test shows Agent Kourier ignoring itself.
 	BotID string `json:"bot_id"`
 	// Username is the name the post shows; "incoming-webhook" if empty.
 	Username    string       `json:"username,omitempty"`

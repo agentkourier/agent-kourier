@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Make a fresh Dex ID token for the Binding identity and store it in courier's Secret courier-agent-token (the full
+# Make a fresh Dex ID token for the Binding identity and store it in Agent Kourier's Secret agent-kourier-agent-token (the full
 # tier's; see lib.sh's refresh_dex_token). The token lasts 24 hours, so run this before using a full tier that has
-# been up that long; e2e-run.sh full does. Names --context kind-courier-full on every call.
+# been up that long; e2e-run.sh full does. Names --context kind-agent-kourier-full on every call.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

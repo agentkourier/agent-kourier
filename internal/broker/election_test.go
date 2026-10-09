@@ -23,7 +23,7 @@ import (
 // testElection is an election with timings short enough for a test and long enough for a loaded machine: a lease of
 // 3 s, a leader that gives up renewing after 2 s, and a try every 200 ms.
 var testElection = ElectionConfig{
-	Namespace: "courier", Name: "courier-leader", Identity: "pod-a_1",
+	Namespace: "agent-kourier", Name: "agent-kourier-leader", Identity: "pod-a_1",
 	LeaseDuration: 3 * time.Second, RenewDeadline: 2 * time.Second, RetryPeriod: 200 * time.Millisecond,
 }
 
@@ -40,7 +40,7 @@ func eventually(t *testing.T, d time.Duration, what string, cond func() bool) {
 }
 
 func TestElectionConfigDefaultsTheTimingsToTheDesignsAndChecksTheOrder(t *testing.T) {
-	base := ElectionConfig{Namespace: "courier", Name: "leader", Identity: "pod"}
+	base := ElectionConfig{Namespace: "agent-kourier", Name: "leader", Identity: "pod"}
 	got := base.withDefaults()
 	if got.LeaseDuration != 15*time.Second || got.RenewDeadline != 10*time.Second || got.RetryPeriod != 2*time.Second {
 		t.Errorf("defaults = %s, %s, %s; want 15s, 10s, 2s (D37)", got.LeaseDuration, got.RenewDeadline, got.RetryPeriod)
@@ -237,7 +237,7 @@ func holder(t *testing.T, client *fake.Clientset) string {
 	return *l.Spec.HolderIdentity
 }
 
-// One of two candidates wins the Lease, in courier's namespace under the name the config gives; the other waits
+// One of two candidates wins the Lease, in Agent Kourier's namespace under the name the config gives; the other waits
 // without ever being told it leads, and without losing anything.
 func TestCandidacyOnlyTheWinnerIsToldItLeads(t *testing.T) {
 	client := fake.NewClientset()
@@ -255,11 +255,11 @@ func TestCandidacyOnlyTheWinnerIsToldItLeads(t *testing.T) {
 	}
 }
 
-// The chart makes the Lease, empty, and courier is not allowed to create one: the first replica takes the empty Lease.
+// The chart makes the Lease, empty, and Agent Kourier is not allowed to create one: the first replica takes the empty Lease.
 func TestCandidacyTakesTheEmptyLeaseTheChartMade(t *testing.T) {
 	client := fake.NewClientset(&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Namespace: testElection.Namespace, Name: testElection.Name}})
 	client.PrependReactor("create", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, errors.New("courier may not create a Lease")
+		return true, nil, errors.New("Agent Kourier may not create a Lease")
 	})
 
 	a := standFor(t, client, "pod-a_1")

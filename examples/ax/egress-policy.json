@@ -1,7 +1,7 @@
 {
-  "actor": {"atespace": "courier-ax", "name": "assistant"},
+  "actor": {"atespace": "agent-kourier-ax", "name": "assistant"},
   "egressPolicy": {
-    "metadata": {"atespace": "courier-ax", "name": "default"},
+    "metadata": {"atespace": "agent-kourier-ax", "name": "default"},
     "rules": [
       {"hostnames": {
         "patterns": ["bedrock-runtime.us-east-1.amazonaws.com"],

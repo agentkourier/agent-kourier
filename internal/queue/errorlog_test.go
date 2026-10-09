@@ -14,7 +14,7 @@ import (
 )
 
 // A handler's error and a handler's panic value are the handler's own text, and may hold a secret or an event's
-// content. Through courier's log handler the lines hold no secret-shaped value and no more than the cap, and keep the
+// content. Through Agent Kourier's log handler the lines hold no secret-shaped value and no more than the cap, and keep the
 // messages and keys operators grep.
 func TestHandlerErrorsAndPanicsAreRedactedAndCappedInLogs(t *testing.T) {
 	long := strings.Repeat("content of the alert payload. ", 40)

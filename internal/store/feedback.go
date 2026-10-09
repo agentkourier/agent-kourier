@@ -8,7 +8,7 @@ import (
 // Verdict is what a person says of a message of an investigation: spec 8.7.
 type Verdict string
 
-// The verdicts, the closed set of the verdict label of courier_investigation_feedback_total.
+// The verdicts, the closed set of the verdict label of agentkourier_investigation_feedback_total.
 const (
 	VerdictUseful    Verdict = "useful"
 	VerdictNotUseful Verdict = "not_useful"
@@ -31,7 +31,7 @@ const (
 func (k FeedbackKind) Valid() bool { return k == FeedbackInvestigation || k == FeedbackAnswer }
 
 // FeedbackVote is one person's verdict on one message of one session: the row of the feedback table (spec 9). It holds
-// identifiers, a name and a verdict, and no text a person wrote: courier asks for none.
+// identifiers, a name and a verdict, and no text a person wrote: Agent Kourier asks for none.
 type FeedbackVote struct {
 	// Key is the session, and Turn the turn whose output is the rated message (its outbox source). Together with User
 	// they are the vote's identity: a person has one vote on a message, and a later one replaces it.

@@ -94,7 +94,7 @@ func warnIfNewer(ctx context.Context, pool *pgxpool.Pool, known []migration, log
 		return fmt.Errorf("read the newest migration: %w", err)
 	}
 	if n := len(known); n > 0 && highest > known[n-1].version {
-		log.WarnContext(ctx, "the database schema is newer than this build of courier",
+		log.WarnContext(ctx, "the database schema is newer than this build of Agent Kourier",
 			"newest_known_migration", known[n-1].version, "newest_in_database", highest)
 	}
 	return nil

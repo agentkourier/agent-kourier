@@ -26,7 +26,7 @@ func promptOf(th []fakeslack.MessageView) (fakeslack.MessageView, bool) {
 }
 
 // TestS3_AnAskUserPromptAcceptsOnlyACompleteAuthorizedAnswer: the agent asks two questions, a
-// multiple choice and a free-text one, courier posts them as a prompt with a Submit button, and:
+// multiple choice and a free-text one, Agent Kourier posts them as a prompt with a Submit button, and:
 //   - a Submit with the second question unanswered is told to its sender alone, by number, and leaves the
 //     prompt as it was, so what the others have typed is not reset, and the agent is not told anything;
 //   - a complete Submit decides the question: the prompt is edited to its decided content, with no button, and
@@ -42,7 +42,7 @@ func TestS3_AnAskUserPromptAcceptsOnlyACompleteAuthorizedAnswer(t *testing.T) {
 		return
 	}
 	const user = "US3"
-	// Only a member of the channel who is not a bot may answer: courier asks Slack.
+	// Only a member of the channel who is not a bot may answer: Agent Kourier asks Slack.
 	s.know(user)
 	if err := s.slack.SetMembers(s.ctx, ChannelS3, user); err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestS3_AnAskUserPromptAcceptsOnlyACompleteAuthorizedAnswer(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := s.slack.AckWait(s.ctx, 15*time.Second, id); err != nil {
-			t.Fatalf("courier never acked the press: %v", err)
+			t.Fatalf("Agent Kourier never acked the press: %v", err)
 		}
 	}
 

@@ -44,7 +44,7 @@ func TestChatErrorsAreNotExported(t *testing.T) {
 	}
 	h.RequireNone(t, canary, botToken, appToken, "private-message-text", "private-stream-text", "private-step-title")
 	for _, op := range []string{"Post", "AppendStream", "AppendStep"} {
-		if h.Counter(t, "courier_chat_api_calls_total", map[string]string{"operation": op, "outcome": "api_error"}) != 1 {
+		if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": op, "outcome": "api_error"}) != 1 {
 			t.Errorf("%s was not counted once as an api_error", op)
 		}
 	}
@@ -63,10 +63,10 @@ func TestRefusedChunksModeIsItsOwnOutcome(t *testing.T) {
 			if err == nil {
 				t.Fatal("AppendStream succeeded")
 			}
-			if h.Counter(t, "courier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "mode_refused"}) != 1 {
+			if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "mode_refused"}) != 1 {
 				t.Errorf("%s was not counted as mode_refused: %s", code, h.Exported(t))
 			}
-			if s := h.Span(t, "courier.chat.AppendStream"); s.Status.Description != "mode_refused" {
+			if s := h.Span(t, "agentkourier.chat.AppendStream"); s.Status.Description != "mode_refused" {
 				t.Errorf("span status = %q, want mode_refused", s.Status.Description)
 			}
 		})
@@ -74,7 +74,7 @@ func TestRefusedChunksModeIsItsOwnOutcome(t *testing.T) {
 	// Other API errors, and the arguments error that also starts the fallback, stay api_error.
 	h := telemetrytest.New(t)
 	_ = refusingClient(t, "invalid_arguments").AppendStream(h.Ctx, "C1", "1.0", "text", slack.ChunksMode)
-	if h.Counter(t, "courier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "api_error"}) != 1 {
+	if h.Counter(t, "agentkourier_chat_api_calls_total", map[string]string{"operation": "AppendStream", "outcome": "api_error"}) != 1 {
 		t.Error("invalid_arguments is not an api_error")
 	}
 }

@@ -72,13 +72,13 @@ type pg struct {
 	hasMore bool
 }
 
-// tagged is a message with courier's metadata naming id, posted by user.
+// tagged is a message with Agent Kourier's metadata naming id, posted by user.
 func tagged(user, id, ts string) map[string]any {
 	return map[string]any{"type": "message", "user": user, "ts": ts, "text": "x",
 		"metadata": map[string]any{"event_type": slack.MetadataEventType, "event_payload": map[string]any{"outbox_id": id}}}
 }
 
-// otherType is tagged, with an event_type that is not courier's.
+// otherType is tagged, with an event_type that is not Agent Kourier's.
 func otherType(user, id, ts string) map[string]any {
 	m := tagged(user, id, ts)
 	m["metadata"].(map[string]any)["event_type"] = "another_app_message"
@@ -113,7 +113,7 @@ func stubHistory(t *testing.T, pages map[string]pg, bot string) (*slack.Client, 
 }
 
 // TestFindWalksToTheEnd serves pages that put the match last, and a forgery first: Find must
-// read every page whatever order they come in, and take only courier's own message.
+// read every page whatever order they come in, and take only Agent Kourier's own message.
 func TestFindWalksToTheEnd(t *testing.T) {
 	pages := map[string]pg{
 		"":   {msgs: []map[string]any{tagged("UOTHER", "t", "1.1")}, next: "c1", hasMore: true},

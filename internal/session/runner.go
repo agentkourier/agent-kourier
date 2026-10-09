@@ -30,8 +30,8 @@ type convo struct {
 	busyNoted    bool            // the thread was told the reply is queued behind a task nobody recorded
 	waitSince    time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
 	waitNoted    bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
-	lastSeen     time.Time       // when courier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
-	life         life            // what courier already holds of that task, so a replayed snapshot is not life
+	lastSeen     time.Time       // when Agent Kourier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
+	life         life            // what Agent Kourier already holds of that task, so a replayed snapshot is not life
 	cancelFrom   time.Time       // when the first attempt to cancel a wedged task was made, for SendGiveUp
 	cancelNow    bool            // the task is known to be wedged: cancel it at once, without waiting for its age
 	patient      bool            // the turn is never given up on: the agent may have taken it
@@ -71,7 +71,7 @@ const (
 	idle outcome = iota
 	ended
 	paused
-	blocked // the agent is busy with a task courier did not record, or the lookup failed
+	blocked // the agent is busy with a task Agent Kourier did not record, or the lookup failed
 )
 
 // start is the wake hook: it makes sure a runner is draining key's queue.
@@ -122,7 +122,7 @@ func (m *Manager) adopt(key Key, t *tstate) {
 func (m *Manager) newConvo(key Key) *convo {
 	c := &convo{resume: make(chan struct{}, 1), answers: make(chan answerWork, 1), queued: make(chan struct{}, 1)}
 	m.convos[key] = c
-	telemetry.AddGauge(m.ctx, "courier_sessions_active", 1)
+	telemetry.AddGauge(m.ctx, "agentkourier_sessions_active", 1)
 	return c
 }
 
@@ -200,7 +200,7 @@ func (m *Manager) backoff(tries int) time.Duration {
 // is blocked is retried after a backoff, and never dropped.
 func (m *Manager) run(key Key, c *convo) {
 	defer m.wg.Done()
-	defer telemetry.AddGauge(m.ctx, "courier_sessions_active", -1)
+	defer telemetry.AddGauge(m.ctx, "agentkourier_sessions_active", -1)
 	for m.ctx.Err() == nil {
 		out, err := m.turn(key, c)
 		for m.log(key, c, out, err); out == paused && m.ctx.Err() == nil; m.log(key, c, out, err) {
@@ -241,8 +241,8 @@ func (m *Manager) log(key Key, c *convo, out outcome, err error) {
 // pause ended (cancelled, timed out: see endPause), so the task is cleared and the held replies
 // go out; or an answer was sent, whose stream is followed to where it ends or pauses again.
 func (m *Manager) parked(key Key, c *convo) (outcome, error) {
-	telemetry.AddGauge(m.ctx, "courier_sessions_paused", 1)
-	defer telemetry.AddGauge(m.ctx, "courier_sessions_paused", -1)
+	telemetry.AddGauge(m.ctx, "agentkourier_sessions_paused", 1)
+	defer telemetry.AddGauge(m.ctx, "agentkourier_sessions_paused", -1)
 	select {
 	case <-c.resume:
 		return m.releasePause(key, c)
@@ -602,7 +602,7 @@ func (m *Manager) unpark(c *convo) {
 	}
 }
 
-// life is what courier holds of one task: its state, the text of each artifact, and the tool
+// life is what Agent Kourier holds of one task: its state, the text of each artifact, and the tool
 // calls and results seen. An event that adds nothing to it (the replay of a snapshot) shows no
 // sign that the task is alive.
 type life struct {
@@ -655,7 +655,7 @@ type tstate struct {
 	taskID    a2a.TaskID      // the task the agent named, or the one followed or answered
 	op        audit.Op        // the call audit rows name, when not a send
 	traceCtx  context.Context // current attempt, for correlated lifecycle logs
-	system    bool            // courier made the call itself: no person, no turn
+	system    bool            // Agent Kourier made the call itself: no person, no turn
 	recovered bool            // the task was found again after a restart
 	began     store.TaskTurn  // the turn the session recorded for the recovered task, whose output the renderer continues; zero if none was
 	texted    bool            // the turn said something to read: kept across a stream lost and followed, for the renderer keeps the message
@@ -700,7 +700,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	if t.recovered && !t.answer {
 		parentCtx = m.ctx
 	}
-	parentCtx, op := telemetry.Start(parentCtx, "courier.turn.attempt", attribute.String("courier.binding", t.sess.Binding), attribute.String("courier.turn.id", r.ID), attribute.Bool("courier.recovered", t.recovered && !t.answer), attribute.Int("courier.retry.count", c.tries), attribute.String("courier.backend", t.b.Name), attribute.String("courier.agent.name", t.b.AgentName), attribute.String("courier.dialect", t.b.Dialect))
+	parentCtx, op := telemetry.Start(parentCtx, "agentkourier.turn.attempt", attribute.String("agentkourier.binding", t.sess.Binding), attribute.String("agentkourier.turn.id", r.ID), attribute.Bool("agentkourier.recovered", t.recovered && !t.answer), attribute.Int("agentkourier.retry.count", c.tries), attribute.String("agentkourier.backend", t.b.Name), attribute.String("agentkourier.agent.name", t.b.AgentName), attribute.String("agentkourier.dialect", t.b.Dialect))
 	if t.recovered && !t.answer {
 		telemetry.Link(parentCtx, t.sess.TraceParent, t.sess.TraceState)
 	}
@@ -720,7 +720,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	_, begun := m.begun[r.ID]
 	m.mu.Unlock()
 	if !begun && !r.EnqueuedAt.IsZero() {
-		telemetry.Observe(m.ctx, "courier_turn_queue_wait_seconds", m.cfg.Now().Sub(r.EnqueuedAt), t.sess.Binding)
+		telemetry.Observe(m.ctx, "agentkourier_turn_queue_wait_seconds", m.cfg.Now().Sub(r.EnqueuedAt), t.sess.Binding)
 	}
 	m.begin(t)
 	h := func(agent.Event) {}
@@ -746,7 +746,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 		}
 		switch ev := e.(type) {
 		case agent.StateEvent:
-			trace.SpanFromContext(tctx).SetAttributes(attribute.String("courier.task.id", string(ev.TaskID)), attribute.String("courier.context.id", ev.ContextID), attribute.String("courier.task.state", string(ev.State)))
+			trace.SpanFromContext(tctx).SetAttributes(attribute.String("agentkourier.task.id", string(ev.TaskID)), attribute.String("agentkourier.context.id", ev.ContextID), attribute.String("agentkourier.task.state", string(ev.State)))
 			t.taskID = ev.TaskID
 			m.drives(c, ev.TaskID)
 			if !named { // the agent has named the task: record it before anyone renders it
@@ -794,7 +794,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	}
 	switch {
 	case recordErr != nil: // the agent has the turn and we cannot say so: never send it again
-		telemetry.Count(parentCtx, "courier_session_recovery_total", "record_failed")
+		telemetry.Count(parentCtx, "agentkourier_session_recovery_total", "record_failed")
 		m.hold(key, r.ID)
 		return ended, fmt.Errorf("record accepted turn %s: %w", r.ID, recordErr)
 	case err != nil && t.answer && errors.Is(err, agent.ErrAnswerRejected): // it says so after the task is named again
@@ -883,7 +883,7 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	return m.repark(t), nil
 }
 
-// Details of the notice an answer that the agent refused gets, by what it said (see readAnswered). Courier does
+// Details of the notice an answer that the agent refused gets, by what it said (see readAnswered). Agent Kourier does
 // not send the answer again: the thread is told, and the person answers again if the pause is open.
 const (
 	answerBusyDetail     = "the agent is busy with the task, and did not take the answer"
@@ -1013,7 +1013,7 @@ func taskNoticeID(key Key, id a2a.TaskID, kind NoticeKind) string {
 }
 
 // resume follows the task of a turn whose stream was lost. A task WORKING for longer than
-// MaxWorkingAge (the agent's timestamp of the state, on courier's clock), or one whose state
+// MaxWorkingAge (the agent's timestamp of the state, on Agent Kourier's clock), or one whose state
 // cannot be read for that long, is presumed wedged and cancelled (R17); otherwise the stream
 // is picked up again.
 func (m *Manager) resume(c *convo) (out outcome, err error) {
@@ -1042,15 +1042,15 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 }
 
 // wedgedByAge reports whether a WORKING task has gone too long without life (R17): it counts
-// from the later of the task's status timestamp and the last event courier saw of it, so a
+// from the later of the task's status timestamp and the last event Agent Kourier saw of it, so a
 // healthy task that streamed for hours and then dropped is followed. A state with no timestamp
-// counts from the last event courier saw, else from the loss; a timestamp in the future protects
+// counts from the last event Agent Kourier saw, else from the loss; a timestamp in the future protects
 // the task only until it has passed. What a follow replays from its snapshot is not new life.
 func (m *Manager) wedgedByAge(c *convo, task *a2a.Task) bool {
 	if !running(task) {
 		return false
 	}
-	var alive time.Time // the latest sign of life: the status timestamp, or what courier saw
+	var alive time.Time // the latest sign of life: the status timestamp, or what Agent Kourier saw
 	if ts := task.Status.Timestamp; ts != nil {
 		alive = *ts
 	}
@@ -1082,7 +1082,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 		c.cancelFrom = m.cfg.Now()
 	}
 	_, err := t.b.Agent.CancelTask(m.ctx, t.taskID)
-	t.op, t.system = audit.OpCancel, true // courier's own cancel: not the paused turn's user, not its message
+	t.op, t.system = audit.OpCancel, true // Agent Kourier's own cancel: not the paused turn's user, not its message
 	defer func() { t.op, t.system = "", false }()
 	kind := classifyCancel(err)
 	switch {
@@ -1105,7 +1105,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case kind == cancelForbidden, m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
 		m.audit(t, t.call(err))
 		c.follow = nil
-		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; stop it from the thread, or restart courier to reconcile it", err)
+		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; stop it from the thread, or restart agent-kourier to reconcile it", err)
 	}
 	c.tries++
 	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)
@@ -1160,7 +1160,7 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 }
 
 // waitNoticeAfter is how long the head turn may get -32004, busy or not ready, before the thread is told it waits.
-// A reply to a task courier recorded is held without a send, and its reaction says so; this is for the turn that
+// A reply to a task Agent Kourier recorded is held without a send, and its reaction says so; this is for the turn that
 // is sent again and again into a session that does not take it, such as a task that nobody recorded, or a
 // controller that crash-loops, which would otherwise show nothing past the reaction. A couple of minutes is
 // past a session that is merely starting, and well inside the time an operator takes to notice a stuck one.
@@ -1227,7 +1227,7 @@ func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (o
 func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
 	switch kind {
 	case NoticeWedged, NoticeDuplicateRun, NoticeRetrying:
-		telemetry.Count(m.ctx, "courier_session_recovery_total", string(kind))
+		telemetry.Count(m.ctx, "agentkourier_session_recovery_total", string(kind))
 	}
 	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
 }

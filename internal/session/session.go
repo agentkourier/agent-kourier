@@ -1,4 +1,4 @@
-// Package session is courier's session manager: it maps a chat conversation to an agent
+// Package session is Agent Kourier's session manager: it maps a chat conversation to an agent
 // session, queues the thread's replies durably, and runs one turn at a time against the
 // agent (spec 8.2, 8.3, D21, D28). The durable intake here never talks to the agent.
 package session
@@ -35,7 +35,7 @@ type Store interface {
 }
 
 // Questions finds the question a thread is waiting on. The intake asks it, in a mention-only Binding, whether a reply
-// that does not mention courier is the answer to a question that takes text replies (D38). store.Interactions
+// that does not mention Agent Kourier is the answer to a question that takes text replies (D38). store.Interactions
 // satisfies it.
 type Questions interface {
 	// PendingTextQuestion returns the pending interaction of the thread that takes text replies, or
@@ -59,7 +59,7 @@ type Backend struct {
 	// the Binding takes text replies to the agent's questions (TakesTextReplies).
 	Name, AgentName, Dialect string
 	// ThreadReplies is the Binding's chat.threadReplies. Anything but mention, the empty value too,
-	// means every person's reply in a thread courier owns is a turn (spec 8.2, D38).
+	// means every person's reply in a thread Agent Kourier owns is a turn (spec 8.2, D38).
 	ThreadReplies v1alpha1.ThreadReplies
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
@@ -122,7 +122,7 @@ type TurnRef struct {
 	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
 	Feedback store.FeedbackKind
 	// ThreadReplies is the Binding's chat.threadReplies. In mention the final message of the output tells the thread to mention
-	// courier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
+	// Agent Kourier to ask a follow-up (D38); anything else, the empty value too, adds nothing.
 	ThreadReplies v1alpha1.ThreadReplies
 }
 
@@ -138,13 +138,13 @@ const (
 	// place finds the first from the second, whichever it sees first. It is raised only for a turn that may
 	// carry the reaction.
 	NoticeDequeued NoticeKind = "dequeued"
-	// NoticeStillBusy says a turn has waited, for a task of the session that courier did not record, longer
+	// NoticeStillBusy says a turn has waited, for a task of the session that Agent Kourier did not record, longer
 	// than waitNoticeAfter: it is sent again after each backoff, and never dropped.
 	NoticeStillBusy NoticeKind = "still_busy"
 	// NoticeNotReady says the same of a turn the agent answered, for that long, that its session cannot take
 	// input yet (agent.ErrNotReady): it is starting, or in a lifecycle operation.
 	NoticeNotReady NoticeKind = "not_ready"
-	// NoticeRetrying says the agent cannot be reached and courier is trying again (spec 11). It follows the
+	// NoticeRetrying says the agent cannot be reached and Agent Kourier is trying again (spec 11). It follows the
 	// second failed send in a row: the first is retried silently.
 	NoticeRetrying NoticeKind = "retrying"
 	// NoticeFailed says the turn failed and will not be sent; Detail says why.
@@ -179,10 +179,10 @@ const (
 	// NoticeNoOutput says the agent's task completed with nothing to show.
 	NoticeNoOutput NoticeKind = "no_output"
 	// NoticeTriggerRepeat says a botMessage trigger's key fired again, in the thread that holds it, and starts
-	// no turn (spec 8.2). Detail is the time, which courier made.
+	// no turn (spec 8.2). Detail is the time, which Agent Kourier made.
 	NoticeTriggerRepeat NoticeKind = "trigger_repeat"
 	// NoticeTriggerClosed says a botMessage trigger's key closed, such as an alert that resolved, in the thread
-	// that holds it, and starts no turn. Detail is the time, which courier made.
+	// that holds it, and starts no turn. Detail is the time, which Agent Kourier made.
 	NoticeTriggerClosed NoticeKind = "trigger_closed"
 	// NoticeTriggerRefused says a botMessage trigger's start was refused, so the alert's thread has no
 	// investigation. Detail names which value failed its check (".Fields.alertname failed the prompt check.")
@@ -269,7 +269,7 @@ type Config struct {
 	RetryBase, RetryMax time.Duration
 	// MaxWorkingAge is how long a WORKING task may go without life, after a stream was lost,
 	// before it is presumed wedged and cancelled (R17). Its age counts from the later of the
-	// task's status timestamp and the last event courier saw of it, so a task that streamed for
+	// task's status timestamp and the last event Agent Kourier saw of it, so a task that streamed for
 	// hours and then dropped is followed. It defaults to an hour, and never limits a live stream.
 	MaxWorkingAge time.Duration
 	// SendGiveUp is how long an unreachable agent is retried before the turn fails (spec 11).

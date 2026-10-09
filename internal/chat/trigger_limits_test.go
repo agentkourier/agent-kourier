@@ -41,7 +41,7 @@ func newLimited(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 	return h
 }
 
-// restartLimited is a restart of courier: the database is closed and opened again, and a new Intake, which remembers no
+// restartLimited is a restart of Agent Kourier: the database is closed and opened again, and a new Intake, which remembers no
 // message and no count, is made over it.
 func (h *triggered) restartLimited(t *testing.T) {
 	t.Helper()
@@ -50,7 +50,7 @@ func (h *triggered) restartLimited(t *testing.T) {
 	h.in = chat.NewIntake(h.cfg)
 }
 
-// limitedCount reads courier_trigger_limited_total of the test's Binding and trigger index, by limit.
+// limitedCount reads agentkourier_trigger_limited_total of the test's Binding and trigger index, by limit.
 func (h *triggered) limitedCount(t *testing.T, trigger string) map[string]float64 {
 	t.Helper()
 	families, err := h.reg.Gather()
@@ -59,7 +59,7 @@ func (h *triggered) limitedCount(t *testing.T, trigger string) map[string]float6
 	}
 	out := map[string]float64{}
 	for _, f := range families {
-		if f.GetName() != "courier_trigger_limited_total" {
+		if f.GetName() != "agentkourier_trigger_limited_total" {
 			continue
 		}
 		for _, m := range f.Metric {
@@ -68,7 +68,7 @@ func (h *triggered) limitedCount(t *testing.T, trigger string) map[string]float6
 				labels[l.GetName()] = l.GetValue()
 			}
 			if len(labels) != 3 {
-				t.Errorf("courier_trigger_limited_total has labels %v; want binding, trigger and limit only", labels)
+				t.Errorf("agentkourier_trigger_limited_total has labels %v; want binding, trigger and limit only", labels)
 			}
 			if labels["binding"] == bindingName && labels["trigger"] == trigger {
 				out[labels["limit"]] += m.Counter.GetValue()
@@ -153,7 +153,7 @@ func TestAStormOfDistinctAlertsStartsOnlyTheRateLimit(t *testing.T) {
 		t.Errorf("notes %v were posted; want none for a limited alert, or for a start", kinds)
 	}
 	if got := h.limitedCount(t, "0"); len(got) != 1 || got["rate"] != 3 {
-		t.Errorf("courier_trigger_limited_total = %v; want 3 for rate", got)
+		t.Errorf("agentkourier_trigger_limited_total = %v; want 3 for rate", got)
 	}
 	ds := h.digests(t)
 	if len(ds) != 1 || ds[0].Counts[store.LimitRate] != 3 || len(ds[0].Counts) != 1 || ds[0].Binding != bindingName || ds[0].Channel != "C1" || ds[0].Connection != conn {
@@ -208,7 +208,7 @@ func TestMaxConcurrentCountsRunningInvestigations(t *testing.T) {
 		t.Fatalf("a third with two running: %q; want limited", got)
 	}
 	if got := h.limitedCount(t, "0"); got["concurrent"] != 1 || len(got) != 1 {
-		t.Errorf("courier_trigger_limited_total = %v; want 1 for concurrent", got)
+		t.Errorf("agentkourier_trigger_limited_total = %v; want 1 for concurrent", got)
 	}
 	// The first investigation ends: the manager clears its task.
 	if err := h.st.SetSessionTask(t.Context(), store.ConversationKey{Connection: conn, Channel: "C1", Thread: "100.1"}, "", "", store.TaskTurn{}); err != nil {
@@ -241,7 +241,7 @@ func TestMaxRunsPerDayCapsTheDay(t *testing.T) {
 		t.Fatalf("decisions = %v; want %v", decisions, want)
 	}
 	if got := h.limitedCount(t, "0"); got["daily"] != 2 || len(got) != 1 {
-		t.Errorf("courier_trigger_limited_total = %v; want 2 for daily", got)
+		t.Errorf("agentkourier_trigger_limited_total = %v; want 2 for daily", got)
 	}
 	h.clk.advance(24 * time.Hour)
 	if got := h.fire(t, 9, "109.1"); got != "started" {
@@ -310,7 +310,7 @@ func TestRepeatsAndClosesAreNeverLimited(t *testing.T) {
 		t.Errorf("notes %v; want the three that a repeat, a close and a repeat make", kinds)
 	}
 	if got := h.limitedCount(t, "0"); got["rate"] != 1 || len(got) != 1 {
-		t.Errorf("courier_trigger_limited_total = %v; want only the one limited start", got)
+		t.Errorf("agentkourier_trigger_limited_total = %v; want only the one limited start", got)
 	}
 	if ds := h.digests(t); len(ds) != 1 || ds[0].Counts[store.LimitRate] != 1 {
 		t.Errorf("digests = %+v; want one counting the limited start only", ds)

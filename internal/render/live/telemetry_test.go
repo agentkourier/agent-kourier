@@ -54,7 +54,7 @@ func TestFinalDeliveryMetricsDistinguishFailureFromCompletion(t *testing.T) {
 			}
 			found := false
 			for _, f := range families {
-				if f.GetName() == "courier_render_final_total" {
+				if f.GetName() == "agentkourier_render_final_total" {
 					found = true
 					if len(f.Metric) != 1 || f.Metric[0].Label[0].GetValue() != tc.outcome || f.Metric[0].Counter.GetValue() != 1 {
 						t.Fatalf("final metric=%v", f)

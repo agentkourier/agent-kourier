@@ -12,7 +12,7 @@ import (
 )
 
 // TestS12_ATurnThatEndsWithoutOutputIsTold: the agent's task fails (scenario-fails, with a provider's
-// masked-key error as its status message) or completes with nothing to show, and the thread gets courier's own
+// masked-key error as its status message) or completes with nothing to show, and the thread gets Agent Kourier's own
 // notice, once, and none of the agent's text. A turn must never end in silence: this is the dogfood failure, where
 // a model call that failed upstream left the thread empty. The outcome counter goes up by one for each.
 //
@@ -29,8 +29,8 @@ func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 		{"a completed task with no output", "say something empty", "completed", "The agent finished without any output."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			labels := map[string]string{"binding": "courier/fast-s12", "outcome": tc.outcome}
-			const metric = "courier_turn_outcomes_total"
+			labels := map[string]string{"binding": "agent-kourier/fast-s12", "outcome": tc.outcome}
+			const metric = "agentkourier_turn_outcomes_total"
 			before := s.counter(metric, labels)
 
 			prompt := tc.prompt
@@ -38,7 +38,7 @@ func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 				prompt = "provider-error"
 			}
 			m := s.mention(ChannelS12, "US12", prompt)
-			th := s.thread(ChannelS12, m.TS, "courier's notice", func(th []fakeslack.MessageView) bool {
+			th := s.thread(ChannelS12, m.TS, "agent-kourier's notice", func(th []fakeslack.MessageView) bool {
 				for _, b := range BotMessages(th) {
 					if strings.Contains(b.Text, tc.notice) {
 						return true

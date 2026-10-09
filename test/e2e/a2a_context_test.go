@@ -20,7 +20,7 @@ import (
 // This is one of the two ways an agent can react, measured with the stub: it accepts the unknown contextId, keeping the id, and starts
 // a context without error (the stub's own behavior, UNCONFIRMED(WP-02) against kagent). The other, an agent that answers the send with
 // an error, is not reachable with the stub and is read from the code in the note. The assertions are what was measured: the third
-// reply is turn 1 of an empty context, so the agent lost its memory, and courier says nothing about it, since the id it sent is the id
+// reply is turn 1 of an empty context, so the agent lost its memory, and Agent Kourier says nothing about it, since the id it sent is the id
 // it got back (the notice of a session opened under another id, NoticeSessionGone, needs the agent to answer with another one).
 //
 // The fast tier only: the stub agent is not in the others.
@@ -51,7 +51,7 @@ func TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext(t *testing.T)
 		t.Fatal(err)
 	}
 	// Restart returns when the replacement is Ready, but the pod it replaced may still be terminating with its endpoint routed, and a
-	// turn sent then could meet a refused or reset connection, which is courier's retry and not what is measured. So the third turn waits
+	// turn sent then could meet a refused or reset connection, which is Agent Kourier's retry and not what is measured. So the third turn waits
 	// until the replacement is the only pod there.
 	err = Wait(restart, time.Minute, "the replaced stub agent pod to be gone", func(ctx context.Context) (bool, error) {
 		pods, err := s.pods.List(ctx, kube.Namespace, "app=stubagent")
@@ -72,7 +72,7 @@ func TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext(t *testing.T)
 	if !strings.Contains(got, "Message 1. Earlier: none") || strings.Contains(got, one) || strings.Contains(got, two) {
 		t.Errorf("the reply after the restart is %q; want turn 1 of an empty context, which the agent opened for the contextId it did not know", got)
 	}
-	// Courier tells the thread nothing about it: no notice, and no second reply. If this fails, the note's account of what the thread
+	// Agent Kourier tells the thread nothing about it: no notice, and no second reply. If this fails, the note's account of what the thread
 	// shows is out of date.
 	err = Consistently(s.ctx, 3*time.Second, "the thread holds the three replies of the bot and no notice", func(ctx context.Context) (bool, error) {
 		th, err := s.slack.Thread(ctx, ChannelA2AMemory, m.TS)

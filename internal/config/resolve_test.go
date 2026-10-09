@@ -43,9 +43,9 @@ func (f fakeSecrets) Keys(_ context.Context, namespace, name string) ([]string, 
 // specSecrets holds the Secrets that spec 7's examples refer to.
 func specSecrets() fakeSecrets {
 	return fakeSecrets{
-		"courier-system/slack-main":   {"botToken", "appToken"},
-		"sre/courier-sre-alerts-oidc": {"token"},
-		"sre/courier-webhook-token":   {"token"},
+		"agent-kourier-system/slack-main":   {"botToken", "appToken"},
+		"sre/agent-kourier-sre-alerts-oidc": {"token"},
+		"sre/agent-kourier-webhook-token":   {"token"},
 	}
 }
 
@@ -87,7 +87,7 @@ func TestResolveSpecExample(t *testing.T) {
 	lookups := map[string]func() (ResolvedBinding, bool){
 		"Binding": func() (ResolvedBinding, bool) { return snap.Binding("sre", "sre-alerts") },
 		"BindingForChannel": func() (ResolvedBinding, bool) {
-			return snap.BindingForChannel("courier-system", "slack-main", "C0123456789")
+			return snap.BindingForChannel("agent-kourier-system", "slack-main", "C0123456789")
 		},
 		"BindingForWebhook": func() (ResolvedBinding, bool) { return snap.BindingForWebhook(path) },
 	}
@@ -101,7 +101,7 @@ func TestResolveSpecExample(t *testing.T) {
 	misses := map[string]func() (ResolvedBinding, bool){
 		"Binding": func() (ResolvedBinding, bool) { return snap.Binding("sre", "other") },
 		"BindingForChannel": func() (ResolvedBinding, bool) {
-			return snap.BindingForChannel("courier-system", "slack-main", "C0000000000")
+			return snap.BindingForChannel("agent-kourier-system", "slack-main", "C0000000000")
 		},
 		"BindingForWebhook": func() (ResolvedBinding, bool) { return snap.BindingForWebhook("/hooks/alertmanager/sre/other") },
 	}
@@ -116,7 +116,7 @@ func TestResolveSpecExample(t *testing.T) {
 func TestResolveRejectsABindingOnAnUnbuiltDialect(t *testing.T) {
 	set := specSet(t)
 	set.AgentBackends[0].Spec.Dialect = "unknown"
-	const why = `: spec.agent.backendRef: AgentBackend courier-system/kagent-pilot uses the "unknown" dialect, supported dialects are "kagent-v1" and "a2a"`
+	const why = `: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot uses the "unknown" dialect, supported dialects are "kagent-v1" and "a2a"`
 	wantProblems(t, set, specSecrets(), "Binding sre/chat-only"+why, "Binding sre/sre-alerts"+why)
 
 	set = specSet(t) // the dialect that is built still resolves
@@ -135,42 +135,42 @@ func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 	c.Spec.DirectMessages.DefaultBindingRef.Namespace = b.Namespace
 	be.Spec.AllowedNamespaces, c.Spec.AllowedNamespaces = nil, nil
 	secrets := specSecrets()
-	secrets["courier-system/courier-sre-alerts-oidc"] = []string{"token"} // Secrets follow the Binding's namespace
-	secrets["courier-system/courier-webhook-token"] = []string{"token"}
+	secrets["agent-kourier-system/agent-kourier-sre-alerts-oidc"] = []string{"token"} // Secrets follow the Binding's namespace
+	secrets["agent-kourier-system/agent-kourier-webhook-token"] = []string{"token"}
 	snap, err := Resolve(context.Background(), set, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rb, ok := snap.Binding("courier-system", "sre-alerts"); !ok || rb.Backend != be || rb.Connection != c {
+	if rb, ok := snap.Binding("agent-kourier-system", "sre-alerts"); !ok || rb.Backend != be || rb.Connection != c {
 		t.Errorf("Binding = %+v, %v; want it resolved to the backend and connection in its own namespace", rb, ok)
 	}
 }
 
 func TestResolveRejects(t *testing.T) {
 	const from = "Binding sre/sre-alerts: "
-	dmFrom := "ChatConnection courier-system/slack-main: spec.directMessages.defaultBindingRef: "
+	dmFrom := "ChatConnection agent-kourier-system/slack-main: spec.directMessages.defaultBindingRef: "
 	tests := []struct {
 		name   string
 		mutate func(*Set)
 		want   []string
 	}{
 		{"missing backend", func(s *Set) { sreAlerts(s).Spec.Agent.BackendRef.Name = "nope" },
-			[]string{from + "spec.agent.backendRef: AgentBackend courier-system/nope not found"}},
+			[]string{from + "spec.agent.backendRef: AgentBackend agent-kourier-system/nope not found"}},
 		{"missing connection", func(s *Set) { sreAlerts(s).Spec.Chat.ConnectionRef.Name = "nope" },
-			[]string{from + "spec.chat.connectionRef: ChatConnection courier-system/nope not found"}},
+			[]string{from + "spec.chat.connectionRef: ChatConnection agent-kourier-system/nope not found"}},
 		{"backend does not allow namespace", func(s *Set) { s.AgentBackends[0].Spec.AllowedNamespaces = []string{"payments"} }, []string{
-			"Binding sre/chat-only: spec.agent.backendRef: AgentBackend courier-system/kagent-pilot does not allow namespace sre",
-			from + "spec.agent.backendRef: AgentBackend courier-system/kagent-pilot does not allow namespace sre",
+			"Binding sre/chat-only: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot does not allow namespace sre",
+			from + "spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot does not allow namespace sre",
 		}},
 		{"connection does not allow namespace", func(s *Set) { s.ChatConnections[0].Spec.AllowedNamespaces = nil }, []string{
-			"Binding sre/chat-only: spec.chat.connectionRef: ChatConnection courier-system/slack-main does not allow namespace sre",
-			from + "spec.chat.connectionRef: ChatConnection courier-system/slack-main does not allow namespace sre",
+			"Binding sre/chat-only: spec.chat.connectionRef: ChatConnection agent-kourier-system/slack-main does not allow namespace sre",
+			from + "spec.chat.connectionRef: ChatConnection agent-kourier-system/slack-main does not allow namespace sre",
 		}},
 		{"second Binding for a channel", func(s *Set) {
 			second := *sreAlerts(s)
 			second.Name = "other"
 			s.Bindings = append(s.Bindings, second)
-		}, []string{"Binding sre/other: spec.chat.channel: C0123456789 on ChatConnection courier-system/slack-main is already bound by Binding sre/sre-alerts"}},
+		}, []string{"Binding sre/other: spec.chat.channel: C0123456789 on ChatConnection agent-kourier-system/slack-main is already bound by Binding sre/sre-alerts"}},
 		{"missing default Binding", func(s *Set) { s.ChatConnections[0].Spec.DirectMessages.DefaultBindingRef.Name = "nope" },
 			[]string{dmFrom + "Binding sre/nope not found"}},
 		{"default Binding uses another connection", func(s *Set) {
@@ -178,12 +178,12 @@ func TestResolveRejects(t *testing.T) {
 			other.Name, other.Spec.DirectMessages = "other-conn", nil
 			s.ChatConnections = append(s.ChatConnections, other)
 			sreAlerts(s).Spec.Chat.ConnectionRef.Name = "other-conn"
-		}, []string{dmFrom + "Binding sre/sre-alerts belongs to ChatConnection courier-system/other-conn, not this one"}},
+		}, []string{dmFrom + "Binding sre/sre-alerts belongs to ChatConnection agent-kourier-system/other-conn, not this one"}},
 		{"every problem is reported", func(s *Set) {
 			sreAlerts(s).Spec.Agent.BackendRef.Name = "nope"
 			s.ChatConnections[0].Spec.DirectMessages.DefaultBindingRef.Name = "nope"
 		}, []string{
-			from + "spec.agent.backendRef: AgentBackend courier-system/nope not found",
+			from + "spec.agent.backendRef: AgentBackend agent-kourier-system/nope not found",
 			dmFrom + "Binding sre/nope not found",
 		}},
 	}
@@ -211,12 +211,12 @@ func TestResolveChannelsBelongToConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	for conn, want := range map[string]string{"slack-main": "sre-alerts", "other-conn": "other"} {
-		if rb, ok := snap.BindingForChannel("courier-system", conn, "C0123456789"); !ok || rb.Binding.Name != want {
+		if rb, ok := snap.BindingForChannel("agent-kourier-system", conn, "C0123456789"); !ok || rb.Binding.Name != want {
 			t.Errorf("BindingForChannel(%s) = %+v, %v; want %s", conn, rb, ok, want)
 		}
 	}
 	// chat-only's channel is on slack-main only.
-	if rb, ok := snap.BindingForChannel("courier-system", "other-conn", "G0123456789"); ok {
+	if rb, ok := snap.BindingForChannel("agent-kourier-system", "other-conn", "G0123456789"); ok {
 		t.Errorf("BindingForChannel found %+v on the wrong connection", rb)
 	}
 }
@@ -231,7 +231,7 @@ func TestSnapshotConcurrentLookups(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 100 {
-				a, okA := snap.BindingForChannel("courier-system", "slack-main", "C0123456789")
+				a, okA := snap.BindingForChannel("agent-kourier-system", "slack-main", "C0123456789")
 				b, okB := snap.BindingForWebhook("/hooks/alertmanager/sre/sre-alerts")
 				c, okC := snap.Binding("sre", "sre-alerts")
 				if !okA || !okB || !okC || a != b || b != c {
@@ -261,7 +261,7 @@ func TestSnapshotListsEveryConnection(t *testing.T) {
 	for _, c := range snap.ChatConnections() {
 		got = append(got, c.Namespace+"/"+c.Name)
 	}
-	want := []string{"courier-system/aaa-idle", "courier-system/slack-main", "courier-system/zzz-idle"}
+	want := []string{"agent-kourier-system/aaa-idle", "agent-kourier-system/slack-main", "agent-kourier-system/zzz-idle"}
 	if !slices.Equal(got, want) {
 		t.Errorf("ChatConnections = %v; want %v", got, want)
 	}

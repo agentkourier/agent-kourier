@@ -52,19 +52,19 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 		call func(*Metrics)
 		want string
 	}{
-		{"audit write failure", func(m *Metrics) { m.AuditFailure(store.AuditAgentCall) }, `courier_audit_write_failures_total{kind=agent_call} 1`},
-		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `courier_credential_rejections_total{binding=sre/sre-alerts} 1`},
-		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `courier_config_reload_errors_total{} 1`},
-		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `courier_outbox_abandoned_total{reason=channel_gone} 1`},
-		{"retention removal", func(m *Metrics) { m.RetentionRemoved(RemovedStrandedReplies, 1) }, `courier_retention_removed_total{what=stranded_replies} 1`},
-		{"turn outcome", func(m *Metrics) { m.TurnOutcome("sre/sre-alerts", session.TurnFailed) }, `courier_turn_outcomes_total{binding=sre/sre-alerts,outcome=failed} 1`},
+		{"audit write failure", func(m *Metrics) { m.AuditFailure(store.AuditAgentCall) }, `agentkourier_audit_write_failures_total{kind=agent_call} 1`},
+		{"credential rejection", func(m *Metrics) { m.CredentialRejected("sre/sre-alerts") }, `agentkourier_credential_rejections_total{binding=sre/sre-alerts} 1`},
+		{"config reload failure", func(m *Metrics) { m.ReloadError(errors.New("bad yaml")) }, `agentkourier_config_reload_errors_total{} 1`},
+		{"outbox abandon", func(m *Metrics) { m.OutboxAbandoned("row-1", "channel_gone") }, `agentkourier_outbox_abandoned_total{reason=channel_gone} 1`},
+		{"retention removal", func(m *Metrics) { m.RetentionRemoved(RemovedStrandedReplies, 1) }, `agentkourier_retention_removed_total{what=stranded_replies} 1`},
+		{"turn outcome", func(m *Metrics) { m.TurnOutcome("sre/sre-alerts", session.TurnFailed) }, `agentkourier_turn_outcomes_total{binding=sre/sre-alerts,outcome=failed} 1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := mustMetrics(t, nil)
 			tc.call(m)
 			var hit []string
 			for _, s := range samples(t, m) {
-				if strings.HasSuffix(s, " 1") && !strings.HasPrefix(s, "courier_config_stale") {
+				if strings.HasSuffix(s, " 1") && !strings.HasPrefix(s, "agentkourier_config_stale") {
 					hit = append(hit, s)
 				}
 			}
@@ -79,27 +79,27 @@ func TestEachHookIncrementsItsMetric(t *testing.T) {
 func TestStaleGaugeFollowsTheConfig(t *testing.T) {
 	stale := false
 	m := mustMetrics(t, func() bool { return stale })
-	if !slices.Contains(samples(t, m), "courier_config_stale{} 0") {
+	if !slices.Contains(samples(t, m), "agentkourier_config_stale{} 0") {
 		t.Errorf("samples = %v; want stale 0", samples(t, m))
 	}
 	stale = true
-	if !slices.Contains(samples(t, m), "courier_config_stale{} 1") {
+	if !slices.Contains(samples(t, m), "agentkourier_config_stale{} 1") {
 		t.Errorf("samples = %v; want stale 1", samples(t, m))
 	}
 }
 
 // The chat gauge is 1 or 0 per ChatConnection, and its label is the connection's name alone.
 func TestChatConnectedGaugeFollowsTheConnection(t *testing.T) {
-	const series = "courier_chat_connected{connection=courier-system/slack-main} "
+	const series = "agentkourier_chat_connected{connection=agent-kourier-system/slack-main} "
 	m := mustMetrics(t, nil)
-	if got := samples(t, m); slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "courier_chat_connected") }) {
+	if got := samples(t, m); slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "agentkourier_chat_connected") }) {
 		t.Fatalf("samples = %v; a connection nobody reported has no series", got)
 	}
 	for _, step := range []struct {
 		up   bool
 		want string
 	}{{false, "0"}, {true, "1"}, {false, "0"}} {
-		m.ChatConnected("courier-system/slack-main", step.up)
+		m.ChatConnected("agent-kourier-system/slack-main", step.up)
 		if got := samples(t, m); !slices.Contains(got, series+step.want) {
 			t.Errorf("after ChatConnected(%v) samples = %v; want %q", step.up, got, series+step.want)
 		}
@@ -137,7 +137,7 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 			t.Errorf("series %v carry %q; an unknown value must become %q", got, bad, "other")
 		}
 	}
-	if !slices.Contains(got, "courier_audit_write_failures_total{kind=other} 1") || !slices.Contains(got, "courier_outbox_abandoned_total{reason=other} 2") {
+	if !slices.Contains(got, "agentkourier_audit_write_failures_total{kind=other} 1") || !slices.Contains(got, "agentkourier_outbox_abandoned_total{reason=other} 2") {
 		t.Errorf("samples = %v; want the unknown kind and the two unknown reasons counted as other", got)
 	}
 }
@@ -147,7 +147,7 @@ func TestEveryTurnOutcomeHasItsOwnLabel(t *testing.T) {
 	for _, o := range session.TurnOutcomes() {
 		m := mustMetrics(t, nil)
 		m.TurnOutcome("ns/b", o)
-		if got := samples(t, m); !slices.Contains(got, "courier_turn_outcomes_total{binding=ns/b,outcome="+string(o)+"} 1") {
+		if got := samples(t, m); !slices.Contains(got, "agentkourier_turn_outcomes_total{binding=ns/b,outcome="+string(o)+"} 1") {
 			t.Errorf("outcome %q: samples = %v; want its own label", o, got)
 		}
 	}
@@ -162,14 +162,14 @@ func TestEveryAbandonReasonHasItsOwnLabel(t *testing.T) {
 	for _, r := range reasons {
 		m := mustMetrics(t, nil)
 		m.OutboxAbandoned("id", r)
-		if got := samples(t, m); !slices.Contains(got, "courier_outbox_abandoned_total{reason="+r+"} 1") {
+		if got := samples(t, m); !slices.Contains(got, "agentkourier_outbox_abandoned_total{reason="+r+"} 1") {
 			t.Errorf("reason %q: samples = %v; want its own label", r, got)
 		}
 	}
 	for _, code := range []string{"channel_not_found", "is_archived", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_blocks_format"} {
 		m := mustMetrics(t, nil)
 		m.OutboxAbandoned("id", code)
-		if got := samples(t, m); !slices.Contains(got, "courier_outbox_abandoned_total{reason=other} 1") || strings.Contains(strings.Join(got, "\n"), code) {
+		if got := samples(t, m); !slices.Contains(got, "agentkourier_outbox_abandoned_total{reason=other} 1") || strings.Contains(strings.Join(got, "\n"), code) {
 			t.Errorf("code %q: samples = %v; want it counted as other, and never as a label", code, got)
 		}
 	}

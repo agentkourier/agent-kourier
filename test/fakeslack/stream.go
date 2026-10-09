@@ -28,7 +28,7 @@ import (
 // a stream is visible to reads while running; treating channel IDs that start
 // with "D" as direct messages, which need no recipient; and that a metadata
 // parameter, which this method is not known to take, is ignored. Metadata
-// matters for spec 8.6, where the outbox tags each post, so courier should set
+// matters for spec 8.6, where the outbox tags each post, so Agent Kourier should set
 // it on chat.stopStream and never rely on it here.
 func (s *Server) startStream(form url.Values) (response, string) {
 	channel := form.Get("channel")

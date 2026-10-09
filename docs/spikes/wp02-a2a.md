@@ -16,7 +16,7 @@ occurred. This is the acceptance oracle for the stub agent (WP-12). Everything b
 **measured** unless marked *inferred* or *source*. This file is the plan's
 `docs/spikes/wp02-a2a.md`; Q1 is answered here.
 
-## What courier must know (headline findings)
+## What Agent Kourier must know (headline findings)
 
 1. **kagent does not validate ask-user replies the way spec 6.3 says.** A reply with fewer
    answers than questions, or an answer that is not one of the choices, is accepted and the
@@ -97,7 +97,7 @@ has one history message and one artifact, and the text is one run of eight ticks
 model turn is visible (request count not read). `SubscribeToTask` on the task after it has
 completed returns one `task` `COMPLETED` snapshot. *Run B*: dropping the replay after its first
 event and calling `SubscribeToTask` gives the same snapshot, deltas, `lastChunk` and `COMPLETED`.
-Spec 8.2 says the replay returns a snapshot that courier follows with `SubscribeToTask`. That
+Spec 8.2 says the replay returns a snapshot that Agent Kourier follows with `SubscribeToTask`. That
 holds for a completed task (one `COMPLETED` snapshot); for a running task the replay is itself
 the live stream. Either way the client rule (append on `append: true`, otherwise replace)
 gives the full text.
@@ -110,7 +110,7 @@ Round 2 resent the exact params (same `messageId`) that had been rejected: after
 and again after the running task completed by itself, the resend was accepted and ran as a new
 task in the same context, normally to `COMPLETED` (shape `task:SUBMITTED x2,
 statusUpdate:WORKING, artifact, artifact+append x7, artifact+last, task:COMPLETED`). So a
-rejected `messageId` is not remembered, and courier's queue can resend it unchanged.
+rejected `messageId` is not remembered, and Agent Kourier's queue can resend it unchanged.
 `-32004` carries no reason that marks it retryable; the code and message are the signal. (The
 round 1 remark about `KAGENT_SEND_NOT_ACCEPTED` here was unsourced and is removed; that string
 in the WP-01 report is a NetworkPolicy failure, unrelated to a busy session.)
@@ -171,7 +171,7 @@ the round trip three times and recorded the `A2A-Extensions` header on the wire 
 
 So the activator is what adds the header, and only when the card lists the URI (measured; the
 activator source, `a2aext/activator.go`, does the same: *source*). What the SDK does **not**
-provide is typed HITL payloads: courier defines its own structs and decodes the map. Two SDK
+provide is typed HITL payloads: Agent Kourier defines its own structs and decodes the map. Two SDK
 traps: `agentcard.Resolve` fetches a base URL with a path verbatim, so pass the full
 `…/.well-known/agent-card.json` URL; and the card advertises the in-cluster URL
 (`http://kagent-controller.kagent.svc:8083/agents/…`), so a client outside the cluster must

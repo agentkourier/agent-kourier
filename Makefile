@@ -18,7 +18,7 @@ lint: ## Run golangci-lint (also over the e2e, image and testhooks tagged code)
 
 test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, the testhooks-tagged ones, the kind scripts' own (CI runs the three apart)
 
-test-race: ## Run unit tests with the race detector (the chart tests need helm; COURIER_REQUIRE_HELM=1 fails without it)
+test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
 	go test -race ./...
 
 test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
@@ -30,17 +30,17 @@ test-scripts: ## Run the kind scripts' own tests (no cluster)
 test-postgres: ## Run the Postgres store's tests, the store conformance suite and the broker's Postgres test against a throwaway Postgres container (Docker; hack/postgres/test.sh)
 	hack/postgres/test.sh
 
-build: ## Build bin/courier
-	go build -ldflags "$(LDFLAGS)" -o bin/courier ./cmd/courier
+build: ## Build bin/agent-kourier
+	go build -ldflags "$(LDFLAGS)" -o bin/agent-kourier ./cmd/agent-kourier
 
 tidy: ## Tidy go.mod and go.sum
 	go mod tidy
 
-image: ## Build the production courier image, courier:dev (hack/kind/build-courier.sh; Docker)
-	hack/kind/build-courier.sh
+image: ## Build the production Agent Kourier image, agent-kourier:dev (hack/kind/build-agent-kourier.sh; Docker)
+	hack/kind/build-agent-kourier.sh
 
-image-testhooks: ## Build the test image, courier-e2e/courier-testhooks:dev, which the kind tiers run and nothing pushes
-	hack/kind/build-courier.sh testhooks
+image-testhooks: ## Build the test image, agent-kourier-e2e/agent-kourier-testhooks:dev, which the kind tiers run and nothing pushes
+	hack/kind/build-agent-kourier.sh testhooks
 
 image-check: image image-testhooks ## Prove the production image's binary lacks the test hooks, and the test image's has them
 	go test -tags image -count=1 -run TestImageHasNeitherHook ./internal/testhooks
@@ -51,7 +51,7 @@ release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.
 stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and with -no-auth (about 2 minutes)
 	hack/stub-oracle.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs courier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover)
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover)
 	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
@@ -72,10 +72,10 @@ e2e-full-down: ## Tear down the full E2E tier only
 e2e-down: ## Tear down all E2E tiers
 	hack/kind/down.sh
 
-sandbox-up: ## Dogfood tier on the full tier: courier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
+sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
 	hack/kind/sandbox/up.sh
 
-sandbox-down: ## Remove the sandbox and put the full tier's own courier back, so that e2e-full works again
+sandbox-down: ## Remove the sandbox and put the full tier's own Agent Kourier back, so that e2e-full works again
 	hack/kind/sandbox/down.sh
 
 sandbox-heal: ## Restart the full tier's kindnet if NetworkPolicy is not applied, and its egress gateway if its certificate is stale (about a day old)
@@ -90,7 +90,7 @@ ax-test: ## Test the separate AX/ADK/Bedrock reference module with the race dete
 	cd examples/ax && go vet ./...
 
 ax-image: ## Build the AX reference agent and runner image
-	docker build -t courier-ax:dev examples/ax
+	docker build -t agent-kourier-ax:dev examples/ax
 
 ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentials file
 	bash examples/ax/smoke.sh

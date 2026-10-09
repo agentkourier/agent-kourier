@@ -2,7 +2,7 @@
 # ClusterIP and stays that way: the fake Slack's /_control/ and the stub agent's
 # /_control/release/ have no authentication, so their ports are never published (no NodePort,
 # Ingress, LoadBalancer or hostPort). verify.sh checks that for both.
-# Courier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
+# Agent Kourier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
 # stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent> and sink.e2e.svc.cluster.local:8080.
 apiVersion: v1
 kind: Namespace
@@ -26,7 +26,7 @@ spec:
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: fakeslack
-          image: courier-e2e/fast-doubles:dev
+          image: agent-kourier-e2e/fast-doubles:dev
           imagePullPolicy: Never
           command: ["/fakeslack", "-addr", "0.0.0.0:8080"]
           ports: [{containerPort: 8080}]
@@ -44,10 +44,10 @@ spec:
   ports: [{port: 8080, targetPort: 8080}]
 ---
 # -require-auth: a request with no bearer token gets 401, as kagent in OIDC mode answers.
-# -unique-ids: the ids of one start are not those of another. A test restarts this pod, and courier's store outlives the
+# -unique-ids: the ids of one start are not those of another. A test restarts this pod, and Agent Kourier's store outlives the
 # restart: with the counter begun again at 1, a task id of an earlier run (and so the interaction id derived from it) met a row
 # that was already decided, and a prompt was never posted; and a context id made after the restart matched one the stub had
-# adopted from courier before it, so that a new thread joined an old session and saw its turns.
+# adopted from Agent Kourier before it, so that a new thread joined an old session and saw its turns.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -65,7 +65,7 @@ spec:
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stubagent
-          image: courier-e2e/fast-doubles:dev
+          image: agent-kourier-e2e/fast-doubles:dev
           imagePullPolicy: Never
           command: ["/stubagent", "-addr", "0.0.0.0:8080", "-require-auth", "-unique-ids"]
           ports: [{containerPort: 8080}]
@@ -99,7 +99,7 @@ spec:
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: sink
-          image: courier-e2e/fast-doubles:dev
+          image: agent-kourier-e2e/fast-doubles:dev
           imagePullPolicy: Never
           command: ["/sink", "-addr", "0.0.0.0:8080"]
           ports: [{containerPort: 8080}]

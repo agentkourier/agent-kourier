@@ -1,0 +1,44 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax-default, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://atenet-router.ate-system.svc.cluster.local/a2a
+  headers:
+    - {name: ate-target-actor, value: agent-kourier-ax/default}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax-gated, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://atenet-router.ate-system.svc.cluster.local/a2a
+  headers:
+    - {name: ate-target-actor, value: agent-kourier-ax/gated}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax-memory, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://atenet-router.ate-system.svc.cluster.local/a2a
+  headers:
+    - {name: ate-target-actor, value: agent-kourier-ax/memory}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax-ask, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://atenet-router.ate-system.svc.cluster.local/a2a
+  headers:
+    - {name: ate-target-actor, value: agent-kourier-ax/ask}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax-fails, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://atenet-router.ate-system.svc.cluster.local/a2a
+  headers:
+    - {name: ate-target-actor, value: agent-kourier-ax/fails}

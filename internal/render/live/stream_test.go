@@ -196,7 +196,7 @@ func TestShutdownAfterTheFinalStopsTheStream(t *testing.T) {
 }
 
 // TestRecoveredTurnWithItsTsStopsTheStreamAndUpdatesIt: a stream's ts was recorded, so the message
-// exists and is courier's. A turn that continues it, after a restart or a lost connection, ends the
+// exists and is Agent Kourier's. A turn that continues it, after a restart or a lost connection, ends the
 // stream if it still runs (and goes on if it has ended) and writes the whole text to the same
 // message: no second message, which is only accepted in the window before the ts is recorded.
 func TestRecoveredTurnWithItsTsStopsTheStreamAndUpdatesIt(t *testing.T) {

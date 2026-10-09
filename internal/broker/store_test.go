@@ -26,9 +26,9 @@ import (
 const fakePassword = "fake-pg-password-7Qz"
 
 // deadDSN names a server nobody listens on, so that opening it fails at once, with a password in it.
-const deadDSN = "postgres://courier:" + fakePassword + "@127.0.0.1:1/courier?sslmode=disable&connect_timeout=2"
+const deadDSN = "postgres://agentkourier:" + fakePassword + "@127.0.0.1:1/agentkourier?sslmode=disable&connect_timeout=2"
 
-var dsnRef = SecretKey{Namespace: "courier", Name: "courier-pg", Key: "dsn"}
+var dsnRef = SecretKey{Namespace: "agent-kourier", Name: "agent-kourier-pg", Key: "dsn"}
 
 // values is a secretValues that serves one value and records what it was asked for.
 type values struct {
@@ -48,7 +48,7 @@ func (v *values) Value(_ context.Context, namespace, name, key string) (secret.V
 func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 func TestOpenStoreDefaultsToSQLiteOnTheGivenPath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	for name, kind := range map[string]StoreKind{"unset": "", "named": StoreSQLite} {
 		t.Run(name, func(t *testing.T) {
 			st, err := openStore(t.Context(), StoreConfig{Kind: kind}, path, &values{}, discard())
@@ -66,7 +66,7 @@ func TestOpenStoreDefaultsToSQLiteOnTheGivenPath(t *testing.T) {
 
 func TestOpenStoreSQLiteReadsNoSecret(t *testing.T) {
 	v := &values{}
-	st, err := openStore(t.Context(), StoreConfig{}, filepath.Join(t.TempDir(), "courier.db"), v, discard())
+	st, err := openStore(t.Context(), StoreConfig{}, filepath.Join(t.TempDir(), "agent-kourier.db"), v, discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,10 +94,10 @@ func TestOpenStorePostgresAsksForTheConfiguredSecretKey(t *testing.T) {
 func TestOpenStorePostgresErrorsCarryNoPasswordAndNoDSN(t *testing.T) {
 	for name, dsn := range map[string]string{
 		"unreachable":     deadDSN,
-		"bad port":        "postgres://courier:" + fakePassword + "@127.0.0.1:notaport/courier",
-		"bad escape":      "postgres://courier:" + fakePassword + "%zz@127.0.0.1:1/courier",
-		"key and value":   "host=127.0.0.1 port=1 user=courier password=" + fakePassword + " dbname=courier sslmode=disable connect_timeout=2",
-		"unknown setting": "postgres://courier:" + fakePassword + "@127.0.0.1:1/courier?no_such_setting=1",
+		"bad port":        "postgres://agentkourier:" + fakePassword + "@127.0.0.1:notaport/agentkourier",
+		"bad escape":      "postgres://agentkourier:" + fakePassword + "%zz@127.0.0.1:1/agentkourier",
+		"key and value":   "host=127.0.0.1 port=1 user=agentkourier password=" + fakePassword + " dbname=agentkourier sslmode=disable connect_timeout=2",
+		"unknown setting": "postgres://agentkourier:" + fakePassword + "@127.0.0.1:1/agentkourier?no_such_setting=1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var logs strings.Builder
@@ -119,7 +119,7 @@ func TestOpenStorePostgresErrorsCarryNoPasswordAndNoDSN(t *testing.T) {
 // the key, never the DSN.
 func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 	opaque := func(data map[string][]byte) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "courier", Name: "courier-pg"}, Data: data}
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "agent-kourier", Name: "agent-kourier-pg"}, Data: data}
 	}
 	for name, tc := range map[string]struct {
 		objects []*corev1.Secret
@@ -130,7 +130,7 @@ func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 		"empty value":     {[]*corev1.Secret{opaque(map[string][]byte{"dsn": {}})}, secret.ErrEmptyValue},
 		"only whitespace": {[]*corev1.Secret{opaque(map[string][]byte{"dsn": []byte(" \n")})}, secret.ErrEmptyValue},
 		"not Opaque": {[]*corev1.Secret{{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "courier", Name: "courier-pg"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "agent-kourier", Name: "agent-kourier-pg"},
 			Type:       corev1.SecretTypeTLS, Data: map[string][]byte{"dsn": []byte(deadDSN)},
 		}}, secret.ErrUnsupportedType},
 	} {
@@ -141,7 +141,7 @@ func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			r := k8ssecrets.New(client, []string{"courier"})
+			r := k8ssecrets.New(client, []string{"agent-kourier"})
 			if err := r.Start(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func TestOpenStorePostgresRefusesASecretThatCannotBeRead(t *testing.T) {
 				t.Errorf("openStore = %v, want ErrWiring wrapping %v", err, tc.want)
 			}
 			msg := err.Error()
-			if !strings.Contains(msg, "courier/courier-pg") || !strings.Contains(msg, `"dsn"`) {
+			if !strings.Contains(msg, "agent-kourier/agent-kourier-pg") || !strings.Contains(msg, `"dsn"`) {
 				t.Errorf("the error does not name the Secret and the key: %v", err)
 			}
 			if strings.Contains(msg, fakePassword) || strings.Contains(msg, "postgres://") {
@@ -206,7 +206,7 @@ func startupParams(t *testing.T) (dsn string, params func() map[string]string) {
 			}()
 		}
 	}()
-	dsn = "postgres://courier:" + fakePassword + "@" + ln.Addr().String() + "/courier?sslmode=disable&connect_timeout=2"
+	dsn = "postgres://agentkourier:" + fakePassword + "@" + ln.Addr().String() + "/agentkourier?sslmode=disable&connect_timeout=2"
 	return dsn, func() map[string]string {
 		select {
 		case p := <-got:
@@ -218,13 +218,13 @@ func startupParams(t *testing.T) (dsn string, params func() map[string]string) {
 	}
 }
 
-// With the role setting the timeouts (behind a pooler that refuses startup parameters) courier sends none; otherwise
+// With the role setting the timeouts (behind a pooler that refuses startup parameters) Agent Kourier sends none; otherwise
 // it sends its own.
 func TestPostgresSendsItsTimeoutsUnlessTheRoleSetsThem(t *testing.T) {
 	for name, tc := range map[string]struct {
 		role bool
 		want bool
-	}{"courier's own": {false, true}, "the role's": {true, false}} {
+	}{"agent-kourier's own": {false, true}, "the role's": {true, false}} {
 		t.Run(name, func(t *testing.T) {
 			dsn, params := startupParams(t)
 			_, err := openStore(t.Context(), StoreConfig{Kind: StorePostgres, PostgresDSN: dsnRef, PostgresRoleTimeouts: tc.role}, "", &values{dsn: dsn}, discard())

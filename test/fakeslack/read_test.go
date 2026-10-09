@@ -44,7 +44,7 @@ func wantTS(t *testing.T, what string, msgs []slack.Message, want ...string) {
 func TestUpdateMessage(t *testing.T) {
 	fake, api := newFake(t)
 	blocks := slack.NewSectionBlock(slack.NewTextBlockObject("mrkdwn", "b", false, false), nil, nil)
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-1"}}
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{"outbox_id": "ob-1"}}
 	ts := post(t, api, text("old"), slack.MsgOptionBlocks(blocks), slack.MsgOptionMetadata(meta))
 
 	channel, gotTS, gotText, err := api.UpdateMessage("C1", ts, text("new"))
@@ -67,7 +67,7 @@ func TestUpdateMessage(t *testing.T) {
 	if m = fake.Messages("C1")[0]; m.Metadata.EventPayload["outbox_id"] != "ob-2" || m.Text != "newer" {
 		t.Fatalf("after metadata update = %+v", m)
 	}
-	// UNCONFIRMED(WP-04): blocks=[] with text clears the blocks, as courier's
+	// UNCONFIRMED(WP-04): blocks=[] with text clears the blocks, as Agent Kourier's
 	// removal of interaction controls (spec 8.4) needs.
 	if _, _, _, err := api.UpdateMessage("C1", ts, text("done"), slack.MsgOptionBlocks()); err != nil {
 		t.Fatalf("clearing blocks: %v", err)
@@ -114,7 +114,7 @@ func TestHistoryIsNewestFirstAndFoldsThreads(t *testing.T) {
 
 func TestMetadataRoundTrip(t *testing.T) {
 	_, api := newFake(t)
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-7"}}
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{"outbox_id": "ob-7"}}
 	parent := post(t, api, text("root"), slack.MsgOptionMetadata(meta))
 	reply := post(t, api, text("reply"), slack.MsgOptionTS(parent), slack.MsgOptionMetadata(meta))
 
@@ -123,7 +123,7 @@ func TestMetadataRoundTrip(t *testing.T) {
 		t.Fatalf("history without include_all_metadata returned metadata: %+v", got.Metadata)
 	}
 	got := history(t, api, slack.GetConversationHistoryParameters{IncludeAllMetadata: true}).Messages[0]
-	if got.Metadata.EventType != "courier_message" || got.Metadata.EventPayload["outbox_id"] != "ob-7" {
+	if got.Metadata.EventType != "agentkourier_message" || got.Metadata.EventPayload["outbox_id"] != "ob-7" {
 		t.Fatalf("history metadata = %+v", got.Metadata)
 	}
 	msgs, _, _, err := api.GetConversationReplies(&slack.GetConversationRepliesParameters{

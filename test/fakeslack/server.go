@@ -1,5 +1,5 @@
 // Package fakeslack is an in-memory fake of the Slack Web API and Socket Mode,
-// for courier's unit and end-to-end tests (spec 12.1). Courier reaches it
+// for Agent Kourier's unit and end-to-end tests (spec 12.1). Agent Kourier reaches it
 // through slack-go's slack.OptionAPIURL(fake.URL() + "/"), or, when the fake
 // runs behind another listener, by serving the Server as an http.Handler.
 // Socket Mode clients connect with an xapp- token; apps.connections.open
@@ -11,7 +11,7 @@
 // response types, not from captured traffic. Comments name the docs page for
 // each method. Behavior that is guessed, remembered, or inferred from slack-go
 // rather than read from the docs carries the tag UNCONFIRMED(WP-04):, and
-// WP-04 replays real captures against the fake to settle each one. Courier
+// WP-04 replays real captures against the fake to settle each one. Agent Kourier
 // should attach message metadata with slack.MsgOptionMetadata, not through
 // PostMessageParameters. The tagged items are:
 //
@@ -26,7 +26,7 @@
 //     never being redelivered, where Slack retries.
 //   - User actions (control.go): the order of the app_mention and message
 //     events for a mention, in a thread too, and both being sent; the fields
-//     of each event, which are the ones courier needs; a mention in a direct
+//     of each event, which are the ones Agent Kourier needs; a mention in a direct
 //     message getting no app_mention; the channel_type of a channel being
 //     "channel" unless SetChannelType says otherwise ("group" for private
 //     ones); and no message events for the bot's own posts, which Slack sends.
@@ -43,7 +43,7 @@
 //     owner's alert channel and not from a captured event; and the post being top-level only.
 //   - Interactions (interaction.go): Submit answering an inline ask-user with a
 //     block_actions press that carries state.values, not a view_submission
-//     (the fake has no views); the payload's fields, which are the ones courier
+//     (the fake has no views); the payload's fields, which are the ones Agent Kourier
 //     needs; the message in it omitting metadata; the envelope's
 //     accepts_response_payload being false; the name of each element type's
 //     value field in state.values, and unanswered inputs being sent as null;
@@ -168,7 +168,7 @@ func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = n
 
 // WithBot sets the identity that bot-token posts carry: the bot's user ID, its
 // bot_id, and the app_id. The defaults are UFAKEBOT, BFAKEBOT and AFAKEAPP.
-// Courier learns its own user and bot IDs from auth.test; slack-go does not
+// Agent Kourier learns its own user and bot IDs from auth.test; slack-go does not
 // decode app_id on messages. Set at construction, read-only after.
 func WithBot(user, botID, appID string) Option {
 	return func(s *Server) { s.bot = botIdentity{user: user, id: botID, app: appID} }
@@ -322,7 +322,7 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 }
 
 // authTest implements auth.test
-// (https://docs.slack.dev/reference/methods/auth.test/), which tells courier
+// (https://docs.slack.dev/reference/methods/auth.test/), which tells Agent Kourier
 // who it is: the bot's user and bot IDs and the team's.
 //
 // UNCONFIRMED(WP-04): the fields returned, and the placeholder url and user name.

@@ -243,7 +243,7 @@ func TestAStepNeedsAnID(t *testing.T) {
 // A step is a chat.appendStream call, so a rate limit or a failure of it is classified as any call of a stream is.
 func TestAStepThatSlackRefusesIsAnError(t *testing.T) {
 	c, _, calls, root := updateClient(t)
-	p := slack.NewPlatform(c, "courier-system/slack-main")
+	p := slack.NewPlatform(c, "agent-kourier-system/slack-main")
 	st, err := p.Stream(t.Context(), chat.Target{Channel: "C1", Thread: root}, "U1", "x")
 	if err != nil {
 		t.Fatal(err)

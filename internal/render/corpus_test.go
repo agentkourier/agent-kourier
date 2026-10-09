@@ -40,15 +40,15 @@ func TestAlertBlockTakesTheSplitSecretCorpus(t *testing.T) {
 	}
 }
 
-// The footer keeps its "name: value" pairs: "courier-key: ns/alertname" is the key the footer carries, and the free-text
+// The footer keeps its "name: value" pairs: "agent-kourier-key: ns/alertname" is the key the footer carries, and the free-text
 // rules would take it for a secret named "key". A token in it is still taken out.
 func TestAlertFooterKeepsPairsAndLosesTokens(t *testing.T) {
-	got := untrustedSection(TriggerMessage{Footer: "courier-key: KubePodCrashLooping/default"})
-	if !strings.Contains(got, "<footer>courier-key: KubePodCrashLooping/default</footer>") {
+	got := untrustedSection(TriggerMessage{Footer: "agent-kourier-key: KubePodCrashLooping/default"})
+	if !strings.Contains(got, "<footer>agent-kourier-key: KubePodCrashLooping/default</footer>") {
 		t.Errorf("the footer's key was taken out:\n%s", got)
 	}
-	got = untrustedSection(TriggerMessage{Footer: "courier-key: x Bearer Zq9vK3mT7wRx xoxb-1-Zq9vK3mT7wRx"})
-	if strings.Contains(got, "Zq9vK3mT7wRx") || !strings.Contains(got, "courier-key: x") {
+	got = untrustedSection(TriggerMessage{Footer: "agent-kourier-key: x Bearer Zq9vK3mT7wRx xoxb-1-Zq9vK3mT7wRx"})
+	if strings.Contains(got, "Zq9vK3mT7wRx") || !strings.Contains(got, "agent-kourier-key: x") {
 		t.Errorf("the footer must lose its tokens and keep its pair:\n%s", got)
 	}
 }

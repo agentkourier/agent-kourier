@@ -1,0 +1,25 @@
+# S17: the feedback buttons on the final message of an investigation an alert started (spec 8.7). The trigger is S14's, for the
+# bot the scenario posts as; the Binding does not set feedback.enabled, since the buttons of an investigation a trigger
+# started do not depend on it. A channel of its own on the fake Slack, so scenarios never share a thread; the identity
+# token is the same Secret as fast-chat's. The channel, the bot and the agent are pinned by test/kindmanifests and
+# test/e2e/scenarios.go. Like S14 it runs in the fast tier only: the full tier's kagent has no scenario-alert agent.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s17, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-alert
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS17
+    output: live
+    triggers:
+      - type: botMessage
+        from: {botId: B0S17ALERT1}
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}

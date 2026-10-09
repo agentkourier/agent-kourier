@@ -13,9 +13,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// MetadataEventType is the event_type of the metadata on every message courier posts. Its
+// MetadataEventType is the event_type of the metadata on every message Agent Kourier posts. Its
 // payload holds the outbox ID, so a post can be found again after a crash (spec 8.6).
-const MetadataEventType = "courier_message"
+const MetadataEventType = "agentkourier_message"
 
 // Content is what a post says: its text, and optionally Block Kit blocks as JSON.
 type Content struct {
@@ -37,10 +37,10 @@ func outboxTag(outboxID string) (slackgo.MsgOption, error) {
 // A failure does not say whether the message was posted: the caller finds it before posting again.
 // Its error holds no token.
 //
-// UNCONFIRMED(WP-04): that Slack accepts event_type courier_message with a string value in
+// UNCONFIRMED(WP-04): that Slack accepts event_type agentkourier_message with a string value in
 // event_payload, and that chat.postMessage returns the ts of a message that carries metadata.
 func (c *Client) Post(ctx context.Context, channel, threadTS string, content Content, outboxID string) (telemetryResult0 string, telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.Post")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Post")
 	defer func() { finishChat(ctx, op, "Post", telemetryErr) }()
 	tag, err := outboxTag(outboxID)
 	if err != nil {

@@ -34,12 +34,12 @@ const (
 // The notices are fixed text: nothing the agent wrote reaches the thread through them (spec 8.4, R2).
 // They are enqueued before the cancel is made, so they say it is under way, not that it is done.
 const (
-	noticeUnusable = "The agent paused for input in a way courier cannot use, so courier is cancelling the task."
-	noticeAskUser  = "The agent asked a question, but this Binding does not allow questions, so courier is cancelling the task."
-	noticeCleared  = "The answer to this question was not sent before it was cleared, so courier is cancelling the task."
-	noticeDenied   = "The agent asked to run a tool that needs approval, but this Binding does not allow approvals, so courier is denying the request."
-	denyReason     = "denied by courier: this Binding does not allow tool approvals"
-	autoDecider    = "courier" // who the interaction records as having decided
+	noticeUnusable = "The agent paused for input in a way Agent Kourier cannot use, so Agent Kourier is cancelling the task."
+	noticeAskUser  = "The agent asked a question, but this Binding does not allow questions, so Agent Kourier is cancelling the task."
+	noticeCleared  = "The answer to this question was not sent before it was cleared, so Agent Kourier is cancelling the task."
+	noticeDenied   = "The agent asked to run a tool that needs approval, but this Binding does not allow approvals, so Agent Kourier is denying the request."
+	denyReason     = "denied by agent-kourier: this Binding does not allow tool approvals"
+	autoDecider    = "agent-kourier" // who the interaction records as having decided
 )
 
 // Auditor is what the package records through: *audit.Writer. The refusals write the unusable pause and

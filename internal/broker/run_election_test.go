@@ -78,7 +78,7 @@ func (r *replica) metric(line string) bool {
 }
 
 // A replica that has not won the lease is as ready as the leader and does none of its work: it builds no chat
-// platform, so it opens no Socket Mode connection, and it reports courier_leader 0. The one that wins is given the
+// platform, so it opens no Socket Mode connection, and it reports agentkourier_leader 0. The one that wins is given the
 // epoch, and does all of it.
 func TestRunOnlyTheLeaderStartsTheLeaderHalf(t *testing.T) {
 	client, fence := cluster(), &fakeFence{}
@@ -95,11 +95,11 @@ func TestRunOnlyTheLeaderStartsTheLeaderHalf(t *testing.T) {
 	if b.built.Load() != 0 {
 		t.Errorf("the standby built %d chat platforms; want none: only the leader connects", b.built.Load())
 	}
-	if !a.metric("courier_leader 1") || !a.metric("courier_leader_takeovers_total 1") {
-		t.Error("the leader's /metrics lacks courier_leader 1 and courier_leader_takeovers_total 1")
+	if !a.metric("agentkourier_leader 1") || !a.metric("agentkourier_leader_takeovers_total 1") {
+		t.Error("the leader's /metrics lacks agentkourier_leader 1 and agentkourier_leader_takeovers_total 1")
 	}
-	if !b.metric("courier_leader 0") || !b.metric("courier_leader_takeovers_total 0") {
-		t.Error("the standby's /metrics lacks courier_leader 0 and courier_leader_takeovers_total 0")
+	if !b.metric("agentkourier_leader 0") || !b.metric("agentkourier_leader_takeovers_total 0") {
+		t.Error("the standby's /metrics lacks agentkourier_leader 0 and agentkourier_leader_takeovers_total 0")
 	}
 	if fence.epoch != 1 || len(fence.holders) != 1 || fence.holders[0] != "pod-a_1" {
 		t.Errorf("the store was told to lead %v at epoch %d; want pod-a_1 once, at epoch 1", fence.holders, fence.epoch)
@@ -130,8 +130,8 @@ func TestRunAStandbyTakesOverWhenTheLeaderStopsGracefully(t *testing.T) {
 	if took := time.Since(start); took > testElection.LeaseDuration {
 		t.Errorf("the takeover took %s after a graceful stop; want less than the lease duration, %s", took, testElection.LeaseDuration)
 	}
-	if !b.metric("courier_leader 1") {
-		t.Error("the new leader's /metrics lacks courier_leader 1")
+	if !b.metric("agentkourier_leader 1") {
+		t.Error("the new leader's /metrics lacks agentkourier_leader 1")
 	}
 	if fence.epoch != 2 || fence.holders[1] != "pod-b_1" {
 		t.Errorf("leads %v at epoch %d; want pod-b_1 second, at epoch 2", fence.holders, fence.epoch)
@@ -156,9 +156,9 @@ func TestRunTheNewLeaderUsesTheCredentialsOfNowAndNotOfItsStart(t *testing.T) {
 	b.running = start(t, cb)
 	b.until("/readyz", http.StatusOK)
 
-	rotated := secretOf("courier-system", "slack-main", "botToken", "appToken")
+	rotated := secretOf("agent-kourier-system", "slack-main", "botToken", "appToken")
 	rotated.Data["botToken"] = []byte("rotated-bot-token")
-	if _, err := client.CoreV1().Secrets("courier-system").Update(t.Context(), rotated, metav1.UpdateOptions{}); err != nil {
+	if _, err := client.CoreV1().Secrets("agent-kourier-system").Update(t.Context(), rotated, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	a.cancel()
@@ -253,7 +253,7 @@ func TestRunAStandbyStopsCleanly(t *testing.T) {
 	}
 }
 
-// With SQLite there is no election: the replica does the work at once, makes no Lease, and says courier_leader 1.
+// With SQLite there is no election: the replica does the work at once, makes no Lease, and says agentkourier_leader 1.
 func TestRunWithSQLiteHasNoElection(t *testing.T) {
 	c := startConfig(t)
 	var built atomic.Int32
@@ -271,8 +271,8 @@ func TestRunWithSQLiteHasNoElection(t *testing.T) {
 	if leases, err := c.Client.(*fake.Clientset).CoordinationV1().Leases("").List(t.Context(), metav1.ListOptions{}); err != nil || len(leases.Items) != 0 {
 		t.Errorf("leases = %v, %v; want none with SQLite", leases, err)
 	}
-	if _, body := r.get("/metrics"); !strings.Contains(body, "courier_leader 1\n") || !strings.Contains(body, "courier_leader_takeovers_total 0\n") {
-		t.Errorf("/metrics with SQLite lacks courier_leader 1 and courier_leader_takeovers_total 0:\n%s", body)
+	if _, body := r.get("/metrics"); !strings.Contains(body, "agentkourier_leader 1\n") || !strings.Contains(body, "agentkourier_leader_takeovers_total 0\n") {
+		t.Errorf("/metrics with SQLite lacks agentkourier_leader 1 and agentkourier_leader_takeovers_total 0:\n%s", body)
 	}
 }
 

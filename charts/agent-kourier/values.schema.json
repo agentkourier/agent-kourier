@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Agent Kourier chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "replicaCount": {"type": "integer", "minimum": 0, "description": "0 (the kill switch), 1, or 2 or more with store.type postgres: the replicas elect a leader and the others stand by; SQLite is one replica"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string"},
+        "tag": {"type": "string"},
+        "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {"type": "array"},
+    "fullnameOverride": {"type": "string"},
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"create": {"type": "boolean"}, "name": {"type": "string"}, "annotations": {"type": "object"}}
+    },
+    "listen": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"port": {"type": "integer", "minimum": 1, "maximum": 65535}}
+    },
+    "logLevel": {"enum": ["debug", "info", "warn", "error"]},
+    "klogVerbosity": {"type": "integer", "minimum": 0, "maximum": 7, "description": "client-go logs response bodies, Secret lists included, at 8 and above"},
+    "syncTimeout": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+    "auditRetention": {"type": "string", "pattern": "^(keep|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)?$", "description": "empty or keep: audit entries are never purged; else a duration of at least 24h"},
+    "extraEnv": {"type": "array"},
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingConfigMap": {"type": "string"},
+        "agentBackends": {"$ref": "#/definitions/resources"},
+        "chatConnections": {"$ref": "#/definitions/resources"},
+        "bindings": {"$ref": "#/definitions/resources"},
+        "rollOnChange": {"type": "boolean"}
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["sqlite", "postgres"]},
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dsnSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {"type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$", "maxLength": 253},
+                "key": {"type": "string", "pattern": "^[-._a-zA-Z0-9]*$", "maxLength": 253}
+              }
+            },
+            "timeouts": {"enum": ["agent-kourier", "role"]}
+          }
+        }
+      }
+    },
+    "leaderElection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "leaseDuration": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+        "renewDeadline": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+        "retryPeriod": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"}
+      }
+    },
+    "livenessProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1}
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingClaim": {"type": "string"},
+        "dbFile": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+        "size": {"type": "string"},
+        "storageClassName": {"type": "string"},
+        "accessModes": {"type": "array", "items": {"type": "string"}},
+        "retainOnUninstall": {"type": "boolean"}
+      }
+    },
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 0},
+    "podAnnotations": {"type": "object"},
+    "podLabels": {"type": "object"},
+    "priorityClassName": {"type": "string"},
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"},
+    "podSecurityContext": {"type": "object"},
+    "securityContext": {"type": "object"},
+    "resources": {"type": "object"},
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"create": {"type": "boolean"}, "secretNamespaces": {"type": "array", "items": {"type": "string"}}}
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"enabled": {"type": "boolean"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "annotations": {"type": "object"}}
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespace": {"type": "string"},
+        "labels": {"type": "object"},
+        "interval": {"type": "string"},
+        "scrapeTimeout": {"type": "string"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "kubeApiServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"cidrs": {"type": "array", "items": {"type": "string"}}, "ports": {"type": "array", "items": {"type": "integer"}}}
+        },
+        "dns": {"type": "object"},
+        "slack": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"cidrs": {"type": "array", "items": {"type": "string"}}, "except": {"type": "array", "items": {"type": "string"}}}
+        },
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"to": {"type": "array"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}
+        },
+        "metricsFrom": {"type": "array"},
+        "extraEgress": {"type": "array"}
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"enabled": {"type": "boolean"}, "minAvailable": {"type": ["integer", "string", "null"]}, "maxUnavailable": {"type": ["integer", "string", "null"]}}
+    },
+    "tokenRefresh": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string"},
+        "targetSecret": {"type": "string"},
+        "targetKey": {"type": "string", "pattern": "^[-._a-zA-Z0-9]+$"},
+        "targetNamespace": {"type": "string"},
+        "dex": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tokenURL": {"type": "string"},
+            "clientId": {"type": "string"},
+            "scope": {"type": "string"},
+            "credentialsSecret": {"type": "string"}
+          }
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {"type": "string"},
+            "tag": {"type": "string"},
+            "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$"}
+          }
+        },
+        "resources": {"type": "object"}
+      }
+    }
+  },
+  "definitions": {
+    "resources": {
+      "description": "Agent Kourier resources keyed by name: each has a spec, and optionally a namespace (default: the release's)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["spec"],
+        "properties": {"namespace": {"type": "string"}, "spec": {"type": "object"}}
+      }
+    }
+  }
+}

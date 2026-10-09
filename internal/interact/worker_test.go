@@ -212,7 +212,7 @@ func TestAPressWaitingToBeTriedAgainHoldsNoWorker(t *testing.T) {
 	waitFor(t, "the other interaction", func() bool { return f.processed()[2] == 1 })
 }
 
-// TestAPressThatKeepsFailingIsGivenUpOn: the cap is the press's age by courier's clock, so a restart
+// TestAPressThatKeepsFailingIsGivenUpOn: the cap is the press's age by Agent Kourier's clock, so a restart
 // does not give a press a fresh one, and it is the last word on a press that nothing else ends.
 func TestAPressThatKeepsFailingIsGivenUpOn(t *testing.T) {
 	var step atomic.Int64 // each try moves the clock on a minute

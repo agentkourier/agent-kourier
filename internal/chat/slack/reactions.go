@@ -22,7 +22,7 @@ import (
 // UNCONFIRMED(WP-04): that already_reacted is the code for a reaction this app added before (the
 // fake says so), and which codes a message that is gone gives (the fake says message_not_found).
 func (c *Client) React(ctx context.Context, channel, ts, name string) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.React")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.React")
 	defer func() { finishChat(ctx, op, "React", telemetryErr) }()
 	if channel == "" || ts == "" || name == "" {
 		return fmt.Errorf("slack react: the channel, ts and name are required: %w", store.ErrInvalid)
@@ -48,7 +48,7 @@ func (c *Client) React(ctx context.Context, channel, ts, name string) (telemetry
 // UNCONFIRMED(WP-04): that no_reaction is the code for a reaction that is not on the message (the fake
 // says so), and which codes a message that is gone gives (the fake says message_not_found).
 func (c *Client) Unreact(ctx context.Context, channel, ts, name string) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.chat.Unreact")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Unreact")
 	defer func() { finishChat(ctx, op, "Unreact", telemetryErr) }()
 	if channel == "" || ts == "" || name == "" {
 		return fmt.Errorf("slack unreact: the channel, ts and name are required: %w", store.ErrInvalid)

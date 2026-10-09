@@ -17,7 +17,8 @@ import (
 const recoveredPrefix = "task:"
 
 // SystemUser is the user a turn is filed under when nobody wrote it (an alert's first
-// prompt): the store requires one.
+// prompt): the store requires one. The value is stored (reply_queue.user_id, sessions.turn_user), so it keeps the
+// name it was written under: a turn queued before the project's rename must still read as the system's after it.
 const SystemUser = "courier:system"
 
 // Disposition says what Submit did with a turn.
@@ -31,11 +32,11 @@ type Disposition string
 const (
 	Created     Disposition = "created"      // a new session was made and the turn queued on it
 	Accepted    Disposition = "accepted"     // the session is live and the turn queued on it
-	NotOwned    Disposition = "not_owned"    // courier owns no such thread: ignore the turn (spec 8.2)
+	NotOwned    Disposition = "not_owned"    // Agent Kourier owns no such thread: ignore the turn (spec 8.2)
 	BindingGone Disposition = "binding_gone" // owned, but its Binding left the config: nothing written; Result.Admission says whether the caller posts the notice
 	Expired     Disposition = "expired"      // owned but past threadTTL: nothing written; the caller posts the notice
 	// Unmentioned is a reply the Binding does not take: owned, but the Binding's threadReplies is mention
-	// and the reply does not mention courier (D38). Nothing is written or queued, the session is not
+	// and the reply does not mention Agent Kourier (D38). Nothing is written or queued, the session is not
 	// touched (threadTTL is not extended), and nobody is told, whether the thread is live or expired. A typed
 	// answer to a pending question that takes text replies is no such reply: it is Accepted, queued pinned to the
 	// question.
@@ -52,7 +53,7 @@ type Inbound struct {
 	MessageRef string // the platform's ID of the message, for the reaction on a queued reply
 	UserID     string // the platform's ID of the user who wrote the turn; empty when nobody did
 	Text       string
-	// Mentioned says the turn mentions courier, or is in a direct message, where no mention is needed:
+	// Mentioned says the turn mentions Agent Kourier, or is in a direct message, where no mention is needed:
 	// the adapter decides. A Binding whose threadReplies is mention takes a reply in a thread it owns
 	// only if this is set (or Create is).
 	Mentioned bool
@@ -61,7 +62,7 @@ type Inbound struct {
 	Create bool
 	// ChannelThreadReplies is the chat.threadReplies of the Binding that owns the channel now, empty when none does
 	// (the default mode, all). It is read only when the session's own Binding has left the config, and then it
-	// decides whether a reply that does not mention courier is answered with the Binding-gone notice (spec 8.2).
+	// decides whether a reply that does not mention Agent Kourier is answered with the Binding-gone notice (spec 8.2).
 	ChannelThreadReplies v1alpha1.ThreadReplies
 	// Alert is the name of the alert the thread is started for, which the session keeps for the feedback on its
 	// messages (spec 8.7). Like Binding it is used only to create a session. The caller has bounded it: it is
@@ -148,7 +149,7 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}
 	if !enqueued {
-		telemetry.Count(ctx, "courier_intake_total", "reply_queue", "duplicate")
+		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate")
 	}
 	if enqueued { // this process made the row, so nothing has sent the turn yet
 		m.mu.Lock()
@@ -217,7 +218,7 @@ func (m *Manager) carryOut(ctx context.Context, in Inbound, owned bool, binding 
 		case IgnoredUnmentioned:
 			// It writes nothing; it counts the reply for the Binding, which is how a thread that people talk in
 			// without waking the agent shows up.
-			telemetry.Count(ctx, "courier_thread_unmentioned_total", binding)
+			telemetry.Count(ctx, "agentkourier_thread_unmentioned_total", binding)
 			res.Disposition = Unmentioned
 		case IgnoredBindingGone:
 			res.Disposition = BindingGone

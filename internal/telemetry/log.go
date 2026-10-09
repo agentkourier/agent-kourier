@@ -14,7 +14,7 @@ import (
 )
 
 // MaxLogErrorBytes caps the text of an error attribute in a log line, after redaction. It is the audit log's cap
-// for a returned error (internal/audit maxError): room for the context courier wraps an error in ("send message:
+// for a returned error (internal/audit maxError): room for the context Agent Kourier wraps an error in ("send message:
 // agent: not sent: ...") and the head of what the agent or Slack said, which is the part that diagnoses, but not
 // a page of model output or a response body. The text that is cut is not logged anywhere.
 const MaxLogErrorBytes = 300
@@ -24,8 +24,8 @@ const MaxLogErrorBytes = 300
 // its type, under any key.
 var redactedKeys = map[string]bool{"err": true, "error": true, "cause": true, "reason": true, "panic": true}
 
-// NewJSONHandler returns courier's log handler: JSON lines on w at level and above, in which every error attribute
-// goes through RedactAttr. It is the only place courier builds one (TestOnlyTheTelemetryPackageBuildsHandlers),
+// NewJSONHandler returns Agent Kourier's log handler: JSON lines on w at level and above, in which every error attribute
+// goes through RedactAttr. It is the only place Agent Kourier builds one (TestOnlyTheTelemetryPackageBuildsHandlers),
 // so no log line carries an error's text unredacted or unbounded.
 func NewJSONHandler(w io.Writer, level slog.Leveler) slog.Handler {
 	return slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level, ReplaceAttr: RedactAttr})

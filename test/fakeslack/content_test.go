@@ -149,7 +149,7 @@ func fmtTS(t time.Time) string {
 
 func TestInspectionReturnsCopies(t *testing.T) {
 	fake, api := newFake(t)
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{
 		"outbox_id": "ob-1", "nested": map[string]any{"k": "v"}}}
 	ts := post(t, api, text("x"), slack.MsgOptionMetadata(meta), slack.MsgOptionBlocks(slack.NewDividerBlock()))
 

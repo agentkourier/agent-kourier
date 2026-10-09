@@ -47,7 +47,7 @@ func TestSendWithContextIDContinuesSession(t *testing.T) {
 }
 
 // TestAnIDTagSetsApartTheIdsOfOneRunFromAnother: the counter behind the ids starts again at 1 when the stub restarts, so two runs
-// of the same requests make the same ids, and a client that stored one (courier derives an interaction's ID from the task and
+// of the same requests make the same ids, and a client that stored one (Agent Kourier derives an interaction's ID from the task and
 // request ids) meets it again. A tag puts the run in the ids. Without one the ids stay plain, which the other tests count on.
 func TestAnIDTagSetsApartTheIdsOfOneRunFromAnother(t *testing.T) {
 	ids := func(opts ...stubagent.Option) (taskID, contextID any) {

@@ -1,0 +1,20 @@
+# The plain pod forgets its contexts: scenario-memory says which turn its context has had, so a context that the agent lost shows
+# as "Message 1". The scenario restarts the stub agent's pod between two turns of a thread (the stub keeps its sessions in
+# memory, as an agent without a volume does) and reads what the thread shows (docs/spikes/demo1-a2a-plain-pod.md). A channel of its
+# own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel and the agent are pinned by
+# test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-a2a-memory, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: stub-a2a-memory}
+    namespace: kagent
+    name: scenario-memory
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CA2AM
+    output: live

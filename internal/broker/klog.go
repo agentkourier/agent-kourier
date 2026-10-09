@@ -8,7 +8,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// maxKlogVerbosity is the highest klog verbosity courier allows. client-go logs request and
+// maxKlogVerbosity is the highest klog verbosity Agent Kourier allows. client-go logs request and
 // response bodies, Secret lists included, at verbosity 8 and above, so nothing at 8 may ever be
 // enabled, whatever is asked for.
 const maxKlogVerbosity = 7

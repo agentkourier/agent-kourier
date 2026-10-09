@@ -1,6 +1,6 @@
 // Package sink is a webhook receiver for the fast E2E tier (spec 12.1). Alertmanager routes
-// every test alert to it as well as to courier, so a test can assert that alerts still arrive
-// while courier is down (D22). It answers 200 to any write, keeps what it was sent in order,
+// every test alert to it as well as to Agent Kourier, so a test can assert that alerts still arrive
+// while Agent Kourier is down (D22). It answers 200 to any write, keeps what it was sent in order,
 // and shows that log to tests:
 //
 //	POST, PUT or PATCH anywhere but /requests: recorded, 200

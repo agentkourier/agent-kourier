@@ -35,18 +35,18 @@ func TestS15_AStormOfAlertsIsHeldToTheLimitsAndGetsOneDigest(t *testing.T) {
 	const (
 		storm   = 6
 		started = 3
-		binding = "courier/fast-s15"
+		binding = "agent-kourier/fast-s15"
 		digest  = "3 alert messages not investigated in the last 10s (rate limit)."
 	)
 	decisions := func(decision string) float64 {
-		return s.counter("courier_trigger_decisions_total", map[string]string{"binding": binding, "decision": decision})
+		return s.counter("agentkourier_trigger_decisions_total", map[string]string{"binding": binding, "decision": decision})
 	}
 	limited := func() float64 {
-		return s.counter("courier_trigger_limited_total", map[string]string{"binding": binding, "trigger": "0", "limit": "rate"})
+		return s.counter("agentkourier_trigger_limited_total", map[string]string{"binding": binding, "trigger": "0", "limit": "rate"})
 	}
 	startedBefore, limitedBefore, limitedCountBefore := decisions("started"), decisions("limited"), limited()
 
-	// The channel and courier's database outlive a run, and a key holds its thread for the cooldown: the alerts are ones no
+	// The channel and Agent Kourier's database outlive a run, and a key holds its thread for the cooldown: the alerts are ones no
 	// earlier run posted. Each has a key of its own.
 	suffix := fmt.Sprintf("x%d", time.Now().UnixNano()%1_000_000_000)
 	var alerts []fakeslack.UserMessage
@@ -56,7 +56,7 @@ func TestS15_AStormOfAlertsIsHeldToTheLimitsAndGetsOneDigest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.acked(m) // courier takes them in the order they were posted, so the first three are the ones that start
+		s.acked(m) // Agent Kourier takes them in the order they were posted, so the first three are the ones that start
 		alerts = append(alerts, m)
 	}
 
@@ -125,10 +125,10 @@ func TestS15_AStormOfAlertsIsHeldToTheLimitsAndGetsOneDigest(t *testing.T) {
 
 	for decision, want := range map[string]float64{"started": startedBefore + started, "limited": limitedBefore + storm - started} {
 		if got := decisions(decision); got != want {
-			t.Errorf("courier_trigger_decisions_total{decision=%q} is %v; want %v", decision, got, want)
+			t.Errorf("agentkourier_trigger_decisions_total{decision=%q} is %v; want %v", decision, got, want)
 		}
 	}
 	if got, want := limited(), limitedCountBefore+storm-started; got != want {
-		t.Errorf("courier_trigger_limited_total{limit=\"rate\"} is %v; want %v", got, want)
+		t.Errorf("agentkourier_trigger_limited_total{limit=\"rate\"} is %v; want %v", got, want)
 	}
 }

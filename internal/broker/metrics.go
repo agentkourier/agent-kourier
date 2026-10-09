@@ -37,37 +37,37 @@ type Metrics struct {
 	takeovers     prometheus.Counter
 }
 
-// NewMetrics returns the metrics. stale is read at each scrape for courier_config_stale, and
+// NewMetrics returns the metrics. stale is read at each scrape for agentkourier_config_stale, and
 // may be nil (never stale): it is Config.Stale.
 func NewMetrics(stale func() bool) (*Metrics, error) {
 	m := &Metrics{
 		reg: prometheus.NewRegistry(),
-		auditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_audit_write_failures_total",
+		auditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_audit_write_failures_total",
 			Help: "Audit entries that could not be written, by kind."}, []string{"kind"}),
-		rejections: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_credential_rejections_total",
+		rejections: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_credential_rejections_total",
 			Help: "Credentials an agent rejected, by Binding."}, []string{"binding"}),
-		abandons: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_outbox_abandoned_total",
+		abandons: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_outbox_abandoned_total",
 			Help: "Outbound posts given up on, by reason."}, []string{"reason"}),
-		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_config_reload_errors_total",
+		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_config_reload_errors_total",
 			Help: "Config reloads that failed."}),
-		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_approval_outcomes_total",
+		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_approval_outcomes_total",
 			Help: "Pauses a Binding's policy turned away, by Binding and outcome."}, []string{"binding", "outcome"}),
-		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_interaction_timeouts_total",
+		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
-		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_retention_removed_total",
+		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_retention_removed_total",
 			Help: "Stored content removed by retention, by what: stranded_replies, cleared_interactions, audit_entries, expired_sessions, session_replies, session_interactions, session_presses, session_outbox, stale_tasks (a task left on an expired session, ended) or stale_task_interactions (pending interactions cancelled with it)."}, []string{"what"}),
-		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_interaction_decisions_total",
+		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_interaction_decisions_total",
 			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
-		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "courier_chat_connected",
+		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_chat_connected",
 			Help: "1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
-		turns: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "courier_turn_outcomes_total",
+		turns: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_turn_outcomes_total",
 			Help: "Turns that ended, by Binding and how: the terminal state of the task, or the class of what stopped it."}, []string{"binding", "outcome"}),
-		leader: prometheus.NewGauge(prometheus.GaugeOpts{Name: "courier_leader",
-			Help: "1 while this replica does courier's work (it leads, or it is the only replica: SQLite), 0 while it is a standby."}),
-		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "courier_leader_takeovers_total",
+		leader: prometheus.NewGauge(prometheus.GaugeOpts{Name: "agentkourier_leader",
+			Help: "1 while this replica does Agent Kourier's work (it leads, or it is the only replica: SQLite), 0 while it is a standby."}),
+		takeovers: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_leader_takeovers_total",
 			Help: "Times this replica took the leadership: it won the lease and was given the next epoch."}),
 	}
-	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "courier_config_stale",
+	staleGauge := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "agentkourier_config_stale",
 		Help: "1 while the latest config reload failed, so the running config lags the files."}, func() float64 {
 		if stale != nil && stale() {
 			return 1
@@ -158,7 +158,7 @@ func abandonLabel(reason string) string {
 	return otherLabel
 }
 
-// ChatConnected sets courier_chat_connected for the ChatConnection named connection ("namespace/name"): 1 when the
+// ChatConnected sets agentkourier_chat_connected for the ChatConnection named connection ("namespace/name"): 1 when the
 // platform's connection is up, 0 when it is not. The adapter's hook for it is Config.OnConnection of the Slack adapter.
 func (m *Metrics) ChatConnected(connection string, up bool) {
 	v := 0.0
@@ -168,7 +168,7 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 	m.chatUp.WithLabelValues(connection).Set(v)
 }
 
-// Leader sets courier_leader: 1 once this replica does courier's work, 0 while it waits to.
+// Leader sets agentkourier_leader: 1 once this replica does Agent Kourier's work, 0 while it waits to.
 func (m *Metrics) Leader(leading bool) {
 	v := 0.0
 	if leading {

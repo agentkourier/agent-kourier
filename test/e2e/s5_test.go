@@ -16,7 +16,7 @@ import (
 // s5Answer is what test-agent says in both tiers: the stub's canned reply, and mockllm's, whatever it was asked.
 const s5Answer = "The answer is 4."
 
-// TestS5_AReplyPostedBeforeACrashIsNotPostedAgain: courier is killed between posting a reply and
+// TestS5_AReplyPostedBeforeACrashIsNotPostedAgain: Agent Kourier is killed between posting a reply and
 // recording that it did (the testhooks fault, exit 137), and after it restarts the thread holds that one
 // message, found again by the tag it carries, not a second. That the restart is done with the unfinished
 // turn is shown by a positive signal, a second message of the thread being answered after it.
@@ -30,7 +30,7 @@ func TestS5_AReplyPostedBeforeACrashIsNotPostedAgain(t *testing.T) {
 }
 
 // TestS5_AReplyPostedBeforeACrashIsNotPostedAgainOverTheA2ADialect: S5 again, through the generic a2a dialect to the stub agent in
-// its plain pod (see TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect). The restarted courier finds the posted reply by its tag
+// its plain pod (see TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect). The restarted Agent Kourier finds the posted reply by its tag
 // and goes on with the thread, the second message reaching the agent through the same dialect.
 func TestS5_AReplyPostedBeforeACrashIsNotPostedAgainOverTheA2ADialect(t *testing.T) {
 	s5(t, a2aScenario(t), ChannelA2AS5)
@@ -41,7 +41,7 @@ func s5(t *testing.T, s *scenario, channel string) {
 	arm := func(ctx context.Context, fault string) error {
 		rollout, cancel := context.WithTimeout(ctx, 3*time.Minute) // a stuck rollout fails here, with its reason
 		defer cancel()
-		return s.pods.SetFault(rollout, kube.CourierNamespace, kube.CourierDeployment, courierContainer, fault)
+		return s.pods.SetFault(rollout, kube.AgentKourierNamespace, kube.AgentKourierDeployment, agentKourierContainer, fault)
 	}
 	t.Cleanup(func() {
 		if err := arm(context.WithoutCancel(s.ctx), ""); err != nil {
@@ -55,7 +55,7 @@ func s5(t *testing.T, s *scenario, channel string) {
 	// The baseline is of the pod the arming rollout left, taken after it: a baseline from before would let
 	// the old pod's own shutdown, which may end in 137 after its grace period, answer for a crash that
 	// never happened.
-	base, err := s.pods.Baseline(s.ctx, kube.CourierNamespace, courierPods, courierContainer)
+	base, err := s.pods.Baseline(s.ctx, kube.AgentKourierNamespace, agentKourierPods, agentKourierContainer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,19 +64,19 @@ func s5(t *testing.T, s *scenario, channel string) {
 	m := s.mention(channel, "US5", "answer once "+tok)
 	crashCtx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
 	defer cancel()
-	crash, err := s.pods.WaitCrash(crashCtx, kube.CourierNamespace, courierPods, courierContainer, base)
+	crash, err := s.pods.WaitCrash(crashCtx, kube.AgentKourierNamespace, agentKourierPods, agentKourierContainer, base)
 	if err != nil {
-		t.Fatalf("courier never crashed after posting: %v\nthe thread: %s", err, s.describeNow(channel, m.TS))
+		t.Fatalf("Agent Kourier never crashed after posting: %v\nthe thread: %s", err, s.describeNow(channel, m.TS))
 	}
 	if crash.ExitCode != 137 {
-		t.Fatalf("courier ended with exit code %d (%s); want 137, the fault's", crash.ExitCode, crash.Reason)
+		t.Fatalf("Agent Kourier ended with exit code %d (%s); want 137, the fault's", crash.ExitCode, crash.Reason)
 	}
 	if err := arm(s.ctx, ""); err != nil { // at once: the restarted container has the fault armed too
 		t.Fatal(err)
 	}
 	s.connected()
 
-	// What shows that the restarted courier is done with the turn it found unfinished: a second message in
+	// What shows that the restarted Agent Kourier is done with the turn it found unfinished: a second message in
 	// the thread is answered only after it, because a reply waits for the thread's active task. So when
 	// that answer is there, a duplicate of the first reply, if the restart made one, is there too.
 	again := s.reply(channel, m.TS, "US5", "and again "+tok)
@@ -102,7 +102,7 @@ func s5(t *testing.T, s *scenario, channel string) {
 // answeredOnceBeforeAndAfter says whether the thread holds exactly one tagged message of the bot before again, and one after it, each its
 // own and each the agent's answer: the first reply was posted once, and the one the second message got is another. A message the crash
 // hook reaches can be any outbox post, a notice that the turn failed included, so a scenario that checked only that something was posted
-// once would pass on a courier whose agent turn never worked. The string is the thread, for a failure message.
+// once would pass on an Agent Kourier whose agent turn never worked. The string is the thread, for a failure message.
 func answeredOnceBeforeAndAfter(th []fakeslack.MessageView, again fakeslack.UserMessage) (bool, string) {
 	var before, after []fakeslack.MessageView
 	for _, b := range BotMessages(th) {

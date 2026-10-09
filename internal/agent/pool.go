@@ -22,7 +22,7 @@ var (
 	// ErrStreamingUnsupported means the agent's card does not advertise capabilities.streaming.
 	// a2a-go would then fall back to a unary SendMessage, whose response headers arrive only
 	// when the task ends, and the dialect's response-header timeout (30 s) would cut every
-	// long task. Courier refuses such an agent instead.
+	// long task. Agent Kourier refuses such an agent instead.
 	ErrStreamingUnsupported = errors.New("agent: the agent card does not advertise streaming")
 	// ErrTokenRequired means a Target with TokenRequired got credentials without a token.
 	ErrTokenRequired = errors.New("agent: the Binding requires a bearer token and the credentials carry none")

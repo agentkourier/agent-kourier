@@ -16,7 +16,7 @@ import (
 
 // The text of an agent's JSON-RPC error is the agent's own: kagent puts the exception of a failed model call or tool
 // in it, and that may quote model output, a tool's input or a credential. It reaches the ERROR and WARN lines of a
-// failed turn through the handler courier is built with, which redacts it and cuts it, so the line names the turn
+// failed turn through the handler Agent Kourier is built with, which redacts it and cuts it, so the line names the turn
 // and the head of the cause and holds no secret and no page of text. Message and keys stay the ones operators grep.
 func TestAgentErrorTextIsRedactedAndCappedInTurnFailureLogs(t *testing.T) {
 	long := strings.Repeat("the model quoted the customer's record. ", 40)

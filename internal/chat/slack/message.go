@@ -80,27 +80,27 @@ func botSubtype(s string) bool {
 // group 1 is the ID, and mentionedIn compares it whole, so that U1 is not found in <@U12>.
 var userToken = regexp.MustCompile(`<@([^<>|]+)(?:\|[^<>]*)?>`)
 
-// self is who courier is on the workspace, from auth.test: the user ID its posts carry, and the bot ID.
+// self is who Agent Kourier is on the workspace, from auth.test: the user ID its posts carry, and the bot ID.
 type self struct{ user, bot string }
 
 // verdict is what decode makes of an event.
 type verdict int
 
 const (
-	// dropped is an event that is no message for courier: it is acknowledged and nothing more.
+	// dropped is an event that is no message for Agent Kourier: it is acknowledged and nothing more.
 	dropped verdict = iota
-	// forward is a message for the Sink: a person's, or a bot's that is not courier's own.
+	// forward is a message for the Sink: a person's, or a bot's that is not Agent Kourier's own.
 	forward
-	// ownPost is a post of courier itself. It is never forwarded, but Run tells a trigger that names
-	// courier's bot ID from one that does not (Client.refuseOwn).
+	// ownPost is a post of Agent Kourier itself. It is never forwarded, but Run tells a trigger that names
+	// Agent Kourier's bot ID from one that does not (Client.refuseOwn).
 	ownPost
 )
 
 // decode returns the Message that inner carries, and what to do with it (spec 8.2, D36).
 //   - A person's message is forwarded if it is plain, a thread_broadcast or a file_share, with a user, a
-//     channel, a ts and text. It is Mentioned if its text holds courier's user token (mentionedIn).
+//     channel, a ts and text. It is Mentioned if its text holds Agent Kourier's user token (mentionedIn).
 //   - A bot's message (a message event with a bot_id and no subtype or bot_message) is forwarded with its
-//     content, for Run to ask the Sink whether a trigger names the bot. A message of courier's own, by user ID
+//     content, for Run to ask the Sink whether a trigger names the bot. A message of Agent Kourier's own, by user ID
 //     or by bot ID, is never forwarded (ownPost): two bots would answer each other without end. A bot's message
 //     of another subtype, one with no content, and an app_mention by a bot are dropped.
 //   - Edits, deletions and other subtypes, whoever they are of, are dropped: a bot's edit is no new alert.
@@ -142,7 +142,7 @@ func decode(me self, inner any) (Message, verdict) {
 	return Message{}, dropped
 }
 
-// mentionedIn reports whether text holds courier's user token, <@UID> or <@UID|label>, anywhere in it: Slack sends
+// mentionedIn reports whether text holds Agent Kourier's user token, <@UID> or <@UID|label>, anywhere in it: Slack sends
 // an app_mention for a token in a quote or in code, so the message event of that text counts as one too. Plain
 // "@courier", another user's token, <!here>, <!channel> and a user group are not mentions.
 func (me self) mentionedIn(text string) bool {

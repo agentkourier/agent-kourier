@@ -1,6 +1,6 @@
-# agent-courier
+# Agent Kourier
 
-agent-courier is a Go broker between Alertmanager, Slack, and A2A agents (kagent 1.0 or any
+Agent Kourier is a Go broker between Alertmanager, Slack, and A2A agents (kagent 1.0 or any
 A2A backend). It turns alerts and Slack messages into agent sessions and renders the agent's
 output back into Slack threads. `spec.md` is the source of truth (decisions in section 5,
 architecture in section 6); the build plan is `tasks/plans/agent-courier-pilot.md`.
@@ -10,7 +10,7 @@ architecture in section 6); the build plan is `tasks/plans/agent-courier-pilot.m
 Directories appear when the work package that owns them lands; do not create empty ones.
 
 ```
-cmd/courier/            entrypoint (--version, later the broker)
+cmd/agent-kourier/            entrypoint (--version, later the broker)
 api/v1alpha1/           resource types (Binding, etc.)
 internal/config         file loader for resources
 internal/router         Binding resolution, dedup, rate limit, daily cap
@@ -39,25 +39,25 @@ spike/                  throwaway A2A and Slack experiments
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...` and then `go test -race -tags testhooks ./internal/...`; `build` writes `bin/courier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...` and then `go test -race -tags testhooks ./internal/...`; `build` writes `bin/agent-kourier`.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
 - AX fixtures use the separate `examples/ax` module and unmodified pinned AX/Substrate APIs; see
   `hack/kind/ax/README.md` for shared scenarios and capability differences. `make ax-smoke` exercises Bedrock/Haiku.
-- `make image` builds `courier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless
-  images, in `hack/kind/lib.sh`); `make image-testhooks` builds `courier-e2e/courier-testhooks:dev`, the
+- `make image` builds `agent-kourier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless
+  images, in `hack/kind/lib.sh`); `make image-testhooks` builds `agent-kourier-e2e/agent-kourier-testhooks:dev`, the
   labelled test image the kind tiers run and nothing pushes; `make image-check` proves the production
   binary lacks the test hooks. All three need Docker.
 - Add tools with `go get -tool <module>/cmd/<tool>@<version>`.
 
 ## Work-package workflow
 
-1. The orchestrator dispatches one WP from the plan to `courier-implementer` on branch
+1. The orchestrator dispatches one WP from the plan to `agent-kourier-implementer` on branch
    `wp/<id>-<slug>` in its own worktree.
 2. Implementer works test-first, runs `make fmt lint test` (plus `make e2e-fast` when the
    WP says so), commits, and reports.
-3. `courier-reviewer` gates the diff. Fixes go back to the same implementer, at most two rounds.
+3. `agent-kourier-reviewer` gates the diff. Fixes go back to the same implementer, at most two rounds.
 4. The orchestrator squash-merges approved branches onto `main`.
 
 No line cap (owner, 2026-10-01): one concern per WP is the only size rule. Split only when

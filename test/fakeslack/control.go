@@ -32,13 +32,13 @@ func invalid(format string, args ...any) error { return invalidError(fmt.Sprintf
 
 // Mention posts text in a channel as user and delivers an app_mention event and
 // a message event for it. The text must mention the bot, as <@UFAKEBOT> by
-// default, since courier reads the mention out of the text. Slack sends no
+// default, since Agent Kourier reads the mention out of the text. Slack sends no
 // app_mention in a direct message, so a D channel is refused: use DM.
 //
 // UNCONFIRMED(WP-04): the order of the two events; that both are sent, as
 // they are for an app subscribed to app_mention and message.channels; that a
 // DM gets no app_mention; and the fields of each event, which are the ones
-// slack-go's types carry that courier needs (no client_msg_id, blocks,
+// slack-go's types carry that Agent Kourier needs (no client_msg_id, blocks,
 // event_context or token).
 func (s *Server) Mention(channel, user, text string) (UserMessage, error) {
 	if !s.mentionsBot(text) {

@@ -17,15 +17,15 @@ import (
 
 var deployments = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-// courierDeployment is a Deployment whose spec is already at generation 2, with the controller still
+// agentKourierDeployment is a Deployment whose spec is already at generation 2, with the controller still
 // at generation 1 and its one replica up to date and ready for that generation: a rollout that has
 // been asked for and not begun, which must not look finished.
-func courierDeployment() *appsv1.Deployment {
+func agentKourierDeployment() *appsv1.Deployment {
 	one := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "courier", Name: "courier", Generation: 2},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agent-kourier", Name: "agent-kourier", Generation: 2},
 		Spec: appsv1.DeploymentSpec{Replicas: &one, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
-			{Name: "courier", Env: []corev1.EnvVar{{Name: "LOG_LEVEL", Value: "debug"}}},
+			{Name: "agent-kourier", Env: []corev1.EnvVar{{Name: "LOG_LEVEL", Value: "debug"}}},
 			{Name: "sidecar"},
 		}}}},
 		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1},
@@ -43,7 +43,7 @@ func rolloutAfter(cs *fake.Clientset, n int) *int {
 		if *gets < n-2 {
 			return false, nil, nil
 		}
-		cur, _ := cs.Tracker().Get(deployments, "courier", "courier")
+		cur, _ := cs.Tracker().Get(deployments, "agent-kourier", "agent-kourier")
 		d := cur.(*appsv1.Deployment).DeepCopy()
 		switch *gets {
 		case n - 2:
@@ -53,28 +53,28 @@ func rolloutAfter(cs *fake.Clientset, n int) *int {
 		default: // the n-th Get and every one after it
 			d.Status = appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1}
 		}
-		_ = cs.Tracker().Update(deployments, d, "courier")
+		_ = cs.Tracker().Update(deployments, d, "agent-kourier")
 		return false, nil, nil
 	})
 	return gets
 }
 
 func TestSetFault_PatchesTheEnvAndWaitsForTheRollout(t *testing.T) {
-	cs := fake.NewClientset(courierDeployment())
+	cs := fake.NewClientset(agentKourierDeployment())
 	gets := rolloutAfter(cs, 5)
 	p := newPods(cs)
 	p.poll = time.Millisecond
 
-	if err := p.SetFault(t.Context(), "courier", "courier", "courier", "crash-after-post"); err != nil {
+	if err := p.SetFault(t.Context(), "agent-kourier", "agent-kourier", "agent-kourier", "crash-after-post"); err != nil {
 		t.Fatal(err)
 	}
 	if *gets < 5 {
 		t.Fatalf("SetFault returned after %d reads of the Deployment, before the controller caught up", *gets)
 	}
-	d, _ := cs.AppsV1().Deployments("courier").Get(t.Context(), "courier", metav1.GetOptions{})
-	got := envOf(d, "courier")
-	if got["COURIER_FAULT"] != "crash-after-post" || got["LOG_LEVEL"] != "debug" || len(d.Spec.Template.Spec.Containers) != 2 {
-		t.Fatalf("env after the patch = %v in %d containers; want COURIER_FAULT added, LOG_LEVEL and the sidecar kept", got, len(d.Spec.Template.Spec.Containers))
+	d, _ := cs.AppsV1().Deployments("agent-kourier").Get(t.Context(), "agent-kourier", metav1.GetOptions{})
+	got := envOf(d, "agent-kourier")
+	if got["AGENTKOURIER_FAULT"] != "crash-after-post" || got["LOG_LEVEL"] != "debug" || len(d.Spec.Template.Spec.Containers) != 2 {
+		t.Fatalf("env after the patch = %v in %d containers; want AGENTKOURIER_FAULT added, LOG_LEVEL and the sidecar kept", got, len(d.Spec.Template.Spec.Containers))
 	}
 	for _, a := range cs.Actions() {
 		if a.GetResource().Resource == "pods" {
@@ -82,12 +82,12 @@ func TestSetFault_PatchesTheEnvAndWaitsForTheRollout(t *testing.T) {
 		}
 	}
 
-	if err := p.SetFault(t.Context(), "courier", "courier", "courier", ""); err != nil {
+	if err := p.SetFault(t.Context(), "agent-kourier", "agent-kourier", "agent-kourier", ""); err != nil {
 		t.Fatal(err)
 	}
-	d, _ = cs.AppsV1().Deployments("courier").Get(t.Context(), "courier", metav1.GetOptions{})
-	if got := envOf(d, "courier"); got["COURIER_FAULT"] != "" || len(got) != 2 {
-		t.Fatalf("env after disarming = %v; want COURIER_FAULT present and empty", got)
+	d, _ = cs.AppsV1().Deployments("agent-kourier").Get(t.Context(), "agent-kourier", metav1.GetOptions{})
+	if got := envOf(d, "agent-kourier"); got["AGENTKOURIER_FAULT"] != "" || len(got) != 2 {
+		t.Fatalf("env after disarming = %v; want AGENTKOURIER_FAULT present and empty", got)
 	}
 }
 
@@ -105,11 +105,11 @@ func envOf(d *appsv1.Deployment, container string) map[string]string {
 }
 
 func TestSetFault_FailsWhenTheRolloutNeverCompletes(t *testing.T) {
-	p := newPods(fake.NewClientset(courierDeployment()))
+	p := newPods(fake.NewClientset(agentKourierDeployment()))
 	p.poll = time.Millisecond
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	err := p.SetFault(ctx, "courier", "courier", "courier", "crash-after-post")
+	err := p.SetFault(ctx, "agent-kourier", "agent-kourier", "agent-kourier", "crash-after-post")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SetFault = %v, want a deadline error naming the rollout", err)
 	}
@@ -118,8 +118,8 @@ func TestSetFault_FailsWhenTheRolloutNeverCompletes(t *testing.T) {
 func TestSetFault_RefusesBadInputAndMissingDeployments(t *testing.T) {
 	p := newPods(fake.NewClientset())
 	for name, call := range map[string]func() error{
-		"no container":       func() error { return p.SetFault(t.Context(), "courier", "courier", "", "x") },
-		"no such Deployment": func() error { return p.SetFault(t.Context(), "courier", "courier", "courier", "x") },
+		"no container":       func() error { return p.SetFault(t.Context(), "agent-kourier", "agent-kourier", "", "x") },
+		"no such Deployment": func() error { return p.SetFault(t.Context(), "agent-kourier", "agent-kourier", "agent-kourier", "x") },
 	} {
 		if err := call(); err == nil {
 			t.Errorf("%s: SetFault succeeded", name)
@@ -128,18 +128,18 @@ func TestSetFault_RefusesBadInputAndMissingDeployments(t *testing.T) {
 }
 
 func TestPodDeletesAreRefusedOutsideE2E(t *testing.T) {
-	// Courier runs under strategy: Recreate on one SQLite volume; a pod delete would bypass that.
-	cp := sink("courier-0", "u1", true)
-	cp.Namespace = "courier"
+	// Agent Kourier runs under strategy: Recreate on one SQLite volume; a pod delete would bypass that.
+	cp := sink("agent-kourier-0", "u1", true)
+	cp.Namespace = "agent-kourier"
 	cs := fake.NewClientset(cp)
 	p := newPods(cs)
 	p.poll = time.Millisecond
-	if err := p.Kill(t.Context(), "courier", "courier-0"); !errors.Is(err, ErrDeleteRefused) {
+	if err := p.Kill(t.Context(), "agent-kourier", "agent-kourier-0"); !errors.Is(err, ErrDeleteRefused) {
 		t.Errorf("Kill = %v, want ErrDeleteRefused", err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second) // a Restart that is not refused would wait for a pod forever
 	defer cancel()
-	if _, err := p.Restart(ctx, "courier", sinkSel); !errors.Is(err, ErrDeleteRefused) {
+	if _, err := p.Restart(ctx, "agent-kourier", sinkSel); !errors.Is(err, ErrDeleteRefused) {
 		t.Errorf("Restart = %v, want ErrDeleteRefused", err)
 	}
 	for _, a := range cs.Actions() {

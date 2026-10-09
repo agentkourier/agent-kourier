@@ -6,10 +6,10 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-// A message event is Mentioned when its text holds courier's user token, in either form Slack writes it, <@UID> or
+// A message event is Mentioned when its text holds Agent Kourier's user token, in either form Slack writes it, <@UID> or
 // <@UID|label>, wherever in the text it is: Slack sends an app_mention for a token in a quote or in code too, so
 // the message event must agree with it. Nothing else is a mention.
-func TestDecodeMessageMentionedIsCouriersUserTokenAnywhereInTheText(t *testing.T) {
+func TestDecodeMessageMentionedIsAgentKouriersUserTokenAnywhereInTheText(t *testing.T) {
 	me := self{user: "UME", bot: "BME"}
 	for _, tc := range []struct {
 		name string
@@ -23,7 +23,7 @@ func TestDecodeMessageMentionedIsCouriersUserTokenAnywhereInTheText(t *testing.T
 		{"a labelled token with an empty label", "<@UME|> why?", true},
 		{"a label with a pipe in it", "<@UME|a|b> why?", true},
 		{"a label ends at its first >", "<@UME|a>b> why?", true},
-		{"a label with a space and a symbol", "<@UME|Agent Courier (bot)!> why?", true},
+		{"a label with a space and a symbol", "<@UME|Agent Kourier (bot)!> why?", true},
 		{"a token among others", "<@U1> <@UME> <@U2|bob>", true},
 		{"a token after another user's labelled one", "<@U1|ME> <@UME>", true},
 		{"a token on a later line", "line one\nline two <@UME>", true},
@@ -39,12 +39,12 @@ func TestDecodeMessageMentionedIsCouriersUserTokenAnywhereInTheText(t *testing.T
 		{"plain @courier in code", "`@courier`", false},
 		{"another user's token", "<@U1> why?", false},
 		{"another user's labelled token", "<@U1|courier> why?", false},
-		{"a user ID that begins with courier's", "<@UME2> why?", false},
-		{"a labelled user ID that begins with courier's", "<@UME2|courier> why?", false},
-		{"a user ID that ends with courier's", "<@XUME> why?", false},
-		{"courier's ID as another user's label", "<@U1|UME> why?", false},
-		{"courier's ID in a channel link", "<#UME|general>", false},
-		{"courier's ID in a user group", "<!subteam^UME|@team>", false},
+		{"a user ID that begins with Agent Kourier's", "<@UME2> why?", false},
+		{"a labelled user ID that begins with Agent Kourier's", "<@UME2|courier> why?", false},
+		{"a user ID that ends with Agent Kourier's", "<@XUME> why?", false},
+		{"agent-kourier's ID as another user's label", "<@U1|UME> why?", false},
+		{"agent-kourier's ID in a channel link", "<#UME|general>", false},
+		{"agent-kourier's ID in a user group", "<!subteam^UME|@team>", false},
 		{"@here", "<!here> why?", false},
 		{"@channel", "<!channel> why?", false},
 		{"@everyone", "<!everyone> why?", false},
@@ -82,7 +82,7 @@ func TestDecodeMessageWithoutABotUserIDIsNeverMentioned(t *testing.T) {
 	}
 }
 
-// A bot's message with courier's token in it starts nothing: it is forwarded for a trigger to read, unmentioned.
+// A bot's message with Agent Kourier's token in it starts nothing: it is forwarded for a trigger to read, unmentioned.
 func TestDecodeABotsMessageWithTheTokenIsNotMentioned(t *testing.T) {
 	me := self{user: "UME", bot: "BME"}
 	for _, ev := range []*slackevents.MessageEvent{

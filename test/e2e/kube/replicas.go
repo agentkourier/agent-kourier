@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// Replica is one running process of courier as a failover scenario needs it: where to ask it (its pod's IP), which
+// Replica is one running process of Agent Kourier as a failover scenario needs it: where to ask it (its pod's IP), which
 // container run it is (the ID the signaler names it by) and how often its container has restarted. A container that
 // restarts in the same pod is a new process in the same pod, so the pod's name alone does not say which process led.
 type Replica struct {
@@ -47,7 +47,7 @@ func (p *Pods) Replicas(ctx context.Context, namespace, selector, container stri
 
 // Logs returns the last tail lines of the named container's log in the pod: of the run before the current one if
 // previous is set, which is how a container that exited is read after the kubelet has restarted it. The runner's Role
-// needs get on pods/log in courier's namespace (hack/kind/e2e/runner.yaml). Courier logs no token and no Secret value,
+// needs get on pods/log in Agent Kourier's namespace (hack/kind/e2e/runner.yaml). Agent Kourier logs no token and no Secret value,
 // and a caller that prints a line of it prints only the ones it looks for.
 func (p *Pods) Logs(ctx context.Context, namespace, pod, container string, previous bool, tail int64) (string, error) {
 	stream, err := p.client.CoreV1().Pods(namespace).GetLogs(pod, &corev1.PodLogOptions{Container: container, Previous: previous, TailLines: &tail}).Stream(ctx)

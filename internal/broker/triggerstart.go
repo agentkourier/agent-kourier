@@ -88,7 +88,7 @@ func permalinks(p chat.Platform) func(chat.Ref) (string, bool) {
 // The first turn's text is the rendered prompt (render.Prompt): the template's output, then the whole message in the
 // untrusted block. The turn names no user: nobody wrote it, so it is filed under the session manager's system
 // user (session.SystemUser), which sends no attribution and audits no person, rather than a person who did not write
-// it. A person's reply in the thread continues the session without a mention, as a reply in any thread courier
+// it. A person's reply in the thread continues the session without a mention, as a reply in any thread Agent Kourier
 // owns does.
 //
 // The session keeps the alert's name (the match's "alertname" entry, if it has the shape of a name: feedback.AlertName),
@@ -154,7 +154,7 @@ func (s *triggerStarter) refuse(ctx context.Context, m chat.TriggerMatch, cause 
 	if err := s.audit.TriggerRefused(ctx, audit.Actor{Binding: m.Binding}, audit.TriggerRefusal{MessageID: id, Trigger: m.Index, Ref: ref, Reason: reason, Len: length}); err != nil {
 		s.log.WarnContext(ctx, "chat: the refusal of a trigger's start was not audited", "binding", m.Binding, "trigger", m.Index, "message", at.ID, "error", err)
 	}
-	telemetry.Count(ctx, "courier_trigger_refused_total", m.Binding, strconv.Itoa(m.Index), ref, reason)
+	telemetry.Count(ctx, "agentkourier_trigger_refused_total", m.Binding, strconv.Itoa(m.Index), ref, reason)
 	// The render error of a template that failed to run is logged by its text, which holds names of the template and
 	// Go's own words. A refusal's holds neither the value nor its text, only the ref, reason and length.
 	if refused == nil {

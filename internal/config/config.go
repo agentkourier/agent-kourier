@@ -1,4 +1,4 @@
-// Package config loads courier's resources (AgentBackend, ChatConnection, Binding) from YAML
+// Package config loads Agent Kourier's resources (AgentBackend, ChatConnection, Binding) from YAML
 // files (D30, spec section 7). It checks one object at a time; cross-object checks belong to
 // the snapshot builder.
 package config

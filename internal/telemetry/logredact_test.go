@@ -168,7 +168,7 @@ func TestJSONHandlerSurvivesBadErrors(t *testing.T) {
 	}
 }
 
-// Courier builds a log handler in one place. A second JSON or text handler, in any non-test file of cmd or
+// Agent Kourier builds a log handler in one place. A second JSON or text handler, in any non-test file of cmd or
 // internal, is a logger the redaction does not cover.
 func TestOnlyTheTelemetryPackageBuildsHandlers(t *testing.T) {
 	const root = "../.."

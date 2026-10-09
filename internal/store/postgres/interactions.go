@@ -129,7 +129,7 @@ func (s *adapter) transition(ctx context.Context, id, update string, args ...any
 		return err
 	})
 	if applied && err == nil {
-		telemetry.Observe(ctx, "courier_interaction_wait_seconds", decided.Sub(created), kind, string(state))
+		telemetry.Observe(ctx, "agentkourier_interaction_wait_seconds", decided.Sub(created), kind, string(state))
 	}
 	return applied, state, decider, err
 }

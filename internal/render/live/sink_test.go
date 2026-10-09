@@ -84,7 +84,7 @@ func TestNoticeOnlyQueuesAndKeepsItsDetailLiteral(t *testing.T) {
 }
 
 // TestStuckNoticesSayWhatTheTurnWaitsFor: a turn that has waited long says whether it is for a busy task or for a
-// session not ready, in words that promise only what courier does: it keeps trying.
+// session not ready, in words that promise only what Agent Kourier does: it keeps trying.
 func TestStuckNoticesSayWhatTheTurnWaitsFor(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
@@ -338,7 +338,7 @@ func TestTurnWithoutFinalFreesItsGoroutine(t *testing.T) {
 	endTurn()
 }
 
-// The wording of the two notices for a thread courier cannot continue is courier's own and fixed:
+// The wording of the two notices for a thread Agent Kourier cannot continue is Agent Kourier's own and fixed:
 // what the person wrote is nowhere in it.
 func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 	e := setup(t)
@@ -360,8 +360,8 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 	}
 }
 
-// The notices of a turn that ended without an answer say what happened in courier's own fixed words, and
-// name no cause: the agent's status text is untrusted and not courier's to repeat (spec 8.4, R2).
+// The notices of a turn that ended without an answer say what happened in Agent Kourier's own fixed words, and
+// name no cause: the agent's status text is untrusted and not Agent Kourier's to repeat (spec 8.4, R2).
 func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
@@ -384,7 +384,7 @@ func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
 	}
 }
 
-// The notes a trigger's thread gets for a repeat and for a close are courier's own words and the time it
+// The notes a trigger's thread gets for a repeat and for a close are Agent Kourier's own words and the time it
 // fills in: nothing of the message that fired them is in them.
 func TestNoticesOfATriggerThreadAreFixedTextAndATime(t *testing.T) {
 	e := setup(t)
@@ -406,7 +406,7 @@ func TestNoticesOfATriggerThreadAreFixedTextAndATime(t *testing.T) {
 	}
 }
 
-// The note of a start that was refused says so in courier's words, and what failed in the Detail's: the name of the
+// The note of a start that was refused says so in Agent Kourier's words, and what failed in the Detail's: the name of the
 // value, which the caller took from a closed set, and never the value.
 func TestNoticeOfARefusedTriggerStartIsFixedText(t *testing.T) {
 	e := setup(t)

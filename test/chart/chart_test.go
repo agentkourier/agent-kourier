@@ -1,10 +1,10 @@
-// Package chart_test checks the courier Helm chart (charts/courier) by rendering it with `helm template`: golden files for
+// Package chart_test checks the Agent Kourier Helm chart (charts/agent-kourier) by rendering it with `helm template`: golden files for
 // five values files, the failures a values file must not get past, the properties that make the install safe, and what the
 // kind tiers' values (ci/fast, ax and sandbox) render, which hack/kind's scripts and the E2E tests rely on, so a chart that
 // drifts from what the tiers run fails `make test` and not an install.
 //
 // The tests need the helm binary, which the kind scripts need too (they find it on PATH, as these do). Without it they skip
-// with a message that says so, so `make test` stays runnable on a machine that has only Go; set COURIER_REQUIRE_HELM=1 and a
+// with a message that says so, so `make test` stays runnable on a machine that has only Go; set AGENTKOURIER_REQUIRE_HELM=1 and a
 // missing helm fails them instead, so a pipeline cannot pass by skipping: .github/workflows/ci.yml sets it. Refresh the
 // golden files after a
 // deliberate chart change with: go test ./test/chart -update
@@ -42,17 +42,17 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files from the chart's current output")
 
-const chartDir = "../../charts/courier"
+const chartDir = "../../charts/agent-kourier"
 
-// helmPath returns the helm binary, or skips the test (fails it with COURIER_REQUIRE_HELM=1) when there is none.
+// helmPath returns the helm binary, or skips the test (fails it with AGENTKOURIER_REQUIRE_HELM=1) when there is none.
 func helmPath(t *testing.T) string {
 	t.Helper()
 	path, err := exec.LookPath("helm")
 	if err != nil {
-		if os.Getenv("COURIER_REQUIRE_HELM") == "1" {
-			t.Fatal("helm is not on PATH, and COURIER_REQUIRE_HELM=1 says the chart tests must run")
+		if os.Getenv("AGENTKOURIER_REQUIRE_HELM") == "1" {
+			t.Fatal("helm is not on PATH, and AGENTKOURIER_REQUIRE_HELM=1 says the chart tests must run")
 		}
-		t.Skip("helm is not on PATH: the chart tests render charts/courier with `helm template` and are skipped without it (install helm, or set COURIER_REQUIRE_HELM=1 to make this a failure)")
+		t.Skip("helm is not on PATH: the chart tests render charts/agent-kourier with `helm template` and are skipped without it (install helm, or set AGENTKOURIER_REQUIRE_HELM=1 to make this a failure)")
 	}
 	return path
 }
@@ -166,13 +166,13 @@ func TestLint(t *testing.T) {
 // goldenCases are the values files whose full output is checked in: the namespace and release are the ones the case's
 // own header says it is installed as.
 var goldenCases = []struct{ name, release, namespace string }{
-	{"minimal", "courier", "courier"},
-	{"fast", "courier", "courier"},
-	{"fast-postgres", "courier", "courier"},
-	{"postgres", "courier", "courier"},
-	{"ax", "courier", "courier"},
-	{"sandbox", "courier-sandbox", "courier"},
-	{"full", "courier", "courier-system"},
+	{"minimal", "agent-kourier", "agent-kourier"},
+	{"fast", "agent-kourier", "agent-kourier"},
+	{"fast-postgres", "agent-kourier", "agent-kourier"},
+	{"postgres", "agent-kourier", "agent-kourier"},
+	{"ax", "agent-kourier", "agent-kourier"},
+	{"sandbox", "agent-kourier-sandbox", "agent-kourier"},
+	{"full", "agent-kourier", "agent-kourier-system"},
 }
 
 func TestGolden(t *testing.T) {
@@ -231,7 +231,7 @@ func firstDifference(want, got string) string {
 func TestRefusals(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	image := "image.repository=registry.example.test/courier"
+	image := "image.repository=registry.example.test/agent-kourier"
 	tests := []struct {
 		name string
 		args []string
@@ -252,7 +252,7 @@ func TestRefusals(t *testing.T) {
 		{"an unknown store", []string{"--set", image, "--set", "store.type=mysql"}, "store.type"},
 		{"unknown Postgres timeouts", []string{"--set", image, "--set", "store.type=postgres,store.postgres.timeouts=never"}, "store.postgres.timeouts"},
 		{"a Secret name with a slash", []string{"--set", image, "--set", "store.type=postgres,store.postgres.dsnSecret.name=a/b,store.postgres.dsnSecret.key=dsn"}, "store.postgres.dsnSecret.name"},
-		{"a DSN with a password in the values", []string{"--set", image, "--set-json", `extraEnv=[{"name":"X","value":"postgres://courier:hunter2@db:5432/courier"}]`}, "looks like a Postgres DSN with a password"},
+		{"a DSN with a password in the values", []string{"--set", image, "--set-json", `extraEnv=[{"name":"X","value":"postgres://agentkourier:hunter2@db:5432/agentkourier"}]`}, "looks like a Postgres DSN with a password"},
 		{"a postgresql:// URL with a percent-encoded password", []string{"--set", image, "--set-json", `config.chatConnections={"c":{"spec":{"note":"postgresql://u:p%40ss@db/x"}}}`}, "looks like a Postgres DSN with a password"},
 		{"no image", nil, "image.repository is required"},
 		{"a config two ways", []string{"--set", image, "--set", "config.existingConfigMap=mine", "-f", values("minimal")}, "set one"},
@@ -263,9 +263,9 @@ func TestRefusals(t *testing.T) {
 		{"a typo in a key", []string{"--set", image, "--set", "replicas=1"}, "specifications of the schema"},
 		{"a malformed digest", []string{"--set", image, "--set", "image.digest=latest"}, "image.digest"},
 		{"verbose client-go", []string{"--set", image, "--set", "klogVerbosity=8"}, "klogVerbosity"},
-		{"a token refreshed where no Binding reads it", []string{"-f", values("minimal"), "--set", "tokenRefresh.enabled=true,tokenRefresh.targetSecret=other-token,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"}, "no Binding in namespace courier has identity.tokenSecretRef naming it"},
-		{"a token refreshed in the wrong namespace", []string{"-f", values("minimal"), "--set", "tokenRefresh.enabled=true,tokenRefresh.targetSecret=courier-agent-token,tokenRefresh.targetNamespace=elsewhere,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"}, "no Binding in namespace elsewhere"},
-		{"a token refreshed under the wrong key", []string{"-f", values("minimal"), "--set", "tokenRefresh.enabled=true,tokenRefresh.targetSecret=courier-agent-token,tokenRefresh.targetKey=other,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"}, "no Binding in namespace courier"},
+		{"a token refreshed where no Binding reads it", []string{"-f", values("minimal"), "--set", "tokenRefresh.enabled=true,tokenRefresh.targetSecret=other-token,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"}, "no Binding in namespace agent-kourier has identity.tokenSecretRef naming it"},
+		{"a token refreshed in the wrong namespace", []string{"-f", values("minimal"), "--set", "tokenRefresh.enabled=true,tokenRefresh.targetSecret=agent-kourier-agent-token,tokenRefresh.targetNamespace=elsewhere,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"}, "no Binding in namespace elsewhere"},
+		{"a token refreshed under the wrong key", []string{"-f", values("minimal"), "--set", "tokenRefresh.enabled=true,tokenRefresh.targetSecret=agent-kourier-agent-token,tokenRefresh.targetKey=other,tokenRefresh.dex.tokenURL=http://dex,tokenRefresh.dex.clientId=c,tokenRefresh.dex.credentialsSecret=d"}, "no Binding in namespace agent-kourier"},
 		{"a budget that keeps the only pod", []string{"--set", image, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1"}, "blocks every voluntary eviction"},
 		{"a budget of 100 percent", []string{"--set", image, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=100%"}, "blocks every voluntary eviction"},
 		{"a budget with no evictions allowed", []string{"--set", image, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.maxUnavailable=0"}, "blocks every voluntary eviction"},
@@ -275,13 +275,13 @@ func TestRefusals(t *testing.T) {
 		{"a Slack bot token in the values", []string{"--set", image, "--set-json", `config.chatConnections={"c":{"spec":{"platform":"slack","note":"xoxb-0-fake"}}}`}, "looks like a Slack token"},
 		{"a Slack app token in the values", []string{"--set", image, "--set-json", `extraEnv=[{"name":"X","value":"xapp-1-fake"}]`}, "looks like a Slack token"},
 		{"a percentage budget that rounds up to the only pod", []string{"--set", image, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=50%"}, "rounds up to every pod"},
-		{"a database file in another directory", []string{"--set", image, "--set", "persistence.dbFile=../etc/courier.db"}, "persistence.dbFile"},
+		{"a database file in another directory", []string{"--set", image, "--set", "persistence.dbFile=../etc/agent-kourier.db"}, "persistence.dbFile"},
 		{"a resource with no spec", []string{"--set", image, "--set", "config.bindings.b.namespace=x"}, "spec"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := render(t.Context(), t, "courier", "courier", tc.args...)
+			_, err := render(t.Context(), t, "agent-kourier", "agent-kourier", tc.args...)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("render error = %v; want one containing %q", err, tc.want)
 			}
@@ -294,19 +294,19 @@ func TestRefusals(t *testing.T) {
 func TestLookalikeNamesRender(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	image := "image.repository=registry.example.test/courier"
+	image := "image.repository=registry.example.test/agent-kourier"
 	for _, tc := range []struct{ name, setJSON string }{
 		{"a Secret named taxapp-slack", `config.chatConnections={"c":{"spec":{"platform":"slack","tokenSecretRef":{"name":"taxapp-slack"}}}}`},
 		{"a namespace named linuxapp-prod", `config.bindings={"b":{"namespace":"linuxapp-prod","spec":{"note":"xoxbox-prod"}}}`},
 		{"a header named X-Monkey-Id", `config.agentBackends={"b":{"spec":{"dialect":"a2a","url":"http://x","headers":[{"name":"X-Monkey-Id","value":"m1"}]}}}`},
 		{"a Postgres URL beside an email address", `extraEnv=[{"name":"X","value":"postgres://pg.db.svc:5432/app"},{"name":"Y","value":"oncall@example.com"}]`},
 		{"a Postgres URL, then a field with a colon and an at sign", `extraEnv=[{"name":"X","value":"postgres://pg.db.svc"},{"name":"Y","value":"a:b@c"}]`},
-		{"a Postgres URL with no password", `extraEnv=[{"name":"X","value":"postgres://db.example.test:5432/courier"}]`},
-		{"the Bedrock egress header", `config.agentBackends={"b":{"spec":{"dialect":"a2a","url":"http://x","headers":[{"name":"X-Courier-Egress-Host","value":"https://bedrock-runtime.us-east-1.amazonaws.com"}]}}}`},
+		{"a Postgres URL with no password", `extraEnv=[{"name":"X","value":"postgres://db.example.test:5432/agent-kourier"}]`},
+		{"the Bedrock egress header", `config.agentBackends={"b":{"spec":{"dialect":"a2a","url":"http://x","headers":[{"name":"X-Agent-Kourier-Egress-Host","value":"https://bedrock-runtime.us-east-1.amazonaws.com"}]}}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := render(t.Context(), t, "courier", "courier", "--set", image, "--set-json", tc.setJSON); err != nil {
+			if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", image, "--set-json", tc.setJSON); err != nil {
 				t.Errorf("render: %v; want it to render", err)
 			}
 		})
@@ -317,16 +317,16 @@ func TestDeploymentIsSafe(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	var d appsv1.Deployment
-	find(t, mustRender(t, "courier", "courier", "-f", values("minimal")), "Deployment", "courier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal")), "Deployment", "agent-kourier", &d)
 	pod, c := d.Spec.Template.Spec, d.Spec.Template.Spec.Containers[0]
 
 	if *d.Spec.Replicas != 1 || d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
 		t.Errorf("replicas %d, strategy %s; want one pod and Recreate: SQLite's volume is never shared", *d.Spec.Replicas, d.Spec.Strategy.Type)
 	}
-	if d.Spec.Template.Labels["app.kubernetes.io/name"] != "courier" || d.Spec.Selector.MatchLabels["app.kubernetes.io/name"] != "courier" {
-		t.Errorf("pod labels %v, selector %v; want app.kubernetes.io/name=courier on both: NetworkPolicies elsewhere trust it", d.Spec.Template.Labels, d.Spec.Selector.MatchLabels)
+	if d.Spec.Template.Labels["app.kubernetes.io/name"] != "agent-kourier" || d.Spec.Selector.MatchLabels["app.kubernetes.io/name"] != "agent-kourier" {
+		t.Errorf("pod labels %v, selector %v; want app.kubernetes.io/name=agent-kourier on both: NetworkPolicies elsewhere trust it", d.Spec.Template.Labels, d.Spec.Selector.MatchLabels)
 	}
-	if c.Image != "registry.example.test/courier:v0.1.0" {
+	if c.Image != "registry.example.test/agent-kourier:v0.1.0" {
 		t.Errorf("image %q; want the repository and tag of the values", c.Image)
 	}
 	sc, psc := c.SecurityContext, pod.SecurityContext
@@ -339,7 +339,7 @@ func TestDeploymentIsSafe(t *testing.T) {
 			c.StartupProbe.HTTPGet.Path, c.LivenessProbe.HTTPGet.Path, c.ReadinessProbe.HTTPGet.Path)
 	}
 	if *pod.TerminationGracePeriodSeconds != 40 || pod.HostNetwork {
-		t.Errorf("grace %d s, hostNetwork %v; want 40 s (past courier's 25 s ordered shutdown) and no host network", *pod.TerminationGracePeriodSeconds, pod.HostNetwork)
+		t.Errorf("grace %d s, hostNetwork %v; want 40 s (past Agent Kourier's 25 s ordered shutdown) and no host network", *pod.TerminationGracePeriodSeconds, pod.HostNetwork)
 	}
 	if c.Resources.Limits.Memory().IsZero() || c.Resources.Requests.Memory().IsZero() {
 		t.Errorf("resources %+v; want memory requests and limits", c.Resources)
@@ -350,7 +350,7 @@ func TestDeploymentIsSafe(t *testing.T) {
 		}
 	}
 	if len(c.Args) != 0 || len(c.Command) != 0 {
-		t.Errorf("command %v, args %v; cmd/courier takes none", c.Command, c.Args)
+		t.Errorf("command %v, args %v; cmd/agent-kourier takes none", c.Command, c.Args)
 	}
 }
 
@@ -360,16 +360,16 @@ func TestLivenessProbeDefaultsAndOverride(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	var d appsv1.Deployment
-	find(t, mustRender(t, "courier", "courier", "--set", "image.repository=courier"), "Deployment", "courier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier"), "Deployment", "agent-kourier", &d)
 	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp.PeriodSeconds != 10 || lp.FailureThreshold != 3 {
 		t.Errorf("default liveness probe %+v; want ten seconds and three misses", lp)
 	}
-	find(t, mustRender(t, "courier", "courier", "--set", "image.repository=courier,livenessProbe.periodSeconds=5,livenessProbe.failureThreshold=8"), "Deployment", "courier", &d)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,livenessProbe.periodSeconds=5,livenessProbe.failureThreshold=8"), "Deployment", "agent-kourier", &d)
 	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp.PeriodSeconds != 5 || lp.FailureThreshold != 8 {
 		t.Errorf("liveness probe %+v; want the values' five seconds and eight misses", lp)
 	}
 	for _, bad := range []string{"livenessProbe.failureThreshold=0", "livenessProbe.periodSeconds=0", "livenessProbe.failureThreshold=x"} {
-		if _, err := render(t.Context(), t, "courier", "courier", "--set", "image.repository=courier,"+bad); err == nil {
+		if _, err := render(t.Context(), t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier,"+bad); err == nil {
 			t.Errorf("--set %s rendered; want it refused", bad)
 		}
 	}
@@ -379,13 +379,13 @@ func TestKillSwitchAndImageDigest(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	digest := "sha256:" + strings.Repeat("ab", 32)
-	objs := mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "replicaCount=0", "--set", "image.digest="+digest)
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "replicaCount=0", "--set", "image.digest="+digest)
 	var d appsv1.Deployment
-	find(t, objs, "Deployment", "courier", &d)
+	find(t, objs, "Deployment", "agent-kourier", &d)
 	if *d.Spec.Replicas != 0 {
 		t.Errorf("replicas %d; replicaCount 0 is the kill switch", *d.Spec.Replicas)
 	}
-	if got, want := d.Spec.Template.Spec.Containers[0].Image, "registry.example.test/courier@"+digest; got != want {
+	if got, want := d.Spec.Template.Spec.Containers[0].Image, "registry.example.test/agent-kourier@"+digest; got != want {
 		t.Errorf("image %q; want %q: a digest wins over the tag", got, want)
 	}
 }
@@ -395,41 +395,41 @@ func TestDatabaseFileIsInTheVolume(t *testing.T) {
 	helmPath(t)
 	dbPath := func(args ...string) string {
 		var d appsv1.Deployment
-		find(t, mustRender(t, "courier", "courier", append([]string{"-f", values("minimal")}, args...)...), "Deployment", "courier", &d)
+		find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"-f", values("minimal")}, args...)...), "Deployment", "agent-kourier", &d)
 		for _, e := range d.Spec.Template.Spec.Containers[0].Env {
-			if e.Name == "COURIER_DB_PATH" {
+			if e.Name == "AGENTKOURIER_DB_PATH" {
 				return e.Value
 			}
 		}
 		return ""
 	}
 	if got := dbPath(); got != "/data/courier.db" {
-		t.Errorf("COURIER_DB_PATH %q; want /data/courier.db by default", got)
+		t.Errorf("AGENTKOURIER_DB_PATH %q; want /data/courier.db by default", got)
 	}
 	if got := dbPath("--set", "persistence.dbFile=other.db"); got != "/data/other.db" {
-		t.Errorf("COURIER_DB_PATH %q; want /data/other.db with persistence.dbFile set", got)
+		t.Errorf("AGENTKOURIER_DB_PATH %q; want /data/other.db with persistence.dbFile set", got)
 	}
 }
 
 // TestPostgresStore: with store.type postgres the pod is told where its DSN is and holds none, mounts no volume, and has no
-// claim; and the Role that lets courier read the DSN's Secret (list and watch, like the rest) is in the release namespace
+// claim; and the Role that lets Agent Kourier read the DSN's Secret (list and watch, like the rest) is in the release namespace
 // whatever the config's namespaces are. With SQLite none of that changes but the pod says which store it runs.
 func TestPostgresStore(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	bindingInSRE := `config.bindings={"b":{"namespace":"sre","spec":{"identity":{"tokenSecretRef":{"name":"t"}}}}}`
-	postgres := []string{"--set", "store.type=postgres,store.postgres.dsnSecret.name=courier-pg,store.postgres.dsnSecret.key=dsn", "--set-json", bindingInSRE}
+	postgres := []string{"--set", "store.type=postgres,store.postgres.dsnSecret.name=agent-kourier-pg,store.postgres.dsnSecret.key=dsn", "--set-json", bindingInSRE}
 	deployment := func(args ...string) (appsv1.Deployment, []object, map[string]string) {
-		objs := mustRender(t, "courier", "courier-system", append([]string{"--set", "image.repository=courier"}, args...)...)
+		objs := mustRender(t, "agent-kourier", "agent-kourier-system", append([]string{"--set", "image.repository=agent-kourier"}, args...)...)
 		var d appsv1.Deployment
-		find(t, objs, "Deployment", "courier", &d)
+		find(t, objs, "Deployment", "agent-kourier", &d)
 		env := map[string]string{}
 		for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 			env[e.Name] = e.Value
 			// The one value from a source is the pod's own name, which says who holds the Lease: the DSN is read through the
 			// API, and nothing of it is mounted or injected.
-			if e.ValueFrom != nil && (e.Name != "COURIER_POD_NAME" || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "metadata.name") {
-				t.Errorf("env %s comes from a source %+v; want only COURIER_POD_NAME, from the pod's name", e.Name, e.ValueFrom)
+			if e.ValueFrom != nil && (e.Name != "AGENTKOURIER_POD_NAME" || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "metadata.name") {
+				t.Errorf("env %s comes from a source %+v; want only AGENTKOURIER_POD_NAME, from the pod's name", e.Name, e.ValueFrom)
 			}
 		}
 		return d, objs, env
@@ -437,11 +437,11 @@ func TestPostgresStore(t *testing.T) {
 
 	d, objs, env := deployment(postgres...)
 	pod := d.Spec.Template.Spec
-	if env["COURIER_STORE"] != "postgres" || env["COURIER_POSTGRES_DSN_SECRET"] != "courier-system/courier-pg/dsn" || env["COURIER_POSTGRES_TIMEOUTS"] != "courier" {
-		t.Errorf("env %v; want the store, the DSN's Secret in the release namespace (namespace/name/key) and courier's own timeouts", env)
+	if env["AGENTKOURIER_STORE"] != "postgres" || env["AGENTKOURIER_POSTGRES_DSN_SECRET"] != "agent-kourier-system/agent-kourier-pg/dsn" || env["AGENTKOURIER_POSTGRES_TIMEOUTS"] != "agent-kourier" {
+		t.Errorf("env %v; want the store, the DSN's Secret in the release namespace (namespace/name/key) and Agent Kourier's own timeouts", env)
 	}
-	if _, has := env["COURIER_DB_PATH"]; has {
-		t.Errorf("COURIER_DB_PATH %q with Postgres", env["COURIER_DB_PATH"])
+	if _, has := env["AGENTKOURIER_DB_PATH"]; has {
+		t.Errorf("AGENTKOURIER_DB_PATH %q with Postgres", env["AGENTKOURIER_DB_PATH"])
 	}
 	for _, v := range pod.Volumes {
 		if v.Name == "data" || v.PersistentVolumeClaim != nil {
@@ -461,21 +461,21 @@ func TestPostgresStore(t *testing.T) {
 	}
 	roles := map[string]rbacv1.Role{}
 	for _, o := range objs {
-		if o.kind() == "Role" && o.name() == "courier-secrets" {
+		if o.kind() == "Role" && o.name() == "agent-kourier-secrets" {
 			var r rbacv1.Role
-			find(t, []object{o}, "Role", "courier-secrets", &r)
+			find(t, []object{o}, "Role", "agent-kourier-secrets", &r)
 			roles[r.Namespace] = r
 		}
 	}
-	if len(roles) != 2 || len(roles["sre"].Rules) != 1 || len(roles["courier-system"].Rules) != 1 {
-		t.Fatalf("Secret Roles in %v; want sre (the Binding's Secret) and courier-system (the DSN's)", slices.Sorted(maps.Keys(roles)))
+	if len(roles) != 2 || len(roles["sre"].Rules) != 1 || len(roles["agent-kourier-system"].Rules) != 1 {
+		t.Fatalf("Secret Roles in %v; want sre (the Binding's Secret) and agent-kourier-system (the DSN's)", slices.Sorted(maps.Keys(roles)))
 	}
-	if r := roles["courier-system"].Rules[0]; !slices.Equal(r.Resources, []string{"secrets"}) || !slices.Equal(r.Verbs, []string{"list", "watch"}) {
-		t.Errorf("the DSN Secret's Role rules %+v; want list and watch on secrets, as for every Secret courier reads", r)
+	if r := roles["agent-kourier-system"].Rules[0]; !slices.Equal(r.Resources, []string{"secrets"}) || !slices.Equal(r.Verbs, []string{"list", "watch"}) {
+		t.Errorf("the DSN Secret's Role rules %+v; want list and watch on secrets, as for every Secret that Agent Kourier reads", r)
 	}
 
-	if _, _, env := deployment(append(postgres, "--set", "store.postgres.timeouts=role")...); env["COURIER_POSTGRES_TIMEOUTS"] != "role" {
-		t.Errorf("COURIER_POSTGRES_TIMEOUTS %q with store.postgres.timeouts=role", env["COURIER_POSTGRES_TIMEOUTS"])
+	if _, _, env := deployment(append(postgres, "--set", "store.postgres.timeouts=role")...); env["AGENTKOURIER_POSTGRES_TIMEOUTS"] != "role" {
+		t.Errorf("AGENTKOURIER_POSTGRES_TIMEOUTS %q with store.postgres.timeouts=role", env["AGENTKOURIER_POSTGRES_TIMEOUTS"])
 	}
 	if _, objs, _ := deployment(append(postgres, "--set", "rbac.create=false")...); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" }) {
 		t.Errorf("rbac.create=false still rendered a Role with Postgres: %v", kinds(objs))
@@ -483,10 +483,10 @@ func TestPostgresStore(t *testing.T) {
 
 	// SQLite: the same pod as before, which now says so, and no Role in a namespace the config does not name.
 	d, objs, env = deployment("--set-json", bindingInSRE)
-	if env["COURIER_STORE"] != "sqlite" || env["COURIER_DB_PATH"] != "/data/courier.db" || env["COURIER_POSTGRES_DSN_SECRET"] != "" {
-		t.Errorf("env %v with SQLite; want COURIER_STORE sqlite, the database file and no DSN Secret", env)
+	if env["AGENTKOURIER_STORE"] != "sqlite" || env["AGENTKOURIER_DB_PATH"] != "/data/courier.db" || env["AGENTKOURIER_POSTGRES_DSN_SECRET"] != "" {
+		t.Errorf("env %v with SQLite; want AGENTKOURIER_STORE sqlite, the database file and no DSN Secret", env)
 	}
-	if !slices.Contains(kinds(objs), "PersistentVolumeClaim/courier-system/courier-data") || slices.Contains(kinds(objs), "Role/courier-system/courier-secrets") {
+	if !slices.Contains(kinds(objs), "PersistentVolumeClaim/agent-kourier-system/agent-kourier-data") || slices.Contains(kinds(objs), "Role/agent-kourier-system/agent-kourier-secrets") {
 		t.Errorf("objects %v; want the claim, and a Role in sre only", kinds(objs))
 	}
 	_ = d
@@ -498,11 +498,11 @@ func TestPostgresStore(t *testing.T) {
 func TestLeaderElection(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	pg := []string{"--set", "image.repository=courier,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,replicaCount=2"}
-	objs := mustRender(t, "courier", "courier-system", append(pg, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1")...)
+	pg := []string{"--set", "image.repository=agent-kourier,store.type=postgres,store.postgres.dsnSecret.name=pg,store.postgres.dsnSecret.key=dsn,replicaCount=2"}
+	objs := mustRender(t, "agent-kourier", "agent-kourier-system", append(pg, "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1")...)
 
 	var d appsv1.Deployment
-	find(t, objs, "Deployment", "courier", &d)
+	find(t, objs, "Deployment", "agent-kourier", &d)
 	if *d.Spec.Replicas != 2 {
 		t.Errorf("replicas %d; want 2", *d.Spec.Replicas)
 	}
@@ -514,25 +514,25 @@ func TestLeaderElection(t *testing.T) {
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 		env[e.Name] = e
 	}
-	if env["COURIER_LEASE_NAMESPACE"].Value != "courier-system" || env["COURIER_LEASE_NAME"].Value != "courier-leader" {
-		t.Errorf("the Lease is %q in %q; want courier-leader in the release namespace", env["COURIER_LEASE_NAME"].Value, env["COURIER_LEASE_NAMESPACE"].Value)
+	if env["AGENTKOURIER_LEASE_NAMESPACE"].Value != "agent-kourier-system" || env["AGENTKOURIER_LEASE_NAME"].Value != "agent-kourier-leader" {
+		t.Errorf("the Lease is %q in %q; want agent-kourier-leader in the release namespace", env["AGENTKOURIER_LEASE_NAME"].Value, env["AGENTKOURIER_LEASE_NAMESPACE"].Value)
 	}
-	if pod := env["COURIER_POD_NAME"]; pod.ValueFrom == nil || pod.ValueFrom.FieldRef == nil || pod.ValueFrom.FieldRef.FieldPath != "metadata.name" {
-		t.Errorf("COURIER_POD_NAME = %+v; want the pod's name from the downward API", pod)
+	if pod := env["AGENTKOURIER_POD_NAME"]; pod.ValueFrom == nil || pod.ValueFrom.FieldRef == nil || pod.ValueFrom.FieldRef.FieldPath != "metadata.name" {
+		t.Errorf("AGENTKOURIER_POD_NAME = %+v; want the pod's name from the downward API", pod)
 	}
-	for _, name := range []string{"COURIER_LEASE_DURATION", "COURIER_LEASE_RENEW_DEADLINE", "COURIER_LEASE_RETRY_PERIOD"} {
+	for _, name := range []string{"AGENTKOURIER_LEASE_DURATION", "AGENTKOURIER_LEASE_RENEW_DEADLINE", "AGENTKOURIER_LEASE_RETRY_PERIOD"} {
 		if _, set := env[name]; set {
-			t.Errorf("%s is set by default; want courier's own default", name)
+			t.Errorf("%s is set by default; want Agent Kourier's own default", name)
 		}
 	}
 
 	var role rbacv1.Role
-	find(t, objs, "Role", "courier-leader", &role)
-	if role.Namespace != "courier-system" || len(role.Rules) != 1 {
+	find(t, objs, "Role", "agent-kourier-leader", &role)
+	if role.Namespace != "agent-kourier-system" || len(role.Rules) != 1 {
 		t.Fatalf("Role %s/%s with %d rules; want one, in the release namespace", role.Namespace, role.Name, len(role.Rules))
 	}
-	if r := role.Rules[0]; !slices.Equal(r.APIGroups, []string{"coordination.k8s.io"}) || !slices.Equal(r.Resources, []string{"leases"}) || !slices.Equal(r.ResourceNames, []string{"courier-leader"}) || !slices.Equal(r.Verbs, []string{"get", "update"}) {
-		t.Errorf("the rule %+v; want get and update on the one Lease courier-leader, and no create (it cannot be limited by name)", r)
+	if r := role.Rules[0]; !slices.Equal(r.APIGroups, []string{"coordination.k8s.io"}) || !slices.Equal(r.Resources, []string{"leases"}) || !slices.Equal(r.ResourceNames, []string{"agent-kourier-leader"}) || !slices.Equal(r.Verbs, []string{"get", "update"}) {
+		t.Errorf("the rule %+v; want get and update on the one Lease agent-kourier-leader, and no create (it cannot be limited by name)", r)
 	}
 	var lease struct {
 		Metadata struct {
@@ -541,51 +541,51 @@ func TestLeaderElection(t *testing.T) {
 		} `json:"metadata"`
 		Spec map[string]any `json:"spec"`
 	}
-	find(t, objs, "Lease", "courier-leader", &lease)
-	if lease.Metadata.Namespace != "courier-system" || lease.Metadata.Annotations["helm.sh/resource-policy"] != "keep" || len(lease.Spec) != 0 {
+	find(t, objs, "Lease", "agent-kourier-leader", &lease)
+	if lease.Metadata.Namespace != "agent-kourier-system" || lease.Metadata.Annotations["helm.sh/resource-policy"] != "keep" || len(lease.Spec) != 0 {
 		t.Errorf("Lease %+v; want it in the release namespace, empty, and kept on uninstall", lease)
 	}
 	var binding rbacv1.RoleBinding
-	find(t, objs, "RoleBinding", "courier-leader", &binding)
-	if binding.RoleRef.Name != "courier-leader" || len(binding.Subjects) != 1 || binding.Subjects[0].Name != "courier" || binding.Subjects[0].Namespace != "courier-system" {
-		t.Errorf("RoleBinding %+v; want the Role bound to courier's ServiceAccount", binding)
+	find(t, objs, "RoleBinding", "agent-kourier-leader", &binding)
+	if binding.RoleRef.Name != "agent-kourier-leader" || len(binding.Subjects) != 1 || binding.Subjects[0].Name != "agent-kourier" || binding.Subjects[0].Namespace != "agent-kourier-system" {
+		t.Errorf("RoleBinding %+v; want the Role bound to Agent Kourier's ServiceAccount", binding)
 	}
 	var pdb struct {
 		Spec struct {
 			MinAvailable int `json:"minAvailable"`
 		} `json:"spec"`
 	}
-	find(t, objs, "PodDisruptionBudget", "courier", &pdb)
+	find(t, objs, "PodDisruptionBudget", "agent-kourier", &pdb)
 	if pdb.Spec.MinAvailable != 1 {
 		t.Errorf("minAvailable %d; want 1: at two replicas a drain may take one", pdb.Spec.MinAvailable)
 	}
 
 	// The timings pass through.
-	objs = mustRender(t, "courier", "courier-system", append(pg, "--set", "leaderElection.leaseDuration=20s,leaderElection.renewDeadline=12s,leaderElection.retryPeriod=3s")...)
-	find(t, objs, "Deployment", "courier", &d)
+	objs = mustRender(t, "agent-kourier", "agent-kourier-system", append(pg, "--set", "leaderElection.leaseDuration=20s,leaderElection.renewDeadline=12s,leaderElection.retryPeriod=3s")...)
+	find(t, objs, "Deployment", "agent-kourier", &d)
 	got := map[string]string{}
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 		got[e.Name] = e.Value
 	}
-	if got["COURIER_LEASE_DURATION"] != "20s" || got["COURIER_LEASE_RENEW_DEADLINE"] != "12s" || got["COURIER_LEASE_RETRY_PERIOD"] != "3s" {
+	if got["AGENTKOURIER_LEASE_DURATION"] != "20s" || got["AGENTKOURIER_LEASE_RENEW_DEADLINE"] != "12s" || got["AGENTKOURIER_LEASE_RETRY_PERIOD"] != "3s" {
 		t.Errorf("env %v; want the timings of the values", got)
 	}
 
 	// No Role without rbac.create (the Lease stays: it is not RBAC), nothing with SQLite, which has no election: one pod,
 	// Recreate, no Lease in its environment.
-	if objs := mustRender(t, "courier", "courier-system", append(pg, "--set", "rbac.create=false")...); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" || o.kind() == "RoleBinding" }) || !slices.Contains(kinds(objs), "Lease/courier-system/courier-leader") {
+	if objs := mustRender(t, "agent-kourier", "agent-kourier-system", append(pg, "--set", "rbac.create=false")...); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" || o.kind() == "RoleBinding" }) || !slices.Contains(kinds(objs), "Lease/agent-kourier-system/agent-kourier-leader") {
 		t.Errorf("rbac.create=false rendered %v; want the Lease and no Role", kinds(objs))
 	}
-	objs = mustRender(t, "courier", "courier-system", "--set", "image.repository=courier")
-	if slices.ContainsFunc(objs, func(o object) bool { return o.name() == "courier-leader" }) {
+	objs = mustRender(t, "agent-kourier", "agent-kourier-system", "--set", "image.repository=agent-kourier")
+	if slices.ContainsFunc(objs, func(o object) bool { return o.name() == "agent-kourier-leader" }) {
 		t.Errorf("SQLite rendered the Lease or its Role: %v", kinds(objs))
 	}
-	find(t, objs, "Deployment", "courier", &d)
+	find(t, objs, "Deployment", "agent-kourier", &d)
 	if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
 		t.Errorf("SQLite strategy %s; want Recreate", d.Spec.Strategy.Type)
 	}
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
-		if strings.HasPrefix(e.Name, "COURIER_LEASE") || e.Name == "COURIER_POD_NAME" {
+		if strings.HasPrefix(e.Name, "AGENTKOURIER_LEASE") || e.Name == "AGENTKOURIER_POD_NAME" {
 			t.Errorf("SQLite sets %s: there is no election", e.Name)
 		}
 	}
@@ -594,11 +594,11 @@ func TestLeaderElection(t *testing.T) {
 func TestPodLabelsCannotMoveTheSelector(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "courier", "courier", "-f", values("minimal"), "--set-json", `podLabels={"app.kubernetes.io/name":"other","team":"sre"}`)
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set-json", `podLabels={"app.kubernetes.io/name":"other","team":"sre"}`)
 	var d appsv1.Deployment
-	find(t, objs, "Deployment", "courier", &d)
-	if got := d.Spec.Template.Labels; got["app.kubernetes.io/name"] != "courier" || got["team"] != "sre" {
-		t.Errorf("pod labels %v; want name=courier kept and team=sre added", got)
+	find(t, objs, "Deployment", "agent-kourier", &d)
+	if got := d.Spec.Template.Labels; got["app.kubernetes.io/name"] != "agent-kourier" || got["team"] != "sre" {
+		t.Errorf("pod labels %v; want name=agent-kourier kept and team=sre added", got)
 	}
 }
 
@@ -607,7 +607,7 @@ func TestConfigChangeRollsThePod(t *testing.T) {
 	helmPath(t)
 	checksum := func(args ...string) string {
 		var d appsv1.Deployment
-		find(t, mustRender(t, "courier", "courier", append([]string{"-f", values("minimal")}, args...)...), "Deployment", "courier", &d)
+		find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"-f", values("minimal")}, args...)...), "Deployment", "agent-kourier", &d)
 		return d.Spec.Template.Annotations["checksum/config"]
 	}
 	base := checksum()
@@ -625,12 +625,12 @@ func TestConfigChangeRollsThePod(t *testing.T) {
 func TestSecretRBACFollowsTheConfig(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "courier", "courier-system", "-f", values("full"))
+	objs := mustRender(t, "agent-kourier", "agent-kourier-system", "-f", values("full"))
 	var namespaces []string
 	for _, o := range objs {
-		if o.kind() == "Role" && o.name() == "courier-secrets" {
+		if o.kind() == "Role" && o.name() == "agent-kourier-secrets" {
 			var r rbacv1.Role
-			find(t, []object{o}, "Role", "courier-secrets", &r)
+			find(t, []object{o}, "Role", "agent-kourier-secrets", &r)
 			if len(r.Rules) != 1 || !slices.Equal(r.Rules[0].Resources, []string{"secrets"}) || !slices.Equal(r.Rules[0].Verbs, []string{"list", "watch"}) {
 				t.Errorf("Role in %s: rules %+v; want list and watch on secrets and nothing else", r.Namespace, r.Rules)
 			}
@@ -638,18 +638,18 @@ func TestSecretRBACFollowsTheConfig(t *testing.T) {
 		}
 	}
 	// The connection and the backend's header Secret are in the release namespace; the Binding's token is in sre.
-	if want := []string{"courier-system", "sre"}; !slices.Equal(namespaces, want) {
+	if want := []string{"agent-kourier-system", "sre"}; !slices.Equal(namespaces, want) {
 		t.Errorf("Secret Roles in %v; want %v: one for each namespace that holds a Secret the config names, and no others", namespaces, want)
 	}
 	// Without a Secret reference in a namespace, no Role there: a Binding with no token adds nothing.
-	objs = mustRender(t, "courier", "courier", "-f", values("minimal"), "--set-json",
+	objs = mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set-json",
 		`config.bindings={"open":{"namespace":"open","spec":{"chat":{"channel":"C1"}}}}`)
 	for _, o := range objs {
 		if o.kind() == "Role" && o.namespace() == "open" {
 			t.Errorf("a Role in namespace open, whose Binding names no Secret: %v", kinds(objs))
 		}
 	}
-	if objs := mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "rbac.create=false"); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" }) {
+	if objs := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "rbac.create=false"); slices.ContainsFunc(objs, func(o object) bool { return o.kind() == "Role" }) {
 		t.Errorf("rbac.create=false still rendered a Role: %v", kinds(objs))
 	}
 }
@@ -657,17 +657,17 @@ func TestSecretRBACFollowsTheConfig(t *testing.T) {
 func TestTokenRefreshIsLeastPrivilege(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "courier", "courier", "-f", values("sandbox"))
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("sandbox"))
 	var r rbacv1.Role
-	find(t, objs, "Role", "courier-token-refresh", &r)
-	if len(r.Rules) != 1 || !slices.Equal(r.Rules[0].Verbs, []string{"patch"}) || !slices.Equal(r.Rules[0].ResourceNames, []string{"courier-agent-token"}) || !slices.Equal(r.Rules[0].Resources, []string{"secrets"}) {
-		t.Errorf("token-refresh Role rules %+v; want patch on the one Secret courier-agent-token", r.Rules)
+	find(t, objs, "Role", "agent-kourier-token-refresh", &r)
+	if len(r.Rules) != 1 || !slices.Equal(r.Rules[0].Verbs, []string{"patch"}) || !slices.Equal(r.Rules[0].ResourceNames, []string{"agent-kourier-agent-token"}) || !slices.Equal(r.Rules[0].Resources, []string{"secrets"}) {
+		t.Errorf("token-refresh Role rules %+v; want patch on the one Secret agent-kourier-agent-token", r.Rules)
 	}
 	var cj batchv1.CronJob
-	find(t, objs, "CronJob", "courier-token-refresh", &cj)
+	find(t, objs, "CronJob", "agent-kourier-token-refresh", &cj)
 	pod := cj.Spec.JobTemplate.Spec.Template
-	if pod.Labels["app.kubernetes.io/name"] == "courier" {
-		t.Error("the refresh pod carries app.kubernetes.io/name=courier, which the front door's NetworkPolicy trusts")
+	if pod.Labels["app.kubernetes.io/name"] == "agent-kourier" {
+		t.Error("the refresh pod carries app.kubernetes.io/name=agent-kourier, which the front door's NetworkPolicy trusts")
 	}
 	script := strings.Join(pod.Spec.Containers[0].Command, "\n")
 	for _, secret := range []string{"DEX_CLIENT_SECRET", "DEX_PASSWORD", "DEX_USERNAME"} {
@@ -694,14 +694,14 @@ func TestTokenRefreshIsLeastPrivilege(t *testing.T) {
 		refreshEnv[e.Name] = e.Value
 	}
 	for name, want := range map[string]string{
-		"DEX_TOKEN_URL": "http://dex.dex.svc.cluster.local:5556/dex/token", "DEX_CLIENT_ID": "courier-binding",
-		"TARGET_URL": "https://kubernetes.default.svc/api/v1/namespaces/courier/secrets/courier-agent-token", "TARGET_KEY": "token",
+		"DEX_TOKEN_URL": "http://dex.dex.svc.cluster.local:5556/dex/token", "DEX_CLIENT_ID": "agent-kourier-binding",
+		"TARGET_URL": "https://kubernetes.default.svc/api/v1/namespaces/agent-kourier/secrets/agent-kourier-agent-token", "TARGET_KEY": "token",
 	} {
 		if refreshEnv[name] != want {
 			t.Errorf("env %s = %q; want %q", name, refreshEnv[name], want)
 		}
 	}
-	if without := mustRender(t, "courier", "courier", "-f", values("minimal")); slices.ContainsFunc(without, func(o object) bool { return o.kind() == "CronJob" }) {
+	if without := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal")); slices.ContainsFunc(without, func(o object) bool { return o.kind() == "CronJob" }) {
 		t.Error("the default install has a token-refresh CronJob; it is for an AgentBackend with a Dex identity only")
 	}
 }
@@ -714,7 +714,7 @@ func TestTokenRefreshScriptNeverPrintsTheToken(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	var cj batchv1.CronJob
-	find(t, mustRender(t, "courier", "courier", "-f", values("sandbox")), "CronJob", "courier-token-refresh", &cj)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", values("sandbox")), "CronJob", "agent-kourier-token-refresh", &cj)
 	script := strings.Join(cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Command, "\n")
 	mentionsToken := regexp.MustCompile(`\$\{?tok\b|\btok=`)
 	writes := regexp.MustCompile(`\becho\b|\bprintf\b|\bcat\b|\btee\b|>&|/dev/(stdout|stderr|tty)|\s>\s|>>`)
@@ -764,23 +764,23 @@ func TestTokenRefreshScriptNeverPrintsTheToken(t *testing.T) {
 func TestTokenRefreshPatchesTheBindingsSecret(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "courier", "courier-system", "-f", values("full"))
+	objs := mustRender(t, "agent-kourier", "agent-kourier-system", "-f", values("full"))
 	var r rbacv1.Role
-	find(t, objs, "Role", "courier-token-refresh", &r)
+	find(t, objs, "Role", "agent-kourier-token-refresh", &r)
 	var b rbacv1.RoleBinding
-	find(t, objs, "RoleBinding", "courier-token-refresh", &b)
-	if r.Namespace != "sre" || b.Namespace != "sre" || len(b.Subjects) != 1 || b.Subjects[0].Name != "courier-token-refresh" || b.Subjects[0].Namespace != "courier-system" {
-		t.Errorf("Role in %q, RoleBinding in %q with subjects %+v; want both in sre (the Binding's namespace) and the Job's ServiceAccount from courier-system as the subject", r.Namespace, b.Namespace, b.Subjects)
+	find(t, objs, "RoleBinding", "agent-kourier-token-refresh", &b)
+	if r.Namespace != "sre" || b.Namespace != "sre" || len(b.Subjects) != 1 || b.Subjects[0].Name != "agent-kourier-token-refresh" || b.Subjects[0].Namespace != "agent-kourier-system" {
+		t.Errorf("Role in %q, RoleBinding in %q with subjects %+v; want both in sre (the Binding's namespace) and the Job's ServiceAccount from agent-kourier-system as the subject", r.Namespace, b.Namespace, b.Subjects)
 	}
 	var cj batchv1.CronJob
-	find(t, objs, "CronJob", "courier-token-refresh", &cj)
+	find(t, objs, "CronJob", "agent-kourier-token-refresh", &cj)
 	var url string
 	for _, e := range cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env {
 		if e.Name == "TARGET_URL" {
 			url = e.Value
 		}
 	}
-	if want := "https://kubernetes.default.svc/api/v1/namespaces/sre/secrets/courier-agent-token"; url != want {
+	if want := "https://kubernetes.default.svc/api/v1/namespaces/sre/secrets/agent-kourier-agent-token"; url != want {
 		t.Errorf("the Job patches %q; want %q, the Secret the Binding reads", url, want)
 	}
 }
@@ -793,12 +793,12 @@ func TestPodDisruptionBudgetThatAllowsAnEviction(t *testing.T) {
 			MaxUnavailable int `json:"maxUnavailable"`
 		} `json:"spec"`
 	}
-	find(t, mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.maxUnavailable=1"), "PodDisruptionBudget", "courier", &pdb)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "podDisruptionBudget.enabled=true,podDisruptionBudget.maxUnavailable=1"), "PodDisruptionBudget", "agent-kourier", &pdb)
 	if pdb.Spec.MaxUnavailable != 1 {
 		t.Errorf("maxUnavailable %d; want 1", pdb.Spec.MaxUnavailable)
 	}
 	// Scaled to zero (the kill switch), a budget that keeps a pod keeps nothing: it must not block the switch.
-	mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "replicaCount=0,podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1")
+	mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "replicaCount=0,podDisruptionBudget.enabled=true,podDisruptionBudget.minAvailable=1")
 }
 
 func TestNetworkPolicyFencesEgress(t *testing.T) {
@@ -819,7 +819,7 @@ func TestNetworkPolicyFencesEgress(t *testing.T) {
 			} `json:"egress"`
 		} `json:"spec"`
 	}
-	find(t, mustRender(t, "courier", "courier-system", "-f", values("full")), "NetworkPolicy", "courier", &np)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier-system", "-f", values("full")), "NetworkPolicy", "agent-kourier", &np)
 	if !slices.Equal(np.Spec.PolicyTypes, []string{"Ingress", "Egress"}) {
 		t.Errorf("policy types %v; want both, so that what is not listed is denied", np.Spec.PolicyTypes)
 	}
@@ -842,7 +842,7 @@ func TestNetworkPolicyFencesEgress(t *testing.T) {
 			Ingress []any `json:"ingress"`
 		} `json:"spec"`
 	}
-	find(t, mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "networkPolicy.enabled=true", "--set", "networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"), "NetworkPolicy", "courier", &open)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "networkPolicy.enabled=true", "--set", "networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"), "NetworkPolicy", "agent-kourier", &open)
 	if len(open.Spec.Ingress) != 0 {
 		t.Errorf("ingress %v with no metricsFrom; want none", open.Spec.Ingress)
 	}
@@ -863,7 +863,7 @@ func TestNetworkPolicyAllowsThePostgresDatabase(t *testing.T) {
 				} `json:"egress"`
 			} `json:"spec"`
 		}
-		find(t, mustRender(t, "courier", "courier", append([]string{"-f", values("postgres")}, args...)...), "NetworkPolicy", "courier", &np)
+		find(t, mustRender(t, "agent-kourier", "agent-kourier", append([]string{"-f", values("postgres")}, args...)...), "NetworkPolicy", "agent-kourier", &np)
 		var out []int
 		for _, e := range np.Spec.Egress {
 			if len(e.To) == 1 && e.To[0]["podSelector"] != nil && e.To[0]["namespaceSelector"] != nil && len(e.Ports) == 1 && e.Ports[0].Port != 53 {
@@ -883,7 +883,7 @@ func TestNetworkPolicyAllowsThePostgresDatabase(t *testing.T) {
 			Egress []any `json:"egress"`
 		} `json:"spec"`
 	}
-	find(t, mustRender(t, "courier", "courier", "-f", values("minimal"), "--set", "networkPolicy.enabled=true,networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"), "NetworkPolicy", "courier", &np)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", values("minimal"), "--set", "networkPolicy.enabled=true,networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"), "NetworkPolicy", "agent-kourier", &np)
 	if len(np.Spec.Egress) != 3 {
 		t.Errorf("%d egress rules with SQLite; want 3 (DNS, the API server, Slack): no rule for a database", len(np.Spec.Egress))
 	}
@@ -892,14 +892,14 @@ func TestNetworkPolicyAllowsThePostgresDatabase(t *testing.T) {
 func TestExistingClaimAndConfigMapAreNotRendered(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	objs := mustRender(t, "courier", "courier", "--set", "image.repository=courier", "--set", "config.existingConfigMap=mine", "--set", "persistence.existingClaim=mine-data")
+	objs := mustRender(t, "agent-kourier", "agent-kourier", "--set", "image.repository=agent-kourier", "--set", "config.existingConfigMap=mine", "--set", "persistence.existingClaim=mine-data")
 	for _, o := range objs {
 		if o.kind() == "ConfigMap" || o.kind() == "PersistentVolumeClaim" {
 			t.Errorf("rendered %s %s, which the values say the operator manages", o.kind(), o.name())
 		}
 	}
 	var d appsv1.Deployment
-	find(t, objs, "Deployment", "courier", &d)
+	find(t, objs, "Deployment", "agent-kourier", &d)
 	vols := map[string]corev1.Volume{}
 	for _, v := range d.Spec.Template.Spec.Volumes {
 		vols[v.Name] = v
@@ -909,30 +909,30 @@ func TestExistingClaimAndConfigMapAreNotRendered(t *testing.T) {
 	}
 }
 
-// tierCases are the kind tiers' courier as hack/kind's scripts install it and the E2E tests find it: the values, the release the
+// tierCases are the kind tiers' Agent Kourier as hack/kind's scripts install it and the E2E tests find it: the values, the release the
 // script names, and what the chart must make of them. Everything here is something a script or a test relies on: the object
-// names (kubectl -n courier get deploy courier, the runner's Role for the Deployment courier), the pod label
-// app.kubernetes.io/name=courier (NetworkPolicies trust it) and app.kubernetes.io/instance=<release> (lib.sh tells the tier's
-// courier from the sandbox's by it), the container name, the image the scripts load, the ConfigMap the scripts make, and
+// names (kubectl -n agent-kourier get deploy agent-kourier, the runner's Role for the Deployment agent-kourier), the pod label
+// app.kubernetes.io/name=agent-kourier (NetworkPolicies trust it) and app.kubernetes.io/instance=<release> (lib.sh tells the tier's
+// Agent Kourier from the sandbox's by it), the container name, the image the scripts load, the ConfigMap the scripts make, and
 // the volume.
 var tierCases = []struct {
 	name, values, release string
 	image, pullPolicy     string
 	configMap, claim      string
 	dbPath                string
-	slackAPIOverride      bool     // the testhooks image's COURIER_SLACK_API_URL: the fake Slack
+	slackAPIOverride      bool     // the testhooks image's AGENTKOURIER_SLACK_API_URL: the fake Slack
 	objects               []string // Kind/namespace/name of every object
 }{
-	{"fast", "fast", "courier", "courier-e2e/courier-testhooks:dev", "Never", "courier-config", "courier-data", "/data/courier.db", true, []string{
-		"Deployment/courier/courier", "PersistentVolumeClaim/courier/courier-data", "Role/courier/courier-secrets",
-		"RoleBinding/courier/courier-secrets", "Service/courier/courier", "ServiceAccount/courier/courier"}},
-	{"ax", "ax", "courier", "courier-e2e/courier-testhooks:dev", "Never", "courier-config", "courier-data", "/data/courier-ax.db", true, []string{
-		"Deployment/courier/courier", "PersistentVolumeClaim/courier/courier-data", "Role/courier/courier-secrets",
-		"RoleBinding/courier/courier-secrets", "Service/courier/courier", "ServiceAccount/courier/courier"}},
-	{"sandbox", "sandbox", "courier-sandbox", "courier:dev", "Never", "courier-sandbox-config", "courier-sandbox-data", "/data/courier.db", false, []string{
-		"CronJob/courier/courier-sandbox-token-refresh", "Deployment/courier/courier-sandbox", "PersistentVolumeClaim/courier/courier-sandbox-data",
-		"Role/courier/courier-sandbox-secrets", "Role/courier/courier-sandbox-token-refresh", "RoleBinding/courier/courier-sandbox-secrets",
-		"RoleBinding/courier/courier-sandbox-token-refresh", "ServiceAccount/courier/courier-sandbox", "ServiceAccount/courier/courier-sandbox-token-refresh"}},
+	{"fast", "fast", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/courier.db", true, []string{
+		"Deployment/agent-kourier/agent-kourier", "PersistentVolumeClaim/agent-kourier/agent-kourier-data", "Role/agent-kourier/agent-kourier-secrets",
+		"RoleBinding/agent-kourier/agent-kourier-secrets", "Service/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier"}},
+	{"ax", "ax", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/agent-kourier-ax.db", true, []string{
+		"Deployment/agent-kourier/agent-kourier", "PersistentVolumeClaim/agent-kourier/agent-kourier-data", "Role/agent-kourier/agent-kourier-secrets",
+		"RoleBinding/agent-kourier/agent-kourier-secrets", "Service/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier"}},
+	{"sandbox", "sandbox", "agent-kourier-sandbox", "agent-kourier:dev", "Never", "agent-kourier-sandbox-config", "agent-kourier-sandbox-data", "/data/courier.db", false, []string{
+		"CronJob/agent-kourier/agent-kourier-sandbox-token-refresh", "Deployment/agent-kourier/agent-kourier-sandbox", "PersistentVolumeClaim/agent-kourier/agent-kourier-sandbox-data",
+		"Role/agent-kourier/agent-kourier-sandbox-secrets", "Role/agent-kourier/agent-kourier-sandbox-token-refresh", "RoleBinding/agent-kourier/agent-kourier-sandbox-secrets",
+		"RoleBinding/agent-kourier/agent-kourier-sandbox-token-refresh", "ServiceAccount/agent-kourier/agent-kourier-sandbox", "ServiceAccount/agent-kourier/agent-kourier-sandbox-token-refresh"}},
 }
 
 // TestFastPostgresHAOverlayRunsTwoReplicasWithAShorterLease: the overlay S16's tier layers over fast-postgres lints, and renders two
@@ -945,9 +945,9 @@ func TestFastPostgresHAOverlayRunsTwoReplicasWithAShorterLease(t *testing.T) {
 	if out, err := helm(t.Context(), t, append([]string{"lint", "--strict", chartDir}, layers...)...); err != nil {
 		t.Fatalf("helm lint --strict: %v\n%s", err, out)
 	}
-	objs := mustRender(t, "courier", "courier", layers...)
+	objs := mustRender(t, "agent-kourier", "agent-kourier", layers...)
 	var d appsv1.Deployment
-	find(t, objs, "Deployment", "courier", &d)
+	find(t, objs, "Deployment", "agent-kourier", &d)
 	if *d.Spec.Replicas != 2 || d.Spec.Strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
 		t.Errorf("replicas %d, strategy %s; want two on a rolling update", *d.Spec.Replicas, d.Spec.Strategy.Type)
 	}
@@ -955,13 +955,13 @@ func TestFastPostgresHAOverlayRunsTwoReplicasWithAShorterLease(t *testing.T) {
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 		env[e.Name] = e.Value
 	}
-	if env["COURIER_LEASE_DURATION"] != "9s" || env["COURIER_LEASE_RENEW_DEADLINE"] != "6s" || env["COURIER_LEASE_RETRY_PERIOD"] != "2s" {
+	if env["AGENTKOURIER_LEASE_DURATION"] != "9s" || env["AGENTKOURIER_LEASE_RENEW_DEADLINE"] != "6s" || env["AGENTKOURIER_LEASE_RETRY_PERIOD"] != "2s" {
 		t.Errorf("election timings %v; want 9s, 6s and 2s", env)
 	}
 	if lp := d.Spec.Template.Spec.Containers[0].LivenessProbe; lp == nil || lp.FailureThreshold != 6 || lp.PeriodSeconds != 10 {
 		t.Errorf("liveness probe %+v; want six misses ten seconds apart: a frozen leader is resumed long before the kubelet restarts it", lp)
 	}
-	if env["COURIER_STORE"] != "postgres" || env["COURIER_SLACK_API_URL"] == "" {
+	if env["AGENTKOURIER_STORE"] != "postgres" || env["AGENTKOURIER_SLACK_API_URL"] == "" {
 		t.Errorf("env %v; want the fast tier's Postgres values underneath", env)
 	}
 }
@@ -975,20 +975,20 @@ func TestTierValuesRenderWhatTheScriptsAndTestsRely(t *testing.T) {
 	for _, tc := range tierCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			objs := mustRender(t, tc.release, "courier", "-f", values(tc.values))
+			objs := mustRender(t, tc.release, "agent-kourier", "-f", values(tc.values))
 			if got := kinds(objs); !slices.Equal(got, tc.objects) {
 				t.Fatalf("the chart rendered %v; want %v", got, tc.objects)
 			}
-			deployment := strings.TrimPrefix(tc.objects[slices.IndexFunc(tc.objects, func(o string) bool { return strings.HasPrefix(o, "Deployment/") })], "Deployment/courier/")
+			deployment := strings.TrimPrefix(tc.objects[slices.IndexFunc(tc.objects, func(o string) bool { return strings.HasPrefix(o, "Deployment/") })], "Deployment/agent-kourier/")
 			var d appsv1.Deployment
 			find(t, objs, "Deployment", deployment, &d)
 			pod := d.Spec.Template.Spec
-			wantLabels := map[string]string{"app.kubernetes.io/name": "courier", "app.kubernetes.io/instance": tc.release}
+			wantLabels := map[string]string{"app.kubernetes.io/name": "agent-kourier", "app.kubernetes.io/instance": tc.release}
 			if !maps.Equal(d.Spec.Selector.MatchLabels, wantLabels) || !maps.Equal(d.Spec.Template.Labels, wantLabels) {
 				t.Errorf("selector %v, pod labels %v; want %v on both", d.Spec.Selector.MatchLabels, d.Spec.Template.Labels, wantLabels)
 			}
-			if len(pod.Containers) != 1 || pod.Containers[0].Name != "courier" {
-				t.Fatalf("containers %+v; want the one, named courier (the E2E tests arm faults on it)", pod.Containers)
+			if len(pod.Containers) != 1 || pod.Containers[0].Name != "agent-kourier" {
+				t.Fatalf("containers %+v; want the one, named agent-kourier (the E2E tests arm faults on it)", pod.Containers)
 			}
 			c := pod.Containers[0]
 			if c.Image != tc.image || string(c.ImagePullPolicy) != tc.pullPolicy {
@@ -998,11 +998,11 @@ func TestTierValuesRenderWhatTheScriptsAndTestsRely(t *testing.T) {
 			for _, e := range c.Env {
 				env[e.Name] = e.Value
 			}
-			if env["COURIER_DB_PATH"] != tc.dbPath {
-				t.Errorf("COURIER_DB_PATH %q; want %q", env["COURIER_DB_PATH"], tc.dbPath)
+			if env["AGENTKOURIER_DB_PATH"] != tc.dbPath {
+				t.Errorf("AGENTKOURIER_DB_PATH %q; want %q", env["AGENTKOURIER_DB_PATH"], tc.dbPath)
 			}
-			if _, has := env["COURIER_SLACK_API_URL"]; has != tc.slackAPIOverride || tc.slackAPIOverride && env["COURIER_SLACK_API_URL"] != "http://fakeslack.e2e.svc.cluster.local:8080/" {
-				t.Errorf("COURIER_SLACK_API_URL %q (set: %v); want it set to the fake Slack only where the tier runs the testhooks image: %v", env["COURIER_SLACK_API_URL"], has, tc.slackAPIOverride)
+			if _, has := env["AGENTKOURIER_SLACK_API_URL"]; has != tc.slackAPIOverride || tc.slackAPIOverride && env["AGENTKOURIER_SLACK_API_URL"] != "http://fakeslack.e2e.svc.cluster.local:8080/" {
+				t.Errorf("AGENTKOURIER_SLACK_API_URL %q (set: %v); want it set to the fake Slack only where the tier runs the testhooks image: %v", env["AGENTKOURIER_SLACK_API_URL"], has, tc.slackAPIOverride)
 			}
 			vols := map[string]corev1.Volume{}
 			for _, v := range pod.Volumes {
@@ -1020,7 +1020,7 @@ func TestTierValuesRenderWhatTheScriptsAndTestsRely(t *testing.T) {
 	}
 }
 
-// TestFastTiersServiceIsTheHealthPortAndNothingPublished: the E2E runner reaches courier's health and metrics port through a
+// TestFastTiersServiceIsTheHealthPortAndNothingPublished: the E2E runner reaches Agent Kourier's health and metrics port through a
 // ClusterIP Service, selecting the tier's release alone, and the Service has that one port: the Alertmanager receiver is not
 // served yet, and its port must not reach the Service until it is.
 func TestFastTiersServiceIsTheHealthPortAndNothingPublished(t *testing.T) {
@@ -1029,11 +1029,11 @@ func TestFastTiersServiceIsTheHealthPortAndNothingPublished(t *testing.T) {
 	for _, tier := range []string{"fast", "ax"} {
 		t.Run(tier, func(t *testing.T) {
 			t.Parallel()
-			objs := mustRender(t, "courier", "courier", "-f", values(tier))
+			objs := mustRender(t, "agent-kourier", "agent-kourier", "-f", values(tier))
 			var svc corev1.Service
-			find(t, objs, "Service", "courier", &svc)
+			find(t, objs, "Service", "agent-kourier", &svc)
 			var d appsv1.Deployment
-			find(t, objs, "Deployment", "courier", &d)
+			find(t, objs, "Deployment", "agent-kourier", &d)
 			c := d.Spec.Template.Spec.Containers[0]
 			if svc.Spec.Type != corev1.ServiceTypeClusterIP || len(svc.Spec.ExternalIPs) != 0 || svc.Spec.LoadBalancerIP != "" ||
 				len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Name != "http" || svc.Spec.Ports[0].Port != 8080 || svc.Spec.Ports[0].NodePort != 0 || svc.Spec.Ports[0].TargetPort.String() != "http" {
@@ -1060,8 +1060,8 @@ func diff(t *testing.T, want, got any) string {
 	return firstDifference(string(w), string(g)) + "\n--- tier\n" + string(w) + "--- chart\n" + string(g)
 }
 
-// TestRenderedConfigLoadsLikeTheTiers puts each kind tier's courier resources into chart values, renders the ConfigMap, and
-// loads it with courier's own loader: the Set must equal the one loaded from the tier's files, so that anything the tiers
+// TestRenderedConfigLoadsLikeTheTiers puts each kind tier's Agent Kourier resources into chart values, renders the ConfigMap, and
+// loads it with Agent Kourier's own loader: the Set must equal the one loaded from the tier's files, so that anything the tiers
 // run can be said in values, and the chart writes what the loader reads.
 func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 	t.Parallel()
@@ -1069,14 +1069,14 @@ func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 	for _, dir := range []string{"fast", "ax"} {
 		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			src := filepath.Join("../../hack/kind", dir, "courier", "config")
+			src := filepath.Join("../../hack/kind", dir, "agent-kourier", "config")
 			want, err := config.Load(t.Context(), src)
 			if err != nil {
 				t.Fatal(err)
 			}
 			vals := filepath.Join(t.TempDir(), "values.json")
 			writeJSON(t, vals, map[string]any{
-				"image": map[string]any{"repository": "courier"},
+				"image": map[string]any{"repository": "agent-kourier"},
 				"config": map[string]any{
 					"agentBackends":   entries(want.AgentBackends, func(o v1alpha1.AgentBackend) (string, string, any) { return o.Name, o.Namespace, o.Spec }),
 					"chatConnections": entries(want.ChatConnections, func(o v1alpha1.ChatConnection) (string, string, any) { return o.Name, o.Namespace, o.Spec }),
@@ -1084,7 +1084,7 @@ func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 				},
 			})
 			var cm corev1.ConfigMap
-			find(t, mustRender(t, "courier", "courier", "-f", vals), "ConfigMap", "courier-config", &cm)
+			find(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", vals), "ConfigMap", "agent-kourier-config", &cm)
 
 			rendered := t.TempDir()
 			for name, content := range cm.Data {
@@ -1094,7 +1094,7 @@ func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 			}
 			got, err := config.Load(t.Context(), rendered)
 			if err != nil {
-				t.Fatalf("courier's loader rejects the rendered ConfigMap: %v", err)
+				t.Fatalf("agent-kourier's loader rejects the rendered ConfigMap: %v", err)
 			}
 			if len(got.Bindings) != len(want.Bindings) || len(got.ChatConnections) != len(want.ChatConnections) || len(got.AgentBackends) != len(want.AgentBackends) {
 				t.Fatalf("loaded %d Bindings, %d connections and %d backends; the tier has %d, %d and %d",

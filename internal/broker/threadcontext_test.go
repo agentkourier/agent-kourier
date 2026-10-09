@@ -24,7 +24,7 @@ import (
 
 const (
 	tcBinding = "ns/mention-mode"
-	tcConn    = "courier-system/slack-main"
+	tcConn    = "agent-kourier-system/slack-main"
 	tcChannel = "C0123456789"
 	tcThread  = "100.000001"
 )
@@ -192,7 +192,7 @@ func (w *tcWorld) sectionOf(tc *threadContext) string {
 	return tc.Section(w.ctx, tcKey, tcBinding, "100.000100", "100.000900")
 }
 
-// outcomes returns every count of courier_thread_context_total by its binding and outcome.
+// outcomes returns every count of agentkourier_thread_context_total by its binding and outcome.
 func (w *tcWorld) outcomes() map[string]float64 {
 	w.t.Helper()
 	families, err := w.reg.Gather()
@@ -201,7 +201,7 @@ func (w *tcWorld) outcomes() map[string]float64 {
 	}
 	got := map[string]float64{}
 	for _, fam := range families {
-		if fam.GetName() != "courier_thread_context_total" {
+		if fam.GetName() != "agentkourier_thread_context_total" {
 			continue
 		}
 		for _, m := range fam.Metric {
@@ -284,7 +284,7 @@ func TestThreadContextShowsAPersonsRepliesOldestFirstWithTheirNames(t *testing.T
 // What is not a person's unmentioned reply is not shown: each kind alone with one reply that is shown, so that a check that
 // is missing shows.
 func TestThreadContextLeavesOutWhatIsNotAPersonsReply(t *testing.T) {
-	own := msg(1, "UBOT", "courier's own answer")
+	own := msg(1, "UBOT", "agent-kourier's own answer")
 	own.Own = true
 	ignored := msg(1, "U2", "an edit or a deletion")
 	ignored.Ignored = true
@@ -300,7 +300,7 @@ func TestThreadContextLeavesOutWhatIsNotAPersonsReply(t *testing.T) {
 		m    chat.HistoryMessage
 		turn bool
 	}{
-		"courier's own":                {m: own},
+		"agent-kourier's own":          {m: own},
 		"an ignored message":           {m: ignored},
 		"a bot's message with a user":  {m: bot},
 		"a bot's message without one":  {m: hook},
@@ -335,7 +335,7 @@ func TestThreadContextLeavesOutWhatIsNotAPersonsReply(t *testing.T) {
 		w := newTCWorld(t)
 		w.win.window = []chat.HistoryMessage{own, msg(2, "U1", "x")}
 		w.section()
-		if want := []string{"fake:courier-system/slack-main:C0123456789:100.000102"}; !sameTexts(w.turns.asked, want) {
+		if want := []string{"fake:agent-kourier-system/slack-main:C0123456789:100.000102"}; !sameTexts(w.turns.asked, want) {
 			t.Errorf("HasReply was asked about %v, want %v", w.turns.asked, want)
 		}
 	})
@@ -352,7 +352,7 @@ func TestThreadContextAsksTheReplyQueueOnceForTheWholeWindow(t *testing.T) {
 	for i := range total {
 		m := msg(i, "U1", fmt.Sprintf("reply %04d", i))
 		switch i % 7 {
-		case 3: // courier's own, a bot's and an ignored one never reach the queue
+		case 3: // Agent Kourier's own, a bot's and an ignored one never reach the queue
 			m.Own = true
 		case 4:
 			m.Message.Bot = &chat.BotMessage{BotID: "B1"}
@@ -390,7 +390,7 @@ func TestThreadContextAsksTheReplyQueueOnceForTheWholeWindow(t *testing.T) {
 // A window with no message for the queue to be asked about is not asked about at all.
 func TestThreadContextDoesNotAskTheReplyQueueWhenNothingIsLeftToAskAbout(t *testing.T) {
 	w := newTCWorld(t)
-	own := msg(1, "U1", "courier's own")
+	own := msg(1, "U1", "agent-kourier's own")
 	own.Own = true
 	w.win.window = []chat.HistoryMessage{own}
 	w.section()
@@ -406,7 +406,7 @@ func TestThreadFetchLimitFitsOneReplyLookup(t *testing.T) {
 	}
 }
 
-// The platform's limit and its count of what it left out are of every message, so courier's own posts of the previous turn
+// The platform's limit and its count of what it left out are of every message, so Agent Kourier's own posts of the previous turn
 // would crowd the people out of a short read.
 func TestThreadContextReadsPastTheNoiseOfBotsAndItsOwnPosts(t *testing.T) {
 	w := newTCWorld(t)
@@ -573,7 +573,7 @@ type nopSink struct{}
 func (nopSink) Message(context.Context, chat.Inbound) error         { return nil }
 func (nopSink) Interaction(context.Context, chat.Interaction) error { return nil }
 
-// With the chattest fake as the platform, the read is of the thread of the key: courier's own posts are Own and left out, a
+// With the chattest fake as the platform, the read is of the thread of the key: Agent Kourier's own posts are Own and left out, a
 // bot is left out, a turn is left out, and what was said in another thread or channel is not here.
 func TestThreadContextOverTheFakePlatform(t *testing.T) {
 	w := newTCWorld(t)
@@ -582,7 +582,7 @@ func TestThreadContextOverTheFakePlatform(t *testing.T) {
 		return chat.Ref{Platform: "fake", Conn: tcConn, Channel: tcChannel, Thread: tcThread, ID: id}
 	}
 	target := chat.Target{Conn: tcConn, Channel: tcChannel, Thread: tcThread}
-	if _, err := w.fake.Post(w.ctx, target, chat.Say(chat.Message{Fallback: "an answer of courier's own"}), "t1"); err != nil { // 1.000
+	if _, err := w.fake.Post(w.ctx, target, chat.Say(chat.Message{Fallback: "an answer of Agent Kourier's own"}), "t1"); err != nil { // 1.000
 		t.Fatal(err)
 	}
 	turn := chat.Inbound{At: at("100.000300"), User: "U2", Text: "this was a turn"}
@@ -694,7 +694,7 @@ func TestThreadContextDegradesToTheFixedLine(t *testing.T) {
 
 			got := w.section()
 
-			if got != "Courier could not read the earlier replies in this thread." {
+			if got != "Agent Kourier could not read the earlier replies in this thread." {
 				t.Errorf("section = %q, want the fixed line", got)
 			}
 			if o := w.outcomes(); fmt.Sprint(o) != fmt.Sprint(map[string]float64{tcBinding + " failed": 1}) {

@@ -255,7 +255,7 @@ func TestPresetOverridesFieldByField(t *testing.T) {
 		Preset:  PresetAlertmanager,
 		Match:   map[MessageField]string{FieldTitleLink: "receiver=slack-critical-kind", FieldTitle: "^custom$"},
 		Exclude: map[MessageField]string{FieldTitle: "^Prometheus heartbeat$"},
-		Extract: map[string]Extract{"key": {Field: FieldFooter, Regex: `courier-key: (?P<key>\S+)`}},
+		Extract: map[string]Extract{"key": {Field: FieldFooter, Regex: `agent-kourier-key: (?P<key>\S+)`}},
 		Thread: TriggerThread{
 			Cooldown:  metav1.Duration{Duration: time.Hour},
 			CloseWhen: map[string]string{"state": "ENDED"},
@@ -271,7 +271,7 @@ func TestPresetOverridesFieldByField(t *testing.T) {
 	if tr.Exclude[FieldTitle] != "^Prometheus heartbeat$" {
 		t.Errorf("exclude = %v", tr.Exclude)
 	}
-	if got := tr.Extract["key"]; got.Field != FieldFooter || got.Regex != `courier-key: (?P<key>\S+)` {
+	if got := tr.Extract["key"]; got.Field != FieldFooter || got.Regex != `agent-kourier-key: (?P<key>\S+)` {
 		t.Errorf("extract key = %+v, want the Binding's", got)
 	}
 	if tr.Thread.Cooldown.Duration != time.Hour || tr.Thread.CloseWhen["state"] != "ENDED" {

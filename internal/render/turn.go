@@ -1,7 +1,7 @@
 // Package render turns agent output into messages in the chat-neutral model (package chat): the text of a turn,
 // the status line of a tool call, a notice. Everything it takes in is attacker-influenced (spec 8.4, R2), so what
 // it keeps is what no platform differs on: secrets are redacted out of a tool's arguments (redact.go), what is shown
-// is bounded, and the words courier writes are fixed. The text it returns is literal. It does nothing for a
+// is bounded, and the words Agent Kourier writes are fixed. The text it returns is literal. It does nothing for a
 // platform's markup: each adapter (internal/chat/slack) makes text inert for its platform, cleans it and cuts it to
 // its limits, and must pass chattest.Conformance to show it does. They are pure: no platform, no I/O.
 //
@@ -26,7 +26,7 @@ import (
 
 // These builders make the messages of a turn in the chat-neutral model (package chat) from agent output. What
 // they keep is what no platform differs on: the secrets are redacted out of a tool's arguments, the text that is
-// shown is bounded, and the words courier writes itself are fixed. What they do not do is anything for a
+// shown is bounded, and the words Agent Kourier writes itself are fixed. What they do not do is anything for a
 // platform's markup: the text they return is literal, and each adapter makes it inert for its own platform, cleans
 // it, and cuts it to its own limits (spec 8.4, R2). So nothing here escapes, and nothing here may be escaped twice.
 
@@ -135,7 +135,7 @@ func Nothing() chat.Message {
 	return chat.Message{Fallback: NoOutput, Parts: []chat.Part{chat.Body{Markdown: NoOutput}}}
 }
 
-// Notice is the message of a notice: fixed wording that courier wrote, and, if there is one, a short detail, which
+// Notice is the message of a notice: fixed wording that Agent Kourier wrote, and, if there is one, a short detail, which
 // is untrusted like everything else and is put on one line and capped.
 func Notice(fixed, detail string) chat.Message {
 	text := fixed

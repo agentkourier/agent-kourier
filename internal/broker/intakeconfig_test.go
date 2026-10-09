@@ -27,7 +27,7 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	s := newStarter(t)
 	cfg, err := newIntakeConfig(intakeParts{
-		conn: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
+		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
 		submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
 		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
 	})
@@ -55,7 +55,7 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	if cfg.TurnQueued == nil {
 		t.Fatal("TurnQueued is not set: a lost mark would give the key a second turn")
 	}
-	const id = "slack:courier-system/slack-main:C0EXAMPLE01:1759560000.123456"
+	const id = "slack:agent-kourier-system/slack-main:C0EXAMPLE01:1759560000.123456"
 	queued := func() bool {
 		t.Helper()
 		ok, err := cfg.TurnQueued(t.Context(), id)
@@ -67,7 +67,7 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	if queued() {
 		t.Error("TurnQueued says a turn that was never queued was")
 	}
-	key := session.Key{Connection: "courier-system/slack-main", Channel: "C0EXAMPLE01", Thread: "1759560000.123456"}
+	key := session.Key{Connection: "agent-kourier-system/slack-main", Channel: "C0EXAMPLE01", Thread: "1759560000.123456"}
 	if _, err := st.EnqueueReply(context.Background(), store.Reply{ID: id, Key: key, UserID: session.SystemUser, MessageRef: key.Thread, Text: "x", EnqueuedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestIntakeConfigNamesThePartThatIsMissing(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	s := newStarter(t)
 	full := intakeParts{
-		conn: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
+		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
 		submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
 		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
 	}

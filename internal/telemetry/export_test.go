@@ -68,7 +68,7 @@ func TestCollectorErrorDetailsDoNotEnterSDKDiagnostics(t *testing.T) {
 	}
 }
 
-// realExporter is the OTLP exporter courier uses, aimed at url, with retries short enough for a test.
+// realExporter is the OTLP exporter Agent Kourier uses, aimed at url, with retries short enough for a test.
 func realExporter(t *testing.T, url string, timeout time.Duration) sdktrace.SpanExporter {
 	t.Helper()
 	exporter, err := otlptracehttp.New(t.Context(), otlptracehttp.WithEndpointURL(url), otlptracehttp.WithTimeout(timeout),

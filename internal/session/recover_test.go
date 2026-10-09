@@ -119,7 +119,7 @@ func TestRecoverFollowsATaskWhenTheRecheckFails(t *testing.T) {
 	}
 }
 
-// A task that ended while courier was down has its final output rendered, once, and is cleared.
+// A task that ended while Agent Kourier was down has its final output rendered, once, and is cleared.
 func TestRecoverRendersAFinishedTaskOnce(t *testing.T) {
 	f, sink := restarted(t)
 	f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) {

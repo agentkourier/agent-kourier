@@ -51,7 +51,7 @@ func TestSpecExamplesDecode(t *testing.T) {
 	if b.Spec.Chat.ThreadReplies != ThreadRepliesAll {
 		t.Errorf("Binding threadReplies = %q, want %q", b.Spec.Chat.ThreadReplies, ThreadRepliesAll)
 	}
-	if b.Spec.Identity.UserID != "courier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
+	if b.Spec.Identity.UserID != "agent-kourier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
 		!b.Spec.Interactions.AskUser || !b.Spec.Feedback.Enabled ||
 		b.Status.WebhookPath != "/hooks/alertmanager/sre/sre-alerts" {
 		t.Errorf("Binding did not decode as in the spec: %+v", b)

@@ -22,11 +22,11 @@ import (
 )
 
 // These tests pin the sandbox tier's manifests (hack/kind/sandbox): what it applies to the full tier's cluster to dogfood
-// courier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go.
+// Agent Kourier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go.
 
 // manifestFiles are the Kubernetes manifests of the sandbox, which must parse; some carry a placeholder that up.sh fills in.
 var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent.yaml",
-	"courier/config/chatconnection.yaml", "courier/config/binding.yaml", "courier/alert-trial/alert-binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
+	"agent-kourier/config/chatconnection.yaml", "agent-kourier/config/binding.yaml", "agent-kourier/alert-trial/alert-binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
 
 // sandboxObjects returns every object of the given kind in the sandbox's file, as a map of its name.
 func sandboxObjects[T any](t *testing.T, file, kind string) map[string]T {
@@ -75,7 +75,7 @@ func TestSandboxManifestsParse(t *testing.T) {
 		}
 	}
 	// The placeholders are each in exactly the files that up.sh renders, and the rendered files hold none.
-	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"courier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}, {"courier/alert-trial/alert-binding.yaml", "__ALERT_CHANNEL_ID__"}} {
+	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"agent-kourier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}, {"agent-kourier/alert-trial/alert-binding.yaml", "__ALERT_CHANNEL_ID__"}} {
 		raw, err := os.ReadFile(sandboxDir + tc.file)
 		if err != nil {
 			t.Fatal(err)
@@ -95,9 +95,9 @@ func TestSandboxHoldsNoSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	more, _ := filepath.Glob(sandboxDir + "courier/*.yaml")
-	more2, _ := filepath.Glob(sandboxDir + "courier/config/*.yaml")
-	more3, _ := filepath.Glob(sandboxDir + "courier/alert-trial/*.yaml")
+	more, _ := filepath.Glob(sandboxDir + "agent-kourier/*.yaml")
+	more2, _ := filepath.Glob(sandboxDir + "agent-kourier/config/*.yaml")
+	more3, _ := filepath.Glob(sandboxDir + "agent-kourier/alert-trial/*.yaml")
 	for _, file := range slices.Concat(entries, more, more2, more3) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -117,17 +117,17 @@ func TestSandboxHoldsNoSecret(t *testing.T) {
 	}
 }
 
-// sandboxConfig loads the sandbox's courier config as up.sh builds the ConfigMap: its files, rendered, and the full tier's
+// sandboxConfig loads the sandbox's Agent Kourier config as up.sh builds the ConfigMap: its files, rendered, and the full tier's
 // AgentBackend, which is the verifying front door.
 func sandboxConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, file := range []string{"courier/config/chatconnection.yaml", "courier/config/binding.yaml"} {
+	for _, file := range []string{"agent-kourier/config/chatconnection.yaml", "agent-kourier/config/binding.yaml"} {
 		if err := os.WriteFile(filepath.Join(dir, filepath.Base(file)), []byte(rendered(t, file)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	raw, err := os.ReadFile("../../hack/kind/full/courier/agentbackend.yaml")
+	raw, err := os.ReadFile("../../hack/kind/full/agent-kourier/agentbackend.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,11 +144,11 @@ func TestSandboxBindingAndConnection(t *testing.T) {
 	if err != nil || len(set.Bindings) != 1 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
 		t.Fatalf("Load = %+v, %v; want one Binding, one ChatConnection and one AgentBackend", set, err)
 	}
-	snap, err := config.Resolve(t.Context(), set, secrets{"courier/sandbox-slack": {"botToken", "appToken"}, "courier/courier-agent-token": {"token"}})
+	snap, err := config.Resolve(t.Context(), set, secrets{"agent-kourier/sandbox-slack": {"botToken", "appToken"}, "agent-kourier/agent-kourier-agent-token": {"token"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rb, ok := snap.BindingForChannel("courier", "sandbox-slack", "C0SANDBOX01")
+	rb, ok := snap.BindingForChannel("agent-kourier", "sandbox-slack", "C0SANDBOX01")
 	if !ok {
 		t.Fatal("the sandbox channel resolves to no Binding")
 	}
@@ -161,15 +161,15 @@ func TestSandboxBindingAndConnection(t *testing.T) {
 	if rb.Backend.Spec.URL != "http://kagent-frontdoor.kagent.svc.cluster.local:4180" || rb.Backend.Spec.Dialect != "kagent-v1" {
 		t.Errorf("backend %q (%s); want the front door on 4180, dialect kagent-v1", rb.Backend.Spec.URL, rb.Backend.Spec.Dialect)
 	}
-	if spec.Identity.TokenSecretRef == nil || spec.Identity.TokenSecretRef.Name != "courier-agent-token" {
-		t.Errorf("identity %+v; want the Dex token Secret courier-agent-token, which the refresh keeps fresh", spec.Identity)
+	if spec.Identity.TokenSecretRef == nil || spec.Identity.TokenSecretRef.Name != "agent-kourier-agent-token" {
+		t.Errorf("identity %+v; want the Dex token Secret agent-kourier-agent-token, which the refresh keeps fresh", spec.Identity)
 	}
 	conn := rb.Connection.Spec
 	if conn.Platform != "slack" || conn.Mode != v1alpha1.ModeSocket || conn.CredentialsSecretRef.Name != "sandbox-slack" {
 		t.Errorf("connection %+v; want Slack over Socket Mode on the Secret sandbox-slack", conn)
 	}
 	// Without the Secrets, as before they are made, the config does not resolve.
-	if _, err := config.Resolve(t.Context(), set, secrets{"courier/courier-agent-token": {"token"}}); err == nil {
+	if _, err := config.Resolve(t.Context(), set, secrets{"agent-kourier/agent-kourier-agent-token": {"token"}}); err == nil {
 		t.Error("config resolved without the Slack Secret")
 	}
 }
@@ -421,9 +421,9 @@ func selects(selector, labels map[string]string) bool {
 var imageRef = regexp.MustCompile(`(?m)^\s*(?:- )?(?:image|tag): "?([^\s"#]+)`)
 
 // TestSandboxImagesArePinned: every image the sandbox names is pinned by digest, except the one fault that is a bad tag and
-// courier:dev, which is built here and loaded, never pulled.
+// agent-kourier:dev, which is built here and loaded, never pulled.
 func TestSandboxImagesArePinned(t *testing.T) {
-	exempt := map[string]string{"busybox:1.37.99": "catalog's bad tag, which is its fault", "courier:dev": "the image built by make image and loaded into the cluster"}
+	exempt := map[string]string{"busybox:1.37.99": "catalog's bad tag, which is its fault", "agent-kourier:dev": "the image built by make image and loaded into the cluster"}
 	seen := 0
 	for _, file := range append(slices.Clone(manifestFiles), "tools-values.yaml") {
 		raw, err := os.ReadFile(sandboxDir + file)
@@ -478,9 +478,9 @@ func TestSandboxMakeTargets(t *testing.T) {
 	}
 }
 
-// TestSandboxUpWaitsForCourierToSayItIsConnected: a Ready pod says nothing of Slack (readiness is not tied to it), so up.sh
+// TestSandboxUpWaitsForAgentKourierToSayItIsConnected: a Ready pod says nothing of Slack (readiness is not tied to it), so up.sh
 // claims a connection only after the log line the Slack adapter writes for it, which the README names with the gauge.
-func TestSandboxUpWaitsForCourierToSayItIsConnected(t *testing.T) {
+func TestSandboxUpWaitsForAgentKourierToSayItIsConnected(t *testing.T) {
 	up, err := os.ReadFile(sandboxDir + "up.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -492,10 +492,10 @@ func TestSandboxUpWaitsForCourierToSayItIsConnected(t *testing.T) {
 	if !strings.Contains(string(up), "'"+slack.ConnectedMessage+"'") {
 		t.Errorf("up.sh does not wait for the line %q, which the Slack adapter logs when Socket Mode connects", slack.ConnectedMessage)
 	}
-	if strings.Contains(string(up), "courier is Ready: connected to Slack") {
+	if strings.Contains(string(up), "Agent Kourier is Ready: connected to Slack") {
 		t.Error("up.sh still claims a Ready pod is connected to Slack")
 	}
-	for _, want := range []string{slack.ConnectedMessage, "courier_chat_connected"} {
+	for _, want := range []string{slack.ConnectedMessage, "agentkourier_chat_connected"} {
 		if !strings.Contains(string(readme), want) {
 			t.Errorf("the README's \"where to look\" does not name %q", want)
 		}

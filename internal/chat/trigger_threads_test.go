@@ -30,7 +30,7 @@ const bindingName = "sre/sre-alerts"
 // alert's name, and a pod's.
 var alertWords = []string{"KubePodCrashLooping", "KubePodNotReady", "checkout-7d9f8b6c5", "CrashLoopBackOff"}
 
-// restart is a restart of courier: the database is closed and opened again, and a new Intake, which remembers
+// restart is a restart of Agent Kourier: the database is closed and opened again, and a new Intake, which remembers
 // no message, is made over it. The hook, the notices and the clock stay the test's.
 func (h *triggered) restart(t *testing.T) {
 	t.Helper()
@@ -39,7 +39,7 @@ func (h *triggered) restart(t *testing.T) {
 	h.in = chat.NewIntake(h.cfg)
 }
 
-// decisions reads courier_trigger_decisions_total of the test's Binding, by decision.
+// decisions reads agentkourier_trigger_decisions_total of the test's Binding, by decision.
 func (h *triggered) decisions(t *testing.T) map[string]float64 {
 	t.Helper()
 	families, err := h.reg.Gather()
@@ -48,7 +48,7 @@ func (h *triggered) decisions(t *testing.T) map[string]float64 {
 	}
 	out := map[string]float64{}
 	for _, f := range families {
-		if f.GetName() != "courier_trigger_decisions_total" {
+		if f.GetName() != "agentkourier_trigger_decisions_total" {
 			continue
 		}
 		for _, m := range f.Metric {
@@ -57,7 +57,7 @@ func (h *triggered) decisions(t *testing.T) map[string]float64 {
 				labels[l.GetName()] = l.GetValue()
 			}
 			if len(labels) != 2 {
-				t.Errorf("courier_trigger_decisions_total has labels %v; want binding and decision only", labels)
+				t.Errorf("agentkourier_trigger_decisions_total has labels %v; want binding and decision only", labels)
 			}
 			if labels["binding"] == bindingName {
 				out[labels["decision"]] += m.Counter.GetValue()
@@ -556,7 +556,7 @@ func TestAFailedMarkIsMendedByTheRedelivery(t *testing.T) {
 	}
 }
 
-// A resolve that never registers (courier was down past Slack's retry window) must not leave the key with a thread
+// A resolve that never registers (Agent Kourier was down past Slack's retry window) must not leave the key with a thread
 // that only takes notes for ever: an open thread that has had no message of its key for maxIdle (24h unless the
 // trigger says) is abandoned, and the next fire starts a new investigation. Every message of the key counts as
 // life, so an alert that Alertmanager keeps repeating stays one thread.

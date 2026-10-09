@@ -145,7 +145,7 @@ func TestAuditFailureNeverBlocksTheCancel(t *testing.T) {
 }
 
 // A prompt that does not fit in one message (chat.ErrTooLarge, which no retry mends) is no
-// different to the thread from a pause courier cannot take: it is told, the task is cancelled, and both
+// different to the thread from a pause Agent Kourier cannot take: it is told, the task is cancelled, and both
 // are audited, once. The interaction is closed with the task, so that the sweep has no prompt to replace.
 func TestAPromptThatIsTooLargeIsRefusedAsUnusable(t *testing.T) {
 	r := newRig(t, nil)
@@ -178,7 +178,7 @@ func TestAPromptThatFailsForAnotherReasonIsReturnedForARetry(t *testing.T) {
 }
 
 // TestAReusedRequestIDIsRefusedAsUnusable: a second question under a seen request ID (UNCONFIRMED(WP-02))
-// is told to the thread and cancelled, like any pause courier cannot take.
+// is told to the thread and cancelled, like any pause Agent Kourier cannot take.
 func TestAReusedRequestIDIsRefusedAsUnusable(t *testing.T) {
 	r := newRig(t, nil)
 	if err := r.paused(t, askUser("req-1")); err != nil {

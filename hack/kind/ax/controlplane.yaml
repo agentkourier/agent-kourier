@@ -53,7 +53,7 @@ spec:
       serviceAccountName: ax-server
       containers:
         - name: ax-server
-          image: courier-e2e/ax:dev
+          image: agent-kourier-e2e/ax:dev
           command: ["/usr/local/bin/ax-server"]
           imagePullPolicy: Never
           args:
@@ -69,7 +69,7 @@ spec:
             - name: ATENET_ROUTER_ADDR
               value: "atenet-router.ate-system.svc.cluster.local:80"
             - name: AX_SNAPSHOTS_BUCKET
-              value: "gs://ate-snapshots/courier-ax/"
+              value: "gs://ate-snapshots/agent-kourier-ax/"
           ports:
             - containerPort: 8080
               name: http

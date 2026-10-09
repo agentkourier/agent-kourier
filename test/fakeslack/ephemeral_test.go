@@ -97,7 +97,7 @@ func TestPostEphemeralNeedsABotToken(t *testing.T) {
 	}
 }
 
-// Slack sends no event for an ephemeral message, so courier's notice to a user
+// Slack sends no event for an ephemeral message, so Agent Kourier's notice to a user
 // must not come back to it as a message event.
 func TestPostEphemeralDeliversNoEvent(t *testing.T) {
 	fake, smc := newSocket(t)

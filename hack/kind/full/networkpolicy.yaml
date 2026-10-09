@@ -1,12 +1,12 @@
-# Three policies that make the verifying front door (frontdoor.yaml) the only route from courier
+# Three policies that make the verifying front door (frontdoor.yaml) the only route from Agent Kourier
 # to the kagent controller. kagent's controller does not verify JWTs (WP-01, spec D32/R4), so
 # these policies decide who is trusted; the front door decides whether a token is genuine.
 #   1. the controller (8083) admits the front door, the UI nginx, and Substrate's egress gateway;
 #   2. the UI (8080) admits only the UI's own oauth2-proxy, because its nginx relays /mcp, /api/
 #      and /a2a/ to 8083 with Authorization intact and would otherwise be a way around the door;
-#   3. the front door (4180) admits only courier pods.
-# What is left: a pod that can carry these labels in these namespaces (in kagent, or in courier
-# with the courier label) is trusted, and the actors' TaskStore calls arrive unauthenticated via
+#   3. the front door (4180) admits only Agent Kourier pods.
+# What is left: a pod that can carry these labels in these namespaces (in kagent, or in Agent Kourier
+# with the Agent Kourier label) is trusted, and the actors' TaskStore calls arrive unauthenticated via
 # atenet-egress (kagent #1660, spec R11). Namespace RBAC has to keep that set small.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -49,16 +49,16 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: frontdoor-admit-courier-only
+  name: frontdoor-admit-agent-kourier-only
   namespace: kagent
 spec:
   podSelector:
     matchLabels: {app.kubernetes.io/name: kagent-frontdoor}
   policyTypes: [Ingress]
   ingress:
-    - from: # courier, in its own namespace ("courier" is kind-only; the spec examples use courier-system)
+    - from: # Agent Kourier, in its own namespace ("agent-kourier" is kind-only; the spec examples use agent-kourier-system)
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: courier}
+            matchLabels: {kubernetes.io/metadata.name: agent-kourier}
           podSelector:
-            matchLabels: {app.kubernetes.io/name: courier}
+            matchLabels: {app.kubernetes.io/name: agent-kourier}
       ports: [{port: 4180, protocol: TCP}]

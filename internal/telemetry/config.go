@@ -21,7 +21,7 @@ import (
 )
 
 // maxAttributeValueLength bounds every span string attribute. Task IDs, context IDs and states
-// come from the agent, which courier does not control, so no value may grow without limit.
+// come from the agent, which Agent Kourier does not control, so no value may grow without limit.
 const maxAttributeValueLength = 256
 
 // Config is the explicitly parsed trace-export configuration. No endpoint means disabled.
@@ -35,11 +35,11 @@ type Config struct {
 
 // LoadConfig reads supported OTEL settings without exposing their contents in errors.
 func LoadConfig(getenv func(string) string) (Config, error) {
-	c := Config{ServiceName: "agent-courier", SampleRatio: 1}
+	c := Config{ServiceName: "agent-kourier", SampleRatio: 1}
 	if s := getenv("OTEL_SERVICE_NAME"); s != "" {
 		c.ServiceName = s
 	}
-	c.Environment = getenv("COURIER_ENVIRONMENT")
+	c.Environment = getenv("AGENTKOURIER_ENVIRONMENT")
 	switch e := getenv("OTEL_TRACES_EXPORTER"); e {
 	case "", "otlp":
 	case "none":
@@ -100,8 +100,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	// The parsed scheme, which url.Parse lower-cases, as the exporter reads it: HTTP:// is cleartext too.
 	if len(c.Headers) > 0 && used != nil && used.Scheme == "http" {
-		if getenv("COURIER_OTLP_ALLOW_INSECURE_HEADERS") != "true" {
-			return c, errors.New("OTEL export headers would travel in cleartext to an http endpoint: use https, or set COURIER_OTLP_ALLOW_INSECURE_HEADERS=true")
+		if getenv("AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS") != "true" {
+			return c, errors.New("OTEL export headers would travel in cleartext to an http endpoint: use https, or set AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS=true")
 		}
 	}
 	return c, nil

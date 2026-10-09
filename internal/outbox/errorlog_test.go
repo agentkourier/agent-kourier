@@ -17,7 +17,7 @@ import (
 )
 
 // A post the platform refuses with a body slack-go cannot parse is abandoned, and the warning carries the error:
-// "unknown error structure: <the raw body>". Through courier's log handler the line holds no secret-shaped value
+// "unknown error structure: <the raw body>". Through Agent Kourier's log handler the line holds no secret-shaped value
 // and no more of the body than the cap, and keeps the message, the reason and the keys operators grep.
 func TestAbandonWarningRedactsAndCapsTheErrorBody(t *testing.T) {
 	long := strings.Repeat("text of a private message. ", 40)

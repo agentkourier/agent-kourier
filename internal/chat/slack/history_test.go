@@ -23,7 +23,7 @@ func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // History reads the whole channel through as many pages as it takes and returns it oldest first, each message
-// decoded as Run decodes a live one: a bot's with its attachment flattened, a person's with its mention, courier's own
+// decoded as Run decodes a live one: a bot's with its attachment flattened, a person's with its mention, Agent Kourier's own
 // post marked, and every Ref naming the connection.
 func TestHistoryPagesThroughTheChannelOldestFirst(t *testing.T) {
 	fake := newFake(t)
@@ -60,7 +60,7 @@ func TestHistoryPagesThroughTheChannelOldestFirst(t *testing.T) {
 	post(alert())
 	post(alert())
 
-	got, err := c.History(t.Context(), "courier-system/slack-main", "C1", time.Time{})
+	got, err := c.History(t.Context(), "agent-kourier-system/slack-main", "C1", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestHistoryPagesThroughTheChannelOldestFirst(t *testing.T) {
 		if h.Message.At.ID != posted[i] {
 			t.Errorf("message %d is %s; want %s: the history is oldest first", i, h.Message.At.ID, posted[i])
 		}
-		if want := (chat.Ref{Platform: "slack", Conn: "courier-system/slack-main", Channel: "C1", ID: posted[i]}); h.Message.At != want {
+		if want := (chat.Ref{Platform: "slack", Conn: "agent-kourier-system/slack-main", Channel: "C1", ID: posted[i]}); h.Message.At != want {
 			t.Errorf("message %d is at %+v; want %+v", i, h.Message.At, want)
 		}
 	}
@@ -111,7 +111,7 @@ func TestHistoryReadsFromSince(t *testing.T) {
 		{"from an hour ago", time.Now().Add(-time.Hour), 1},
 		{"from an hour ahead", time.Now().Add(time.Hour), 0},
 	} {
-		got, err := c.History(t.Context(), "courier-system/slack-main", "C1", tc.since)
+		got, err := c.History(t.Context(), "agent-kourier-system/slack-main", "C1", tc.since)
 		if err != nil || len(got) != tc.want {
 			t.Errorf("%s: History = %d messages, %v; want %d", tc.name, len(got), err, tc.want)
 		}
@@ -122,7 +122,7 @@ func TestHistoryReadsFromSince(t *testing.T) {
 func TestHistoryErrorsDoNotCarryTheToken(t *testing.T) {
 	fake := newFake(t)
 	c := slack.New(clientConfig(fake))
-	_, err := c.History(t.Context(), "courier-system/slack-main", "", time.Time{}) // no channel: channel_not_found
+	_, err := c.History(t.Context(), "agent-kourier-system/slack-main", "", time.Time{}) // no channel: channel_not_found
 	if err == nil || !strings.Contains(err.Error(), "channel_not_found") {
 		t.Fatalf("History = %v; want Slack's channel_not_found", err)
 	}

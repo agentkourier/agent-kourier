@@ -1,0 +1,27 @@
+# S14: an Alertmanager alert posted to the channel through an incoming webhook starts one investigation in its own
+# thread (the first turn is the preset's prompt and the hashed untrusted block), a repeat is a note, and the resolve is
+# a note. The bot is named by its ID (D36); the kind receiver is the trial's, narrowed with the anchored $ so that the
+# production receiver of the same prefix stays out. A channel of its own on the fake Slack, so scenarios never share a
+# thread; the identity token is the same Secret as fast-chat's. The channel, the bot and the agent are pinned by
+# test/kindmanifests and test/e2e/scenarios.go.
+# The full tier loads this Binding too, but its kagent has no scenario-alert agent, so S14 runs in the fast tier only.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s14, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-alert
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS14
+    output: live
+    triggers:
+      - type: botMessage
+        from: {botId: B0S14ALERT1}
+        preset: alertmanager
+        match: {titleLink: 'receiver=slack-critical-kind$'}

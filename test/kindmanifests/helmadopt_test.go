@@ -27,7 +27,7 @@ func runMigrationHelper(t *testing.T, call, exists, owner string) string {
 	if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(kubectlStub), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), "bash", "-c", `set -eu; . "$1"; K=(kubectl --context kind-courier-full); `+call, "bash", "../../hack/kind/lib.sh")
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", `set -eu; . "$1"; K=(kubectl --context kind-agent-kourier-full); `+call, "bash", "../../hack/kind/lib.sh")
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+logs, "STUB_EXISTS="+exists, "STUB_OWNER="+owner)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s: %v\n%s", call, err, out)
@@ -35,22 +35,22 @@ func runMigrationHelper(t *testing.T, call, exists, owner string) string {
 	return readLog(t, logs, "argv")
 }
 
-// TestReplaceUnownedDeployment: a courier Deployment that no Helm release owns (the hand-made one of a tier brought up before the
+// TestReplaceUnownedDeployment: an Agent Kourier Deployment that no Helm release owns (the hand-made one of a tier brought up before the
 // chart) is deleted, in the foreground so that its pod has released the SQLite volume before the chart's starts; one that a release
 // owns, or none, is left alone.
 func TestReplaceUnownedDeployment(t *testing.T) {
-	const del = "--context kind-courier-full -n courier delete deploy/courier --cascade=foreground --wait"
+	const del = "--context kind-agent-kourier-full -n agent-kourier delete deploy/agent-kourier --cascade=foreground --wait"
 	for name, tc := range map[string]struct {
 		exists, owner string
 		deleted       bool
 	}{
-		"hand-made":                {"deployment.apps/courier", "", true},
-		"owned by a release":       {"deployment.apps/courier", "courier", false},
-		"owned by another release": {"deployment.apps/courier", "other", false},
+		"hand-made":                {"deployment.apps/agent-kourier", "", true},
+		"owned by a release":       {"deployment.apps/agent-kourier", "agent-kourier", false},
+		"owned by another release": {"deployment.apps/agent-kourier", "other", false},
 		"not there":                {"", "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			argv := runMigrationHelper(t, "replace_unowned_deployment courier", tc.exists, tc.owner)
+			argv := runMigrationHelper(t, "replace_unowned_deployment agent-kourier", tc.exists, tc.owner)
 			if got := strings.Contains(argv, del); got != tc.deleted {
 				t.Errorf("kubectl was asked:\n%s\nwant a foreground delete of the Deployment: %t", argv, tc.deleted)
 			}
@@ -62,19 +62,19 @@ func TestReplaceUnownedDeployment(t *testing.T) {
 // it; one that is not there, or that a release owns, is not touched.
 func TestAdoptIntoRelease(t *testing.T) {
 	const (
-		annotate = "-n courier annotate --overwrite pvc/courier-data meta.helm.sh/release-name=courier meta.helm.sh/release-namespace=courier"
-		label    = "-n courier label --overwrite pvc/courier-data app.kubernetes.io/managed-by=Helm"
+		annotate = "-n agent-kourier annotate --overwrite pvc/agent-kourier-data meta.helm.sh/release-name=agent-kourier meta.helm.sh/release-namespace=agent-kourier"
+		label    = "-n agent-kourier label --overwrite pvc/agent-kourier-data app.kubernetes.io/managed-by=Helm"
 	)
 	for name, tc := range map[string]struct {
 		exists, owner string
 		adopted       bool
 	}{
-		"hand-made":          {"persistentvolumeclaim/courier-data", "", true},
-		"owned by a release": {"persistentvolumeclaim/courier-data", "courier", false},
+		"hand-made":          {"persistentvolumeclaim/agent-kourier-data", "", true},
+		"owned by a release": {"persistentvolumeclaim/agent-kourier-data", "agent-kourier", false},
 		"not there":          {"", "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			argv := runMigrationHelper(t, "adopt_into_release courier pvc/courier-data", tc.exists, tc.owner)
+			argv := runMigrationHelper(t, "adopt_into_release agent-kourier pvc/agent-kourier-data", tc.exists, tc.owner)
 			if got := strings.Contains(argv, annotate) && strings.Contains(argv, label); got != tc.adopted {
 				t.Errorf("kubectl was asked:\n%s\nwant the object adopted: %t", argv, tc.adopted)
 			}
@@ -88,14 +88,14 @@ func TestAdoptIntoRelease(t *testing.T) {
 // valuesFile finds the chart's ci values file that a line names.
 var valuesFile = regexp.MustCompile(`ci/[a-z-]+-values\.yaml`)
 
-// TestEveryTierInstallsTheChart: each tier's script installs courier with a values file of the chart's ci directory, and the files
-// exist; none applies a hand-made courier manifest any more.
+// TestEveryTierInstallsTheChart: each tier's script installs Agent Kourier with a values file of the chart's ci directory, and the files
+// exist; none applies a hand-made Agent Kourier manifest any more.
 func TestEveryTierInstallsTheChart(t *testing.T) {
 	for _, tc := range []struct{ script, want string }{
-		{"lib.sh", `install_courier "${COURIER_VALUES:-${ROOT}/charts/courier/ci/fast-values.yaml}"`}, // the fast and full tiers (deploy_courier)
-		{"up-fast.sh", `COURIER_VALUES=${ROOT}/charts/courier/ci/fast-postgres-values.yaml`},          // E2E_STORE=postgres
-		{"up-ax.sh", `install_courier "${ROOT}/charts/courier/ci/ax-values.yaml"`},
-		{"sandbox/up.sh", `helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml"`},
+		{"lib.sh", `install_agentkourier "${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}"`}, // the fast and full tiers (deploy_agentkourier)
+		{"up-fast.sh", `AGENTKOURIER_VALUES=${ROOT}/charts/agent-kourier/ci/fast-postgres-values.yaml`},               // E2E_STORE=postgres
+		{"up-ax.sh", `install_agentkourier "${ROOT}/charts/agent-kourier/ci/ax-values.yaml"`},
+		{"sandbox/up.sh", `helm_install_agentkourier "${SANDBOX_RELEASE}" "${ROOT}/charts/agent-kourier/ci/sandbox-values.yaml"`},
 	} {
 		raw, err := os.ReadFile("../../hack/kind/" + tc.script)
 		if err != nil {
@@ -105,12 +105,12 @@ func TestEveryTierInstallsTheChart(t *testing.T) {
 			t.Errorf("%s does not run %s", tc.script, tc.want)
 		}
 		if file := valuesFile.FindString(tc.want); file != "" {
-			if _, err := os.Stat("../../charts/courier/" + file); err != nil {
+			if _, err := os.Stat("../../charts/agent-kourier/" + file); err != nil {
 				t.Errorf("%s names %s: %v", tc.script, file, err)
 			}
 		}
 	}
-	for _, gone := range []string{"fast/courier/deployment.yaml", "fast/courier/pvc.yaml", "fast/courier/rbac.yaml", "fast/courier/service.yaml", "sandbox/courier/deployment.yaml", "sandbox/token-refresh.yaml"} {
+	for _, gone := range []string{"fast/agent-kourier/deployment.yaml", "fast/agent-kourier/pvc.yaml", "fast/agent-kourier/rbac.yaml", "fast/agent-kourier/service.yaml", "sandbox/agent-kourier/deployment.yaml", "sandbox/token-refresh.yaml"} {
 		if _, err := os.Stat("../../hack/kind/" + gone); err == nil {
 			t.Errorf("hack/kind/%s is back: the chart makes what it held", gone)
 		}

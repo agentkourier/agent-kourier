@@ -3,7 +3,7 @@ package e2e
 import "testing"
 
 func TestNewEnv(t *testing.T) {
-	vars := map[string]string{"E2E_SLACK_URL": "http://s", "E2E_SINK_URL": "http://k", "E2E_STUB_URL": "http://u", "E2E_ALERTMANAGER_URL": "http://a", "E2E_COURIER_URL": "http://c", "E2E_SIGNALER_URL": "http://g", "E2E_TIER": "full"}
+	vars := map[string]string{"E2E_SLACK_URL": "http://s", "E2E_SINK_URL": "http://k", "E2E_STUB_URL": "http://u", "E2E_ALERTMANAGER_URL": "http://a", "E2E_AGENTKOURIER_URL": "http://c", "E2E_SIGNALER_URL": "http://g", "E2E_TIER": "full"}
 	for _, tc := range []struct {
 		name string
 		env  map[string]string
@@ -14,10 +14,10 @@ func TestNewEnv(t *testing.T) {
 			SinkURL:         "http://sink.e2e.svc.cluster.local:8080",
 			StubURL:         "http://stubagent.e2e.svc.cluster.local:8080",
 			AlertmanagerURL: "http://alertmanager.monitoring.svc.cluster.local:9093",
-			CourierURL:      "http://courier.courier.svc.cluster.local:8080",
+			AgentKourierURL: "http://agent-kourier.agent-kourier.svc.cluster.local:8080",
 			SignalerURL:     "http://signaler.e2e.svc.cluster.local:8080",
 		}},
-		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", CourierURL: "http://c", SignalerURL: "http://g", Tier: "full"}},
+		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", AgentKourierURL: "http://c", SignalerURL: "http://g", Tier: "full"}},
 	} {
 		if got := NewEnv(func(k string) string { return tc.env[k] }); got != tc.want {
 			t.Errorf("%s: NewEnv() = %+v, want %+v", tc.name, got, tc.want)

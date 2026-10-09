@@ -59,7 +59,7 @@ type API interface {
 
 var _ API = (*Client)(nil)
 
-// Render is o as the Slack message that Post sends: its text and blocks. Nothing in courier delivers through it (the
+// Render is o as the Slack message that Post sends: its text and blocks. Nothing in Agent Kourier delivers through it (the
 // outbox stores the neutral model and the Platform renders it at delivery); it is for a test or a tool that shows what
 // Slack would be sent.
 func Render(o chat.Outgoing) (Content, error) { return renderOutgoing(o) }
@@ -181,7 +181,7 @@ func (p *Platform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) erro
 
 // Stream starts a streaming message in t, shown to the user to, with the markdown first. The stream starts in the
 // chunks mode, which is the one that can show steps. That mode is a guess about Slack that no one has confirmed
-// (UNCONFIRMED(WP-04)), and a Slack that refuses it, with one of the codes of refusesChunks, must not cost courier its
+// (UNCONFIRMED(WP-04)), and a Slack that refuses it, with one of the codes of refusesChunks, must not cost Agent Kourier its
 // replies: the start is made once more in the markdown_text mode, and if that works the platform stays in it for
 // the process, so that the next stream starts there with no failed call first, and is logged once. A stream in that
 // mode shows no steps. A start with no text carries no mode and cannot be refused for it.
@@ -310,7 +310,7 @@ func (s *stream) Append(ctx context.Context, md string) error {
 // settle keeps the reading of the stream as what Slack has, after a call that carried a text. If every call made was
 // answered with an error, the text was not applied, and the caller may send it again, so the reading goes back to before
 // it. If any call made was lost with no answer (unsure), the text may have been applied, and Slack may be in a block
-// that courier is not, or hold the text twice after a second try: the stream goes back to before the text too, and is
+// that Agent Kourier is not, or hold the text twice after a second try: the stream goes back to before the text too, and is
 // blind from then on, which escapes everything, held-back text included.
 func (s *stream) settle(saved mdText, unsure bool, err error) {
 	if err == nil {
@@ -321,7 +321,7 @@ func (s *stream) settle(saved mdText, unsure bool, err error) {
 }
 
 // noResult is what the card of a step says when the stream ended with no result for it. Slack has no state for a
-// step whose outcome is not known, so the card is complete, and says so in words of courier's own: a tick alone
+// step whose outcome is not known, so the card is complete, and says so in words of Agent Kourier's own: a tick alone
 // would read as success. It is the only text of a step that is not the agent's.
 const noResult = "No result was reported."
 
@@ -382,7 +382,7 @@ func (s *stream) Stop(ctx context.Context, md string, final chat.Message, tag st
 }
 
 // StreamAt is the stream that is the message at r. Its mode is the platform's, and if the stream of the earlier run
-// that started it was in the other, the first text it is sent finds out (stream.text). Courier cannot know whether
+// that started it was in the other, the first text it is sent finds out (stream.text). Agent Kourier cannot know whether
 // Slack is inside a block of the earlier run's, so the stream is blind: it escapes everything, for good (mdText).
 func (p *Platform) StreamAt(r chat.Ref) chat.Stream {
 	s := &stream{p: p, ref: r, esc: mdText{blind: true}}

@@ -181,15 +181,15 @@ func TestRunInvestigatesAFiringAlertOnceInItsOwnThread(t *testing.T) {
 	}
 	for _, m := range a.fake.Messages(alertChannel) { // nothing top-level but the alerts: every answer and note is in the thread
 		if m.BotID == "BFAKEBOT" && m.ThreadTS != alert.TS {
-			t.Errorf("courier posted %q outside the alert's thread (thread %q)", m.Text, m.ThreadTS)
+			t.Errorf("Agent Kourier posted %q outside the alert's thread (thread %q)", m.Text, m.ThreadTS)
 		}
 	}
 	if _, ok := a.threadOf(again.TS); ok {
 		t.Errorf("the repeat %s has a thread of its own; want its note in the first alert's", again.TS)
 	}
-	a.r.waitMetric(`courier_trigger_decisions_total{binding="sre/sre-alerts",decision="started"} 1`)
-	a.r.waitMetric(`courier_trigger_decisions_total{binding="sre/sre-alerts",decision="repeat"} 1`)
-	a.r.waitMetric(`courier_trigger_decisions_total{binding="sre/sre-alerts",decision="closed"} 1`)
+	a.r.waitMetric(`agentkourier_trigger_decisions_total{binding="sre/sre-alerts",decision="started"} 1`)
+	a.r.waitMetric(`agentkourier_trigger_decisions_total{binding="sre/sre-alerts",decision="repeat"} 1`)
+	a.r.waitMetric(`agentkourier_trigger_decisions_total{binding="sre/sre-alerts",decision="closed"} 1`)
 }
 
 // threadOf says whether any message is a reply in the thread of ts.
@@ -255,7 +255,7 @@ func TestRunAStartedInvestigationSurvivesARestart(t *testing.T) {
 	}
 }
 
-// The .Link a template reads is the permalink courier builds from the workspace URL auth.test returned and the alert's
+// The .Link a template reads is the permalink Agent Kourier builds from the workspace URL auth.test returned and the alert's
 // channel and ts, and not the alert's own link.
 func TestRunBuildsThePermalinkFromTheWorkspaceURL(t *testing.T) {
 	a := newAlerts(t)
@@ -306,7 +306,7 @@ func TestRunRefusesAPromptWhoseValueFailsItsCheck(t *testing.T) {
 	if got := a.agent.asked(); len(got) != 0 {
 		t.Errorf("the agent was asked %q after a refusal; want no turn", got)
 	}
-	a.r.waitMetric(`courier_trigger_refused_total{binding="sre/sre-alerts",reason="characters",ref="Fields.alertname",trigger="1"} 1`)
+	a.r.waitMetric(`agentkourier_trigger_refused_total{binding="sre/sre-alerts",reason="characters",ref="Fields.alertname",trigger="1"} 1`)
 
 	a.r.cancel()
 	if err := a.r.wait(); err != nil {

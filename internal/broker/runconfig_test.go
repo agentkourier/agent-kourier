@@ -20,7 +20,7 @@ func valid(t *testing.T) RunConfig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return RunConfig{ConfigDir: "/etc/courier", DBPath: "/data/courier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
+	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/courier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
 }
 
 // No build can start without the renderer or the interactions, or with different ones, and none can
@@ -83,7 +83,7 @@ func TestValidateRefusesWhatIsMissingAsAWiringError(t *testing.T) {
 	}
 }
 
-// Courier reads Secrets and watches them through the API server it runs next to; a kubeconfig on a
+// Agent Kourier reads Secrets and watches them through the API server it runs next to; a kubeconfig on a
 // laptop is never used, because it could point at any cluster.
 func TestInClusterClientRefusesOutsideACluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
@@ -97,7 +97,7 @@ func TestInClusterClientRefusesOutsideACluster(t *testing.T) {
 }
 
 func TestValidateTheStore(t *testing.T) {
-	pg := SecretKey{Namespace: "courier", Name: "courier-pg", Key: "dsn"}
+	pg := SecretKey{Namespace: "agent-kourier", Name: "agent-kourier-pg", Key: "dsn"}
 	for name, tc := range map[string]struct {
 		mutate func(*RunConfig)
 		want   string // "" is accepted; otherwise a piece of the wiring error
@@ -119,7 +119,7 @@ func TestValidateTheStore(t *testing.T) {
 		}, "lease duration"},
 		"postgres needs the Secret": {func(c *RunConfig) { c.Store.Kind = StorePostgres }, "Secret that holds its DSN"},
 		"postgres needs the whole key": {func(c *RunConfig) {
-			c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: SecretKey{Namespace: "courier", Name: "x"}}
+			c.Store = StoreConfig{Kind: StorePostgres, PostgresDSN: SecretKey{Namespace: "agent-kourier", Name: "x"}}
 		}, "Secret that holds its DSN"},
 		"sqlite refuses a DSN Secret":  {func(c *RunConfig) { c.Store.PostgresDSN = pg }, "a Postgres setting"},
 		"sqlite refuses role timeouts": {func(c *RunConfig) { c.Store.PostgresRoleTimeouts = true }, "a Postgres setting"},

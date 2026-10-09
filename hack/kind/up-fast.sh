@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
-# Bring up the fast E2E tier from nothing: a kind cluster (courier-fast) with prometheus-operator
+# Bring up the fast E2E tier from nothing: a kind cluster (agent-kourier-fast) with prometheus-operator
 # and one Alertmanager, the fake Slack, the stub agent (-require-auth) and a sink webhook
-# receiver, and courier's image when one exists (spec 12.1). Safe to re-run.
+# receiver, and Agent Kourier's image when one exists (spec 12.1). Safe to re-run.
 # The fast tier is its own cluster, so it runs beside the full tier; `make e2e-down` removes both
 # (hack/kind/down.sh fast removes only this one).
 #
-# Every kubectl and helm call names --context kind-courier-fast and every kind call names
-# --name courier-fast: the host kubeconfig may hold other clusters, production among them, and
+# Every kubectl and helm call names --context kind-agent-kourier-fast and every kind call names
+# --name agent-kourier-fast: the host kubeconfig may hold other clusters, production among them, and
 # the current context is never relied on. assert_context aborts unless that context is the local
 # kind cluster.
 #
 # The operator's CRDs are installed by helm on first install only; helm never upgrades them. To
 # change OPERATOR_CHART_VERSION (in lib.sh), run `hack/kind/down.sh fast` first.
 #
-# Courier's testhooks image (courier-e2e/courier-testhooks:dev, built from the repo's Dockerfile) is
-# built and loaded into the cluster, after a check that it carries its label, and run by courier's chart
-# (charts/courier, with ci/fast-values.yaml, which the full tier uses too: lib.sh's deploy_courier and install_courier). On a
+# Agent Kourier's testhooks image (agent-kourier-e2e/agent-kourier-testhooks:dev, built from the repo's Dockerfile) is
+# built and loaded into the cluster, after a check that it carries its label, and run by Agent Kourier's chart
+# (charts/agent-kourier, with ci/fast-values.yaml, which the full tier uses too: lib.sh's deploy_agentkourier and install_agentkourier). On a
 # cluster that still has the hand-made Deployment this tier used to have, re-running this replaces it, keeping the volume.
-# The tier is up only when courier is ready and connected to the fake Slack.
+# The tier is up only when Agent Kourier is ready and connected to the fake Slack.
 #
-# E2E_STORE=postgres runs courier on Postgres instead of SQLite: a Postgres in namespace e2e (fast/postgres.yaml), its password
-# generated here and handed to the cluster through a pipe, and courier installed with ci/fast-postgres-values.yaml. The E2E suite is
+# E2E_STORE=postgres runs Agent Kourier on Postgres instead of SQLite: a Postgres in namespace e2e (fast/postgres.yaml), its password
+# generated here and handed to the cluster through a pipe, and Agent Kourier installed with ci/fast-postgres-values.yaml. The E2E suite is
 # the same on either. A tier keeps the store it was brought up with: to change it, run hack/kind/down.sh fast first.
-# E2E_REPLICAS=2 (with E2E_STORE=postgres) runs two courier replicas, a leader and a standby (spec 11, D37), with the election timings of
-# charts/courier/ci/fast-postgres-ha-values.yaml, and brings up the container signaler (fast/signaler.yaml) that the failover scenario S16
+# E2E_REPLICAS=2 (with E2E_STORE=postgres) runs two Agent Kourier replicas, a leader and a standby (spec 11, D37), with the election timings of
+# charts/agent-kourier/ci/fast-postgres-ha-values.yaml, and brings up the container signaler (fast/signaler.yaml) that the failover scenario S16
 # uses to freeze or kill the leader's process. The rest of the suite runs on two replicas too. Without it, or with 1, there is one replica and
 # no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place.
 set -eEuo pipefail
@@ -94,32 +94,32 @@ else
   remove_signaler
 fi
 
-step "courier image ${TESTHOOKS_IMAGE}"
-load_courier_image
+step "Agent Kourier image ${TESTHOOKS_IMAGE}"
+load_agentkourier_image
 
 if [ "${E2E_STORE}" = postgres ]; then
-  step "postgres, and the Secret that holds courier's DSN"
+  step "postgres, and the Secret that holds Agent Kourier's DSN"
   deploy_postgres
-  COURIER_VALUES=${ROOT}/charts/courier/ci/fast-postgres-values.yaml
+  AGENTKOURIER_VALUES=${ROOT}/charts/agent-kourier/ci/fast-postgres-values.yaml
 fi
 
-COURIER_HELM_ARGS=()
+AGENTKOURIER_HELM_ARGS=()
 if [ "${E2E_REPLICAS}" = 2 ]; then
-  COURIER_HELM_ARGS=(-f "${ROOT}/charts/courier/ci/fast-postgres-ha-values.yaml")
+  AGENTKOURIER_HELM_ARGS=(-f "${ROOT}/charts/agent-kourier/ci/fast-postgres-ha-values.yaml")
 fi
 
-step "courier: namespace, config, Secrets, chart"
+step "agent-kourier: namespace, config, Secrets, chart"
 # Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
 # here and never committed: the Slack tokens carry the prefixes the fake Slack checks, and the agent token
 # is an unsigned JWT with an email claim, which is all the stub agent (-require-auth) asks of a bearer.
-"${K[@]}" create namespace courier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+"${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 b64url() { printf %s "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
-"${K[@]}" -n courier create secret generic courier-agent-token \
-  --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"courier-fast@example.test"}')." --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-# The rollout restart in install_courier picks up a rebuilt image (same tag) or a changed ConfigMap; verify.sh
-# waits for the rollout and shows courier's log if it does not become ready.
-deploy_courier "${FAST}/courier/config/agentbackend.yaml" "${FAST}/courier/a2a"
+"${K[@]}" -n agent-kourier create secret generic agent-kourier-agent-token \
+  --from-literal=token="$(b64url '{"alg":"none"}').$(b64url '{"email":"agent-kourier-fast@example.test"}')." --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+# The rollout restart in install_agentkourier picks up a rebuilt image (same tag) or a changed ConfigMap; verify.sh
+# waits for the rollout and shows Agent Kourier's log if it does not become ready.
+deploy_agentkourier "${FAST}/agent-kourier/config/agentbackend.yaml" "${FAST}/agent-kourier/a2a"
 
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} courier replica(s))"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s))"

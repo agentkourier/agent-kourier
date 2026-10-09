@@ -27,7 +27,7 @@ func TestPressProcessingContinuesTheTraceOfThePressAcrossARestart(t *testing.T) 
 		t.Fatal(err)
 	}
 	key := store.ConversationKey{Connection: "ns/conn", Channel: "C1", Thread: "1.0"}
-	pressCtx, press := telemetry.Start(h.Ctx, "courier.interaction.press")
+	pressCtx, press := telemetry.Start(h.Ctx, "agentkourier.interaction.press")
 	if _, err = st.CreateInteraction(pressCtx, store.Interaction{ID: "pause-1", Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, CreatedAt: d0, Deadline: d0.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +69,8 @@ func TestPressProcessingContinuesTheTraceOfThePressAcrossARestart(t *testing.T) 
 	}
 	cancel()
 	<-done
-	root, write := h.Span(t, "courier.interaction.press"), h.Span(t, "courier.store.RecordPress")
-	process := h.Span(t, "courier.interaction.process")
+	root, write := h.Span(t, "agentkourier.interaction.press"), h.Span(t, "agentkourier.store.RecordPress")
+	process := h.Span(t, "agentkourier.interaction.process")
 	if processing.TraceID() != root.SpanContext.TraceID() || process.SpanContext.TraceID() != root.SpanContext.TraceID() {
 		t.Fatalf("processed in trace %s, span in %s; want the press's trace %s", processing.TraceID(), process.SpanContext.TraceID(), root.SpanContext.TraceID())
 	}

@@ -43,7 +43,7 @@ func fakePods(objs ...runtime.Object) (*Pods, *fake.Clientset, <-chan struct{}) 
 
 func TestList_FiltersByNamespaceAndSelector(t *testing.T) {
 	elsewhere := sink("elsewhere", "u3", true)
-	elsewhere.Namespace = "courier"
+	elsewhere.Namespace = "agent-kourier"
 	other := sink("other", "u2", true)
 	other.Labels = map[string]string{"app": "stubagent"}
 	p, _, _ := fakePods(sink("sink-a", "u1", true), other, elsewhere)

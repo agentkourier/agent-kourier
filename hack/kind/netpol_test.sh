@@ -17,7 +17,7 @@ SEQ=$(mktemp)
 FAKEBIN=$(mktemp -d)
 trap 'rm -rf "${CALLS}" "${SEQ}" "${SEQ}.bak" "${FAKEBIN}"' EXIT
 fake_kubectl() { echo "$*" >>"${CALLS}"; }
-K=(fake_kubectl --context kind-courier-full)
+K=(fake_kubectl --context kind-agent-kourier-full)
 
 fails=0
 check() { # DESCRIPTION WANT GOT
@@ -108,14 +108,14 @@ echo "== the probe pod and its cleanup"
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 got=$(. "${HERE}/lib.sh" && policy_probe)
 check "a probe pod that prints nothing is no verdict, after three tries" "3:" "$(grep -c ' run probe-netpol-' "${CALLS}"):${got}"
-check "the probe pod carries the courier label and the probe label" 3 "$(grep -c -e '--labels=app.kubernetes.io/name=courier,courier.agent-courier.dev/probe=netpol' "${CALLS}")"
+check "the probe pod carries the Agent Kourier label and the probe label" 3 "$(grep -c -e '--labels=app.kubernetes.io/name=agent-kourier,agentkourier.agent-kourier.dev/probe=netpol' "${CALLS}")"
 : >"${CALLS}"
 delete_netpol_probes
 check "before any probe could have run, the cleanup asks the cluster nothing" "" "$(cat "${CALLS}")"
 NETPOL_PROBING=1
 delete_netpol_probes
-check "the traps delete the probe pods by their label, in courier only" \
-  "--context kind-courier-full -n courier delete pod -l courier.agent-courier.dev/probe=netpol --ignore-not-found --wait=false" "$(cat "${CALLS}")"
+check "the traps delete the probe pods by their label, in Agent Kourier only" \
+  "--context kind-agent-kourier-full -n agent-kourier delete pod -l agentkourier.agent-kourier.dev/probe=netpol --ignore-not-found --wait=false" "$(cat "${CALLS}")"
 
 echo "== network_policy_verdict"
 line=$(verdict "${CLEAN_LOG}" "0 28 0.000000")
@@ -186,8 +186,8 @@ check "healthy: runs no kubectl" "" "$(cat "${CALLS}")"
 sequence "stale: cause" "enforced: fine"
 heal_network_policy >/dev/null
 check "stale: restarts kindnet in kube-system of the full tier, then waits for it" \
-  "--context kind-courier-full -n kube-system rollout restart ds/kindnet
---context kind-courier-full -n kube-system rollout status ds/kindnet --timeout=120s" "$(cat "${CALLS}")"
+  "--context kind-agent-kourier-full -n kube-system rollout restart ds/kindnet
+--context kind-agent-kourier-full -n kube-system rollout status ds/kindnet --timeout=120s" "$(cat "${CALLS}")"
 
 : >"${CALLS}"
 sequence "stale: cause" "stale: cause" "enforced: fine"

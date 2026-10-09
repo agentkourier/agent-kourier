@@ -1,7 +1,7 @@
 // Package signaler sends SIGSTOP, SIGCONT or SIGKILL to the processes of one container, named by its container ID,
 // for the failover scenario of the fast E2E tier (S16). It runs in a pod that shares the node's PID namespace
 // (hostPID), as the node's own tooling would: from inside the cluster there is no other way to pause or kill a
-// courier process the way a frozen node or a crash does, since courier is PID 1 of its own namespace and the kernel
+// Agent Kourier process the way a frozen node or a crash does, since Agent Kourier is PID 1 of its own namespace and the kernel
 // drops a SIGSTOP or SIGKILL that an init gets from inside it.
 //
 //	POST /stop?container=ID: SIGSTOP, so the process is frozen, not ended

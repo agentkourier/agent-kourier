@@ -26,7 +26,7 @@ func (s *Slack) WaitThread(ctx context.Context, timeout time.Duration, channel, 
 	return last, err
 }
 
-// Ephemerals returns the ephemeral messages courier sent in channel, oldest first. The fake shows
+// Ephemerals returns the ephemeral messages Agent Kourier sent in channel, oldest first. The fake shows
 // them through this call alone, for e2e tests: no user, history or thread read does, as in Slack,
 // where only the recipient sees one.
 func (s *Slack) Ephemerals(ctx context.Context, channel string) ([]fakeslack.Ephemeral, error) {

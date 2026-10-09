@@ -65,9 +65,9 @@ func TestApplySecretKeepsValuesOffArgvEnvAndOutput(t *testing.T) {
 	bin, logs := recorders(t)
 	script := `set -eu
 . "$1"
-K=(kubectl --context kind-courier-full)
+K=(kubectl --context kind-agent-kourier-full)
 sandbox_env_load "$2"
-apply_secret courier sandbox-slack botToken=SLACK_BOT_TOKEN appToken=SLACK_APP_TOKEN
+apply_secret agent-kourier sandbox-slack botToken=SLACK_BOT_TOKEN appToken=SLACK_APP_TOKEN
 apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
 `
 	cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", sandboxDir+"env.sh", envFile(t, 0o600, goodEnv()...))
@@ -97,7 +97,7 @@ apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
 	}
 	// kubectl is asked for a server-side apply, twice, naming its context.
 	argv := strings.Split(strings.TrimSpace(readLog(t, logs, "kubectl.argv")), "\n")
-	want := "--context kind-courier-full apply --server-side --force-conflicts --field-manager=courier-sandbox -f -"
+	want := "--context kind-agent-kourier-full apply --server-side --force-conflicts --field-manager=agent-kourier-sandbox -f -"
 	if len(argv) != 2 || argv[0] != want || argv[1] != want {
 		t.Errorf("kubectl was run as %q; want twice, as %q", argv, want)
 	}
@@ -109,7 +109,7 @@ apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
 			t.Errorf("kubectl's stdin lacks the base64 of value %d", i)
 		}
 	}
-	for _, line := range []string{"kind: Secret", "  name: sandbox-slack", "  namespace: courier", "  botToken: ", "  appToken: ", "  name: sandbox-model", "  namespace: kagent", "  apiKey: "} {
+	for _, line := range []string{"kind: Secret", "  name: sandbox-slack", "  namespace: agent-kourier", "  botToken: ", "  appToken: ", "  name: sandbox-model", "  namespace: kagent", "  apiKey: "} {
 		if !strings.Contains(stdin, line) {
 			t.Errorf("kubectl's stdin lacks %q:\n%s", line, redactBase64(stdin))
 		}
@@ -178,7 +178,7 @@ func TestNoScriptExportsOrTracesAValue(t *testing.T) {
 func TestRenderFillsPlaceholdersByExpansion(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "bash", "-c", `set -eu
 . "$1"
-MODEL_NAME=model-x SLACK_CHANNEL_ID=C0RENDER01 render "$2"`, "bash", sandboxDir+"env.sh", sandboxDir+"courier/config/binding.yaml")
+MODEL_NAME=model-x SLACK_CHANNEL_ID=C0RENDER01 render "$2"`, "bash", sandboxDir+"env.sh", sandboxDir+"agent-kourier/config/binding.yaml")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestRefuseWhileSandboxUp(t *testing.T) {
 		refuse   bool
 		wantInfo string
 	}{
-		"the Deployment is there":   {"echo deployment.apps/courier-sandbox", true, "make sandbox-down first"},
+		"the Deployment is there":   {"echo deployment.apps/agent-kourier-sandbox", true, "make sandbox-down first"},
 		"no Deployment":             {"exit 0", false, ""},
 		"the API server cannot say": {"echo 'Unable to connect' >&2; exit 1", false, ""},
 	} {
@@ -229,7 +229,7 @@ func TestRefuseWhileSandboxUp(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(stub), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.CommandContext(t.Context(), "bash", "-c", `. "$1"; K=(kubectl --context kind-courier-full); refuse_while_sandbox_up`, "bash", "../../hack/kind/lib.sh")
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", `. "$1"; K=(kubectl --context kind-agent-kourier-full); refuse_while_sandbox_up`, "bash", "../../hack/kind/lib.sh")
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			var errOut bytes.Buffer
 			cmd.Stderr = &errOut
@@ -237,7 +237,7 @@ func TestRefuseWhileSandboxUp(t *testing.T) {
 			if (err != nil) != tc.refuse || !strings.Contains(errOut.String(), tc.wantInfo) {
 				t.Errorf("err %v, stderr %q; want a refusal: %t, saying %q", err, errOut.String(), tc.refuse, tc.wantInfo)
 			}
-			if argv := readLog(t, logs, "argv"); !strings.Contains(argv, "--context kind-courier-full -n courier get deploy courier-sandbox") {
+			if argv := readLog(t, logs, "argv"); !strings.Contains(argv, "--context kind-agent-kourier-full -n agent-kourier get deploy agent-kourier-sandbox") {
 				t.Errorf("kubectl was asked %q; want it to name the context and the Deployment", argv)
 			}
 		})
@@ -245,13 +245,13 @@ func TestRefuseWhileSandboxUp(t *testing.T) {
 }
 
 // TestTheTierScriptsRefuseWhileSandboxUp: e2e-run.sh refuses on the context it has checked and before it makes a token or
-// starts the Job; up-full.sh refuses before it changes anything in an existing cluster; deploy_courier refuses first of all.
+// starts the Job; up-full.sh refuses before it changes anything in an existing cluster; deploy_agentkourier refuses first of all.
 func TestTheTierScriptsRefuseWhileSandboxUp(t *testing.T) {
 	guard := "refuse_while_sandbox_up"
 	for _, tc := range []struct{ file, before, after string }{
 		{"e2e-run.sh", `assert_context "${tier}"`, "refresh_dex_token"},
 		{"up-full.sh", "\nassert_context full\n", "Agent Substrate"},
-		{"lib.sh", "deploy_courier() {", "mktemp -d"},
+		{"lib.sh", "deploy_agentkourier() {", "mktemp -d"},
 	} {
 		raw, err := os.ReadFile("../../hack/kind/" + tc.file)
 		if err != nil {
@@ -268,8 +268,8 @@ func TestTheTierScriptsRefuseWhileSandboxUp(t *testing.T) {
 }
 
 // TestUpMakesTheFirstTokenWithTheCronJob: one path makes a token: up.sh installs the chart (whose CronJob it is) with no replicas, runs the
-// CronJob as a Job, waits for it, and deletes it, and only then takes the full tier's courier down and starts the sandbox's on the real
-// Slack: on a first run, a Job that fails leaves both couriers as they were; on a re-run the sandbox's is at zero until the next run or
+// CronJob as a Job, waits for it, and deletes it, and only then takes the full tier's Agent Kourier down and starts the sandbox's on the real
+// Slack: on a first run, a Job that fails leaves both Agent Kourier deployments as they were; on a re-run the sandbox's is at zero until the next run or
 // sandbox-down. It does not use lib.sh's refresh_dex_token, whose throwaway pod leaves the
 // token in its log.
 func TestUpMakesTheFirstTokenWithTheCronJob(t *testing.T) {
@@ -278,15 +278,15 @@ func TestUpMakesTheFirstTokenWithTheCronJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	install := strings.Index(s, `helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml" --set replicaCount=0`)
-	create := strings.Index(s, `create job courier-token-refresh-bringup --from="cronjob/${SANDBOX_RELEASE}-token-refresh"`)
-	wait := strings.Index(s, `wait --for=condition=Complete job/courier-token-refresh-bringup`)
-	del := strings.Index(s, `delete job courier-token-refresh-bringup >/dev/null`)
-	scale := strings.Index(s, `scale deploy/courier --replicas=0`)
-	start := strings.Index(s, `helm_install_courier "${SANDBOX_RELEASE}" "${ROOT}/charts/courier/ci/sandbox-values.yaml"
+	install := strings.Index(s, `helm_install_agentkourier "${SANDBOX_RELEASE}" "${ROOT}/charts/agent-kourier/ci/sandbox-values.yaml" --set replicaCount=0`)
+	create := strings.Index(s, `create job agent-kourier-token-refresh-bringup --from="cronjob/${SANDBOX_RELEASE}-token-refresh"`)
+	wait := strings.Index(s, `wait --for=condition=Complete job/agent-kourier-token-refresh-bringup`)
+	del := strings.Index(s, `delete job agent-kourier-token-refresh-bringup >/dev/null`)
+	scale := strings.Index(s, `scale deploy/agent-kourier --replicas=0`)
+	start := strings.Index(s, `helm_install_agentkourier "${SANDBOX_RELEASE}" "${ROOT}/charts/agent-kourier/ci/sandbox-values.yaml"
 `)
 	if install <= 0 || install >= create || create >= wait || wait >= del || del >= scale || scale >= start {
-		t.Errorf("up.sh: install with no replicas %d, create the Job %d, wait %d, delete %d, scale the tier's courier down %d, start the sandbox's %d; want that order", install, create, wait, del, scale, start)
+		t.Errorf("up.sh: install with no replicas %d, create the Job %d, wait %d, delete %d, scale the tier's Agent Kourier down %d, start the sandbox's %d; want that order", install, create, wait, del, scale, start)
 	}
 	if strings.Contains(s, "refresh_dex_token") {
 		t.Error("up.sh uses refresh_dex_token: the CronJob's script is the one path that makes the token")
@@ -295,7 +295,7 @@ func TestUpMakesTheFirstTokenWithTheCronJob(t *testing.T) {
 
 // TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod: a sandbox brought up before the chart has a pod that is not the release's
 // (instance=sandbox), which the wait for the tier's own pod to go would never see go; so the hand-made Deployment is replaced first, and
-// the wait for the tier's courier comes after every step that deletes the sandbox's.
+// the wait for the tier's Agent Kourier comes after every step that deletes the sandbox's.
 func TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod(t *testing.T) {
 	raw, err := os.ReadFile(sandboxDir + "up.sh")
 	if err != nil {
@@ -303,13 +303,13 @@ func TestUpReplacesAHandMadeSandboxBeforeItWaitsForTheTiersPod(t *testing.T) {
 	}
 	s := string(raw)
 	replace := strings.Index(s, `replace_unowned_deployment "${SANDBOX_RELEASE}"`)
-	wait := strings.Index(s, `wait --for=delete pod -l "app.kubernetes.io/name=courier,app.kubernetes.io/instance!=${SANDBOX_RELEASE}"`)
+	wait := strings.Index(s, `wait --for=delete pod -l "app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance!=${SANDBOX_RELEASE}"`)
 	if replace <= 0 || wait <= replace {
 		t.Errorf("up.sh: replace the hand-made Deployment %d, wait for the tier's pod to go %d; want that order", replace, wait)
 	}
 }
 
-// TestEveryUpScriptRequiresHelm4: helm_install_courier needs --force-conflicts, which Helm 3 lacks, and it would fail only after the
+// TestEveryUpScriptRequiresHelm4: helm_install_agentkourier needs --force-conflicts, which Helm 3 lacks, and it would fail only after the
 // hand-made Deployment was deleted; so each script checks the version in its preflight, before it changes anything.
 func TestEveryUpScriptRequiresHelm4(t *testing.T) {
 	for _, tc := range []struct{ script, after, before string }{

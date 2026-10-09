@@ -29,7 +29,7 @@ func newWorld(t *testing.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &world{fake: fake, p: slack.NewPlatform(c, "courier-system/slack-main"), c: c, target: chat.Target{Conn: "courier-system/slack-main", Channel: "C1", Thread: root}}
+	return &world{fake: fake, p: slack.NewPlatform(c, "agent-kourier-system/slack-main"), c: c, target: chat.Target{Conn: "agent-kourier-system/slack-main", Channel: "C1", Thread: root}}
 }
 
 // last is the newest message in the thread, and its blocks.
@@ -107,7 +107,7 @@ func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	if first["action_id"] != "go" || first["value"] != "v1" || first["style"] != "primary" || second["style"] != nil {
 		t.Errorf("buttons = %v %v; want the IDs and values, and primary only on the first", first, second)
 	}
-	if m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-1" || ref.ID != m.TS || ref.Channel != "C1" || ref.Thread != w.target.Thread || ref.Platform != "slack" || ref.Conn != "courier-system/slack-main" {
+	if m.Metadata == nil || m.Metadata.EventPayload["outbox_id"] != "outbox-1" || ref.ID != m.TS || ref.Channel != "C1" || ref.Thread != w.target.Thread || ref.Platform != "slack" || ref.Conn != "agent-kourier-system/slack-main" {
 		t.Errorf("metadata %+v, ref %+v; want the outbox tag, and a Ref of this message", m.Metadata, ref)
 	}
 	found, ok, err := w.p.Find(t.Context(), w.target, "outbox-1", time.Now().Add(-time.Hour))
@@ -238,7 +238,7 @@ func TestAPromptSaysItNeedsInputAndWhenItCloses(t *testing.T) {
 	m, _ := w.last(t)
 
 	if m.Text != "The agent needs your input. Answer by 2026-10-02 15:04 UTC." {
-		t.Errorf("text = %q, want courier's own words and the deadline, and nothing the agent wrote", m.Text)
+		t.Errorf("text = %q, want Agent Kourier's own words and the deadline, and nothing the agent wrote", m.Text)
 	}
 	if textOf(blocks[0]) != "The agent needs your input" {
 		t.Errorf("header with no hint = %q, want the default", textOf(blocks[0]))
@@ -371,7 +371,7 @@ func mrkdwnObjects(v any) []map[string]any {
 }
 
 // TestEveryMrkdwnObjectIsVerbatim: with verbatim false, which is Slack's default, Slack links channel names
-// and parses some mentions in a mrkdwn object, whatever the escaping did. Every mrkdwn object courier sends
+// and parses some mentions in a mrkdwn object, whatever the escaping did. Every mrkdwn object Agent Kourier sends
 // says verbatim true, and none is sent without it. (UNCONFIRMED(WP-04): what Slack does with each value.)
 func TestEveryMrkdwnObjectIsVerbatim(t *testing.T) {
 	w := newWorld(t)

@@ -9,7 +9,7 @@ import (
 // TestMigration0008KeepsExistingRows opens a database migrated to 0007: the rows are kept, as not
 // abandoned, and the unposted one is still work.
 func TestMigration0008KeepsExistingRows(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "courier.db")
+	path := filepath.Join(t.TempDir(), "agent-kourier.db")
 	databaseAt(t, path, 7)
 	s := openAt(t, path) // applies 0008
 	ctx := context.Background()

@@ -86,12 +86,12 @@ func TestAnInterruptedRunLeavesNoTokenPod(t *testing.T) {
 		}
 		found := false
 		for _, line := range strings.Split(string(raw), "\n") {
-			if strings.HasPrefix(line, "trap ") && strings.HasSuffix(line, " EXIT") && strings.Contains(line, `delete_courier_pod "${DEX_TOKEN_POD:-}"`) {
+			if strings.HasPrefix(line, "trap ") && strings.HasSuffix(line, " EXIT") && strings.Contains(line, `delete_agentkourier_pod "${DEX_TOKEN_POD:-}"`) {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("%s has no EXIT trap that deletes the token pod (delete_courier_pod \"${DEX_TOKEN_POD:-}\")", file)
+			t.Errorf("%s has no EXIT trap that deletes the token pod (delete_agentkourier_pod \"${DEX_TOKEN_POD:-}\")", file)
 		}
 	}
 }

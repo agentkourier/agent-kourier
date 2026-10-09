@@ -1,0 +1,16 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s2, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: ax-memory}
+    namespace: agent-kourier-ax
+    name: memory
+  identity:
+    userId: agent-kourier-ax
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS2
+    output: live
+  interactions: {askUser: true, toolApprovals: false}

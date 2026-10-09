@@ -58,7 +58,7 @@ func TestBotPostEventShapeOnTheWire(t *testing.T) {
 		t.Fatalf("read hello: %v", err)
 	}
 	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second)) // a missing event fails fast
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-1"}}
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{"outbox_id": "ob-1"}}
 	api := botClient(fake)
 	ts := post(t, api, text("hi"), slack.MsgOptionMetadata(meta))
 	_, raw, err := ws.ReadMessage()
@@ -105,7 +105,7 @@ func TestChatUpdateDeliversMessageChanged(t *testing.T) {
 	api := botClient(fake)
 	ts := post(t, api, text("before"))
 	nextInner(t, smc) // the post
-	meta := slack.SlackMetadata{EventType: "courier_message", EventPayload: map[string]any{"outbox_id": "ob-2"}}
+	meta := slack.SlackMetadata{EventType: "agentkourier_message", EventPayload: map[string]any{"outbox_id": "ob-2"}}
 	if _, _, _, err := api.UpdateMessage("C1", ts, text("after"), slack.MsgOptionMetadata(meta)); err != nil {
 		t.Fatalf("UpdateMessage: %v", err)
 	}

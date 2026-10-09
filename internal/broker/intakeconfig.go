@@ -48,7 +48,7 @@ func newIntakeConfig(p intakeParts) (chat.IntakeConfig, error) {
 	case p.interactions == nil:
 		return chat.IntakeConfig{}, errors.New("broker: interactions is required for the intake: it takes the presses of buttons")
 	case p.notice == nil:
-		return chat.IntakeConfig{}, errors.New("broker: notice is required for the intake: it tells a thread that courier cannot continue it")
+		return chat.IntakeConfig{}, errors.New("broker: notice is required for the intake: it tells a thread that Agent Kourier cannot continue it")
 	case p.starter == nil:
 		return chat.IntakeConfig{}, errors.New("broker: starter is required for the intake: it starts the turn of a trigger")
 	case p.threads == nil:

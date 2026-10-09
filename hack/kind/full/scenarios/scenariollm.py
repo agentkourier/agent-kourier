@@ -9,7 +9,7 @@ scenario agent in scenarios.yaml; everything else comes from the conversation ka
           stub agent's scenario-gated (S1, S4): the held task keeps the kagent task WORKING and the reply
           streaming, so what a thread shows while it is held does not depend on timing.
   memory  "Message N. Earlier: "a", "b"." where N counts the user messages of the conversation and the
-          earlier ones are quoted (S2): the context kagent keeps across courier's restart is what it shows.
+          earlier ones are quoted (S2): the context kagent keeps across Agent Kourier's restart is what it shows.
   ask     asks two questions with ask_user, a multiple choice and a free-text one, and after the answer says
           "Answers: ..." with what it was given, an empty one as (none) (S3).
   approve calls the MCP tool add_numbers(3, 5), which needs approval; "I have added 3 and 5. The result is 8."
@@ -49,12 +49,12 @@ def text_of(content):
     return content or ""
 
 
-PERSON = "[Slack: "  # courier's attribution, which kagent keeps at the start of what a person wrote
+PERSON = "[Slack: "  # Agent Kourier's attribution, which kagent keeps at the start of what a person wrote
 
 
 def users(messages):
     """What people wrote, oldest first. kagent replays the agent's own earlier replies to its model as user
-    messages too (measured), and the only way to tell them from a person's is courier's attribution prefix."""
+    messages too (measured), and the only way to tell them from a person's is Agent Kourier's attribution prefix."""
     return [t for t in (text_of(m.get("content")) for m in messages if m.get("role") == "user") if t.startswith(PERSON)]
 
 

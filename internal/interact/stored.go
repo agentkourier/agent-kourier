@@ -12,7 +12,7 @@ import (
 // sub-agent's likewise, and a tool's arguments through render.RedactArgs, the redaction of the status line that
 // shows them, so that what is stored is never more than what is shown of it. in is not changed: the pause is posted, and answered, from the original.
 //
-// What courier sends back to the agent is not redacted, so what the answer is built from is kept exactly: the
+// What Agent Kourier sends back to the agent is not redacted, so what the answer is built from is kept exactly: the
 // request and tool IDs, and the choices of a question (an answer picks one by its index, and the agent
 // receives the stored choice). A secret that is itself a choice is therefore stored, until the interaction is
 // cleared (store.Interactions.ClearSettledInteractions). Nothing the dialect builds an answer from is among what

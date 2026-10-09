@@ -36,7 +36,7 @@ type IntakeConfig struct {
 	Submitter Submitter
 	// Interactions takes the presses of buttons. Nil drops them, acknowledged.
 	Interactions func(ctx context.Context, i Interaction) error
-	// Notice, if set, tells a thread that courier cannot continue it: session.NoticeExpired for a
+	// Notice, if set, tells a thread that Agent Kourier cannot continue it: session.NoticeExpired for a
 	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config. It also
 	// takes the notes of a trigger's thread: session.NoticeTriggerRepeat and session.NoticeTriggerClosed.
 	// The notice ID is the message's ID and a suffix, so a notice for the same message is the same
@@ -111,10 +111,10 @@ func NewIntake(cfg IntakeConfig) *Intake {
 
 // Message submits m as a turn, unless the table says to ignore it:
 //   - A mention in a channel bound to a Binding may start a session: a new thread, or one
-//     anchored to the thread it is in (the session manager decides whether courier owns it).
-//   - Any other message in a thread continues the thread's session if courier owns it, unless the
+//     anchored to the thread it is in (the session manager decides whether Agent Kourier owns it).
+//   - Any other message in a thread continues the thread's session if Agent Kourier owns it, unless the
 //     Binding takes only mentioned replies (chat.threadReplies: mention): the session manager says
-//     Unmentioned then, and it is ignored. It says NotOwned if courier does not own the thread, and
+//     Unmentioned then, and it is ignored. It says NotOwned if Agent Kourier does not own the thread, and
 //     that too is ignored.
 //   - A message outside a thread that does not start one is ignored without asking.
 //   - A bot's message (m.Bot set) is never a mention and is never submitted: it is tried against the
@@ -129,14 +129,14 @@ func NewIntake(cfg IntakeConfig) *Intake {
 // event that queued nothing, or whose notice failed to write, may be tried again. An unmentioned reply queued
 // nothing, so a later app_mention of the same message is still taken.
 func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.intake", attribute.String("courier.source", "message"), attribute.String("courier.platform", m.At.Platform))
+	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "message"), attribute.String("agentkourier.platform", m.At.Platform))
 	disposition := "ignored"
 	defer func() {
 		if telemetryErr != nil {
 			disposition = "error"
 		}
-		telemetry.Count(ctx, "courier_intake_total", "message", disposition)
-		trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.intake.disposition", disposition))
+		telemetry.Count(ctx, "agentkourier_intake_total", "message", disposition)
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.intake.disposition", disposition))
 		op.Finish(telemetryErr)
 	}()
 	seen := [2]string{m.At.Channel, m.At.ID}
@@ -173,7 +173,7 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 		return nil
 	}
 	req.ChannelThreadReplies = in.channelThreadReplies(m.At.Channel)
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.binding", req.Binding))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", req.Binding))
 	res, err := in.cfg.Submitter.Submit(ctx, req)
 	if res.Disposition != "" {
 		disposition = string(res.Disposition)
@@ -193,10 +193,10 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 	case session.AdmitIgnored:
 		// Not remembered and not noticed: the message's app_mention may still come, and it counts.
 		if adm.Ignored == session.IgnoredBindingGone { // chatter in a thread nobody was asked into
-			in.log.DebugContext(ctx, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
+			in.log.DebugContext(ctx, "chat: reply in a thread Agent Kourier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
 		}
 	case session.AdmitNotice:
-		in.log.WarnContext(ctx, "chat: reply in a thread courier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
+		in.log.WarnContext(ctx, "chat: reply in a thread Agent Kourier cannot continue", "channel", m.At.Channel, "thread", req.Key.Thread, "disposition", res.Disposition)
 		if in.cfg.Notice != nil {
 			suffix := "/" + string(adm.Notice)
 			if err := in.cfg.Notice(ctx, req.Key, session.Notice{ID: req.MessageID + suffix, Kind: adm.Notice, MessageRef: m.At.ID}); err != nil {
@@ -215,9 +215,9 @@ func (in *Intake) Message(ctx context.Context, m Inbound) (telemetryErr error) {
 
 // Interaction passes a press to IntakeConfig.Interactions, and returns its error.
 func (in *Intake) Interaction(ctx context.Context, i Interaction) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.intake", attribute.String("courier.source", "interaction"))
+	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
 	defer func() {
-		telemetry.Count(ctx, "courier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr))
+		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr))
 		op.Finish(telemetryErr)
 	}()
 	if in.cfg.Interactions == nil {
@@ -230,13 +230,13 @@ func (in *Intake) Interaction(ctx context.Context, i Interaction) (telemetryErr 
 // botMessage tries a bot's message against the botMessage triggers of the Binding that owns its channel, and
 // returns the disposition for the intake metric. Nothing here starts a session: a start goes to OnStart (CT-4).
 //   - A channel with no Binding, or a bot's reply inside a thread, is ignored and not counted: a trigger is about
-//     a message that opens its own, and a bot must not continue, or hijack, a thread of people or of courier's
-//     own. The adapter has already refused courier's own messages, and every bot no trigger names.
-//   - A message that no trigger matches is counted as courier_trigger_unmatched_total of the Binding, so that a
+//     a message that opens its own, and a bot must not continue, or hijack, a thread of people or of Agent Kourier's
+//     own. The adapter has already refused Agent Kourier's own messages, and every bot no trigger names.
+//   - A message that no trigger matches is counted as agentkourier_trigger_unmatched_total of the Binding, so that a
 //     changed template shows up as a rising count, and logged at DEBUG with where it was and which bot, and never
 //     what it said.
 //   - A match is counted and logged, and decided: what it does to the thread of its key (decide). The decision is
-//     counted as courier_trigger_decisions_total once it is made, whether or not what follows it succeeds; an
+//     counted as agentkourier_trigger_decisions_total once it is made, whether or not what follows it succeeds; an
 //     error returns, and the redelivery is decided again (a dedup, for a start that was already recorded).
 func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string, err error) {
 	snap := in.cfg.Snapshot()
@@ -248,10 +248,10 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 		return "ignored", nil
 	}
 	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.binding", name))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", name))
 	trigger, fields, ok := in.tables.table(snap, rb.Binding, in.log).match(m)
 	if !ok {
-		telemetry.Count(ctx, "courier_trigger_unmatched_total", name)
+		telemetry.Count(ctx, "agentkourier_trigger_unmatched_total", name)
 		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 		return "trigger_unmatched", nil
 	}
@@ -259,13 +259,13 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 	out, err := in.decide(ctx, match)
 	if out.decision != "" {
-		telemetry.Count(ctx, "courier_trigger_decisions_total", name, string(out.decision))
+		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
 		in.log.InfoContext(ctx, "chat: trigger decided", "binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread)
 	}
 	if err != nil {
 		return "", fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
 	}
-	telemetry.Count(ctx, "courier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
+	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
 	return "trigger_matched", nil
 }
 
@@ -290,7 +290,7 @@ func (in *Intake) countDecision(ctx context.Context, channel string, d TriggerDe
 		return
 	}
 	if rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, channel); ok {
-		telemetry.Count(ctx, "courier_trigger_decisions_total", v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name), string(d))
+		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name), string(d))
 	}
 }
 
@@ -313,7 +313,7 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 // binding returns the namespace/name of the Binding that owns channel on this connection and takes @mentions: a
 // Binding whose triggers are listed and leave out the mention one does not (spec 8.2), and says so, once. An empty
 // list is the mention trigger. It decides only whether a mention may create a session: a reply in a thread
-// courier owns continues it whatever the triggers say (what it must mention is chat.threadReplies).
+// Agent Kourier owns continues it whatever the triggers say (what it must mention is chat.threadReplies).
 func (in *Intake) binding(ctx context.Context, channel string) (name string, ok bool) {
 	snap := in.cfg.Snapshot()
 	if snap == nil {
@@ -327,9 +327,9 @@ func (in *Intake) binding(ctx context.Context, channel string) (name string, ok 
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) > 0 && !slices.ContainsFunc(triggers, func(t v1alpha1.Trigger) bool { return t.Type == v1alpha1.TriggerMention }) {
 		if _, told := in.mentionless.LoadOrStore(name, struct{}{}); !told {
-			replies := "replies in a thread courier owns still continue it"
+			replies := "replies in a thread Agent Kourier owns still continue it"
 			if rb.Binding.Spec.Chat.ThreadReplies == v1alpha1.ThreadRepliesMention {
-				replies = "in a thread courier owns only a reply that mentions courier continues it"
+				replies = "in a thread Agent Kourier owns only a reply that mentions courier continues it"
 			}
 			in.log.InfoContext(ctx, "chat: the triggers of a Binding have no mention trigger, so an @mention in its channel starts no session; "+replies, "binding", name)
 		}

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Bring up the full E2E tier from nothing: kind, Agent Substrate (gVisor), kagent 1.0 alpha in
-# OIDC mode behind Dex, mockllm as the model, two test agents, courier's verifying front door,
+# OIDC mode behind Dex, mockllm as the model, two test agents, Agent Kourier's verifying front door,
 # the NetworkPolicies that make that door the only way in, the fast tier's test doubles (fake
 # Slack, sink, and Alertmanager under prometheus-operator; spec 12.1) so `make e2e-full` can run
-# the same E2E tests, and courier itself, which reaches kagent through that door. Their manifests and install steps are shared with up-fast.sh through lib.sh.
+# the same E2E tests, and Agent Kourier itself, which reaches kagent through that door. Their manifests and install steps are shared with up-fast.sh through lib.sh.
 # Safe to re-run. Findings and workarounds: docs/spikes/wp01-kind-full.md.
 # One full tier per Docker host: the cluster name is fixed, so parallel worktrees share it.
 set -eEuo pipefail
@@ -15,7 +15,7 @@ KAGENT_VERSION=1.0.0-alpha5
 MOCKLLM_REF=v0.1.0 # tag name, for humans; the commit below is what is built
 MOCKLLM_COMMIT=35792a004f9387562a8760b2a513be8edeea6cf7
 GO_IMAGE=golang:1.25.14@sha256:699337d620559a59b4a2bb298ad59611e535d2ee755a34cf2d2a98f37578dc80
-MOCKLLM_IMAGE=courier-e2e/mockllm:${MOCKLLM_REF}
+MOCKLLM_IMAGE=agent-kourier-e2e/mockllm:${MOCKLLM_REF}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "${HERE}/../.." && pwd)
@@ -37,7 +37,7 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 BUILD=
-trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; delete_courier_pod "${DEX_TOKEN_POD:-}"' EXIT
+trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; delete_agentkourier_pod "${DEX_TOKEN_POD:-}"' EXIT
 
 for tool in docker kind kubectl helm curl openssl jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
@@ -73,7 +73,7 @@ step "Agent Substrate ${SUBSTRATE_VERSION}"
 install_substrate
 
 step "namespaces, mockllm ${MOCKLLM_REF}, Dex"
-for ns in kagent courier; do
+for ns in kagent agent-kourier; do
   "${K[@]}" create namespace "${ns}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 done
 # kagent-dev/mockllm publishes no image, so build the pinned commit and side-load it. The
@@ -99,9 +99,9 @@ kind load docker-image "${MOCKLLM_IMAGE}" --name "${CLUSTER}"
 "${K[@]}" -n kagent get secret kagent-oidc >/dev/null 2>&1 ||
   "${K[@]}" -n kagent create secret generic kagent-oidc --from-literal=client-id=kagent-ui \
     --from-literal=client-secret=fake-oauth2-proxy-secret --from-literal=cookie-secret="$(openssl rand -hex 16)"
-# The front door's credentials: the courier-binding client from dex.yaml, its own cookie key.
+# The front door's credentials: the agent-kourier-binding client from dex.yaml, its own cookie key.
 "${K[@]}" -n kagent get secret kagent-frontdoor >/dev/null 2>&1 ||
-  "${K[@]}" -n kagent create secret generic kagent-frontdoor --from-literal=client-secret=fake-courier-binding-secret \
+  "${K[@]}" -n kagent create secret generic kagent-frontdoor --from-literal=client-secret=fake-agent-kourier-binding-secret \
     --from-literal=cookie-secret="$(openssl rand -hex 16)"
 
 step "kagent ${KAGENT_VERSION}"
@@ -114,8 +114,8 @@ step "kagent ${KAGENT_VERSION}"
 
 step "test agents, front door, NetworkPolicy"
 "${K[@]}" apply -f "${FULL}/agent.yaml" -f "${FULL}/slow-agent.yaml" -f "${FULL}/frontdoor.yaml" -f "${FULL}/networkpolicy.yaml" >/dev/null
-# WP-01's policy had another name and apply does not prune; left in place it would still admit courier.
-"${K[@]}" -n kagent delete networkpolicy controller-admit-courier-only --ignore-not-found >/dev/null
+# WP-01's policy had another name and apply does not prune; left in place it would still admit Agent Kourier.
+"${K[@]}" -n kagent delete networkpolicy controller-admit-agent-kourier-only --ignore-not-found >/dev/null
 # Restart, as for mockllm, so a changed slowllm ConfigMap or front-door alpha config is picked up
 # (a mounted file is read at start).
 "${K[@]}" -n kagent rollout restart deploy/slowllm deploy/kagent-frontdoor >/dev/null
@@ -123,7 +123,7 @@ step "test agents, front door, NetworkPolicy"
 "${K[@]}" -n kagent wait --for=condition=Ready agent/test-agent agent/slow-agent --timeout=300s
 
 step "test doubles: prometheus-operator ${OPERATOR_CHART_VERSION}, fake Slack, sink, Alertmanager"
-# In namespaces e2e and monitoring, outside every policy above, and never labelled as courier.
+# In namespaces e2e and monitoring, outside every policy above, and never labelled as agent-kourier.
 install_operator
 build_doubles_image
 apply_doubles
@@ -131,15 +131,15 @@ apply_doubles
 step "scenario agents: the scenario model, its tool server, one kagent agent per scenario"
 deploy_scenario_agents
 
-step "courier: image, the Binding's Dex token, config, chart"
-# Courier is the chart (charts/courier, ci/fast-values.yaml, as the fast tier has it), running the testhooks image against the fake
+step "agent-kourier: image, the Binding's Dex token, config, chart"
+# Agent Kourier is the chart (charts/agent-kourier, ci/fast-values.yaml, as the fast tier has it), running the testhooks image against the fake
 # Slack in e2e, with the fast tier's Bindings and an AgentBackend for kagent's front door. Its pod carries the
-# label that frontdoor-admit-courier-only trusts, which no other pod has. The Binding's token is an ID token from
+# label that frontdoor-admit-agent-kourier-only trusts, which no other pod has. The Binding's token is an ID token from
 # Dex, which expires after 24 hours (refresh_dex_token; e2e-run.sh refreshes it before each run). A tier brought up before the
-# chart has a hand-made Deployment, which deploy_courier replaces, keeping the volume.
-load_courier_image
+# chart has a hand-made Deployment, which deploy_agentkourier replaces, keeping the volume.
+load_agentkourier_image
 refresh_dex_token
-deploy_courier "${FULL}/courier/agentbackend.yaml"
+deploy_agentkourier "${FULL}/agent-kourier/agentbackend.yaml"
 
 step "settle: the kagent controller is ready and the front door answers by its Service name"
 settle_full_tier

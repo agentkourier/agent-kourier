@@ -13,7 +13,7 @@ import (
 // The first prompt of a chat trigger (spec 8.2, R2; design: tasks/plans/chat-triggers.md). It has
 // two parts. The instruction part is the output of the trigger's promptTemplate, which is written
 // by the operator but reads values taken out of an attacker's message; each value it reads must
-// pass a strict character check (promptcheck.go) or the render is refused. After it courier
+// pass a strict character check (promptcheck.go) or the render is refused. After it Agent Kourier
 // always appends the whole matched message, in an untrusted-data block it writes itself, so a
 // template can neither move the message nor leave it out. Neither part may be longer than a cap.
 //
@@ -30,7 +30,7 @@ import (
 // the tag, and the escaping. This file says only what the block holds: the message's fields, each read as follows. A
 // field is normalized and redacted (redact.FreeTextCut: the invisible characters deleted, the line breaks made "\n", the
 // secrets taken out, in the first 12000 bytes, cut at a character), the one-line title and link put on one line
-// (chat.Clean), and the footer, which is a line of identifiers such as "courier-key: ns/alertname", read as identifier
+// (chat.Clean), and the footer, which is a line of identifiers such as "agent-kourier-key: ns/alertname", read as identifier
 // text (redact.IdentifierText: the tokens taken out, a "name: value" pair kept). The cost of the escaping is that Slack's
 // own markup, "<url|text>" and "&amp;", is escaped a second time.
 
@@ -173,8 +173,8 @@ const untrustedDataPrefix = "untrusted-data-"
 
 // alertItem is one field of the message as the block shows it: an item of its own, in an element named by the field,
 // and read through a window (kindWindow), and, for a field that is one line (line), put on one. The footer is
-// identifier text instead (kindIdentifier): the free-text rules would read its "courier-key: X" as a pair named by the
-// secret word "key" and take the key out, and the key is what the footer is there for. A field's name is one of courier's
+// identifier text instead (kindIdentifier): the free-text rules would read its "agent-kourier-key: X" as a pair named by the
+// secret word "key" and take the key out, and the key is what the footer is there for. A field's name is one of Agent Kourier's
 // constants, never the message's. The agent is sent the cleaned field and nothing else of it, so a secret that an alert or
 // a person wrote into one does not reach the model's provider.
 func alertItem(name v1alpha1.MessageField, value string, kind fieldKind, line bool) untrustedItem {

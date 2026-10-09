@@ -53,7 +53,7 @@ func TestScenarioMemoryAgentProvesTheContext(t *testing.T) {
 	got1, ctxID := say("m1", "first", "")
 	got2, _ := say("m2", "second", ctxID)
 	got3, _ := say("m3", "third", ctxID)
-	// A turn sent without the contextId, as courier would after losing the thread's mapping, is
+	// A turn sent without the contextId, as Agent Kourier would after losing the thread's mapping, is
 	// a new conversation, and says so.
 	got4, _ := say("m4", "fourth", "")
 
@@ -77,7 +77,7 @@ func TestReplyWithHistoryShowsAReplayThatRanTwice(t *testing.T) {
 		return []stubagent.Step{stubagent.Text("ok")}
 	})
 	_, ctxID, _ := ids(last(c.send(msg("m1", "one", ""))))
-	c.send(msg("m1", "one", ctxID)) // courier's blind resend into the context, after the task ended
+	c.send(msg("m1", "one", ctxID)) // Agent Kourier's blind resend into the context, after the task ended
 	c.send(msg("m2", "two", ctxID))
 
 	if want := []string{"one", "one"}; !reflect.DeepEqual(priors[2], want) {
@@ -254,7 +254,7 @@ func TestScenarioToolsAgentMakesTwoCallsAndTheSecondFails(t *testing.T) {
 }
 
 // scenario-alert answers a trigger's first prompt with what it saw: the first line, which is the template's output, and
-// the tag of the untrusted block that courier appends, or that there was none. A turn that is not a prompt of that shape
+// the tag of the untrusted block that Agent Kourier appends, or that there was none. A turn that is not a prompt of that shape
 // is told so.
 func TestScenarioAlertAgentSaysWhatThePromptHeld(t *testing.T) {
 	c := scenario(t, "scenario-alert")
@@ -276,7 +276,7 @@ func firstPartOf(artifact any) any {
 	return parts[0]
 }
 
-// threadSection is what courier appends to a mentioned turn for the given replies, built by the code that builds it, so that the
+// threadSection is what Agent Kourier appends to a mentioned turn for the given replies, built by the code that builds it, so that the
 // stub's reading of the block is pinned to the real layout. The tag is a hash of the block, so it is read back from the section.
 func threadSection(t *testing.T, replies ...string) (section, tag string) {
 	t.Helper()
@@ -293,7 +293,7 @@ func threadSection(t *testing.T, replies ...string) (section, tag string) {
 }
 
 // scenario-context says which turn it is, how many replies of the thread the turn carried and the tag of their block, so that an
-// end-to-end test sees what courier put after the person's text. What the person wrote is not read as the block: a reply-looking
+// end-to-end test sees what Agent Kourier put after the person's text. What the person wrote is not read as the block: a reply-looking
 // tag in their text is not counted, a line in it that looks like the block's opening is taken over by the real block that follows,
 // and a gate named in the replies is not a gate.
 func TestScenarioContextAgentSaysWhatTheTurnCarried(t *testing.T) {

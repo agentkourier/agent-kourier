@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TriggerThread is the thread courier opened for one key of a botMessage trigger (spec 8.2): the row that
+// TriggerThread is the thread Agent Kourier opened for one key of a botMessage trigger (spec 8.2): the row that
 // makes a repeat of the key a note in that thread, and a re-fire after a close, inside the cooldown, the same
 // thread again.
 type TriggerThread struct {
@@ -15,7 +15,7 @@ type TriggerThread struct {
 	// (together with whatever else scopes a key, such as the channel) and the store never holds the key
 	// itself. The store reads the hash as an opaque string.
 	KeyHash string
-	// Thread is the thread courier opened: the ts of the message that started it.
+	// Thread is the thread Agent Kourier opened: the ts of the message that started it.
 	Thread string
 	// Opened is when the thread was reserved, and LastSeen is the latest message of the key that reached it.
 	Opened, LastSeen time.Time

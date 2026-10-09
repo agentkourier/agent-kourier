@@ -9,18 +9,18 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
-// fenceMark is the line courier writes to open and to close a block of code, alone at column 0, and nothing else
+// fenceMark is the line Agent Kourier writes to open and to close a block of code, alone at column 0, and nothing else
 // ever does (the contract in escape.go). The row numbers in this file are those of the table in
 // tasks/plans/slack-code-rendering.md: a probe of the sandbox workspace, 2026-10-04.
 const fenceMark = "```"
 
-// mdText turns the markdown of the agent into the markdown courier sends, one document that may come in pieces: the
+// mdText turns the markdown of the agent into the markdown Agent Kourier sends, one document that may come in pieces: the
 // text of a message is one piece, and a stream's is as many as it has Appends, which Slack reads as one (row 12). So the
 // state of the reading is kept here, across the pieces, and the zero value is a document that has not begun.
 //
-// It reads the text as courier means to show it, and writes every fence and every code span itself, in one form:
+// It reads the text as Agent Kourier means to show it, and writes every fence and every code span itself, in one form:
 //
-//   - a line that starts, after white space, with three or more backticks or tildes is a fence line. Courier writes
+//   - a line that starts, after white space, with three or more backticks or tildes is a fence line. Agent Kourier writes
 //     "```" alone at column 0 in its place, and the block's lines are dedented by the white space of the opener
 //     (row 22: a fence in a list item is not code to Slack, but one at column 0 is);
 //   - in a block the text is raw (rows 01, 02, 19), but for "<" before "!", "@" or "#", which is written "&lt;" so
@@ -30,17 +30,17 @@ const fenceMark = "```"
 //   - everything else is prose: escapeRune, and every backtick as "\`" (rows 34, 53, 55) and every tilde of a run of
 //     three or more as "\~" (rows 35, 42, 43), so that Slack never opens code by itself.
 //
-// Slack then sees code only where courier wrote it, whatever the agent wrote.
+// Slack then sees code only where Agent Kourier wrote it, whatever the agent wrote.
 //
 // A line's start is held back until it is known not to be a fence line, a prose line is held back from its first
 // backtick to its end, and "<" at the end of code until the next character is known: the text reaches Slack a line
 // late at most, and the end of the document (final) writes what is held.
 //
-// A stream that courier did not start in this process, or one that lost a call without an answer, is blind: Slack may be
-// inside a block that courier does not know of, so everything is escaped, prose and code alike (escapeRune), and no code
+// A stream that Agent Kourier did not start in this process, or one that lost a call without an answer, is blind: Slack may be
+// inside a block that Agent Kourier does not know of, so everything is escaped, prose and code alike (escapeRune), and no code
 // is written or read. That is safe whatever state Slack is in, and costs only the look of code in what is sent.
 type mdText struct {
-	code   bool   // inside a block that courier opened
+	code   bool   // inside a block that Agent Kourier opened
 	inLine bool   // past the start of the line that held begins in
 	indent int    // the white space of the opener, which the lines of the block lose
 	held   string // text not yet written: the cleaned input from the first thing that is not decided
@@ -165,7 +165,7 @@ func runLen(s string, c byte) int {
 }
 
 // fence reads a whole fence line. In a block it closes it, whatever else is on the line (row 40, 41, 44: Slack would
-// close on fewer lines, which is safe, since the line courier writes is the one Slack closes on). Out of one it opens
+// close on fewer lines, which is safe, since the line Agent Kourier writes is the one Slack closes on). Out of one it opens
 // one: the rest of the line is dropped if it is an info string (row 10), and otherwise it is the text of the block, with
 // a closing run of the opener's in it or without.
 //

@@ -1,7 +1,7 @@
 # Architecture
 
-Courier connects declarative messaging bindings to agents deployed with a chosen
-runtime. The runtime hosts and executes the agents. Courier owns the messaging
+Agent Kourier connects declarative messaging bindings to agents deployed with a chosen
+runtime. The runtime hosts and executes the agents. Agent Kourier owns the messaging
 connection, conversation lifecycle, and delivery state.
 
 The [README](../README.md#how-it-works) shows the basic idea. This diagram expands
@@ -17,7 +17,7 @@ flowchart TB
         Files["Mounted configuration YAML<br/>ConfigMap"]
         Secrets["Kubernetes Secrets<br/>Slack credentials + Binding identity"]
 
-        subgraph Broker["Courier broker · one active ChatConnection per process"]
+        subgraph Broker["Agent Kourier broker · one active ChatConnection per process"]
             Config["Configuration loader + reloader<br/>Validate references and namespace access"]
             Identity["Secret resolver + Binding identity"]
             Chat["Slack adapter<br/>Socket Mode intake + outbound API calls"]
@@ -99,8 +99,8 @@ traces are exported only when configured.
 
 ## Configuration and deployment
 
-The current pilot reads resource-shaped YAML files from `COURIER_CONFIG_DIR`.
-GitOps deploys those files as a ConfigMap alongside Secrets, the Courier
+The current pilot reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`.
+GitOps deploys those files as a ConfigMap alongside Secrets, the Agent Kourier
 Deployment, and persistent storage. The reloader validates changes and keeps the
 last accepted configuration if a reload fails. Secret access uses Kubernetes
 RBAC; cross-namespace resource references use configured namespace allowlists.
@@ -109,7 +109,7 @@ The broker selects one active `ChatConnection` per process. Multiple bindings
 can route its channels to different agents and backends. The current deployment
 uses SQLite; this diagram does not imply an active-active, shared-database broker.
 
-Live Courier CRDs and a reconciliation controller are planned. Courier does not
+Live Agent Kourier CRDs and a reconciliation controller are planned. Agent Kourier does not
 deploy an agent when it loads an `AgentBackend` or `Binding`: the runtime's own
 manifests, operator, or deployment tooling handle that lifecycle.
 

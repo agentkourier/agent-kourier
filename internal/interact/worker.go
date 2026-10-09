@@ -31,7 +31,7 @@ type WorkerConfig struct {
 	// doubles with each try up to MaxBackoff (default 30 seconds). It is seconds and not an instant because
 	// a retry that comes too soon finds what it found: a task the session has not parked again yet.
 	Backoff, MaxBackoff time.Duration
-	// GiveUpAfter is how old a press may be, by courier's clock from the time it was recorded, before one
+	// GiveUpAfter is how old a press may be, by Agent Kourier's clock from the time it was recorded, before one
 	// that still cannot be processed is given up on (default 1 hour), so that a press that nothing ends
 	// does not hold its interaction open for the timeout sweep. A press always gets one try first.
 	GiveUpAfter time.Duration
@@ -196,7 +196,7 @@ func (w *Worker) work(ctx context.Context, l *lane) {
 	j := l.jobs[0]
 	w.mu.Unlock()
 	ctx = telemetry.Restore(ctx, j.press.TraceParent, j.press.TraceState)
-	ctx, op := telemetry.Start(ctx, "courier.interaction.process")
+	ctx, op := telemetry.Start(ctx, "agentkourier.interaction.process")
 	defer func() { op.Finish(nil) }()
 	res, err := w.cfg.Processor.Process(ctx, j.press)
 	op.Finish(err)

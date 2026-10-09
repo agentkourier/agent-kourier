@@ -26,7 +26,7 @@ func TestEventHandlingContinuesTheTraceOfTheEventAcrossARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	appendCtx, intake := telemetry.Start(h.Ctx, "courier.intake")
+	appendCtx, intake := telemetry.Start(h.Ctx, "agentkourier.intake")
 	if _, err = st.AppendEvent(appendCtx, store.Event{ID: "ev", Kind: "alert", BindingKey: "ns/b", Payload: []byte("private-payload-canary"), ReceivedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +51,8 @@ func TestEventHandlingContinuesTheTraceOfTheEventAcrossARestart(t *testing.T) {
 	if handled, err := w.RunOnce(h.Ctx); err != nil || !handled {
 		t.Fatalf("RunOnce = %v, %v; want the event handled", handled, err)
 	}
-	intakeSpan := h.Span(t, "courier.intake")
-	process, handle := h.Span(t, "courier.queue.process"), h.Span(t, "courier.queue.handle")
+	intakeSpan := h.Span(t, "agentkourier.intake")
+	process, handle := h.Span(t, "agentkourier.queue.process"), h.Span(t, "agentkourier.queue.handle")
 	if process.SpanContext.TraceID() != intakeSpan.SpanContext.TraceID() || process.Parent.SpanID() != intakeSpan.SpanContext.SpanID() {
 		t.Fatalf("processing: trace %s parent %s; want trace %s, parent %s: the span that appended the event",
 			process.SpanContext.TraceID(), process.Parent.SpanID(), intakeSpan.SpanContext.TraceID(), intakeSpan.SpanContext.SpanID())

@@ -1,7 +1,7 @@
 """A three-tool MCP server for the full tier's scenario agents. Streamable HTTP, stateless, JSON answers. Test only.
 
   add_numbers(a, b)        S11's agent lists it with requireApproval, so kagent pauses the task for approval before
-                           the tool runs, and courier, on a Binding that does not allow approvals, denies it.
+                           the tool runs, and Agent Kourier, on a Binding that does not allow approvals, denies it.
   check_status(service)    S13's agent calls it: it works ("<service> is up").
   restart_service(service) S13's agent calls it: it fails, as an MCP tool reports a failure, with isError true and the
                            reason as its text ("restart refused: <service> is locked").

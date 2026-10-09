@@ -9,7 +9,7 @@ import (
 
 // EnqueueReply implements ReplyQueue.
 func (g *Guarded) EnqueueReply(ctx context.Context, r Reply) (enqueued bool, err error) {
-	err = g.run(ctx, "courier.store.EnqueueReply", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.EnqueueReply", func(ctx context.Context) error {
 		stamp(ctx, &r.TraceParent, &r.TraceState)
 		if r.ID == "" || !validKey(r.Key) || r.UserID == "" || r.MessageRef == "" || r.EnqueuedAt.IsZero() {
 			return fmt.Errorf("enqueue reply %q: ID, key, UserID, MessageRef and EnqueuedAt are required: %w", r.ID, ErrInvalid)
@@ -23,7 +23,7 @@ func (g *Guarded) EnqueueReply(ctx context.Context, r Reply) (enqueued bool, err
 
 // HasReply implements ReplyQueue.
 func (g *Guarded) HasReply(ctx context.Context, id string) (found bool, err error) {
-	err = g.run(ctx, "courier.store.HasReply", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.HasReply", func(ctx context.Context) error {
 		if id == "" {
 			return fmt.Errorf("has reply: an ID is required: %w", ErrInvalid)
 		}
@@ -36,7 +36,7 @@ func (g *Guarded) HasReply(ctx context.Context, id string) (found bool, err erro
 
 // HasReplies implements ReplyQueue.
 func (g *Guarded) HasReplies(ctx context.Context, ids []string) (found map[string]bool, err error) {
-	err = g.run(ctx, "courier.store.HasReplies", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.HasReplies", func(ctx context.Context) error {
 		if len(ids) > MaxReplyIDs || slices.Contains(ids, "") {
 			return fmt.Errorf("has replies: %d IDs, none empty and at most %d, are required: %w", len(ids), MaxReplyIDs, ErrInvalid)
 		}
@@ -49,7 +49,7 @@ func (g *Guarded) HasReplies(ctx context.Context, ids []string) (found map[strin
 
 // NextReply implements ReplyQueue.
 func (g *Guarded) NextReply(ctx context.Context, key ConversationKey) (r Reply, err error) {
-	err = g.run(ctx, "courier.store.NextReply", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.NextReply", func(ctx context.Context) error {
 		if !validKey(key) {
 			return fmt.Errorf("next reply %+v: key is required: %w", key, ErrInvalid)
 		}
@@ -62,7 +62,7 @@ func (g *Guarded) NextReply(ctx context.Context, key ConversationKey) (r Reply, 
 
 // NextReplyAfter implements ReplyQueue.
 func (g *Guarded) NextReplyAfter(ctx context.Context, key ConversationKey, after int64) (r Reply, err error) {
-	err = g.run(ctx, "courier.store.NextReplyAfter", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.NextReplyAfter", func(ctx context.Context) error {
 		if !validKey(key) || after < 0 {
 			return fmt.Errorf("next reply %+v: key is required: %w", key, ErrInvalid)
 		}
@@ -75,7 +75,7 @@ func (g *Guarded) NextReplyAfter(ctx context.Context, key ConversationKey, after
 
 // PreviousReply implements ReplyQueue.
 func (g *Guarded) PreviousReply(ctx context.Context, key ConversationKey, sequence int64) (r Reply, err error) {
-	err = g.run(ctx, "courier.store.PreviousReply", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.PreviousReply", func(ctx context.Context) error {
 		if !validKey(key) || sequence < 1 {
 			return fmt.Errorf("previous reply %+v below %d: a key and a sequence from 1 are required: %w", key, sequence, ErrInvalid)
 		}
@@ -88,7 +88,7 @@ func (g *Guarded) PreviousReply(ctx context.Context, key ConversationKey, sequen
 
 // MarkReplyDelivered implements ReplyQueue.
 func (g *Guarded) MarkReplyDelivered(ctx context.Context, id string, at time.Time) error {
-	return g.run(ctx, "courier.store.MarkReplyDelivered", func(ctx context.Context) error {
+	return g.run(ctx, "agentkourier.store.MarkReplyDelivered", func(ctx context.Context) error {
 		if id == "" || at.IsZero() {
 			return fmt.Errorf("mark reply %q delivered: ID and time are required: %w", id, ErrInvalid)
 		}
@@ -98,7 +98,7 @@ func (g *Guarded) MarkReplyDelivered(ctx context.Context, id string, at time.Tim
 
 // AbandonStrandedReplies implements ReplyQueue.
 func (g *Guarded) AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (abandoned int, err error) {
-	err = g.run(ctx, "courier.store.AbandonStrandedReplies", func(ctx context.Context) error {
+	err = g.run(ctx, "agentkourier.store.AbandonStrandedReplies", func(ctx context.Context) error {
 		if now.IsZero() || age <= 0 {
 			return fmt.Errorf("abandon stranded replies: a time and a positive age are required: %w", ErrInvalid)
 		}

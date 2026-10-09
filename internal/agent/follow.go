@@ -32,7 +32,7 @@ import (
 //
 // h may be nil. A task ID is required.
 func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.agent.follow")
+	ctx, op := telemetry.Start(ctx, "agentkourier.agent.follow")
 	var finalState a2a.TaskState
 	defer func() { finishAgentTask(op, telemetryErr, finalState) }()
 	h = observeHandler(ctx, "follow", h, &finalState)

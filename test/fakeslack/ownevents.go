@@ -5,7 +5,7 @@ import "slices"
 // WithoutOwnPostEvents stops the fake sending Socket Mode events for the bot's
 // own posts and updates. By default every bot post is delivered as a message
 // event, and every update as a message_changed event, to a connected client, as
-// Slack does; courier has to recognise and ignore them. Set at construction,
+// Slack does; Agent Kourier has to recognise and ignore them. Set at construction,
 // read-only after.
 func WithoutOwnPostEvents() Option { return func(s *Server) { s.noOwnEvents = true } }
 
@@ -21,7 +21,7 @@ type ownKey struct{ channel, ts string }
 // OwnEventEnvelopes returns the envelope_id of each event the fake sent for the
 // bot's message ts in channel, in order: its message event, then one
 // message_changed for each update (or the stop of a stream). A test that wants
-// to know courier has seen its own post's event passes them to WaitAck. They
+// to know Agent Kourier has seen its own post's event passes them to WaitAck. They
 // are recorded before the call that caused them returns. The list is empty when
 // events are off or no client was connected.
 func (s *Server) OwnEventEnvelopes(channel, ts string) []string {

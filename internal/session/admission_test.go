@@ -45,7 +45,7 @@ func TestReplyAdmission(t *testing.T) {
 		want   Admission
 		asks   bool
 	}{
-		// A thread courier does not own.
+		// A thread Agent Kourier does not own.
 		{"not owned: a plain reply", func(f *ReplyFacts) { *f = ReplyFacts{Mode: modeMention} }, admNotOwned, false},
 		{"not owned: a mentioned reply that may not create", func(f *ReplyFacts) { *f = ReplyFacts{Mode: modeMention, Mentioned: true} }, admNotOwned, false},
 		{"not owned: a mention creates the session", func(f *ReplyFacts) { *f = ReplyFacts{Mode: modeMention, Mentioned: true, Create: true} }, admTurn, false},

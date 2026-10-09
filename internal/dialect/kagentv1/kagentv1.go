@@ -1,6 +1,6 @@
 // Package kagentv1 is the dialect for kagent 1.0: A2A over JSON-RPC at
 // POST /agents/{ns}/{name}, with the card at .well-known/agent-card.json, and the
-// human-in-the-loop extension (spec 6.3). Courier reaches kagent only through its verifying
+// human-in-the-loop extension (spec 6.3). Agent Kourier reaches kagent only through its verifying
 // front door, never the controller port, which trusts identity without checking it (D32).
 package kagentv1
 
@@ -22,7 +22,7 @@ import (
 
 const (
 	// ActorMetadataKey is the message metadata key that holds the acting user (spec 8.5).
-	ActorMetadataKey = "agentcourier.dev/actor"
+	ActorMetadataKey = "agentkourier.dev/actor"
 
 	maxActorRunes = 64
 )

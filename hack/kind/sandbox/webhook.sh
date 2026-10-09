@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The alert source's webhook file: the checks and the loader, sourced by up.sh after env.sh (which has the stat helper).
 #
-# The file, ~/.config/agent-courier/alertmanager-webhook-url unless ALERTMANAGER_WEBHOOK_FILE says another, holds the Slack
+# The file, ~/.config/agent-kourier/alertmanager-webhook-url unless ALERTMANAGER_WEBHOOK_FILE says another, holds the Slack
 # incoming-webhook URL of the owner's real alert channel, on one line. Whoever has the URL can post to that channel, so it is
 # refused, and the error names the file and never the value, when it is missing, a symbolic link, not a regular file, not
 # owned by the user, accessible to the group or others, empty, longer than one line, or not shaped as an incoming-webhook URL.
@@ -11,12 +11,12 @@
 WEBHOOK_URL_FILE="" # the file the last webhook_url_load was given, for a message
 
 # The ID of the owner's real alert channel, #alerts-critical: the channel the webhook posts to, and the one the alert trial's Binding
-# (courier/alert-trial) watches. It is a constant, set here and nowhere else and never read from the environment or a file, so that it cannot be pointed
+# (agent-kourier/alert-trial) watches. It is a constant, set here and nowhere else and never read from the environment or a file, so that it cannot be pointed
 # at another channel by accident; a test keeps it equal to the channel of the dry run's Bindings and the README.
 ALERT_CHANNEL_ID=C0EXAMPLE01
 
 # alert_channel_check: ALERT_CHANNEL_ID is a channel ID, and not the dogfood channel (SLACK_CHANNEL_ID, which env.sh checked), which the dogfood Binding
-# holds: two Bindings cannot share a channel on one connection, and courier would refuse the config. Exits 1, naming the key and never a value of a file.
+# holds: two Bindings cannot share a channel on one connection, and Agent Kourier would refuse the config. Exits 1, naming the key and never a value of a file.
 alert_channel_check() {
   [[ ${ALERT_CHANNEL_ID} =~ ^[CG][A-Z0-9]+$ ]] || {
     echo "error: ALERT_CHANNEL_ID (webhook.sh) is not a channel ID such as C0123ABCDEF (C or G, then capitals and digits), not a name" >&2

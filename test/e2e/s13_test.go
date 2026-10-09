@@ -19,7 +19,7 @@ import (
 // Both tiers: the full tier's scenario model has kagent call the tools of the scenario MCP server.
 //
 // UNCONFIRMED(full tier): that kagent's function_response for an MCP tool that reports isError has the "error" entry
-// that courier reads as a failed call (render.Failed), and that it streams the text said before a call as part of the
+// that Agent Kourier reads as a failed call (render.Failed), and that it streams the text said before a call as part of the
 // reply. The assertions do not depend on how the text is split into artifacts, only on each piece being said once.
 func TestS13_AToolCallIsAStepCardAndAFailedOneIsAnError(t *testing.T) {
 	s := newScenario(t)

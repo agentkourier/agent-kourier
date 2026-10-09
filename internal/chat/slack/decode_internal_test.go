@@ -81,7 +81,7 @@ func TestClassifyMapsTheCodesToNeutralReasonsAndKeepsTheRawCode(t *testing.T) {
 	}{
 		{"a channel that is gone", chat.OpPost, slackError("channel_not_found"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}},
 		{"an archived channel", chat.OpPost, slackError("is_archived"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "is_archived"}},
-		{"courier not in the channel", chat.OpPost, slackError("not_in_channel"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "not_in_channel"}},
+		{"Agent Kourier not in the channel", chat.OpPost, slackError("not_in_channel"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "not_in_channel"}},
 		{"text too long", chat.OpPost, slackError("msg_too_long"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonTooLong, Code: "msg_too_long"}},
 		{"blocks Slack refuses", chat.OpPost, slackError("invalid_blocks"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_blocks"}},
 		{"blocks in a form Slack refuses", chat.OpPost, slackError("invalid_blocks_format"), chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid_blocks_format"}},
@@ -113,7 +113,7 @@ type keep struct{ got []chat.Inbound }
 func (k *keep) Message(_ context.Context, m chat.Inbound) error     { k.got = append(k.got, m); return nil }
 func (k *keep) Interaction(context.Context, chat.Interaction) error { return nil }
 
-// A message in a conversation of its own with courier is Direct, which the routing reads in place of a
+// A message in a conversation of its own with Agent Kourier is Direct, which the routing reads in place of a
 // mention. The Client drops direct messages until Phase 4, so the mapping is tested here and not through
 // the fake Slack.
 func TestAMessageInAnIMIsDirect(t *testing.T) {

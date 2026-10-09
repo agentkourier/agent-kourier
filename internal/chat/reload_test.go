@@ -51,7 +51,7 @@ func TestAConfigReloadChangesWhichBotsAreAcceptedAndMatched(t *testing.T) {
 	if len(got) != 2 || got[1].Message.Bot.BotID != newBot || got[1].Message.At.ID != "2.1" {
 		t.Fatalf("after the reload: matches %+v; want the new bot's message and not the old bot's", got)
 	}
-	if n := h.counter(t, "courier_trigger_unmatched_total", "sre/sre-alerts"); n != 2 {
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 2 {
 		t.Errorf("unmatched = %v; want the new bot's before the reload and the old bot's after it", n)
 	}
 

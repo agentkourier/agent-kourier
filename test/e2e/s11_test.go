@@ -12,7 +12,7 @@ import (
 )
 
 // TestS11_AToolApprovalOnABindingThatDoesNotAllowThemIsDenied: the agent asks to approve a tool call on a
-// Binding with toolApprovals off (all of Phase 1). Courier denies it, says so in the thread in words of its
+// Binding with toolApprovals off (all of Phase 1). Agent Kourier denies it, says so in the thread in words of its
 // own, the agent goes on without the tool, and the approval-outcome counter goes up by one.
 //
 // UNCONFIRMED(WP-02): that the agent's continuation after a denial is the text spike-approve gives it
@@ -23,8 +23,8 @@ func TestS11_AToolApprovalOnABindingThatDoesNotAllowThemIsDenied(t *testing.T) {
 	if s.env.Tier == "ax" {
 		t.Skip("AX/ADK exposes plain-text questions; structured tool approval metadata is a kagent capability")
 	}
-	labels := map[string]string{"binding": "courier/fast-s11", "outcome": "auto_denied"}
-	const metric = "courier_approval_outcomes_total"
+	labels := map[string]string{"binding": "agent-kourier/fast-s11", "outcome": "auto_denied"}
+	const metric = "agentkourier_approval_outcomes_total"
 	before := s.counter(metric, labels)
 
 	m := s.mention(ChannelS11, "US11", "add 3 and 5 "+s.stub.Gate("S11"))

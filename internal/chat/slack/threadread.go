@@ -18,7 +18,7 @@ const maxThreadPages = 5
 
 // ThreadBetween reads the replies of the thread threadTS in channel that are strictly after the message after and
 // strictly before the message before (an empty one is no bound on that side) and returns the newest limit of them, oldest
-// first, each decoded by historyMessage as a live message is, so that a message Run would drop is Ignored and courier's
+// first, each decoded by historyMessage as a live message is, so that a message Run would drop is Ignored and Agent Kourier's
 // own post is Own. conn is the "namespace/name" of the ChatConnection, which the Refs name. The thread's root is never
 // among them, whether or not Slack returns it. dropped is how many older ones it left out, exactly.
 //
@@ -42,13 +42,13 @@ func (c *Client) ThreadBetween(ctx context.Context, conn, channel, threadTS, aft
 	if after != "" && before != "" && compareTS(after, before) >= 0 {
 		return nil, 0, nil
 	}
-	ctx, op := telemetry.Start(ctx, "courier.chat.ThreadBetween")
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ThreadBetween")
 	defer func() { finishChat(ctx, op, "ThreadBetween", err) }()
 	auth, err := c.api.AuthTestContext(ctx)
 	if err != nil {
 		return nil, 0, c.scrub("auth.test", err)
 	}
-	if auth.UserID == "" { // without it courier cannot tell its own posts that arrive with no bot_id
+	if auth.UserID == "" { // without it Agent Kourier cannot tell its own posts that arrive with no bot_id
 		return nil, 0, errors.New("slack auth.test: no bot user ID")
 	}
 	var raw []slackgo.Message

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Heal the full tier's egress gateway (deploy/atenet-egress in ate-system) when its client certificate is, or is about to be, expired.
 # Every agent connection to kagent, to the tool server and to the model's host leaves through that gateway, and after about a day it
-# rejects them all (`actor identity check denied ... received fatal alert: CertificateExpired`), which kagent answers courier as
+# rejects them all (`actor identity check denied ... received fatal alert: CertificateExpired`), which kagent answers Agent Kourier as
 # "session not ready" (-32004) for good, with the pod still Running and at 0 restarts: the gateway reads its pod certificate
 # once, when it starts, and does not reload the one the kubelet rotates in. A restart makes it read a new one.
 # Run as `make sandbox-heal` (it checks the full tier's cluster, then heals; for a long session), or sourced: up.sh calls
 # heal_egress_gateway before it verifies. Needs jq. Exit 0: the gateway is fine, or was restarted and is rolled out. 1: it
-# could not tell, or the restart did not finish. Every call names --context kind-courier-full.
+# could not tell, or the restart did not finish. Every call names --context kind-agent-kourier-full.
 # Other ate-system pods carry the same 24-hour pod certificates but show no sign of the expiry (see the README); they are not
 # restarted here.
 # It also heals kindnet (ds/kindnet in kube-system), the tier's network plugin: when it has lost the API server, NetworkPolicy stops
-# applying to new pods (lib.sh, "The full tier's network policy"). heal_network_policy restarts it if a courier-labelled pod reaches
+# applying to new pods (lib.sh, "The full tier's network policy"). heal_network_policy restarts it if an agent-kourier-labelled pod reaches
 # the kagent controller, which the policy must refuse, and then proves the policy again. up.sh does not heal this one: it refuses.
 
 # EGRESS_MAX_AGE_SECONDS: how old the gateway's pod may be before it is restarted whatever its logs say. Its pod certificates

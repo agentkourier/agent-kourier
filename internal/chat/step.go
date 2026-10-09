@@ -40,7 +40,7 @@ func (s StepState) String() string {
 // written. A step is begun by Stream.Step with the state Running, and finished by Stream.Step again with the
 // same ID and another state. Nothing in a stream is taken back: a step is only ever moved forward.
 type Step struct {
-	// ID names the step in its stream. It is courier's own, never text the agent wrote, and a caller does not
+	// ID names the step in its stream. It is Agent Kourier's own, never text the agent wrote, and a caller does not
 	// reuse one in a stream.
 	ID string
 	// Title is what the step is, such as a tool's name: literal text, one line, untrusted (see the package

@@ -21,7 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-const threadConn = "courier-system/slack-main"
+const threadConn = "agent-kourier-system/slack-main"
 
 // pathCounter counts the calls to the Web API by method, and answers conversations.replies with limited (a 429 that asks
 // for a wait of 7 s) if it is set.
@@ -347,7 +347,7 @@ func reply(extra map[string]any) map[string]any {
 }
 
 // The request carries the bounds as oldest and latest, exclusive. What comes back has the parent on every page and the pages
-// out of order, and a person's message, courier's own, another bot's and one that starts nothing are told apart.
+// out of order, and a person's message, Agent Kourier's own, another bot's and one that starts nothing are told apart.
 func TestThreadBetweenAsksForExclusiveBoundsAndDecodesWhatComesBack(t *testing.T) {
 	parent := map[string]any{"type": "message", "user": "U9", "text": "root", "ts": "1.000001", "thread_ts": "1.000001"}
 	stub := &stubThread{}
@@ -369,7 +369,7 @@ func TestThreadBetweenAsksForExclusiveBoundsAndDecodesWhatComesBack(t *testing.T
 		t.Errorf("a message that starts nothing = %+v; want Ignored and not Own", got[0])
 	}
 	if !got[1].Own || got[1].Ignored {
-		t.Errorf("courier's own post = %+v; want Own and not Ignored", got[1])
+		t.Errorf("agent-kourier's own post = %+v; want Own and not Ignored", got[1])
 	}
 	if h := got[2]; h.Own || h.Ignored || h.Message.Bot == nil || h.Message.Bot.BotID != "BOTHER" {
 		t.Errorf("another bot's post = %+v; want it a bot's, neither Own nor Ignored", h)

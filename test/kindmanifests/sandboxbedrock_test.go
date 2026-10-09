@@ -101,7 +101,7 @@ func TestBedrockKeyGoesInTheSecretKeyKagentReads(t *testing.T) {
 	bin, logs := recorders(t)
 	script := `set -eu
 . "$1"
-K=(kubectl --context kind-courier-full)
+K=(kubectl --context kind-agent-kourier-full)
 sandbox_env_load "$2"
 apply_secret kagent sandbox-model AWS_BEARER_TOKEN_BEDROCK=MODEL_API_KEY
 printf '%s\n' "$SANDBOX_ENV_FOUND"
@@ -242,8 +242,8 @@ MODEL_NAME="$3" MODEL_REGION="$4" SLACK_CHANNEL_ID=C0RENDER01 render "$2"`, "bas
 				t.Fatal(err)
 			}
 			host := "bedrock-runtime." + region + ".amazonaws.com"
-			if len(mc.Spec.DefaultHeaders) != 1 || mc.Spec.DefaultHeaders["X-Courier-Egress-Host"] != "https://"+host || mc.Spec.Bedrock.Region != region {
-				t.Fatalf("defaultHeaders %v, region %q; want the one header X-Courier-Egress-Host: https://%s, and the region", mc.Spec.DefaultHeaders, mc.Spec.Bedrock.Region, host)
+			if len(mc.Spec.DefaultHeaders) != 1 || mc.Spec.DefaultHeaders["X-Agent-Kourier-Egress-Host"] != "https://"+host || mc.Spec.Bedrock.Region != region {
+				t.Fatalf("defaultHeaders %v, region %q; want the one header X-Agent-Kourier-Egress-Host: https://%s, and the region", mc.Spec.DefaultHeaders, mc.Spec.Bedrock.Region, host)
 			}
 			// The model JSON kagent walks.
 			model := map[string]any{"type": "bedrock", "model": mc.Spec.Model, "region": mc.Spec.Bedrock.Region, "headers": map[string]any{}}

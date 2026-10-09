@@ -12,7 +12,7 @@ import (
 )
 
 // A Web API response slack-go cannot parse comes back as "unknown error structure: <the raw body>", and the body may
-// quote what was sent or what a workspace holds. The error courier's callers log carries the tokens scrubbed, and,
+// quote what was sent or what a workspace holds. The error Agent Kourier's callers log carries the tokens scrubbed, and,
 // once the handler redacts and cuts it, no secret-shaped value and no more of the body than the cap. The message and
 // the key of the line stay as the callers set them.
 func TestUnknownSlackErrorBodyIsRedactedAndCappedInLogs(t *testing.T) {

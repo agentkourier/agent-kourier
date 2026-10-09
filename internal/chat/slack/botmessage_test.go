@@ -34,7 +34,7 @@ func alert() fakeslack.WebhookPost {
 		TitleLink:  link,
 		Fallback:   "[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | " + link,
 		Text:       "*KubePodCrashLooping* - critical\nPod is crash looping.\n",
-		Footer:     "courier-key: KubePodCrashLooping/shop",
+		Footer:     "agent-kourier-key: KubePodCrashLooping/shop",
 		MarkdownIn: []string{"text", "fields"},
 	}}}
 }
@@ -134,7 +134,7 @@ func TestAWebhookPostWithTextAndNoAttachment(t *testing.T) {
 }
 
 // An app's own post (a bot user, a bot_id and an app_id, no subtype) is a bot's message too, with its text. A
-// mention of courier in a bot's text starts nothing.
+// mention of Agent Kourier in a bot's text starts nothing.
 func TestAnAppPostIsABotMessageAndNeverAMention(t *testing.T) {
 	fake, sk, _ := startBots(t, "C1", "BOTHERAPP1")
 	app := message(map[string]any{"user": "UOTHERAPP", "bot_id": "BOTHERAPP1", "app_id": "AOTHER", "text": botMark + " deploy done"})
@@ -232,10 +232,10 @@ func TestOnlyABotTheSinkTakesIsForwarded(t *testing.T) {
 	}
 }
 
-// Courier's own messages are never forwarded, by user ID or by bot ID, even for a sink that takes every bot, as
-// when a trigger names courier's own bot ID by mistake. That mistake is logged once, at WARN, and the log says
+// Agent Kourier's own messages are never forwarded, by user ID or by bot ID, even for a sink that takes every bot, as
+// when a trigger names Agent Kourier's own bot ID by mistake. That mistake is logged once, at WARN, and the log says
 // nothing of the message.
-func TestCouriersOwnMessagesAreNeverForwardedEvenIfATriggerNamesThem(t *testing.T) {
+func TestAgentKouriersOwnMessagesAreNeverForwardedEvenIfATriggerNamesThem(t *testing.T) {
 	fake := newFake(t)
 	logs := &syncBuffer{}
 	cfg := clientConfig(fake)
@@ -244,7 +244,7 @@ func TestCouriersOwnMessagesAreNeverForwardedEvenIfATriggerNamesThem(t *testing.
 	run(t, slack.New(cfg), sk)
 	waitConnected(t, fake)
 
-	// A webhook post that carries courier's bot ID.
+	// A webhook post that carries Agent Kourier's bot ID.
 	own := alert()
 	own.BotID = "BFAKEBOT"
 	own.Attachments[0].Title = "SECRET-OWN-TITLE"
@@ -256,11 +256,11 @@ func TestCouriersOwnMessagesAreNeverForwardedEvenIfATriggerNamesThem(t *testing.
 		}
 		envelopes = append(envelopes, got.Envelopes...)
 	}
-	// An app's post of courier's user ID with another bot ID, and one with courier's bot ID and another user.
+	// An app's post of Agent Kourier's user ID with another bot ID, and one with Agent Kourier's bot ID and another user.
 	envelopes = append(envelopes,
 		send(t, fake, message(map[string]any{"ts": "5.5", "event_ts": "5.5", "user": "UFAKEBOT", "bot_id": "BOTHERAPP1", "text": "x"})),
 		send(t, fake, message(map[string]any{"ts": "5.6", "event_ts": "5.6", "user": "UOTHER", "bot_id": "BFAKEBOT", "text": "x"})))
-	// And courier's own real posts, which the fake sends back as events, an edit among them.
+	// And Agent Kourier's own real posts, which the fake sends back as events, an edit among them.
 	api := slackgo.New(botToken, slackgo.OptionAPIURL(fake.URL()+"/"))
 	_, ts, err := api.PostMessage("C1", slackgo.MsgOptionText("an answer", false))
 	if err != nil {
@@ -272,18 +272,18 @@ func TestCouriersOwnMessagesAreNeverForwardedEvenIfATriggerNamesThem(t *testing.
 	waitAck(t, fake, slices.Concat(envelopes, fake.OwnEventEnvelopes("C1", ts))...)
 
 	if msgs := sk.messages(); len(msgs) != 0 {
-		t.Fatalf("courier's own messages reached the sink: %+v", msgs)
+		t.Fatalf("agent-kourier's own messages reached the sink: %+v", msgs)
 	}
-	if n := logs.count("WARN", "names courier's own bot ID"); n != 1 {
-		t.Errorf("%d warnings that a trigger names courier's own bot ID; want exactly one for all of its posts\n%s", n, logs.String())
+	if n := logs.count("WARN", "names Agent Kourier's own bot ID"); n != 1 {
+		t.Errorf("%d warnings that a trigger names Agent Kourier's own bot ID; want exactly one for all of its posts\n%s", n, logs.String())
 	}
 	if strings.Contains(logs.String(), "SECRET-OWN-TITLE") {
 		t.Errorf("the log holds the message: %s", logs.String())
 	}
 }
 
-// With no trigger naming courier's own bot ID there is nothing to warn of.
-func TestCouriersOwnPostsWarnOfNothingWhenNoTriggerNamesThem(t *testing.T) {
+// With no trigger naming Agent Kourier's own bot ID there is nothing to warn of.
+func TestAgentKouriersOwnPostsWarnOfNothingWhenNoTriggerNamesThem(t *testing.T) {
 	fake, sk, logs := startBots(t, "C1", webhookBot)
 	own := alert()
 	own.BotID = "BFAKEBOT"
@@ -320,7 +320,7 @@ func (b *botIntake) unmatched(t *testing.T) float64 {
 		t.Fatal(err)
 	}
 	for _, f := range families {
-		if f.GetName() == "courier_trigger_unmatched_total" {
+		if f.GetName() == "agentkourier_trigger_unmatched_total" {
 			for _, m := range f.Metric {
 				return m.Counter.GetValue()
 			}
@@ -334,16 +334,16 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	allow := []string{"sre"}
 	b := v1alpha1.Binding{ObjectMeta: meta("sre", "sre-alerts"), Spec: v1alpha1.BindingSpec{
-		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
-		Identity: v1alpha1.Identity{UserID: "courier-sre"},
-		Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"}, Channel: "C1", Triggers: triggers}}}
+		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
+		Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
+		Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: "C1", Triggers: triggers}}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatalf("the test's triggers are invalid: %v", err)
 	}
 	snap, err := config.Resolve(t.Context(), &config.Set{
-		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("courier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
-		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("courier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
+		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: meta("agent-kourier-system", "kagent"), Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, AllowedNamespaces: allow}}},
+		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("agent-kourier-system", "slack-main"), Spec: v1alpha1.ChatConnectionSpec{AllowedNamespaces: allow}}},
 		Bindings:        []v1alpha1.Binding{b},
 	}, allKeys{})
 	if err != nil {
@@ -357,7 +357,7 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 	log := slog.New(slog.NewTextHandler(bi.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	sub := &submitter{}
 	intake := chat.NewIntake(chat.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "courier-system", Name: "slack-main"},
+		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Snapshot:   func() *config.Snapshot { return snap }, Submitter: sub, Logger: log,
 		OnStart: func(_ context.Context, m chat.TriggerMatch) error {
 			bi.mu.Lock()
@@ -394,7 +394,7 @@ func loose() v1alpha1.Trigger {
 
 // An allowlisted bot's alert goes through the adapter and the trigger table: the trigger matches, with what it
 // extracted and the message flattened. The heartbeat, which the same bot posts to the same channel, passes the
-// bot's name and is ignored by the exclude; another bot's alert, and courier's own message, never get as far as
+// bot's name and is ignored by the exclude; another bot's alert, and Agent Kourier's own message, never get as far as
 // the table.
 func TestFromTheWebhookToAMatchedTrigger(t *testing.T) {
 	bi := startBotIntake(t, loose())
@@ -437,7 +437,7 @@ func TestFromTheWebhookToAMatchedTrigger(t *testing.T) {
 	// The heartbeat reached the table, where the exclude counted it as unmatched; the other two were stopped at
 	// the adapter and never counted.
 	if n := bi.unmatched(t); n != 1 {
-		t.Errorf("courier_trigger_unmatched_total = %v; want 1, the heartbeat alone", n)
+		t.Errorf("agentkourier_trigger_unmatched_total = %v; want 1, the heartbeat alone", n)
 	}
 }
 
@@ -458,8 +458,8 @@ func TestAnEditAndAThreadReplyOfTheWebhookBotMatchNothing(t *testing.T) {
 	}
 }
 
-// A trigger that names courier's own bot ID matches nothing, and warns once.
-func TestATriggerNamingCouriersOwnBotMatchesNothing(t *testing.T) {
+// A trigger that names Agent Kourier's own bot ID matches nothing, and warns once.
+func TestATriggerNamingAgentKouriersOwnBotMatchesNothing(t *testing.T) {
 	mistake := loose()
 	mistake.From = &v1alpha1.BotSource{BotID: "BFAKEBOT"}
 	bi := startBotIntake(t, mistake)
@@ -475,12 +475,12 @@ func TestATriggerNamingCouriersOwnBotMatchesNothing(t *testing.T) {
 	}
 	waitAck(t, bi.fake, envelopes...)
 	if matches := bi.got(); len(matches) != 0 {
-		t.Fatalf("matched courier's own message: %+v", matches)
+		t.Fatalf("matched Agent Kourier's own message: %+v", matches)
 	}
-	if n := bi.logs.count("WARN", "names courier's own bot ID"); n != 1 {
+	if n := bi.logs.count("WARN", "names Agent Kourier's own bot ID"); n != 1 {
 		t.Errorf("%d warnings; want one\n%s", n, bi.logs.String())
 	}
 	if n := bi.unmatched(t); n != 0 {
-		t.Errorf("courier's own messages were counted as unmatched: %v", n)
+		t.Errorf("agent-kourier's own messages were counted as unmatched: %v", n)
 	}
 }

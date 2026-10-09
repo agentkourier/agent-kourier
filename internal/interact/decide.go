@@ -47,7 +47,7 @@ type PressDecision struct {
 	// In is the decoded request of the interaction, and Answer the person's complete answer to it.
 	In     dialect.Interaction
 	Answer dialect.Answer
-	// User is who pressed. PressedAt is when courier recorded the press, by its own clock, and is the
+	// User is who pressed. PressedAt is when Agent Kourier recorded the press, by its own clock, and is the
 	// time of the decision whenever it is decided (WP-33e contract): a press made in time wins even if
 	// it is decided after the deadline.
 	User      string
@@ -58,7 +58,7 @@ type PressDecision struct {
 }
 
 // textClosedBefore tells the thread that an answer reached a task that was no longer waiting for it. It is
-// neutral: courier does not know whether the question timed out, was stopped or was left behind. The
+// neutral: Agent Kourier does not know whether the question timed out, was stopped or was left behind. The
 // decider and the backstop use it alike, so one answer is never told two ways.
 const textClosedBefore = "Your answer was not sent: the question closed before it could be."
 
@@ -144,7 +144,7 @@ const (
 // The interaction is recorded as answered at PressedAt, so a press made before the deadline wins even if
 // it is decided after it. One made at or after the deadline is no decision: it is told so and not audited.
 func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "courier.interaction.decide", attribute.String("courier.interaction.id", pd.Interaction.ID), attribute.String("courier.interaction.kind", string(pd.Interaction.Kind)), attribute.String("courier.binding", pd.BindingName))
+	ctx, op := telemetry.Start(ctx, "agentkourier.interaction.decide", attribute.String("agentkourier.interaction.id", pd.Interaction.ID), attribute.String("agentkourier.interaction.kind", string(pd.Interaction.Kind)), attribute.String("agentkourier.binding", pd.BindingName))
 	telemetry.Link(ctx, pd.Interaction.TraceParent, pd.Interaction.TraceState)
 	defer func() { op.Finish(telemetryErr) }()
 	row := pd.Interaction

@@ -1,4 +1,4 @@
-// Package telemetrytest is the test harness for code that records courier telemetry: an
+// Package telemetrytest is the test harness for code that records Agent Kourier telemetry: an
 // Observer over an in-memory span exporter and a Prometheus registry, and a way to ask whether
 // a string reached either.
 package telemetrytest

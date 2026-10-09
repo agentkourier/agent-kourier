@@ -42,16 +42,16 @@ func observeHandler(ctx context.Context, operation string, h Handler, final *a2a
 	return func(ev Event) {
 		switch e := ev.(type) {
 		case StateEvent:
-			trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.task.id", string(e.TaskID)), attribute.String("courier.context.id", e.ContextID), attribute.String("courier.task.state", string(e.State)))
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.task.id", string(e.TaskID)), attribute.String("agentkourier.context.id", e.ContextID), attribute.String("agentkourier.task.state", string(e.State)))
 		case TextEvent:
 			if operation != "follow" && !texted && e.Text != "" {
 				texted = true
-				telemetry.Observe(ctx, "courier_agent_first_text_duration_seconds", time.Since(started), operation)
+				telemetry.Observe(ctx, "agentkourier_agent_first_text_duration_seconds", time.Since(started), operation)
 			}
 		case FinalEvent:
 			if e.Task != nil {
 				*final = e.Task.Status.State
-				trace.SpanFromContext(ctx).SetAttributes(attribute.String("courier.task.state", string(e.Task.Status.State)))
+				trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.task.state", string(e.Task.Status.State)))
 				if e.Task.Status.State == a2a.TaskStateFailed {
 					trace.SpanFromContext(ctx).SetStatus(codes.Error, "task_failed")
 				}

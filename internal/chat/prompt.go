@@ -10,7 +10,7 @@ import (
 // menu, a numbered list for options that do not fit), the layout and the platform's limits. Every text
 // field is literal.
 type Prompt struct {
-	// ID names the interaction. It is courier's own, and comes back as Interaction.PromptID when the
+	// ID names the interaction. It is Agent Kourier's own, and comes back as Interaction.PromptID when the
 	// prompt is answered.
 	ID string `json:"id"`
 	// Hint is the agent's one-line title for the question, or "".
@@ -58,7 +58,7 @@ const (
 // with no controls left.
 type Ending struct {
 	Outcome Outcome `json:"outcome"`
-	// By is the user who decided (Answered) or stopped it (Cancelled), as courier verified it, or "". It
+	// By is the user who decided (Answered) or stopped it (Cancelled), as Agent Kourier verified it, or "". It
 	// is a user ID and not text: the adapter shows it as a mention only if the platform's own ID has
 	// that shape, and otherwise as "someone".
 	By string `json:"by,omitempty"`
@@ -67,7 +67,7 @@ type Ending struct {
 	// Prompt is what was asked.
 	Prompt Prompt `json:"prompt"`
 	// Answers is, for Answered, what to show of each question's answer, in order, each on one line: the
-	// text of each chosen option, and for a free-text answer a fixed word of courier's, never what the person
+	// text of each chosen option, and for a free-text answer a fixed word of Agent Kourier's, never what the person
 	// typed, which may be a secret and which the channel would keep (the owner's rule). An adapter shows what
 	// it is given.
 	Answers [][]string `json:"answers,omitempty"`

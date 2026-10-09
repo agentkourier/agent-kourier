@@ -7,22 +7,22 @@ import (
 )
 
 // TestStoretestIsOnlyForTests: this package imports the testing package and the telemetry test harness, and
-// nothing courier runs may hold them. That nothing imports it outside tests is what keeps it out of the
+// nothing Agent Kourier runs may hold them. That nothing imports it outside tests is what keeps it out of the
 // binary: go list -deps of the command lists every package it is built from.
 func TestStoretestIsOnlyForTests(t *testing.T) {
-	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "./cmd/courier")
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "./cmd/agent-kourier")
 	cmd.Dir = "../../.." // the module root
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("go list -deps ./cmd/courier: %v", err)
+		t.Fatalf("go list -deps ./cmd/agent-kourier: %v", err)
 	}
 	deps := "\n" + string(out)
 	const module = "github.com/agentkourier/agent-kourier/"
-	// The anchors: the courier is built from the store that this package tests, so a list without them is not
+	// The anchors: the Agent Kourier is built from the store that this package tests, so a list without them is not
 	// the list that proves anything.
 	for _, anchor := range []string{"internal/broker", "internal/store", "internal/store/sqlite"} {
 		if !strings.Contains(deps, module+anchor+"\n") {
-			t.Fatalf("go list -deps ./cmd/courier lists no %s, so it says nothing about storetest", anchor)
+			t.Fatalf("go list -deps ./cmd/agent-kourier lists no %s, so it says nothing about storetest", anchor)
 		}
 	}
 	for _, banned := range []string{
@@ -30,7 +30,7 @@ func TestStoretestIsOnlyForTests(t *testing.T) {
 		"go.opentelemetry.io/otel/sdk/trace/tracetest",
 	} {
 		if strings.Contains(deps, "\n"+banned+"\n") { // a whole line: one import path
-			t.Errorf("courier is built from %s: a test dependency has reached the binary", banned)
+			t.Errorf("Agent Kourier is built from %s: a test dependency has reached the binary", banned)
 		}
 	}
 }

@@ -43,7 +43,7 @@ const providerError = "Incorrect API key provided: sk-proj-********************w
 // A task that reaches a terminal state leaves the thread something to read, once, whatever the agent said
 // (spec 8.2, 11: events are never dropped silently). A task that failed, was rejected or was cancelled
 // is told, also when it said something first; a completed task is told only when it said nothing to show.
-// The notice is the courier's own words: the agent's status message is untrusted and cannot be redacted
+// The notice is the Agent Kourier's own words: the agent's status message is untrusted and cannot be redacted
 // reliably (providerError), so it reaches neither the thread nor the log.
 func TestTerminalTaskTellsTheThread(t *testing.T) {
 	for _, tc := range []struct {
@@ -81,7 +81,7 @@ func TestTerminalTaskTellsTheThread(t *testing.T) {
 			}
 			want := Notice{ID: "task:slack:C1:1700.01:t1/" + string(tc.want), Kind: tc.want, MessageRef: "1"}
 			if len(sink.notices) != 1 || sink.notices[0] != want {
-				t.Errorf("notices = %+v; want exactly %+v: no detail, for the agent's text is not the courier's to show", sink.notices, want)
+				t.Errorf("notices = %+v; want exactly %+v: no detail, for the agent's text is not Agent Kourier's to show", sink.notices, want)
 			}
 		})
 	}

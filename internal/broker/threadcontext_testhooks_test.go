@@ -16,12 +16,12 @@ import (
 )
 
 // The whole path of the thread context (spec 8.2, D38), through the real broker: in a Binding with chat.threadReplies:
-// mention, the replies that people wrote without mentioning courier start no turn, and the next mention carries them to the
-// agent after its own text, in the block of untrusted data, read from Slack's thread (the fake), without courier's own
+// mention, the replies that people wrote without mentioning Agent Kourier start no turn, and the next mention carries them to the
+// agent after its own text, in the block of untrusted data, read from Slack's thread (the fake), without Agent Kourier's own
 // answer, the mention that was a turn, or the mention itself. A mention with nothing unmentioned before it carries no block.
 func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
 	w := newSlackWorld(t, "xoxb-fake-bot")
-	w.cfg.sink = nil // the live renderer, so that courier's own answers are in the thread, to be left out of the context
+	w.cfg.sink = nil // the live renderer, so that Agent Kourier's own answers are in the thread, to be left out of the context
 	file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
 	raw, err := os.ReadFile(file)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
 				return
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("courier posted fewer than %d answers", n)
+				t.Fatalf("Agent Kourier posted fewer than %d answers", n)
 			}
 		}
 	}
@@ -123,9 +123,9 @@ func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
 			t.Errorf("the block holds %q, which is not an unmentioned reply of a person:\n%s", out, second)
 		}
 	}
-	r.waitMetric(`courier_thread_context_total{binding="sre/sre-alerts",outcome="read"} 1`)
+	r.waitMetric(`agentkourier_thread_context_total{binding="sre/sre-alerts",outcome="read"} 1`)
 
-	// A mention with nothing unmentioned before it: the window holds courier's own answer alone.
+	// A mention with nothing unmentioned before it: the window holds Agent Kourier's own answer alone.
 	if _, err := w.fake.Reply("C0123456789", first.TS, "U2", "<@UFAKEBOT> anything else?"); err != nil {
 		t.Fatal(err)
 	}
@@ -133,5 +133,5 @@ func TestRunCarriesTheUnmentionedRepliesToTheNextMentionedTurn(t *testing.T) {
 	if strings.Contains(third, "thread-replies") {
 		t.Errorf("a mention with no reply before it carries a block:\n%s", third)
 	}
-	r.waitMetric(`courier_thread_context_total{binding="sre/sre-alerts",outcome="empty"} 1`)
+	r.waitMetric(`agentkourier_thread_context_total{binding="sre/sre-alerts",outcome="empty"} 1`)
 }
