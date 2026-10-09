@@ -174,7 +174,7 @@ lines (the one-line entries take the word); a one-word paragraph (`Token:\n\nExp
 take its `@` first, because the lines are read before they are joined. And text that reads as a name and a value only once its
 lines are joined is taken in the one-line entries: `Token:`, a blank line and `Please rotate it` shows
 `Token: [redacted] rotate it`, and `Retry with --token`, a line break and `The deploy` loses `The`; the entries that keep lines
-tell the name from the text.
+tell the name from the text. The ways the rules leak that these tests do not pin are pinned by the leak oracle (`internal/redact/leaklimits_test.go`): one row for each, with the work package that retires it, and each row held to exactly the inputs where the rules show a secret (a row that applies where they hide it fails the oracle). Among them: an OAuth name followed by a tag, a block header, a continuation mark or `Basic` (`id_token: !x v` shows `v`), and a name whose value is only a tag, a continuation mark or a scheme, or nothing, takes the next field's name (`password: !x token: v`).
 
 In the alert and thread blocks, "&", "<" and ">" are written `&amp;`, `&lt;` and `&gt;`, and so is every character that a
 reader may take for an angle bracket: the full-width and small forms, the single and double guillemets, the mathematical,
