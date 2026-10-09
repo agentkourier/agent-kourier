@@ -5,12 +5,13 @@ import (
 	"testing"
 )
 
-// The pins hold each known limit to exactly the slots it explains. The sample and the full sweep each count, for every row of
-// leakLimits, the slots it explained and digest them (leakTally); a run fails if a row explains more slots than its pin, a row with
-// no pin explains any, or a digest differs. That is what keeps a later work package from widening a predicate, which the oracle's own
-// check cannot see when the widening excuses a leak that the same work package adds. A fix that removes a leak lowers a count and
-// changes a digest too, and so does a growth of the generator: re-pinning is a deliberate edit of this file that the orchestrator
-// signs off, from the numbers that the run logs ("pin" lines with -v).
+// The pins hold each known limit to exactly the slots it explains. The full sweep counts, for every row of leakLimits, the slots it
+// explained and digests them (leakTally); a run fails if a row explains more slots than its pin, a row with no pin explains any, or a
+// digest differs. That is what keeps a later work package from widening a predicate, which the oracle's own check cannot see when the
+// widening excuses a leak that the same work package adds. A fix that removes a leak lowers a count and changes a digest too, and so does
+// a growth of the generator: re-pinning is a deliberate edit of this file that the orchestrator signs off, from the numbers that the
+// run logs ("pin" lines with -v). The default run's sample is held to committed slots instead (leaksubset_test.go), where a fix's
+// re-pin is a diff that only deletes lines.
 type leakPin struct {
 	n      int
 	digest string
@@ -58,24 +59,6 @@ func checkPins(t *testing.T, what string, got map[string]leakTally, pins map[str
 	}
 }
 
-// samplePins are the pins of TestLeakOracleSample.
-var samplePins = map[string]leakPin{
-	"at-sign-ends-a-user-password":     {40, "ad5b2b5d94b681207bf74889e2c6d4a0"},
-	"block-header-under-the-name":      {207, "5332c179a2e7c770c9d6cea8d1588286"},
-	"continuation-takes-the-next-key":  {68, "0843be74c1219b5c44c2662867a404b0"},
-	"doubled-equals-hides-the-mark":    {90, "e6a98dc3f32bf28bb967ddfb48dfd277"},
-	"empty-takes-the-next-run":         {16, "ef4d1194bf32df90da729e54cbfc4838"},
-	"heredoc-body-is-not-read":         {159, "18c5c01ad85cf6a11dd35252b5861f17"},
-	"oauth-empty-takes-the-next-key":   {98, "b9e09c6fff7db2a73031624560f8fd4d"},
-	"oauth-hash-rocket":                {227, "4f8816377682176be469121fb2ac57a3"},
-	"oauth-value-is-the-mark":          {3510, "366763793cb0eb4a4d2e83e27b57d0e2"},
-	"oauth-value-stops-at-a-backslash": {80, "5b35f4ecbe07785d288b5741dedab0a9"},
-	"question-equals-is-no-operator":   {20, "de3ab329d1d85dac68cb104cf6f25830"},
-	"scheme-takes-the-next-key":        {4, "30c5039e43b63144e646596644ec6680"},
-	"tag-takes-the-next-key":           {112, "ae85225ee0ef8cbc91b79e79e9b30030"},
-	"taken-out-marker-ends-the-value":  {238, "f3b2dee9537bfc4c8ed5f4cfb68e00fa"},
-}
-
 // fullPins are the pins of TestLeakOracleFull without -leak.extra.
 var fullPins = map[string]leakPin{
 	"at-sign-ends-a-user-password":            {72505, "ea7fdbce69f2c55f8c3c907a2dbb6681"},
@@ -116,7 +99,7 @@ func TestLeakPinsNameTheRows(t *testing.T) {
 			t.Errorf("the row %q has no pin in fullPins (a new row needs the orchestrator's sign-off)", l.id)
 		}
 	}
-	for name, pins := range map[string]map[string]leakPin{"samplePins": samplePins, "fullPins": fullPins, "extraPins": extraPins} {
+	for name, pins := range map[string]map[string]leakPin{"fullPins": fullPins, "extraPins": extraPins} {
 		for id := range pins {
 			if !rows[id] {
 				t.Errorf("%s pins %q, which is no row of leakLimits: the row is gone, remove its pin", name, id)

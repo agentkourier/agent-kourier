@@ -17,7 +17,9 @@ import (
 // The leak oracle. It plants a unique marker as the secret value of each field of a generated input (see leakgen_test.go) and
 // fails when an entry point shows one that its field's shape says must be hidden, at full length and, for the Cut entries, at
 // every cut limit. What must be hidden comes from the shape of the field and never from the code under test; what main does not
-// hide is in leaklimits_test.go, one entry per way it leaks, each pinned so that a fix shows.
+// hide is in leaklimits_test.go, one entry per way it leaks, each pinned: the full sweep by count and digest (leakpins_test.go) so
+// that a fix shows, the sample to its committed slots and its committed composition (leaksubset_test.go) so that a widening fails even
+// when a fix comes with it.
 //
 // A work package that changes how redaction reads a value runs it as its leak gate:
 //
@@ -181,11 +183,13 @@ type leakResult struct {
 }
 
 // leakTally counts the slots that a known limit explains and digests them: the sum and the exclusive or of a 64-bit hash of the key of
-// each slot (its case, its marker, its entry and its limit), which do not depend on the order the slots are found in. The pins of
-// leakpins_test.go hold a row to exactly the slots it explained when they were made.
+// each slot (its case, its marker, its entry and its limit), which do not depend on the order the slots are found in. The full sweep's pins
+// in leakpins_test.go hold a row to exactly the slots it explained when they were made. A sweep that asks for it (the sample's) also keeps
+// the hash of each slot, with its key to show in a failure: the committed sets of leaksubset_test.go hold the sample's rows to exactly those slots.
 type leakTally struct {
 	n        int
 	sum, xor uint64
+	slots    map[uint64]string // hash to key, or nil if the sweep does not keep them
 }
 
 func (t *leakTally) add(key string) {
@@ -195,18 +199,27 @@ func (t *leakTally) add(key string) {
 	t.n++
 	t.sum += v
 	t.xor ^= v
+	if t.slots != nil {
+		t.slots[v] = key
+	}
 }
 
 func (t *leakTally) merge(o leakTally) {
 	t.n += o.n
 	t.sum += o.sum
 	t.xor ^= o.xor
+	if o.slots != nil && t.slots == nil {
+		t.slots = map[uint64]string{}
+	}
+	for h, k := range o.slots {
+		t.slots[h] = k
+	}
 }
 
 func (t leakTally) digest() string { return fmt.Sprintf("%016x%016x", t.sum, t.xor) }
 
-// sweepLeaks checks the cases on workers goroutines. The cases are independent.
-func sweepLeaks(entries []leakEntry, cases []leakCase, workers int) leakResult {
+// sweepLeaks checks the cases on workers goroutines. The cases are independent. keep makes the tallies keep the slots (see leakTally).
+func sweepLeaks(entries []leakEntry, cases []leakCase, workers int, keep bool) leakResult {
 	res := leakResult{explained: map[string]leakTally{}}
 	var (
 		wg   sync.WaitGroup
@@ -235,7 +248,10 @@ func sweepLeaks(entries []leakEntry, cases []leakCase, workers int) leakResult {
 						broad = append(broad, f)
 					case f.known != "":
 						total++
-						t := explained[f.known]
+						t, ok := explained[f.known]
+						if !ok && keep {
+							t.slots = map[uint64]string{}
+						}
 						t.add(fmt.Sprintf("%s|%d.%d|%s|%d", ck, f.m.atom, f.m.idx, f.entry, f.limit))
 						explained[f.known] = t
 					default:
@@ -269,8 +285,8 @@ type leakSet struct {
 
 // runLeakSets checks the sets on workers goroutines. It fails t for each distinct way an entry shows a secret that no known limit
 // explains (with how many times and one example) and for each known limit that applies where main hides the marker ("limit too
-// broad"), and returns how many findings each known limit explained.
-func runLeakSets(t *testing.T, sets []leakSet, workers int) map[string]leakTally {
+// broad"), and returns how many findings each known limit explained (keep: with the slots, see leakTally).
+func runLeakSets(t *testing.T, sets []leakSet, workers int, keep bool) map[string]leakTally {
 	t.Helper()
 	explained := map[string]leakTally{}
 	for _, set := range sets {
@@ -278,7 +294,7 @@ func runLeakSets(t *testing.T, sets []leakSet, workers int) map[string]leakTally
 			t.Fatalf("%s: no cases", set.name)
 		}
 		start := time.Now()
-		res := sweepLeaks(set.entries, set.cases, workers)
+		res := sweepLeaks(set.entries, set.cases, workers, keep)
 		t.Logf("%s: %d cases checked in %v, %d leaks, %d of them known limits", set.name, len(set.cases), time.Since(start).Round(time.Millisecond), res.total, res.total-len(res.unexplained))
 		for k, n := range res.explained {
 			t := explained[k]
@@ -542,9 +558,10 @@ func TestLeakOracleSample(t *testing.T) {
 	if *leakFull {
 		t.Skip("-leak.full runs TestLeakOracleFull")
 	}
-	explained := runLeakSets(t, sampleSets(t, leakAtoms()), sampleWorkers)
+	sets := sampleSets(t, leakAtoms())
+	explained := runLeakSets(t, sets, sampleWorkers, true)
 	if !*leakExtraAll {
-		checkPins(t, "the sample", explained, samplePins)
+		checkSampleSlots(t, sampleComposition(sets), explained)
 	}
 }
 
@@ -570,7 +587,7 @@ func TestLeakOracleFull(t *testing.T) {
 	if *leakExtraKeys {
 		sets = append(sets, extraSets()...)
 	}
-	explained := runLeakSets(t, sets, runtime.GOMAXPROCS(0))
+	explained := runLeakSets(t, sets, runtime.GOMAXPROCS(0), false)
 	if !*leakExtraAll {
 		pins := fullPins
 		if *leakExtraKeys {

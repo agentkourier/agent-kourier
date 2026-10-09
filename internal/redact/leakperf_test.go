@@ -17,11 +17,15 @@ const (
 
 // A run is quadratic if it takes more than quadraticRatio times as long at the large window as at the small one (a linear one
 // takes three and a quadratic nine, so six is between them: twice what a linear path takes, and two thirds of what a quadratic one
-// does, to leave room for a loaded machine), unless it took under quadraticFloor, and no run may take over slowLimit.
+// does, to leave room for a loaded machine), unless it took under quadraticFloor, and no run may take over slowLimit. A pair over
+// suspectRatio is not taken at one measure, in either direction: a loaded machine can push a linear path's ratio up to the
+// verdict's and a quadratic one's down to it (5.5 against 6, in RF-1a's audit), so it is measured again and the least of each counts.
 const (
 	quadraticRatio = 6
+	suspectRatio   = 4
 	quadraticFloor = 20 * time.Millisecond
 	slowLimit      = 10 * time.Second
+	extraRuns      = 5
 )
 
 // perfEntry is the call that a timing makes: the cut entry, the cut entry for text shown on one line (which reads the text twice,
@@ -69,21 +73,22 @@ func perfInput(i, n int) string {
 	return (sh.prefix + strings.Repeat(sh.unit, n/len(sh.unit)+1))[:n]
 }
 
-// slowOrQuadratic says why the times at the small and the large window are not a linear path's, or returns "".
-func slowOrQuadratic(small, large time.Duration) string {
+// slowOrQuadratic says why the times at the small and the large window are not a linear path's, or returns "": the large is over
+// slowLimit, or over ratio times the small (and over quadraticFloor).
+func slowOrQuadratic(small, large time.Duration, ratio int) string {
 	switch {
 	case large > slowLimit:
 		return "over " + slowLimit.String()
-	case large > quadraticRatio*small && large > quadraticFloor:
-		return fmt.Sprintf("more than %d times as long as at the small window, so a quadratic path", quadraticRatio)
+	case large > time.Duration(ratio)*small && large > quadraticFloor:
+		return fmt.Sprintf("more than %d times as long as at the small window, so a quadratic path", ratio)
 	}
 	return ""
 }
 
 // timeWindows times run at the two windows, in the CPU time the process uses (see cpuTime), the small and the large taken in turn,
-// and says whether the pair is linear. A pair that is not linear is timed again, five times more, and the least of each counts: a loaded
-// machine can slow a run, and not the least of several.
-func timeWindows(run func(window int)) (small, large time.Duration, verdict string) {
+// runs times, and says whether the pair is linear. A pair over suspectRatio is timed again, extraRuns more times, and the least of
+// each counts: a loaded machine can slow a run, and not the least of several.
+func timeWindows(run func(window int), runs int) (small, large time.Duration, verdict string) {
 	measure := func(tries int) {
 		for range tries {
 			for _, w := range []int{smallWindow, largeWindow} {
@@ -99,12 +104,11 @@ func timeWindows(run func(window int)) (small, large time.Duration, verdict stri
 			}
 		}
 	}
-	measure(1)
-	if verdict = slowOrQuadratic(small, large); verdict != "" {
-		measure(5)
-		verdict = slowOrQuadratic(small, large)
+	measure(runs)
+	if slowOrQuadratic(small, large, suspectRatio) != "" {
+		measure(extraRuns)
 	}
-	return small, large, verdict
+	return small, large, slowOrQuadratic(small, large, quadraticRatio)
 }
 
 // TestEntriesAreLinearInTheirWindow holds the entries to their work on repeated units at the production windows: the time at 12000
@@ -117,7 +121,7 @@ func TestEntriesAreLinearInTheirWindow(t *testing.T) {
 	}
 	for i, sh := range perfShapes {
 		for _, e := range sh.via {
-			small, large, verdict := timeWindows(func(n int) { e.run(perfInput(i, n), n) })
+			small, large, verdict := timeWindows(func(n int) { e.run(perfInput(i, n), n) }, 1)
 			t.Logf("%-24s %-16s %10v at %d, %10v at %d", sh.name, e.name, small.Round(time.Microsecond), smallWindow, large.Round(time.Microsecond), largeWindow)
 			if verdict != "" {
 				t.Errorf("%s through %s: %v at %d bytes and %v at %d: %s", sh.name, e.name, small, smallWindow, large, largeWindow, verdict)
@@ -126,8 +130,12 @@ func TestEntriesAreLinearInTheirWindow(t *testing.T) {
 	}
 }
 
+// selfTestRuns is how many times the self-test times each loop.
+const selfTestRuns = 5
+
 // The check sees a quadratic path and passes a linear one, with the work of a loop standing in for a rule: a linear loop and a
-// quadratic one, sized to take milliseconds at the small window.
+// quadratic one, sized to take milliseconds at the small window. The loops are cheap, so each is timed selfTestRuns times and the least
+// of each counts, which keeps the ratios steady on a loaded machine: the quadratic loop's was seen at 5.5 against the verdict's 6 once.
 func TestTimingSeesAQuadraticPath(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing")
@@ -149,10 +157,14 @@ func TestTimingSeesAQuadraticPath(t *testing.T) {
 		}
 		sink += sum
 	}
-	if small, large, verdict := timeWindows(linear); verdict != "" {
+	small, large, verdict := timeWindows(linear, selfTestRuns)
+	t.Logf("linear loop: %v at %d, %v at %d, %.1f times", small, smallWindow, large, largeWindow, float64(large)/float64(small))
+	if verdict != "" {
 		t.Errorf("a linear loop: %v at %d, %v at %d: %s", small, smallWindow, large, largeWindow, verdict)
 	}
-	if small, large, verdict := timeWindows(quadratic); verdict == "" {
+	small, large, verdict = timeWindows(quadratic, selfTestRuns)
+	t.Logf("quadratic loop: %v at %d, %v at %d, %.1f times", small, smallWindow, large, largeWindow, float64(large)/float64(small))
+	if verdict == "" {
 		t.Errorf("a quadratic loop passed: %v at %d, %v at %d", small, smallWindow, large, largeWindow)
 	}
 	_ = sink
