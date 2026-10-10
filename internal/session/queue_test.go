@@ -513,3 +513,33 @@ func TestDuplicateEndPauseWhileThePauseIsBeingEnded(t *testing.T) {
 	}
 	close(release)
 }
+
+// A resend is looked up first (spec 8.2). On an agent with no task list the lookup is refused outright, which
+// is not a failed lookup: asking again never answers, and the turn used to wait as "busy" until it was failed. It is
+// treated as absent, as a lookup that found nothing is, and sent.
+func TestResendOnAnAgentThatCannotListIsSentNotWaitedOn(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.m.cfg.RetryBase, f.m.cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+	f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+		if n == 1 {
+			return fmt.Errorf("send message: %w", agent.ErrBusy)
+		}
+		return turn(h, n, a2a.TaskStateCompleted)
+	}
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return nil, nil, fmt.Errorf("list tasks of context c1: %w", agent.ErrLookupUnsupported)
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+		<-sink.finals
+	}
+	f.agent.mu.Lock()
+	sends, finds, follows := len(f.agent.msgs), len(f.agent.finds), len(f.agent.follows)
+	f.agent.mu.Unlock()
+	if sends != 3 || finds != 1 || follows != 0 {
+		t.Errorf("%d sends, %d lookups, %d follows; want 3 sends (turn 1, turn 2 busy, turn 2 again), one lookup and nothing followed", sends, finds, follows)
+	}
+}

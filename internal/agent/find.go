@@ -102,10 +102,23 @@ func (a *Agent) listTasks(ctx context.Context, conn Conn, req *a2a.ListTasksRequ
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.UnaryTimeout)
 	defer cancel()
 	page, err := conn.ListTasks(ctx, req)
+	if refusedLocally(err) {
+		// On a send this means busy (typed), but a list is never busy: the agent has no list (A2A 0.3).
+		return nil, fmt.Errorf("list tasks of context %s: %w: %w", req.ContextID, ErrLookupUnsupported, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list tasks of context %s: %w", req.ContextID, typed(classOnly(err), false))
 	}
 	return page, nil
+}
+
+// refusedLocally reports whether err is the client's own "not supported": the SDK's 0.3 transport has no
+// tasks/list and answers ErrUnsupportedOperation without a request. A -32004 that an agent answered with
+// arrives as an *a2a.Error that wraps the same sentinel, and means what it always has (busy, or in a lifecycle
+// operation): it must stay ErrBusy, so that a 1.0 agent's lookup is retried and never taken for an absent turn.
+func refusedLocally(err error) bool {
+	var wire *a2a.Error
+	return errors.Is(err, a2a.ErrUnsupportedOperation) && !errors.As(err, &wire)
 }
 
 func holds(task *a2a.Task, messageID string) bool {

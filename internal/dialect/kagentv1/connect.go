@@ -17,6 +17,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 	"github.com/a2aproject/a2a-go/v2/a2aext"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -63,6 +64,24 @@ func (d *Dialect) CloseIdleConnections() {
 	}
 }
 
+// cardParser reads an agent card as A2A 1.0 and, when that lists no interface, as A2A 0.3: one
+// `url` and a `preferredTransport`, with no protocolVersion, which is what kagent 0.9.x serves.
+// The 0.3 reader maps it onto the 1.0 shape, so the checks in ConnectEndpoint see one kind of card.
+func cardParser(body []byte) (*a2a.AgentCard, error) {
+	card, err := agentcard.DefaultCardParser(body)
+	if err == nil && len(card.SupportedInterfaces) > 0 {
+		return card, nil
+	}
+	legacy, legacyErr := a2av0.NewAgentCardParser()(body)
+	switch {
+	case legacyErr == nil:
+		return legacy, nil
+	case err == nil:
+		return card, nil // read as 1.0 but lists no interface: ConnectEndpoint's own check says so
+	}
+	return nil, err
+}
+
 // Connect resolves the agent's card through the front door and returns an A2A client for it.
 // It fetches the card from the full .well-known URL, then points every JSON-RPC interface
 // at the front door and drops the others: the card advertises the controller port (:8083),
@@ -92,7 +111,9 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 		return nil, fmt.Errorf("connect to endpoint: %w", err)
 	}
 	hc := d.httpClient(creds, frontDoor)
-	card, err := agentcard.NewResolver(hc).Resolve(ctx, strings.TrimRight(endpoint, "/")+cardPath)
+	resolver := agentcard.NewResolver(hc)
+	resolver.CardParser = cardParser
+	card, err := resolver.Resolve(ctx, strings.TrimRight(endpoint, "/")+cardPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve agent card: %w", err)
 	}
@@ -110,11 +131,13 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 	for _, i := range card.SupportedInterfaces {
 		i.URL = endpoint
 	}
-	// Defaults off, so JSON-RPC over hc is the only transport the client can pick.
+	// Defaults off, so JSON-RPC over hc is the only transport the client can pick: the 1.0 one, and
+	// the 0.3 one for an agent whose interface is 0.3 (kagent 0.9.x), chosen by the interface's version.
 	client, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithDefaultsDisabled(),
 		a2aclient.WithCallInterceptors(a2aext.NewActivator(extensions...)),
-		a2aclient.WithJSONRPCTransport(hc))
+		a2aclient.WithJSONRPCTransport(hc),
+		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: hc}))
 	if err != nil {
 		return nil, fmt.Errorf("create agent client: %w", err)
 	}

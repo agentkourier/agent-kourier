@@ -7,6 +7,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -94,6 +95,14 @@ func (m *Manager) recoverKey(key Key) {
 	if herr == nil && sess.ContextID != "" {
 		for attempt := 1; ; attempt++ { // asked again until it answers: a fallback would render t's output twice
 			task, _, err := backend.Agent.FindTask(m.ctx, sess.ContextID, head.ID)
+			if errors.Is(err, agent.ErrLookupUnsupported) {
+				// The agent has no task list (A2A 0.3, kagent 0.9.x), so asking again would never answer. The head
+				// is taken as not the task's own turn: the task is followed first, and the head is sent after it.
+				// A head that was the task's own, after a crash in the narrow gap between recording the task and
+				// marking the turn delivered, runs a second time; the alternative was to wait for ever.
+				log.Warn("recover: the agent cannot list tasks, so the queued head is not looked up", "head", head.ID, "task", sess.TaskID)
+				break
+			}
 			if err == nil {
 				if task != nil && string(task.ID) == sess.TaskID {
 					turnRow, headIsTask = head, true

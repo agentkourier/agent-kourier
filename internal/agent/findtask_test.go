@@ -186,3 +186,44 @@ func TestFindTaskHasADeadline(t *testing.T) {
 		}
 	})
 }
+
+// A2A 0.3 (kagent 0.9.x) has no tasks/list: the SDK's 0.3 transport refuses ListTasks itself with
+// ErrUnsupportedOperation. On a send that error means busy, and typed() says so; FindTask must not,
+// or the lookup is retried for ever as if the agent were only occupied.
+func TestFindTaskOnAnAgentThatCannotListSaysSo(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemConn(t, nil, nil)
+		m.list = func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+			return nil, a2a.ErrUnsupportedOperation
+		}
+		_, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
+		if !errors.Is(err, ErrLookupUnsupported) {
+			t.Fatalf("err = %v, want ErrLookupUnsupported", err)
+		}
+		if errors.Is(err, ErrBusy) {
+			t.Errorf("err = %v is also ErrBusy: a caller would wait for a task to end that does not exist", err)
+		}
+		if n := countOf(m.calls(), "list"); n != 1 {
+			t.Errorf("%d list calls, want 1: an answer that cannot change is not asked for again", n)
+		}
+	})
+}
+
+// The other side of the same sentinel: a 1.0 agent that answers tasks/list with -32004 (busy, or in a
+// lifecycle operation) sends an *a2a.Error wrapping ErrUnsupportedOperation. That is no refusal to list; it
+// is ErrBusy as before, so the lookup is retried and the turn is never taken for absent and resent.
+func TestFindTaskOnAWire32004IsStillBusy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newMemConn(t, nil, nil)
+		m.list = func(context.Context, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
+			return nil, a2a.NewError(a2a.ErrUnsupportedOperation, "task is not accepting requests")
+		}
+		_, _, err := memAgent(t, m, nil).FindTask(t.Context(), "c1", "turn")
+		if !errors.Is(err, ErrBusy) {
+			t.Errorf("err = %v, want ErrBusy", err)
+		}
+		if errors.Is(err, ErrLookupUnsupported) {
+			t.Errorf("err = %v is ErrLookupUnsupported: a busy 1.0 agent would have its turn resent", err)
+		}
+	})
+}

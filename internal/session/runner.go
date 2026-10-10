@@ -502,6 +502,14 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 		if sess.ContextID != "" {
 			task, holders, err := backend.Agent.FindTask(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), sess.ContextID, r.ID)
 			switch {
+			case errors.Is(err, agent.ErrLookupUnsupported):
+				// The agent has no task list (A2A 0.3, kagent 0.9.x): this turn cannot be looked up, and asking
+				// again changes nothing. It is treated as absent, as a lookup that found nothing is: a duplicate
+				// run is possible after a resend, a turn that waits for ever is not.
+				m.cfg.Logger.Warn("session turn not looked up: the agent cannot list tasks", "key", key, "turn", r.ID)
+				if sess.TaskID != "" { // a task of the session runs: this turn is behind it
+					return idle, hold
+				}
 			case err != nil:
 				c.patient = c.patient || hold != nil // a turn the agent took is never failed
 				return m.retry(t, fmt.Errorf("look up turn %s: %w", r.ID, err))

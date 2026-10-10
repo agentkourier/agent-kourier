@@ -46,6 +46,11 @@ var (
 	// terminal task too), so GetTask the task: if it has ended, drop the answer and tell the
 	// thread; if it is WORKING, apply the age rule.
 	ErrBusy = errors.New("agent: the session has an active task")
+	// ErrLookupUnsupported means the agent cannot list tasks, so FindTask cannot answer: A2A 0.3, which
+	// kagent 0.9.x speaks, has no tasks/list. It is no failure to retry and no busy session: the same
+	// call will never answer. A caller that needs the answer treats it as no information and decides what
+	// to do without one (spec 8.2 says to send nothing when a lookup FAILS; this one cannot succeed).
+	ErrLookupUnsupported = errors.New("agent: the agent cannot list tasks")
 	// ErrNotReady means the -32004 is no busy session, the backend's dialect says (Config.NotReady), but one that
 	// cannot take input yet: it is starting, or in a lifecycle operation, or the agent is not rolled out. The
 	// message was not recorded either, and is resent unchanged after a backoff just the same; what differs is

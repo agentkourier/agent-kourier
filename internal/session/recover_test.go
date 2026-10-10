@@ -768,3 +768,48 @@ func TestRecoverPinnedAnswerWaitsForInteractionsWithoutHandlerErrors(t *testing.
 		t.Fatalf("recovery errors: %s", logs.String())
 	}
 }
+
+// An agent with no task list (A2A 0.3, kagent 0.9.x) can never answer FindTask. Recovery used to treat
+// the refusal as a failure and ask again for ever, with backoff and no notice, so a restart during a run
+// wedged the thread. It is no information instead: the recorded task is followed first, and the queued head is
+// sent after it.
+func TestRecoverDoesNotWaitOnALookupTheAgentCannotAnswer(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return nil, nil, fmt.Errorf("list tasks of context c1: %w", agent.ErrLookupUnsupported)
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	waitFinal(t, sink) // the followed task's, then the head's own
+	sends, finds, follows := f.agent.counts()
+	if follows != 1 || sends != 1 {
+		t.Errorf("%d follows, %d sends; want the task followed once and the head sent once after it", follows, sends)
+	}
+	if finds > 3 {
+		t.Errorf("%d lookups; want a few at most: an answer that cannot come is not asked for again and again", finds)
+	}
+}
+
+// The runner's own lookup, reached before Recover has attached the recorded task, on an agent that cannot
+// list: the head is not sent into the context beside the task that runs (the lookup's "absent" with a task
+// recorded means behind it, and this refusal is taken the same way), and goes out once the task is followed.
+func TestRunnerKeepsAHeadBehindTheRecordedTaskWhenTheAgentCannotList(t *testing.T) {
+	f, sink := restarted(t)
+	queuedBeforeTheRestart(t, f)
+	f.agent.find = func(string, string) (*a2a.Task, []a2a.TaskID, error) {
+		return nil, nil, fmt.Errorf("list tasks of context c1: %w", agent.ErrLookupUnsupported)
+	}
+	if _, err := f.submit(inbound("1")); err != nil { // the redelivered event wakes a runner first
+		t.Fatal(err)
+	}
+	f.recover(t)
+	waitFinal(t, sink)
+	waitFinal(t, sink)
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	follow, send := slices.Index(f.agent.seq, "follow"), slices.Index(f.agent.seq, "send")
+	if follow < 0 || send < 0 || send < follow || len(f.agent.msgs) != 1 {
+		t.Errorf("calls = %v, %d sends; want the task followed before the one send", f.agent.seq, len(f.agent.msgs))
+	}
+}
