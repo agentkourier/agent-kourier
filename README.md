@@ -306,6 +306,10 @@ make fmt lint test build
 The build produces `bin/agent-kourier`. Kubernetes test environments and the real-Slack
 sandbox are available through the Makefile; run `make` to list the targets.
 
+A race build of the whole module puts several gigabytes in the Go build cache for each
+worktree, because package paths are part of the cache key. A checkout per work package
+fills a disk. Check `df -h` before a long run, and run `go clean -cache` after merging.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
