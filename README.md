@@ -274,7 +274,9 @@ metadata:
   namespace: agent-kourier-system
 spec:
   dialect: a2a
-  url: https://ax-gateway.example.internal/a2a
+  url: https://ax-gateway.example.internal/a2a # the exact JSON-RPC endpoint, used as written: a trailing
+                                               # slash is kept, and no redirect is followed (kagent 0.9.x
+                                               # answers a POST without its slash with a 307)
   headers:
     - name: ate-target-actor
       value: agent-kourier-ax/assistant

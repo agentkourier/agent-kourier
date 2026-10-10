@@ -18,40 +18,50 @@ import (
 )
 
 func TestConnectPinsEndpointAndPreservesActorRouting(t *testing.T) {
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		if r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("ate-target-actor") != "default/sre" {
-			t.Errorf("identity or routing header missing")
-		}
-		if r.Header.Get("A2A-Extensions") != "" {
-			t.Error("generic client negotiated kagent HITL")
-		}
-		switch r.URL.Path {
-		case "/a2a/.well-known/agent-card.json":
-			card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://untrusted.invalid/secret", a2a.TransportProtocolJSONRPC)}}
-			_ = json.NewEncoder(w).Encode(card)
-		case "/a2a":
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1","status":{"state":"TASK_STATE_COMPLETED"}}}`))
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-	d := generic.New(time.Second)
-	defer d.CloseIdleConnections()
-	backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + "/a2a/"}}
-	client, err := d.Connect(t.Context(), backend, v1alpha1.AgentRef{Name: "logical", Namespace: "logical"}, dialect.Credentials{Token: secret.New("token"), Headers: dialect.Headers{"ate-target-actor": []secret.Value{secret.New("default/sre")}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: "t1"}); err != nil {
-		t.Fatal(err)
-	}
-	if calls.Load() != 2 {
-		t.Fatalf("calls=%d", calls.Load())
+	// The URL is used as written: kagent 0.9.x answers a POST to ".../agent" with a 307 to ".../agent/", and the
+	// dialect follows no redirect, so an operator who writes the slash needs it sent. The card is under the
+	// endpoint either way.
+	for _, tc := range []struct{ name, suffix, post string }{
+		{"no trailing slash", "/a2a", "/a2a"},
+		{"trailing slash kept", "/a2a/", "/a2a/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("ate-target-actor") != "default/sre" {
+					t.Errorf("identity or routing header missing")
+				}
+				if r.Header.Get("A2A-Extensions") != "" {
+					t.Error("generic client negotiated kagent HITL")
+				}
+				switch r.URL.Path {
+				case "/a2a/.well-known/agent-card.json":
+					card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
+					_ = json.NewEncoder(w).Encode(card)
+				case tc.post:
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1","status":{"state":"TASK_STATE_COMPLETED"}}}`))
+				default:
+					t.Errorf("unexpected path %s, want the card or %s", r.URL.Path, tc.post)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			d := generic.New(time.Second)
+			defer d.CloseIdleConnections()
+			backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + tc.suffix}}
+			client, err := d.Connect(t.Context(), backend, v1alpha1.AgentRef{Name: "logical", Namespace: "logical"}, dialect.Credentials{Token: secret.New("token"), Headers: dialect.Headers{"ate-target-actor": []secret.Value{secret.New("default/sre")}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.GetTask(t.Context(), &a2a.GetTaskRequest{ID: "t1"}); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("calls=%d", calls.Load())
+			}
+		})
 	}
 }
 

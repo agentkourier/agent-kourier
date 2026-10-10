@@ -24,13 +24,16 @@ var _ dialect.Dialect = (*Dialect)(nil)
 // New shares kagent's protected HTTP transport and credential handling.
 func New(timeout time.Duration) *Dialect { return &Dialect{kagentv1.New(timeout)} }
 
-// Endpoint validates the configured endpoint without interpolating logical agent identifiers.
+// Endpoint validates the configured endpoint without interpolating logical agent identifiers. The URL is
+// returned as written, trailing slash included: a router that canonicalizes ".../agent" to ".../agent/"
+// answers a POST with a redirect (kagent 0.9.x does, with a 307), and this dialect follows none, so the
+// operator's spelling is the one sent. The card is fetched under the endpoint with the slash trimmed.
 func (*Dialect) Endpoint(backend *v1alpha1.AgentBackend, _ v1alpha1.AgentRef) (string, error) {
 	u, err := url.Parse(backend.Spec.URL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("A2A endpoint must be an http or https URL without credentials, query or fragment")
 	}
-	return strings.TrimRight(u.String(), "/"), nil
+	return u.String(), nil
 }
 
 // Connect fetches the card and pins JSON-RPC to the configured gateway.
