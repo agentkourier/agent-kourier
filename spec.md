@@ -129,8 +129,8 @@ upstream webhook trigger stays compatible with Agent Kourier.
 - G5. Live-updating agent output in Slack.
 - G6. Declarative configuration, suitable for GitOps: the same resource schema is
   loaded from files during the pilot and served as CRDs after hardening.
-- G7. Backend-neutral: any A2A 1.0 agent works for chat and alerts. Backend-specific
-  behavior is isolated in a dialect.
+- G7. Backend-neutral: any A2A agent, 1.0 or 0.3, works for chat and alerts.
+  Backend-specific behavior is isolated in a dialect.
 - G8. Every inbound event, agent call, and interaction decision is audit logged.
 - G9. Every investigation collects a useful or not-useful rating, so value is measured,
   not assumed.
@@ -318,11 +318,16 @@ aside) the Slack adapter and its client library, so a new package is covered fro
 ### 6.3 Backends
 
 Agent Kourier speaks A2A 1.0 over JSON-RPC: `SendStreamingMessage`, `GetTask`,
-`SubscribeToTask`, `CancelTask`.
+`SubscribeToTask`, `CancelTask`. It also speaks A2A 0.3 JSON-RPC to an agent whose card is a
+0.3 card, such as kagent 0.9.x, through the SDK's compatibility transport. A 0.3 transport has
+no `tasks/list`, so a lookup of a turn on such an agent cannot be answered. Recovery then
+takes the queued turn as not the recorded task's own, so the task is followed first and that
+turn is sent after it, and a resend treats the turn as absent: it is sent, behind a recorded
+task if one runs. A turn may therefore run twice.
 
 | Dialect | Chat and alerts | Approvals | Notes |
 |---|---|---|---|
-| `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text. Replies enqueued after the question pass the same authorization, audit, and deadline checks as Submit before being sent as plain messages. | A2A 1.0 agents without a structured HITL extension, with a card at the exact RPC URL plus `/.well-known/agent-card.json`, as AX serves it |
+| `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text. Replies enqueued after the question pass the same authorization, audit, and deadline checks as Submit before being sent as plain messages. | A2A 1.0 and 0.3 agents without a structured HITL extension, with a card at the exact RPC URL plus `/.well-known/agent-card.json`, as AX serves it |
 | `kagent-v1` | Yes | Yes: tool approvals, ask-user questions, and nested sub-agent interactions, through extension `https://kagent.dev/extensions/hitl/v1` | `POST /agents/{ns}/{name}`, card at `.well-known/agent-card.json`. Auth by bearer token in OIDC mode, or `X-User-Id` in insecure mode. |
 
 kagent 1.0.0-alpha5 validates HITL responses far less than assumed (WP-02, measured). Too
@@ -738,7 +743,7 @@ single run (one history message, one artifact); whether the model was called a s
 time is not measured. A resend carrying a `contextId` (a crash during a thread reply) is not
 deduplicated (WP-03): while the task runs it gets `-32004`, not a live join, and after the
 task ends it starts a second full task. Agent Kourier never blindly resends into an existing
-context. Before resending a turn whose task it has not recorded, it calls `ListTasks` with
+context, except to an agent that cannot list tasks (6.3). Before resending a turn whose task it has not recorded, it calls `ListTasks` with
 the `contextId`, follows `nextPageToken` to the end, and looks for a task whose history
 holds the turn's `messageId` (kagent records it there). Found: reconcile as in 8.3
 (`GetTask`, then `SubscribeToTask` if not terminal). Absent: send. A `-32004` on that send

@@ -39,6 +39,10 @@ tier's, with the token-refresh CronJob).
 
 `<fullname>` is the release name, or `<release>-agent-kourier` when the name does not contain "agent-kourier" (`fullnameOverride` sets it).
 
+Argo CD names the Helm release after the Application. An Application called `cluster-gitops-agent-kourier` makes that the
+fullname, so the Deployment and the Service are not called `agent-kourier`. Anything that addresses them from outside, a
+NetworkPolicy in another namespace for instance, needs the real name, or you set `fullnameOverride`.
+
 ## Values
 
 `values.yaml` documents every key; `values.schema.json` rejects an unknown or mistyped one. The ones you will set:
@@ -156,6 +160,37 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - The token-refresh Job's Role allows `patch` on one named Secret and nothing else. The Dex credentials reach `curl` through
   `--variable` from the environment, so they are never on an argument list; the Job prints no token.
 
+## Cilium and the API server
+
+`networkPolicy.kubeApiServer.cidrs` takes the control plane's addresses, and the chart renders them as an `ipBlock`. kind
+enforces that as written. Cilium, by default, does not. It treats the API server as the `kube-apiserver` entity and not as a
+CIDR, so an `ipBlock` on a node address does not match. The `policy-cidr-match-mode` setting in `cilium-config` changes that,
+and it was empty on the first install. With the policy enabled, the pod's Secret informer times out and the pod exits with
+code 4: `bootstrap: start the secret resolver: secret caches not synced`.
+
+Add a `CiliumNetworkPolicy` beside the chart's. The two add up, so the chart's policy keeps fencing DNS, Slack and the agent:
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agent-kourier-kube-apiserver
+  namespace: agent-kourier
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-kourier
+  egress:
+    - toEntities:
+        - kube-apiserver
+```
+
+To check it, run two throwaway pods in the release namespace, one with the Deployment's pod labels, `app.kubernetes.io/name:
+agent-kourier` and `app.kubernetes.io/instance: <release>`, and one without, each calling `curl -sk
+https://kubernetes.default.svc/version`. The chart's policy selects on both labels, so a pod with only one is not subject to
+it. Before the Cilium policy exists, the labelled pod times out and the other gets a 200. The chart does not render this
+object yet.
+
 ## Probes
 
 `/healthz` is the process, for the startup (80 s) and liveness probes. `/readyz` is the config loaded, the Secret caches synced and the store
@@ -196,6 +231,13 @@ helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.
 
 Or leave the volume out of the release: `--set persistence.existingClaim=agent-kourier-data`, and nothing the chart manages can delete it.
 A ConfigMap you keep is `config.existingConfigMap`, with `rbac.secretNamespaces` naming where its Secrets are.
+
+## Footprint
+
+Measured on a three-worker cluster, idle after a first answered question, the Agent Kourier pod used 15 MiB of memory and about
+2 millicores. The chart's defaults are a 64 MiB request, 50m of CPU and a 256 MiB limit. The agent side is larger. A kagent
+0.9.x controller, its Postgres, the UI, a read-only tool server and one agent together used about 390 MiB, and the agent pod
+was the largest of them at 188 MiB.
 
 ## Tests
 

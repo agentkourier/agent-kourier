@@ -48,8 +48,8 @@ a note there.
   Alertmanager posts to Slack and starts an investigation in that alert's thread,
   with a cooldown per alert, a rate limit and a daily cap. Agent Kourier reads what is
   already posted, so it is never in the paging path.
-- **Any streaming A2A 1.0 backend.** A kagent 1.0 agent, an agent running in Google AX
-  and any other A2A 1.0 agent whose card advertises streaming use the same `Binding`.
+- **Any streaming A2A backend.** A kagent agent, an agent running in Google AX and any
+  other A2A 1.0 or 0.3 agent whose card advertises streaming use the same `Binding`.
   Backend-specific behaviour lives in a dialect.
 - **Teams own their bindings.** A `Binding` is namespaced. The platform team runs the
   broker and the shared Slack connection. An application team wires its own channel
@@ -61,7 +61,7 @@ a note there.
 flowchart LR
     Slack["Slack channel<br/>People and alert messages"]
     AgentKourier["agent-kourier<br/>Bindings, sessions, delivery"]
-    Agents["A2A agents<br/>kagent, Google AX, any streaming A2A 1.0 agent"]
+    Agents["A2A agents<br/>kagent, Google AX, any streaming A2A agent"]
 
     Slack <-->|Messages, answers| AgentKourier
     AgentKourier <-->|A2A| Agents
@@ -197,14 +197,15 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Agent Kourier refuses a tool approval request and posts a notice. Needs a cluster that serves the pod-certificate APIs (see below) | Implemented |
-| Agent backend | Any A2A 1.0 agent whose card advertises streaming, `a2a` dialect. Questions arrive as text | Implemented |
+| Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text | Implemented |
+| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect an agent](docs/getting-started.md#7-connect-an-agent) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Agent backend | Tool approvals answered from Slack | Planned |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full | Implemented |
 | Alert source | Alertmanager webhook, received by Agent Kourier directly | Planned |
 
-The common interface to an agent is streaming A2A 1.0 over JSON-RPC, and Agent Kourier
+The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
 rejects an agent whose card does not advertise streaming. A team can change or add
 a runtime and keep the same messaging configuration. What a thread can do still
 depends on what the backend exposes. See [backend design](spec.md#63-backends) for
@@ -226,7 +227,9 @@ kubectl api-versions | grep certificates.k8s.io/v1beta1
 ```
 
 Without them, use an agent that does not need Substrate, through the `a2a` dialect.
-See [risk R19](spec.md#14-risks).
+kagent 0.9.x is one. It speaks A2A 0.3, which the dialect reads. See
+[Connect an agent](docs/getting-started.md#7-connect-an-agent) for the URL form and the
+limits, and [risk R19](spec.md#14-risks) for why.
 
 ## Status
 
@@ -237,8 +240,10 @@ an audit log, exports Prometheus metrics and can export OpenTelemetry traces. Se
 [observability](docs/observability.md), and [stored data](docs/data.md) for what
 Agent Kourier keeps and for how long.
 
-Start with the [sandbox deployment guide](hack/kind/sandbox/README.md), which runs
-Agent Kourier against a real Slack workspace and a kagent agent in kind. The
+To try it first, use the [sandbox deployment guide](hack/kind/sandbox/README.md), which runs
+Agent Kourier against a real Slack workspace and a kagent agent in kind. To run it on a
+cluster, follow [Run Agent Kourier on a cluster](docs/getting-started.md), and see
+[troubleshooting](docs/troubleshooting.md) when a first install does not answer. The
 [specification](spec.md) records the detailed behaviour, and the
 [roadmap](ROADMAP.md) lists what comes next.
 
