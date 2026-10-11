@@ -26,8 +26,8 @@ team's identity token Secret lives in its own namespace.
 
 ## Why kagent needs a front door
 
-kagent's controller port (8083) trusts identity without verifying it. In insecure mode it takes `X-User-Id`; in OIDC
-mode it decodes the JWT without checking its signature, and a forged `alg: none` token was accepted. It also takes the
+kagent's controller port (8083) trusts identity without verifying it. In insecure mode it takes `X-User-Id`; in its OIDC
+(trusted-proxy) mode, which expects a validating proxy in front, it decodes the JWT without checking its signature, and a forged `alg: none` token was accepted. It also takes the
 acting user from `X-User-Id` or `?user_id=` whenever `X-Agent-Name` is present, even alongside a valid token.
 
 So Agent Kourier calls kagent only through a verifying front door, oauth2-proxy or agentgateway, which validates the

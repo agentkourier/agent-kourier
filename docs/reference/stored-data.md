@@ -110,18 +110,18 @@ U+2028, U+2029) as `\n`. So no such character
 can split a secret's name past the redaction, and none is stored, logged or sent to the agent in the alert and thread
 blocks. What a reader sees stays, an emoji with its glyph and without its presentation selector. There are two shapes:
 **free text** (a pause's hint and questions, an error in a log line, an alert field, and what a thread reply says) keeps its
-line breaks and is cut at 4 KiB at a white space; an **identifier** (an audit field, a Binding's name, the
+line breaks and is cut at 4 KiB at a white space; an **identifier** (an audit row's identifier fields, a Binding's name, the
 name that the chat platform's user cache keeps) is one line, every run of white space a single space, and is read for tokens
 only. A person's display name is not identifier text where it reaches the agent: it is theirs to choose and may say anything,
 so the thread block cleans it again as free text and shows it in an element of its own (`<from>`), apart from the platform's
 user ID (`<id>`), which is what says who wrote a reply. The alert fields and the text of a thread reply that reach the agent are
 the exception to the 4 KiB cut: a field with no white space in it (a Japanese body, a long Grafana link) is read up to 12000
-bytes (4000 for a reply), cut at a character and marked, so its first 3000 UTF-16 units (1000 for a reply) reach the agent,
+bytes (4000 for a reply), cut at a character and marked, so at most 3000 UTF-16 units (1000 for a reply), the escapes and the mark of the cut included, reach the agent,
 redacted, instead of the whole field being replaced by "… (truncated)" (the last run of a cut
-field, back to its last white space, is left out, so that no start of a secret the cut went through is shown; and the text
+field, back to its last white space within its final 1 KiB (or that whole KiB if it holds none), is left out, so that no start of a secret the cut went through is shown; and the text
 is read as it came only up to four times that window, so the work is bounded whatever is sent); the footer is an identifier,
-so its `name: value` pairs (`agent-kourier-key: ns/alertname`) stay and only its tokens are taken out. A token or credential is
-matched both in the text as it came and in the normalized text, so that a word or an invisible character that
+so its `name: value` pairs (`agent-kourier-key: ns/alertname`) stay and only its tokens are taken out. The token layer (Slack, Bearer and Basic credentials, JWTs, OAuth fields and the `sk-` keys) is
+matched both in the text as it came and in the normalized text; the rest is matched in the normalized text only. Reading both is so that a word or an invisible character that
 normalization closes up cannot hide one. The same set of characters is deleted from the text that is shown in
 Slack (`chat.Clean`), so display and redaction cannot disagree on it.
 
@@ -133,14 +133,14 @@ and at the end of a URL's user and password. A value that is itself a key is not
 key: a quoted name closed by its quote before the `:` (with white space allowed between them, anywhere), or a name and `: ` with white
 space after the colon (and, for a key that begins its own line under the name, white space before it: `password : x`);
 `password: Password123` and a line of `=======` under it, `key=x`, `secret:hunter2` and `"Session: x"` are values. A line
-under a secret name that begins with a secret pair of another shape (`password : x`, `token = x`, `$env:APIKEY = x`) is
+under a secret name that begins with a secret pair of another shape (`password :x`, `token = x`, `$env:APIKEY = x`) is
 taken whole with the name above it, and so is a compact JSON object on the line under it (`secret:\n  {"db":"x"}`). A `Bearer`
 before a secret-named key and its colon (`type: Bearer` and `credentials:` under it, `bearer token: x`) takes no
 credential: the key has its own value. Markdown emphasis around a name does not hide it (`**Password:** x`,
 `**Password**: x`, `*Token:* x`, `- **API key**: x`). A value does not begin after a blank line unless it is indented under
 its name or its line does not read as prose, a plain word first and more words after it (`Password:`, a blank line and
 `hunter2x` or `hunter2x (rotated)` is a secret; `Token:`, a blank line and `Please rotate it` is prose). A Kubernetes env entry whose `name:`
-is a secret name loses its `value:` when it follows later in the entry, up to eight lines on (comments, blank lines and other
+is a secret name loses its `value:` when it follows later in the entry, with up to eight lines between (comments, blank lines and other
 keys among them), or after a comma, as in JSON, also when the JSON is itself in a string; a line that begins another entry
 (any line that begins with `-`, `- name:` and `---` among them) or an object (a line that begins with `{` or `}`) ends the
 match, so one entry's name does not take the next entry's value, and a name
@@ -149,12 +149,12 @@ indicators, with a tag or an anchor before the indicator or without) under a sec
 more than its key, and a tag or an anchor before a plain or quoted value goes with it (`password: &pw x`, `!!str "x y"`, and
 `password: !important note` loses "note" too); a value that follows a trailing continuation mark (`mysql --password \`, PowerShell's backtick, cmd's
 caret) is the first word of the next line. A token that has a prefix of its own is redacted with no name before it (and by
-identifier text too), in the shape of the real token: GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_` and `ghr_` and their 36 letters
-and digits, the fine-grained `github_pat_` with its 22, an underscore and 59, GitLab's `glpat-`, the `sk-` keys of OpenAI and
+identifier text too), in the shape of the real token: GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_` and `ghr_` and their at least 36 letters
+and digits, the fine-grained `github_pat_` with its at least 22, an underscore and at least 59, GitLab's `glpat-`, the `sk-` keys of OpenAI and
 Anthropic (`sk-proj-`, `sk-svcacct-`, `sk-admin-` and `sk-ant-` from 20 characters with a digit or a capital among them; a bare `sk-`
 from 20 characters with a capital, or with a digit and a run of 20 lower-case letters and digits, so a Title-Case slug is taken
-too and `sk-learn-tutorial-for-beginners-2024` is not), Google's `AIza` (35 characters), Stripe's
-`sk_live_`, `rk_live_` and their `_test_` kind (24 letters and digits), and the `sig=` value of an Azure SAS URL. So "sk-learn",
+too and `sk-learn-tutorial-for-beginners-2024` is not), Google's `AIza` (and at least 35 characters), Stripe's
+`sk_live_`, `rk_live_` and their `_test_` kind (at least 24 letters and digits), and the `sig=` value of an Azure SAS URL. So "sk-learn",
 "AIzawhatever", a pod called `sk-payments-api-7c9d8f6b5-x2k4p`, a namespace called `sk-platform-observability-prod` and
 `network_test_connectivityToService` stay. Text that is shown on one line (an audit row's free text, an alert's title and
 link, a thread author's name and ID) is read twice, with its lines and then joined, so that a flag, a user or a URL's password that
@@ -167,15 +167,16 @@ a name (`password:\n\n` and three backticks: the fence is the value), Terraform'
 `value = "x"` lines, a tag with its value on the next line (`password: !!str\n  x`, left by the one-line entries too), a plain
 scalar that goes on over several lines, a short flag (`-p x`) and a name with no separator (`passwd x`). A secret written where
 a nested key would be, on the line under a secret name (`token:\n  SECRET : x`, `Password:\n    'SECRET': rotated`), is shown
-as the key it looks like by the entries that keep lines (the one-line entries take it). After a blank line a value that
+as the key it looks like by the entries that keep lines; the one-line entries take the unquoted one (`SECRET : x`) but show
+the quoted one too (`'SECRET': rotated`). After a blank line a value that
 begins with a plain word and goes on in words (`password:\n\nletmein now`) is read as prose and left by the entries that keep
-lines (the one-line entries take the word); a one-word paragraph (`Token:\n\nExpired`) is taken in every entry
+lines (the one-line entries take the word); a one-word paragraph (`Token:\n\nExpired`) is taken in every free-text entry (an identifier does not read names)
 (`TestAOneWordParagraphAfterABlankLineIsTaken`). A Markdown legend of a secret word (`**Key**: blue means prod`,
 `**Session**: 42 minutes`) is taken as a name and its value, an over-redaction (`TestAMarkdownLegendOfASecretWordIsTaken`). A URL's password that a line break cuts (`https://admin:x\npassword=y@host`) is taken only if the line below does not
 take its `@` first, because the lines are read before they are joined. And text that reads as a name and a value only once its
 lines are joined is taken in the one-line entries: `Token:`, a blank line and `Please rotate it` shows
 `Token: [redacted] rotate it`, and `Retry with --token`, a line break and `The deploy` loses `The`; the entries that keep lines
-tell the name from the text. The ways the rules leak that these tests do not pin are pinned by the leak oracle (`internal/redact/leaklimits_test.go`): one row for each, with the work package that retires it, and each row held to exactly the inputs where the rules show a secret (a row that applies where they hide it fails the oracle). Among them: an OAuth name followed by a tag, a block header, a continuation mark or `Basic` (`id_token: !x v` shows `v`), and a name whose value is only a tag, a continuation mark or a scheme, or nothing, takes the next field's name (`password: !x token: v`).
+tell the name from the text. The ways the rules leak that these tests do not pin are pinned by the leak oracle (`internal/redact/leaklimits_test.go`): one row for each, with the change that retires it, and each row held, over the inputs the oracle generates, to exactly those where the rules show a secret (a row that applies where they hide it fails the oracle). Among them: an OAuth name followed by a tag, a block header, a continuation mark or `Basic` (`id_token: !x v` shows `v`), and a name whose value is only a tag, a continuation mark or a scheme, or nothing, takes the next field's name (`password: !x token: v`).
 
 In the alert and thread blocks, "&", "<" and ">" are written `&amp;`, `&lt;` and `&gt;`, and so is every character that a
 reader may take for an angle bracket: the full-width and small forms, the single and double guillemets, the mathematical,

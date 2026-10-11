@@ -105,7 +105,6 @@ type Extract struct {
 	// +kubebuilder:validation:Enum=text;title;titleLink;fallback;footer;attachmentText
 	Field MessageField `json:"field"`
 	// Regex is a Go (RE2) regular expression of at most 512 bytes.
-	// +kubebuilder:validation:MaxLength=512
 	Regex string `json:"regex"`
 }
 

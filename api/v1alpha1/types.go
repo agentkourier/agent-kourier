@@ -36,7 +36,8 @@ const (
 // allowedNamespaces.
 type ObjectRef struct {
 	Namespace string `json:"namespace,omitempty"`
-	// +kubebuilder:validation:MinLength=1
+	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+	// letter or digit.
 	Name string `json:"name"`
 }
 
@@ -50,9 +51,11 @@ const DefaultSecretKey = "token"
 
 // SecretKeyRef names one value in a Secret in the referring object's namespace.
 type SecretKeyRef struct {
-	// +kubebuilder:validation:MinLength=1
+	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+	// letter or digit.
 	Name string `json:"name"`
-	// Key selects the entry of the Secret. It defaults to "token".
+	// Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters,
+	// '-', '_' or '.'.
 	// +kubebuilder:default=token
 	// +optional
 	Key string `json:"key,omitempty"`
@@ -60,7 +63,8 @@ type SecretKeyRef struct {
 
 // SecretRef names a Secret in the referring object's namespace whose keys are fixed.
 type SecretRef struct {
-	// +kubebuilder:validation:MinLength=1
+	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
+	// letter or digit.
 	Name string `json:"name"`
 }
 
@@ -101,7 +105,7 @@ type AgentBackendSpec struct {
 	URL string `json:"url"`
 	// Headers are sent on every request.
 	Headers []Header `json:"headers,omitempty"`
-	// AllowedNamespaces lists the namespaces whose Bindings may reference this backend.
+	// AllowedNamespaces lists the namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
@@ -142,7 +146,7 @@ type ChatConnectionSpec struct {
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode).
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
-	// AllowedNamespaces lists the namespaces whose Bindings may reference this connection.
+	// AllowedNamespaces lists the namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
@@ -186,8 +190,8 @@ type AgentRef struct {
 	// Name is the agent's name on the backend.
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-	// Namespace is the agent's namespace on the backend.
-	// +kubebuilder:validation:MinLength=1
+	// Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or
+	// '-', starting and ending with a letter or digit.
 	Namespace string `json:"namespace"`
 }
 

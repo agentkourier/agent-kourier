@@ -50,10 +50,10 @@ Agent Kourier does not validate and passes through unchanged:
 `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` with `OTEL_EXPORTER_OTLP_CLIENT_KEY` (mutual TLS),
 `OTEL_EXPORTER_OTLP_COMPRESSION` (`gzip` or none) and `OTEL_EXPORTER_OTLP_TIMEOUT`
 (milliseconds), each also with the `_TRACES_` infix. `OTEL_EXPORTER_OTLP_INSECURE` is
-ignored: the endpoint's scheme alone decides whether TLS is used. A value among these
+overridden: the endpoint's scheme decides whether TLS is used. A value among these
 that the exporter cannot use is reported as a warning (below), without the value.
 
-Span attribute values are cut to 256 bytes, so an agent-supplied task or context ID
+Span attribute values are cut to 256 characters (up to about 1 KiB of UTF-8), so an agent-supplied task or context ID
 cannot grow a span without limit.
 
 Export runs through a bounded batch queue. After broker shutdown drains its work,

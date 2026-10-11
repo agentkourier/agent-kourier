@@ -90,7 +90,8 @@ causes.
 
 ### `HTTP 307 Temporary Redirect`
 
-The agent's router redirects a POST to the same path with a trailing slash. kagent 0.9.x does.
+The agent's router redirects a POST to the same path with a trailing slash. The kagent 0.9.x installs this was
+written against did.
 Agent Kourier follows no redirects, because a redirect could carry the Binding's token
 somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` dialect sends to the
 URL exactly as written.
@@ -114,7 +115,7 @@ the chart's NetworkPolicy allows the agent only through `networkPolicy.extraEgre
 Agent Kourier never saw the message. Check, in this order:
 
 1. The bot is a member of the channel. An invite is separate from the app being installed.
-2. The Binding's `chat.channel` is the channel ID (`C…`, or `G…`), not the name.
+2. The Binding's `chat.channel` is the channel ID (`C…`; `G…` for an older private channel), not the name.
 3. The app subscribes to `app_mention`, `message.channels` and `message.groups`, and Socket
    Mode is on.
 4. Only one process uses the app token. A second consumer receives a share of the events.

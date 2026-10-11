@@ -1,7 +1,8 @@
 ---
 description: >-
-  Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A agent, wakes it if
-  needed, and brings its findings back into the Slack thread where people can keep the session going.
+  Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A agent, including one
+  that is suspended until it is called, and brings its findings back into the Slack thread where people can keep the
+  session going.
 hide:
   - navigation
   - toc
@@ -16,8 +17,8 @@ hide:
 </div>
 
 <p class="ak-hero__pitch">Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A
-agent, wakes it if needed, and brings its findings back into the Slack thread where people can keep the session
-going.</p>
+agent, including one that is suspended until it is called, and brings its findings back into the Slack thread where
+people can keep the session going.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>

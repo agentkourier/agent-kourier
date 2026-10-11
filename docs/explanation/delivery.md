@@ -5,7 +5,7 @@ promises across a crash, and the windows it accepts.
 
 ## Coming in: at least once, acknowledged only when durable
 
-Slack expects an acknowledgement within 3 seconds, so no agent call happens while a message is being received. The
+Slack expects an acknowledgement within about 3 seconds (documented for HTTP delivery and for interactions), so no agent call happens while a message is being received. The
 adapter writes the turn locally, by its message ID, and only then acknowledges. If the write fails, the event is not
 acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn.
 
@@ -50,7 +50,8 @@ refused, and a stale task that was ended. A message that arrives is not recorded
 With Postgres, one replica leads and does all the work, and a takeover runs the same recovery as a restart, so the
 promises above hold across a failover. What it adds for delivery: a deposed leader's writes are refused, to the store
 by the epoch and to the chat by its own clock, so it cannot finish a stream it had open; and each Slack call or agent
-send already in flight when a pause began can still happen once more. The election, the fencing and the failover are
+send already in flight when a pause began, or an agent send started before its first fenced write, can still happen
+once more. The election, the fencing and the failover are
 explained in [High availability and failover](high-availability.md).
 
 The store, the outbox and the session state are described field by field in [Stored data](../reference/stored-data.md).

@@ -10,8 +10,8 @@ Binding's turns reach one of its agents.
 
     **1. Check the cluster can run it.** kagent 1.0 runs every agent session on Agent Substrate, which needs the
     pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` feature
-    gates and `certificates.k8s.io/v1beta1`. They are off by default through Kubernetes 1.36, and managed EKS cannot
-    enable them. Check:
+    gates and `certificates.k8s.io/v1beta1`. They are off by default through Kubernetes 1.36, and managed EKS through 1.36 cannot
+    enable them. From 1.37 the APIs are GA, but `v1beta1` is still off by default, and the pinned Substrate needs it. Check:
 
     ```sh
     kubectl api-resources --api-group=certificates.k8s.io   # lists clustertrustbundles and podcertificaterequests
@@ -21,7 +21,7 @@ Binding's turns reach one of its agents.
     Without them, use kagent 0.9.x (the other tab) or another agent through the `a2a` dialect.
 
     **2. Put a verifying front door in front of the controller.** Agent Kourier must never call kagent's controller
-    port (8083) directly: in OIDC mode kagent decodes the token without verifying it. See
+    port (8083) directly: in its OIDC (trusted-proxy) mode kagent decodes the token without verifying it. See
     [Put a verifying front door before kagent](front-door.md).
 
     **3. Declare the backend**, pointing at the front door. The dialect adds the agent's path itself:
@@ -39,7 +39,7 @@ Binding's turns reach one of its agents.
     **4. Give each Binding its own token.** A Binding's `identity.tokenSecretRef` names a Secret with an OIDC token the
     front door accepts. kagent binds a session to the identity that created it, so every turn of a Binding uses the
     same token owner. A Binding with `tokenSecretRef` must target an OIDC-mode kagent: in insecure mode kagent ignores
-    the token and, with no `X-User-Id`, runs every turn as `admin@kagent.dev`.
+    the token and takes the user from `?user_id=` or `X-User-Id`; with neither, it runs every turn as `admin@kagent.dev`.
 
     **5. Turn on questions** with `interactions.askUser: true` in the Binding, if the agent should ask people things.
     A tool approval request is denied, the agent receives the denial and the thread is told that this Binding does not allow approvals (approvals from Slack are not built yet).
@@ -57,8 +57,9 @@ Binding's turns reach one of its agents.
     kubectl get svc -n <kagent-namespace>
     ```
 
-    **2. Declare the backend** with the agent's A2A endpoint. Keep the trailing slash: the controller answers a POST
-    without it with a 307, and Agent Kourier follows no redirect.
+    **2. Declare the backend** with the agent's A2A endpoint. Keep the trailing slash: a POST without it was answered
+    with a 307 in the 0.9.x installs this was written against (kagent's own router issues no redirect, so another hop
+    in front of it may be the source), and Agent Kourier follows no redirect.
 
     ```yaml
     config:

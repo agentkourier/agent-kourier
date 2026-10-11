@@ -4,7 +4,7 @@ For a platform engineer connecting Agent Kourier to kagent 1.0 in OIDC mode: at 
 reaches kagent through a proxy that verifies the Binding's token and strips the headers that select a user, and
 nothing else can reach kagent's controller port.
 
-kagent's controller port (8083) trusts identity without verifying it. In OIDC mode it decodes the JWT without checking
+kagent's controller port (8083) trusts identity without verifying it. In its OIDC (trusted-proxy) mode, which expects a validating proxy in front, it decodes the JWT without checking
 its signature (a forged `alg: none` token was accepted), and it takes the acting user from `X-User-Id` or `?user_id=`
 whenever `X-Agent-Name` is present, even with a valid token. The [security model](../explanation/security.md) has the
 background.
@@ -37,8 +37,8 @@ injectRequestHeaders:
   # ... and the Authorization and X-Forwarded-* entries, which this list replaces
 ```
 
-The alpha list replaces oauth2-proxy's default injections, so keep its `Authorization` entry, or no token reaches
-kagent.
+The alpha list replaces the list oauth2-proxy builds from its flags, so keep the `Authorization` entry that
+`--pass-authorization-header` produces, or the token oauth2-proxy would have injected does not reach kagent.
 
 ## 2. Fence the controller
 

@@ -34,7 +34,7 @@ AgentRef names the agent on a backend.
 |---|---|---|---|---|
 | `backendRef` | [ObjectRef](#objectref) | Yes |  |  |
 | `name` | string | Yes |  | Name is the agent's name on the backend. At least 1 character. |
-| `namespace` | string | Yes |  | Namespace is the agent's namespace on the backend. At least 1 character. |
+| `namespace` | string | Yes |  | Namespace is the agent's namespace on the backend: a DNS-1123 label of at most 63 lowercase letters, digits or '-', starting and ending with a letter or digit. |
 
 ## ObjectRef
 
@@ -43,7 +43,7 @@ ObjectRef names a resource in a namespace. An empty namespace means the namespac
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `namespace` | string | No |  |  |
-| `name` | string | Yes |  | At least 1 character. |
+| `name` | string | Yes |  | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
 
 ## Identity
 
@@ -60,8 +60,8 @@ SecretKeyRef names one value in a Secret in the referring object's namespace.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | At least 1 character. |
-| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". |
+| `name` | string | Yes |  | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
+| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters, '-', '_' or '.'. |
 
 ## ChatBinding
 
@@ -106,7 +106,7 @@ Extract pulls one named value out of a message field. The entry's name in Trigge
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `field` | string | Yes |  | Field is the message field the regex runs on. One of `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
-| `regex` | string | Yes |  | Regex is a Go (RE2) regular expression of at most 512 bytes. At most 512 characters. |
+| `regex` | string | Yes |  | Regex is a Go (RE2) regular expression of at most 512 bytes. |
 
 ## TriggerThread
 

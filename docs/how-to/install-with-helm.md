@@ -101,7 +101,7 @@ config:
 1. The `a2a` dialect sends to this URL exactly as written and follows no redirect. Write the trailing slash if the
    agent's route has one.
 2. Add `tokenSecretRef: {name: agent-kourier-agent-token}` here when you created that Secret.
-3. The channel ID, which starts with `C` (`G` for a private channel), not the channel's name.
+3. The channel ID, which starts with `C` (`G` for an older private channel), not the channel's name.
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).

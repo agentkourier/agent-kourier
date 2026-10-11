@@ -21,7 +21,7 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 |---|---|---|---|---|
 | `platform` | string | Yes |  | One of `slack`. |
 | `credentialsSecretRef` | [SecretRef](#secretref) | Yes |  | CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode). |
-| `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this connection. |
+| `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. |
 
 ## SecretRef
 
@@ -29,7 +29,7 @@ SecretRef names a Secret in the referring object's namespace whose keys are fixe
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | At least 1 character. |
+| `name` | string | Yes |  | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
 
 ---
 

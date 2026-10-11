@@ -206,7 +206,7 @@ var (
 // ("password: !!str\n  x"; FreeTextLine leaves it too), a plain scalar that goes on over lines, a short flag
 // ("-p hunter2") and a name with no separator ("passwd hunter2") leave the value. A secret written where a nested key
 // would be, on the line under a secret name ("token:\n  SECRET : x", "Password:\n    'SECRET': rotated"), is shown by
-// FreeText as the key it looks like (FreeTextLine, which joins the lines, takes it). After a blank line a value is taken
+// FreeText as the key it looks like (FreeTextLine, which joins the lines, takes the unquoted one and shows the quoted one). After a blank line a value is taken
 // unless the line reads as prose, a plain word first and more words after it: "password:\n\nletmein now" leaves the word
 // in FreeText (FreeTextLine takes it), and "Token:\n\nExpired", one word, is taken. And text that reads as a name and a
 // value only once its lines are joined is taken by FreeTextLine as one ("Retry with --token\nThe deploy": "The");

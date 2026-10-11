@@ -5,8 +5,8 @@
 <p align="center"><strong>Declarative chat gateway for Kubernetes agents.</strong></p>
 
 Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to
-any A2A agent, wakes it if needed, and brings its findings back into the Slack thread
-where people can keep the session going. A team commits a `Binding` next to its
+any A2A agent, including one that is suspended until it is called, and brings its findings back
+into the Slack thread where people can keep the session going. A team commits a `Binding` next to its
 agent's manifests, and the agent answers mentions, follows up in threads, and
 investigates the alerts a bot already posts to the channel. The broker holds the Slack
 connection, the reply queue and the delivery state, so an Agent Kourier restart loses
@@ -226,7 +226,7 @@ kagent 1.0 runs every agent session on Agent Substrate, and Substrate needs the
 pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and
 `PodCertificateRequest` feature gates and `certificates.k8s.io/v1beta1`. They are off by
 default through Kubernetes 1.36, and the pinned Substrate (0.3.0-alpha1) still needs
-`certificates.k8s.io/v1beta1` on 1.37. Managed EKS cannot enable them. The full and AX kind tiers
+`certificates.k8s.io/v1beta1` on 1.37. Managed EKS through 1.36 cannot enable them, and EKS 1.37 serves the GA `v1` APIs but not `v1beta1`. The full and AX kind tiers
 turn them on, so a cluster that kind runs fine may still not run kagent 1.0. Check the
 target cluster first:
 
@@ -306,7 +306,7 @@ spec:
   dialect: a2a
   url: https://ax-gateway.example.internal/a2a # the exact JSON-RPC endpoint, used as written: a trailing
                                                # slash is kept, and no redirect is followed (kagent 0.9.x
-                                               # answers a POST without its slash with a 307)
+                                               # answered a POST without its slash with a 307 where this was measured)
   headers:
     - name: ate-target-actor
       value: agent-kourier-ax/assistant

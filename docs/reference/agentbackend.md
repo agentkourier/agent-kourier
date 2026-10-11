@@ -22,7 +22,7 @@ AgentBackendSpec is the desired state of an AgentBackend.
 | `dialect` | string | Yes |  | One of `a2a`, `kagent-v1`. |
 | `url` | string | Yes |  | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At least 1 character. |
 | `headers` | [][Header](#header) | No |  | Headers are sent on every request. |
-| `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this backend. |
+| `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. |
 
 ## Header
 
@@ -40,8 +40,8 @@ SecretKeyRef names one value in a Secret in the referring object's namespace.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | At least 1 character. |
-| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". |
+| `name` | string | Yes |  | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
+| `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters, '-', '_' or '.'. |
 
 ---
 

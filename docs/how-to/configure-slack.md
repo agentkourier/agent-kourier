@@ -22,8 +22,8 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
        it (`xapp-`). The manifest cannot make it.
 
     **3. Invite the bot and copy the channel ID.** In each channel a Binding will use, send `/invite @Agent Kourier`
-    (or the display name you gave the bot). Copy the channel ID from the channel's details: it starts with `C`, or `G`
-    for a private channel. A Binding takes the ID, not the name.
+    (or the display name you gave the bot). Copy the channel ID from the channel's details: it starts with `C` (a private
+    channel created before March 2021 may start with `G`). A Binding takes the ID, not the name.
 
     **4. Store the tokens.**
 
@@ -51,7 +51,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     !!! warning "One consumer per app token"
 
-        Socket Mode spreads events across every open connection on an app token. A second process on the same
+        Slack sends each Socket Mode event to one of the open connections on an app token. A second process on the same
         token, such as a laptop sandbox, receives some of the events, and your install seems to ignore messages.
         Stop the other one first.
 

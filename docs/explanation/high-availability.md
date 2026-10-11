@@ -63,7 +63,8 @@ one starts. The timings must satisfy `leaseDuration > renewDeadline > 1.2 × ret
 
 A leader can be paused rather than dead: a long garbage-collection pause, a frozen node, or a partition from the API
 server but not from Postgres or Slack. Its Lease passes to the standby while it still runs. Two defences stop it from
-writing as a second leader.
+writing to the store and the chat as a second leader. Neither covers a call to the agent; see
+[the duplicate that can still happen](#the-duplicate-that-can-still-happen).
 
 **Epoch fencing in Postgres.** The database holds one row, `leadership(epoch, holder, since)`. A replica that takes the
 Lease increments the epoch and keeps the number. Every write transaction of the Postgres store first checks the
@@ -81,8 +82,8 @@ pass. With SQLite there is no Lease, and this fence is not installed.
 
 The standby is Ready: readiness never depends on the Lease, because nothing routes traffic to Agent Kourier in Socket
 Mode and a standby is healthy. It serves `/healthz`, `/readyz` and `/metrics`, keeps its configuration and Secret
-caches fresh, and does no work. It opens no Socket Mode connection: Slack spreads an app's events across every open
-connection, so a second connection would send a share of them to a replica that does nothing.
+caches fresh, and does no work. It opens no Socket Mode connection: Slack sends each event to one of an app's open
+connections, so a second connection would send a share of them to a replica that does nothing.
 
 `agentkourier_leader` is 1 on the leader and 0 on the standby, and `agentkourier_leader_takeovers_total` counts the times
 a replica took the leadership.
@@ -123,8 +124,14 @@ or an upgrade, are where they could.
 Fencing stops a deposed leader's next write. It cannot recall one already sent. Each Slack call or agent send that was
 already in flight when the pause began, one for each concurrent writer (the outbox, each turn's renderer, the
 interactions), can still happen once more. For a stream's append or stop that is harmless as far as the test doubles
-show, since Slack refuses a write to a stream that has been stopped; a post or an edit in flight is the residual
+show, since Slack refuses a write to a message that is not in the streaming state; a post or an edit in flight is the residual
 duplicate. This is accepted, and it is what the failover end-to-end test measures.
+
+**A send that starts after the pause is not fenced either.** Calls to the agent pass through neither fence: the epoch
+check guards store write transactions and the Lease clock guards chat writes. A deposed leader that resumes with a reply
+already queued reads it and can send it to the agent before its first store or chat write, or the Lease loss, ends the
+process. The new leader's recovery can send the same turn, so the turn can run twice. The window is narrow, and the
+failover test does not cover it.
 
 The failover test runs in the fast end-to-end tier with two replicas on Postgres. It kills the leader mid-turn, mid-post and
 mid-storm, and freezes it past its Lease and then resumes it. In each case another process must take the leadership,
