@@ -95,7 +95,8 @@ previous revision.</span>
 Agent Kourier carries them.</p>
 
 A repeat of the same alert attaches to its thread, and its resolve posts a note there. Agent Kourier reads the alert
-your alerting tool already posts to Slack, so it is never in the paging path. Alertmanager has a ready-made preset;
+your alerting tool already posts to Slack, so your alerts arrive as before, whether or not Agent Kourier is running.
+Alertmanager has a ready-made preset;
 another tool's bot needs a trigger of its own.
 
 <div class="ak-strip">

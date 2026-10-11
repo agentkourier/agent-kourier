@@ -17,7 +17,7 @@ no message.
 
 ## What it looks like
 
-https://github.com/user-attachments/assets/d503caad-4341-4824-982a-700ea6a0897f
+https://github.com/user-attachments/assets/c54bb9d3-bcac-45a7-9e35-9d46f16f45c8
 
 An illustration of one alert thread, not captured output:
 
@@ -53,7 +53,8 @@ a note there.
   posts to the channel, named by its bot ID, and starts an investigation in each
   alert's thread, with a cooldown per alert, a rate limit and a daily cap. A preset
   fills it in for Alertmanager; another bot's trigger is written in full. Agent
-  Kourier reads what is already posted, so it is never in the paging path.
+  Kourier only reads what is already posted, so your alerts arrive as before, whether or
+  not Agent Kourier is running.
 - **Any streaming A2A backend.** A kagent agent, an agent running in Google AX and any
   other A2A 1.0 or 0.3 agent whose card advertises streaming use the same `Binding`.
   Backend-specific behaviour lives in a dialect.

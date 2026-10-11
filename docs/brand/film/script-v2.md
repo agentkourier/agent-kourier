@@ -16,7 +16,7 @@ the footage captions) are the script. This table is a copy for reading; if it an
 Both cuts follow the same arc: the problem, the reveal, the product working, the close. Sources are named
 generally (alerts, chat) with the first supported tool beside them (Alertmanager, Slack).
 
-### Demo cut, 101.8 s
+### Demo cut, 107.4 s
 
 | # | Beat | Narration | On screen |
 |---|---|---|---|
@@ -30,8 +30,8 @@ generally (alerts, chat) with the first supported tool beside them (Alertmanager
 | 8 | Real footage: mention | Or skip the alert, and just ask. | **Or just ask.** A mention opens its own thread. |
 | 9 | Real footage: question | When the agent needs a decision, it asks, and waits for your answer. | **It asks when it needs to.** Answer in the thread and it carries on. |
 | 10 | Real footage: restart | And if Agent Kourier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two. | **A restart loses no message.** The thread still finishes, once. |
-| 11 | Setup, animated | Teams add one Binding, in YAML, next to their agent. The platform wiring is shared. | **One Binding per channel.** Declared in YAML, next to your agent. The Binding the demo ran with. |
-| 12 | Close, animated | It works with kagent, or any streaming A2A agent. Slack and Alertmanager first, built for more. And never in your paging path. Agent Kourier. Every thread, a live agent session. | Pills: kagent or any streaming A2A agent · Slack and Alertmanager first, built for more · Never in your paging path. End card: **Agent Kourier.** Every thread, a live agent session. The always-on chat gateway for A2A agents on Kubernetes. |
+| 11 | Setup, animated | Teams add one Binding, in YAML, next to their agent. The platform wiring is shared. | **One Binding per channel.** Declared in YAML, next to your agent. The Binding the demo ran with, its channel ID replaced by a placeholder. |
+| 12 | Close, animated | Bring the agent you have: kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Start with Slack and Alertmanager; it's built for more. Agent Kourier. Every thread, a live agent session. | Pills: kagent, or any A2A agent that streams · It answers, asks back, and keeps the context · Start with Slack and Alertmanager, built for more. End card: **Agent Kourier.** Every thread, a live agent session. The always-on chat gateway for A2A agents on Kubernetes. |
 
 ### Teaser, 20 s
 
@@ -41,6 +41,15 @@ generally (alerts, chat) with the first supported tool beside them (Alertmanager
 | 2 | Reveal, animated | Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes. | **Introducing Agent Kourier.** The always-on chat gateway for A2A agents on Kubernetes. |
 | 3 | Real footage | Alerts and questions become live agent sessions, right in the thread. Slack first. | An alert opens a session. · Reply in the thread. · Or just ask. |
 | 4 | End card | | **Agent Kourier.** Every thread, a live agent session. |
+
+### The close
+
+The three closing points answer what a viewer still wants to know after watching it work: does my agent
+qualify, is this a real conversation or a one-shot bot, and am I tied to these tools. An earlier close said
+"Never in your paging path"; the owner found it jargon and too narrowly about alerts (2026-10-11), so the
+alerting-safety point lives in the README and the close sells the general product. Not claimed, because they
+are not built or would overstate: steering an agent mid-turn (a reply is queued until the turn ends) and
+tool approvals from Slack (planned).
 
 ### Narration
 
