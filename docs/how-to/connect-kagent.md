@@ -42,7 +42,7 @@ Binding's turns reach one of its agents.
     the token and, with no `X-User-Id`, runs every turn as `admin@kagent.dev`.
 
     **5. Turn on questions** with `interactions.askUser: true` in the Binding, if the agent should ask people things.
-    A tool approval request is refused and the thread is told: approvals from Slack are not built yet.
+    A tool approval request is denied, the agent receives the denial and the thread is told: approvals from Slack are not built yet.
 
 === "kagent 0.9.x"
 

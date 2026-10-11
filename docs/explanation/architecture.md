@@ -132,7 +132,7 @@ The generic A2A dialect supports text continuation: a plain-text `input-required
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
 paused task. The kagent dialect additionally understands structured questions and
-tool step cards. A tool approval request is refused with a notice.
+tool step cards. A tool approval request is denied, and the thread is told.
 
 Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with
 no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
