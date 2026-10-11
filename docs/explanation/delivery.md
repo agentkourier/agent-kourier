@@ -49,9 +49,9 @@ refused, and a stale task that was ended. A message that arrives is not recorded
 
 With Postgres, one replica leads and does all the work, and a takeover runs the same recovery as a restart, so the
 promises above hold across a failover. What it adds for delivery: a deposed leader's writes are refused, to the store
-by the epoch and to the chat by its own clock, so it cannot finish a stream it had open; and each Slack call or agent
-send already in flight when a pause began, or an agent send started before its first fenced write, can still happen
-once more. The election, the fencing and the failover are
+by the epoch and to the chat by its own clock, so it cannot finish a stream it had open; its sends, answers and
+cancels to the agent are refused by the same clock, so it cannot send a reply that was queued; and each Slack call or
+agent send already in flight when a pause began can still happen once more. The election, the fencing and the failover are
 explained in [High availability and failover](high-availability.md).
 
 The store, the outbox and the session state are described field by field in [Stored data](../reference/stored-data.md).

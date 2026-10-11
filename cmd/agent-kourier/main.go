@@ -27,7 +27,8 @@
 //
 // It exits 0 after a signal, 1 when Slack rejects the tokens, 2 for a wrong config or wiring (or an
 // unreadable variable), 3 when RBAC denies it the Secrets, 4 for any other failure, and 5 when it was the leader and
-// lost the lease or met a stale epoch (spec D37): it ends at once, and Kubernetes restarts it as a standby.
+// lost the lease, met a stale epoch, or had a chat write or an agent call refused because its lease was past the renew deadline
+// (spec D37): it ends at once, and Kubernetes restarts it as a standby.
 package main
 
 import (

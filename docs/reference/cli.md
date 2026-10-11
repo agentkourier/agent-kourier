@@ -50,7 +50,7 @@ timings mean for a takeover.
 | 2 | The config, the wiring, or an environment variable is wrong. |
 | 3 | The API server denied access to Secrets. |
 | 4 | Any other failure, such as the Secret caches not syncing. |
-| 5 | It was the leader and lost the lease or met a stale epoch. It ends at once, and Kubernetes restarts it as a standby. |
+| 5 | It was the leader and lost the lease, met a stale epoch, or had a chat write or an agent call refused because its lease was past the renew deadline. It ends at once, and Kubernetes restarts it as a standby. |
 
 ## `agent-kourier dry-run`
 

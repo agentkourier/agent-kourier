@@ -41,6 +41,10 @@ type Options struct {
 	// Binding's namespace/name. Turns run concurrently, so it may be called from several
 	// goroutines at once and must be safe for that. Required.
 	OnRejected func(binding string)
+	// fence, when set, refuses the calls that change what the agent holds (a send, an answer, a cancel) of a leader whose
+	// lease is past its renew deadline (fenceAgent). Nil with SQLite, which has no lease. Set only by the leader half, which is
+	// where the Bindings of a running broker are built.
+	fence *leaseFence
 }
 
 // kit is what one dialect needs: the dialect itself, the pool that connects through it, its
@@ -134,10 +138,14 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	if err != nil {
 		return session.Backend{}, fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
+	var ag session.AgentAPI = k.pool.Agent(src.Target())
+	if b.opts.fence != nil {
+		ag = fenceAgent(ag, b.opts.fence)
+	}
 	return session.Backend{
 		Name: v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), AgentName: v1alpha1.NamespacedName(rb.Binding.Spec.Agent.Namespace, rb.Binding.Spec.Agent.Name), Dialect: string(rb.Backend.Spec.Dialect),
 		ThreadTTL:     rb.Binding.Spec.Session.ThreadTTL.Duration,
-		Agent:         k.pool.Agent(src.Target()),
+		Agent:         ag,
 		Attribute:     k.attribute,
 		Rejected:      src.Rejected,
 		Identity:      src.Identity(),

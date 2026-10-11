@@ -20,8 +20,8 @@ import (
 )
 
 // ExitLeadershipLost is the exit code of a replica that was the leader and no longer is: its lease lapsed or could
-// not be renewed, a write found that another replica has led since (store.ErrDeposed), or a chat write was refused because
-// the lease is past its renew deadline (ErrChatFenced). The process ends at
+// not be renewed, a write found that another replica has led since (store.ErrDeposed), or a chat write or an agent call was
+// refused because the lease is past its renew deadline (ErrChatFenced, ErrAgentFenced). The process ends at
 // once, with no graceful drain, since a drain would post (spec D37); Kubernetes restarts it as a standby.
 const ExitLeadershipLost = 5
 
@@ -195,7 +195,7 @@ type candidacyCallbacks struct {
 
 // startCandidacy begins to ask for the Lease. The goroutine ends with stop, or when the Lease is lost, which calls
 // cb.lost; it does not stand again, since the process is to end. If lease is not nil it is told of every write of the Lease
-// that the API server accepted (renewWatch), which is what chatFence reads.
+// that the API server accepted (renewWatch), which is what leaseFence reads.
 func startCandidacy(ctx context.Context, client kubernetes.Interface, cfg ElectionConfig, log *slog.Logger, lease *leaseClock, cb candidacyCallbacks) (*candidacy, error) {
 	cfg = cfg.withDefaults()
 	lock := &resourcelock.LeaseLock{

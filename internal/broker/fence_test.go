@@ -321,7 +321,7 @@ func newFenceUnderTest(limit time.Duration) *fenceUnderTest {
 	f := &fenceUnderTest{clock: newStepClock(), inner: &recordingPlatform{}}
 	f.lease = newLeaseClock(f.clock.now)
 	f.lease.renewed(f.clock.now())
-	f.platform = fenceChat(f.inner, &chatFence{clock: f.lease, limit: limit, stop: func(reason string) {
+	f.platform = fenceChat(f.inner, &leaseFence{clock: f.lease, limit: limit, stop: func(reason string) {
 		f.mu.Lock()
 		f.stops = append(f.stops, reason)
 		f.mu.Unlock()
@@ -397,7 +397,7 @@ func TestChatFenceRefusesEveryWriteOncePastTheRenewDeadlineAndNoRead(t *testing.
 func TestChatFenceRefusesWhenTheLeaseWasNeverRenewed(t *testing.T) {
 	inner := &recordingPlatform{}
 	var stops int
-	p := fenceChat(inner, &chatFence{clock: newLeaseClock(nil), limit: time.Hour, stop: func(string) { stops++ }})
+	p := fenceChat(inner, &leaseFence{clock: newLeaseClock(nil), limit: time.Hour, stop: func(string) { stops++ }})
 	if _, err := p.Post(t.Context(), chat.Target{}, chat.Outgoing{}, "tag"); !errors.Is(err, ErrChatFenced) || len(inner.seen()) != 0 || stops != 1 {
 		t.Errorf("Post = %v, %d platform calls, %d stops; want ErrChatFenced, none, one", err, len(inner.seen()), stops)
 	}
@@ -432,7 +432,7 @@ type permalinkPlatform struct{ *recordingPlatform }
 func (permalinkPlatform) Permalink(r chat.Ref) (string, bool) { return "link/" + r.ID, true }
 
 func TestChatFencePassesPermalinksOn(t *testing.T) {
-	f := &chatFence{clock: newLeaseClock(nil), limit: time.Hour, stop: func(string) {}}
+	f := &leaseFence{clock: newLeaseClock(nil), limit: time.Hour, stop: func(string) {}}
 	with, ok := fenceChat(permalinkPlatform{&recordingPlatform{}}, f).(chat.Permalinker)
 	if !ok {
 		t.Fatal("the fenced platform is not a chat.Permalinker")
@@ -464,7 +464,7 @@ var errThreadRead = errors.New("the platform's own error")
 // read a thread is told of by the sentinel, from the wrapper that every platform is behind.
 func TestChatFencePassesThreadReadsOnAndSaysWhenThePlatformCannot(t *testing.T) {
 	var stops []string
-	fence := &chatFence{clock: newLeaseClock(nil), limit: time.Second, stop: func(reason string) { stops = append(stops, reason) }} // never renewed: a write is refused
+	fence := &leaseFence{clock: newLeaseClock(nil), limit: time.Second, stop: func(reason string) { stops = append(stops, reason) }} // never renewed: a write is refused
 	inner := &threadPlatform{recordingPlatform: &recordingPlatform{}}
 	reader, ok := fenceChat(inner, fence).(chat.ThreadReader)
 	if !ok {
@@ -503,7 +503,7 @@ func TestChatFenceIsBoundedByTheRenewDeadlineNotTheLeaseDuration(t *testing.T) {
 		"the timings of the chart's values": {LeaseDuration: 9 * time.Second, RenewDeadline: 6 * time.Second, RetryPeriod: 2 * time.Second},
 		"a test's":                          testElection,
 	} {
-		f := newChatFence(cfg, newLeaseClock(nil), func(string) {})
+		f := newLeaseFence(cfg, newLeaseClock(nil), func(string) {})
 		want := cfg.withDefaults()
 		if f.limit != want.RenewDeadline || f.limit >= want.LeaseDuration {
 			t.Errorf("%s: the fence's limit is %s; want the renew deadline, %s, which is under the lease duration, %s", name, f.limit, want.RenewDeadline, want.LeaseDuration)

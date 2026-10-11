@@ -31,9 +31,10 @@ import (
 // What only the leader runs follows, as leaderHalf.start has it: the audit writer, the Bindings, the chat platform,
 // the outbox, the session manager and its recovery, the sweeps, the interactions and the chat connection. With SQLite
 // it starts at once. With Postgres a replica first wins a Kubernetes Lease (cfg.Election) and is given the next epoch
-// by the store, which fences every write of a replica that is no longer the leader, and its chat platform refuses every
-// write once the lease is past its renew deadline (chatFence); a replica that loses the lease, meets a stale epoch or is
-// refused a chat write ends the process at once (ExitLeadershipLost).
+// by the store, which fences every write of a replica that is no longer the leader, and its chat platform and its agent
+// calls that change the agent (a send, an answer, a cancel) are refused once the lease is past its renew deadline
+// (leaseFence); a replica that loses the lease, meets a stale epoch or is refused a chat write or an agent call ends the
+// process at once (ExitLeadershipLost).
 func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if err := cfg.validate(); err != nil {
 		return err
@@ -172,15 +173,15 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 
 	// The leader half starts here with SQLite, and with a fencing store when the lease is won and the store has its
 	// epoch. Whatever ends it, or fails to start it, is sent to leaderDone.
-	// Besides the store's epoch, a leader's writes to the chat are fenced by its own clock: once its lease is past the renew
-	// deadline it writes nothing, and ends (chatFence). Only a replica with a Lease has one to be past.
+	// Besides the store's epoch, a leader's writes to the chat and its sends, answers and cancels to the agent are fenced by its
+	// own clock: once its lease is past the renew deadline it makes none, and ends (leaseFence). Only a replica with a Lease has one to be past.
 	var lease *leaseClock
-	var guard *chatFence
+	var guard *leaseFence
 	if fenced != nil {
 		lease = newLeaseClock(cfg.leaseNow)
-		guard = newChatFence(cfg.Election, lease, fail.now)
+		guard = newLeaseFence(cfg.Election, lease, fail.now)
 	}
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, chatFence: guard}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()

@@ -113,8 +113,8 @@ renewing after the renew deadline and **exits at once**, 5 s before a standby ma
 takes it a lease duration after the leader's last renewal. After a crash, a deleted pod or a lost node, work resumes in about 15 s plus
 Agent Kourier's start-up. A leader that stops on a signal (a rolling update, a drain) finishes its ordered shutdown and hands the lease over, so
 the standby takes it after the old leader's ordered shutdown (up to 25 s), at its next attempt. Every write is also fenced by an epoch in the database, so a leader that was paused past its
-lease cannot write when it wakes: the write fails and the process exits (exit code 5). What fencing cannot cover is a Slack post or an
-agent send that the paused leader had already begun, or an agent send it starts before its first fenced write, which can happen once more (see [High availability and failover](../../docs/explanation/high-availability.md)).
+lease cannot write when it wakes: the write fails and the process exits (exit code 5). Its chat writes and its sends, answers and cancels to the agent are refused too, once its lease is past the renew deadline. What fencing cannot cover is a Slack post or an
+agent send that the paused leader had already begun, which can happen once more (see [High availability and failover](../../docs/explanation/high-availability.md)).
 
 Set `affinity` (a `podAntiAffinity` on `app.kubernetes.io/name: agent-kourier`) so the two replicas do not share a node, which the chart does not
 do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain cannot take both.

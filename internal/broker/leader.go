@@ -26,9 +26,10 @@ type leaderHalf struct {
 	metrics *Metrics
 	boot    *Config
 	st      openedStore
-	// chatFence refuses the chat writes of a leader whose lease is past its renew deadline. Nil with SQLite, which has no
-	// lease: openPlatform is the one place the platform is built, so that no write to the chat goes round it.
-	chatFence *chatFence
+	// leaseFence refuses the chat writes, and the sends, answers and cancels to the agent, of a leader whose lease is past its
+	// renew deadline. Nil with SQLite, which has no lease: openPlatform is the one place the platform is built, and start the one
+	// place the Bindings are, so that no write to the chat and no call that changes the agent goes round it.
+	leaseFence *leaseFence
 }
 
 // openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
@@ -39,8 +40,8 @@ func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected b
 	if err != nil {
 		return builtPlatform{}, err
 	}
-	if h.chatFence != nil {
-		p.Platform = fenceChat(p.Platform, h.chatFence)
+	if h.leaseFence != nil {
+		p.Platform = fenceChat(p.Platform, h.leaseFence)
 	}
 	return p, nil
 }
@@ -61,7 +62,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected})
+	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected, fence: h.leaseFence})
 	if err != nil {
 		return nil, err
 	}

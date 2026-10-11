@@ -62,9 +62,9 @@ one starts. The timings must satisfy `leaseDuration > renewDeadline > 1.2 × ret
 ## Fencing: when the timing is not enough
 
 A leader can be paused rather than dead: a long garbage-collection pause, a frozen node, or a partition from the API
-server but not from Postgres or Slack. Its Lease passes to the standby while it still runs. Two defences stop it from
-writing to the store and the chat as a second leader. Neither covers a call to the agent; see
-[the duplicate that can still happen](#the-duplicate-that-can-still-happen).
+server but not from Postgres or Slack. Its Lease passes to the standby while it still runs. Three defences stop it from
+writing to the store and the chat, and from sending to the agent, as a second leader. A call that was already in flight
+when the pause began is out of their reach; see [the duplicate that can still happen](#the-duplicate-that-can-still-happen).
 
 **Epoch fencing in Postgres.** The database holds one row, `leadership(epoch, holder, since)`. A replica that takes the
 Lease increments the epoch and keeps the number. Every write transaction of the Postgres store first checks the
@@ -77,6 +77,17 @@ So every write to the chat (a post, an edit, a stream's start, append and stop, 
 and the process stopped, once the monotonic clock is past the last accepted renewal of the Lease plus the renew
 deadline. The monotonic clock keeps counting through a pause, so the first call after one sees a stale Lease. Reads
 pass. With SQLite there is no Lease, and this fence is not installed.
+
+**Calls to the agent fenced on the replica.** The same check on the Lease clock guards the calls that change what the
+agent holds: sending a turn, answering a pause (a question or a tool approval) and cancelling a task. A leader that
+resumes after a pause with a reply already queued, or an answer already recorded, would otherwise read it and send it
+before its first write to the store or the chat. Past the renew deadline the call is refused, it never reaches the
+agent, and the process is stopped with exit code 5. The refused turn is not lost: it is still queued, because the
+refusal ends the process before anything marks it delivered (a sent turn leaves the queue when the agent names its task), and
+the new leader's recovery sends it. As after any
+restart, a turn of a session that already has a context is looked up on the agent first. A recorded answer stays recorded as answered, and the new leader sends it again when it
+finds the task paused. Calls that only read pass: getting a task, looking up a turn by its message ID, and following a
+task.
 
 ## What the standby does
 
@@ -127,16 +138,22 @@ interactions), can still happen once more. For a stream's append or stop that is
 show, since Slack refuses a write to a message that is not in the streaming state; a post or an edit in flight is the residual
 duplicate. This is accepted, and it is what the failover end-to-end test measures.
 
-**A send that starts after the pause is not fenced either.** Calls to the agent pass through neither fence: the epoch
-check guards store write transactions and the Lease clock guards chat writes. A deposed leader that resumes with a reply
-already queued reads it and can send it to the agent before its first store or chat write, or the Lease loss, ends the
-process. The new leader's recovery can send the same turn, so the turn can run twice. The window is narrow, and the
-failover test does not cover it.
+**A send that starts after the pause is refused.** Between the renew deadline and the moment a standby takes the Lease
+(a lease duration after the last renewal it saw) the old leader's writes to the database still pass the epoch check,
+because nothing has changed the epoch yet. What stops it from sending then is the Lease clock, which refuses the send, the
+answer and the cancel as it refuses a chat write. The check runs when the call starts, and
+connecting to the agent sits between the check and the request, so a leader that is frozen after the check can still send
+when it is resumed, whether or not a standby has taken the Lease by then: nothing checks the Lease again before the
+request. The fence does not cut a call that has already begun. What the stream's events cause is stopped where it is
+written: the process ends at the first chat write, at the first call that changes the agent, or at the first store write
+once a standby has taken the Lease; until then a store write passes. An answer that the agent rejects is followed by the cancel
+of the task it wedged, which belongs to that answer and is not checked again.
 
 The failover test runs in the fast end-to-end tier with two replicas on Postgres. It kills the leader mid-turn, mid-post and
-mid-storm, and freezes it past its Lease and then resumes it. In each case another process must take the leadership,
-and the fake Slack's record must show every reply once. The stalled-leader case is the one that found a leader
-finishing its open stream on resume, which is why chat writes are fenced on the replica.
+mid-storm, and freezes it past its Lease and then resumes it. In each case another process must take the leadership, and
+the fake Slack's record must show every reply once. The stalled-leader case is the one that found a leader finishing its
+open stream on resume, which is why chat writes are fenced on the replica. The failover test does not cover a send that a
+resumed leader starts; that a leader past its renew deadline sends nothing to the agent is shown by the broker's unit tests.
 
 ## Stopping everything
 
@@ -147,7 +164,8 @@ replicas down, nothing runs and the alerts your alerting tool posts still reach 
 
 The liveness probe asks `/healthz` every 10 seconds and restarts the container after 3 misses in a row, about 30
 seconds. A frozen process answers nothing, so that is also how long a paused pod is left before Kubernetes restarts
-it. The chat fence has stopped its writes long before.
+it. The Lease fence has refused its chat writes and its calls that change the agent since the renew deadline, which is
+long before.
 
 ## Related
 
