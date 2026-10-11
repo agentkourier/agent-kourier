@@ -18,9 +18,6 @@ no message.
 
 ## What it looks like
 
-A 100-second demo, recorded in the kind sandbox against seeded faults (the agent's output is real;
-the footage is sped up in places):
-
 https://github.com/user-attachments/assets/d503caad-4341-4824-982a-700ea6a0897f
 
 An illustration of one alert thread, not captured output:
