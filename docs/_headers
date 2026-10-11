@@ -1,0 +1,14 @@
+# Cloudflare Pages response headers (https://developers.cloudflare.com/pages/configuration/headers/).
+# MkDocs names the stylesheet and scripts by path, not by content hash, so a short cache keeps a
+# style fix from hiding behind a visitor's browser cache for hours. Material's own assets carry a hash
+# in their file names and may be cached long.
+/stylesheets/*
+  Cache-Control: public, max-age=300, must-revalidate
+/*.html
+  Cache-Control: public, max-age=300, must-revalidate
+/
+  Cache-Control: public, max-age=300, must-revalidate
+/assets/stylesheets/*
+  Cache-Control: public, max-age=31536000, immutable
+/assets/javascripts/*
+  Cache-Control: public, max-age=31536000, immutable
