@@ -1,6 +1,11 @@
-# Agent Kourier
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/assets/png/lockup-horizontal-dark-2240x480.png">
+    <img src="docs/brand/assets/png/lockup-horizontal-2240x480.png" alt="Agent Kourier" width="440">
+  </picture>
+</h1>
 
-**Declarative chat gateway for Kubernetes agents.**
+<p align="center"><strong>Declarative chat gateway for Kubernetes agents.</strong></p>
 
 Agent Kourier puts your A2A agents in Slack. A team commits a `Binding` next to its
 agent's manifests, and the agent answers mentions, follows up in threads, and
@@ -13,6 +18,11 @@ loses no message.
 [Specification](spec.md)
 
 ## What it looks like
+
+A 100-second demo, recorded in the kind sandbox against seeded faults (the agent's output is real;
+the footage is sped up in places):
+
+https://github.com/user-attachments/assets/d503caad-4341-4824-982a-700ea6a0897f
 
 An illustration of one alert thread, not captured output:
 

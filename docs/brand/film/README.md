@@ -62,7 +62,22 @@ node build.mjs sheets && node build.mjs storyboard
 ```
 
 Rules the v2 film keeps: every Slack frame is a real recording of the kind sandbox (seeded faults, real agent
-output), cropped to the message list or the thread so the workspace name never shows; sped-up footage carries a
-speed label; the Binding on screen is the one the demo ran with; Slack is named as the first chat tool, not the only one.
+output), cropped to the message list or the thread so the workspace name never shows; sped-up footage is
+disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with; Slack is named as the first chat tool, not the only one.
 The Chrome extension's pointer is painted out only where it sat on blank chrome; shots where it covered text were reframed or retimed.
 
+### The copy in the project README
+
+The project README plays the 16:9 demo from a GitHub attachment
+(`https://github.com/user-attachments/assets/d503caad-4341-4824-982a-700ea6a0897f`). Attachments on the
+free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 600 kb/s
+(8.5 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
+repository without submitting it, and replace the URL in `README.md` with the one GitHub inserts.
+
+```sh
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 600k -pass 1 -an -f null /dev/null
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 600k -pass 2 \
+  -c:a aac -b:a 112k -movflags +faststart build/readme/agent-kourier-demo.mp4
+```
+
+The attachment belongs to a private repository, so only people who can see the repository can play it.
