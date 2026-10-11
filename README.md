@@ -1,8 +1,5 @@
 <h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/assets/png/lockup-horizontal-dark-2240x480.png">
-    <img src="docs/brand/assets/png/lockup-horizontal-2240x480.png" alt="Agent Kourier" width="440">
-  </picture>
+  <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: every thread, a live agent session." width="100%">
 </h1>
 
 <p align="center"><strong>Declarative chat gateway for Kubernetes agents.</strong></p>
