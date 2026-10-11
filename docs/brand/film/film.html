@@ -48,14 +48,15 @@ const COPY = {
   yaml: { '16x9': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']],
           '1x1': [['One Binding per channel.'], ['Declared in YAML, next to your agent.']],
           '9x16': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']] },
-  pills: ['kagent or any streaming A2A agent', 'Slack and Alertmanager first, built for more', 'Never in your paging path'],
-  pillAt: [0.2, 4.0, 7.2],
+  pills: ['kagent, or any A2A agent that streams', 'It answers, asks back, and keeps the context', 'Start with Slack and Alertmanager, built for more'],
+  pillAt: [0.2, 5.1, 11.6],
   can: ['logs', 'rollouts', 'events'],
   hook: 'Every thread, a live agent session.',
   category: 'The always-on chat gateway for A2A agents on Kubernetes',
 };
 
-// The Binding the demo ran with: hack/kind/sandbox/agent-kourier/config/binding.yaml, comments removed.
+// The Binding the demo ran with: hack/kind/sandbox/agent-kourier/config/binding.yaml, comments removed and the
+// channel ID replaced by a placeholder (the real one names a channel in the owner's workspace).
 const YAML = [
   'apiVersion: agentkourier.dev/v1alpha1',
   'kind: Binding',
@@ -70,7 +71,7 @@ const YAML = [
   '    tokenSecretRef: {name: agent-kourier-agent-token}',
   '  chat:',
   '    connectionRef: {namespace: agent-kourier, name: sandbox-slack}',
-  '    channel: C0C7V1M306T',
+  '    channel: C0123456789',
   '    output: live',
   '  interactions: {askUser: true}',
 ];
@@ -616,6 +617,9 @@ if (!OVERLAY && (SEG === 'close' || SEG === 't-end')) {
     t.textContent = s; fit(t, P.w - P.h * 1.7);
     return r;
   });
+  // One size for all three: a pill that had to shrink sets the size of the others.
+  const pillTexts = rows.map(r => r.querySelector('text')), pillSize = Math.min(...pillTexts.map(t => parseFloat(t.getAttribute('font-size'))));
+  pillTexts.forEach(t => t.setAttribute('font-size', pillSize));
   const end = el('g', {}, svg);
   const lk = lockup(end, E.mark, E.word, E.mode);
   const hook = el('text', { 'font-size': E.hook, 'font-weight': 600, fill: C.white, 'text-anchor': 'middle' }, end);

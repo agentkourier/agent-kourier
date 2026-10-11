@@ -42,13 +42,14 @@ Narrated, with real Slack footage. The v1 files above are kept in `out/v1/`; the
 
 | File | What |
 |---|---|
-| `out/agent-kourier-demo-{16x9,9x16,1x1}.mp4` | The demo cut, 102 s: animated problem and solution, real footage, animated setup and close. |
+| `out/agent-kourier-demo-{16x9,9x16,1x1}.mp4` | The demo cut, 107 s: animated problem and solution, real footage, animated setup and close. |
 | `out/agent-kourier-teaser-{16x9,9x16,1x1}.mp4` | The 20 s teaser cut from it. |
 | `out/poster-*.png`, `out/contact-sheet-{demo,teaser}-*.png`, `out/storyboard.{pdf,png,html}` | Poster frame, contact sheets, storyboard. |
 | `film.html` | The motion graphics and the frame that sits around footage. Copy, palette and layouts at the top; the mark is `docs/brand/assets/svg/agent-kourier-mark-dark.svg`. |
 | `build.mjs` | The edit: beats, footage in and out points, framings, speeds. Renders, cuts, mixes narration. |
 | `narration.json`, `narrate.mjs` | The narrator's lines and the generator (ElevenLabs Eleven v4 through OpenRouter). `build.mjs` reads the set named by `VOICE` and its slide lengths are timed to it. |
 | `script-v2.md` | Script, capture plan, privacy rules, recording runbook. |
+| `recreate-prompt.md` | A prompt to hand a new agent session to rebuild or re-record the film: the decisions to keep, how the pieces fit, and what went wrong the first time. |
 | `raw/` (git-ignored) | The screen recordings. They show the whole screen; only cropped frames are published. |
 
 ```sh
@@ -63,20 +64,20 @@ node build.mjs sheets && node build.mjs storyboard
 
 Rules the v2 film keeps: every Slack frame is a real recording of the kind sandbox (seeded faults, real agent
 output), cropped to the message list or the thread so the workspace name never shows; sped-up footage is
-disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with; Slack is named as the first chat tool, not the only one.
+disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with, except its channel ID, which is a placeholder; Slack is named as the first chat tool, not the only one.
 The Chrome extension's pointer is painted out only where it sat on blank chrome; shots where it covered text were reframed or retimed.
 
 ### The copy in the project README
 
 The project README plays the 16:9 demo from a GitHub attachment
-(`https://github.com/user-attachments/assets/d503caad-4341-4824-982a-700ea6a0897f`). Attachments on the
-free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 600 kb/s
-(8.5 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
+(`https://github.com/user-attachments/assets/c54bb9d3-bcac-45a7-9e35-9d46f16f45c8`). Attachments on the
+free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 570 kb/s
+(8.7 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
 repository without submitting it, and replace the URL in `README.md` with the one GitHub inserts.
 
 ```sh
-ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 600k -pass 1 -an -f null /dev/null
-ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 600k -pass 2 \
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 570k -pass 1 -an -f null /dev/null
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 570k -pass 2 \
   -c:a aac -b:a 112k -movflags +faststart build/readme/agent-kourier-demo.mp4
 ```
 

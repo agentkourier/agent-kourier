@@ -67,7 +67,7 @@ const DEMO = [
   { rec: 'r5', line: 'r5', lead: 0.3, cap: 'A restart loses no message.', sub: 'The thread still finishes, once.',
     shots: [[S1, 226.0, 5.0, 2.5, 'threadTop', HEADER], [S1, 234.0, 2.5, 2.5, 'threadTop', HEADER, '$ kubectl delete pod -l app.kubernetes.io/instance=agent-kourier-sandbox'], [S1, 277.5, 4.0, 4.0, 'threadLow']] },
   { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.6 },
-  { mg: 'close', line: 'close', lead: 0.3, dur: 16.2, query: { endAt: 9.3 } },
+  { mg: 'close', line: 'close', lead: 0.3, dur: 21.8, query: { endAt: 15.2 } },
 ];
 const TEASER = [
   { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.5 },
@@ -209,10 +209,10 @@ async function buildCut(browser, name, ar) {
 async function stills(browser, ars) {
   const dir = join(WORK, 'stills');
   await mkdir(dir, { recursive: true });
-  const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 4.0], ['close', 8.0], ['close', 14.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
+  const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 4.0], ['close', 13.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
   for (const ar of ars) {
     for (const [seg, t] of shots) {
-      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 9.3 } : {}) });
+      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 15.2 } : {}) });
       await page.screenshot({ path: join(dir, `${ar}-${seg}-${t}.png`) });
       await page.close();
     }

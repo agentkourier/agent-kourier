@@ -64,7 +64,7 @@
     {
       "id": "close",
       "shot": "Close",
-      "text": "It works with kagent, or any streaming A2A agent. Slack and Alertmanager first, built for more. And never in your paging path. Agent Kourier. Every thread, a live agent session."
+      "text": "Bring the agent you have: kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Start with Slack and Alertmanager; it's built for more. Agent Kourier. Every thread, a live agent session."
     }
   ],
   "teaser": [
