@@ -45,8 +45,8 @@ An agent runs one task per session at a time. A reply that arrives while a task 
 reaction, and sent when the task ends, in order, one per turn. A reply while the agent waits on a question is held the
 same way, unless the question takes typed replies, in which case the first reply is its answer.
 
-With `chat.threadReplies: mention`, only replies that mention Agent Kourier are turns. The others are ignored, and the
-next mentioned turn carries them to the agent as context, in a block marked as untrusted data.
+With `chat.threadReplies: mention`, only replies that mention Agent Kourier are turns, except a typed answer to the agent's pending question. The
+others are ignored, and the next mentioned turn carries them to the agent as context, in a block marked as untrusted data.
 
 ## Output
 
@@ -66,7 +66,7 @@ A thread keeps its session for `session.threadTTL`, 90 days by default, after it
 point in that window resumes the same context. The agent platform suspends and resumes idle sessions on its own;
 Agent Kourier has no idle timeout.
 
-After the TTL, the thread has expired: a reply gets a notice that the conversation has expired and that a new mention
+After the TTL, the thread has expired: a reply that the Binding would take gets a notice that the conversation has expired and that a new mention
 starts a new one. 90 days after expiry the session is deleted with everything that belongs to it, and the thread
 becomes one Agent Kourier never owned. If the agent reports that a session no longer exists, Agent Kourier says so in
 the thread, and the next message starts a fresh context.

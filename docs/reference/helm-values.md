@@ -260,7 +260,7 @@ Fences Agent Kourier's network. Egress is the Kubernetes API server, DNS, Slack 
 
 ## podDisruptionBudget
 
-Off, and meaningful with the standby (replicaCount 2 on Postgres): minAvailable: 1 keeps a drain from taking both replicas, and renders there. At one replica a budget that keeps the pod (minAvailable 1 or 100%, maxUnavailable 0) blocks every voluntary eviction, a node drain included, so the render refuses it. Set exactly one of minAvailable and maxUnavailable; with one replica only maxUnavailable: 1 renders, and that permits what it was meant to stop. A minAvailable that renders at replicaCount 0 (the kill switch) is refused again on scaling back to 1: switch the budget off, or to maxUnavailable, before scaling to zero.
+Off, and meaningful with the standby (replicaCount 2 on Postgres): minAvailable: 1 keeps a drain from taking both replicas, and renders there. At one replica a budget that keeps the pod (minAvailable 1 or 100%, maxUnavailable 0) blocks every voluntary eviction, a node drain included, so the render refuses it. Set exactly one of minAvailable and maxUnavailable; with one replica only a nonzero maxUnavailable renders, and that permits what it was meant to stop. A minAvailable that renders at replicaCount 0 (the kill switch) is refused again on scaling back to 1: switch the budget off, or to maxUnavailable, before scaling to zero.
 
 | Key | Default | Description |
 |---|---|---|

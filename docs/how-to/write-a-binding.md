@@ -45,7 +45,7 @@ spec:
 3. The token every turn of this Binding is sent with. Without a front door that verifies it, use `userId` instead,
    which is sent as `X-User-Id`.
 4. `live` streams the answer as the agent writes it; `final` posts it once, when the turn ends.
-5. `all` makes every reply in a thread Agent Kourier owns a turn. `mention` takes only the replies that mention the bot.
+5. `all` makes every person's reply in a thread Agent Kourier owns a turn. `mention` takes only the replies that mention the bot.
 
 ## Load it
 
@@ -61,7 +61,7 @@ config:
         # the spec above
 ```
 
-Then `helm upgrade`. The chart rolls the pod when the config changes.
+Then `helm upgrade`. By default (`config.rollOnChange`) the chart rolls the pod when the config changes.
 
 If the platform team manages its own ConfigMap (`config.existingConfigMap`), add the Binding's YAML there as a file
 ending in `.yaml`, and ask them to list your namespace in `rbac.secretNamespaces` so the broker may read your Secret.
@@ -71,8 +71,9 @@ ending in `.yaml`, and ask them to list your namespace in `rbac.secretNamespaces
 Mention the bot in the channel. A thread opens and the agent answers in it. If nothing happens, see
 [Troubleshoot an install](troubleshoot.md#the-mention-gets-no-reply-and-the-log-shows-no-session-turn-started).
 
-One channel takes one Binding. A second Binding for the same channel on the same connection is refused, and the
-loader names the Binding that holds it.
+One channel takes one Binding. A second Binding for the same channel on the same connection makes the whole
+config fail to load: a reload keeps the last good config, and a fresh start fails. The error names the Binding that
+already holds the channel.
 
 ## Variations
 

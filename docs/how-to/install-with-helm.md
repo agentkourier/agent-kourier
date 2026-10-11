@@ -154,8 +154,10 @@ slack: socket mode connected
 carries a `num_connections` field, the number of connections open on the app token. A value above 1 on a fresh start
 is worth a look.
 
-Then mention the bot in the channel. With no agent, the thread gets "I can't reach the agent right now, and I'm trying
-again." The log shows `session turn started` and then `session turn failed`, with the reason in `error`.
+Then mention the bot in the channel. With no agent, the first failed send is retried silently; after the second the thread gets "I can't reach the agent
+right now, and I'm trying again." If the agent stays unreachable the turn eventually fails with "This request failed,
+and I won't try it again." The log shows `session turn started` and then `session turn failed`, with the reason in
+`error`.
 
 Now connect a real agent: [kagent](connect-kagent.md), [any A2A agent](connect-a2a-agent.md) or
 [an agent on Google AX](connect-ax.md).

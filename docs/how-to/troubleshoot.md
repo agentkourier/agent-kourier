@@ -30,7 +30,7 @@ kubectl auth can-i list secrets -n agent-kourier --as system:serviceaccount:agen
 kubectl auth can-i watch secrets -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
 ```
 
-The chart grants `list` and `watch` in each namespace the config names, and `rbac.secretNamespaces`
+The chart grants `list` and `watch` in each namespace that holds a Secret the config names, and `rbac.secretNamespaces`
 adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
 read the ConfigMap to find the namespaces.
 
@@ -97,7 +97,9 @@ URL exactly as written.
 
 ### `HTTP 401` or `HTTP 403` at the card fetch
 
-The front door refused the Binding's token. Check the Secret named by `identity.tokenSecretRef`
+The front door refused the Binding's token. The turn is not retried: the thread gets "This request failed, and I won't
+try it again" with the detail that the agent's front door refused the Binding's credentials, the log's
+`session turn failed` line carries the reason, and `agentkourier_credential_rejections_total` counts it. Check the Secret named by `identity.tokenSecretRef`
 and the front door's own configuration.
 
 ### The host does not resolve, or the connection times out
@@ -112,7 +114,7 @@ the chart's NetworkPolicy allows the agent only through `networkPolicy.extraEgre
 Agent Kourier never saw the message. Check, in this order:
 
 1. The bot is a member of the channel. An invite is separate from the app being installed.
-2. The Binding's `chat.channel` is the channel ID that starts with `C`, not the name.
+2. The Binding's `chat.channel` is the channel ID (`C…`, or `G…`), not the name.
 3. The app subscribes to `app_mention`, `message.channels` and `message.groups`, and Socket
    Mode is on.
 4. Only one process uses the app token. A second consumer receives a share of the events.
@@ -128,7 +130,7 @@ whose outcome was unknown because the stream dropped before the first event, the
 a second time and post a second answer. For a read-only agent that wastes a model call and
 nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
 Kourier does not see a tool call, so the agent's own tool list and the role behind its tools
-are the only fence on a write, and tool approvals from Slack are planned for every backend.
+are the only fence on a write, and tool approvals from Slack (planned) will come through kagent's extension, which only the `kagent-v1` dialect speaks.
 
 ## `Multi-Attach error for volume` while the pod rolls
 

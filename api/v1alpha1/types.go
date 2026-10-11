@@ -214,8 +214,7 @@ type ChatBinding struct {
 	// ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn.
 	// With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a
 	// trigger started the thread; the next mentioned turn carries the other replies as
-	// context. A typed answer to a pending question that takes text replies (spec 8.4) needs no mention,
-	// and neither does a direct message.
+	// context. A typed answer to a pending question that takes text replies needs no mention.
 	// +kubebuilder:validation:Enum=all;mention
 	// +kubebuilder:default=all
 	// +optional

@@ -1,7 +1,7 @@
 # Delivery guarantees
 
 This page explains what Agent Kourier promises about messages coming in and posts going out, how it keeps those
-promises across a crash, and the one window it accepts.
+promises across a crash, and the windows it accepts.
 
 ## Coming in: at least once, acknowledged only when durable
 

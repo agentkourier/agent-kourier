@@ -1,7 +1,7 @@
 # High availability and failover
 
 This page explains how Agent Kourier runs as two replicas, how one of them is chosen to do the work, what happens when
-it fails, and the one duplicate a failover can still produce.
+it fails, and the duplicates a failover can still produce.
 
 ```mermaid
 flowchart TB

@@ -85,6 +85,21 @@ a WP mixes concerns. At most four agents (implementers and reviewers together) r
 - Nothing but the Slack adapter, the broker and cmd (and tests) imports `internal/chat/slack` or slack-go: depguard denies it to every other package, new ones included.
 - Never log, print, or commit tokens or Secret contents; test tokens are fake constants.
 
+## Documentation
+
+- Every statement of behaviour in `README.md`, `docs/` (except `docs/brand` and `docs/spikes`), the chart README
+  and Helm values comments is checked against the code, the chart or the manifests when it is written or changed.
+  A sentence copied from another doc, from `spec.md` or from an agent's summary is not a check: open the code path
+  and read it.
+- Words carry behaviour: say what the code does (denies, drops, queues, retries, cancels), not a near synonym.
+  "Refuses" and "denies" are different outcomes.
+- Say where a claim came from when it cannot be read in this repository (an upstream project's behaviour, a
+  date, a version); mark it in the PR or commit body as unverified rather than stating it as fact.
+- A reviewer, human or agent, verifies against the code and names the file and line; agreement between docs is
+  not evidence.
+- No work-package, decision or risk IDs, `tasks/` paths, personal or workspace identifiers in public pages.
+- Run `make docs-ref docs-check docs-build` before pushing a docs change. Pushing to `main` deploys the site.
+
 ## Commits
 
 Conventional Commits (`feat(session): ...`, `test(e2e): ...`). Never add `Co-Authored-By`

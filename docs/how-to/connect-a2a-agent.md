@@ -38,7 +38,7 @@ config:
 In the Binding's `identity`:
 
 - `tokenSecretRef` sends the Secret's value as `Authorization: Bearer`. Something must verify it: the agent itself, or
-  a proxy in front of it. If the Secret cannot be read, the turn fails; it never falls back to `userId`.
+  a proxy in front of it. If the Secret cannot be read, the turn is retried and then fails after 15 minutes; it never falls back to `userId`.
 - `userId` alone is sent as `X-User-Id`, for an agent that trusts its network.
 
 ## What works on this dialect

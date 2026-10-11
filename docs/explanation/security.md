@@ -46,16 +46,19 @@ never falls back to `userId` when the token cannot be read.
 
 Secrets are read from Kubernetes Secrets by reference, through the API, and never written to logs, the audit table or
 resource status. A Secret's value is held in a type whose every formatting path redacts. The chart grants list and
-watch on Secrets only in the namespaces the config names. A rejected Binding token fails the turn, is re-read,
+watch on Secrets only in the namespaces that hold a Secret the chart's config values name, plus `rbac.secretNamespaces`
+and the release namespace. A rejected Binding token fails the turn, is re-read,
 audited and counted; nothing falls back.
 
 ## Hostile text
 
 Alert messages, other bots' messages, people's replies and agent output are all treated as untrusted.
 
-- **Toward the agent.** Text from people and other bots that reaches an agent is framed as data inside a tagged block
-  that says it is never instructions. A trigger's prompt template may read only values that pass a strict shape check.
-  Secrets are redacted before text is stored, logged, or sent.
+- **Toward the agent.** Alert messages, other bots' messages and the thread replies that ride along as context reach
+  the agent as data inside a tagged block that says it is never instructions. A person's own turn is sent as their text,
+  with an attribution prefix. A trigger's prompt template may read only values that pass a strict shape check.
+  Secrets are redacted from alert fields, thread context, tool arguments, audit rows and logs. A person's own message
+  is stored and sent to the agent as written.
 - **Toward the chat.** Agent output is escaped and stripped of control and format characters, and every post is sent
   with no link parsing and no unfurling, so agent text cannot mention `@channel` or make Slack fetch a URL. Tool
   arguments are shown with secret-looking values redacted. A hostile-text conformance suite runs against every chat

@@ -63,12 +63,13 @@ Binding that fails any of them is rejected.
 For Alertmanager's Slack receiver. A Binding's own entries override the preset's: a `match`, `exclude` or `extract`
 entry replaces the preset's entry of that name; `thread.by`, `thread.cooldown`, `thread.closeWhen` and
 `promptTemplate` replace the preset's; each `limits` field the Binding sets replaces the preset's, and the others stay.
-An empty value means unset, so a Binding cannot switch a preset entry off; to drop a `match` entry, override it with
-`'.*'`.
+An empty `thread` or `limits` field means unset. An empty `match`, `exclude` or `extract` entry replaces the
+preset's and is rejected as required. So a Binding cannot switch a preset entry off; to drop a `match` entry, override
+it with `'.*'`.
 
 | Part | Preset value |
 |---|---|
-| `match.title` | `FIRING (<n>) - ` or `RESOLVED - ` at the start, optionally behind a bracketed tag of up to 32 bytes such as `[kind] ` |
+| `match.title` | `FIRING (<n>) - ` or `RESOLVED - ` at the start, optionally behind a bracketed tag of up to 32 characters such as `[kind] ` |
 | `match.fallback` | `[FIRING]`, `[FIRING:<n>]` or `[RESOLVED]` at the start: Alertmanager's default fallback |
 | `extract.state` | `FIRING` or `RESOLVED`, from the title |
 | `extract.alertname` | The rest of the title after ` - ` |
@@ -99,7 +100,7 @@ of the message.
 ## Limits and the digest line
 
 Only a start is limited: a repeat, a close and a note never are. Rate and daily counts are sliding windows that survive
-a restart. Concurrency counts the trigger's investigations that have an active task (running, or paused for a person)
+a restart. Concurrency counts the trigger's investigations, started in the last 24 hours, that have an active task (running, or paused for a person)
 or a queued turn. When several limits are reached, the daily cap is reported first, then the rate, then the
 concurrency.
 

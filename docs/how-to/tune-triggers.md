@@ -3,15 +3,16 @@
 For anyone writing or changing a Binding's `botMessage` triggers: at the end, you have replayed a channel's real
 history through the triggers and seen what each message would become, before going live.
 
-`agent-kourier dry-run` only reads Slack (`conversations.history`). It posts nothing, starts no session, writes nothing
+`agent-kourier dry-run` only reads Slack (`auth.test` and `conversations.history`). It posts nothing, starts no session, writes nothing
 and needs no cluster.
 
 ## Before you start
 
 - Go, at the version in `go.mod`, and a checkout of the repository; or the `agent-kourier` binary.
 - A directory with the Binding's YAML. It is loaded with the broker's own loader, so the defaults, the `alertmanager`
-  preset and the validation apply as in production. Only the channel and the triggers are used.
-- A file with the bot token: the token alone, or a `SLACK_BOT_TOKEN=...` line among others. It must be a regular file,
+  preset and each Binding's own validation apply as in production. References between resources and Secrets are not
+  checked. Only the channel and the triggers are used.
+- A file with the bot token (or `SLACK_BOT_TOKEN` in the environment): the token alone, or a `SLACK_BOT_TOKEN=...` line among others. It must be a regular file,
   not a link, that the group and others cannot read (`chmod 600`). The bot must be a member of the channel and have
   `channels:history` (`groups:history` for a private channel).
 
@@ -41,7 +42,7 @@ TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME         
 1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
 ```
 
-- **SENDER** is the bot ID, `person:<user ID>`, or `agent-kourier` for Agent Kourier's own post. **TRIGGER** is the
+- **SENDER** is the bot ID, `person:<user ID>`, `agent-kourier` for Agent Kourier's own post, or `unknown` for a message the adapter drops. **TRIGGER** is the
   index in `chat.triggers`.
 - **OUTCOME**:
     - `matched`: the trigger took it; STATE, ALERTNAME and KEY are what it extracted.

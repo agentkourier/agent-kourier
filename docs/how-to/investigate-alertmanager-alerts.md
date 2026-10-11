@@ -22,7 +22,7 @@ The `alertmanager` preset matches one message shape. It needs:
 
 - a title that reads `FIRING (<n>) - <alertname>` or `RESOLVED - <alertname>`, optionally behind a bracketed tag of up
   to 32 characters such as `[kind] `;
-- Alertmanager's default fallback text, which begins `[FIRING:<n>]`.
+- Alertmanager's default fallback text, which begins `[FIRING:<n>]` (`[FIRING]` and `[RESOLVED]` also match).
 
 Alertmanager's default Slack title also begins `[FIRING:<n>]`, so a receiver that keeps the default title does not
 match. Set the receiver's title to the shape above, or override the preset's `match` and `extract` entries for your
@@ -58,8 +58,9 @@ In the Binding's `chat` block:
 The preset supplies the rest:
 
 - **One thread per alert group.** Messages with the same group label values share the first message's thread.
-- **A 4 hour cooldown.** Another fire of the alert while its thread is open, or within 4 hours of the investigation's
-  start, adds a "Fired again" note to the thread and starts no new turn.
+- **A 4 hour cooldown.** Another fire of the alert while its thread is open (unless it has been idle for 24 hours,
+  `thread.maxIdle`, when a new investigation starts), or within 4 hours of the investigation's start, adds a "Fired
+  again" note to the thread and starts no new turn.
 - **A resolve closes the thread** with a "Resolved at" note, and starts no turn.
 - **Limits.** At most 5 investigations in any 10 minutes, 2 running at once and 40 a day. An alert a limit stops gets
   no investigation; one line per window in the channel counts them.
@@ -78,8 +79,8 @@ The fields and the merge rules are in [Chat triggers](../reference/chat-triggers
 Before going live, replay the channel's history through the trigger with a [dry run](tune-triggers.md). Then load
 the Binding and watch the next alert: a thread opens under it and the investigation streams in.
 
-In the pod log, `chat: bot message matched a trigger` and `chat: trigger decided` (with `decision=started`) come
-before `session turn started`. The metrics `agentkourier_trigger_matched_total` and
+In the pod log, `chat: bot message matched a trigger` and `chat: trigger decided` (with `decision=started`) appear
+around `session turn started`, which the turn's own worker logs, so the order is usual rather than guaranteed. The metrics `agentkourier_trigger_matched_total` and
 `agentkourier_trigger_decisions_total` count the same.
 
 If an alert message raises `agentkourier_trigger_unmatched_total` and starts nothing, its title or link does not fit the

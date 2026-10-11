@@ -46,7 +46,7 @@ Three NetworkPolicies in kagent's namespace (the kind tier's are in
 [`hack/kind/full/networkpolicy.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/full/networkpolicy.yaml)):
 
 - **Port 8083** admits only the front door and kagent's own components.
-- **The kagent UI** admits only its own oauth2-proxy, because the UI's nginx relays `/mcp` and `/api` to 8083 with
+- **The kagent UI** admits only its own oauth2-proxy, because the UI's nginx relays `/mcp`, `/api` and `/a2a` to 8083 with
   `Authorization` intact.
 - **The front door** admits only Agent Kourier's pods, which carry `app.kubernetes.io/name: agent-kourier`.
 

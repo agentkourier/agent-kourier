@@ -4,7 +4,7 @@ For anyone who wants to see Agent Kourier work before installing it: at the end,
 question in a Slack thread, follows up in the same thread, and asks you a question of its own.
 
 You run everything on your machine in a kind cluster. The agent is `sandbox-sre`, a kagent agent on a real model,
-looking at six small Deployments with faults seeded into them. It can read the cluster and cannot change it.
+looking at six small Deployments, five of them with faults seeded into them. It can read the cluster and cannot change it.
 
 ## What you need
 

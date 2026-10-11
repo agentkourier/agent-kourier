@@ -72,7 +72,7 @@ ChatBinding places the Binding in a channel.
 | `connectionRef` | [ObjectRef](#objectref) | Yes |  |  |
 | `channel` | string | Yes |  | Channel is the channel ID, not its name. Pattern `^[CG][A-Z0-9]+$`. |
 | `output` | string | No | `live` | Output defaults to live. One of `live`, `final`. |
-| `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention, and neither does a direct message. One of `all`, `mention`. |
+| `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
 | `triggers` | [][Trigger](#trigger) | No |  | Triggers decide which events in the channel start or continue a turn. Empty means [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. |
 
 ## Trigger

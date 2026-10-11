@@ -112,7 +112,7 @@ as a standby beside the old one.
 renewing after the renew deadline and **exits at once**, 5 s before a standby may take the lease with the defaults, and the standby
 takes it a lease duration after the leader's last renewal. After a crash, a deleted pod or a lost node, work resumes in about 15 s plus
 Agent Kourier's start-up. A leader that stops on a signal (a rolling update, a drain) finishes its ordered shutdown and hands the lease over, so
-the standby takes it within a retry period. Every write is also fenced by an epoch in the database, so a leader that was paused past its
+the standby takes it after the old leader's ordered shutdown (up to 25 s), at its next attempt. Every write is also fenced by an epoch in the database, so a leader that was paused past its
 lease cannot write when it wakes: the write fails and the process exits (exit code 5). What fencing cannot cover is a Slack post or an
 agent send that the paused leader had already begun, which can happen once more (see [High availability and failover](../../docs/explanation/high-availability.md)).
 
@@ -127,10 +127,10 @@ make them (by hand, Sealed Secrets, an external operator) before Agent Kourier s
 - the ChatConnection's Secret, with `botToken` and `appToken`;
 - each Binding's `tokenSecretRef` Secret, with a `token` key (or the key the reference says);
 - with Postgres, the DSN Secret (`store.postgres.dsnSecret`), in the release namespace;
-- the Dex credentials Secret for `tokenRefresh`, with `clientSecret`, `username` and `password`.
+- the Dex credentials Secret for `tokenRefresh`, with `clientSecret`, `username` and `password`. The token-refresh Job reads it through its environment; Agent Kourier does not read it.
 
 Agent Kourier reads them through the Kubernetes API, never from its environment or a mounted file. The render refuses what would put
-a secret in the ConfigMap: a Slack token (`xox*-`, `xapp-`) anywhere in the values, and an AgentBackend header `value` whose name
+a secret in the ConfigMap: a Slack token (`xoxb-`, `xoxp-`, `xoxa-`, `xoxe-`, `xoxr-` or `xapp-`, followed by digits) anywhere in the values, and an AgentBackend header `value` whose name
 looks like a credential (key, token, secret, auth, cookie, password), which belongs in `valueSecretRef`.
 
 ## Security posture
@@ -239,7 +239,7 @@ was the largest of them at 188 MiB.
 
 ## Tests
 
-`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for the seven `ci/` values files, the
+`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for seven of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
 refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
 properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
 on), and the fast and AX tiers' config, which is loaded through Agent Kourier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;

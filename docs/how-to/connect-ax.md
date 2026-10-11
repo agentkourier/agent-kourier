@@ -39,7 +39,7 @@ spec:
 
 ## What to expect
 
-- Questions arrive as plain text, and a person answers by replying in the thread.
+- With `interactions.askUser: true`, questions arrive as plain text, and a person answers by replying in the thread or with the answer form.
 - Structured tool approvals and tool step cards are kagent-only.
 - The AX kind tier (`make e2e-ax-up`, `make e2e-ax`) runs the shared Slack scenarios against a real AX and Substrate
   install with a deterministic model: streaming, context across restarts, actor suspend and resume, queued replies and

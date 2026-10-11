@@ -16,20 +16,22 @@ spec:
 
 1. How long a question waits. The default is 30 minutes.
 
-Without `askUser: true`, Agent Kourier refuses the agent's question and says so in the thread.
+Without `askUser: true`, Agent Kourier cancels the agent's task and says so in the thread.
 
 ## What people see
 
 === "kagent 1.0"
 
-    The `kagent-v1` dialect reads kagent's structured questions. Each question is shown with its choices as a select
-    (a multi-select where the agent allows several), or as a text input when there are no choices, and a **Submit**
+    The `kagent-v1` dialect reads kagent's structured questions. A question with choices is shown as radio buttons, or
+    checkboxes where the agent allows several (a select or multi-select above 10 choices, and a numbered list with a
+    text box for the numbers above 100). A question with no choices is a text input. Every prompt has a **Submit**
     button. A question raised by a sub-agent is labelled with that sub-agent.
 
 === "Generic A2A"
 
-    The `a2a` dialect shows an agent's `input-required` pause as a question in text. A single question with no
-    choices also takes a typed reply in the thread, and its prompt says so. In a Binding with
+    The `a2a` dialect shows an agent's text-only `input-required` pause as one text question, which you can
+    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause with structured parts
+    cannot be used, so the task is cancelled and the thread is told. In a Binding with
     `chat.threadReplies: mention`, that reply needs no mention.
 
 ## How an answer is taken
@@ -41,7 +43,7 @@ Without `askUser: true`, Agent Kourier refuses the agent's question and says so 
   answer's shape, never its text.
 - A reply that is not an answer waits until the question is answered, times out or is cancelled, and is then sent as
   the next turn.
-- When the timeout passes, the question is cancelled and the thread is told.
+- When the timeout passes, Agent Kourier cancels the agent's paused task, closes the prompt and tells the thread.
 
 ## Tool approvals
 

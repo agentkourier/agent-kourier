@@ -105,9 +105,9 @@ Deployment, and persistent storage. The reloader validates changes and keeps the
 last accepted configuration if a reload fails. Secret access uses Kubernetes
 RBAC; cross-namespace resource references use configured namespace allowlists.
 
-The broker selects one active `ChatConnection` per process. Multiple bindings
+The config must hold exactly one `ChatConnection`; the broker refuses to start with more. Multiple bindings
 can route its channels to different agents and backends. The store is SQLite with
-one replica, or Postgres with two replicas, active and passive (see
+one replica, or Postgres with one or two replicas (two are active and passive) (see
 [High availability](high-availability.md)); the broker is never active-active.
 
 Live Agent Kourier CRDs and a reconciliation controller are planned. Agent Kourier does not
@@ -142,7 +142,7 @@ front door sits in this path, so the agent must verify the Binding's bearer ID t
 itself, as the reference agent does (issuer, audience and subject), or an
 OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
 in-thread text answers are tested in the AX kind tier. Structured tool approvals and
-tool step cards are kagent-only; the generic dialect leaves them opaque. ax's own
+tool step cards are kagent-only; the generic dialect shows no tool steps, and a structured pause cancels the task with a notice. ax's own
 lifecycle (task, template, egress policy) stays with the operator. See the
 [AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).
@@ -159,6 +159,6 @@ lifecycle (task, template, egress policy) stays with the operator. See the
 | A2A clients and backend behavior | [`internal/agent`](https://github.com/agentkourier/agent-kourier/tree/main/internal/agent), [`internal/dialect`](https://github.com/agentkourier/agent-kourier/tree/main/internal/dialect) |
 | Human interactions | [`internal/interact`](https://github.com/agentkourier/agent-kourier/tree/main/internal/interact) |
 | Output and durable delivery | [`internal/render/live`](https://github.com/agentkourier/agent-kourier/tree/main/internal/render/live), [`internal/outbox`](https://github.com/agentkourier/agent-kourier/tree/main/internal/outbox) |
-| Persistence and observations | [`internal/store/sqlite`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/sqlite), [`internal/telemetry`](https://github.com/agentkourier/agent-kourier/tree/main/internal/telemetry), [`internal/audit`](https://github.com/agentkourier/agent-kourier/tree/main/internal/audit) |
+| Persistence and observations | [`internal/store/sqlite`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/sqlite), [`internal/store/postgres`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/postgres), [`internal/telemetry`](https://github.com/agentkourier/agent-kourier/tree/main/internal/telemetry), [`internal/audit`](https://github.com/agentkourier/agent-kourier/tree/main/internal/audit) |
 
 See [Logs and traces](../reference/logs-and-traces.md) for the trace boundaries.

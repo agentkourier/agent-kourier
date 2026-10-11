@@ -63,7 +63,7 @@ call gives it nothing to ask about after a restart.
 - **A2A does not standardise everything the chat needs.** Structured questions with choices and tool approvals are
   runtime extensions. The `kagent-v1` dialect reads kagent 1.0's structured questions and shows its tool steps as
   cards; it denies a tool approval request, sends the denial to the agent and tells the thread, because approvals from Slack are not built yet. Every other
-  agent, kagent 0.9.x and AX included, asks questions as plain text that a person answers by replying.
+  agent, kagent 0.9.x and AX included, asks questions as plain text that a person answers by replying in the thread or with the answer form.
 - **The agent must stream.** Agent Kourier rejects an agent whose card does not advertise streaming, and one that
   offers only gRPC or REST. Streaming lets the thread show partial output, and one transport means one code path to
   keep correct.

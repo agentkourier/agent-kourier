@@ -185,9 +185,9 @@ the fields a Binding can override.
 ```
 
 The preset matches one message shape, and a message of another shape starts no
-investigation. It needs a title that reads `FIRING (1) - <alertname>` or
-`RESOLVED - <alertname>`, and Alertmanager's default fallback text, which begins
-`[FIRING:1]`. Alertmanager's default Slack title begins `[FIRING:1]` too, so a
+investigation. It needs a title that reads `FIRING (n) - <alertname>` or
+`RESOLVED - <alertname>` (optionally behind a bracketed tag such as `[prod] `), and Alertmanager's default fallback
+text, which begins `[FIRING:n]`. Alertmanager's default Slack title begins `[FIRING:1]` too, so a
 receiver that keeps the default title does not match. Either set the receiver's
 title to the shape above, or override the preset's `match` and `extract` entries for
 your own template.
@@ -226,7 +226,7 @@ kagent 1.0 runs every agent session on Agent Substrate, and Substrate needs the
 pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and
 `PodCertificateRequest` feature gates and `certificates.k8s.io/v1beta1`. They are off by
 default through Kubernetes 1.36, and the pinned Substrate (0.3.0-alpha1) still needs
-`certificates.k8s.io/v1beta1` on 1.37. Managed EKS cannot enable them. The kind tiers
+`certificates.k8s.io/v1beta1` on 1.37. Managed EKS cannot enable them. The full and AX kind tiers
 turn them on, so a cluster that kind runs fine may still not run kagent 1.0. Check the
 target cluster first:
 
@@ -287,7 +287,7 @@ Task, through AX's router, with the generic `a2a` dialect. What that needs:
 - **A TLS gateway in front of the router** that forwards only the A2A endpoint and
   card and fixes the actor header, reachable from Agent Kourier only.
 - **Questions are plain text.** The agent's question appears in the thread and a
-  person answers by replying there. Structured tool approvals and tool step cards
+  person answers by replying there or with the answer form. Structured tool approvals and tool step cards
   are kagent-only.
 - **AX's lifecycle stays with the operator.** Agent Kourier creates, pauses or resumes no
   task.

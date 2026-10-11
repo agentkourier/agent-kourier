@@ -30,7 +30,7 @@ a random service instance ID for each provider lifetime, and the environment whe
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Base URL; Agent Kourier appends `/v1/traces` |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Exact trace URL; overrides the base URL |
 | `OTEL_TRACES_EXPORTER` | `otlp`, or `none` to disable export |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf`; other protocols are rejected |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | The trace-specific one if set, else the general one, must be `http/protobuf`; another value there is rejected |
 | `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Comma-separated `key=value` headers, values percent-decoded, names valid HTTP tokens; trace-specific settings override general settings. Both are checked even when the other wins, and a bad one stops startup |
 | `AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS` | `true` accepts headers on an `http://` endpoint; default refuses them |
 | `OTEL_TRACES_SAMPLER` | `parentbased_traceidratio` |
@@ -85,7 +85,7 @@ it up. A2A HTTP calls carry `traceparent` and `tracestate` to the verifying back
 front door after the destination and credential checks. Slack receives no trace
 headers or baggage.
 
-SQLite stores trace context beside replies, active tasks, outbound rows,
+Both stores keep trace context beside replies, active tasks, outbound rows,
 interactions, button presses, and generic durable events. Duplicate inserts retain
 the original carrier. Existing rows without trace context still work. Migration
 `0012_trace_context.sql` adds columns with empty defaults.
@@ -142,7 +142,7 @@ log it. The agent's own text is in the agent's logs; find it there by the task o
 line. A Slack response body that slack-go could not parse, a handler's error or panic, and the like
 may still quote someone, so Agent Kourier's JSON handler, built in one place (`telemetry.NewJSONHandler`) and
 also the default `slog` logger, passes every attribute that holds an error, and every attribute
-named `err`, `error`, `cause`, `reason` or `panic`, through the redaction the audit log uses: tokens,
+named `err`, `error`, `cause`, `reason` or `panic`, through the free-text redaction (`redact.FreeText`): tokens,
 credentials, URL userinfo, key blocks and the values of secret-named fields become `[redacted]`.
 It then cuts the text to 300 bytes (the audit log's cap for a returned error) and marks the cut
 with `… (truncated)`. Where the content has no diagnostic value, the line does not carry it at all: a

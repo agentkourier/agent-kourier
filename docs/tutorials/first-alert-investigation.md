@@ -80,10 +80,11 @@ Open `hack/kind/sandbox/agent-kourier/alert-trial/alert-binding.yaml` and set `b
 make sandbox-up
 ```
 
-It ends with two lines:
+Among its last lines are the connection check and, at the very end, the alert source:
 
 ```text
-ok: Agent Kourier is connected to Slack
+ok: Agent Kourier is connected to Slack (it logged "...": auth.test passed and Socket Mode said hello)
+...
 alert source up, and Agent Kourier watches C0123456789 for [kind] alerts: fire one with make sandbox-alert (README, Run the alert trial)
 ```
 
@@ -114,7 +115,7 @@ make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved
 ```
 
 About 30 seconds later the webhook posts `[kind] RESOLVED - KubePodCrashLooping`, and the investigation's thread gets
-a note that says when the alert resolved. No new investigation starts.
+a note that says when the resolve was posted. No new investigation starts.
 
 ## 9. Clean up
 

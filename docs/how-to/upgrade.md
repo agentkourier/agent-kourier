@@ -17,7 +17,7 @@ helm upgrade agent-kourier oci://<registry>/<repo>/charts/agent-kourier --versio
   before the new one starts, so Agent Kourier is down for its start-up. Its volume carries the sessions, the outbox
   and the reply queue across, and recovery continues each conversation where it stopped.
 - **Postgres with a standby.** The strategy is a rolling update. The leader hands the lease over when it stops, so
-  the other replica takes over within a retry period.
+  the other replica takes over after the old leader's ordered shutdown (up to 25 s), at its next attempt.
 - Agent Kourier applies its own database migrations at start.
 
 Deploy by digest. A released chart pins its image by digest, so `--set image.tag=...` alone changes nothing: set

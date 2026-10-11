@@ -69,11 +69,11 @@ Replace the regexes with ones that fit your bot's messages.
 3. Every `match` entry must match, and no `exclude` entry may. Regexes are RE2, at most 512 bytes.
 4. Each entry's regex has a named group with the entry's name, which supplies the value. A message in which an
    extract does not match does not match the trigger.
-5. Messages with the same `key` share one thread. A repeat within the cooldown adds a note; a message whose `state`
+5. Messages with the same `key` share one thread. A fire while the thread is open, or within the cooldown, adds a note and reopens a closed thread; a message whose `state`
    is `RESOLVED` closes the thread with a note. Neither starts a turn.
 6. Without a preset, a trigger with no `limits` is unlimited. These are the values the Alertmanager preset uses.
 7. The first turn's prompt. Read extracted values through `.Fields`: a value the template reads must be name-shaped
-   (letters, digits, `_.-:`), and the key here holds spaces, so a template that reads `.Key` is refused.
+   (letters, digits, `_.-:`), and the key here holds spaces, so a template that reads `.Key` loads, but every alert's prompt is refused when it renders: a "Not investigated" note, and no turn.
 
 The Binding is validated when it loads: a regex that does not compile, an extract without its named group, a
 `thread.by: key` without a `key` extract, or a template that reads a field the trigger does not extract rejects it.
