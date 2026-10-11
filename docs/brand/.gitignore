@@ -1,0 +1,10 @@
+# Exploration output and renders stay on disk, not in git. The kit is assets/.
+/generated/
+/svg/
+/survey/
+/review-all.*
+/agent-kourier-logos.html
+/logo-*.svg
+/film/out/
+# Narration takes: un-ignore the chosen voice with !/film/audio/<voice>/
+/film/audio/*

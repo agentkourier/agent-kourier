@@ -13,4 +13,5 @@
 *.db-shm
 *.db-wal
 /.claude/worktrees/
+/.worktrees/
 /.claude/settings.local.json
