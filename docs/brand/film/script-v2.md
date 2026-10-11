@@ -93,8 +93,9 @@ Three layers. Any one of them alone is not enough.
   so there is no history to scroll into view.
 - **A neutral profile.** In the sandbox workspace, set your display name to a role ("On-call engineer")
   and a plain avatar, unless you want to appear as yourself.
-- **The bot's name and avatar.** The sandbox app's display name is still `courier` (`slack-app-manifest.yaml`).
-  Change it to `Agent Kourier` and set its icon to `assets/social/slack-app-icon-512.png` before recording.
+- **The bot's name and avatar.** The bot is `Agent Kourier`, as `slack-app-manifest.yaml` names it; an app made from an
+  older copy of the manifest is `courier` and needs renaming. Set its icon to `assets/social/slack-app-icon-512.png`
+  before recording.
 - **Focus mode on,** Dock hidden, no other windows. Nothing can slide in.
 - **No terminal on screen.** Run every command in a second window outside the recorded area. The shell
   prompt, kube contexts and the secrets path stay unrecorded.

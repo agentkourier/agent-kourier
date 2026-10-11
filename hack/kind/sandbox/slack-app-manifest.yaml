@@ -3,7 +3,7 @@ display_information:
   description: agent-kourier dogfood (sandbox workspace only)
 features:
   bot_user:
-    display_name: courier
+    display_name: Agent Kourier
     always_online: true
 oauth_config:
   scopes:

@@ -47,7 +47,7 @@ use `deploy/agent-kourier-sandbox`.
 2. **Make an app-level token.** Basic Information, App-Level Tokens, Generate Token, with the scope
    `connections:write`. That is `SLACK_APP_TOKEN` (`xapp-...`). The manifest cannot make it.
 3. **Install the app** to the sandbox workspace (Install App). The Bot User OAuth Token is `SLACK_BOT_TOKEN` (`xoxb-...`).
-4. **Invite the bot** to a channel: `/invite @courier` in it. The channel's ID (Channel details, at the bottom; `C...`,
+4. **Invite the bot** to a channel: `/invite @Agent Kourier` in it. The channel's ID (Channel details, at the bottom; `C...`,
    or `G...` for a private channel) is `SLACK_CHANNEL_ID`. Agent Kourier answers in this channel only.
 5. **Fill in the secrets file**, outside the repository:
    ```
@@ -174,7 +174,7 @@ Agent Kourier answers in the one channel. Watch it while you try each row (where
 
 | # | Try | Look for |
 |---|---|---|
-| 1 | `@courier why is checkout crashlooping?` | A thread opens under your message. The reply **streams** (it grows as the model writes) and shows **tool steps** as cards (`k8s_get_pod_logs ...`, one per call, placed in the text where the call was made, status complete once it is done; confirmed in dogfood 2026-10-03). It quotes the `FATAL: cannot resolve payments-db` line, says what it checked, and changes nothing. If it streams in one piece, or fails at `chat.startStream`, that is a WP-04 finding. |
+| 1 | `@Agent Kourier why is checkout crashlooping?` | A thread opens under your message. The reply **streams** (it grows as the model writes) and shows **tool steps** as cards (`k8s_get_pod_logs ...`, one per call, placed in the text where the call was made, status complete once it is done; confirmed in dogfood 2026-10-03). It quotes the `FATAL: cannot resolve payments-db` line, says what it checked, and changes nothing. If it streams in one piece, or fails at `chat.startStream`, that is a WP-04 finding. |
 | 2 | Other questions: `why is catalog stuck?`, `is recommender healthy?`, `why does inventory have no endpoints?`, `what is wrong with search?`, `is frontend ok?` | Each finds its fault: ImagePullBackOff and the missing tag; OOMKilled and the 48Mi limit; the Service's selector against the pods' labels; the readiness probe's 404; and `frontend` fine, with how it knows. |
 | 3 | **A thread reply**, in the same thread, after the answer: `and which pods does that affect?` | The answer comes in the same thread, and knows the earlier turn (same session). No new thread. |
 | 4 | **A reply while a turn is running**: send a long question (`check every deployment in shop and tell me about each`), and answer or add to it before it finishes | Agent Kourier queues it: a notice says it is queued, and the answer follows when the first turn ends, in order. Never two answers at once, never a lost message. |
@@ -378,7 +378,7 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
 
 1. **A regenerated webhook in the file.** The URL was pasted into a chat once, so regenerate it in Slack (the app's Incoming Webhooks, add one for `#alerts-critical`, revoke the old one), put the new URL in
    `~/.config/agent-kourier/alertmanager-webhook-url` (see "Alert trial", Setup) and `chmod 600` it.
-2. **Agent Kourier invited to the alert channel**: `/invite @courier` in `#alerts-critical`. The tokens in the secrets file must belong to an app installed in the workspace that channel is in (a channel ID is only good in its own workspace),
+2. **Agent Kourier invited to the alert channel**: `/invite @Agent Kourier` in `#alerts-critical`. The tokens in the secrets file must belong to an app installed in the workspace that channel is in (a channel ID is only good in its own workspace),
    which is also the workspace of `SLACK_CHANNEL_ID`; the one connection serves both Bindings. The dry run below needs the same membership and `channels:history`.
 3. **The dry run shows 0 trial matches on production history.** From the repo root (see "Tune triggers with a dry run" for the options):
 
