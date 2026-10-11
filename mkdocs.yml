@@ -1,0 +1,157 @@
+# The Agent Kourier documentation site: https://agentkourier.dev
+# Build with `make docs-build` (strict) and preview with `make docs`. The plan is tasks/plans/docs-site.md.
+site_name: Agent Kourier
+site_url: https://agentkourier.dev/
+site_description: >-
+  Agent Kourier is a Kubernetes-native broker that carries Alertmanager alerts and Slack messages to any A2A agent,
+  wakes it if needed, and brings its findings back into the Slack thread where people can keep the session going.
+repo_url: https://github.com/agentkourier/agent-kourier
+repo_name: agentkourier/agent-kourier
+edit_uri: edit/main/docs/
+copyright: Agent Kourier is licensed under the Apache License 2.0.
+
+docs_dir: docs
+# The brand kit and the spike notes live in docs/ for the repository, not for the site.
+exclude_docs: |
+  /brand/
+  /spikes/
+
+theme:
+  name: material
+  custom_dir: hack/docs/overrides
+  language: en
+  font: false # Inter and JetBrains Mono, loaded in overrides/main.html
+  favicon: assets/favicon/favicon-32.png
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Use the light theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Use the dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Follow the system theme
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+plugins:
+  - search
+  # Opens an image full size on the page. manual: only images with the on-glb class, such as the architecture map.
+  - glightbox:
+      manual: true
+      zoomable: true
+      background: white
+
+extra_css:
+  - stylesheets/brand.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/agentkourier/agent-kourier
+      name: Agent Kourier on GitHub
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: relative_to_docs
+    unrecognized_links: warn
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - tutorials/index.md
+      - Your first agent in Slack: tutorials/first-agent-in-slack.md
+      - Your first alert investigation: tutorials/first-alert-investigation.md
+  - How-to guides:
+      - how-to/index.md
+      - Install with Helm: how-to/install-with-helm.md
+      - Configure Slack: how-to/configure-slack.md
+      - Write a Binding: how-to/write-a-binding.md
+      - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
+      - Tune triggers with a dry run: how-to/tune-triggers.md
+      - Connect a kagent agent: how-to/connect-kagent.md
+      - Connect a generic A2A agent: how-to/connect-a2a-agent.md
+      - Connect an agent on Google AX: how-to/connect-ax.md
+      - Let the agent ask questions: how-to/agent-questions.md
+      - Rotate the Binding token: how-to/rotate-binding-token.md
+      - Put a verifying front door before kagent: how-to/front-door.md
+      - Run on Postgres with a standby: how-to/postgres-and-ha.md
+      - Export metrics and traces: how-to/export-telemetry.md
+      - Upgrade: how-to/upgrade.md
+      - Troubleshoot an install: how-to/troubleshoot.md
+  - Reference:
+      - reference/index.md
+      - Binding: reference/binding.md
+      - AgentBackend: reference/agentbackend.md
+      - ChatConnection: reference/chatconnection.md
+      - Helm values: reference/helm-values.md
+      - Command line and environment: reference/cli.md
+      - Chat triggers: reference/chat-triggers.md
+      - Metrics: reference/metrics.md
+      - Logs and traces: reference/logs-and-traces.md
+      - Stored data: reference/stored-data.md
+      - Glossary: reference/glossary.md
+  - Explanation:
+      - explanation/index.md
+      - Architecture: explanation/architecture.md
+      - Why a broker: explanation/why-a-broker.md
+      - Threads and sessions: explanation/threads-and-sessions.md
+      - Delivery guarantees: explanation/delivery.md
+      - Security model: explanation/security.md
+      - Comparison with other projects: explanation/comparison.md
+      - Roadmap: explanation/roadmap.md

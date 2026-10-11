@@ -10,7 +10,7 @@ import (
 // pinned by examples that must still leak, so that a fix fails TestLeakLimitsStillLeak and the row goes. Its applies function says
 // where main shows a marker, and it is held to that from both sides: a marker that main shows and no row explains fails the oracle,
 // and so does a row that applies to a marker main hides ("limit too broad"). Later work packages may only narrow a predicate or
-// delete a row, never widen one or add one without the orchestrator's sign-off. docs/data.md's limits paragraph points here.
+// delete a row, never widen one or add one without the orchestrator's sign-off. docs/reference/stored-data.md's limits paragraph points here.
 //
 // leakLimit is one row.
 type leakLimit struct {

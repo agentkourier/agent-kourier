@@ -50,7 +50,7 @@ type FeedbackVote struct {
 	At, First time.Time
 }
 
-// Feedback persists the verdicts people give. The rows are kept: no retention purge deletes one (docs/data.md).
+// Feedback persists the verdicts people give. The rows are kept: no retention purge deletes one (docs/reference/stored-data.md).
 type Feedback interface {
 	// RecordVote stores v, and returns the verdict this person's vote on this message had before it, which is
 	// empty for a first vote. A vote with another verdict than the one stored replaces it, and At is then the time of

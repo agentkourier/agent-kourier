@@ -104,3 +104,32 @@ e2e-ax: ## Run the shared E2E scenarios and AX text-question/lifecycle scenarios
 
 e2e-ax-down: ## Tear down only the AX E2E tier
 	hack/kind/down.sh ax
+
+# The documentation site (mkdocs.yml, docs/): MkDocs with Material, in a virtualenv under bin/ with the versions
+# pinned in hack/docs/requirements.txt. Needs Python 3.
+.PHONY: docs docs-build docs-ref docs-check docs-diagrams
+DOCS_VENV := bin/docs-venv
+
+$(DOCS_VENV)/.installed: hack/docs/requirements.txt
+	python3 -m venv --clear $(DOCS_VENV)
+	$(DOCS_VENV)/bin/pip install --quiet --disable-pip-version-check -r hack/docs/requirements.txt
+	touch $@
+
+docs-ref: ## Generate the reference pages from api/v1alpha1 and the chart's values (hack/docs/refgen)
+	go run ./hack/docs/refgen
+
+docs-check: ## Fail on the product name misspelt on the site ("Kourier" alone, or "courier")
+	go run ./hack/docs/namecheck
+
+docs-diagrams: ## Render the full architecture map to docs/assets/diagrams (Node; mermaid-cli through npx)
+	npx -y @mermaid-js/mermaid-cli@11.15.0 -i hack/docs/diagrams/architecture-map.mmd \
+	  -o docs/assets/diagrams/architecture-map.svg -c hack/docs/diagrams/mermaid.json -b white
+	@# mermaid writes width="100%", which an <img> reads as 300 px; give the SVG its real size so it opens full size.
+	perl -0pi -e 's/<svg id="my-svg" width="100%"(.*?)viewBox="0 0 ([\d.]+) ([\d.]+)"/sprintf(q{<svg id="my-svg" width="%d" height="%d"%sviewBox="0 0 %s %s"}, $$2+0.5, $$3+0.5, $$1, $$2, $$3)/e' \
+	  docs/assets/diagrams/architecture-map.svg
+
+docs: $(DOCS_VENV)/.installed docs-ref ## Serve the documentation site at http://127.0.0.1:8000, reloading on change
+	$(DOCS_VENV)/bin/mkdocs serve
+
+docs-build: $(DOCS_VENV)/.installed docs-ref docs-check ## Build the documentation site into bin/site; any warning fails the build
+	$(DOCS_VENV)/bin/mkdocs build --strict --site-dir bin/site

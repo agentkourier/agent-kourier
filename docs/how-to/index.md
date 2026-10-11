@@ -1,0 +1,34 @@
+# How-to guides
+
+For engineers who know what they want done: each guide is one task, with the steps to finish it on your own cluster.
+The guides assume you know Kubernetes and Helm, and link to [explanation](../explanation/index.md) pages for the why.
+
+## Install and connect
+
+- [Install with Helm](install-with-helm.md): the chart, the Secrets and a first answer in a thread.
+- [Configure Slack](configure-slack.md): the Slack app, its tokens and the ChatConnection.
+- [Write a Binding](write-a-binding.md): your agent in your channel.
+
+## Agents
+
+- [Connect a kagent agent](connect-kagent.md): kagent 1.0 or 0.9.x.
+- [Connect a generic A2A agent](connect-a2a-agent.md): any agent that streams A2A over JSON-RPC.
+- [Connect an agent on Google AX](connect-ax.md): an A2A agent running in an AX Task.
+- [Let the agent ask questions](agent-questions.md): answers from the thread.
+
+## Alerts
+
+- [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md): an investigation in each alert's thread.
+- [Tune triggers with a dry run](tune-triggers.md): replay a channel's history before going live.
+
+## Security
+
+- [Put a verifying front door before kagent](front-door.md): verify the Binding's token and strip identity headers.
+- [Rotate the Binding token](rotate-binding-token.md): by hand or on a schedule.
+
+## Operate
+
+- [Run on Postgres with a standby](postgres-and-ha.md): two replicas, one leading.
+- [Export metrics and traces](export-telemetry.md): Prometheus, OpenTelemetry and alerts worth having.
+- [Upgrade](upgrade.md): a new build, a rollback, and the move across the rename.
+- [Troubleshoot an install](troubleshoot.md): from what you see to the cause and the fix.

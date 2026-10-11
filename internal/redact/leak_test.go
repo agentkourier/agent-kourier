@@ -807,7 +807,7 @@ func shownSet(c leakCase, text string) string {
 }
 
 // What leaks does not change with invisible characters or a space of another width: normalization deletes the first and the rules read
-// the second as a space (docs/data.md), so a text with a zero-width space or a soft hyphen after each colon and equals sign, with
+// the second as a space (docs/reference/stored-data.md), so a text with a zero-width space or a soft hyphen after each colon and equals sign, with
 // "\r\n" or U+2028 for each line break, or with a no-break space for each space, shows the markers that the plain text shows.
 func TestLeakInvisiblesDoNotChangeWhatLeaks(t *testing.T) {
 	atoms := leakAtoms()

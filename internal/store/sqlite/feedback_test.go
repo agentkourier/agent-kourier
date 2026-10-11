@@ -6,7 +6,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store/storetest"
 )
 
-// The query that docs/data.md gives for the pilot's exit decision (D33) answers by the rule of the owner: per investigation, the
+// The query that docs/reference/stored-data.md gives for the pilot's exit decision (D33) answers by the rule of the owner: per investigation, the
 // majority of its votes, a tie not useful, and only an investigation's own message.
 func TestTheDocumentedDecisionQueryCountsInvestigationsByMajority(t *testing.T) {
 	s := openTemp(t)

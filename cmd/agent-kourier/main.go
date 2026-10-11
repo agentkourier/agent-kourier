@@ -9,8 +9,9 @@
 //	AGENTKOURIER_STORE          sqlite (the default, one replica) or postgres
 //	AGENTKOURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
 //	                       Secret caches (its namespace needs the list and watch Role the config's do)
-//	AGENTKOURIER_POSTGRES_TIMEOUTS     with postgres, Agent Kourier (default: it sets the idle-in-transaction and statement
-//	                       timeouts) or role (the database role sets them; for a pooler that refuses startup parameters)
+//	AGENTKOURIER_POSTGRES_TIMEOUTS     with postgres, agent-kourier (the default: Agent Kourier sets the idle-in-transaction
+//	                       and statement timeouts on each connection) or role (the database role sets them, for a pooler
+//	                       that refuses startup parameters)
 //	AGENTKOURIER_LEASE_NAMESPACE, AGENTKOURIER_LEASE_NAME, AGENTKOURIER_POD_NAME   with postgres, required: where the leader-election Lease
 //	                       is (Agent Kourier's own namespace, one Lease for the Deployment) and the pod's name, which names the
 //	                       replica as the holder. The election runs with postgres and never with sqlite, whose replica works at once

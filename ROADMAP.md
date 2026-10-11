@@ -2,8 +2,9 @@
 
 This is the order of work, without dates. The phases and their exit tests are in
 [spec section 12](spec.md#12-phases). The order here differs from the spec in one
-place: the first part of hardening now comes before the pilot, so that the pilot
-runs on the hardened build. The spec still lists the pilot first. The
+place: the first part of hardening (the chart, Postgres, a standby and published
+images) came before the pilot, so that the pilot runs on the hardened build. The
+spec still lists the pilot first. The
 [README](README.md#integrations) lists what each integration supports today.
 
 ## Implemented
@@ -19,19 +20,19 @@ runs on the hardened build. The spec still lists the pilot first. The
   reference agent.
 - Audit log, Prometheus metrics and optional OpenTelemetry traces.
 - Resources loaded from YAML files, usually a mounted ConfigMap.
-
-## In progress: hardening
-
 - A Helm chart.
 - A Postgres store beside SQLite.
-- Two replicas, one active and one standby, with a failover test that loses and
-  duplicates nothing.
-- Container images published to GHCR.
+- Two replicas on Postgres, one leading and one standing by: a Kubernetes
+  Lease elects the leader, and an epoch in the database fences a deposed
+  leader's writes.
+- A release workflow that publishes signed multi-arch images and a signed Helm
+  chart to GHCR on a version tag.
+- Useful and not-useful buttons on each investigation, one changeable vote per
+  person.
 
 ## Next: the pilot
 
 - Four weeks with one team, on production alerts.
-- Useful and not-useful buttons on each investigation.
 - A dashboard for the pilot's results.
 
 ## Later
@@ -44,5 +45,5 @@ These wait for the pilot's verdict or for an upstream release.
 - Tool approvals from Slack, for agents that can change things.
 - The move to kagent 1.0 when it is released.
 - More chat platforms. The candidates are Mattermost, Microsoft Teams and Discord.
-- Open-source readiness: a license, a tutorial, reference docs and conformance tests
-  for the `a2a` dialect.
+- Open-source readiness: the governance files (contributing, security policy, code
+  of conduct) and conformance tests for the `a2a` dialect.

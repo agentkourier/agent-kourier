@@ -165,7 +165,7 @@ func headerToken(k string) bool {
 // Export failures are reported to log, by class and at most once a minute for each.
 //
 // The exporter reads more OTEL_EXPORTER_OTLP_* variables from the process environment than
-// LoadConfig checks (certificates, compression, timeout; see docs/observability.md). Call
+// LoadConfig checks (certificates, compression, timeout; see docs/reference/logs-and-traces.md). Call
 // InstallDiagnostics first, so that what it says about any of them goes to log.
 func (c Config) Provider(ctx context.Context, version string, log *slog.Logger) (trace.TracerProvider, func(context.Context) error, error) {
 	if c.Endpoint == "" {

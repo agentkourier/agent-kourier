@@ -303,7 +303,7 @@ func TestFreeTextReadsManifestAndShellForms(t *testing.T) {
 }
 
 // TestFreeTextKnownLimits pins what the free-text rules document they do not catch, and what they take that is no secret.
-// Each is deliberate: when one is fixed, flip its case and update the limits listed on FreeText and in docs/data.md.
+// Each is deliberate: when one is fixed, flip its case and update the limits listed on FreeText and in docs/reference/stored-data.md.
 func TestFreeTextKnownLimits(t *testing.T) {
 	for _, c := range []struct {
 		name, in, leak string

@@ -64,8 +64,9 @@ type Trigger struct {
 	Type TriggerType `json:"type"`
 	// From names the bot a botMessage trigger accepts. Required for botMessage.
 	From *BotSource `json:"from,omitempty"`
-	// Preset fills in match, extract, thread and promptTemplate for a known sender. What the
-	// Binding sets itself overrides the preset field by field (see applyPreset).
+	// Preset fills in match, extract, thread, limits and promptTemplate for a known sender. What the
+	// Binding sets itself overrides the preset field by field: a match, exclude or extract entry replaces the
+	// preset's entry of that name, and each part of thread and limits replaces the preset's (see applyPreset).
 	// +kubebuilder:validation:Enum=alertmanager
 	// +optional
 	Preset string `json:"preset,omitempty"`
@@ -121,7 +122,7 @@ type TriggerThread struct {
 	// MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
 	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
 	// resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset
-	// means the larger of 24h and twice the cooldown (EffectiveMaxIdle). It must be longer than the
+	// means the larger of 24h and twice the cooldown (see EffectiveMaxIdle). It must be longer than the
 	// sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that
 	// interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and
 	// starts a second investigation for it. Twice the cooldown covers that only for the preset's 4h

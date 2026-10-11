@@ -27,8 +27,8 @@ type TriggerLimits struct {
 	// What the Binding leaves out of it comes from the preset, field by field.
 	// +optional
 	RateLimit *RateLimit `json:"rateLimit,omitempty"`
-	// MaxRunsPerDay caps starts in any 24 hours (D31). It is a pointer so that 0, which means no cap, can be
-	// told from unset, which takes the preset's cap.
+	// MaxRunsPerDay caps starts in any 24 hours (D31). An explicit 0 means no cap; leaving it out takes the
+	// preset's cap.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MaxRunsPerDay *int32 `json:"maxRunsPerDay,omitempty"`

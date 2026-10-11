@@ -988,7 +988,7 @@ this with an outbox:
   Binding has at most 100 names in a process, then `other`.
 - The pilot exit decision (D33) is computed from the rows, not the metric (owner, 2026-10-05): each investigation
   counts once, useful when most of its investigation votes say Useful (a tie is not useful); "rated" means at least
-  one vote. The query is in `docs/data.md`.
+  one vote. The query is in `docs/reference/stored-data.md`.
 
 ## 9. State
 

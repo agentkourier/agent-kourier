@@ -36,8 +36,11 @@ const (
 	AlertAlertmanager = "alertmanager"
 )
 
-// ObjectRef names a resource in a namespace. An empty Namespace means the namespace of the
-// referring object. Whether a cross-namespace reference is allowed is decided by WP-21.
+// ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
+// referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a
+// ChatConnection in another namespace only if that resource lists the Binding's namespace in its
+// allowedNamespaces. A ChatConnection's directMessages.defaultBindingRef is not checked that way: it may
+// name a Binding in any namespace, provided that Binding uses the connection (WP-21; see Resolve).
 type ObjectRef struct {
 	Namespace string `json:"namespace,omitempty"`
 	// +kubebuilder:validation:MinLength=1
@@ -109,9 +112,10 @@ type AgentBackendSpec struct {
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
-// Header is a static HTTP header. Set exactly one of Value and ValueSecretRef; a
-// ValueSecretRef follows the same key convention as the other single-value refs.
-// Authorization and X-User-Id are reserved for the Binding identity; Validate rejects them.
+// Header is a static HTTP header. Set exactly one of value and valueSecretRef; valueSecretRef's key
+// defaults to "token", as for the other single-value Secret references. A header that carries or selects
+// identity is refused, because the Binding identity owns it: Authorization, Proxy-Authorization, Cookie,
+// X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity (D14, D32; see IsReservedHeader).
 type Header struct {
 	// +kubebuilder:validation:MinLength=1
 	Name           string        `json:"name"`
@@ -190,7 +194,8 @@ type BindingSpec struct {
 	Agent    AgentRef    `json:"agent"`
 	Identity Identity    `json:"identity"`
 	Chat     ChatBinding `json:"chat"`
-	// Alerts enables the alert webhook; without it the Binding is chat only.
+	// Alerts configures an Alertmanager webhook for the Binding. The loader accepts it, but the webhook
+	// receiver is not served yet; alerts reach a Binding today through a botMessage trigger.
 	Alerts *Alerts `json:"alerts,omitempty"`
 	// +optional
 	Interactions Interactions `json:"interactions,omitzero"`
@@ -211,8 +216,8 @@ type AgentRef struct {
 	Namespace string `json:"namespace"`
 }
 
-// Identity is the service identity every turn in the Binding runs as (D14). Set UserID,
-// TokenSecretRef, or both.
+// Identity is the service identity every turn in the Binding runs as, whoever wrote the message (D14). Set
+// userId, tokenSecretRef, or both.
 type Identity struct {
 	// UserID is sent as X-User-Id when the backend runs in insecure mode.
 	UserID string `json:"userId,omitempty"`
@@ -234,15 +239,15 @@ type ChatBinding struct {
 	// ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn.
 	// With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a
 	// trigger started the thread; the next mentioned turn carries the other replies as
-	// context. A typed answer to a pending question that takes text replies (spec 8.4)
-	// needs no mention, and neither does a direct message.
+	// context. A typed answer to a pending question that takes text replies (spec 8.4) needs no mention,
+	// and neither does a direct message.
 	// +kubebuilder:validation:Enum=all;mention
 	// +kubebuilder:default=all
 	// +optional
 	ThreadReplies ThreadReplies `json:"threadReplies"`
-	// Triggers decide which events in the channel start or continue a turn (spec 8.2).
-	// Empty means [{type: mention}], which is how a Binding behaved before triggers existed;
-	// Default fills it in.
+	// Triggers decide which events in the channel start or continue a turn (spec 8.2). Empty means
+	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list
+	// (see defaultTriggers).
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
 }
@@ -277,13 +282,14 @@ type RateLimit struct {
 type Interactions struct {
 	// AskUser lets the agent ask questions in the thread. Defaults to false.
 	AskUser bool `json:"askUser,omitempty"`
-	// ToolApprovals gates tool calls on approval (Phase 5). Defaults to false.
+	// ToolApprovals gates tool calls on approval from the chat, which is not built yet (Phase 5): keep it
+	// false. Defaults to false.
 	ToolApprovals bool `json:"toolApprovals,omitempty"`
 	// Timeout is how long a pause waits for an answer. Defaults to 30m.
 	// +kubebuilder:default="30m"
 	// +optional
 	Timeout metav1.Duration `json:"timeout"`
-	// ApproverGroups is reserved (R1); empty means any channel member.
+	// ApproverGroups is reserved for limiting who may answer (R1); empty means any channel member.
 	ApproverGroups []string `json:"approverGroups,omitempty"`
 }
 
@@ -298,13 +304,15 @@ type Feedback struct {
 
 // Session configures thread-to-session mapping.
 type Session struct {
-	// ThreadTTL is how long a thread keeps its session (D28). Defaults to 2160h (90 days).
+	// ThreadTTL is how long a thread keeps its session after its last activity (D28). Defaults to 2160h
+	// (90 days).
 	// +kubebuilder:default="2160h"
 	// +optional
 	ThreadTTL metav1.Duration `json:"threadTTL"`
 }
 
-// BindingStatus is the observed state of a Binding. Written by the controller.
+// BindingStatus is the observed state of a Binding. The loader sets webhookPath in memory; conditions are for
+// the controller that will serve these resources (D30). Neither is visible while resources are loaded from files.
 type BindingStatus struct {
 	// Conditions include Ready, BackendReachable, and ChannelJoined.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

@@ -10,10 +10,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// decisionSQL matches the query of docs/data.md that D33 is computed with: the one fenced block of SQL after "```sql".
+// decisionSQL matches the query of docs/reference/stored-data.md that D33 is computed with: the one fenced block of SQL after "```sql".
 var decisionSQL = regexp.MustCompile("(?s)```sql\n(WITH rated.*?)```")
 
-// DecisionSQL returns the query that docs/data.md gives for the pilot's exit decision (D33), as written there, so that a store's
+// DecisionSQL returns the query that docs/reference/stored-data.md gives for the pilot's exit decision (D33), as written there, so that a store's
 // own test can run the very text an operator would.
 func DecisionSQL(t testing.TB) string {
 	t.Helper()
@@ -21,13 +21,13 @@ func DecisionSQL(t testing.TB) string {
 	if !ok {
 		t.Fatal("storetest: cannot find the source of the package")
 	}
-	doc, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "..", "docs", "data.md"))
+	doc, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "..", "docs", "reference", "stored-data.md"))
 	if err != nil {
-		t.Fatalf("read docs/data.md: %v", err)
+		t.Fatalf("read docs/reference/stored-data.md: %v", err)
 	}
 	m := decisionSQL.FindSubmatch(doc)
 	if m == nil {
-		t.Fatal("docs/data.md has no SQL block for the pilot's exit decision")
+		t.Fatal("docs/reference/stored-data.md has no SQL block for the pilot's exit decision")
 	}
 	return string(m[1])
 }

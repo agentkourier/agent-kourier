@@ -1,9 +1,11 @@
-# What Agent Kourier stores, and for how long
+# Stored data
+
+This page lists what Agent Kourier stores, in SQLite or Postgres, and for how long.
 
 Agent Kourier encrypts nothing itself. At rest it relies on the volume (an encrypted EBS volume for SQLite) or the database (RDS
 with a KMS key). What it does control is how long a piece of content is kept, and that an agent's secrets never reach the
 store. Both stores (SQLite and Postgres) keep the same promises: the store conformance suite (`internal/store/storetest`)
-holds each to them. What Agent Kourier logs is a separate matter, covered with the telemetry in [observability.md](observability.md).
+holds each to them. What Agent Kourier logs is a separate matter, covered with the telemetry in [Logs and traces](logs-and-traces.md).
 
 Agent text that streams to a thread is never stored. Spans, metric labels and the trace context sent to the agent
 (`traceparent` and `tracestate`, baggage removed) carry no content.
@@ -47,7 +49,7 @@ rows of a person with `DELETE FROM feedback WHERE user_id = ...` on the operator
 
 Each vote is also an audit entry of kind `event` whose subject names the turn, channel and thread and whose outcome is the verdict
 (`feedback: verdict=useful changed=false`), and it is counted in `agentkourier_investigation_feedback_total`
-([observability.md](observability.md)); the table, not the metric, is the record D33 is computed from.
+([Metrics](metrics.md#operations-intake-delivery-and-triggers)); the table, not the metric, is the record D33 is computed from.
 
 The pilot's exit decision (D33) counts investigations, not votes: an investigation (the thread a trigger started) is rated if any
 person voted on its investigation message, and is useful if more of its votes are useful than not useful, so a tie is not useful.

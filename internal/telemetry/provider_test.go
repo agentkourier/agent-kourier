@@ -63,7 +63,7 @@ func TestSpanAttributeValuesAreBounded(t *testing.T) {
 	}
 }
 
-// The exporter honours these variables itself, and docs/observability.md says so. The test pins
+// The exporter honours these variables itself, and docs/reference/logs-and-traces.md says so. The test pins
 // the documentation to the behaviour, and the endpoint's scheme to the last word on transport
 // security.
 func TestDocumentedExporterEnvironment(t *testing.T) {

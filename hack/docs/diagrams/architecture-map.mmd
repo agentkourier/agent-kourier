@@ -1,0 +1,74 @@
+%% The full architecture map on docs/explanation/architecture.md. make docs-diagrams renders it to
+%% docs/assets/diagrams/architecture-map.svg in the palette of hack/docs/diagrams/mermaid.json.
+flowchart TB
+    Git["Git repository<br/>AgentBackend · ChatConnection · Binding<br/>Runtime deployment manifests"]
+    GitOps["GitOps deployment"]
+    Slack["People in Slack<br/>Messages, thread replies, question answers"]
+
+    subgraph K8s["Kubernetes"]
+        Files["Mounted configuration YAML<br/>ConfigMap"]
+        Secrets["Kubernetes Secrets<br/>Slack credentials + Binding identity"]
+
+        subgraph Broker["Agent Kourier broker · one active ChatConnection per process"]
+            Config["Configuration loader + reloader<br/>Validate references and namespace access"]
+            Identity["Secret resolver + Binding identity"]
+            Chat["Slack adapter<br/>Socket Mode intake + outbound API calls"]
+            Intake["Chat intake<br/>Choose Binding and handle thread controls"]
+            Session["Session manager<br/>Durable reply queue · serial turns · recovery"]
+            A2A["Agent client pool + dialect<br/>Send · follow · get · cancel"]
+            Interact["Interaction handling<br/>Persist questions and presses · validate answers"]
+            Render["Renderer<br/>Stream text, render questions, finalize output"]
+            Outbox["Durable outbox<br/>Post, adopt, retry, record delivery"]
+            Telemetry["Prometheus metrics + audit logging<br/>Optional OTLP traces"]
+        end
+
+        DB[("Store: SQLite on a volume, or Postgres<br/>Sessions · replies · interactions · presses<br/>Outbox · audit · trace context")]
+
+        subgraph Runtime["Agent runtime · managed independently"]
+            Frontdoor["Authenticated A2A endpoint<br/>kagent front door, or a TLS gateway to atenet-router"]
+            Agent["kagent-hosted agent"]
+            Tools["Model, tools, and execution environment"]
+            Ax["Google AX task<br/>A2A agent behind atenet-router"]
+        end
+    end
+
+    Observability["Metrics scraper + trace collector"]
+
+    Git --> GitOps
+    GitOps --> Files
+    GitOps --> Secrets
+    GitOps -->|Runtime deployment| Agent
+    GitOps -->|Task deployment| Ax
+    Files --> Config
+    Secrets --> Identity
+    Config -.->|Routing snapshot| Intake
+    Config -.->|Backend and Binding settings| A2A
+    Identity -.->|Service credentials| A2A
+    Identity -.->|Slack credentials| Chat
+
+    Slack <-->|Events, acknowledgements, output| Chat
+    Chat -->|Inbound messages| Intake
+    Intake -->|Queue a turn| Session
+    Intake -->|Human answer or button press| Interact
+    Session <-->|Task lifecycle and events| A2A
+    A2A <-->|A2A 1.0 JSON-RPC + streaming| Frontdoor
+    Frontdoor <--> Agent
+    Frontdoor <--> Ax
+    Agent <--> Tools
+
+    Session -->|Task output and pauses| Render
+    Session -->|Pause handoff| Interact
+    Interact -->|Question or interaction card| Render
+    Interact -->|Validated answer through same session| Session
+    Render -->|Stream and edit| Chat
+    Render -->|Durable posts and notices| Outbox
+    Outbox -->|Deliver or find an earlier post| Chat
+
+    Session <-->|Conversation state| DB
+    Interact <-->|Interaction state| DB
+    Outbox <-->|Delivery state| DB
+    Telemetry -->|Audit records| DB
+    Broker -.->|Operation observations| Observability
+
+    classDef core fill:#326CE5,stroke:#1E3A8A,color:#FFFFFF
+    class Session core

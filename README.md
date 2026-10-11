@@ -11,7 +11,7 @@ the Slack connection, the reply queue and the delivery state, so an Agent Kourie
 loses no message.
 
 [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
-[Architecture](docs/architecture.md) · [Roadmap](ROADMAP.md) ·
+[Architecture](docs/explanation/architecture.md) · [Roadmap](ROADMAP.md) ·
 [Specification](spec.md)
 
 ## What it looks like
@@ -83,7 +83,7 @@ flowchart LR
 
 Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
 The runtime's own manifests or operator deploy and run the agent. Agent Kourier supplies
-the messaging wiring. See the [detailed architecture](docs/architecture.md) for the
+the messaging wiring. See the [detailed architecture](docs/explanation/architecture.md) for the
 configuration, execution, persistence, and interaction paths.
 
 ## Configuration model
@@ -205,7 +205,7 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions. Tested against 1.0.0-alpha5. Agent Kourier refuses a tool approval request and posts a notice. Needs a cluster that serves the pod-certificate APIs (see below) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text | Implemented |
-| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect an agent](docs/getting-started.md#7-connect-an-agent) | Implemented |
+| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Agent backend | Tool approvals answered from Slack | Planned |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
@@ -235,7 +235,7 @@ kubectl api-versions | grep certificates.k8s.io/v1beta1
 
 Without them, use an agent that does not need Substrate, through the `a2a` dialect.
 kagent 0.9.x is one. It speaks A2A 0.3, which the dialect reads. See
-[Connect an agent](docs/getting-started.md#7-connect-an-agent) for the URL form and the
+[Connect a kagent agent](docs/how-to/connect-kagent.md) for the URL form and the
 limits, and [risk R19](spec.md#14-risks) for why.
 
 ## Status
@@ -244,13 +244,13 @@ The project is in an internal-first pilot and has no tagged release. It runs as 
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
-[observability](docs/observability.md), and [stored data](docs/data.md) for what
+[observability](docs/reference/logs-and-traces.md), and [stored data](docs/reference/stored-data.md) for what
 Agent Kourier keeps and for how long.
 
 To try it first, use the [sandbox deployment guide](hack/kind/sandbox/README.md), which runs
 Agent Kourier against a real Slack workspace and a kagent agent in kind. To run it on a
-cluster, follow [Run Agent Kourier on a cluster](docs/getting-started.md), and see
-[troubleshooting](docs/troubleshooting.md) when a first install does not answer. The
+cluster, follow [Install with Helm](docs/how-to/install-with-helm.md), and see
+[troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer. The
 [specification](spec.md) records the detailed behaviour, and the
 [roadmap](ROADMAP.md) lists what comes next.
 

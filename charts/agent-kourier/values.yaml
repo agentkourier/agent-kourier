@@ -12,7 +12,7 @@ replicaCount: 1
 
 image:
   # Required. A released chart has it stamped (ghcr.io/agentkourier/agent-kourier), with digest; in the source tree it
-  # is empty. Locally: Agent Kourier (the image `make image` builds is agent-kourier:dev).
+  # is empty. Locally: agent-kourier (the image `make image` builds is agent-kourier:dev).
   repository: ""
   # A tag, which defaults to the chart's appVersion. Ignored when digest is set: a released chart sets the digest, so to
   # run another tag with it, set image.digest="" as well (or set image.digest to the other release's digest).
@@ -54,7 +54,7 @@ extraEnv: []
 # What Agent Kourier reads. Either the resources below, which the chart writes into a ConfigMap mounted at /etc/agent-kourier, or
 # existingConfigMap, the name of a ConfigMap you manage (one key per file, each ending .yaml). Not both.
 #
-# Each entry is keyed by its name and holds the resource's spec exactly as spec.md section 7 describes it (the chart does
+# Each entry is keyed by its name and holds the resource's spec exactly as the resource reference describes it (spec section 7) (the chart does
 # not interpret it) and, optionally, the namespace (default: the release's). Secrets are referenced by name
 # (credentialsSecretRef, tokenSecretRef, valueSecretRef) and live in the cluster, made by you or Sealed Secrets:
 # no token value belongs in this file or in any values file (the render refuses a Slack token, and a header value whose name
@@ -104,8 +104,8 @@ store:
     # (spec D37). "agent-kourier" (the default) sends them as startup parameters on every connection. Connect to Postgres directly
     # or through a pooler in SESSION mode. A pooler in TRANSACTION mode (PgBouncer's pool_mode = transaction) refuses startup
     # parameters ("unsupported startup parameter"), and listing them in its ignore_startup_parameters silently drops the
-    # protection: there, set both on the database role (ALTER ROLE Agent Kourier SET idle_in_transaction_session_timeout = '10s';
-    # ALTER ROLE Agent Kourier SET statement_timeout = '30s') and set this to "role", which turns Agent Kourier's own off.
+    # protection: there, set both on the database role (ALTER ROLE agentkourier SET idle_in_transaction_session_timeout = '10s';
+    # ALTER ROLE agentkourier SET statement_timeout = '30s') and set this to "role", which turns Agent Kourier's own off.
     timeouts: agent-kourier
 
 # Leader election, which runs with store.type postgres only (with sqlite none of this is allowed). The replicas hold one Lease,
@@ -132,7 +132,7 @@ livenessProbe:
 persistence:
   # Use a claim you manage instead of creating one.
   existingClaim: ""
-  # The SQLite file in the volume (AGENTKOURIER_DB_PATH is /data/<dbFile>). Change it to start a fresh database beside an old one. The default predates the project's rename and is kept so that the file in an existing volume keeps its name (upgrading across the rename: see the README).
+  # The SQLite file in the volume (AGENTKOURIER_DB_PATH is /data/<dbFile>). Change it to start a fresh database beside an old one. The default predates the project's rename and is kept so that the file in an existing volume keeps its name (upgrading across the rename: docs/how-to/upgrade.md, "Upgrade across the rename").
   dbFile: courier.db
   size: 1Gi
   # Empty is the cluster's default class; "-" is an explicitly empty one.

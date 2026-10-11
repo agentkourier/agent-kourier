@@ -1,0 +1,529 @@
+/*
+ * Agent Kourier on Material for MkDocs.
+ *
+ * Palette (docs/brand/assets/README.md): Kubernetes blue #326CE5, navy #1E3A8A, white. Dark mode uses the dark mark's
+ * blue #5B8DEF, because navy on near-black is 1.6:1. #E5484D is the one signal colour, kept for a firing alert and the
+ * danger admonition, and never used for text (3.9:1 on white).
+ *
+ * Contrast (WCAG 2.1): #326CE5 on white 4.76, #1E3A8A on white 10.4, #5B8DEF on #0B1020 5.86, #E6EAF2 on #0B1020 15.7,
+ * #A9B4C8 on #0B1020 9.06. #326CE5 on #0B1020 is 3.98, so in dark mode it is a border and fill colour, not a text colour.
+ */
+
+:root {
+  --ak-blue: #326ce5;
+  --ak-navy: #1e3a8a;
+  --ak-blue-on-dark: #5b8def;
+  --ak-red: #e5484d;
+  --ak-ground-dark: #0b1020;
+  --ak-ground-dark-raised: #131a2b;
+
+  --md-text-font: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --md-code-font: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Light: white ground, navy text, blue links and primary. */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--ak-blue);
+  --md-primary-fg-color--light: #5b8def;
+  --md-primary-fg-color--dark: var(--ak-navy);
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+  --md-accent-fg-color: var(--ak-navy);
+  --md-accent-fg-color--transparent: rgba(30, 58, 138, 0.08);
+
+  --md-default-bg-color: #ffffff;
+  --md-default-fg-color: var(--ak-navy);
+  --md-default-fg-color--light: rgba(30, 58, 138, 0.78);
+  --md-default-fg-color--lighter: rgba(30, 58, 138, 0.42);
+  --md-default-fg-color--lightest: rgba(30, 58, 138, 0.1);
+
+  --md-typeset-color: var(--ak-navy);
+  --md-typeset-a-color: var(--ak-blue);
+  --md-code-bg-color: #f4f6fb;
+  --md-code-fg-color: #1b2a55;
+
+  --ak-header-bg: #ffffff;
+  --ak-header-fg: var(--ak-navy);
+  --ak-rule: rgba(30, 58, 138, 0.14);
+  --ak-card-bg: #ffffff;
+  --ak-surface: #f7f9fd;
+}
+
+/* Dark: near-black ground, #5B8DEF primary, #326CE5 accent. */
+[data-md-color-scheme="slate"] {
+  --md-hue: 225;
+  --md-primary-fg-color: var(--ak-blue-on-dark);
+  --md-primary-fg-color--light: #7ba4f5;
+  --md-primary-fg-color--dark: var(--ak-blue);
+  --md-primary-bg-color: var(--ak-ground-dark);
+  --md-primary-bg-color--light: rgba(11, 16, 32, 0.7);
+  --md-accent-fg-color: var(--ak-blue);
+  --md-accent-fg-color--transparent: rgba(50, 108, 229, 0.12);
+
+  --md-default-bg-color: var(--ak-ground-dark);
+  --md-default-bg-color--light: rgba(11, 16, 32, 0.54);
+  --md-default-fg-color: #e6eaf2;
+  --md-default-fg-color--light: #a9b4c8;
+  --md-default-fg-color--lighter: rgba(230, 234, 242, 0.32);
+  --md-default-fg-color--lightest: rgba(230, 234, 242, 0.12);
+
+  --md-typeset-color: #e6eaf2;
+  --md-typeset-a-color: var(--ak-blue-on-dark);
+  --md-code-bg-color: var(--ak-ground-dark-raised);
+  --md-code-fg-color: #dbe3f3;
+  --md-footer-bg-color: var(--ak-ground-dark);
+  --md-footer-bg-color--dark: #070a14;
+
+  --ak-header-bg: var(--ak-ground-dark);
+  --ak-header-fg: #e6eaf2;
+  --ak-rule: rgba(230, 234, 242, 0.12);
+  --ak-card-bg: var(--ak-ground-dark-raised);
+  --ak-surface: var(--ak-ground-dark-raised);
+}
+
+/* Link hover: underline, never a second hue. In dark mode #326CE5 is too dark for text. */
+.md-typeset a:hover,
+.md-typeset a:focus {
+  color: var(--md-typeset-a-color);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+/* Header and tabs: the ground colour, with a hairline, so the blue mark reads on it. */
+.md-header,
+.md-tabs {
+  background-color: var(--ak-header-bg);
+  color: var(--ak-header-fg);
+}
+.md-header {
+  box-shadow: none;
+  border-bottom: 1px solid var(--ak-rule);
+}
+.md-header--shadow {
+  box-shadow: none;
+}
+.md-tabs {
+  border-bottom: 1px solid var(--ak-rule);
+}
+.md-tabs__link {
+  font-weight: 600;
+  opacity: 0.78;
+}
+.md-tabs__item--active .md-tabs__link,
+.md-tabs__link:hover {
+  color: var(--md-typeset-a-color);
+  opacity: 1;
+}
+.md-header__title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.md-search__input {
+  background-color: var(--ak-surface);
+  box-shadow: inset 0 0 0 1px var(--ak-rule);
+  color: var(--ak-header-fg);
+}
+.md-search__input:hover {
+  background-color: var(--ak-surface);
+}
+.md-search__input::placeholder,
+.md-search__icon {
+  color: var(--md-default-fg-color--light);
+}
+.md-source {
+  color: var(--ak-header-fg);
+}
+
+/* The mark: one variant per scheme. */
+.md-header__button.md-logo {
+  padding: 0.2rem;
+  margin: 0.2rem 0.2rem 0.2rem 0.4rem;
+}
+.md-header__button.md-logo img.ak-logo,
+.md-nav__button.md-logo img.ak-logo {
+  height: 1.9rem;
+  width: auto;
+}
+/* !important: Material shows every header logo image with a more specific rule. */
+[data-md-color-scheme="default"] img.ak-logo--dark,
+[data-md-color-scheme="slate"] img.ak-logo--light {
+  display: none !important;
+}
+
+/* Typography: Inter 600 for headings, 400 for text. Sentence case is the writers' job. */
+.md-typeset {
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  color: var(--md-typeset-color);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.md-typeset h1 {
+  font-size: 2rem;
+  line-height: 1.2;
+  margin-bottom: 0.8em;
+}
+.md-typeset h2 {
+  font-size: 1.3rem;
+  margin-top: 2em;
+}
+.md-typeset h3 {
+  font-size: 1rem;
+}
+.md-typeset code {
+  font-size: 0.86em;
+}
+
+/* Tables: flat, a hairline per row. */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--ak-rule);
+  border-radius: 0.2rem;
+  box-shadow: none;
+  font-size: 0.72rem;
+}
+.md-typeset table:not([class]) td:first-child code {
+  white-space: nowrap;
+}
+.md-typeset table:not([class]) th {
+  background-color: var(--ak-surface);
+  color: var(--md-typeset-color);
+  font-weight: 600;
+}
+
+/* Admonitions: flat, the palette only. Note and tip are blue, warning navy, danger the signal red. */
+.md-typeset .admonition,
+.md-typeset details {
+  border-width: 0 0 0 0.2rem;
+  border-radius: 0.1rem;
+  box-shadow: none;
+  font-size: 0.76rem;
+  background-color: var(--ak-surface);
+}
+.md-typeset .admonition.note,
+.md-typeset details.note,
+.md-typeset .admonition.tip,
+.md-typeset details.tip,
+.md-typeset .admonition.info,
+.md-typeset details.info {
+  border-color: var(--md-primary-fg-color);
+}
+.md-typeset .note > .admonition-title,
+.md-typeset .note > summary,
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary,
+.md-typeset .info > .admonition-title,
+.md-typeset .info > summary {
+  background-color: var(--md-accent-fg-color--transparent);
+}
+.md-typeset .note > .admonition-title::before,
+.md-typeset .note > summary::before,
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before,
+.md-typeset .info > .admonition-title::before,
+.md-typeset .info > summary::before {
+  background-color: var(--md-primary-fg-color);
+}
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: var(--ak-navy);
+}
+[data-md-color-scheme="slate"] .md-typeset .admonition.warning,
+[data-md-color-scheme="slate"] .md-typeset details.warning {
+  border-color: #a9b4c8;
+}
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary {
+  background-color: var(--md-default-fg-color--lightest);
+}
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .warning > summary::before {
+  background-color: var(--md-typeset-color);
+}
+.md-typeset .admonition.danger,
+.md-typeset details.danger {
+  border-color: var(--ak-red);
+}
+.md-typeset .danger > .admonition-title,
+.md-typeset .danger > summary {
+  background-color: rgba(229, 72, 77, 0.1);
+}
+.md-typeset .danger > .admonition-title::before,
+.md-typeset .danger > summary::before {
+  background-color: var(--ak-red);
+}
+
+/* Content tabs and the copy button take the primary. */
+.md-typeset .tabbed-labels > label:hover,
+.md-typeset .tabbed-set > input:checked + label {
+  color: var(--md-typeset-a-color);
+}
+
+/* Mermaid in the palette. */
+:root,
+[data-md-color-scheme="default"] {
+  --md-mermaid-font-family: var(--md-text-font);
+  --md-mermaid-edge-color: var(--ak-navy);
+  --md-mermaid-node-bg-color: #eef3fd;
+  --md-mermaid-node-fg-color: var(--ak-navy);
+  --md-mermaid-label-bg-color: #ffffff;
+  --md-mermaid-label-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-actor-bg-color: #eef3fd;
+  --md-mermaid-sequence-actor-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-actor-border-color: var(--ak-blue);
+  --md-mermaid-sequence-actor-line-color: var(--ak-navy);
+  --md-mermaid-sequence-actorman-bg-color: #eef3fd;
+  --md-mermaid-sequence-actorman-line-color: var(--ak-navy);
+  --md-mermaid-sequence-box-bg-color: #f7f9fd;
+  --md-mermaid-sequence-box-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-label-bg-color: #ffffff;
+  --md-mermaid-sequence-label-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-loop-bg-color: #f7f9fd;
+  --md-mermaid-sequence-loop-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-loop-border-color: var(--ak-blue);
+  --md-mermaid-sequence-message-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-message-line-color: var(--ak-navy);
+  --md-mermaid-sequence-note-bg-color: #ffffff;
+  --md-mermaid-sequence-note-fg-color: var(--ak-navy);
+  --md-mermaid-sequence-note-border-color: var(--ak-blue);
+  --md-mermaid-sequence-number-bg-color: var(--ak-blue);
+  --md-mermaid-sequence-number-fg-color: #ffffff;
+}
+[data-md-color-scheme="slate"] {
+  --md-mermaid-edge-color: #a9b4c8;
+  --md-mermaid-node-bg-color: var(--ak-ground-dark-raised);
+  --md-mermaid-node-fg-color: #e6eaf2;
+  --md-mermaid-label-bg-color: var(--ak-ground-dark);
+  --md-mermaid-label-fg-color: #e6eaf2;
+  --md-mermaid-sequence-actor-bg-color: var(--ak-ground-dark-raised);
+  --md-mermaid-sequence-actor-fg-color: #e6eaf2;
+  --md-mermaid-sequence-actor-border-color: var(--ak-blue-on-dark);
+  --md-mermaid-sequence-actor-line-color: #a9b4c8;
+  --md-mermaid-sequence-actorman-bg-color: var(--ak-ground-dark-raised);
+  --md-mermaid-sequence-actorman-line-color: #a9b4c8;
+  --md-mermaid-sequence-box-bg-color: var(--ak-ground-dark-raised);
+  --md-mermaid-sequence-box-fg-color: #e6eaf2;
+  --md-mermaid-sequence-label-bg-color: var(--ak-ground-dark);
+  --md-mermaid-sequence-label-fg-color: #e6eaf2;
+  --md-mermaid-sequence-loop-bg-color: var(--ak-ground-dark-raised);
+  --md-mermaid-sequence-loop-fg-color: #e6eaf2;
+  --md-mermaid-sequence-loop-border-color: var(--ak-blue-on-dark);
+  --md-mermaid-sequence-message-fg-color: #e6eaf2;
+  --md-mermaid-sequence-message-line-color: #a9b4c8;
+  --md-mermaid-sequence-note-bg-color: var(--ak-ground-dark-raised);
+  --md-mermaid-sequence-note-fg-color: #e6eaf2;
+  --md-mermaid-sequence-note-border-color: var(--ak-blue-on-dark);
+  --md-mermaid-sequence-number-bg-color: var(--ak-blue-on-dark);
+  --md-mermaid-sequence-number-fg-color: var(--ak-ground-dark);
+}
+
+/* Section landing pages and the home page: flat cards with a hairline and a blue rule on hover. */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border: 1px solid var(--ak-rule);
+  border-radius: 0.3rem;
+  background-color: var(--ak-card-bg);
+  box-shadow: none;
+  transition: border-color 125ms;
+}
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid.cards > ul > li:focus-within,
+.md-typeset .grid > .card:hover {
+  border-color: var(--md-primary-fg-color);
+  box-shadow: none;
+}
+.md-typeset .grid.cards .twemoji,
+.md-typeset .grid.cards .lg {
+  color: var(--md-primary-fg-color);
+}
+
+/* The architecture map: a preview that opens full size. */
+.md-typeset .ak-map img {
+  border: 1px solid var(--ak-rule);
+  border-radius: 0.3rem;
+  background-color: #ffffff;
+  cursor: zoom-in;
+}
+.md-typeset .ak-map figcaption {
+  max-width: none;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* ---------- Home page ---------- */
+
+.ak-home .md-content__inner {
+  padding-top: 0;
+}
+.ak-home .md-content__inner > h1:first-child {
+  display: none;
+}
+.ak-hero {
+  display: grid;
+  gap: 1.2rem;
+  justify-items: start;
+  padding: 2.4rem 0 1.6rem;
+}
+.ak-hero__lockup {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.ak-hero__lockup img {
+  width: 4.4rem;
+  height: auto;
+}
+.md-typeset .ak-hero__name {
+  margin: 0;
+  font-size: 2.6rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.md-typeset .ak-hero__pitch {
+  margin: 0;
+  max-width: 40rem;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color--light);
+}
+.ak-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.md-typeset .ak-hero__actions .md-button {
+  margin: 0;
+  border-radius: 0.2rem;
+  font-weight: 600;
+}
+.md-typeset .md-button--primary {
+  background-color: var(--md-primary-fg-color);
+  border-color: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+}
+[data-md-color-scheme="default"] .md-typeset .md-button--primary {
+  color: #ffffff;
+}
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  background-color: var(--md-primary-fg-color--dark);
+  border-color: var(--md-primary-fg-color--dark);
+  color: #ffffff;
+  text-decoration: none;
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:hover,
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:focus {
+  background-color: #7ba4f5;
+  border-color: #7ba4f5;
+  color: var(--ak-ground-dark);
+}
+
+.ak-film {
+  margin: 0.4rem 0 2rem;
+}
+.ak-film video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.3rem;
+  background-color: #0a1530;
+}
+.md-typeset .ak-film figcaption {
+  max-width: none;
+  margin: 0.6rem 0 0;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* The illustrated thread: a styled block, not a screenshot. */
+.ak-thread {
+  margin: 1rem 0 0.4rem;
+  border: 1px solid var(--ak-rule);
+  border-radius: 0.3rem;
+  background-color: var(--ak-surface);
+  font-size: 0.74rem;
+  line-height: 1.55;
+}
+.ak-thread__channel {
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--ak-rule);
+  font-weight: 600;
+}
+.ak-thread__post {
+  display: grid;
+  grid-template-columns: 8.5rem 1fr;
+  gap: 0.2rem 0.8rem;
+  padding: 0.55rem 0.9rem;
+}
+.ak-thread__post + .ak-thread__post {
+  border-top: 1px dashed var(--ak-rule);
+}
+.ak-thread__who {
+  font-weight: 600;
+}
+.ak-thread__post--alert {
+  border-left: 0.2rem solid var(--ak-red);
+}
+.ak-thread__post--reply {
+  padding-left: 1.9rem;
+}
+.ak-thread__alert-state {
+  font-family: var(--md-code-font);
+  font-weight: 600;
+}
+.md-typeset .ak-thread-label {
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+@media screen and (max-width: 44.9375em) {
+  .ak-thread__post {
+    grid-template-columns: 1fr;
+  }
+  .ak-thread__post--reply {
+    padding-left: 1.4rem;
+  }
+  .md-typeset .ak-hero__name {
+    font-size: 2rem;
+  }
+}
+
+/* The strip of real names. */
+.ak-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem 2rem;
+  margin: 2.4rem 0 1rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--ak-rule);
+  border-bottom: 1px solid var(--ak-rule);
+}
+.md-typeset .ak-strip__label {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: center;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+}
+.ak-strip__name {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+/* Focus rings that show on both grounds. */
+.md-typeset a:focus-visible,
+.md-typeset .md-button:focus-visible,
+.md-typeset video:focus-visible {
+  outline: 2px solid var(--md-primary-fg-color);
+  outline-offset: 2px;
+}

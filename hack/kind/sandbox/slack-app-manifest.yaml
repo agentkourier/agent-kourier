@@ -1,5 +1,5 @@
 display_information:
-  name: agent-kourier-sandbox
+  name: Agent Kourier
   description: agent-kourier dogfood (sandbox workspace only)
 features:
   bot_user:

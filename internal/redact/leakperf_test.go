@@ -8,7 +8,7 @@ import (
 )
 
 // The windows the entries are called with in production: an alert field is read up to 12000 bytes and a thread reply up to
-// 4000 (docs/data.md). A path that is quadratic in the text takes nine times as long at the one as at the other, and a linear
+// 4000 (docs/reference/stored-data.md). A path that is quadratic in the text takes nine times as long at the one as at the other, and a linear
 // one three.
 const (
 	smallWindow = 4000

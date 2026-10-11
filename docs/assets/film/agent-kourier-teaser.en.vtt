@@ -1,0 +1,31 @@
+WEBVTT
+
+NOTE
+Narration of the Agent Kourier teaser (docs/brand/film/narration.json, "teaser").
+Cue times read from the 16:9 render with ffmpeg silencedetect.
+
+1
+00:00:00.300 --> 00:00:01.900
+Your agents are ready.
+
+2
+00:00:02.100 --> 00:00:04.000
+But nothing brings them the work.
+
+3
+00:00:04.700 --> 00:00:06.700
+Introducing Agent Kourier:
+
+4
+00:00:06.800 --> 00:00:10.700
+the always-on chat gateway
+for A2A agents on Kubernetes.
+
+5
+00:00:11.300 --> 00:00:15.400
+Alerts and questions become live agent sessions,
+right in the thread.
+
+6
+00:00:15.600 --> 00:00:17.000
+Slack first.

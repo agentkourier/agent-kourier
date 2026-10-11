@@ -1,0 +1,24 @@
+# Defaults for the fixture chart.
+#
+# Two lines of <intro>.
+replicaCount: 1
+
+image:
+  # Required. The *repository*.
+  repository: ""
+  tag: "" # Defaults to appVersion.
+  pullPolicy: IfNotPresent
+
+# Settings, with an example:
+#
+# config:
+#   bindings:
+#     a: {spec: {}}
+config:
+  bindings: {}
+  rollOnChange: true
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+
+ports: [443, 6443]

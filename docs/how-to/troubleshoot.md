@@ -1,9 +1,8 @@
-# Troubleshooting
+# Troubleshoot an install
 
-Each entry starts from something you can see, in the pod log or in Slack, and gives the
+For an operator whose install does not answer: each entry starts from something you can see, in the pod log or in Slack, and gives the
 cause and the fix. They come from the first real installs, so they are the problems a new
-install is likely to meet. For the install itself, see [Run Agent Kourier on a
-cluster](getting-started.md).
+install is likely to meet. For the install itself, see [Install with Helm](install-with-helm.md).
 
 ## Where to look
 
@@ -13,7 +12,7 @@ cluster](getting-started.md).
   an exhausted balance.
 - **The agent runtime's controller log**, when the agent is on kagent.
 - **Metrics.** Agent Kourier's own metrics start with `agentkourier_`. See
-  [Observability](observability.md).
+  [Metrics](../reference/metrics.md).
 
 Keep the pod log open while you reproduce a problem. The `session turn` lines say what the
 turn did and why it stopped.
@@ -148,4 +147,4 @@ will. The answer text renders. Only the `kagent-v1` dialect reports tool parts.
 The chart's defaults run a UI, several MCP servers and ten bundled agents, about 2.3 GiB of
 memory requests. Turn off what you do not use, and turn off the bundled `kagent-tools`, which
 the chart binds to `cluster-admin`. See
-[Connect an agent](getting-started.md#7-connect-an-agent).
+[Connect a kagent agent](connect-kagent.md).
