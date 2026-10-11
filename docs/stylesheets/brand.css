@@ -356,17 +356,22 @@
 
 /* ---------- Home page ---------- */
 
-.ak-home .md-content__inner {
+/* The home page: no body class marks it, so key off the hero itself. Material puts 30px above the
+   main column and 20px inside it; with the hero's own padding that was 98px of nothing under the tabs. */
+.md-main__inner:has(.ak-hero) {
+  margin-top: 0.6rem;
+}
+.md-content__inner:has(.ak-hero) {
   padding-top: 0;
 }
-.ak-home .md-content__inner > h1:first-child {
+.md-content__inner:has(.ak-hero)::before {
   display: none;
 }
 .ak-hero {
   display: grid;
   gap: 1.2rem;
   justify-items: start;
-  padding: 2.4rem 0 1.6rem;
+  padding: 1rem 0 1.6rem;
 }
 .ak-hero__lockup {
   display: flex;
