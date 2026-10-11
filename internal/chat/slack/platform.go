@@ -495,31 +495,35 @@ var (
 	}
 )
 
-// interaction is a press as the neutral model has it. The pressed button's action ID says which button it was: Approve
-// (of one tool) and Approve all are ActionApproveAll, Deny and Deny all are ActionDenyAll, and they ignore the
-// controls, so a press of them carries no answers. Submit is the one button whose controls are read: the answers
-// are read from the state of the controls, by the block and action IDs that renderPrompt made, and each only as
-// the control it was asked in. The radio of a tool is read like a question's, and its value is the index of the
-// option, "0" for Approve and "1" for Deny (chat.ToolApproveValue, chat.ToolDenyValue).
+// interaction is a press as the neutral model has it. The pressed button's action ID, in the block that holds it, says
+// which button it was. The adapter renders two blocks of buttons for a prompt: decide, for one tool, holds Approve and
+// Deny, and submit holds Submit and, for several tools, Approve all and Deny all. Approve and Approve all are
+// ActionApproveAll, Deny and Deny all are ActionDenyAll, and they ignore the controls, so a press of them carries no
+// answers. Submit is the one button whose controls are read: the answers are read from the state of the controls, by
+// the block and action IDs that renderPrompt made, and each only as the control it was asked in. The radio of a tool
+// is read like a question's, and its value is the index of the option, "0" for Approve and "1" for Deny
+// (chat.ToolApproveValue, chat.ToolDenyValue).
 //
-// A button the adapter does not render makes no action and carries no answers, so that it can never be read as a
-// decision. In a block the adapter renders for a prompt (submit, decide) it is not the prompt's, and the press names
-// no prompt (PromptID empty), which interact.Pipeline.Press and feedback.Handler.Press both refuse as not theirs, and
-// the broker's handler drops, acknowledged. In any other block it is the button of a message part (a feedback
-// button), whose value is its own and is passed on for its handler to read.
+// A button the adapter does not render in that block makes no action and carries no answers, so that it can never be
+// read as a decision. In a block the adapter renders for a prompt (submit, decide) it names no prompt (PromptID empty),
+// which interact.Pipeline.Press and feedback.Handler.Press both refuse as not theirs, and the broker's handler drops,
+// acknowledged: Submit in decide is such a button. In any other block, such as the block of a message part, it is any
+// button, even when its action ID is one of the prompt's: its value is its own and is passed on for its handler to read
+// (a feedback button is routed by it).
 func (p *Platform) interaction(i Interaction) chat.Interaction {
 	out := chat.Interaction{User: i.User, At: p.ref(i.Channel, i.ThreadTS, i.MessageTS), PromptID: i.Value}
-	switch i.ActionID {
-	case approveAllActionID:
+	if i.BlockID != submitBlockID && i.BlockID != decideBlockID {
+		return out
+	}
+	switch {
+	case i.ActionID == approveAllActionID:
 		out.Action = chat.ActionApproveAll
-	case denyAllActionID:
+	case i.ActionID == denyAllActionID:
 		out.Action = chat.ActionDenyAll
-	case submitActionID:
+	case i.ActionID == submitActionID && i.BlockID == submitBlockID:
 		out.Answers = answers(i.Inputs)
 	default:
-		if i.BlockID == submitBlockID || i.BlockID == decideBlockID {
-			out.PromptID = ""
-		}
+		out.PromptID = ""
 	}
 	return out
 }

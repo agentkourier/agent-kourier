@@ -735,3 +735,34 @@ func TestAnUnknownButtonOfAPromptNamesNoPrompt(t *testing.T) {
 		t.Errorf("press = %+v, want one that names no prompt and carries nothing", got)
 	}
 }
+
+// The buttons that decide a tool approval are read only in the blocks the adapter renders them in. A button of a message part
+// (block buttons0) with the action ID of Approve all and an interaction's ID for its value arrives with no action and no
+// answers, and keeps its value, which is how a button of its own handler is routed.
+func TestADecisionButtonInTheBlockOfAMessagePartCarriesNoAction(t *testing.T) {
+	w := newWorld(t)
+	rec := &recorder{}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- w.p.Run(ctx, rec) }()
+	t.Cleanup(func() { cancel(); <-done })
+	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("never connected")
+		}
+	}
+	for n, action := range []string{"approve_all", "deny_all", "submit"} {
+		blocks := `[{"type":"actions","block_id":"buttons0","elements":[{"type":"button","action_id":"` + action + `","value":"` + approvalID + `","text":{"type":"plain_text","text":"x"}}]}]`
+		ts, err := w.c.Post(t.Context(), "C1", w.target.Thread, slack.Content{Text: "x", Blocks: []byte(blocks)}, "tag-part-"+action)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.fake.Click("U1", ts, action, approvalID); err != nil {
+			t.Fatal(err)
+		}
+		rec.wait(t, action, func() bool { return len(rec.presses) > n })
+		if got := rec.presses[n]; got.PromptID != approvalID || got.Action != chat.ActionSubmit || len(got.Answers) != 0 {
+			t.Errorf("%s in buttons0: press = %+v, want the value kept and no action and no answers", action, got)
+		}
+	}
+}

@@ -69,6 +69,21 @@ func TestPlatformInteractionDecodesTheButtonsOfAnApproval(t *testing.T) {
 		{"no action ID in the prompt's block names no prompt", press("", "submit", radios), chat.Interaction{User: "U1", At: at}},
 		{"a look-alike action ID is not approve all", press("Approve_All", "submit", radios), chat.Interaction{User: "U1", At: at}},
 		{"a button of a message part keeps its value and reads no controls", press("feedback_up", "buttons3", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		// The decision buttons are the prompt's own: each only in the block that holds it. In the block of a message part
+		// they are any button, which keeps its value for its own handler and carries no action and no answers.
+		{"approve all in a message part's block carries no action", press("approve_all", "buttons0", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		{"deny all in a message part's block carries no action", press("deny_all", "buttons0", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		{"submit in a message part's block carries no answers", press("submit", "buttons0", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		{"approve all in a block of no ID carries no action", press("approve_all", "", nil), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		{"submit is not a button of the block of one tool", press("submit", "decide", radios), chat.Interaction{User: "U1", At: at}},
+		{"approve all is a button of the block of one tool", press("approve_all", "decide", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1", Action: chat.ActionApproveAll}},
+		{"deny all is a button of the block of one tool", press("deny_all", "decide", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1", Action: chat.ActionDenyAll}},
+		{"approve all is a button of the block of several tools", press("approve_all", "submit", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1", Action: chat.ActionApproveAll}},
+		{"deny all is a button of the block of several tools", press("deny_all", "submit", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1", Action: chat.ActionDenyAll}},
+		// The block's ID is matched whole and as written: a look-alike block is a message part's, not the prompt's.
+		{"approve all in a block named in another case carries no action", press("approve_all", "Submit", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		{"approve all in a block whose ID only starts as the prompt's carries no action", press("approve_all", "decide2", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
+		{"submit in a block whose ID only starts as the prompt's carries no answers", press("submit", "submit0", radios), chat.Interaction{User: "U1", At: at, PromptID: "ix-1"}},
 	} {
 		if got := NewPlatform(nil, "ns/conn").interaction(tc.in); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: interaction = %+v, want %+v", tc.name, got, tc.want)
