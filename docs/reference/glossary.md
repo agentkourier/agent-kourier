@@ -39,6 +39,14 @@ Dialect
 Digest line
 :   One line at the top level of a channel that counts the alerts a trigger's limits stopped in a window.
 
+Epoch
+:   With Postgres, the leadership number in the database. A replica that takes the Lease increments it, and every write
+    transaction checks it, so a deposed leader's writes fail. This is the fencing of a leader.
+
+Failover
+:   The standby taking the Lease after the leader stops, is lost or is paused past its renew deadline, and running the
+    same recovery as a restart.
+
 Front door
 :   A proxy in front of an agent runtime that verifies the Binding's token and strips the headers that select a user.
     Required in front of kagent.
@@ -48,6 +56,10 @@ Interaction
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.
+
+Lease
+:   The Kubernetes Lease, `<fullname>-leader`, that the replicas on Postgres hold to elect the leader. The leader renews
+    it; a standby takes it a lease duration after the last renewal it saw.
 
 Leader
 :   With Postgres, the one replica that does Agent Kourier's work, chosen by a Kubernetes Lease. Its writes are fenced
@@ -74,6 +86,10 @@ Reply queue
 
 Session
 :   The conversation between a thread and an agent context, stored by Agent Kourier. A thread is a session.
+
+Standby
+:   With Postgres, a replica that does not hold the Lease. It is Ready, serves health and metrics, does no work and waits
+    to take the Lease.
 
 Thread
 :   A message and its replies. Agent Kourier owns a thread it started, or one it was mentioned in.

@@ -45,9 +45,10 @@ but never blocks the follow-up.
 
 ## With two replicas
 
-With Postgres, one replica leads and does all the work. Every write checks the leader's epoch, and a leader that loses
-its lease, or meets a stale epoch, exits at once. A leader that was paused past its renew deadline refuses every write
-to the chat and exits, so a deposed leader cannot finish a stream it had open. A Slack call or agent send already in
-flight when the pause began can still happen once more.
+With Postgres, one replica leads and does all the work, and a takeover runs the same recovery as a restart, so the
+promises above hold across a failover. What it adds for delivery: a deposed leader's writes are refused, to the store
+by the epoch and to the chat by its own clock, so it cannot finish a stream it had open; and each Slack call or agent
+send already in flight when a pause began can still happen once more. The election, the fencing and the failover are
+explained in [High availability and failover](high-availability.md).
 
 The store, the outbox and the session state are described field by field in [Stored data](../reference/stored-data.md).

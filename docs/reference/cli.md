@@ -30,6 +30,8 @@ The broker is configured by environment variables, which the Helm chart sets fro
 | `AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS` | `false` | `true` accepts OTLP headers on an `http://` endpoint. |
 
 The OpenTelemetry variables Agent Kourier reads are listed in [Logs and traces](logs-and-traces.md#trace-settings).
+See also [High availability and failover](../explanation/high-availability.md) for what the `AGENTKOURIER_LEASE_*`
+timings mean for a takeover.
 
 ## Health endpoints
 

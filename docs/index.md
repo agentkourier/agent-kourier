@@ -58,7 +58,8 @@ workspace, a real model, seeded faults.</figcaption>
 
     ---
 
-    One broker between the chat, the alerts and your agents: a thread is a session, and a restart loses no message.
+    One broker between the chat, the alerts and your agents: a thread is a session, a restart loses no message, and
+    [two replicas on Postgres](explanation/high-availability.md) fail over without losing one.
 
     [:octicons-arrow-right-24: Architecture](explanation/architecture.md)
 

@@ -31,7 +31,8 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 
 ## Operate
 
-- [Run on Postgres with a standby](postgres-and-ha.md): two replicas, one leading.
+- [Run two replicas (high availability)](high-availability.md): Postgres, two replicas on separate nodes, a budget
+  for drains, and a failover drill.
 - [Export metrics and traces](export-telemetry.md): Prometheus, OpenTelemetry and alerts worth having.
 - [Upgrade](upgrade.md): a new build, a rollback, and the move across the rename.
 - [Troubleshoot an install](troubleshoot.md): from what you see to the cause and the fix.

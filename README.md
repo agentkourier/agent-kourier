@@ -218,6 +218,7 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; no preset, and not exercised in the sandbox or the end-to-end tests | Implemented |
 | Alert source | Alertmanager webhook, received by Agent Kourier directly | Planned |
+| Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, epoch fencing in Postgres and chat writes fenced on the replica, a standby that takes over. The failover test (S16: kill the leader mid-turn, mid-post and mid-storm, freeze it past its Lease) checks that every reply appears once; a call already in flight in a frozen leader can still repeat | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
 rejects an agent whose card does not advertise streaming. A team can change or add
@@ -260,6 +261,23 @@ cluster, follow [Install with Helm](docs/how-to/install-with-helm.md), and see
 [troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer. The
 [specification](spec.md) records the detailed behaviour, and the
 [roadmap](ROADMAP.md) lists what comes next.
+
+### High availability
+
+On Postgres, Agent Kourier runs as two replicas, active/passive. With SQLite it is one
+replica, and the chart refuses more.
+
+| Part | What it does |
+|---|---|
+| Leader election | A Kubernetes Lease picks the leader, which does all the work: Socket Mode, turns, the outbox, sweeps. A standby takes the Lease about 15 s after the leader's last renewal (a lease duration), or seconds after the leader stops on a signal and hands it over |
+| Fencing | Every write to Postgres checks the leader's epoch, and every write to Slack checks the replica's own Lease clock, so a deposed or paused leader's writes are refused and it exits |
+| Standby | Ready, serving health and metrics, with its config and Secret caches warm; it does no work and opens no Slack connection |
+| Takeover | The same recovery as a restart: queued turns resume, the outbox adopts what was already posted, and a stream the old leader left open is replaced with the whole answer |
+| Drains and spreading | A PodDisruptionBudget (`minAvailable: 1`) keeps a drain from taking both replicas, and the render refuses a budget that would block every drain. Anti-affinity, `priorityClassName`, `nodeSelector` and `tolerations` go in the chart's values; the chart sets no spread of its own |
+
+See [High availability and failover](docs/explanation/high-availability.md) for how it
+works and what a failover can still repeat, and
+[Run two replicas](docs/how-to/high-availability.md) to set it up and drill a failover.
 
 ## Using Google AX
 

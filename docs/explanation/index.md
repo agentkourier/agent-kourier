@@ -29,6 +29,12 @@ built that way, and what it deliberately does not do.
 
     What Agent Kourier promises about messages in and posts out, and the one window it accepts.
 
+-   **[High availability and failover](high-availability.md)**
+
+    ---
+
+    Two replicas on Postgres: the Lease, epoch fencing, what a takeover recovers and the one duplicate it can leave.
+
 -   **[Security model](security.md)**
 
     ---

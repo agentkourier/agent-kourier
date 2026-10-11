@@ -124,7 +124,7 @@ helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.
 ```
 
 The defaults run one replica with SQLite on a 1 GiB volume. For Postgres and a standby, see
-[Run on Postgres with a standby](postgres-and-ha.md).
+[Run two replicas (high availability)](high-availability.md).
 
 !!! warning "NetworkPolicy on Cilium"
 

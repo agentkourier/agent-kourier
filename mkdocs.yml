@@ -64,6 +64,10 @@ plugins:
       manual: true
       zoomable: true
       background: white
+  # Keeps moved pages' old URLs working.
+  - redirects:
+      redirect_maps:
+        how-to/postgres-and-ha.md: how-to/high-availability.md
 
 extra_css:
   - stylesheets/brand.css
@@ -131,7 +135,7 @@ nav:
       - Let the agent ask questions: how-to/agent-questions.md
       - Rotate the Binding token: how-to/rotate-binding-token.md
       - Put a verifying front door before kagent: how-to/front-door.md
-      - Run on Postgres with a standby: how-to/postgres-and-ha.md
+      - Run two replicas (high availability): how-to/high-availability.md
       - Export metrics and traces: how-to/export-telemetry.md
       - Upgrade: how-to/upgrade.md
       - Troubleshoot an install: how-to/troubleshoot.md
@@ -153,6 +157,7 @@ nav:
       - Why a broker: explanation/why-a-broker.md
       - Threads and sessions: explanation/threads-and-sessions.md
       - Delivery guarantees: explanation/delivery.md
+      - High availability and failover: explanation/high-availability.md
       - Security model: explanation/security.md
       - Comparison with other projects: explanation/comparison.md
       - Roadmap: explanation/roadmap.md
