@@ -10,7 +10,9 @@ import (
 // out. The agent's hint and the text of each question go through redact.FreeText, which deletes the invisible
 // characters before it matches, so that none can split a secret's name past the redaction; a tool's name and a
 // sub-agent's likewise, and a tool's arguments through render.RedactArgs, the redaction of the status line that
-// shows them, so that what is stored is never more than what is shown of it. in is not changed: the pause is posted, and answered, from the original.
+// shows them, so that what is stored is never more than what is shown of it. in is not changed: the pause is answered
+// from the original, and a question is posted from it. An approval's prompt is built from this form (promptOf), so that
+// what is shown is never more than what is kept.
 //
 // What Agent Kourier sends back to the agent is not redacted, so what the answer is built from is kept exactly: the
 // request and tool IDs, and the choices of a question (an answer picks one by its index, and the agent

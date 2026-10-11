@@ -230,7 +230,8 @@ func (r *Replacer) fail(ctx context.Context, id string, err error) {
 // built from the row alone: the outcome from its state, who from its decider and when from its decision
 // time, and the questions, hint and sub-agent from its stored request. An answer is shown only as its
 // chosen choices, and never as free text (the owner's decision): endingOf says only that a free-text
-// question was answered.
+// question was answered. A tool approval that timed out or was cancelled has an ending of its tools as stored; an
+// answered one has none yet (endingOf), and is an error.
 func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 	var outcome chat.Outcome
 	switch row.State {
@@ -255,5 +256,9 @@ func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 		}
 		answers = a.Answers
 	}
-	return chat.End(endingOf(outcome, row.Decider, row.DecidedAt, in, answers)), nil
+	e, err := endingOf(outcome, row.Decider, row.DecidedAt, in, answers)
+	if err != nil {
+		return chat.Outgoing{}, err
+	}
+	return chat.End(e), nil
 }

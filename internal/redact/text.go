@@ -217,7 +217,15 @@ var (
 // character can glue a word to a scheme ("token", a zero-width space, "Bearer") or a credential to it, and the
 // glued rules, which need a word boundary and a credential that decodes, refuse what the gap hid. Its patterns
 // tolerate the gaps, so they take these in the raw text.
-func FreeText(s string) string { return freeText(s, false) }
+func FreeText(s string) string { text, _ := freeText(s, false); return text }
+
+// FreeTextWhole is FreeText that also says whether none of s was cut: whole is false when the text was bounded (Bound), or
+// when it was longer than the token layer reads (capRaw), and the returned text then ends in a mark of the cut, or in
+// what a rule made of that mark. It is the one answer to "was it cut", for a caller that must not show part of a text as
+// if it were all of it. The cut cannot be told from the length of s, because the token layer runs first and
+// lengthens text ("access_token=x" becomes "access_token=[redacted]"), nor from the end of the result, because a rule
+// that takes a value takes the mark with it. FreeText is FreeTextWhole without the answer.
+func FreeTextWhole(s string) (text string, whole bool) { return freeText(s, false) }
 
 // FreeTextLine is FreeText for free text that is shown on one line, such as a title, a link or an author's name and ID, and for
 // the free text that an audit row keeps on one line: it returns what FreeText does with every run of white space, a
@@ -225,15 +233,15 @@ func FreeText(s string) string { return freeText(s, false) }
 // its lines, and then joined, so that what a line break hides from a rule is not hidden from it: a flag and its value,
 // a user and its password, or a URL's password that the break cuts, is taken as it would be on one line. Redacting
 // before joining leaks those, and joining first loses the lines a YAML block scalar needs, so the text is matched both ways.
-func FreeTextLine(s string) string { return freeText(s, true) }
+func FreeTextLine(s string) string { text, _ := freeText(s, true); return text }
 
-func freeText(s string, line bool) string {
+func freeText(s string, line bool) (text string, whole bool) {
 	s, cut := capRaw(s)
 	s = Normalize(rawSecrets(s))
 	if cut { // the end of the kept text may be a secret the cut went through, and invisible padding may have brought it forward
 		s = dropTail(s) + Truncated
 	}
-	return match(Bound(s), line)
+	return match(Bound(s), line), !cut && len(s) <= MaxBytes
 }
 
 // FreeTextCut is FreeText for a caller that shows only the start of the text, such as the alert fields of a prompt.

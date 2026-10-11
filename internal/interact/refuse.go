@@ -27,7 +27,8 @@ type Outcome string
 const (
 	// OutcomeAskUserCancelled: the agent asked a question on a Binding with askUser false.
 	OutcomeAskUserCancelled Outcome = "ask_user_cancelled"
-	// OutcomeAutoDenied: the agent asked to approve tool calls, which no Binding allows yet.
+	// OutcomeAutoDenied: the agent asked to approve tool calls on a Binding that does not allow approvals
+	// (interact.Binding.ToolApprovals is false), so they were denied.
 	OutcomeAutoDenied Outcome = "auto_denied"
 )
 
@@ -138,8 +139,8 @@ func short(fields ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-// autoDeny turns away a tool approval, which no Binding allows yet (Phase 5): every tool call is denied
-// through the dialect, the thread is told, and the denial is audited and counted.
+// autoDeny turns away a tool approval on a Binding that does not allow them (Binding.ToolApprovals is false):
+// every tool call is denied through the dialect, the thread is told, and the denial is audited and counted.
 //
 // The decision record authorizes the denial, so it is written first and a failed write stops everything
 // (spec 8.6 step 7). Then the interaction's first answer is recorded (SubmitInteraction, which only one

@@ -384,3 +384,34 @@ func TestCapAtCutsAtACharacter(t *testing.T) {
 		t.Errorf("capAt(%q, 3) = %q, want the character that does not fit left out", text, got)
 	}
 }
+
+// FreeTextWhole says whether any of its input was cut, and is FreeText's own answer: it is not read from the length of the
+// input, which the token layer changes before the bound is applied, nor from the mark at the end of the result, which a rule
+// that takes a value takes with it.
+func TestFreeTextWholeSaysWhetherTheTextWasCut(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want bool
+		mark bool // the result ends in the mark of a cut
+	}{
+		{"short", "short value", true, false},
+		{"empty", "", true, false},
+		{"exactly the bound", strings.Repeat("a ", MaxBytes/2), true, false},
+		{"one byte over", strings.Repeat("a ", MaxBytes/2) + "a", false, true},
+		{"an unbroken run over", strings.Repeat("y", MaxBytes+1), false, true},
+		{"over what the token layer reads", strings.Repeat("a ", 4*MaxBytes), false, true},
+		// Under the bound as it came, over it once the token layer has written "[redacted]" for each value: cut.
+		{"grows past the bound", strings.Repeat("字 ", 900) + strings.Repeat("access_token=x ", 30) + "; rm -rf /x", false, false},
+		{"grows past the bound, many pairs", strings.Repeat("access_token=x ", 250), false, false},
+		{"grows past the bound, another name", strings.Repeat("client_secret=a ", 250), false, false},
+		// Over the bound as it came, under it once the invisible characters are deleted: whole.
+		{"shrinks under the bound", strings.Repeat("\xe2\x80\x8b", MaxBytes/3) + strings.Repeat("a ", MaxBytes/2-10) + "ok", true, false},
+		{"shrinks by its line breaks", strings.Repeat("a\r\n", MaxBytes/3), true, false},
+	} {
+		text, whole := FreeTextWhole(tc.in)
+		if whole != tc.want || text != FreeText(tc.in) || strings.HasSuffix(text, Truncated) != tc.mark {
+			t.Errorf("%s: FreeTextWhole = %v, mark at the end %v; want %v and %v (and FreeText's text)", tc.name, whole, strings.HasSuffix(text, Truncated), tc.want, tc.mark)
+		}
+	}
+}

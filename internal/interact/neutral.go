@@ -1,7 +1,11 @@
 package interact
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -18,13 +22,31 @@ const answeredWord = "(answered)"
 // controls, layout or limits: each adapter lays the prompt out for its platform, makes the text inert, cuts it
 // to what the platform shows, and says whether it fits (Platform.Fits).
 
-// promptOf is the neutral prompt of an ask-user pause: the agent's hint, its questions, the deadline, and the
-// sub-agent that raised it, if one did. id is what a press carries back.
+// promptOf is the neutral prompt of a pause: for a question, the agent's hint, its questions, the deadline, and the
+// sub-agent that raised it, if one did; for a tool approval, the hint, the tool calls, the deadline and the
+// sub-agent. id is what a press carries back.
+//
+// A question is shown as the agent wrote it. An approval is shown as it is stored (storable): the arguments are
+// the person's only evidence of what a tool will do, but they are also where a secret sits, and the channel keeps
+// what it is shown, so what is shown is never more than what is kept. The decision is still made from the tool IDs,
+// which that leaves as they were.
+//
+// Every tool call is shown as it will run, except that secrets are replaced by the redaction's marker, invisible format
+// characters in values are not shown, line ends are shown as LF, and a number is shown as the nearest float64. Anything
+// else that cannot be shown is an error wrapping dialect.ErrUnusablePause (exactTools), for the caller to refuse: it is
+// checked here as well as by Paused, so that no caller can make a prompt that shows something else. The hint and the
+// sub-agent's name are context and may be shown cut.
 func promptOf(id string, in dialect.Interaction, deadline time.Time) (chat.Prompt, error) {
-	if in.Kind != dialect.AskUser {
-		return chat.Prompt{}, fmt.Errorf("interact: no prompt is made for a %q pause", in.Kind)
+	switch in.Kind {
+	case dialect.AskUser:
+		return questionsOf(id, in, deadline), nil
+	case dialect.ToolApproval:
+		if err := exactTools(in.Tools); err != nil {
+			return chat.Prompt{}, err
+		}
+		return toolsOf(id, storable(in), deadline)
 	}
-	return questionsOf(id, in, deadline), nil
+	return chat.Prompt{}, fmt.Errorf("interact: no prompt is made for a %q pause", in.Kind)
 }
 
 // questionsOf is what a prompt and its ending say of the question: the hint, the questions and the sub-agent.
@@ -39,14 +61,65 @@ func questionsOf(id string, in dialect.Interaction, deadline time.Time) chat.Pro
 	return p
 }
 
+// toolsOf is what a prompt and its ending say of an approval: the hint, one tool for each tool call in the order the
+// agent listed them, and the sub-agent. in must be as it is stored (storable): the secrets are taken out of it
+// by the caller, and are not taken out again here (redacting twice would cut a cut text again).
+func toolsOf(id string, in dialect.Interaction, deadline time.Time) (chat.Prompt, error) {
+	p := chat.Prompt{ID: id, Hint: in.Hint, Deadline: deadline}
+	for _, t := range in.Tools {
+		args, err := argsText(t.Args)
+		if err != nil {
+			return chat.Prompt{}, fmt.Errorf("interact: the arguments of tool %s: %w", t.ID, err)
+		}
+		p.Tools = append(p.Tools, chat.Tool{Name: t.Name, Args: args})
+	}
+	if in.Nested != nil {
+		p.Subagent = in.Nested.Subagent
+	}
+	return p, nil
+}
+
+// argsText is a tool's arguments as the text a person reads: indented JSON, whose object keys encoding/json sorts,
+// so the same pause always renders the same text. The characters <, > and & are written as they are and not as
+// \u003c escapes, which would show a person other text than the agent sent. A tool with no arguments (a nil or
+// an empty map) has none to show, and its Args is "".
+func argsText(args map[string]any) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(args); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(b.String(), "\n"), nil // Encode ends the value with a newline
+}
+
 // endingOf is the neutral ending of a prompt: how it ended, who decided (by, as Agent Kourier verified it, or ""),
-// and when. For an answered one, answers is what was answered to each question, in order; the ending shows
+// and when. For an answered question, answers is what was answered to each question, in order; the ending shows
 // the chosen choices and, for a free-text question, only that it was answered. The prompt of an ending is
 // the question as asked, which has no deadline of its own to show.
-func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interaction, answers [][]string) chat.Ending {
+//
+// An approval's ending shows its tools, hint and sub-agent as in, which must be the stored request: its secrets are
+// out already, and what it holds is what the prompt showed. When the approval timed out or was cancelled it needs
+// nothing more. An answered approval needs a verdict for each tool, which this does not yet build, so it is an error and not an
+// ending that says the wrong thing.
+func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interaction, answers [][]string) (chat.Ending, error) {
+	if in.Kind == dialect.ToolApproval {
+		if outcome == chat.Answered {
+			return chat.Ending{}, errors.New("interact: the verdicts of an answered tool approval are not built")
+		}
+		p, err := toolsOf("", in, time.Time{})
+		if err != nil {
+			return chat.Ending{}, err
+		}
+		return chat.Ending{Outcome: outcome, By: by, At: at, Prompt: p}, nil
+	}
 	e := chat.Ending{Outcome: outcome, By: by, At: at, Prompt: questionsOf("", in, time.Time{})}
 	if outcome != chat.Answered {
-		return e
+		return e, nil
 	}
 	e.Answers = make([][]string, len(in.Questions))
 	for i, q := range in.Questions {
@@ -62,5 +135,5 @@ func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interact
 			e.Answers[i] = given
 		}
 	}
-	return e
+	return e, nil
 }

@@ -117,6 +117,9 @@ type fitter struct{ r *rig }
 
 func (f fitter) Fits(p chat.Prompt) error {
 	f.r.asked = append(f.r.asked, p)
+	if f.r.fits != nil {
+		return f.r.fits(p)
+	}
 	return f.r.promptErr
 }
 
@@ -131,6 +134,8 @@ type rig struct {
 	hook   []interact.Outcome // what OnApprovalOutcome was told
 	// promptErr, if set, is what the platform answers to Fits.
 	promptErr error
+	// fits, if set, answers Fits instead of promptErr: a real platform's limits, such as the chattest fake's.
+	fits func(chat.Prompt) error
 }
 
 func newRig(t *testing.T, mod func(*interact.Binding)) *rig {

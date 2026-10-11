@@ -234,7 +234,11 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if err := json.Unmarshal(row.Request, &in); err != nil {
 		s.cfg.Logger.WarnContext(ctx, "interact: the stored request cannot be read", "interaction", row.ID)
 	}
-	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(endingOf(chat.TimedOut, "", row.Deadline, in, nil)))
+	e, err := endingOf(chat.TimedOut, "", row.Deadline, in, nil)
+	if err != nil {
+		return fmt.Errorf("interact: the ending of %s: %w", row.ID, err)
+	}
+	return s.cfg.Updater.Update(ctx, s.cfg.Updater.RefAt(row.Key.Channel, row.Key.Thread, row.MessageRef), chat.End(e))
 }
 
 // notify enqueues the notice. Its ID comes from the interaction, so the same one is never posted twice.

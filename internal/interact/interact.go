@@ -25,13 +25,20 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// Binding is what the intake needs of a thread's Binding: whether it allows questions, and how long a pause waits.
-// Tool approvals are not built (Phase 5), so there is no flag for them: a tool approval is always denied.
+// Binding is what the intake needs of a thread's Binding: whether it allows questions, whether it allows tool
+// approvals, and how long a pause waits. The two flags are independent: AskUser gates only questions and ToolApprovals
+// only approvals. A pause the Binding does not allow is turned away (refuseAskUser, autoDeny).
 type Binding struct {
 	Dialect  dialect.Dialect
 	Identity string // the Binding's service identity, for the audit rows
 	AskUser  bool
-	Timeout  time.Duration
+	// ToolApprovals makes the intake post an approval as a prompt and leave it pending. With it false, an approval
+	// is denied through the dialect as soon as it arrives (autoDeny). A press on the prompt decides nothing yet.
+	ToolApprovals bool
+	// ApproverGroups are the platform user groups whose members are to decide an approval; empty means any member of
+	// the channel. They are only carried here: nothing reads them yet.
+	ApproverGroups []string
+	Timeout        time.Duration
 }
 
 // Lookup returns the Binding of a name; the broker implements it (WP-35h).
@@ -109,7 +116,9 @@ func InteractionID(in dialect.Interaction) string {
 	return "ix-" + hex.EncodeToString(sum[:])[:32]
 }
 
-// Paused takes up a pause. Every step is idempotent, so a crash between two leaves the next call to
+// Paused takes up a pause. A tool approval on a Binding that does not allow them is denied, and a question on one
+// that does not allow questions is cancelled; any other pause is recorded and posted as a prompt. Every step is
+// idempotent, so a crash between two leaves the next call to
 // finish the work and never repeat it: it creates the interaction, posts the prompt if that is not
 // done (the outbox adopts a post made and not recorded), and records the message. It does I/O, so a
 // caller on the agent's stream goroutine runs it elsewhere.
@@ -128,10 +137,16 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 		return nil // nothing structured to answer: the thread's own replies carry on
 	}
 	switch {
-	case in.Kind == dialect.ToolApproval:
+	case in.Kind == dialect.ToolApproval && !b.ToolApprovals:
 		return i.autoDeny(ctx, p, b, *in)
-	case !b.AskUser:
+	case in.Kind != dialect.ToolApproval && !b.AskUser:
 		return i.refuseAskUser(ctx, p, b, *in)
+	case in.Kind == dialect.ToolApproval:
+		// An approval whose prompt would not show what the tool will run is refused before anything is recorded: no
+		// interaction is made for it, and the request of one that reads differently each time (exactTools) is never stored.
+		if err := exactTools(in.Tools); err != nil {
+			return i.refuseUnusable(ctx, p, b, err)
+		}
 	}
 	row, err := i.record(ctx, p, b, *in)
 	if errors.Is(err, dialect.ErrUnusablePause) { // a second question under a seen ID
@@ -252,14 +267,16 @@ func keyOf(in dialect.Interaction) pauseKey {
 }
 
 // post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5). A prompt
-// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, before anything is sent.
+// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, before anything is sent. It is
+// made from the pause as parsed; promptOf takes the secrets out of an approval's, which a question's does not need, and
+// refuses one it cannot show exactly (exactTools), which Paused has done already, before the pause was recorded.
 func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in dialect.Interaction) error {
 	prompt, err := promptOf(row.ID, in, row.Deadline)
 	if err != nil {
 		return fmt.Errorf("interact: make the prompt of %s: %w", row.ID, err)
 	}
 	if err := i.cfg.Platform.Fits(prompt); err != nil {
-		return fmt.Errorf("interact: the prompt of %s: %w", row.ID, err)
+		return fmt.Errorf("%w (the prompt of %s)", err, row.ID) // the reason first: an audit row keeps the start of it
 	}
 	ref, err := i.cfg.Outbox.Send(ctx, outbox.Post{Source: row.ID, Role: store.OutboxReply, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Ask(prompt)})
 	if err != nil {
