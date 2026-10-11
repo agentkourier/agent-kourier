@@ -8,7 +8,7 @@ proxy in front of an agent or a feature of one agent platform.
 Agents on Kubernetes can read logs, check rollouts and find causes, but they work only when someone opens a prompt and
 asks. Alerts fire in monitoring and questions come up in chat, and neither reaches the agent on its own.
 
-When the project started (research of 2026-09-29), kagent had no webhook trigger and no way to take in alerts, and
+When the project started, kagent had no webhook trigger and no way to take in alerts, and
 upstream had declined a Slack bot in core. A kagent maintainer stated that events arriving while an agent is asleep need
 a third party to act as a broker. The chat half of the problem was partly solved elsewhere; what was missing was the
 combination:
@@ -64,5 +64,3 @@ namespace.
 - **Per-person identity at the agent.** Every turn runs as the Binding's service identity. If per-person tool authority
   becomes a requirement, that is a different design. See [Security model](security.md).
 - **Shared maintenance.** Agent Kourier is maintained by its own project, not by an agent platform.
-
-[Comparison with other projects](comparison.md) sets this against the projects that cover parts of the same ground.

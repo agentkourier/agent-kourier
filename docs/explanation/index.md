@@ -41,16 +41,4 @@ built that way, and what it deliberately does not do.
 
     One identity per Binding, the channel as the access boundary, and why kagent needs a front door.
 
--   **[Comparison with other projects](comparison.md)**
-
-    ---
-
-    klaus-gateway, kslack, a2a-gateway and the alert investigators, and where Agent Kourier differs.
-
--   **[Roadmap](roadmap.md)**
-
-    ---
-
-    What is implemented, what is in progress, and what waits for the pilot.
-
 </div>

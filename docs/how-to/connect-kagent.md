@@ -50,8 +50,8 @@ Binding's turns reach one of its agents.
     pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster.
 
     **1. Find the controller's Service.** Its name depends on the Helm release name. Argo CD names the release after the
-    Application, so an Application called `cluster-gitops-kagent` makes the Service
-    `cluster-gitops-kagent-controller`.
+    Application, so an Application called `my-kagent` makes the Service
+    `my-kagent-controller`.
 
     ```sh
     kubectl get svc -n <kagent-namespace>

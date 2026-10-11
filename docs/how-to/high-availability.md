@@ -111,7 +111,7 @@ description: Agent Kourier's replicas, so a busy node evicts other work before t
 ```
 
 `nodeSelector` and `tolerations` take Kubernetes' own form too, if the replicas must run on particular nodes.
-The chart has no `topologySpreadConstraints` value; adding one is planned (CT-1, `tasks/plans/chart-topology-spread.md`).
+The chart has no `topologySpreadConstraints` value; spread the replicas with `affinity`, as above.
 
 **What an upgrade does.** With Postgres the Deployment's strategy is a rolling update with one surge and none
 unavailable: a new pod starts, as a standby, before an old one stops. When the old leader stops on its signal, it
@@ -179,7 +179,7 @@ Do this on a test install, with a bound channel you can use.
     curl -s localhost:8080/metrics | grep -E '^agentkourier_leader_takeovers_total'
     ```
 
-The project's own failover test, S16, does the same with a kill mid-turn, mid-post and mid-storm, and a leader frozen
+The project's own failover test does the same with a kill mid-turn, mid-post and mid-storm, and a leader frozen
 past its Lease, and checks that every reply appears once.
 
 ## Behind a pooler in transaction mode

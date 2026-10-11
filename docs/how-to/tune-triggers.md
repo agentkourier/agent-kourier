@@ -37,8 +37,8 @@ One line per message, oldest first:
 
 ```text
 TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME            KEY                       TITLE
-1791104398.621498  B0EXAMPLE01  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
-1791104398.621757  B0EXAMPLE01  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
+1791104398.621498  B0123456789  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
+1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
 ```
 
 - **SENDER** is the bot ID, `person:<user ID>`, or `agent-kourier` for Agent Kourier's own post. **TRIGGER** is the

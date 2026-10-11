@@ -1,12 +1,11 @@
 # Agent Kourier
 
-Installs [agent-kourier](../../spec.md), the broker between chat and A2A agents: one Deployment of the
+Installs agent-kourier, the broker between chat and A2A agents: one Deployment of the
 production image, its state (a SQLite volume, or a Postgres database you run), the ConfigMap of its resources, and the read
 access to the Secrets they name.
 
-**One replica with SQLite, or two with Postgres.** SQLite is one file on a volume that one pod may use (spec R7), so the
-chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `replicaCount: 2` is an active/passive pair (spec 11,
-D37): see High availability. `replicaCount: 0` is the kill switch (Agent Kourier stops, the volume or the database and the config stay);
+**One replica with SQLite, or two with Postgres.** SQLite is one file on a volume that one pod may use, so the
+chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `replicaCount: 2` is an active/passive pair (see High availability). `replicaCount: 0` is the kill switch (Agent Kourier stops, the volume or the database and the config stay);
 removing a Binding from the values is the other.
 
 ```sh
@@ -39,7 +38,7 @@ tier's, with the token-refresh CronJob).
 
 `<fullname>` is the release name, or `<release>-agent-kourier` when the name does not contain "agent-kourier" (`fullnameOverride` sets it).
 
-Argo CD names the Helm release after the Application. An Application called `cluster-gitops-agent-kourier` makes that the
+Argo CD names the Helm release after the Application. An Application called `my-agent-kourier` makes that the
 fullname, so the Deployment and the Service are not called `agent-kourier`. Anything that addresses them from outside, a
 NetworkPolicy in another namespace for instance, needs the real name, or you set `fullnameOverride`.
 
@@ -49,7 +48,7 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
 
 - `image.repository`, `image.tag` (default: the chart's appVersion) or `image.digest` (wins; pin production to it).
 - `config.chatConnections`, `config.agentBackends`, `config.bindings`: maps of name to `{namespace, spec}`, where `spec` is the
-  resource's spec exactly as in spec.md section 7 (the chart does not interpret it; Agent Kourier's loader validates it at start).
+  resource's spec exactly as the [resource reference](../../docs/reference/binding.md) describes it (the chart does not interpret it; Agent Kourier's loader validates it at start).
   `namespace` defaults to the release's. Or `config.existingConfigMap`, a ConfigMap you manage, with `rbac.secretNamespaces` to say where
   its Secrets are. Not both.
 - `store.type` (`sqlite`, the default, or `postgres`) and, with Postgres, `store.postgres.dsnSecret` and `store.postgres.timeouts` (see Store).
@@ -63,7 +62,7 @@ namespace fails until restart, and the roll covers it. Turn it off with `config.
 ## Store
 
 `store.type: sqlite` (the default) keeps Agent Kourier's state in one file on the volume, for **one replica**: a SQLite file may be open in one
-pod only (spec R7). Agent Kourier cannot see how many replicas run, so the chart is what refuses more than one with it (`replicaCount`
+pod only. Agent Kourier cannot see how many replicas run, so the chart is what refuses more than one with it (`replicaCount`
 above 1 fails the render with SQLite).
 
 `store.type: postgres` keeps it in a database you run (the chart installs none). Name the Secret that holds the DSN, in the release
@@ -87,7 +86,7 @@ DSN needs the right to create tables in its schema, as Agent Kourier applies its
 so without it Agent Kourier could not reach the database.
 
 **Connection poolers.** Agent Kourier's idle-in-transaction and statement timeouts are sent as startup parameters on each connection:
-they are what ends a stalled leader's transaction and frees its locks (spec D37). So connect directly, or through a pooler in
+they are what ends a stalled leader's transaction and frees its locks. So connect directly, or through a pooler in
 **session** mode. A pooler in **transaction** mode (PgBouncer's `pool_mode = transaction`) rejects startup parameters
 ("unsupported startup parameter"), and listing them in `ignore_startup_parameters` silently drops the protection. There, set the
 timeouts on the role and turn Agent Kourier's off:
@@ -115,8 +114,7 @@ takes it a lease duration after the leader's last renewal. After a crash, a dele
 Agent Kourier's start-up. A leader that stops on a signal (a rolling update, a drain) finishes its ordered shutdown and hands the lease over, so
 the standby takes it within a retry period. Every write is also fenced by an epoch in the database, so a leader that was paused past its
 lease cannot write when it wakes: the write fails and the process exits (exit code 5). What fencing cannot cover is a Slack post or an
-agent send that the paused leader had already begun, which can happen once more (spec 11, D37; the design is in
-`tasks/plans/h4-4-ha-design.md`).
+agent send that the paused leader had already begun, which can happen once more (see [High availability and failover](../../docs/explanation/high-availability.md)).
 
 Set `affinity` (a `podAntiAffinity` on `app.kubernetes.io/name: agent-kourier`) so the two replicas do not share a node, which the chart does not
 do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain cannot take both.
@@ -140,19 +138,19 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - The pod runs as UID 65532, non-root, with the `RuntimeDefault` seccomp profile; the container has a read-only root
   filesystem, `allowPrivilegeEscalation: false` and every capability dropped. The only writable paths are the data volume and `/tmp`.
 - The pod label `app.kubernetes.io/name: agent-kourier` is fixed, whatever the release is named, because NetworkPolicies elsewhere
-  (the front door's, in the kind tiers and the pilot) admit pods by it. Nothing else the chart makes carries it on a pod; in
+  (the front door's, in the kind tiers) admit pods by it. Nothing else the chart makes carries it on a pod; in
   particular the token-refresh Job's pod does not.
 - **Secrets RBAC is namespace-wide, not by name.** Agent Kourier caches Secrets with an informer, which needs `list` and `watch`, and
   Kubernetes cannot limit those verbs by `resourceNames`. Each Role therefore reads every Secret in its namespace, and Agent Kourier
   keeps the Opaque ones in memory (internal/config/k8ssecrets documents it). The chart grants it only in namespaces that hold a
   Secret the config names, and `get` is never granted. Give Agent Kourier's Secrets a namespace of their own when the namespace is shared. With Postgres the DSN's Secret is in the release namespace, which therefore gets this Role too.
-  Narrowing to named Secrets is an Agent Kourier change (one informer per Secret), after the pilot.
+  Narrowing to named Secrets is an Agent Kourier change (one informer per Secret), a possible later change.
 - `klogVerbosity` stays 0 (the schema caps it at 7): at 8 and above client-go logs response bodies, Secret lists included.
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it): egress to DNS, to the API server (you give
   its addresses in `kubeApiServer.cidrs`, since a policy cannot select it), to Slack on
   443 (to anywhere outside the private, CGNAT and link-local ranges, since a policy cannot name a host) and to what `extraEgress` adds (the agent
   backend's front door, an OTLP collector); ingress only from `metricsFrom` on the metrics port. Agent Kourier calls the verifying
-  front door, never the controller on 8083 (spec D32); put the front door in `extraEgress`, and nothing else in that namespace.
+  front door, never the controller on 8083; put the front door in `extraEgress`, and nothing else in that namespace.
   - On kind or kubeadm, `kubectl get endpoints kubernetes` gives the API server's addresses as /32s. On EKS those are
     control-plane ENI addresses that change when AWS upgrades the control plane: use the CIDRs of the control-plane subnets
     (`aws eks describe-cluster`, `resourcesVpcConfig.subnetIds`, each subnet's CIDR). The VPC CNI enforces NetworkPolicy only

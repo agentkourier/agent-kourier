@@ -1,7 +1,7 @@
 # Troubleshoot an install
 
 For an operator whose install does not answer: each entry starts from something you can see, in the pod log or in Slack, and gives the
-cause and the fix. They come from the first real installs, so they are the problems a new
+cause and the fix. They are the problems a new
 install is likely to meet. For the install itself, see [Install with Helm](install-with-helm.md).
 
 ## Where to look
@@ -47,7 +47,7 @@ The usual cause is the NetworkPolicy, on Cilium. The chart asks for the control 
 in `networkPolicy.kubeApiServer.cidrs` and renders it as an `ipBlock`, which works on kind.
 By default Cilium does not match a node address that way. It treats the API server as the
 `kube-apiserver` entity. The `policy-cidr-match-mode` setting in `cilium-config` changes that,
-and it was empty on the first install. Add a policy that allows the entity:
+and it can be empty on a new install. Add a policy that allows the entity:
 
 ```yaml
 apiVersion: cilium.io/v2
@@ -85,7 +85,7 @@ causes.
 
 - The agent serves an A2A 0.3 card, which has a `url` and a `preferredTransport` and no
   `supportedInterfaces`, and the image is older than the one that reads 0.3 cards. kagent
-  0.9.x does this. Use an image built from source commit `fa0abc0b` or later.
+  0.9.x does this. Use a newer image that reads A2A 0.3 cards.
 - The card lists only other transports, gRPC or REST. Agent Kourier uses JSON-RPC.
 
 ### `HTTP 307 Temporary Redirect`
@@ -103,8 +103,8 @@ and the front door's own configuration.
 ### The host does not resolve, or the connection times out
 
 Check the Service name first, with `kubectl get svc -n <namespace>`. Argo CD names the Helm
-release after the Application, so an Application called `cluster-gitops-kagent` produced
-`cluster-gitops-kagent-controller`, not `kagent-controller`. Then check the egress rule:
+release after the Application, so an Application called `my-kagent` produced
+`my-kagent-controller`, not `kagent-controller`. Then check the egress rule:
 the chart's NetworkPolicy allows the agent only through `networkPolicy.extraEgress`.
 
 ## The mention gets no reply and the log shows no `session turn started`
@@ -116,8 +116,8 @@ Agent Kourier never saw the message. Check, in this order:
 3. The app subscribes to `app_mention`, `message.channels` and `message.groups`, and Socket
    Mode is on.
 4. Only one process uses the app token. A second consumer receives a share of the events.
-   The `slack: socket mode connected` line has a `num_connections` field. The first install
-   read 8 on a fresh start, found no other consumer, and replies still arrived, so treat a
+   The `slack: socket mode connected` line has a `num_connections` field. A fresh start
+   can read 8 with no other consumer and replies still arriving, so treat a
    number above 1 as a reason to look and not as proof.
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice

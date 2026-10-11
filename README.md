@@ -13,8 +13,7 @@ connection, the reply queue and the delivery state, so an Agent Kourier restart 
 no message.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
-[Architecture](docs/explanation/architecture.md) · [Roadmap](ROADMAP.md) ·
-[Specification](spec.md)
+[Architecture](docs/explanation/architecture.md) · [Specification](spec.md)
 
 ## What it looks like
 
@@ -167,7 +166,7 @@ messages themselves, which starts with `B`. It is not the Slack app ID, which st
 with `A`, and Agent Kourier rejects a name. The dry run in the
 [sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is
 one way to read it. The `alertmanager` preset supplies the matching, the thread
-rules, the limits and the prompt, and the [trigger reference](spec.md#82-chat) has
+rules, the limits and the prompt, and the [trigger reference](docs/reference/chat-triggers.md) has
 the fields a Binding can override.
 
 ```yaml
@@ -193,7 +192,7 @@ receiver that keeps the default title does not match. Either set the receiver's
 title to the shape above, or override the preset's `match` and `extract` entries for
 your own template.
 
-In the current pilot, these are **configuration files**, loaded from
+These are **configuration files**, loaded from
 `AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
 custom resources reconciled by an Agent Kourier controller. GitOps can manage the
 ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
@@ -213,12 +212,12 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Agent backend | Tool approvals answered from Slack | Planned |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; no preset, and not exercised in the sandbox or the end-to-end tests | Implemented |
-| Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, epoch fencing in Postgres and chat writes fenced on the replica, a standby that takes over. The failover test (S16: kill the leader mid-turn, mid-post and mid-storm, freeze it past its Lease) checks that every reply appears once; a call already in flight in a frozen leader can still repeat | Implemented |
+| Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, epoch fencing in Postgres and chat writes fenced on the replica, a standby that takes over. The failover test (kill the leader mid-turn, mid-post and mid-storm, freeze it past its Lease) checks that every reply appears once; a call already in flight in a frozen leader can still repeat | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
 rejects an agent whose card does not advertise streaming. A team can change or add
 a runtime and keep the same messaging configuration. What a thread can do still
-depends on what the backend exposes. See [backend design](spec.md#63-backends) for
+depends on what the backend exposes. See [backend reference](docs/reference/agentbackend.md) for
 the contract.
 
 ### Running kagent 1.0 off kind
@@ -239,11 +238,11 @@ kubectl api-versions | grep certificates.k8s.io/v1beta1
 Without them, use an agent that does not need Substrate, through the `a2a` dialect.
 kagent 0.9.x is one. It speaks A2A 0.3, which the dialect reads. See
 [Connect a kagent agent](docs/how-to/connect-kagent.md) for the URL form and the
-limits, and [risk R19](spec.md#14-risks) for why.
+limits.
 
 ## Status
 
-The project is in an internal-first pilot and has no tagged release. It runs as one
+Agent Kourier has no tagged release yet. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
@@ -254,8 +253,7 @@ To try it first, use the [sandbox deployment guide](hack/kind/sandbox/README.md)
 Agent Kourier against a real Slack workspace and a kagent agent in kind. To run it on a
 cluster, follow [Install with Helm](docs/how-to/install-with-helm.md), and see
 [troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer. The
-[specification](spec.md) records the detailed behaviour, and the
-[roadmap](ROADMAP.md) lists what comes next.
+[specification](spec.md) records the detailed behaviour.
 
 ### High availability
 
@@ -268,7 +266,7 @@ replica, and the chart refuses more.
 | Fencing | Every write to Postgres checks the leader's epoch, and every write to Slack checks the replica's own Lease clock, so a deposed or paused leader's writes are refused and it exits |
 | Standby | Ready, serving health and metrics, with its config and Secret caches warm; it does no work and opens no Slack connection |
 | Takeover | The same recovery as a restart: queued turns resume, the outbox adopts what was already posted, and a stream the old leader left open is replaced with the whole answer |
-| Drains and spreading | A PodDisruptionBudget (`minAvailable: 1`) keeps a drain from taking both replicas, and the render refuses a budget that would block every drain. Anti-affinity, `priorityClassName`, `nodeSelector` and `tolerations` go in the chart's values; the chart sets no spread of its own |
+| Drains and spreading | An optional PodDisruptionBudget (`podDisruptionBudget.enabled`, off by default; `minAvailable: 1` keeps a drain from taking both replicas), and the render refuses a budget that would block every drain. Anti-affinity, `priorityClassName`, `nodeSelector` and `tolerations` go in the chart's values; the chart sets no spread of its own |
 
 See [High availability and failover](docs/explanation/high-availability.md) for how it
 works and what a failover can still repeat, and
@@ -320,7 +318,7 @@ to run before a real channel. The AX kind tier (`make e2e-ax-up`, `make e2e-ax`)
 runs the shared Slack scenarios against a real AX and Substrate install with a
 deterministic model; see [its guide](hack/kind/ax/README.md). Support is
 experimental: a real AX deployment's pause and resume is covered by the acceptance
-procedure, not yet by a pilot.
+procedure, not yet by a production deployment.
 
 ## Development
 

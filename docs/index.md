@@ -31,8 +31,7 @@ going.</p>
 <track kind="captions" src="assets/film/agent-kourier-teaser.en.vtt" srclang="en" label="English" default>
 <a href="assets/film/agent-kourier-teaser-16x9.mp4">Download the teaser (MP4, 20 seconds)</a>.
 </video>
-<figcaption>The teaser, 20 seconds, narrated with captions. The Slack footage is the kind sandbox: a real Slack
-workspace, a real model, seeded faults.</figcaption>
+<figcaption>The teaser, 20 seconds, narrated with captions.</figcaption>
 </figure>
 
 <div class="grid cards" markdown>
@@ -115,6 +114,3 @@ another tool's bot needs a trigger of its own.
 <span class="ak-strip__name">any bot's message</span>
 </div>
 </div>
-
-Agent Kourier is in an internal-first pilot and has no tagged release yet. The [roadmap](explanation/roadmap.md) says
-what is implemented and what comes next.

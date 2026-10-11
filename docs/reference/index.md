@@ -5,7 +5,7 @@ and without instructions. The resource and Helm value pages are generated from t
 
 ## Resources
 
-API group `agentkourier.dev/v1alpha1`. All three kinds are namespaced. In the current pilot they are loaded from YAML
+API group `agentkourier.dev/v1alpha1`. All three kinds are namespaced. They are loaded from YAML
 files, usually a mounted ConfigMap, rather than served as custom resources.
 
 | Kind | Configures | Typical owner |

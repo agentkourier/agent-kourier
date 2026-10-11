@@ -50,4 +50,4 @@ spec:
 The [AX example guide](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) has the
 deployment steps (the gateway, egress and credential injection, the template overlay) and an acceptance procedure.
 Run it before you bind a real channel: a real AX deployment's pause and resume is covered by that procedure, not yet
-by a pilot.
+by a production deployment.

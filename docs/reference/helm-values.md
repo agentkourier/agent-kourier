@@ -256,7 +256,7 @@ Fences Agent Kourier's network. Egress is the Kubernetes API server, DNS, Slack 
 | `networkPolicy.postgres.to` | `[]` |  |
 | `networkPolicy.postgres.port` | `5432` |  |
 | `networkPolicy.metricsFrom` | `[]` | Who may scrape the metrics port: NetworkPolicyPeers, for example the Prometheus pods: - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}} podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}} Empty admits nobody. Kubelet's probes are node traffic, which the CNIs we know admit regardless. |
-| `networkPolicy.extraEgress` | `[]` | More egress rules, in Kubernetes' own form. The agent backend goes here, for example the front door: - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app: kagent-frontdoor}}}] ports: [{port: 4180}] |
+| `networkPolicy.extraEgress` | `[]` | More egress rules, in Kubernetes' own form. The agent backend goes here, for example the front door: - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app.kubernetes.io/name: kagent-frontdoor}}}] ports: [{port: 4180}] |
 
 ## podDisruptionBudget
 

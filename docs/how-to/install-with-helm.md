@@ -3,7 +3,7 @@
 For a platform engineer with a Kubernetes cluster: at the end, Agent Kourier runs from the Helm chart and answers a
 mention in a Slack thread.
 
-The order is the one the first real deployment followed, and the checks are the ones that caught its problems. You do
+The checks below are the ones that catch the usual problems. You do
 not need an agent for the first install. Without one, Agent Kourier connects to Slack and tells the thread it cannot
 reach the agent. That reply proves Slack in, Slack out, the volume and the policies, and leaves the agent as the only
 thing to wire.
@@ -83,7 +83,7 @@ config:
         dialect: a2a
         url: http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ # (1)!
   bindings:
-    dogfood:
+    my-binding:
       spec:
         agent:
           backendRef: {name: agent}
@@ -101,7 +101,7 @@ config:
 1. The `a2a` dialect sends to this URL exactly as written and follows no redirect. Write the trailing slash if the
    agent's route has one.
 2. Add `tokenSecretRef: {name: agent-kourier-agent-token}` here when you created that Secret.
-3. The channel ID, which starts with `C`, not the channel's name.
+3. The channel ID, which starts with `C` (`G` for a private channel), not the channel's name.
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).
@@ -165,8 +165,8 @@ Now connect a real agent: [kagent](connect-kagent.md), [any A2A agent](connect-a
 Set `replicaCount: 0`. Agent Kourier stops, and the volume stays.
 
 On `helm uninstall` the chart keeps the claim by default: `persistence.retainOnUninstall: true` sets
-`helm.sh/resource-policy: keep` on it. A GitOps tool may not honour that annotation when it prunes, and the first
-install did not test it. If the data matters, create the claim yourself and set `persistence.existingClaim`, so no
+`helm.sh/resource-policy: keep` on it. A GitOps tool may not honour that annotation when it prunes, and that
+behaviour is not guaranteed. If the data matters, create the claim yourself and set `persistence.existingClaim`, so no
 release owns it, and stop with `replicaCount: 0` rather than by removing the app.
 
 ## Related

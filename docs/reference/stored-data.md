@@ -21,14 +21,14 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `interaction_presses.inputs` | What a person typed into a prompt. | Until the press is processed, or the worker gives up (an hour); purged an hour after the interaction's deadline at the latest. |
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned; an unrecorded one is purged after 7 days. |
 | `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. | Until the session has been expired for 90 days, then all deleted together (below). |
-| `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept for the pilot's review (D33). No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
+| `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept so that a review of the votes can read them. No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
 | `sessions.alert_name`, `sessions.agent_name` | The alert name a trigger started the thread for, in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) or empty, and the agent of the Binding when the session was made. A vote is stored and counted under them, whatever the Binding says later. | As long as the session row, which is deleted with its thread (below). |
 | `audit` | IDs, codes, outcomes and lengths, never message text. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
 | `events.payload` | Nothing writes it. | n/a |
 
 ### Feedback
 
-The useful and not-useful buttons (spec 8.7) store one row for each person and message, in table `feedback` of both stores:
+The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores:
 
 | Column | Holds |
 |---|---|
@@ -42,16 +42,15 @@ The useful and not-useful buttons (spec 8.7) store one row for each person and m
 
 No free text is stored: Agent Kourier asks for none, and the alert name is kept only in the name shape (an alert's title is
 untrusted text; a value outside the shape is stored as empty). A vote counts only from a member of the bound channel and
-never from a bot. **Retention: rows are kept.** The pilot's exit decision is computed from them, and a later review reads
-them; no retention loop touches the table, the deletion of expired sessions (DP-3) included. A vote on a message whose session
+never from a bot. **Retention: rows are kept.** A review of how useful the investigations were is computed from them; no retention loop touches the table, the deletion of expired sessions included. A vote on a message whose session
 has been deleted is told that the message can no longer be rated. The voter's ID is the only personal datum in a row: remove the
 rows of a person with `DELETE FROM feedback WHERE user_id = ...` on the operator's own request.
 
 Each vote is also an audit entry of kind `event` whose subject names the turn, channel and thread and whose outcome is the verdict
 (`feedback: verdict=useful changed=false`), and it is counted in `agentkourier_investigation_feedback_total`
-([Metrics](metrics.md#operations-intake-delivery-and-triggers)); the table, not the metric, is the record D33 is computed from.
+([Metrics](metrics.md#operations-intake-delivery-and-triggers)); the table, not the metric, is the record the review is computed from.
 
-The pilot's exit decision (D33) counts investigations, not votes: an investigation (the thread a trigger started) is rated if any
+The review counts investigations, not votes: an investigation (the thread a trigger started) is rated if any
 person voted on its investigation message, and is useful if more of its votes are useful than not useful, so a tie is not useful.
 It is one query, the same in SQLite and Postgres (the stores' tests run this very text against both):
 
@@ -189,7 +188,7 @@ partner.
 
 Accepted limitation: a pause is told to be the same one as a stored pause by comparing both after redaction, so two pauses
 under one interaction ID that differ only in a redacted value count as the same. A keyed digest of the unredacted pause
-(HMAC, key from a Secret) is planned before tool approvals are rendered (tasks/plans/data-protection.md).
+(HMAC, key from a Secret) is planned before tool approvals are rendered.
 
 Two things are stored as given, because the agent gets them back as they are: a question's **choices** (an answer picks
 one by its index, and the agent receives the stored choice), and the **answer**, until the interaction is cleared.
@@ -206,12 +205,12 @@ reaction (the hourglass) stays on the dropped reply's message, since nothing tak
 
 ### Thread replies in a mention-only Binding
 
-With `chat.threadReplies: mention` (spec 8.2, D38), a reply in a thread that does not mention Agent Kourier is not a turn. It is
+With `chat.threadReplies: mention`, a reply in a thread that does not mention Agent Kourier is not a turn. It is
 not stored: no reply row, no reaction, no change to the session's last activity. Slack delivers every reply's event, and Agent Kourier
 drops an unmentioned one at intake; two counters, which hold no content, are all that remains of it
 (`agentkourier_thread_unmentioned_total` and `agentkourier_intake_total{disposition="unmentioned"}`). Agent Kourier reads the text again from
 Slack only when someone later mentions Agent Kourier in the thread, and then only the replies since the session's previous turn.
-They are cleaned, redacted and cut (spec 8.2), and go to the agent, and so to its model provider, as part of that turn's text.
+They are cleaned, redacted and cut, and go to the agent, and so to its model provider, as part of that turn's text.
 Before that they reach neither the agent nor its provider (with `all`, every reply does). Nothing new is stored: the section is built when the turn is
 sent and held in memory while that turn is the head of its session's queue, `reply_queue.text` holds only what the person who
 mentioned Agent Kourier wrote, and no reply's content is logged. A typed answer to a question that takes text replies needs no
@@ -286,22 +285,21 @@ horizon as the deletion: the Binding's `threadTTL` plus 90 days) and still recor
 Nothing inside the horizon is touched: a task on a session that is live, or expired for less than the grace, is a task that
 recovery may still follow. The session is deleted by the purge that follows in the same tick, or by the next, as any session
 whose work has ended. It is bounded as the purge is: 50 sessions to a listing and at most 10 listings (500 tasks) to a tick;
-with Postgres each ending checks the leader's epoch first (D37). It counts `stale_tasks` and `stale_task_interactions` in
+with Postgres each ending checks the leader's epoch first. It counts `stale_tasks` and `stale_task_interactions` in
 `agentkourier_retention_removed_total`.
 
-**What a person sees.** A reply in a thread whose session is deleted is a reply in a thread Agent Kourier never owned, and is ignored
-(spec 8.2). An @mention in it starts a new session anchored to that thread, as it does in any thread Agent Kourier does not own.
+**What a person sees.** A reply in a thread whose session is deleted is a reply in a thread Agent Kourier never owned, and is ignored. An @mention in it starts a new session anchored to that thread, as it does in any thread Agent Kourier does not own.
 Until then, as before, a reply gets the expiry notice.
 
 **How it runs.** The sweep belongs to the store retention loop (hourly, with the replies and the audit purge) and only the
 leader runs it. It deletes 100 sessions to a call, in a transaction, and at most 100 calls (10 000 sessions) to a tick: the first
 sweep after an upgrade finds every old session, and works them down over several ticks. With Postgres each write checks the
-leader's epoch first (D37), and a session that a writer holds locked is left for the next call. It logs a count at INFO and counts in
+leader's epoch first, and a session that a writer holds locked is left for the next call. It logs a count at INFO and counts in
 `agentkourier_retention_removed_total`: `expired_sessions`, and the rows that went with them as `session_replies`,
 `session_interactions`, `session_presses` and `session_outbox` (and, for a stale task, as above). Migration 0022 adds the indexes the sweep reads by (a session's
 last activity; a thread's replies, interactions and outbox rows; an outbox row's source, in the C collation with Postgres).
 
-Not deleted here: `feedback` rows, which are kept until the pilot's review of them (D33).
+Not deleted here: `feedback` rows, which are kept so that a review of the votes can read them.
 
 ### Audit
 

@@ -71,7 +71,7 @@ With the chart's `networkPolicy` on, allow the door in `networkPolicy.extraEgres
 ```yaml
 networkPolicy:
   extraEgress:
-    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app: kagent-frontdoor}}}]
+    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app.kubernetes.io/name: kagent-frontdoor}}}]
       ports: [{port: 4180}]
 ```
 

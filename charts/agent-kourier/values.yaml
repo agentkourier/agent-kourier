@@ -3,7 +3,7 @@
 # This chart runs ONE replica by default, with its state in SQLite on a PersistentVolumeClaim (store.type sqlite, the default)
 # or in Postgres (store.type postgres). A SQLite file may be open in one pod, and the session manager keeps per-thread state in
 # memory, so SQLite is one replica: the render refuses replicaCount above 1 with it. With Postgres, replicaCount 2 gives an
-# active/passive pair (spec 11, D37): the replicas elect a leader with a Kubernetes Lease (leaderElection below), the leader
+# active/passive pair: the replicas elect a leader with a Kubernetes Lease (leaderElection below), the leader
 # does all of Agent Kourier's work, and the standby is Ready and idle until the leader's lease lapses or it stops. Every write is
 # fenced by an epoch in the database, so a leader that has been paused past its lease cannot write when it wakes. Postgres
 # at replicaCount 1 elects too, and is a standby-less leader. replicaCount 0 is the kill switch: Agent Kourier stops, and the volume
@@ -54,7 +54,7 @@ extraEnv: []
 # What Agent Kourier reads. Either the resources below, which the chart writes into a ConfigMap mounted at /etc/agent-kourier, or
 # existingConfigMap, the name of a ConfigMap you manage (one key per file, each ending .yaml). Not both.
 #
-# Each entry is keyed by its name and holds the resource's spec exactly as the resource reference describes it (spec section 7) (the chart does
+# Each entry is keyed by its name and holds the resource's spec exactly as the resource reference describes it (the chart does
 # not interpret it) and, optionally, the namespace (default: the release's). Secrets are referenced by name
 # (credentialsSecretRef, tokenSecretRef, valueSecretRef) and live in the cluster, made by you or Sealed Secrets:
 # no token value belongs in this file or in any values file (the render refuses a Slack token, and a header value whose name
@@ -84,7 +84,7 @@ config:
   # Secret namespace fails until the process restarts. Has no effect with existingConfigMap.
   rollOnChange: true
 
-# Where Agent Kourier keeps its state (spec D15). SQLite is one file on a volume (persistence below), for one replica. Postgres is
+# Where Agent Kourier keeps its state. SQLite is one file on a volume (persistence below), for one replica. Postgres is
 # a database you run (the chart does not install one), for more than one replica: they elect a leader (leaderElection below).
 store:
   type: sqlite # sqlite or postgres (AGENTKOURIER_STORE)
@@ -99,8 +99,8 @@ store:
     dsnSecret:
       name: ""
       key: ""
-    # Who sets the idle-in-transaction and statement timeouts, which end a stalled leader's transaction and free its locks
-    # (spec D37). "agent-kourier" (the default) sends them as startup parameters on every connection. Connect to Postgres directly
+    # Who sets the idle-in-transaction and statement timeouts, which end a stalled leader's transaction and free its locks.
+    # "agent-kourier" (the default) sends them as startup parameters on every connection. Connect to Postgres directly
     # or through a pooler in SESSION mode. A pooler in TRANSACTION mode (PgBouncer's pool_mode = transaction) refuses startup
     # parameters ("unsupported startup parameter"), and listing them in its ignore_startup_parameters silently drops the
     # protection: there, set both on the database role (ALTER ROLE agentkourier SET idle_in_transaction_session_timeout = '10s';
@@ -226,7 +226,7 @@ networkPolicy:
   # Empty admits nobody. Kubelet's probes are node traffic, which the CNIs we know admit regardless.
   metricsFrom: []
   # More egress rules, in Kubernetes' own form. The agent backend goes here, for example the front door:
-  #   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app: kagent-frontdoor}}}]
+  #   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app.kubernetes.io/name: kagent-frontdoor}}}]
   #     ports: [{port: 4180}]
   extraEgress: []
 

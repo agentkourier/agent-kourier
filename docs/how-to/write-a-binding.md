@@ -8,7 +8,7 @@ agent to your channel, through the backend and Slack connection the platform tea
 - The platform team runs Agent Kourier, an [AgentBackend](../reference/agentbackend.md) for your agent's runtime and a
   [ChatConnection](../reference/chatconnection.md) for Slack, and lists your namespace in both resources'
   `allowedNamespaces`.
-- The Agent Kourier bot is a member of your channel, and you have the channel's ID (it starts with `C`).
+- The Agent Kourier bot is a member of your channel, and you have the channel's ID (it starts with `C`, or `G` for a private channel).
 - If the backend verifies tokens, a Secret in your namespace holds the Binding's token under the key `token`.
 
 ## Write it

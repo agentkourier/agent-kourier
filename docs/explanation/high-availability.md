@@ -110,7 +110,7 @@ or an upgrade, are where they could.
   before an old one stops, so an upgrade never leaves zero replicas. An old leader stops on its signal, finishes its
   ordered shutdown (up to 25 seconds, inside the pod's 40 seconds of termination grace) and hands the Lease over. On
   SQLite the strategy is `Recreate`, because the ReadWriteOnce volume can be attached to one pod at a time.
-- **Drains.** A PodDisruptionBudget of `minAvailable: 1` lets a drain take one replica and makes it wait for that one to
+- **Drains.** The chart can render a PodDisruptionBudget (`podDisruptionBudget.enabled`, off by default). One with `minAvailable: 1` lets a drain take one replica and makes it wait for that one to
   return before it takes the other. The chart refuses a budget that would block every voluntary eviction, since a
   drain that can never finish is its own outage.
 - **Placement.** Two replicas on one node fail together. The chart takes a free-form `affinity`, `nodeSelector`,
@@ -124,13 +124,12 @@ Fencing stops a deposed leader's next write. It cannot recall one already sent. 
 already in flight when the pause began, one for each concurrent writer (the outbox, each turn's renderer, the
 interactions), can still happen once more. For a stream's append or stop that is harmless as far as the test doubles
 show, since Slack refuses a write to a stream that has been stopped; a post or an edit in flight is the residual
-duplicate. This is accepted, and it is what the failover test, S16, measures.
+duplicate. This is accepted, and it is what the failover end-to-end test measures.
 
-**S16** runs in the fast end-to-end tier with two replicas on Postgres. It kills the leader mid-turn, mid-post and
+The failover test runs in the fast end-to-end tier with two replicas on Postgres. It kills the leader mid-turn, mid-post and
 mid-storm, and freezes it past its Lease and then resumes it. In each case another process must take the leadership,
 and the fake Slack's record must show every reply once. The stalled-leader case is the one that found a leader
-finishing its open stream on resume, which is why chat writes are fenced on the replica. The project's records show
-three passes of all four cases on 2026-10-06.
+finishing its open stream on resume, which is why chat writes are fenced on the replica.
 
 ## Stopping everything
 

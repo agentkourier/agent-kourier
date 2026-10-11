@@ -48,7 +48,7 @@ is `patch` on that Secret.
     kubectl -n agent-kourier create job --from=cronjob/agent-kourier-token-refresh first-token
     ```
 
-The token must carry the same owner claim on every mint (the `userIdClaim`, `email` in the pilot, else `sub`): kagent
+The token must carry the same owner claim on every mint (the `userIdClaim`, `email` in the kind tiers, else `sub`): kagent
 binds a session to the identity that created it.
 
 ## When a token expires anyway

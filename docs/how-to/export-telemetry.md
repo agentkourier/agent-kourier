@@ -85,7 +85,7 @@ extraEnv:
   - name: OTEL_TRACES_SAMPLER_ARG
     value: "1"
   - name: AGENTKOURIER_ENVIRONMENT
-    value: pilot
+    value: production
 ```
 
 - The collector must accept OTLP over HTTP/protobuf. Agent Kourier deploys none.

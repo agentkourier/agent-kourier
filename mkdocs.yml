@@ -68,6 +68,8 @@ plugins:
   - redirects:
       redirect_maps:
         how-to/postgres-and-ha.md: how-to/high-availability.md
+        explanation/roadmap.md: explanation/index.md
+        explanation/comparison.md: explanation/index.md
 
 extra_css:
   - stylesheets/brand.css
@@ -159,5 +161,3 @@ nav:
       - Delivery guarantees: explanation/delivery.md
       - High availability and failover: explanation/high-availability.md
       - Security model: explanation/security.md
-      - Comparison with other projects: explanation/comparison.md
-      - Roadmap: explanation/roadmap.md

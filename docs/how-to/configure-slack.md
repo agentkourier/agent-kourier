@@ -59,8 +59,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     !!! note "Not served yet"
 
-        The broker serves Slack over Socket Mode only, and a ChatConnection has no setting for another mode. Slack over
-        the Events API is on the [roadmap](../explanation/roadmap.md). Use Socket Mode.
+        The broker serves Slack over Socket Mode only, and a ChatConnection has no setting for another mode. Use Socket Mode.
 
 ## What the app is allowed to do
 

@@ -99,15 +99,16 @@ durable in the store; traces are exported only when configured.
 
 ## Configuration and deployment
 
-The current pilot reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`.
+Agent Kourier reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`.
 GitOps deploys those files as a ConfigMap alongside Secrets, the Agent Kourier
 Deployment, and persistent storage. The reloader validates changes and keeps the
 last accepted configuration if a reload fails. Secret access uses Kubernetes
 RBAC; cross-namespace resource references use configured namespace allowlists.
 
 The broker selects one active `ChatConnection` per process. Multiple bindings
-can route its channels to different agents and backends. The current deployment
-uses SQLite; this diagram does not imply an active-active, shared-database broker.
+can route its channels to different agents and backends. The store is SQLite with
+one replica, or Postgres with two replicas, active and passive (see
+[High availability](high-availability.md)); the broker is never active-active.
 
 Live Agent Kourier CRDs and a reconciliation controller are planned. Agent Kourier does not
 deploy an agent when it loads an `AgentBackend` or `Binding`: the runtime's own
@@ -130,10 +131,10 @@ Structured questions and approvals depend on the backend's interaction contract.
 The generic A2A dialect supports text continuation: a plain-text `input-required`
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
-paused task. The kagent dialect additionally understands its structured HITL
-extension (tool approvals, tool step cards).
+paused task. The kagent dialect additionally understands structured questions and
+tool step cards. A tool approval request is refused with a notice.
 
-Google AX is a supported backend. AX speaks A2A, so it uses the `a2a` dialect with
+Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with
 no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
 the actor with a static `ate-target-actor` header from `spec.headers`; the agent is
 an A2A server running as an ax task, which you build and run (ax ships none). No
@@ -160,5 +161,4 @@ lifecycle (task, template, egress policy) stays with the operator. See the
 | Output and durable delivery | [`internal/render/live`](https://github.com/agentkourier/agent-kourier/tree/main/internal/render/live), [`internal/outbox`](https://github.com/agentkourier/agent-kourier/tree/main/internal/outbox) |
 | Persistence and observations | [`internal/store/sqlite`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/sqlite), [`internal/telemetry`](https://github.com/agentkourier/agent-kourier/tree/main/internal/telemetry), [`internal/audit`](https://github.com/agentkourier/agent-kourier/tree/main/internal/audit) |
 
-See the [specification](https://github.com/agentkourier/agent-kourier/blob/main/spec.md#6-architecture) for the detailed contracts, and
-[Logs and traces](../reference/logs-and-traces.md) for the trace boundaries.
+See [Logs and traces](../reference/logs-and-traces.md) for the trace boundaries.
