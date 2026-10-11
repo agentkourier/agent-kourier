@@ -122,9 +122,34 @@ func TestASecretInAQuestionIsNotStoredButItsChoicesAre(t *testing.T) {
 	}
 }
 
-// TestAPauseStoredBeforeRedactionIsStillThePauseWhenItComesAgain: a row an older version wrote holds the arguments
-// as they were; the same pause arriving after an upgrade is recognised, not refused as a second pause under the ID.
-func TestAPauseStoredBeforeRedactionIsStillThePauseWhenItComesAgain(t *testing.T) {
+// TestAQuestionStoredBeforeRedactionIsStillThePauseWhenItComesAgain: a row an older version wrote holds the question
+// as it was; the same pause arriving after an upgrade is recognised, not refused as a second pause under the ID.
+func TestAQuestionStoredBeforeRedactionIsStillThePauseWhenItComesAgain(t *testing.T) {
+	r := newRig(t, nil)
+	task := pausedOn(map[string]any{"type": "ask_user_request", "id": "req-s", "questions": []map[string]any{
+		{"question": "Is password=" + plantedQuestion + " right?", "choices": []string{"yes", "no"}},
+	}})
+	in, err := (&kagentv1.Dialect{}).ParseInteraction(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(in)
+	legacy := store.Interaction{ID: interact.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
+	if _, err := r.st.CreateInteraction(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.paused(t, task); err != nil {
+		t.Fatalf("Paused = %v; want the old row taken for this pause", err)
+	}
+	if len(r.sess.cancels) != 0 || len(r.notices(t)) != 0 || len(r.asked) != 1 {
+		t.Errorf("%d cancels, %d notices, %d prompts; want the old row's pause posted as any other, and nothing refused", len(r.sess.cancels), len(r.notices(t)), len(r.asked))
+	}
+}
+
+// TestAnApprovalStoredBeforeRedactionIsRefusedAsUnusable: no approval row was written before the arguments were redacted,
+// so an approval row that holds them as they were is not one this version wrote, and a pause that equals it only once
+// redacted is not taken for it: the second reading of samePause is for a question.
+func TestAnApprovalStoredBeforeRedactionIsRefusedAsUnusable(t *testing.T) {
 	r, task := newRig(t, nil), secretApproval()
 	in, err := (&kagentv1.Dialect{}).ParseInteraction(task)
 	if err != nil {
@@ -136,10 +161,10 @@ func TestAPauseStoredBeforeRedactionIsStillThePauseWhenItComesAgain(t *testing.T
 		t.Fatal(err)
 	}
 	if err := r.paused(t, task); err != nil {
-		t.Fatalf("Paused = %v; want the old row taken for this pause", err)
+		t.Fatalf("Paused = %v; want the pause refused as unusable, which is not an error", err)
 	}
-	if got := r.row(t, task); got.State != store.InteractionAnswered || len(r.sess.answers) != 1 {
-		t.Errorf("state %s, %d answers; want the pause denied once, as any other", got.State, len(r.sess.answers))
+	if got := r.row(t, task); got.State != store.InteractionPending || len(r.sess.answers) != 0 || len(r.sess.cancels) != 1 || len(r.notices(t)) != 1 {
+		t.Errorf("state %s, %d answers, %d cancels, %d notices; want nothing denied, and the task cancelled with one notice", got.State, len(r.sess.answers), len(r.sess.cancels), len(r.notices(t)))
 	}
 }
 

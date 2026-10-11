@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -66,9 +67,40 @@ type sweepSess struct {
 	errs    []error
 	always  error
 	log     *callLog
+	// The answers sent (a timed-out approval's denial). An answer to any but the current task is ErrNotPaused, as the
+	// real one answers; answerErrs are returned by the next Answers, one each, and answerAlways by every one.
+	answers      []*a2a.Message
+	answerErrs   []error
+	answerAlways error
+	onAnswer     func() // runs as an answer arrives
 }
 
-func (s *sweepSess) Answer(context.Context, store.ConversationKey, *a2a.Message) error { return nil }
+func (s *sweepSess) Answer(_ context.Context, _ store.ConversationKey, m *a2a.Message) error {
+	s.log.add("deny")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.answers = append(s.answers, m)
+	if s.onAnswer != nil {
+		s.onAnswer()
+	}
+	switch {
+	case s.answerAlways != nil:
+		return s.answerAlways
+	case len(s.answerErrs) > 0:
+		err := s.answerErrs[0]
+		s.answerErrs = s.answerErrs[1:]
+		return err
+	case m.TaskID != s.current:
+		return session.ErrNotPaused
+	}
+	return nil
+}
+
+func (s *sweepSess) sent() []*a2a.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*a2a.Message(nil), s.answers...)
+}
 
 func (s *sweepSess) Cancel(_ context.Context, _ store.ConversationKey, id a2a.TaskID, _ string) error {
 	s.log.add("cancel")
@@ -170,6 +202,15 @@ type flakyResolve struct {
 	fail     bool
 	conflict bool // the interaction was answered after the sweep listed it
 	log      *callLog
+	// sessionErr fails the reads of a session, as a store that is down does.
+	sessionErr error
+}
+
+func (s *flakyResolve) GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (store.Session, error) {
+	if s.sessionErr != nil {
+		return store.Session{}, s.sessionErr
+	}
+	return s.Store.GetSession(ctx, key, ttl, now)
 }
 
 func (s *flakyResolve) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) error {
@@ -213,15 +254,34 @@ type sweepRig struct {
 	press *presses
 	calls *callLog
 	logs  *logBuf
+	look  *sweepLookup
+	outs  []string // "binding outcome", for each call of OnApprovalOutcome
+}
+
+// sweepLookup is the Lookup of the sweep: the Binding of a name, or err for a name it does not have.
+type sweepLookup struct {
+	bindings map[string]interact.Binding
+}
+
+func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
+	if b, ok := l.bindings[name]; ok {
+		return b, nil
+	}
+	return interact.Binding{}, fmt.Errorf("no Binding %q: %w", name, session.ErrUnknownBinding)
 }
 
 func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *interact.Sweeper {
 	t.Helper()
 	cfg := interact.SweepConfig{
-		Store: r.st, Sessions: r.st, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press,
+		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press,
 		Now:       func() time.Time { return *r.clock },
 		Logger:    slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnTimeout: func(id string) { r.mu.Lock(); r.hooks = append(r.hooks, id); r.mu.Unlock() },
+		OnApprovalOutcome: func(binding string, o interact.Outcome) {
+			r.mu.Lock()
+			r.outs = append(r.outs, binding+" "+string(o))
+			r.mu.Unlock()
+		},
 	}
 	if mod != nil {
 		mod(&cfg)
@@ -231,6 +291,13 @@ func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *inter
 		t.Fatal(err)
 	}
 	return sw
+}
+
+// outcomes is what OnApprovalOutcome was told: "binding outcome".
+func (r *sweepRig) outcomes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.outs...)
 }
 
 func (r *sweepRig) hooked() []string {
@@ -247,7 +314,8 @@ func newSweepRig(t *testing.T) *sweepRig {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	now := t0.Add(timeout + time.Minute) // a minute past the deadline of a pause made at t0
-	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}}}
+	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}},
+		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}}}}
 	r.ob = newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	r.enq = &flakyEnqueue{Outbox: r.ob}

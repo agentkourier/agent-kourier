@@ -147,6 +147,16 @@ func short(fields ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
+// denyAll is the answer to the tool approval in that denies every tool, each with reason. It is built from the IDs
+// alone, so it is the same whether in is a pause as parsed or as stored. The reason is fixed text, never the agent's.
+func denyAll(in dialect.Interaction, reason string) dialect.Answer {
+	answer := dialect.Answer{RequestID: in.RequestID}
+	for _, t := range in.Tools {
+		answer.Decisions = append(answer.Decisions, dialect.Decision{ToolID: t.ID, Approved: false, Reason: reason})
+	}
+	return answer
+}
+
 // autoDeny turns away a tool approval on a Binding that does not allow them (Binding.ToolApprovals is false):
 // every tool call is denied through the dialect, the thread is told, and the denial is audited and counted.
 //
@@ -158,6 +168,9 @@ func short(fields ...string) string {
 // again after a failed or interrupted send finishes the send and does not audit or count it again; the
 // one window is a crash between the audit write and the answer's record, which audits twice rather
 // than risk a denial that is not on record.
+//
+// A pause that comes again after the interaction was closed without an answer (the sweep timed it out, on a Binding that
+// then did not allow approvals) has its task cancelled again (endAgain), as it would on a question.
 func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.Interaction) error {
 	row, err := i.record(ctx, p, b, in)
 	if errors.Is(err, dialect.ErrUnusablePause) { // a second approval under a seen ID
@@ -166,10 +179,7 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 		return err
 	}
 	if row.State == store.InteractionPending {
-		answer := dialect.Answer{RequestID: in.RequestID}
-		for _, t := range in.Tools {
-			answer.Decisions = append(answer.Decisions, dialect.Decision{ToolID: t.ID, Approved: false, Reason: denyReason})
-		}
+		answer := denyAll(in, denyReason)
 		a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
 		if err := i.cfg.Audit.Decision(ctx, a, audit.Decision{InteractionID: row.ID, TaskID: in.TaskID, Result: audit.DecisionAutoDenied, Answer: &answer}); err != nil {
 			return fmt.Errorf("interact: audit the denial of %s, which was not sent: %w", row.ID, err)
@@ -189,7 +199,11 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 			return fmt.Errorf("interact: read %s: %w", row.ID, err)
 		}
 	}
-	if row.State != store.InteractionAnswered {
+	switch row.State {
+	case store.InteractionAnswered:
+	case store.InteractionTimedOut, store.InteractionCancelled: // closed without an answer, and the pause has come again
+		return i.endAgain(ctx, p, b, row) // under a Binding that does not allow approvals: the cancel
+	default:
 		return nil
 	}
 	post := outbox.Post{Source: row.ID, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(noticeDenied, ""))}

@@ -54,7 +54,15 @@ func TestConstructorsRefuseAnUnwiredHookAndNameIt(t *testing.T) {
 			return err
 		}},
 		{"the sweeper", "OnTimeout", func() error {
-			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}})
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
+			return err
+		}},
+		{"the sweeper's OnApprovalOutcome", "OnApprovalOutcome", func() error {
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}})
+			return err
+		}},
+		{"the sweeper's Lookup", "Lookup", func() error {
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the retention loop", "OnCleared", func() error {

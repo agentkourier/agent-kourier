@@ -100,7 +100,8 @@ func (m *Metrics) CredentialRejected(binding string) { m.rejections.WithLabelVal
 func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
 
 // ApprovalOutcome counts what became of a pause, by Binding: one a Binding's policy turned away (interact.Config.OnApprovalOutcome),
-// or a tool approval that a person decided (interact.DecideConfig.OnApprovalOutcome). An outcome outside the closed set
+// a tool approval that a person decided (interact.DecideConfig.OnApprovalOutcome), or one that timed out on a Binding that
+// allows approvals (interact.SweepConfig.OnApprovalOutcome). An outcome outside the closed set
 // (interact's Outcome constants) is one series, "other".
 func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 	label := string(outcome)

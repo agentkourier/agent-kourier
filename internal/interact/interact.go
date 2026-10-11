@@ -169,13 +169,53 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 		}
 	case store.InteractionAnswered: // the pause is back, so the answer did not arrive
 		return i.resend(ctx, p, b, row)
-	case store.InteractionTimedOut, store.InteractionCancelled: // the cancel may not have been made
-		err := i.cfg.Session.Cancel(ctx, p.Key, a2a.TaskID(row.TaskID), "the interaction timed out")
-		if err != nil && !errors.Is(err, session.ErrNotPaused) {
-			return fmt.Errorf("interact: cancel the task of %s again: %w", row.ID, err)
-		}
+	case store.InteractionTimedOut, store.InteractionCancelled: // the cancel, or the denial, may not have been made
+		return i.endAgain(ctx, p, b, row)
 	}
 	return nil
+}
+
+// endAgain ends a pause that has come again after its interaction was closed without an answer. A tool approval that timed
+// out (the decoded request's Kind, never the row's) under a Binding that allows approvals is denied again, from the stored
+// request, as the sweep denied it: the denial may not have reached the agent before a crash, or was dropped because the
+// session had not parked on the task yet. Everything else is cancelled again, as it was before approvals could be decided:
+// a question that timed out, anything cancelled, an approval under a Binding that does not allow them (the sweep cancelled
+// it), and an approval whose request retention has cleared or that the dialect cannot answer. A task that is no longer
+// paused is fine.
+func (i *Intake) endAgain(ctx context.Context, p Pause, b Binding, row store.Interaction) error {
+	if in, ok := toolApprovalOf(row); ok && row.State == store.InteractionTimedOut && b.ToolApprovals {
+		if done, err := i.denyAgain(ctx, p, b, row, in); done || err != nil {
+			return err
+		}
+	}
+	err := i.cfg.Session.Cancel(ctx, p.Key, a2a.TaskID(row.TaskID), "the interaction timed out")
+	if err != nil && !errors.Is(err, session.ErrNotPaused) {
+		return fmt.Errorf("interact: cancel the task of %s again: %w", row.ID, err)
+	}
+	return nil
+}
+
+// denyAgain sends the denial of the timed-out approval in again. done is false when none can be sent, because the dialect will
+// not build it or the session refuses it as invalid, neither of which a retry would mend: the caller cancels the task.
+// A task that is not paused is fine, and any other failure is returned, for the pause to be tried again.
+func (i *Intake) denyAgain(ctx context.Context, p Pause, b Binding, row store.Interaction, in dialect.Interaction) (done bool, err error) {
+	msg, err := AnswerMessage(b.Dialect, row.ID, in, denyAll(in, timeoutDenyReason), autoDecider)
+	if err != nil {
+		i.cfg.Logger.WarnContext(ctx, "interact: the dialect would not build the denial of a timed-out approval, so its task is cancelled", "interaction", row.ID, "err", err)
+		return false, nil
+	}
+	switch err := i.cfg.Session.Answer(ctx, p.Key, &msg); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, session.ErrNotPaused):
+		i.cfg.Logger.InfoContext(ctx, "interact: dropped the denial of a timed-out approval whose task has moved on", "interaction", row.ID, "task", row.TaskID)
+		return true, nil
+	case errors.Is(err, store.ErrInvalid):
+		i.cfg.Logger.WarnContext(ctx, "interact: the session refused the denial of a timed-out approval as invalid, so its task is cancelled", "interaction", row.ID, "err", err)
+		return false, nil
+	default:
+		return false, fmt.Errorf("interact: deny %s again: %w", row.ID, err)
+	}
 }
 
 // pausedAt is when the pause began: the task's own timestamp, or now if that is earlier or there is none.
@@ -248,15 +288,23 @@ type toolKey struct {
 // samePause reports whether the stored request and the one just made (as it is stored: storable) are the same
 // pause, by their decoded fields and not their bytes, so that a row written by an older version, with another
 // hint or a field since added, is still the pause it was. A row an older version wrote before secrets were taken
-// out is the same pause too, once they are taken out of it. A request that cannot be read, such as one that has
-// been cleared, is not the same.
+// out is the same pause too, once they are taken out of it: that is for a question. No tagged release wrote an approval row
+// before secrets were taken out (a build of main between 2026-10-01 and 2026-10-05 may have, and its row is refused as
+// unusable), and for stored text over 4 KiB the second reading lets a pause that was constructed match a row whose stored
+// text was never checked, so for a tool approval only the first holds: the stored request is the fresh one's stored form. A request that cannot be read, such as one that has been cleared, is not the same.
 func samePause(stored, fresh []byte) bool {
 	var a, b dialect.Interaction
 	if json.Unmarshal(stored, &a) != nil || json.Unmarshal(fresh, &b) != nil {
 		return false
 	}
 	want := keyOf(b)
-	return reflect.DeepEqual(keyOf(a), want) || reflect.DeepEqual(keyOf(storable(a)), want)
+	if reflect.DeepEqual(keyOf(a), want) {
+		return true
+	}
+	if b.Kind == dialect.ToolApproval { // a match needs the same kind, so the fresh pause's decides for both
+		return false
+	}
+	return reflect.DeepEqual(keyOf(storable(a)), want)
 }
 
 func keyOf(in dialect.Interaction) pauseKey {

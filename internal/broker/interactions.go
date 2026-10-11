@@ -175,8 +175,8 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *interactionRuntime, stops *stopList) (func(context.Context, chat.Interaction) error, error) {
 	tap, pipeline, votes, replacer, worker := r.tap, r.pipeline, r.votes, r.replacer, r.worker
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
-		Store: d.st, Sessions: d.st, Session: mgr, Updater: d.platform, Outbox: d.ob, Auditor: d.auditor,
-		Presses: d.st, OnTimeout: d.metrics.InteractionTimeout, Logger: d.log,
+		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Updater: d.platform, Outbox: d.ob, Auditor: d.auditor,
+		Presses: d.st, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the sweeper: %w", err)

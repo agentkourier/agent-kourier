@@ -118,7 +118,7 @@ func TestRunCountsAFailedConfigReload(t *testing.T) {
 // fill, and each moves its counter. 35h connects them when the interactions are built.
 var (
 	_ = interact.Config{OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
-	_ = interact.SweepConfig{OnTimeout: (*Metrics)(nil).InteractionTimeout}
+	_ = interact.SweepConfig{OnTimeout: (*Metrics)(nil).InteractionTimeout, OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
 	_ = interact.DecideConfig{OnDecision: (*Metrics)(nil).InteractionDecision, OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
 )
 
