@@ -85,6 +85,8 @@ jobs:
           args: >-
             --no-progress
             --max-retries 3
+            --fallback-extensions md
+            --exclude '\.svc\.cluster\.local'
             --exclude-path docs/brand
             --exclude-path docs/spikes
             --exclude '^https://github\.com/agentkourier/'
