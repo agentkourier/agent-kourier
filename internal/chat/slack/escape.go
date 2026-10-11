@@ -34,6 +34,9 @@ import (
 //   - a stream is one document to Slack, so the state of that reading is kept across Stream, Append and Stop; a
 //     stream that Agent Kourier did not start in this process escapes everything, as prose is escaped.
 //
+// The arguments of a tool awaiting approval are the one agent text that is neither: they are the characters of a
+// text element of a rich_text_preformatted block, where Block Kit has no token to escape (approval.go).
+//
 // Literal places are plain_text objects, which carry no emphasis, code or list, and the only text that
 // is mrkdwn is what Agent Kourier wrote itself (a status line built from a verified user ID and a time).
 // What Slack does that no escape stops is listed with the adapter's concessions in platform_test.go.

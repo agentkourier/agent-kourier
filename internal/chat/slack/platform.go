@@ -446,7 +446,8 @@ func (p *Platform) ResolveUser(ctx context.Context, id string) (chat.User, error
 	return chat.User{ID: u.ID, Name: u.Name, Email: u.Email}, nil
 }
 
-// Fits says whether the prompt fits in one message, which is 50 blocks.
+// Fits says whether the prompt fits in one message: 50 blocks, and for a prompt of tools also the limits of a
+// tool's name and arguments and of the arguments of all its tools together (renderToolPrompt).
 func (p *Platform) Fits(pr chat.Prompt) error {
 	_, err := renderPrompt(pr)
 	return err
@@ -494,12 +495,33 @@ var (
 	}
 )
 
-// interaction is a press as the neutral model has it: the answers are read from the state of the controls, by
-// the block and action IDs that renderPrompt made, and each only as the control it was asked in.
+// interaction is a press as the neutral model has it. The pressed button's action ID says which button it was: Approve
+// (of one tool) and Approve all are ActionApproveAll, Deny and Deny all are ActionDenyAll, and they ignore the
+// controls, so a press of them carries no answers. Submit is the one button whose controls are read: the answers
+// are read from the state of the controls, by the block and action IDs that renderPrompt made, and each only as
+// the control it was asked in. The radio of a tool is read like a question's, and its value is the index of the
+// option, "0" for Approve and "1" for Deny (chat.ToolApproveValue, chat.ToolDenyValue).
+//
+// A button the adapter does not render makes no action and carries no answers, so that it can never be read as a
+// decision. In a block the adapter renders for a prompt (submit, decide) it is not the prompt's, and the press names
+// no prompt (PromptID empty), which interact.Pipeline.Press and feedback.Handler.Press both refuse as not theirs, and
+// the broker's handler drops, acknowledged. In any other block it is the button of a message part (a feedback
+// button), whose value is its own and is passed on for its handler to read.
 func (p *Platform) interaction(i Interaction) chat.Interaction {
-	return chat.Interaction{
-		User: i.User, At: p.ref(i.Channel, i.ThreadTS, i.MessageTS), PromptID: i.Value, Answers: answers(i.Inputs),
+	out := chat.Interaction{User: i.User, At: p.ref(i.Channel, i.ThreadTS, i.MessageTS), PromptID: i.Value}
+	switch i.ActionID {
+	case approveAllActionID:
+		out.Action = chat.ActionApproveAll
+	case denyAllActionID:
+		out.Action = chat.ActionDenyAll
+	case submitActionID:
+		out.Answers = answers(i.Inputs)
+	default:
+		if i.BlockID == submitBlockID || i.BlockID == decideBlockID {
+			out.PromptID = ""
+		}
 	}
+	return out
 }
 
 var blockIndex = regexp.MustCompile(`^q(\d{1,4})$`)

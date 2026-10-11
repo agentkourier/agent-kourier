@@ -44,12 +44,13 @@ const (
 
 // caps is what Slack shows. The limits are those of the place's carrier, which is the whole field: the tool
 // name and its arguments are shown in one status line, so both have its limit; a choice is shown on a
-// numbered line, and an answer on the line of its question.
+// numbered line, and an answer on the line of its question. The name of a tool awaiting approval has the same
+// limit, and its arguments, which are shown as preformatted text, have maxApprovalArgs.
 var caps = chat.Caps{
 	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection,
 	Limits: map[chat.Where]int{
 		chat.WhereFallback: maxSection, chat.WhereHeader: maxHeader, chat.WhereBody: maxMarkdown, chat.WhereStream: maxMarkdown,
-		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300,
+		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300, chat.WhereToolArgs: maxApprovalArgs,
 		chat.WhereStepTitle: maxStepText, chat.WhereStepDetail: maxStepText,
 		chat.WhereButton: maxOption, chat.WhereHint: maxHeader, chat.WhereSubagent: maxSubagentLine, chat.WhereQuestion: maxLabel,
 		chat.WhereChoice: maxListLine, chat.WhereAnswer: maxAnswerLine,
@@ -255,11 +256,11 @@ func renderPrompt(p chat.Prompt) (Content, error) {
 	if err := p.Validate(); err != nil {
 		return Content{}, err
 	}
-	if len(p.Tools) > 0 { // until the layout of a tool approval exists, a prompt of tools is refused, not shown with no content
-		return Content{}, fmt.Errorf("%w: this adapter does not lay out a prompt of tools", chat.ErrInvalid)
-	}
 	if n := chat.Units(p.ID); n > maxValue {
 		return Content{}, fmt.Errorf("%w: the prompt ID is %d units; a button's value holds at most %d", chat.ErrInvalid, n, maxValue)
+	}
+	if len(p.Tools) > 0 {
+		return renderToolPrompt(p)
 	}
 	blocks := []map[string]any{{"type": "header", "text": plainObject(cmp.Or(text(p.Hint, maxHeader, true), defaultHeader))}}
 	for i, q := range p.Questions {
@@ -271,18 +272,25 @@ func renderPrompt(p chat.Prompt) (Content, error) {
 	if len(blocks) > maxBlocks {
 		return Content{}, fmt.Errorf("%w: %d blocks", chat.ErrTooLarge, len(blocks))
 	}
-	fallback := "The agent needs your input."
+	blocks, fallback := withNotices(blocks, p, "The agent needs your input.")
+	return content(fallback, blocks)
+}
+
+// withNotices adds the lines that a prompt of either kind has to blocks, which are the header, the controls and
+// the button block last: the sub-agent's line under the header, and the deadline's above the buttons, each only if
+// there is room for it in 50 blocks. The deadline is also said in the fallback, which begins as fallback.
+func withNotices(blocks []map[string]any, p chat.Prompt, fallback string) ([]map[string]any, string) {
 	if p.Subagent != "" && len(blocks) < maxBlocks { // under the header
 		blocks = append(blocks[:1:1], append([]map[string]any{contextLine(subagentLine(p.Subagent))}, blocks[1:]...)...)
 	}
 	if !p.Deadline.IsZero() {
 		fallback += " Answer by " + utc(p.Deadline) + "."
-		if len(blocks) < maxBlocks { // above the Submit button, which stays last
+		if len(blocks) < maxBlocks { // above the buttons, which stay last
 			hint := map[string]any{"type": "context", "elements": []map[string]any{mrkdwnObject("Answer by " + dateToken(p.Deadline))}}
 			blocks = append(blocks[:len(blocks)-1:len(blocks)-1], hint, blocks[len(blocks)-1])
 		}
 	}
-	return content(fallback, blocks)
+	return blocks, fallback
 }
 
 func subagentLine(name string) string {
@@ -393,12 +401,10 @@ func mentionLine(m chat.Mention) map[string]any {
 }
 
 // renderEnding is e as a Slack message: how it ended, who by and when, what was asked, and for an answered
-// prompt a line for each question and its answer. No input or button is left. The only mrkdwn in it is the
+// prompt a line for each question and its answer, or, for a prompt of tools, each tool with its arguments and
+// what was decided of it (toolEndingBlocks). No input or button is left. The only mrkdwn in it is the
 // status line, which is built from a verified user ID, a time and a fixed word.
 func renderEnding(e chat.Ending) (Content, error) {
-	if len(e.Prompt.Tools) > 0 { // as renderPrompt: refused until the layout of a tool approval exists
-		return Content{}, fmt.Errorf("%w: this adapter does not lay out the ending of a prompt of tools", chat.ErrInvalid)
-	}
 	verb := map[chat.Outcome]string{chat.Answered: "Answered", chat.TimedOut: "Timed out", chat.Cancelled: "Cancelled"}[e.Outcome]
 	status := "*" + verb + "*"
 	if e.By != "" {
@@ -412,15 +418,22 @@ func renderEnding(e chat.Ending) (Content, error) {
 		status += " " + dateToken(e.At)
 	}
 	blocks := []map[string]any{{"type": "section", "text": mrkdwnObject(status)}}
-	if e.Prompt.Subagent != "" {
-		blocks = append(blocks, contextLine(subagentLine(e.Prompt.Subagent)))
+	var body []map[string]any
+	switch {
+	case len(e.Prompt.Tools) > 0: // the thread keeps what was asked, whether or not it was decided
+		body = toolEndingBlocks(e)
+	case e.Outcome == chat.Answered:
+		body = answerSections(e.Prompt.Questions, e.Answers)
 	}
-	if hint := text(e.Prompt.Hint, maxHeader, true); hint != "" {
+	// The sub-agent's line and the hint are left out of an ending that has no room for them, rather than cutting what was decided.
+	room := maxBlocks - len(blocks) - len(body)
+	if e.Prompt.Subagent != "" && room > 0 {
+		blocks, room = append(blocks, contextLine(subagentLine(e.Prompt.Subagent))), room-1
+	}
+	if hint := text(e.Prompt.Hint, maxHeader, true); hint != "" && room > 0 {
 		blocks = append(blocks, contextLine(hint))
 	}
-	if e.Outcome == chat.Answered {
-		blocks = append(blocks, answerSections(e.Prompt.Questions, e.Answers)...)
-	}
+	blocks = append(blocks, body...)
 	if len(blocks) > maxBlocks {
 		blocks = blocks[:maxBlocks]
 	}

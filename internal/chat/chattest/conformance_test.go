@@ -50,6 +50,7 @@ type leaks struct {
 	tooLargeToolsFit                            bool // a prompt of too many tools is said to fit
 	smallToolsDoNotFit                          bool // a prompt of one tool is said to be too large
 	cutToolArgs                                 bool // a tool too long for a prompt is cut and shown, not refused as too large
+	fitsLongTool                                bool // Fits says a tool too long for a prompt fits, while Post and Update refuse it
 	undeclaredTools                             bool // shows tool approvals, and does not say so (Subject.ToolApprovals false)
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
@@ -326,6 +327,8 @@ func (m *markupPlatform) Fits(p chat.Prompt) error {
 	switch {
 	case m.leaks.tooLargeFits, m.leaks.tooLargeToolsFit && len(p.Tools) > 0, m.leaks.cutToolArgs && len(p.Tools) > 0 && len(p.Tools) <= m.MaxTools:
 		return nil
+	case m.leaks.fitsLongTool && len(p.Tools) > 0 && len(p.Tools) <= m.MaxTools:
+		return nil
 	case m.leaks.smallToolsDoNotFit && len(p.Tools) > 0:
 		return chat.ErrTooLarge
 	}
@@ -399,6 +402,7 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a prompt of too many tools said to fit", slackPlainText, leaks{tooLargeToolsFit: true}, RuleContract, ""},
 		{"tool arguments cut rather than refused", slackPlainText, leaks{cutToolArgs: true}, RuleContract, ""},
 		{"tool arguments cut rather than refused, CommonMark", commonMark, leaks{cutToolArgs: true}, RuleContract, ""},
+		{"Fits says that a tool too long for a prompt fits, and Post and Update refuse it", slackPlainText, leaks{fitsLongTool: true}, RuleContract, ""},
 		{"tool approvals shown by an adapter that does not say so", slackPlainText, leaks{undeclaredTools: true}, RuleContract, ""},
 		{"a prompt of one tool said to be too large", slackPlainText, leaks{smallToolsDoNotFit: true}, RuleContract, ""},
 		{"a tool's arguments dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereToolArgs}, RuleDropped, ""},

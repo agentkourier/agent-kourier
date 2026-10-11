@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -142,6 +144,65 @@ func taskShown(s string) chattest.Shown {
 	return chattest.Shown{Displayed: taskEscapes.Replace(s), Active: chattest.ScanCommonMark(s).Active}
 }
 
+// richTextShown is how a rich_text block is read, which is where the adapter shows the name and the arguments of a tool: one
+// Shown for each element of the block, with the characters of its text elements as what is displayed. A
+// rich_text_section, which carries a name, is only that. A rich_text_preformatted, which carries arguments, is a block
+// of code, the one construct reported. A token in a text element is not reported, because Block Kit has no token in
+// text: a mention, a broadcast, a channel and a link in rich_text are elements of their own type. Every element or
+// sub-element of the block that is not a text element with no other field (a user, a broadcast, a channel, a link,
+// a styled or any other text, an element of another type) is reported as the construct it is, on every Shown of the block,
+// so that the adapter cannot put one anywhere in it by accident. UNCONFIRMED(WP-04): that Slack posts the block and shows
+// a text element as the characters it holds; the probe of 2026-10-04 sent markdown blocks and did not send a rich_text one.
+func richTextShown(block map[string]any) []chattest.Shown {
+	var found []chattest.Active
+	report := func(kind chattest.Kind, el map[string]any) {
+		found = append(found, chattest.Active{Kind: kind, Text: fmt.Sprint(el)})
+	}
+	var shown []chattest.Shown
+	var code []bool
+	for _, e := range asList(block["elements"]) {
+		el, _ := e.(map[string]any)
+		typ, _ := el["type"].(string)
+		if typ != "rich_text_section" && typ != "rich_text_preformatted" {
+			report(chattest.KindHTML, el)
+			continue
+		}
+		var text strings.Builder
+		for _, c := range asList(el["elements"]) {
+			child, _ := c.(map[string]any)
+			ctyp, _ := child["type"].(string)
+			s, isString := child["text"].(string)
+			switch {
+			case ctyp == "text" && isString && len(child) == 2: // no style, no other field
+				text.WriteString(s)
+			case ctyp == "user":
+				report(chattest.KindMention, child)
+			case ctyp == "broadcast":
+				report(chattest.KindBroadcast, child)
+			case ctyp == "channel":
+				report(chattest.KindChannelLink, child)
+			case ctyp == "link":
+				report(chattest.KindLink, child)
+			default:
+				report(chattest.KindHTML, child)
+			}
+		}
+		shown = append(shown, chattest.Shown{Displayed: text.String()})
+		code = append(code, typ == "rich_text_preformatted")
+	}
+	if len(shown) == 0 { // a block of nothing readable still reports what it holds
+		shown = append(shown, chattest.Shown{})
+		code = append(code, false)
+	}
+	for i := range shown {
+		shown[i].Active = slices.Clone(found)
+		if code[i] {
+			shown[i].Active = append(shown[i].Active, chattest.Active{Kind: chattest.KindCode, Text: shown[i].Displayed})
+		}
+	}
+	return shown
+}
+
 func walk(v any, out *[]chattest.Shown) {
 	switch v := v.(type) {
 	case []any:
@@ -150,6 +211,10 @@ func walk(v any, out *[]chattest.Shown) {
 		}
 	case map[string]any:
 		typ, _ := v["type"].(string)
+		if typ == "rich_text" {
+			*out = append(*out, richTextShown(v)...)
+			return
+		}
 		switch s, isString := v["text"].(string); {
 		case typ == "plain_text" && isString:
 			*out = append(*out, chattest.ScanSlackPlain(s))
@@ -203,6 +268,9 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		},
 		Inert:    inertRequests(w),
 		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 60)},
+		// A prompt of tools too large for one message: 30 tools take 62 blocks.
+		ToolApprovals: true,
+		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, 30)},
 		// A user ID of Slack's shape is a mention in a Mention part, and nothing else is.
 		MentionUser: "U0123456789",
 		// Slack makes a bare URL in text and in markdown into a link that shows its own address, and no escape
@@ -211,6 +279,10 @@ func slackSubject(t *testing.T) (chattest.Subject, *slack.Platform) {
 		// not fetch it). UNCONFIRMED(WP-04): whether a plain_text object does the same.
 		AllowAutolink: true,
 		Concessions: []chattest.Concession{{
+			Where: chat.WhereToolArgs, Kinds: []chattest.Kind{chattest.KindCode},
+			Why: "the arguments of a tool are shown as preformatted text, which is code, on purpose: they are a command or data, and " +
+				"must be read as typed. Nothing else a reader acts on is in the block (richTextShown)",
+		}, {
 			Where: chat.WhereStepTitle, Kinds: chattest.StyleKinds(),
 			Why: "a task's text may be read as markdown, in which *a* is bold: cosmetic, and every construct that is not style (a link, an " +
 				"image, a mention, a broadcast, HTML) is escaped, which is what is read",
@@ -274,5 +346,62 @@ func TestTheSlackReadingOfTheWireFindsWhatSlackWouldActOn(t *testing.T) {
 		if len(kinds) != len(tc.want) || (len(kinds) > 0 && kinds[0] != tc.want[0]) {
 			t.Errorf("%s: found %v, want %v", tc.name, kinds, tc.want)
 		}
+	}
+}
+
+// The reading of a rich_text block is itself tested: the text of a section and of a preformatted element is what is
+// displayed, and a user, a broadcast, a channel, a link, a style or any other element, in either and in the block, is found
+// and attached to every Shown of the block.
+func TestTheReadingOfARichTextBlockFindsWhatIsNotPlainText(t *testing.T) {
+	text := func(s string) map[string]any { return map[string]any{"type": "text", "text": s} }
+	el := func(typ string, children ...map[string]any) map[string]any {
+		list := make([]any, len(children))
+		for i, c := range children {
+			list[i] = c
+		}
+		return map[string]any{"type": typ, "elements": list}
+	}
+	read := func(elements ...map[string]any) []chattest.Shown {
+		list := make([]any, len(elements))
+		for i, e := range elements {
+			list[i] = e
+		}
+		var got []chattest.Shown
+		walk([]any{map[string]any{"type": "rich_text", "elements": list}}, &got)
+		return got
+	}
+	got := read(el("rich_text_section", text("1. <!channel>")), el("rich_text_preformatted", text("<@U0123456789> [x](https://evil.test)"), text("\nmore")))
+	if len(got) != 2 || got[0].Displayed != "1. <!channel>" || got[1].Displayed != "<@U0123456789> [x](https://evil.test)\nmore" {
+		t.Fatalf("shown = %+v, want the characters of each element", got)
+	}
+	if len(got[0].Active) != 0 || len(got[1].Active) != 1 || got[1].Active[0].Kind != chattest.KindCode {
+		t.Errorf("active = %+v and %+v, want none for the name and the code the arguments are", got[0].Active, got[1].Active)
+	}
+	for kind, bad := range map[chattest.Kind]map[string]any{
+		chattest.KindMention:     {"type": "user", "user_id": "U0123456789"},
+		chattest.KindBroadcast:   {"type": "broadcast", "range": "channel"},
+		chattest.KindChannelLink: {"type": "channel", "channel_id": "C1"},
+		chattest.KindLink:        {"type": "link", "url": "https://evil.test"},
+		chattest.KindHTML:        {"type": "text", "text": "x", "style": map[string]any{"bold": true}},
+	} {
+		for where, block := range map[string][]chattest.Shown{
+			"the name's section":    read(el("rich_text_section", text("a"), bad), el("rich_text_preformatted", text("b"))),
+			"the arguments":         read(el("rich_text_section", text("a")), el("rich_text_preformatted", text("b"), bad)),
+			"a sibling section":     read(el("rich_text_section", text("a")), el("rich_text_section", bad), el("rich_text_preformatted", text("b"))),
+			"a second preformatted": read(el("rich_text_preformatted", text("a")), el("rich_text_preformatted", bad)),
+		} {
+			for i, s := range block {
+				found := false
+				for _, a := range s.Active {
+					found = found || a.Kind == kind
+				}
+				if !found {
+					t.Errorf("%s: the element %v was not reported as a %s on Shown %d: %+v", where, bad, kind, i, s.Active)
+				}
+			}
+		}
+	}
+	if odd := read(map[string]any{"type": "rich_text_list"}); len(odd[0].Active) == 0 {
+		t.Error("an element of another type than a section or preformatted text was not reported")
 	}
 }
