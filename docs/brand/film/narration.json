@@ -1,0 +1,87 @@
+{
+  "note": "text is what the narrator says and what captions are cut from. say, when present, is what is sent to the speech model instead, to fix a pronunciation; it never appears on screen.",
+  "pronounce": {
+    "Agent Kourier": "Agent Courier",
+    "kagent": "K agent",
+    "A2A": "A-to-A"
+  },
+  "demo": [
+    {
+      "id": "p1",
+      "shot": "Problem 1",
+      "text": "You've put AI agents on Kubernetes. They can read logs, check rollouts, and find the cause."
+    },
+    {
+      "id": "p2",
+      "shot": "Problem 2",
+      "text": "But they only work when someone opens a prompt and asks."
+    },
+    {
+      "id": "p3",
+      "shot": "Problem 3",
+      "text": "Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither."
+    },
+    {
+      "id": "reveal",
+      "shot": "Reveal",
+      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes."
+    },
+    {
+      "id": "promise",
+      "shot": "Promise",
+      "text": "An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first."
+    },
+    {
+      "id": "r1",
+      "shot": "R1 alert thread",
+      "text": "When an alert lands in the channel, Agent Kourier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found."
+    },
+    {
+      "id": "r2",
+      "shot": "R2 thread reply",
+      "text": "Reply in the thread, and the same session continues. Same context, nothing re-explained."
+    },
+    {
+      "id": "r3",
+      "shot": "R3 mention",
+      "text": "Or skip the alert, and just ask."
+    },
+    {
+      "id": "r4",
+      "shot": "R4 agent asks",
+      "text": "When the agent needs a decision, it asks, and waits for your answer."
+    },
+    {
+      "id": "r5",
+      "shot": "R5 restart",
+      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two."
+    },
+    {
+      "id": "yaml",
+      "shot": "T1 Binding",
+      "text": "Teams add one Binding, in YAML, next to their agent. The platform wiring is shared."
+    },
+    {
+      "id": "close",
+      "shot": "Close",
+      "text": "It works with kagent, or any streaming A2A agent. Slack and Alertmanager first, built for more. And never in your paging path. Agent Kourier. Every thread, a live agent session."
+    }
+  ],
+  "teaser": [
+    {
+      "id": "t-problem",
+      "shot": "Problem",
+      "text": "Your agents are ready. But nothing brings them the work."
+    },
+    {
+      "id": "t-reveal",
+      "shot": "Reveal",
+      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes."
+    },
+    {
+      "id": "t-proof",
+      "shot": "R1 to R3",
+      "text": "Alerts and questions become live agent sessions, right in the thread. Slack first."
+    }
+  ]
+}

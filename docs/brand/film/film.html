@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Kourier film v2</title>
+<!--
+  Motion graphics and footage frames for the v2 film. Everything is a pure function of time.
+    ?ar=16x9|9x16|1x1
+    &seg=p1|p2|p3|reveal|promise|yaml|close|t-problem|t-reveal|t-end   renderAt(t) draws the segment at local time t
+    &overlay=1&card=x,y,w,h&cap=...&sub=...&speed=...&cmd=...           a transparent-holed frame that sits over real footage
+  build.mjs drives both. Preview a still with &t=<seconds>.
+-->
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  svg { display: block; }
+  text { font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .mono { font-family: "SF Mono", Menlo, Monaco, monospace; }
+</style>
+</head>
+<body>
+<svg id="stage" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+'use strict';
+
+// Palette: Kubernetes blue, white, navy. The brand's dark-background variant for the mark.
+const C = {
+  navy: '#0A1530', night: '#060D20', panel: '#122650', deep: '#1D3F91', k8s: '#326CE5',
+  feather: '#5B8DEF', eye: '#1E3A8A', white: '#FFFFFF', alert: '#E5484D', lattice: '#16306E',
+};
+
+const Q = new URLSearchParams(location.search);
+const AR = Q.get('ar') || '16x9';
+
+// On-screen copy. Narration lives in narration.json; these are the captions cut from it.
+const COPY = {
+  p1: { wide: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check rollouts', 'and find the cause.']],
+        tall: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check', 'rollouts and find the cause.']] },
+  p2: { wide: [['But they only work when', 'someone opens a prompt and asks.'], []],
+        tall: [['But they only work', 'when someone opens', 'a prompt and asks.'], []] },
+  p3: { wide: [['Alerts fire in your monitoring.', 'Questions come up in chat.'], ['Your agents hear neither.']],
+        tall: [['Alerts fire in', 'your monitoring.', 'Questions come up', 'in chat.'], ['Your agents hear neither.']] },
+  reveal: { wide: [['Introducing Agent Kourier'], ['The always-on chat gateway', 'for A2A agents on Kubernetes.']],
+            tall: [['Introducing', 'Agent Kourier'], ['The always-on chat gateway', 'for A2A agents on Kubernetes.']] },
+  promise: { wide: [['An alert or a question', 'becomes a live agent session.'], ['In the thread. Slack first.']],
+             tall: [['An alert or', 'a question', 'becomes a live', 'agent session.'], ['In the thread. Slack first.']] },
+  tproblem: { wide: [['Your agents are ready.'], ['Nothing brings them the work.']],
+              tall: [['Your agents', 'are ready.'], ['Nothing brings them', 'the work.']] },
+  yaml: { '16x9': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']],
+          '1x1': [['One Binding per channel.'], ['Declared in YAML, next to your agent.']],
+          '9x16': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']] },
+  pills: ['kagent or any streaming A2A agent', 'Slack and Alertmanager first, built for more', 'Never in your paging path'],
+  pillAt: [0.2, 4.0, 7.2],
+  can: ['logs', 'rollouts', 'events'],
+  hook: 'Every thread, a live agent session.',
+  category: 'The always-on chat gateway for A2A agents on Kubernetes',
+};
+
+// The Binding the demo ran with: hack/kind/sandbox/agent-kourier/config/binding.yaml, comments removed.
+const YAML = [
+  'apiVersion: agentkourier.dev/v1alpha1',
+  'kind: Binding',
+  'metadata: {name: sandbox, namespace: agent-kourier}',
+  'spec:',
+  '  agent:',
+  '    backendRef: {namespace: agent-kourier, name: agents}',
+  '    namespace: kagent',
+  '    name: sandbox-sre',
+  '  identity:',
+  '    userId: agent-kourier-sandbox',
+  '    tokenSecretRef: {name: agent-kourier-agent-token}',
+  '  chat:',
+  '    connectionRef: {namespace: agent-kourier, name: sandbox-slack}',
+  '    channel: C0C7V1M306T',
+  '    output: live',
+  '  interactions: {askUser: true}',
+];
+
+const LAYOUTS = {
+  '16x9': {
+    W: 1920, H: 1080, s: 1, copy: 'wide',
+    head: { x: 120, y: 170, size: 68, sub: 42, gap: 1.2, center: true },
+    am: [420, 560], slack: [420, 830], k: [960, 695], agents: [[1540, 525], [1540, 695], [1540, 865]],
+    r: 64, kSize: 250, tile: 128, firing: [480, 462],
+    prompt: { cx: 760, cy: 695, w: 560, h: 92 },
+    thread: { x: 110, y: 742, w: 220 }, bubble: [555, 698],
+    yaml: { x: 860, y: 214, w: 980, size: 22.5, headX: 120, headY: 470, side: true },
+    pills: { cx: 960, y: 368, size: 40, w: 1080, h: 96, gap: 28 },
+    end: { mode: 'row', cx: 960, cy: 470, mark: 300, word: 118, hook: 46, cat: 27 },
+    cap: { size: 50, sub: 30, mark: 64 },
+  },
+  '1x1': {
+    W: 1080, H: 1080, s: 0.82, copy: 'wide',
+    head: { x: 70, y: 130, size: 52, sub: 34, gap: 1.22, center: true },
+    am: [170, 520], slack: [170, 760], k: [540, 640], agents: [[910, 500], [910, 640], [910, 780]],
+    r: 54, kSize: 200, tile: 104, firing: [215, 438],
+    prompt: { cx: 480, cy: 640, w: 400, h: 76 },
+    thread: { x: 260, y: 790, w: 210 }, bubble: [280, 628],
+    yaml: { x: 40, y: 290, w: 1000, size: 22, headX: 70, headY: 130 },
+    pills: { cx: 540, y: 379, size: 34, w: 880, h: 90, gap: 26 },
+    end: { mode: 'stack', cx: 540, cy: 410, mark: 300, word: 96, hook: 40, cat: 24 },
+    cap: { size: 46, sub: 28, mark: 40 },
+  },
+  '9x16': {
+    W: 1080, H: 1920, s: 1.15, copy: 'tall',
+    head: { x: 90, y: 280, size: 80, sub: 50, gap: 1.2, center: true },
+    am: [320, 960], slack: [760, 960], k: [540, 1210], agents: [[280, 1520], [540, 1520], [800, 1520]],
+    r: 80, kSize: 280, tile: 150, firing: [418, 960], sourceLabel: 'above', kLabel: 'below',
+    prompt: { cx: 540, cy: 1210, w: 660, h: 104 },
+    thread: { x: 760, y: 1090, w: 250 }, bubble: [845, 900],
+    yaml: { x: 40, y: 880, w: 1000, size: 22, headX: 90, headY: 440 },
+    pills: { cx: 540, y: 750, size: 42, w: 940, h: 116, gap: 36 },
+    end: { mode: 'stack', cx: 540, cy: 820, mark: 360, word: 116, hook: 46, cat: 27 },
+    cap: { size: 66, sub: 40, mark: 46 },
+  },
+};
+const L = LAYOUTS[AR];
+
+// ---------- helpers ----------
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function set(n, attrs) { for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); }
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const ramp = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, p) => a + (b - a) * p;
+const outCubic = p => 1 - Math.pow(1 - p, 3);
+const inOutCubic = p => p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+const outBack = p => { const c = 1.6; return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2); };
+const win = (t, a, b, c, d) => Math.min(outCubic(ramp(t, a, b)), 1 - ramp(t, c, d));
+function mix(a, b, p) {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  return '#' + pa.map((v, i) => Math.round(lerp(v, pb[i], clamp(p))).toString(16).padStart(2, '0')).join('');
+}
+function hexPoints(cx, cy, r) {
+  const p = [];
+  for (let i = 0; i < 6; i++) { const a = Math.PI / 180 * (60 * i - 90); p.push(`${(cx + r * Math.cos(a)).toFixed(2)},${(cy + r * Math.sin(a)).toFixed(2)}`); }
+  return p.join(' ');
+}
+function fit(t, maxW) {
+  const w = t.getComputedTextLength();
+  if (w > maxW) t.setAttribute('font-size', (parseFloat(t.getAttribute('font-size')) * maxW / w).toFixed(1));
+}
+// Greedy word wrap, measured with the real font.
+function wrap(text, attrs, maxW, parent) {
+  const probe = el('text', attrs, parent);
+  const lines = [];
+  let cur = '';
+  for (const word of text.split(' ')) {
+    const next = cur ? cur + ' ' + word : word;
+    probe.textContent = next;
+    if (cur && probe.getComputedTextLength() > maxW) { lines.push(cur); cur = word; } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  probe.remove();
+  return lines;
+}
+
+// ---------- stage ----------
+const svg = document.getElementById('stage');
+set(svg, { width: L.W, height: L.H, viewBox: `0 0 ${L.W} ${L.H}` });
+const defs = el('defs', {}, svg);
+const vg = el('radialGradient', { id: 'vignette', cx: '50%', cy: '45%', r: '75%' }, defs);
+el('stop', { offset: '0%', 'stop-color': '#0F2150' }, vg);
+el('stop', { offset: '60%', 'stop-color': C.navy }, vg);
+el('stop', { offset: '100%', 'stop-color': C.night }, vg);
+const glow = el('filter', { id: 'glow', x: '-100%', y: '-100%', width: '300%', height: '300%' }, defs);
+el('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 6 * L.s, result: 'b' }, glow);
+const gm = el('feMerge', {}, glow);
+el('feMergeNode', { in: 'b' }, gm);
+el('feMergeNode', { in: 'SourceGraphic' }, gm);
+const shadow = el('filter', { id: 'shadow', x: '-20%', y: '-20%', width: '140%', height: '140%' }, defs);
+el('feDropShadow', { dx: 0, dy: 10, stdDeviation: 18, 'flood-color': '#020617', 'flood-opacity': 0.7 }, shadow);
+
+const HR = 46 * L.s, hexW = Math.sqrt(3) * HR, hexH = 3 * HR;
+const pat = el('pattern', { id: 'lattice', width: hexW, height: hexH, patternUnits: 'userSpaceOnUse' }, defs);
+for (const [x, y] of [[hexW / 2, HR], [0, HR * 2.5], [hexW, HR * 2.5]])
+  el('polygon', { points: hexPoints(x, y, HR * 0.92), fill: 'none', stroke: C.lattice, 'stroke-width': 1.5 }, pat);
+
+// The mark: docs/brand/assets/svg/agent-kourier-mark-dark.svg, drawn so the feathers can unfold.
+function mark(parent, size) {
+  const g = el('g', {}, parent);
+  const m = el('g', { transform: `scale(${size / 120}) translate(-60 -60)` }, g);
+  const feathers = [[10, 44, 26], [14, 53, 22], [18, 62, 18]].flatMap(([x, y, w], i) => [
+    { n: el('rect', { x, y, width: w, height: 6, rx: 3, fill: C.feather }, m), x, w, side: -1, i },
+    { n: el('rect', { x: 84, y, width: w, height: 6, rx: 3, fill: C.feather }, m), x: 84, w, side: 1, i },
+  ]);
+  el('rect', { x: 38, y: 34, width: 44, height: 52, rx: 12, fill: C.k8s }, m);
+  el('rect', { x: 44, y: 48, width: 32, height: 16, rx: 8, fill: C.white }, m);
+  const eyes = [53, 67].map(cx => el('ellipse', { cx, cy: 56, rx: 4, ry: 4, fill: C.eye }, m));
+  // unfold 0..1 slides the feathers out from the head; blink 0..1 closes the eyes.
+  function pose(unfold, blink) {
+    for (const f of feathers) {
+      const p = outCubic(clamp(unfold * 1.5 - f.i * 0.25));
+      const w = f.w * p;
+      set(f.n, { width: Math.max(w, 0.01), x: f.side < 0 ? 36 - w : 84, opacity: p > 0 ? 1 : 0 });
+    }
+    for (const e of eyes) e.setAttribute('ry', lerp(4, 0.6, blink));
+  }
+  pose(1, 0);
+  return { g, pose };
+}
+
+// Background, optionally with a rounded hole for footage to show through.
+function background(hole) {
+  const full = `M0 0H${L.W}V${L.H}H0Z`;
+  let d = full;
+  if (hole) {
+    const [x, y, w, h] = hole, r = 18;
+    d += ` M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w} ${y + r}V${y + h - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x} ${y + h - r}V${y + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+  }
+  el('path', { d, fill: C.navy, 'fill-rule': 'evenodd' }, svg);
+  const lat = el('path', { d, fill: 'url(#lattice)', 'fill-rule': 'evenodd' }, svg);
+  el('path', { d, fill: 'url(#vignette)', 'fill-rule': 'evenodd', opacity: 0.85 }, svg);
+  return lat;
+}
+
+// A headline block: bold lines then regular lines. Returns the lines for timing.
+function headline(pair, H, parent) {
+  const [bold, reg] = pair, g = el('g', {}, parent), lines = [];
+  // Centred on the frame unless the layout pairs the headline with something beside it.
+  const x = H.center ? L.W / 2 : H.x, anchor = H.center ? 'middle' : 'start', maxW = H.center ? L.W - 160 : L.W - H.x * 2;
+  let y = H.y;
+  for (const s of bold) {
+    const t = el('text', { x, y, 'text-anchor': anchor, 'font-size': H.size, 'font-weight': 700, fill: C.white, 'letter-spacing': -0.02 * H.size }, g);
+    t.textContent = s; fit(t, maxW); lines.push({ n: t, sub: false }); y += H.size * H.gap;
+  }
+  y += H.sub * 0.2;
+  for (const s of reg) {
+    const t = el('text', { x, y, 'text-anchor': anchor, 'font-size': H.sub, 'font-weight': 400, fill: C.white }, g);
+    t.textContent = s; fit(t, maxW); lines.push({ n: t, sub: true }); y += H.sub * H.gap;
+  }
+  return { g, lines, bottom: y };
+}
+// a: bold in, b: regular in, c..d: out. Pass Infinity for c to keep it.
+function showHeadline(h, t, a, b, c, d) {
+  for (const { n, sub } of h.lines) {
+    const start = sub ? b : a, p = outCubic(ramp(t, start, start + 0.45)), out = ramp(t, c, d);
+    set(n, { opacity: Math.min(p, 1 - out) * (sub ? 0.8 : 1), transform: `translate(0 ${(1 - p) * 22 * L.s - out * 14 * L.s})` });
+  }
+}
+
+// The lockup: mark plus "Agent Kourier", one weight, as the brand assets set it.
+function lockup(parent, markSize, wordSize, mode) {
+  const g = el('g', {}, parent);
+  const mk = mark(g, markSize);
+  const word = el('text', { 'font-size': wordSize, 'font-weight': 600, fill: C.white, 'letter-spacing': -0.02 * wordSize }, g);
+  word.textContent = 'Agent Kourier';
+  const ww = word.getComputedTextLength();
+  let w, h;
+  if (mode === 'row') {
+    // The mark's ink spans about 83% of its box; overlap the box a little so the gap reads as one head-width.
+    const gap = markSize * 0.02;
+    w = markSize + gap + ww; h = markSize;
+    set(mk.g, { transform: `translate(${markSize / 2} 0)` });
+    set(word, { x: markSize + gap, y: wordSize * 0.35 });
+    set(g, { 'data-w': w });
+  } else {
+    w = Math.max(markSize, ww); h = markSize * 0.62 + wordSize * 1.1;
+    set(word, { x: -ww / 2, y: markSize * 0.36 + wordSize });
+  }
+  return { g, mk, word, w, h, ww };
+}
+
+const SEG = Q.get('seg');
+const OVERLAY = Q.get('overlay');
+let renderAt = () => {};
+
+// =====================================================================================
+// Footage frame: background with a hole, caption, labels. Static.
+// =====================================================================================
+if (OVERLAY) {
+  const card = Q.get('card').split(',').map(Number), P = L.cap;
+  background(card);
+  const [cx, cy, cw, ch] = card;
+  el('rect', { x: cx - 2, y: cy - 2, width: cw + 4, height: ch + 4, rx: 20, fill: 'none', stroke: C.deep, 'stroke-width': 4 }, svg);
+  // Caption: build.mjs says where (capx, capy), how wide, how aligned, and whether capy is the block's centre.
+  const cap = Q.get('cap') || '', sub = Q.get('sub') || '';
+  const capX = Number(Q.get('capx')), capY = Number(Q.get('capy')), capW = Number(Q.get('capw')), anchor = Q.get('capalign') || 'start';
+  const capAttrs = { 'font-size': P.size, 'font-weight': 700, 'letter-spacing': -0.02 * P.size };
+  const subAttrs = { 'font-size': P.sub, 'font-weight': 400 };
+  const capLines = wrap(cap, capAttrs, capW, svg), subLines = sub ? wrap(sub, subAttrs, capW, svg) : [];
+  const blockH = capLines.length * P.size * 1.16 + (subLines.length ? P.sub * 0.25 + subLines.length * P.sub * 1.3 : 0);
+  let y = Q.get('capvc') ? capY - blockH / 2 + P.size * 0.8 : capY;
+  for (const line of capLines) {
+    const t = el('text', { ...capAttrs, x: capX, y, 'text-anchor': anchor, fill: C.white }, svg); t.textContent = line; y += P.size * 1.16;
+  }
+  y += P.sub * 0.25;
+  const ran = Q.get('cmd');
+  if (ran) {
+    // What was run off screen during this shot, in place of the sub-caption and never over the footage.
+    const fs = { '16x9': 21, '9x16': 30, '1x1': 22 }[AR], cmdAttrs = { 'font-size': fs, 'font-weight': 600, class: 'mono' }, pad = fs * 0.8;
+    // A command may also break after a slash, so a long resource name never runs past the caption column.
+    const lines = [], probe0 = el('text', cmdAttrs, svg);
+    let cur = '';
+    for (const tok of ran.match(/[^ \/]+\/?| /g)) {
+      probe0.textContent = (cur + tok).trim();
+      if (cur.trim() && probe0.getComputedTextLength() > capW - pad * 2) { lines.push(cur.trim()); cur = tok.trimStart(); } else cur += tok;
+    }
+    if (cur.trim()) lines.push(cur.trim());
+    probe0.remove();
+    const lh = fs * 1.45, bh = lines.length * lh + pad * 1.3;
+    const probe = el('text', cmdAttrs, svg); let bw = 0;
+    for (const l of lines) { probe.textContent = l; bw = Math.max(bw, probe.getComputedTextLength()); }
+    probe.remove(); bw += pad * 2;
+    const bxx = anchor === 'middle' ? capX - bw / 2 : capX, byy = y - P.sub * 0.7;
+    el('rect', { x: bxx, y: byy, width: bw, height: bh, rx: 10, fill: C.night, stroke: C.alert, 'stroke-width': 2.5 }, svg);
+    lines.forEach((l, i) => { const t = el('text', { ...cmdAttrs, x: bxx + pad, y: byy + pad * 0.65 + lh * (i + 0.72), fill: C.white }, svg); t.textContent = l; });
+  } else for (const line of subLines) {
+    const t = el('text', { ...subAttrs, x: capX, y, 'text-anchor': anchor, fill: C.white, opacity: 0.8 }, svg); t.textContent = line; y += P.sub * 1.3;
+  }
+  // Small lockup and the honesty note.
+  const lock = Q.get('lock').split(',').map(Number), noteAt = Q.get('note').split(',');
+  const lk = lockup(svg, P.mark, P.mark * 0.42, 'row');
+  set(lk.g, { transform: `translate(${lock[0]} ${lock[1]})`, opacity: 0.95 });
+  const note = el('text', { x: noteAt[0], y: noteAt[1], 'font-size': AR === '16x9' ? 17 : 16, fill: C.white, opacity: 0.6, class: 'mono', 'text-anchor': noteAt[2] }, svg);
+  note.textContent = 'Demo environment · seeded faults · real agent output · sped up in places';
+  // Speed chip, just above the card's top right corner.
+  const speed = Q.get('speed');
+  if (speed) {
+    const fs = 20 * Math.max(L.s, 0.95), t = el('text', { 'font-size': fs, 'font-weight': 600, fill: C.white, class: 'mono' }, svg);
+    t.textContent = speed;
+    const w = t.getComputedTextLength() + fs * 1.4, h = fs * 1.9, x = cx + cw - w, yy = cy - h - 12;
+    const r = el('rect', { x, y: yy, width: w, height: h, rx: h / 2, fill: C.navy, stroke: C.k8s, 'stroke-width': 2, opacity: 0.94 }, svg);
+    svg.insertBefore(r, t);
+    set(t, { x: x + fs * 0.7, y: yy + h / 2 + fs * 0.35 });
+  }
+}
+
+// =====================================================================================
+// The story: p1, p2, p3, reveal, promise (and the teaser's t-problem, t-reveal).
+// Each beat owns a ten-second slot of story time G; a segment ends before its slot does.
+// =====================================================================================
+const SLOT = { p1: 0, p2: 10, p3: 20, reveal: 30, promise: 40 };
+const STORY = ['p1', 'p2', 'p3', 'reveal', 'promise', 't-problem', 't-reveal'];
+if (!OVERLAY && STORY.includes(SEG)) {
+  const lat = background();
+  const D = el('g', {}, svg);
+  const sw = 5 * L.s, kR = L.kSize * 0.30;
+  const A = L.agents, mid = A[1];
+
+  function edge(a, b, ra, rb, dash) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
+    const p1 = [a[0] + ux * ra, a[1] + uy * ra], p2 = [b[0] - ux * rb, b[1] - uy * rb], L2 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+    const n = el('line', { x1: p1[0], y1: p1[1], stroke: C.deep, 'stroke-width': sw, 'stroke-linecap': 'round' }, D);
+    if (dash) n.setAttribute('stroke-dasharray', `${2 * L.s} ${16 * L.s}`);
+    return { draw(p, color, op = 1) {
+      set(n, { x2: lerp(p1[0], p2[0], p), y2: lerp(p1[1], p2[1], p), stroke: color, opacity: p > 0 ? op : 0 });
+    } };
+  }
+  const tileR = L.tile * 0.62;
+  const reachAm = edge(L.am, mid, L.r + 14 * L.s, 0, true), reachSlack = edge(L.slack, mid, L.r + 14 * L.s, 0, true);
+  const promptLine = edge([L.prompt.cx + L.prompt.w / 2, L.prompt.cy], mid, 12 * L.s, tileR, true);
+  const eAm = edge(L.am, L.k, L.r + 14 * L.s, kR + 30 * L.s), eSlack = edge(L.slack, L.k, L.r + 14 * L.s, kR + 30 * L.s);
+  const eAgent = edge(L.k, mid, L.kLabel === 'below' ? L.kSize * 0.33 + 62 * L.s : kR + 34 * L.s, tileR + 6 * L.s);
+
+  const rings = [0, 1, 2, 3, 4].map(() => el('circle', { cx: L.am[0], cy: L.am[1], r: L.r, fill: 'none', stroke: C.alert, 'stroke-width': 3 * L.s, opacity: 0 }, D));
+
+  function source(pos, label, first, draw) {
+    const g = el('g', {}, D), inner = el('g', {}, g);
+    const disc = el('circle', { r: L.r, fill: C.panel, stroke: C.deep, 'stroke-width': sw }, inner);
+    const icon = el('g', { transform: `scale(${L.r / 64 * 1.45}) translate(-24 -24)`, fill: 'none', stroke: C.white, 'stroke-width': 3.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, inner);
+    draw(icon);
+    const above = L.sourceLabel === 'above';
+    const t = el('text', { y: above ? -L.r - 50 * L.s : L.r + 44 * L.s, 'text-anchor': 'middle', 'font-size': 27 * L.s, 'font-weight': 600, fill: C.white }, inner);
+    t.textContent = label;
+    const u = el('text', { y: above ? -L.r - 20 * L.s : L.r + 74 * L.s, 'text-anchor': 'middle', 'font-size': 20 * L.s, fill: C.white, opacity: 0.6, class: 'mono' }, inner);
+    u.textContent = first;
+    return { disc, place(sc, op) { set(g, { transform: `translate(${pos[0]} ${pos[1]}) scale(${sc})`, opacity: op }); } };
+  }
+  const am = source(L.am, 'Alerts', 'Alertmanager first', g => {
+    el('path', { d: 'M24 7c-7.2 0-12 5.2-12 12.5v8.5l-4.5 6.5h33l-4.5-6.5v-8.5C36 12.2 31.2 7 24 7z' }, g);
+    el('path', { d: 'M19.5 38.5a4.5 4.5 0 0 0 9 0' }, g);
+  });
+  const slack = source(L.slack, 'Chat', 'Slack first', g => {
+    el('path', { d: 'M9 10h30a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H22l-8 7v-7H9a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z' }, g);
+    for (const x of [16, 24, 32]) el('circle', { cx: x, cy: 22.5, r: 1.2, fill: C.white }, g);
+  });
+
+  const firing = el('g', {}, D), fw = 128 * L.s, fh = 40 * L.s;
+  el('rect', { x: 0, y: -fh / 2, width: fw, height: fh, rx: fh / 2, fill: C.alert }, firing);
+  const ft = el('text', { x: fw / 2, y: 8 * L.s, 'text-anchor': 'middle', 'font-size': 22 * L.s, 'font-weight': 700, fill: C.white, class: 'mono', 'letter-spacing': 2 * L.s }, firing);
+  ft.textContent = 'FIRING';
+
+  // A question popping up in chat.
+  const bubble = el('g', {}, D), bw = 132 * L.s, bh = 54 * L.s;
+  el('path', { d: `M${14 * L.s} 0h${bw - 28 * L.s}a${14 * L.s} ${14 * L.s} 0 0 1 ${14 * L.s} ${14 * L.s}v${bh - 28 * L.s}a${14 * L.s} ${14 * L.s} 0 0 1 ${-14 * L.s} ${14 * L.s}h${-(bw - 60 * L.s)}l${-18 * L.s} ${16 * L.s}v${-16 * L.s}h${-14 * L.s}a${14 * L.s} ${14 * L.s} 0 0 1 ${-14 * L.s} ${-14 * L.s}v${-(bh - 28 * L.s)}a${14 * L.s} ${14 * L.s} 0 0 1 ${14 * L.s} ${-14 * L.s}z`, fill: C.white }, bubble);
+  const bq = el('text', { x: bw / 2, y: bh / 2 + 11 * L.s, 'text-anchor': 'middle', 'font-size': 32 * L.s, 'font-weight': 700, fill: C.navy }, bubble);
+  bq.textContent = '?';
+
+  // The prompt nobody is typing into.
+  const prompt = el('g', {}, D), PB = L.prompt;
+  el('rect', { x: PB.cx - PB.w / 2, y: PB.cy - PB.h / 2, width: PB.w, height: PB.h, rx: PB.h / 2, fill: C.panel, stroke: C.deep, 'stroke-width': sw }, prompt);
+  const ph = el('text', { x: PB.cx - PB.w / 2 + PB.h * 0.62, y: PB.cy + 10 * L.s, 'font-size': 29 * L.s, fill: C.white, opacity: 0.5 }, prompt);
+  ph.textContent = 'Ask the agent…';
+  const cursor = el('rect', { x: PB.cx - PB.w / 2 + PB.h * 0.42, y: PB.cy - PB.h * 0.25, width: 4 * L.s, height: PB.h * 0.5, fill: C.white }, prompt);
+
+  // Agents: three workloads, each with a face that sleeps and wakes.
+  const agents = A.map((pos, i) => {
+    const g = el('g', {}, D), inner = el('g', {}, g), S = L.tile;
+    const ripple = el('rect', { x: -S / 2, y: -S / 2, width: S, height: S, rx: S * 0.24, fill: 'none', stroke: C.k8s, 'stroke-width': 4 * L.s, opacity: 0 }, inner);
+    const box = el('rect', { x: -S / 2, y: -S / 2, width: S, height: S, rx: S * 0.24, fill: C.panel, stroke: C.deep, 'stroke-width': sw }, inner);
+    const face = el('g', { transform: `scale(${S / 150})` }, inner);
+    el('line', { x1: 0, y1: -40, x2: 0, y2: -30, stroke: C.white, 'stroke-width': 4, 'stroke-linecap': 'round' }, face);
+    el('circle', { cx: 0, cy: -43, r: 4.5, fill: C.white }, face);
+    el('rect', { x: -32, y: -28, width: 64, height: 50, rx: 12, fill: 'none', stroke: C.white, 'stroke-width': 4 }, face);
+    const open = el('g', { fill: C.white }, face);
+    el('circle', { cx: -13, cy: -4, r: 6 }, open); el('circle', { cx: 13, cy: -4, r: 6 }, open);
+    const shut = el('g', { stroke: C.white, 'stroke-width': 4, 'stroke-linecap': 'round' }, face);
+    el('line', { x1: -19, y1: -3, x2: -7, y2: -3 }, shut); el('line', { x1: 7, y1: -3, x2: 19, y2: -3 }, shut);
+    el('line', { x1: -9, y1: 11, x2: 9, y2: 11, stroke: C.white, 'stroke-width': 4, 'stroke-linecap': 'round' }, face);
+    const zs = [0, 1].map(k => { const z = el('text', { 'font-size': (26 - k * 5) * L.s, 'font-weight': 700, fill: C.white, class: 'mono' }, inner); z.textContent = 'z'; return z; });
+    return { pos, g, box, ripple, open, shut, zs, S, i };
+  });
+  // p1: what the agents can read, feeding each of them. Gone before the prompt arrives.
+  const tall = AR === '9x16';
+  const chips = COPY.can.map((word, i) => {
+    const [ax, ay] = A[i], w = 190 * L.s, h = 58 * L.s;
+    const cx = tall ? ax : L.am[0], cy = tall ? ay - 230 * L.s : ay;
+    const g = el('g', {}, D);
+    el('line', { ...(tall ? { x1: cx, y1: cy + h / 2 + 8 * L.s, x2: ax, y2: ay - L.tile / 2 - 12 * L.s } : { x1: cx + w / 2 + 10 * L.s, y1: cy, x2: ax - L.tile / 2 - 12 * L.s, y2: ay }),
+      stroke: C.deep, 'stroke-width': 3 * L.s, 'stroke-linecap': 'round', 'stroke-dasharray': `${2 * L.s} ${12 * L.s}` }, g);
+    el('rect', { x: cx - w / 2, y: cy - h / 2, width: w, height: h, rx: h / 2, fill: C.panel, stroke: C.deep, 'stroke-width': 3 * L.s }, g);
+    const t = el('text', { x: cx, y: cy + 9 * L.s, 'text-anchor': 'middle', 'font-size': 26 * L.s, 'font-weight': 600, fill: C.white, class: 'mono' }, g);
+    t.textContent = word;
+    return g;
+  });
+  // One label for the group, under the last tile (or under the row in the tall layout).
+  const lastA = A[A.length - 1], labelX = AR === '9x16' ? A[1][0] : lastA[0];
+  const aLabel = el('text', { x: labelX, y: lastA[1] + L.tile / 2 + 46 * L.s, 'text-anchor': 'middle', 'font-size': 27 * L.s, 'font-weight': 600, fill: C.white }, D);
+  aLabel.textContent = 'A2A agents';
+  const aSub = el('text', { x: labelX, y: lastA[1] + L.tile / 2 + 80 * L.s, 'text-anchor': 'middle', 'font-size': 21 * L.s, fill: C.white, class: 'mono' }, D);
+  aSub.textContent = 'kagent or your own';
+
+  // Agent Kourier.
+  const kg = el('g', {}, D);
+  const pulse = el('circle', { r: kR * 1.5, fill: 'none', stroke: C.k8s, 'stroke-width': 4 * L.s, opacity: 0 }, kg);
+  const km = mark(kg, L.kSize);
+  const kl = el('text', { y: L.kSize * 0.33 + 34 * L.s, 'text-anchor': 'middle', 'font-size': 27 * L.s, 'font-weight': 700, fill: C.white }, kg);
+  kl.textContent = 'Agent Kourier';
+
+  // The thread: three abstract rows. A glyph, never a product screen.
+  const T = L.thread, rowH = 40 * L.s, pad = 18 * L.s, th = pad * 2 + 28 * L.s + rowH * 3;
+  const thread = el('g', {}, D);
+  el('rect', { x: T.x, y: T.y, width: T.w, height: th, rx: 16 * L.s, fill: C.panel, stroke: C.deep, 'stroke-width': 3 * L.s }, thread);
+  const tc = el('text', { x: T.x + pad, y: T.y + pad + 17 * L.s, 'font-size': 19 * L.s, fill: C.white, opacity: 0.6, class: 'mono' }, thread);
+  tc.textContent = '# thread';
+  const rows = [[C.alert, 0.62], [C.k8s, 0.85], [C.white, 0.5]].map(([col, frac], i) => {
+    const y = T.y + pad + 28 * L.s + rowH * i + rowH / 2, r = el('g', {}, thread);
+    el('circle', { cx: T.x + pad + 11 * L.s, cy: y, r: 11 * L.s, fill: col }, r);
+    el('rect', { x: T.x + pad + 34 * L.s, y: y - 6 * L.s, width: (T.w - pad * 2 - 34 * L.s) * frac, height: 12 * L.s, rx: 6 * L.s, fill: col }, r);
+    return r;
+  });
+
+  // Packets.
+  const packets = el('g', {}, D);
+  function packet() {
+    const g = el('g', { filter: 'url(#glow)' }, packets);
+    const trail = [0, 1, 2].map(() => el('circle', { r: 9 * L.s, opacity: 0 }, g));
+    const head = el('circle', { r: 13 * L.s, stroke: C.white, 'stroke-width': 3 * L.s }, g);
+    return { g, head, trail };
+  }
+  function along(pts, p) {
+    const segs = []; let total = 0;
+    for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); segs.push(l); total += l; }
+    let d = clamp(p) * total;
+    for (let i = 0; i < segs.length; i++) {
+      if (d <= segs[i] || i === segs.length - 1) { const q = segs[i] ? d / segs[i] : 0; return [lerp(pts[i][0], pts[i + 1][0], q), lerp(pts[i][1], pts[i + 1][1], q)]; }
+      d -= segs[i];
+    }
+  }
+  function drive(pk, pts, t, a, b, color) {
+    const vis = t >= a && t <= b + 0.12;
+    pk.g.setAttribute('opacity', vis ? 1 : 0);
+    if (!vis) return;
+    const at = dt => along(pts, inOutCubic(ramp(t - dt, a, b)));
+    const [x, y] = at(0);
+    set(pk.head, { cx: x, cy: y, fill: color, opacity: 1 - ramp(t, b, b + 0.12) });
+    pk.trail.forEach((n, i) => { const [tx, ty] = at(0.035 * (i + 1)); set(n, { cx: tx, cy: ty, fill: color, opacity: (0.5 - i * 0.16) * (1 - ramp(t, b - 0.05, b + 0.1)) }); });
+  }
+  const pkAlert = packet(), pkAsk = packet(), pkTask = packet(), pkBack = packet();
+
+  // Headlines, one per beat.
+  const heads = {};
+  for (const k of ['p1', 'p2', 'p3', 'reveal', 'promise', 'tproblem']) heads[k] = headline(COPY[k][L.copy], L.head, svg);
+
+  // Which beat a segment plays, and which headline it shows.
+  const PLAN = {
+    'p1': t => ({ G: SLOT.p1 + t, head: 'p1', subAt: 2.9 }),
+    'p2': t => ({ G: SLOT.p2 + t, head: 'p2', subAt: 0.3 }),
+    'p3': t => ({ G: SLOT.p3 + t, head: 'p3', subAt: 4.2 }),
+    'reveal': t => ({ G: SLOT.reveal + t, head: 'reveal', subAt: 2.3 }),
+    'promise': t => ({ G: SLOT.promise + t, head: 'promise', subAt: 4.0 }),
+    't-problem': t => ({ G: SLOT.p3 + 0.2 + t, head: 'tproblem', subAt: 1.7, fade: true }),
+    't-reveal': t => ({ G: t < 3.1 ? SLOT.reveal + t : SLOT.promise + (t - 3.1), head: 'reveal', subAt: 2.1 }),
+  };
+
+  renderAt = function (t) {
+    const { G, head, subAt, fade } = PLAN[SEG](t);
+    set(lat, { transform: `translate(${(G * 6) % hexW} ${(G * 10) % hexH})` });
+    svg.style.opacity = (SEG === 'p1' || fade) ? outCubic(ramp(t, 0, 0.45)) : 1;
+
+    for (const k of Object.keys(heads)) heads[k].g.setAttribute('display', k === head ? 'inline' : 'none');
+    showHeadline(heads[head], t, 0.15, subAt, Infinity, Infinity);
+
+    // Agents: awake and capable in p1, asleep from p2 until a session reaches them.
+    const sleep = outCubic(ramp(G, 11.4, 12.0)), wakeMid = outCubic(ramp(G, 42.0, 42.4));
+    agents.forEach(a => {
+      const t0 = 0.35 + a.i * 0.22, sc = lerp(0.7, 1, outBack(ramp(G, t0, t0 + 0.45))), op = outCubic(ramp(G, t0, t0 + 0.3));
+      set(a.g, { transform: `translate(${a.pos[0]} ${a.pos[1]}) scale(${sc})`, opacity: op });
+      const woke = a.i === 1 ? wakeMid : 0, asleep = sleep * (1 - woke);
+      set(a.box, { fill: mix(C.panel, C.k8s, woke), stroke: mix(C.deep, C.k8s, woke) });
+      set(a.shut, { opacity: asleep }); set(a.open, { opacity: 1 - asleep });
+      a.zs.forEach((z, k) => {
+        const cyc = ((G + a.i * 0.5 + k * 0.6) % 1.6) / 1.6;
+        set(z, { x: a.S * 0.58 + k * 18 * L.s + cyc * 12 * L.s, y: -a.S * 0.62 - k * 22 * L.s - cyc * 24 * L.s, opacity: asleep * Math.sin(cyc * Math.PI) });
+      });
+      const rp = ramp(G, 42.0, 42.7);
+      set(a.ripple, { opacity: a.i === 1 && G >= 42.0 && G <= 42.7 ? 0.8 * (1 - rp) : 0, transform: `scale(${1 + outCubic(rp) * 0.3})` });
+    });
+    chips.forEach((g, i) => { const a = 3.1 + i * 0.9, p = win(G, a, a + 0.4, 10.0, 10.4); set(g, { opacity: p, transform: `translate(${tall ? 0 : (1 - Math.min(p, 1)) * -18 * L.s} ${tall ? (1 - Math.min(p, 1)) * -18 * L.s : 0})` }); });
+    const lab = outCubic(ramp(G, 0.9, 1.3));
+    set(aLabel, { opacity: lab }); set(aSub, { opacity: lab * 0.6 });
+
+    // p2: the prompt.
+    const pp = win(G, 10.2, 10.7, 20.0, 20.4);
+    set(prompt, { opacity: pp, transform: `translate(0 ${(1 - Math.min(pp, 1)) * 14 * L.s})` });
+    set(cursor, { opacity: Math.floor(G * 1.8) % 2 ? 0.95 : 0.15 });
+    promptLine.draw(inOutCubic(ramp(G, 11.0, 11.9)), C.deep, pp);
+
+    // p3: the two sources, and both failing to reach the agents.
+    am.place(lerp(0.7, 1, outBack(ramp(G, 20.2, 20.65))), outCubic(ramp(G, 20.2, 20.5)));
+    slack.place(lerp(0.7, 1, outBack(ramp(G, 20.5, 20.95))), outCubic(ramp(G, 20.5, 20.8)));
+    const hot = G < 40.3 ? outCubic(ramp(G, 20.5, 20.8)) : 1 - ramp(G, 40.9, 41.4);
+    set(am.disc, { stroke: mix(C.deep, C.alert, hot) });
+    rings.forEach((c, i) => {
+      const t0 = 20.6 + i * 0.9, p = ramp(G, t0, t0 + 1.2), on = G >= t0 && G <= t0 + 1.2 && G < 30;
+      set(c, { r: L.r * lerp(1, 2.3, outCubic(p)), opacity: on ? 0.7 * (1 - p) : 0 });
+    });
+    const fp = win(G, 20.6, 20.9, 41.0, 41.4);
+    set(firing, { opacity: fp, transform: `translate(${L.firing[0]} ${L.firing[1] + (1 - fp) * 8})` });
+    const bp = G < 30 ? outBack(ramp(G, 22.2, 22.6)) : 1, bo = win(G, 22.2, 22.4, 40.7, 41.1);
+    set(bubble, { opacity: bo, transform: `translate(${L.bubble[0]} ${L.bubble[1]}) scale(${lerp(0.5, 1, bp)})` });
+    reachAm.draw(0.42 * outCubic(ramp(G, 21.0, 22.0)), C.alert, (1 - ramp(G, 22.4, 23.0)) * 0.9);
+    reachSlack.draw(0.42 * outCubic(ramp(G, 23.0, 23.9)), C.white, (1 - ramp(G, 24.3, 24.9)) * 0.8);
+
+    // reveal: the mark lands in the gap and the routes draw.
+    const kp = ramp(G, 30.2, 30.85);
+    set(kg, { transform: `translate(${L.k[0]} ${L.k[1] + (1 - outCubic(kp)) * -60 * L.s}) scale(${lerp(0.6, 1, outBack(kp))})`, opacity: outCubic(ramp(G, 30.2, 30.45)) });
+    const blinkT = G - 30, blink = Math.max(win(blinkT, 2.2, 2.3, 2.34, 2.46), win(blinkT, 12.6, 12.7, 12.74, 12.86));
+    km.pose(ramp(G, 30.6, 31.5), blink);
+    set(kl, { opacity: outCubic(ramp(G, 31.0, 31.4)) });
+    const lit = (a, b) => win(G, a, a + 0.1, b, b + 0.3);
+    eAm.draw(inOutCubic(ramp(G, 30.9, 31.5)), mix(C.deep, C.k8s, lit(40.3, 40.9)));
+    eSlack.draw(inOutCubic(ramp(G, 31.0, 31.6)), mix(C.deep, C.k8s, Math.max(lit(40.6, 41.2), lit(43.0, 43.6))));
+    eAgent.draw(inOutCubic(ramp(G, 31.2, 31.8)), mix(C.deep, C.k8s, Math.max(lit(41.4, 42.0), lit(42.6, 43.0))));
+
+    // promise: both go in, one session comes out, the agent wakes, the thread fills.
+    drive(pkAlert, [L.am, L.k], G, 40.3, 40.9, C.alert);
+    drive(pkAsk, [L.slack, L.k], G, 40.6, 41.2, C.white);
+    drive(pkTask, [L.k, mid], G, 41.4, 42.0, C.k8s);
+    drive(pkBack, [mid, L.k, L.slack], G, 42.6, 43.6, C.k8s);
+    const pa = [41.2, 43.0].find(a => G >= a && G <= a + 0.6);
+    set(pulse, pa !== undefined ? { opacity: 0.8 * (1 - ramp(G, pa, pa + 0.6)), transform: `scale(${1 + outCubic(ramp(G, pa, pa + 0.6)) * 0.4})` } : { opacity: 0 });
+    const tp = outCubic(ramp(G, 43.3, 43.65));
+    set(thread, { opacity: tp, transform: `translate(0 ${(1 - tp) * 14 * L.s})` });
+    [43.5, 43.8, 44.4].forEach((a, i) => { const p = outCubic(ramp(G, a, a + 0.3)); set(rows[i], { opacity: p, transform: `translate(${(1 - p) * -12 * L.s} 0)` }); });
+  };
+}
+
+// =====================================================================================
+// yaml: the Binding the demo ran with.
+// =====================================================================================
+if (!OVERLAY && SEG === 'yaml') {
+  const lat = background(), Y = L.yaml;
+  const head = headline(COPY.yaml[AR], { ...L.head, x: Y.headX, y: Y.headY, center: !Y.side }, svg);
+  const lineH = Y.size * 1.62, pad = Y.size * 1.4, h = pad * 2 + lineH * YAML.length;
+  const card = el('g', {}, svg);
+  el('rect', { x: Y.x, y: Y.y, width: Y.w, height: h, rx: 20, fill: C.night, stroke: C.deep, 'stroke-width': 3, filter: 'url(#shadow)' }, card);
+  for (const [i, c] of [[0, C.deep], [1, C.deep], [2, C.deep]]) el('circle', { cx: Y.x + pad + i * 26, cy: Y.y + pad * 0.62, r: 7, fill: c }, card);
+  const lines = YAML.map((src, i) => {
+    const t = el('text', { x: Y.x + pad, y: Y.y + pad * 1.5 + lineH * (i + 0.72), 'font-size': Y.size, class: 'mono', 'xml:space': 'preserve' }, card);
+    const m = src.match(/^(\s*)([^:]+:)(.*)$/);
+    const add = (s, fill, w) => { const sp = el('tspan', { fill, 'font-weight': w }, t); sp.textContent = s; };
+    if (m) { add(m[1].replace(/ /g, ' '), C.white, 400); add(m[2], C.white, 400); add(m[3], C.feather, 600); } else add(src, C.white, 400);
+    return t;
+  });
+  // The two lines that carry the idea.
+  const hi = [1, 13].map(i => { const r = el('rect', { x: Y.x + pad * 0.5, y: Y.y + pad * 1.5 + lineH * i + lineH * 0.06, width: Y.w - pad, height: lineH * 0.92, rx: 8, fill: C.k8s, opacity: 0 }, card); card.insertBefore(r, lines[0]); return r; });
+  renderAt = function (t) {
+    set(lat, { transform: `translate(${(t * 6) % hexW} ${(t * 10) % hexH})` });
+    showHeadline(head, t, 0.15, 1.0, Infinity, Infinity);
+    const cp = outCubic(ramp(t, 0.1, 0.6));
+    set(card, { opacity: cp, transform: `translate(0 ${(1 - cp) * 30})` });
+    lines.forEach((n, i) => set(n, { opacity: outCubic(ramp(t, 0.3 + i * 0.06, 0.6 + i * 0.06)) }));
+    set(hi[0], { opacity: 0.32 * outCubic(ramp(t, 1.2, 1.6)) });
+    set(hi[1], { opacity: 0.32 * outCubic(ramp(t, 1.9, 2.3)) });
+  };
+}
+
+// =====================================================================================
+// close (pills, then the end card) and t-end (the end card alone).
+// =====================================================================================
+if (!OVERLAY && (SEG === 'close' || SEG === 't-end')) {
+  const lat = background(), P = L.pills, E = L.end;
+  const pills = el('g', {}, svg);
+  const rows = COPY.pills.map((s, i) => {
+    const y = P.y + i * (P.h + P.gap), r = el('g', {}, pills);
+    el('rect', { x: P.cx - P.w / 2, y, width: P.w, height: P.h, rx: P.h / 2, fill: C.panel, stroke: C.deep, 'stroke-width': 3 * L.s }, r);
+    const dot = el('g', {}, r); mark(dot, P.h * 0.78); set(dot, { transform: `translate(${P.cx - P.w / 2 + P.h * 0.62} ${y + P.h / 2})` });
+    const t = el('text', { x: P.cx - P.w / 2 + P.h * 1.16, y: y + P.h / 2 + P.size * 0.35, 'font-size': P.size, 'font-weight': 600, fill: C.white }, r);
+    t.textContent = s; fit(t, P.w - P.h * 1.7);
+    return r;
+  });
+  const end = el('g', {}, svg);
+  const lk = lockup(end, E.mark, E.word, E.mode);
+  const hook = el('text', { 'font-size': E.hook, 'font-weight': 600, fill: C.white, 'text-anchor': 'middle' }, end);
+  hook.textContent = COPY.hook; fit(hook, L.W - 120);
+  const cat = el('text', { 'font-size': E.cat, fill: C.white, 'text-anchor': 'middle', class: 'mono' }, end);
+  cat.textContent = COPY.category; fit(cat, L.W - 120);
+  let lkT, hookY;
+  if (E.mode === 'row') { lkT = [E.cx - lk.w / 2, E.cy]; hookY = E.cy + E.mark * 0.42 + E.hook * 1.5; }
+  else { lkT = [E.cx, E.cy]; hookY = E.cy + E.mark * 0.36 + E.word * 1.2 + E.hook * 2.0; }
+  set(hook, { x: E.cx, y: hookY }); set(cat, { x: E.cx, y: hookY + E.cat * 2.5 });
+  const T0 = SEG === 'close' ? Number(Q.get('endAt') || 5.7) : 0.1;
+  renderAt = function (t) {
+    set(lat, { transform: `translate(${(t * 6) % hexW} ${(t * 10) % hexH})` });
+    const out = SEG === 'close' ? ramp(t, T0 - 0.5, T0 - 0.1) : 1;
+    rows.forEach((r, i) => { const a = COPY.pillAt[i], p = outCubic(ramp(t, a, a + 0.4)); set(r, { opacity: p * (1 - out), transform: `translate(0 ${(1 - p) * 24 * L.s - out * 14 * L.s})` }); });
+    const u = t - T0, ep = ramp(u, 0, 0.6);
+    set(lk.g, { opacity: outCubic(ramp(u, 0, 0.3)), transform: `translate(${lkT[0]} ${lkT[1] + (1 - outCubic(ep)) * 24})` });
+    lk.mk.pose(ramp(u, 0.15, 1.0), win(u, 2.4, 2.5, 2.54, 2.66));
+    const hp = outCubic(ramp(u, 1.0, 1.5));
+    set(hook, { opacity: hp, transform: `translate(0 ${(1 - hp) * 16})` });
+    set(cat, { opacity: outCubic(ramp(u, 1.5, 2.0)) * 0.6 });
+  };
+}
+
+window.renderAt = renderAt;
+renderAt(parseFloat(Q.get('t') || '3'));
+window.READY = true;
+</script>
+</body>
+</html>

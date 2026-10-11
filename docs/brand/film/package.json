@@ -1,0 +1,12 @@
+{
+  "name": "agent-kourier-film",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs all",
+    "frames": "node render.mjs frames"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

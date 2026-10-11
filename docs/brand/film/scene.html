@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Kourier film</title>
+<!--
+  The whole film is this one SVG. renderAt(t) sets every element for time t in seconds, so a
+  frame depends on t alone and the renderer can seek frame by frame.
+  Query: ?ar=16x9 | 9x16 | 1x1 (layout), &t=<seconds> (static frame for previewing).
+-->
+<style>
+  html, body { margin: 0; background: #0A1530; overflow: hidden; }
+  svg { display: block; }
+  text { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .mono { font-family: "SF Mono", Menlo, Monaco, monospace; }
+</style>
+</head>
+<body>
+<svg id="stage" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+'use strict';
+
+// Kubernetes palette. No light tints: white is the only light value.
+const C = {
+  navy: '#0A1530',   // background
+  night: '#060D20',  // vignette edge
+  panel: '#122650',  // node and panel fill
+  deep: '#1D3F91',   // idle lines and strokes
+  k8s: '#326CE5',    // Kubernetes blue
+  white: '#FFFFFF',
+  alert: '#E5484D',  // the one signal colour, for the firing alert only
+};
+
+const DURATION = 17;
+const FPS = 30;
+
+// Copy. "wide" serves 16:9 and 1:1, "tall" serves 9:16. First array is bold, second regular.
+const COPY = {
+  h1: { wide: [['An alert fires.'], ['Your agent never hears it.']],
+        tall: [['An alert fires.'], ['Your agent never', 'hears it.']] },
+  h2: { wide: [['Agent Kourier carries it in.'], ['Alertmanager and Slack, to any A2A agent.']],
+        tall: [['Agent Kourier', 'carries it in.'], ['Alertmanager and Slack,', 'to any A2A agent.']] },
+  h3: { wide: [['Findings land in the thread.'], ['Reply there, and the session continues.']],
+        tall: [['Findings land', 'in the thread.'], ['Reply there, and the', 'session continues.']] },
+  capsHead: 'A Kubernetes-native broker',
+  caps: [
+    [['Any A2A agent: ', 0], ['kagent 1.0', 1], [' or your own', 0]],
+    [['Always on. Wakes agents scaled to zero.', 0]],
+    { wide: [[['Declarative: ', 0], ['AgentBackend · ChatConnection · Binding', 1]]],
+      tall: [[['Declarative resources:', 0]], [['AgentBackend · ChatConnection · Binding', 1]]] },
+    [['An extra receiver. Your paging stays untouched.', 0]],
+  ],
+  tagline: 'Alerts and chat, carried to your agents.',
+  stack: 'Alertmanager · Slack · A2A',
+};
+
+// Layouts. s scales strokes, labels and packets; positions are absolute.
+const LAYOUTS = {
+  '16x9': {
+    W: 1920, H: 1080, s: 1, copy: 'wide',
+    head: { x: 120, y: 190, size: 72, sub: 46, gap: 1.22 },
+    am: [380, 480], slack: [380, 760], k: [960, 620], agent: [1540, 620],
+    r: 64, kSize: 230, agentR: 88,
+    firing: [440, 384],
+    thread: { x: 480, y: 815, w: 300 },
+    caps: { cx: 960, y: 300, head: 54, size: 38, w: 1180, h: 92, gap: 22 },
+    end: { mode: 'row', cx: 960, cy: 490, logo: 230, word: 112, tag: 42, stack: 26 },
+  },
+  '1x1': {
+    W: 1080, H: 1080, s: 0.82, copy: 'wide',
+    head: { x: 80, y: 150, size: 60, sub: 38, gap: 1.25 },
+    am: [190, 470], slack: [190, 735], k: [545, 600], agent: [890, 600],
+    r: 54, kSize: 180, agentR: 72,
+    firing: [235, 390],
+    thread: { x: 270, y: 800, w: 250 },
+    caps: { cx: 540, y: 250, head: 46, size: 29, w: 940, h: 82, gap: 20 },
+    end: { mode: 'stack', cx: 540, cy: 400, logo: 230, word: 96, tag: 36, stack: 24 },
+  },
+  '9x16': {
+    W: 1080, H: 1920, s: 1.15, copy: 'tall',
+    head: { x: 90, y: 300, size: 84, sub: 54, gap: 1.2 },
+    am: [300, 900], slack: [780, 900], k: [540, 1240], agent: [540, 1610],
+    r: 80, kSize: 250, agentR: 104, sourceLabel: 'above', kLabel: 'left',
+    firing: [400, 900],
+    thread: { x: 720, y: 1030, w: 290 },
+    caps: { cx: 540, y: 640, head: 58, size: 32, w: 940, h: 112, gap: 30 },
+    end: { mode: 'stack', cx: 540, cy: 800, logo: 300, word: 112, tag: 42, stack: 28 },
+  },
+};
+
+const AR = new URLSearchParams(location.search).get('ar') || '16x9';
+const L = LAYOUTS[AR];
+
+// ---------- helpers ----------
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function set(n, attrs) { for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); }
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const ramp = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, p) => a + (b - a) * p;
+const outCubic = p => 1 - Math.pow(1 - p, 3);
+const inOutCubic = p => p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+const outBack = p => { const c = 1.6; return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2); };
+// Visible between a and d, fading in over a..b and out over c..d.
+const window4 = (t, a, b, c, d) => Math.min(outCubic(ramp(t, a, b)), 1 - ramp(t, c, d));
+function hexPoints(cx, cy, r) {
+  const p = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 180) * (60 * i - 90);
+    p.push(`${(cx + r * Math.cos(a)).toFixed(2)},${(cy + r * Math.sin(a)).toFixed(2)}`);
+  }
+  return p.join(' ');
+}
+function mixHex(a, b, p) {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  return '#' + pa.map((v, i) => Math.round(lerp(v, pb[i], p)).toString(16).padStart(2, '0')).join('');
+}
+// Shrink a text element's font size until it fits maxW.
+function fit(textEl, maxW) {
+  const w = textEl.getComputedTextLength();
+  if (w > maxW) {
+    const fs = parseFloat(textEl.getAttribute('font-size'));
+    textEl.setAttribute('font-size', (fs * maxW / w).toFixed(1));
+  }
+}
+
+// ---------- stage ----------
+const svg = document.getElementById('stage');
+set(svg, { width: L.W, height: L.H, viewBox: `0 0 ${L.W} ${L.H}` });
+const defs = el('defs', {}, svg);
+
+const vg = el('radialGradient', { id: 'vignette', cx: '50%', cy: '45%', r: '75%' }, defs);
+el('stop', { offset: '0%', 'stop-color': '#0F2150' }, vg);
+el('stop', { offset: '60%', 'stop-color': C.navy }, vg);
+el('stop', { offset: '100%', 'stop-color': C.night }, vg);
+
+const glow = el('filter', { id: 'glow', x: '-100%', y: '-100%', width: '300%', height: '300%' }, defs);
+el('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 6 * L.s, result: 'b' }, glow);
+const gm = el('feMerge', {}, glow);
+el('feMergeNode', { in: 'b' }, gm);
+el('feMergeNode', { in: 'SourceGraphic' }, gm);
+
+// Hex lattice, Kubernetes' cluster cue, drifting slowly.
+const HR = 46 * L.s;
+const hexW = Math.sqrt(3) * HR, hexH = 3 * HR;
+const pat = el('pattern', { id: 'lattice', width: hexW, height: hexH, patternUnits: 'userSpaceOnUse' }, defs);
+el('polygon', { points: hexPoints(hexW / 2, HR, HR * 0.92), fill: 'none', stroke: '#16306E', 'stroke-width': 1.5 }, pat);
+el('polygon', { points: hexPoints(0, HR * 2.5, HR * 0.92), fill: 'none', stroke: '#16306E', 'stroke-width': 1.5 }, pat);
+el('polygon', { points: hexPoints(hexW, HR * 2.5, HR * 0.92), fill: 'none', stroke: '#16306E', 'stroke-width': 1.5 }, pat);
+
+el('rect', { width: L.W, height: L.H, fill: C.navy }, svg);
+const lattice = el('rect', { x: -hexW, y: -hexH, width: L.W + 2 * hexW, height: L.H + 2 * hexH, fill: 'url(#lattice)' }, svg);
+el('rect', { width: L.W, height: L.H, fill: 'url(#vignette)', opacity: 0.85 }, svg);
+
+// ---------- diagram ----------
+const diagram = el('g', {}, svg);
+const sw = 5 * L.s; // line weight
+
+function edge(a, b, ra, rb) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+  const ux = dx / len, uy = dy / len;
+  const p1 = [a[0] + ux * ra, a[1] + uy * ra], p2 = [b[0] - ux * rb, b[1] - uy * rb];
+  const n = el('line', { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: C.deep,
+    'stroke-width': sw, 'stroke-linecap': 'round' }, diagram);
+  const L2 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+  return { n, len: L2, draw(p, lit) {
+    set(n, { 'stroke-dasharray': `${L2} ${L2}`, 'stroke-dashoffset': L2 * (1 - p),
+      stroke: mixHex(C.deep, C.k8s, lit) });
+  } };
+}
+
+const kR = L.kSize * 0.45;
+// The failed reach in shot 1: a dashed red line from Alertmanager towards the sleeping agent.
+const reach = el('line', { x1: L.am[0], y1: L.am[1], x2: L.agent[0], y2: L.agent[1], stroke: C.alert,
+  'stroke-width': sw * 0.8, 'stroke-linecap': 'round', 'stroke-dasharray': `${2 * L.s} ${16 * L.s}` }, diagram);
+const reachLen = Math.hypot(L.agent[0] - L.am[0], L.agent[1] - L.am[1]);
+
+const eAm = edge(L.am, L.k, L.r + 14 * L.s, kR + 14 * L.s);
+const eSlack = edge(L.slack, L.k, L.r + 14 * L.s, kR + 14 * L.s);
+const eAgent = edge(L.k, L.agent, kR + 14 * L.s, L.agentR + 14 * L.s);
+
+// Alert rings behind Alertmanager.
+const rings = [0, 1, 2, 3].map(() => el('circle', { cx: L.am[0], cy: L.am[1], r: L.r, fill: 'none',
+  stroke: C.alert, 'stroke-width': 3 * L.s, opacity: 0 }, diagram));
+
+// Source node: circle, icon, label.
+function sourceNode(pos, label, drawIcon) {
+  const g = el('g', {}, diagram);
+  const inner = el('g', {}, g);
+  const disc = el('circle', { r: L.r, fill: C.panel, stroke: C.deep, 'stroke-width': sw }, inner);
+  const icon = el('g', { transform: `scale(${L.r / 64 * 1.45}) translate(-24 -24)`, fill: 'none',
+    stroke: C.white, 'stroke-width': 3.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, inner);
+  drawIcon(icon);
+  const t = el('text', { y: L.sourceLabel === 'above' ? -L.r - 24 * L.s : L.r + 44 * L.s, 'text-anchor': 'middle', 'font-size': 27 * L.s,
+    'font-weight': 600, fill: C.white }, inner);
+  t.textContent = label;
+  return { g, disc, place(sc, op) {
+    set(g, { transform: `translate(${pos[0]} ${pos[1]}) scale(${sc})`, opacity: op });
+  } };
+}
+const am = sourceNode(L.am, 'Alertmanager', g => {
+  el('path', { d: 'M24 7c-7.2 0-12 5.2-12 12.5v8.5l-4.5 6.5h33l-4.5-6.5v-8.5C36 12.2 31.2 7 24 7z' }, g);
+  el('path', { d: 'M19.5 38.5a4.5 4.5 0 0 0 9 0' }, g);
+});
+const slack = sourceNode(L.slack, 'Slack', g => {
+  el('path', { d: 'M9 10h30a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H22l-8 7v-7H9a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z' }, g);
+  for (const x of [16, 24, 32]) el('circle', { cx: x, cy: 22.5, r: 1.2, fill: C.white }, g);
+});
+
+// FIRING badge.
+const firing = el('g', {}, diagram);
+const fw = 128 * L.s, fh = 40 * L.s;
+el('rect', { x: 0, y: -fh / 2, width: fw, height: fh, rx: fh / 2, fill: C.alert }, firing);
+const ft = el('text', { x: fw / 2, y: 9 * L.s, 'text-anchor': 'middle', 'font-size': 22 * L.s,
+  'font-weight': 700, fill: C.white, class: 'mono', 'letter-spacing': 2 * L.s }, firing);
+ft.textContent = 'FIRING';
+
+// Agent: a hexagon (a workload on Kubernetes) with a bot face that sleeps and wakes.
+const agent = (() => {
+  const g = el('g', {}, diagram);
+  const inner = el('g', {}, g);
+  const ripple = el('polygon', { points: hexPoints(0, 0, L.agentR), fill: 'none', stroke: C.k8s,
+    'stroke-width': 4 * L.s, opacity: 0 }, inner);
+  const hex = el('polygon', { points: hexPoints(0, 0, L.agentR), fill: C.panel, stroke: C.deep,
+    'stroke-width': sw, 'stroke-linejoin': 'round' }, inner);
+  const f = L.agentR / 88;
+  const face = el('g', { transform: `scale(${f})` }, inner);
+  el('line', { x1: 0, y1: -40, x2: 0, y2: -30, stroke: C.white, 'stroke-width': 4, 'stroke-linecap': 'round' }, face);
+  el('circle', { cx: 0, cy: -43, r: 4.5, fill: C.white }, face);
+  el('rect', { x: -32, y: -28, width: 64, height: 50, rx: 12, fill: 'none', stroke: C.white, 'stroke-width': 4 }, face);
+  const eyesOpen = el('g', { fill: C.white }, face);
+  el('circle', { cx: -13, cy: -4, r: 6 }, eyesOpen);
+  el('circle', { cx: 13, cy: -4, r: 6 }, eyesOpen);
+  const eyesShut = el('g', { stroke: C.white, 'stroke-width': 4, 'stroke-linecap': 'round' }, face);
+  el('line', { x1: -19, y1: -3, x2: -7, y2: -3 }, eyesShut);
+  el('line', { x1: 7, y1: -3, x2: 19, y2: -3 }, eyesShut);
+  el('line', { x1: -9, y1: 11, x2: 9, y2: 11, stroke: C.white, 'stroke-width': 4, 'stroke-linecap': 'round' }, face);
+  const zs = [0, 1].map(i => {
+    const z = el('text', { 'font-size': (30 - i * 6) * L.s, 'font-weight': 700, fill: C.white, class: 'mono' }, inner);
+    z.textContent = 'z';
+    return z;
+  });
+  const orbit = [0, 1, 2].map(() => el('circle', { r: 6 * L.s, fill: C.white }, inner));
+  const label = el('text', { y: L.agentR + 46 * L.s, 'text-anchor': 'middle', 'font-size': 27 * L.s,
+    'font-weight': 600, fill: C.white }, inner);
+  label.textContent = 'A2A agent';
+  const sub = el('text', { y: L.agentR + 80 * L.s, 'text-anchor': 'middle', 'font-size': 21 * L.s,
+    fill: C.white, opacity: 0.6, class: 'mono' }, inner);
+  sub.textContent = 'kagent or your own';
+  return { g, hex, ripple, eyesOpen, eyesShut, zs, orbit, place(sc, op) {
+    set(g, { transform: `translate(${L.agent[0]} ${L.agent[1]}) scale(${sc})`, opacity: op });
+  } };
+})();
+
+// Kourier mark: logo draft A in Kubernetes blue, the route junction in navy.
+function kourierMark(parent, size) {
+  const g = el('g', {}, parent);
+  const m = el('g', { transform: `scale(${size / 120}) translate(-60 -60)` }, g);
+  el('polygon', { points: '60,6 106.8,33 106.8,87 60,114 13.2,87 13.2,33', fill: C.k8s }, m);
+  el('rect', { x: 38, y: 34, width: 11, height: 52, rx: 2.5, fill: C.white }, m);
+  el('polyline', { points: '80,38 54,60 80,82', fill: 'none', stroke: C.white, 'stroke-width': 11,
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, m);
+  el('circle', { cx: 54, cy: 60, r: 6, fill: C.navy }, m);
+  return g;
+}
+const kour = (() => {
+  const g = el('g', {}, diagram);
+  const pulse = el('polygon', { points: hexPoints(0, 0, kR), fill: 'none', stroke: C.k8s, 'stroke-width': 4 * L.s, opacity: 0 }, g);
+  const mark = kourierMark(g, L.kSize);
+  const left = L.kLabel === 'left';
+  const label = el('text', left ? { x: -kR - 30 * L.s, y: 10 * L.s, 'text-anchor': 'end' } : { y: L.kSize / 2 + 40 * L.s, 'text-anchor': 'middle' }, g);
+  set(label, { 'font-size': 27 * L.s, 'font-weight': 700, fill: C.white });
+  label.textContent = 'Agent Kourier';
+  return { g, pulse, mark, place(sc, op, rot) {
+    set(g, { transform: `translate(${L.k[0]} ${L.k[1]}) scale(${sc})`, opacity: op });
+    set(mark, { transform: `rotate(${rot})` });
+  } };
+})();
+
+// Thread callout beside Slack: three abstract message rows, no product UI.
+const thread = (() => {
+  const T = L.thread, rowH = 44 * L.s, pad = 20 * L.s;
+  const h = pad * 2 + 30 * L.s + rowH * 3;
+  const g = el('g', {}, diagram);
+  el('rect', { x: T.x, y: T.y, width: T.w, height: h, rx: 16 * L.s, fill: C.panel, stroke: C.deep, 'stroke-width': 3 * L.s }, g);
+  const cap = el('text', { x: T.x + pad, y: T.y + pad + 18 * L.s, 'font-size': 19 * L.s, fill: C.white,
+    opacity: 0.6, class: 'mono' }, g);
+  cap.textContent = '# thread';
+  const specs = [[C.alert, 0.62], [C.k8s, 0.82], [C.white, 0.48]];
+  const rows = specs.map(([col, frac], i) => {
+    const y = T.y + pad + 30 * L.s + rowH * i + rowH / 2;
+    const r = el('g', {}, g);
+    el('circle', { cx: T.x + pad + 12 * L.s, cy: y, r: 12 * L.s, fill: col }, r);
+    el('rect', { x: T.x + pad + 36 * L.s, y: y - 6 * L.s, width: (T.w - pad * 2 - 36 * L.s) * frac,
+      height: 12 * L.s, rx: 6 * L.s, fill: col === C.white ? C.white : col, opacity: col === C.white ? 0.9 : 1 }, r);
+    return r;
+  });
+  return { g, rows };
+})();
+
+// Packets: a small hex that travels a polyline, with a short trail.
+const packets = el('g', {}, diagram);
+function packet(color) {
+  const g = el('g', { filter: 'url(#glow)' }, packets);
+  const trail = [0.55, 0.3, 0.15].map(o => el('polygon', { points: hexPoints(0, 0, 11 * L.s), fill: color, opacity: 0 }, g));
+  const head = el('polygon', { points: hexPoints(0, 0, 15 * L.s), fill: color, stroke: C.white, 'stroke-width': 3 * L.s }, g);
+  return { g, head, trail };
+}
+function along(pts, p) {
+  const segs = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    segs.push(l); total += l;
+  }
+  let d = clamp(p) * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (d <= segs[i] || i === segs.length - 1) {
+      const q = segs[i] ? d / segs[i] : 0;
+      return [lerp(pts[i][0], pts[i + 1][0], q), lerp(pts[i][1], pts[i + 1][1], q)];
+    }
+    d -= segs[i];
+  }
+}
+function drive(pk, pts, t, a, b, color) {
+  const vis = t >= a && t <= b + 0.12;
+  pk.g.setAttribute('opacity', vis ? 1 : 0);
+  if (!vis) return;
+  const at = dt => along(pts, inOutCubic(ramp(t - dt, a, b)));
+  const [x, y] = at(0);
+  set(pk.head, { transform: `translate(${x} ${y})`, fill: color, opacity: 1 - ramp(t, b, b + 0.12) });
+  pk.trail.forEach((n, i) => {
+    const [tx, ty] = at(0.035 * (i + 1));
+    set(n, { transform: `translate(${tx} ${ty})`, fill: color, opacity: (0.55 - i * 0.18) * (1 - ramp(t, b - 0.05, b + 0.1)) });
+  });
+}
+const pkAlert = packet(C.alert), pkTask = packet(C.k8s), pkFind = packet(C.k8s), pkReply = packet(C.white);
+
+// ---------- headlines ----------
+function headline(key) {
+  const H = L.head, [bold, reg] = COPY[key][L.copy];
+  const g = el('g', {}, svg);
+  const maxW = L.W - H.x * 2;
+  let y = H.y;
+  const lines = [];
+  bold.forEach(s => {
+    const t = el('text', { x: H.x, y, 'font-size': H.size, 'font-weight': 700, fill: C.white, 'letter-spacing': -0.02 * H.size }, g);
+    t.textContent = s; fit(t, maxW); lines.push({ n: t, sub: false }); y += H.size * H.gap;
+  });
+  y += H.sub * 0.15;
+  reg.forEach(s => {
+    const t = el('text', { x: H.x, y, 'font-size': H.sub, 'font-weight': 400, fill: C.white, opacity: 0.78 }, g);
+    t.textContent = s; fit(t, maxW); lines.push({ n: t, sub: true }); y += H.sub * H.gap;
+  });
+  return { g, lines };
+}
+const heads = { h1: headline('h1'), h2: headline('h2'), h3: headline('h3') };
+// times: [bold in, regular in, out start, out end]
+const HEAD_T = { h1: [0.3, 1.2, 3.0, 3.3], h2: [3.5, 4.1, 7.0, 7.3], h3: [7.4, 8.0, 10.9, 11.2] };
+function showHeadline(h, t, [a, b, c, d]) {
+  h.lines.forEach(({ n, sub }) => {
+    const start = sub ? b : a;
+    const p = outCubic(ramp(t, start, start + 0.45));
+    const out = ramp(t, c, d);
+    const op = Math.min(p, 1 - out) * (sub ? 0.78 : 1);
+    set(n, { opacity: op, transform: `translate(0 ${(1 - p) * 24 * L.s - out * 16 * L.s})` });
+  });
+}
+
+// ---------- capabilities ----------
+const caps = (() => {
+  const P = L.caps, g = el('g', {}, svg);
+  const head = el('text', { x: P.cx, y: P.y, 'text-anchor': 'middle', 'font-size': P.head, 'font-weight': 700,
+    fill: C.white, 'letter-spacing': -0.02 * P.head }, g);
+  head.textContent = COPY.capsHead; fit(head, L.W - 120);
+  let y = P.y + P.head * 0.9;
+  const rows = COPY.caps.map(entry => {
+    const lines = Array.isArray(entry) ? [entry] : entry[L.copy];
+    const h = P.h + (lines.length - 1) * P.size * 1.3;
+    const r = el('g', {}, g);
+    el('rect', { x: P.cx - P.w / 2, y, width: P.w, height: h, rx: Math.min(h, P.h) / 2, fill: C.panel, stroke: C.deep, 'stroke-width': 3 * L.s }, r);
+    const bx = P.cx - P.w / 2 + P.h * 0.55;
+    el('polygon', { points: hexPoints(bx, y + h / 2, P.h * 0.2), fill: C.k8s }, r);
+    const top = y + h / 2 - (lines.length - 1) * P.size * 0.65 + P.size * 0.35;
+    lines.forEach((parts, li) => {
+      const tx = el('text', { x: bx + P.h * 0.45, y: top + li * P.size * 1.3, 'font-size': P.size, fill: C.white }, r);
+      for (const [s, mono] of parts) {
+        const sp = el('tspan', mono ? { class: 'mono', 'font-weight': 600 } : { 'font-weight': 500 }, tx);
+        sp.textContent = s;
+      }
+      fit(tx, P.w - (bx - (P.cx - P.w / 2)) - P.h * 0.9);
+    });
+    y += h + P.gap;
+    return r;
+  });
+  return { g, head, rows };
+})();
+
+// ---------- end card ----------
+const endCard = (() => {
+  const E = L.end, g = el('g', {}, svg);
+  const logo = el('g', {}, g);
+  kourierMark(logo, E.logo);
+  const word = el('text', { 'font-size': E.word, fill: C.white, 'letter-spacing': -0.025 * E.word }, g);
+  const a = el('tspan', { 'font-weight': 400 }, word); a.textContent = 'Agent ';
+  const b = el('tspan', { 'font-weight': 700 }, word); b.textContent = 'Kourier';
+  const tag = el('text', { 'font-size': E.tag, fill: C.white, opacity: 0.85, 'text-anchor': 'middle' }, g);
+  tag.textContent = COPY.tagline;
+  const stack = el('text', { 'font-size': E.stack, fill: C.white, opacity: 0.6, 'text-anchor': 'middle', class: 'mono', 'letter-spacing': 1 }, g);
+  stack.textContent = COPY.stack;
+  fit(tag, L.W - 140);
+  const ww = word.getComputedTextLength();
+  let pos;
+  if (E.mode === 'row') {
+    const gap = E.logo * 0.18, total = E.logo + gap + ww, x0 = E.cx - total / 2;
+    pos = { logo: [x0 + E.logo / 2, E.cy], word: [x0 + E.logo + gap, E.cy + E.word * 0.35],
+      tag: [E.cx, E.cy + E.logo / 2 + E.tag * 1.9], stack: [E.cx, E.cy + E.logo / 2 + E.tag * 1.9 + E.stack * 2.4] };
+  } else {
+    pos = { logo: [E.cx, E.cy], word: [E.cx - ww / 2, E.cy + E.logo / 2 + E.word * 1.25],
+      tag: [E.cx, E.cy + E.logo / 2 + E.word * 1.25 + E.tag * 2.2], stack: [E.cx, E.cy + E.logo / 2 + E.word * 1.25 + E.tag * 2.2 + E.stack * 2.6] };
+  }
+  set(word, { x: pos.word[0], y: pos.word[1] });
+  set(tag, { x: pos.tag[0], y: pos.tag[1] });
+  set(stack, { x: pos.stack[0], y: pos.stack[1] });
+  return { g, logo, word, tag, stack, pos };
+})();
+
+// ---------- timeline ----------
+function renderAt(t) {
+  // Background: fade up from black, lattice drifts.
+  set(lattice, { transform: `translate(${(t * 6) % hexW} ${(t * 10) % hexH})` });
+  svg.style.opacity = outCubic(ramp(t, 0, 0.4));
+
+  // Diagram leaves for the capabilities shot.
+  const dOut = inOutCubic(ramp(t, 11.1, 11.6));
+  set(diagram, { opacity: 1 - dOut, transform: `translate(${L.W / 2} ${L.H / 2}) scale(${1 - dOut * 0.08}) translate(${-L.W / 2} ${-L.H / 2})` });
+
+  // Shot 1: the gap.
+  am.place(lerp(0.7, 1, outBack(ramp(t, 0.2, 0.65))), outCubic(ramp(t, 0.2, 0.5)));
+  set(am.disc, { stroke: t < 4.3 ? mixHex(C.deep, C.alert, outCubic(ramp(t, 0.4, 0.7))) : mixHex(C.alert, C.deep, ramp(t, 4.3, 4.8)) });
+  rings.forEach((c, i) => {
+    const t0 = 0.45 + i * 0.8, p = ramp(t, t0, t0 + 1.2);
+    const on = t >= t0 && t <= t0 + 1.2;
+    set(c, { r: L.r * lerp(1, 2.3, outCubic(p)), opacity: on ? 0.7 * (1 - p) : 0 });
+  });
+  const fp = window4(t, 0.5, 0.8, 4.6, 5.0);
+  set(firing, { opacity: fp, transform: `translate(${L.firing[0]} ${L.firing[1] + (1 - fp) * 8})` });
+
+  agent.place(lerp(0.7, 1, outBack(ramp(t, 0.6, 1.05))), outCubic(ramp(t, 0.6, 0.9)));
+  const reachP = outCubic(ramp(t, 1.3, 2.3));
+  set(reach, { x2: L.am[0] + (L.agent[0] - L.am[0]) * 0.42 * reachP, y2: L.am[1] + (L.agent[1] - L.am[1]) * 0.42 * reachP,
+    opacity: (1 - ramp(t, 2.5, 3.0)) * (t > 1.3 ? 0.9 : 0) });
+  // Clip the reach so it starts outside the Alertmanager disc.
+  const ux = (L.agent[0] - L.am[0]) / reachLen, uy = (L.agent[1] - L.am[1]) / reachLen;
+  set(reach, { x1: L.am[0] + ux * (L.r + 14 * L.s), y1: L.am[1] + uy * (L.r + 14 * L.s) });
+
+  // Agent sleep, wake, work.
+  const wake = outCubic(ramp(t, 5.6, 6.0));
+  set(agent.hex, { fill: mixHex(C.panel, C.k8s, wake), stroke: mixHex(C.deep, C.k8s, wake) });
+  set(agent.eyesShut, { opacity: 1 - wake });
+  set(agent.eyesOpen, { opacity: wake });
+  agent.zs.forEach((z, i) => {
+    const cyc = ((t + i * 0.6) % 1.6) / 1.6;
+    set(z, { x: L.agentR * 0.55 + i * 22 * L.s + cyc * 14 * L.s, y: -L.agentR * 0.75 - i * 26 * L.s - cyc * 30 * L.s,
+      opacity: (1 - wake) * Math.sin(cyc * Math.PI) * outCubic(ramp(t, 1.0, 1.4)) });
+  });
+  const ripP = (a) => ramp(t, a, a + 0.7);
+  const rip = Math.max(t >= 5.6 && t <= 6.3 ? 1 - ripP(5.6) : 0, t >= 10.6 && t <= 11.3 ? 1 - ripP(10.6) : 0);
+  const ripS = t >= 10.6 ? ripP(10.6) : ripP(5.6);
+  set(agent.ripple, { opacity: rip * 0.8, transform: `scale(${1 + outCubic(ripS) * 0.35})` });
+  const working = Math.max(window4(t, 6.0, 6.2, 7.2, 7.4), window4(t, 10.7, 10.9, 11.1, 11.3));
+  agent.orbit.forEach((o, i) => {
+    const a = t * 4.2 + i * (Math.PI * 2 / 3), rr = L.agentR * 1.3;
+    set(o, { cx: Math.cos(a) * rr, cy: Math.sin(a) * rr, opacity: working });
+  });
+
+  // Shot 2: Kourier bridges the gap.
+  const kp = ramp(t, 3.2, 3.75);
+  kour.place(lerp(0.5, 1, outBack(kp)), outCubic(ramp(t, 3.2, 3.45)), lerp(-60, 0, outCubic(kp)));
+  slack.place(lerp(0.7, 1, outBack(ramp(t, 3.35, 3.8))), outCubic(ramp(t, 3.35, 3.6)));
+  const lit = (a, b) => Math.max(window4(t, a, a + 0.1, b, b + 0.3), 0);
+  eAm.draw(inOutCubic(ramp(t, 3.5, 4.0)), lit(4.3, 4.9));
+  eSlack.draw(inOutCubic(ramp(t, 3.6, 4.1)), Math.max(lit(7.95, 8.5), lit(9.5, 10.05)));
+  eAgent.draw(inOutCubic(ramp(t, 3.75, 4.25)), Math.max(lit(5.0, 5.6), lit(7.4, 7.95), lit(10.05, 10.6)));
+  const pulseAt = [4.9, 7.95, 10.05].find(a => t >= a && t <= a + 0.6);
+  set(kour.pulse, pulseAt !== undefined
+    ? { opacity: 0.8 * (1 - ramp(t, pulseAt, pulseAt + 0.6)), transform: `scale(${1 + outCubic(ramp(t, pulseAt, pulseAt + 0.6)) * 0.5})` }
+    : { opacity: 0 });
+
+  // Packets. The alert arrives red and leaves Kourier as an agent task in blue.
+  drive(pkAlert, [L.am, L.k], t, 4.3, 4.9, C.alert);
+  drive(pkTask, [L.k, L.agent], t, 5.0, 5.6, C.k8s);
+  // Shot 3: findings back to the thread, a reply goes to the same session.
+  drive(pkFind, [L.agent, L.k, L.slack], t, 7.4, 8.5, C.k8s);
+  drive(pkReply, [L.slack, L.k, L.agent], t, 9.5, 10.6, C.white);
+
+  const th = outCubic(ramp(t, 8.2, 8.55));
+  set(thread.g, { opacity: th, transform: `translate(0 ${(1 - th) * 16 * L.s})` });
+  [8.35, 8.6, 9.35].forEach((a, i) => {
+    const p = outCubic(ramp(t, a, a + 0.3));
+    set(thread.rows[i], { opacity: p, transform: `translate(${(1 - p) * -14 * L.s} 0)` });
+  });
+
+  // Headlines.
+  for (const k of ['h1', 'h2', 'h3']) showHeadline(heads[k], t, HEAD_T[k]);
+
+  // Shot 4: capabilities.
+  const capsOut = ramp(t, 13.9, 14.3);
+  set(caps.head, { opacity: outCubic(ramp(t, 11.3, 11.7)) * (1 - capsOut) });
+  caps.rows.forEach((r, i) => {
+    const a = 11.5 + i * 0.32, p = outCubic(ramp(t, a, a + 0.4));
+    set(r, { opacity: p * (1 - capsOut), transform: `translate(0 ${(1 - p) * 26 * L.s - capsOut * 14 * L.s})` });
+  });
+
+  // End card.
+  const E = L.end, ep = ramp(t, 14.3, 14.85);
+  set(endCard.logo, { opacity: outCubic(ramp(t, 14.3, 14.55)),
+    transform: `translate(${endCard.pos.logo[0]} ${endCard.pos.logo[1]}) scale(${lerp(0.6, 1, outBack(ep))}) rotate(${lerp(-60, 0, outCubic(ep))})` });
+  const wp = outCubic(ramp(t, 14.5, 14.95));
+  set(endCard.word, { opacity: wp, transform: `translate(${E.mode === 'row' ? (1 - wp) * -30 : 0} ${E.mode === 'row' ? 0 : (1 - wp) * 20})` });
+  const tp = outCubic(ramp(t, 14.8, 15.2));
+  set(endCard.tag, { opacity: tp * 0.85, transform: `translate(0 ${(1 - tp) * 16})` });
+  set(endCard.stack, { opacity: outCubic(ramp(t, 15.05, 15.45)) * 0.6 });
+}
+
+window.DURATION = DURATION;
+window.FPS = FPS;
+window.renderAt = renderAt;
+renderAt(parseFloat(new URLSearchParams(location.search).get('t') || '6'));
+window.READY = true;
+</script>
+</body>
+</html>

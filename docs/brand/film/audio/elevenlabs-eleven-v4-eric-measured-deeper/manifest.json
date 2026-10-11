@@ -1,0 +1,111 @@
+{
+  "model": "elevenlabs/eleven-v4",
+  "voice": "eric",
+  "lines": {
+    "p1": {
+      "cut": "demo",
+      "text": "You've put AI agents on Kubernetes. They can read logs, check rollouts, and find the cause.",
+      "say": "[confident, measured, authoritative] You've put AI agents on Kubernetes. They can read logs, check rollouts, and find the cause.",
+      "treat": "-1/2",
+      "seconds": 6.17
+    },
+    "p2": {
+      "cut": "demo",
+      "text": "But they only work when someone opens a prompt and asks.",
+      "say": "[confident, measured, authoritative] But they only work when someone opens a prompt and asks.",
+      "treat": "-1/2",
+      "seconds": 3.77
+    },
+    "p3": {
+      "cut": "demo",
+      "text": "Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither.",
+      "say": "[confident, measured, authoritative] Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither.",
+      "treat": "-1/2",
+      "seconds": 5.62
+    },
+    "reveal": {
+      "cut": "demo",
+      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes.",
+      "say": "[confident, measured, authoritative] Introducing Agent Courier: the always-on chat gateway for A-to-A agents on Kubernetes.",
+      "treat": "-1/2",
+      "seconds": 6.02
+    },
+    "promise": {
+      "cut": "demo",
+      "text": "An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first.",
+      "say": "[confident, measured, authoritative] An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first.",
+      "treat": "-1/2",
+      "seconds": 6.74
+    },
+    "r1": {
+      "cut": "demo",
+      "text": "When an alert lands in the channel, Agent Kourier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found.",
+      "say": "[confident, measured, authoritative] When an alert lands in the channel, Agent Courier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found.",
+      "treat": "-1/2",
+      "seconds": 10.67
+    },
+    "r2": {
+      "cut": "demo",
+      "text": "Reply in the thread, and the same session continues. Same context, nothing re-explained.",
+      "say": "[confident, measured, authoritative] Reply in the thread, and the same session continues. Same context, nothing re-explained.",
+      "treat": "-1/2",
+      "seconds": 5.86
+    },
+    "r3": {
+      "cut": "demo",
+      "text": "Or skip the alert, and just ask.",
+      "say": "[confident, measured, authoritative] Or skip the alert, and just ask.",
+      "treat": "-1/2",
+      "seconds": 2.67
+    },
+    "r4": {
+      "cut": "demo",
+      "text": "When the agent needs a decision, it asks, and waits for your answer.",
+      "say": "[confident, measured, authoritative] When the agent needs a decision, it asks, and waits for your answer.",
+      "treat": "-1/2",
+      "seconds": 4.65
+    },
+    "r5": {
+      "cut": "demo",
+      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two.",
+      "say": "[confident, measured, authoritative] And if Agent Courier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two.",
+      "treat": "-1/2",
+      "seconds": 6.98
+    },
+    "yaml": {
+      "cut": "demo",
+      "text": "Teams add one Binding, in YAML, next to their agent. The platform wiring is shared.",
+      "say": "[confident, measured, authoritative] Teams add one Binding, in YAML, next to their agent. The platform wiring is shared.",
+      "treat": "-1/2",
+      "seconds": 6.09
+    },
+    "close": {
+      "cut": "demo",
+      "text": "It works with kagent, or any streaming A2A agent. Slack and Alertmanager first, built for more. And never in your paging path. Agent Kourier. Every thread, a live agent session.",
+      "say": "[confident, measured, authoritative] It works with K agent, or any streaming A-to-A agent. Slack and Alertmanager first, built for more. And never in your paging path. Agent Courier. Every thread, a live agent session.",
+      "treat": "-1/2",
+      "seconds": 12.9
+    },
+    "t-problem": {
+      "cut": "teaser",
+      "text": "Your agents are ready. But nothing brings them the work.",
+      "say": "[confident, measured, authoritative] Your agents are ready. But nothing brings them the work.",
+      "treat": "-1/2",
+      "seconds": 3.95
+    },
+    "t-reveal": {
+      "cut": "teaser",
+      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes.",
+      "say": "[confident, measured, authoritative] Introducing Agent Courier: the always-on chat gateway for A-to-A agents on Kubernetes.",
+      "treat": "-1/2",
+      "seconds": 6.09
+    },
+    "t-proof": {
+      "cut": "teaser",
+      "text": "Alerts and questions become live agent sessions, right in the thread. Slack first.",
+      "say": "[confident, measured, authoritative] Alerts and questions become live agent sessions, right in the thread. Slack first.",
+      "treat": "-1/2",
+      "seconds": 5.7
+    }
+  }
+}

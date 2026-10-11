@@ -8,3 +8,4 @@
 /film/out/
 # Narration takes: un-ignore the chosen voice with !/film/audio/<voice>/
 /film/audio/*
+!/film/audio/elevenlabs-eleven-v4-eric-measured-deeper/
