@@ -118,8 +118,9 @@ $(DOCS_VENV)/.installed: hack/docs/requirements.txt
 docs-ref: ## Generate the reference pages from api/v1alpha1 and the chart's values (hack/docs/refgen)
 	go run ./hack/docs/refgen
 
-docs-check: ## Fail on the product name misspelt on the site ("Kourier" alone, or "courier")
+docs-check: ## Fail on a misspelt product name, and on internal IDs, removed names, workspace identifiers or dead README links in the public docs
 	go run ./hack/docs/namecheck
+	go run ./hack/docs/contentcheck
 
 docs-diagrams: ## Render the full architecture map to docs/assets/diagrams (Node; mermaid-cli through npx)
 	npx -y @mermaid-js/mermaid-cli@11.15.0 -i hack/docs/diagrams/architecture-map.mmd \
