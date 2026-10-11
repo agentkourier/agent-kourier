@@ -4,6 +4,8 @@
 # in their file names and may be cached long.
 /stylesheets/*
   Cache-Control: public, max-age=300, must-revalidate
+/stylesheets/brand.css
+  Cache-Control: public, max-age=300, must-revalidate
 /*.html
   Cache-Control: public, max-age=300, must-revalidate
 /

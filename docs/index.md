@@ -98,12 +98,21 @@ your alerting tool already posts to Slack, so it is never in the paging path. Al
 another tool's bot needs a trigger of its own.
 
 <div class="ak-strip">
-<p class="ak-strip__label">Works with</p>
-<span class="ak-strip__name">Alertmanager</span>
+<div class="ak-strip__group">
+<p class="ak-strip__label">Chat</p>
 <span class="ak-strip__name">Slack</span>
+</div>
+<div class="ak-strip__group">
+<p class="ak-strip__label">Agents</p>
 <span class="ak-strip__name">A2A</span>
 <span class="ak-strip__name">kagent</span>
-<span class="ak-strip__name">Helm</span>
+<span class="ak-strip__name">Google AX</span>
+</div>
+<div class="ak-strip__group">
+<p class="ak-strip__label">Alerts</p>
+<span class="ak-strip__name">Alertmanager preset</span>
+<span class="ak-strip__name">any bot's message</span>
+</div>
 </div>
 
 Agent Kourier is in an internal-first pilot and has no tagged release yet. The [roadmap](explanation/roadmap.md) says

@@ -504,11 +504,18 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.4rem 2rem;
+  gap: 1rem 3rem;
   margin: 2.4rem 0 1rem;
   padding: 1rem 0;
   border-top: 1px solid var(--ak-rule);
   border-bottom: 1px solid var(--ak-rule);
+}
+.ak-strip__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.3rem 1.2rem;
 }
 .md-typeset .ak-strip__label {
   flex-basis: 100%;
