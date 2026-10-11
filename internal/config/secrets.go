@@ -23,9 +23,8 @@ type SecretResolver interface {
 
 // The fixed keys of a ChatConnection's credentials Secret (spec section 7).
 const (
-	keyBotToken      = "botToken"
-	keyAppToken      = "appToken"
-	keySigningSecret = "signingSecret"
+	keyBotToken = "botToken"
+	keyAppToken = "appToken"
 )
 
 // secretRef is one Secret that an object of a Set refers to, and what it must hold.
@@ -55,11 +54,7 @@ func (s *Set) secretRefs() []secretRef {
 	}
 	for i := range s.ChatConnections {
 		c := &s.ChatConnections[i]
-		keys := []string{keyBotToken, keyAppToken}
-		if c.Spec.Mode == v1alpha1.ModeHTTP {
-			keys[1] = keySigningSecret
-		}
-		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, keys})
+		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, []string{keyBotToken, keyAppToken}})
 	}
 	for i := range s.Bindings {
 		b := &s.Bindings[i]

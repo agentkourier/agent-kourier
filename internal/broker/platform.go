@@ -26,19 +26,18 @@ type Connection struct {
 	Credentials map[string]secret.Value
 }
 
-// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, the modes it
-// is served in. Its adapter is built by RunConfig.newPlatform, which leaderHalf.openPlatform calls.
+// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads. Its adapter
+// is built by RunConfig.newPlatform, which leaderHalf.openPlatform calls.
 type platformSpec struct {
-	Keys  []string
-	Modes []v1alpha1.ChatMode
+	Keys []string
 }
 
-// platformFor is the one place that names a platform: a second platform is one more case here, with its keys and its modes,
+// platformFor is the one place that names a platform: a second platform is one more case here, with its keys,
 // and one more in newPlatform for its adapter. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It is a func and
 // not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: []string{"botToken", "appToken"}, Modes: []v1alpha1.ChatMode{v1alpha1.ModeSocket}}, true
+		return platformSpec{Keys: []string{"botToken", "appToken"}}, true
 	}
 	return platformSpec{}, false
 }

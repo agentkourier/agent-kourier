@@ -11,8 +11,8 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
-// TestS11_AToolApprovalOnABindingThatDoesNotAllowThemIsDenied: the agent asks to approve a tool call on a
-// Binding with toolApprovals off (all of Phase 1). Agent Kourier denies it, says so in the thread in words of its
+// TestS11_AToolApprovalOnABindingThatDoesNotAllowThemIsDenied: the agent asks to approve a tool call. Tool approvals
+// are not built (Phase 5), so no Binding allows one. Agent Kourier denies it, says so in the thread in words of its
 // own, the agent goes on without the tool, and the approval-outcome counter goes up by one.
 //
 // UNCONFIRMED(WP-02): that the agent's continuation after a denial is the text spike-approve gives it

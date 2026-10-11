@@ -121,7 +121,6 @@ metadata:
   namespace: agent-kourier-system
 spec:
   platform: slack
-  mode: socket
   credentialsSecretRef:
     name: agent-kourier-slack
   allowedNamespaces: [payments]

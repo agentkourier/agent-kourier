@@ -4,7 +4,7 @@ This page lists every field of the Binding resource, as the Go types in `api/v1a
 
 `apiVersion: agentkourier.dev/v1alpha1` · `kind: Binding`
 
-Binding connects one agent to one chat channel and, optionally, one alert route. Owned by an application team.
+Binding connects one agent to one chat channel. Owned by an application team.
 
 ## Binding
 
@@ -12,7 +12,6 @@ Binding connects one agent to one chat channel and, optionally, one alert route.
 |---|---|---|---|---|
 | `metadata` | ObjectMeta | Yes |  | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |
 | `spec` | [BindingSpec](#bindingspec) | Yes |  |  |
-| `status` | [BindingStatus](#bindingstatus) | No |  |  |
 
 ## BindingSpec
 
@@ -39,7 +38,7 @@ AgentRef names the agent on a backend.
 
 ## ObjectRef
 
-ObjectRef names a resource in a namespace. An empty namespace means the namespace of the referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a ChatConnection in another namespace only if that resource lists the Binding's namespace in its allowedNamespaces. A ChatConnection's directMessages.defaultBindingRef is not checked that way: it may name a Binding in any namespace, provided that Binding uses the connection.
+ObjectRef names a resource in a namespace. An empty namespace means the namespace of the referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a ChatConnection in another namespace only if that resource lists the Binding's namespace in its allowedNamespaces.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -146,9 +145,7 @@ Interactions configures agent pauses that wait on a person.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `askUser` | boolean | No |  | AskUser lets the agent ask questions in the thread. Defaults to false. |
-| `toolApprovals` | boolean | No |  | ToolApprovals gates tool calls on approval from the chat, which is not built yet: keep it false. Defaults to false. |
 | `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. |
-| `approverGroups` | []string | No |  | ApproverGroups is reserved for limiting who may answer; empty means any channel member. |
 
 ## Feedback
 
@@ -165,14 +162,6 @@ Session configures thread-to-session mapping.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `threadTTL` | duration | No | `2160h` | ThreadTTL is how long a thread keeps its session after its last activity. Defaults to 2160h (90 days). |
-
-## BindingStatus
-
-BindingStatus is the observed state of a Binding. Conditions are for the controller that will serve these resources; they are not visible while resources are loaded from files.
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `conditions` | []Condition | No |  | Conditions include Ready, BackendReachable, and ChannelJoined. |
 
 ---
 

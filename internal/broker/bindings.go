@@ -191,6 +191,6 @@ func (b *Bindings) Binding(name string) (interact.Binding, error) {
 	}
 	in := rb.Binding.Spec.Interactions
 	return interact.Binding{
-		Dialect: k.dialect, Identity: src.Identity(), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals, Timeout: in.Timeout.Duration,
+		Dialect: k.dialect, Identity: src.Identity(), AskUser: in.AskUser, Timeout: in.Timeout.Duration,
 	}, nil
 }

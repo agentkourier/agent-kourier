@@ -163,11 +163,7 @@ func (c *ChatConnection) Validate() error {
 	p.meta(c.ObjectMeta)
 	s := &c.Spec
 	p.oneOf("spec.platform", s.Platform, PlatformSlack)
-	p.oneOf("spec.mode", string(s.Mode), string(ModeSocket), string(ModeHTTP))
 	p.name("spec.credentialsSecretRef.name", s.CredentialsSecretRef.Name)
-	if dm := s.DirectMessages; dm != nil && dm.DefaultBindingRef != nil {
-		p.objectRef("spec.directMessages.defaultBindingRef", dm.DefaultBindingRef)
-	}
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
 	return errors.Join(p...)
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -109,8 +108,8 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, secrets identi
 	c := conns[0]
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
 	spec, ok := platformFor(c.Spec.Platform)
-	if !ok || (c.Spec.Mode != "" && !slices.Contains(spec.Modes, c.Spec.Mode)) {
-		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q in mode %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform, c.Spec.Mode)
+	if !ok {
+		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform)
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)

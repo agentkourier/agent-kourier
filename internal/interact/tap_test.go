@@ -226,17 +226,6 @@ func TestAPauseIsGivenUpAtItsOwnDeadline(t *testing.T) {
 	}
 }
 
-func TestAPauseTheIntakeCannotRenderIsNotTriedAgain(t *testing.T) {
-	r := newTap(t, func(c *interact.TapConfig) { c.Backoff, c.MaxBackoff = time.Millisecond, time.Millisecond })
-	r.pauses.handle = func(context.Context, int, interact.Pause) error { return interact.ErrDisallowed }
-	task := pausedTask("task-1", "msg-1", d0)
-	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
-	waitFor(t, "an Error log", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
-	if err := r.close(t); err != nil || r.pauses.calls() != 1 {
-		t.Errorf("Close = %v after %d tries; want one: no retry can change what the Binding allows", err, r.pauses.calls())
-	}
-}
-
 // TestAPauseSeenAgainIsHandedOffAgain: nothing is remembered once a hand-off is over, because the intake is
 // what knows what is done, and a pause that comes again after a restart is how an answered one is sent again
 // (28h). A pause whose hand-off is still running is not started twice, and another pause of the same task is.

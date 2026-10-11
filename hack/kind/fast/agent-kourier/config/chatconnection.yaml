@@ -5,5 +5,4 @@ kind: ChatConnection
 metadata: {name: slack-fast, namespace: agent-kourier}
 spec:
   platform: slack
-  mode: socket
   credentialsSecretRef: {name: slack-fast}

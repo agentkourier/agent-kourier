@@ -59,9 +59,8 @@ func (s *Snapshot) BindingForChannel(connNamespace, connName, channel string) (R
 	return rb, ok
 }
 
-// ChatConnections returns every ChatConnection of the config, sorted by namespace and name:
-// those no Binding uses, and those that only name a Binding as their DM default, too. A
-// chat adapter is started for each. The slice is the caller's; the connections are read-only.
+// ChatConnections returns every ChatConnection of the config, sorted by namespace and name,
+// those no Binding uses too. A chat adapter is started for each. The slice is the caller's; the connections are read-only.
 func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 	out := make([]*v1alpha1.ChatConnection, 0, len(s.conns))
 	for _, c := range s.conns {
@@ -75,13 +74,10 @@ func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 
 // Resolve checks the references between the objects of set and builds a Snapshot. Empty
 // namespaces in references mean the referrer's. A reference into another namespace needs the
-// target to list the referrer's namespace in allowedNamespaces, except that a ChatConnection
-// may name any Binding as its default for direct messages, provided that Binding uses the
-// connection. One connection channel belongs to at most one Binding. Through secrets it also
+// target to list the referrer's namespace in allowedNamespaces. One connection channel belongs to at most one Binding. Through secrets it also
 // requires every referenced Secret to exist with the keys it needs, without reading values.
 //
-// Resolve takes ownership of set: the caller must not use or change it afterwards. It resets
-// each Binding's status, which is never input. On any problem it
+// Resolve takes ownership of set: the caller must not use or change it afterwards. On any problem it
 // returns every one, joined and grouped by object, and a nil Snapshot. If ctx ends first, the
 // error also wraps ctx's, once, ahead of the reference problems found so far; Secret
 // problems are then incomplete.
@@ -90,7 +86,6 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 		secrets:  secrets,
 		backends: index("AgentBackend", set.AgentBackends),
 		conns:    index("ChatConnection", set.ChatConnections),
-		bindings: index("Binding", set.Bindings),
 		snap: &Snapshot{
 			bindings:  map[identity]ResolvedBinding{},
 			byChannel: map[channelKey]ResolvedBinding{},
@@ -99,9 +94,6 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 	r.snap.conns = r.conns
 	for i := range set.Bindings {
 		r.binding(&set.Bindings[i])
-	}
-	for i := range set.ChatConnections {
-		r.connection(&set.ChatConnections[i])
 	}
 	r.checkSecrets(ctx, set)
 	// Group each object's problems, keeping the order they were found in.
@@ -131,7 +123,6 @@ type resolver struct {
 	secrets  SecretResolver
 	backends map[identity]*v1alpha1.AgentBackend
 	conns    map[identity]*v1alpha1.ChatConnection
-	bindings map[identity]*v1alpha1.Binding
 	snap     *Snapshot
 	problems []problem
 }
@@ -169,26 +160,6 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 		return
 	}
 	r.snap.byChannel[key] = rb
-	b.Status = v1alpha1.BindingStatus{}
-}
-
-func (r *resolver) connection(c *v1alpha1.ChatConnection) {
-	dm := c.Spec.DirectMessages
-	if dm == nil || dm.DefaultBindingRef == nil {
-		return
-	}
-	from := identity{"ChatConnection", c.Namespace, c.Name}
-	const path = "spec.directMessages.defaultBindingRef"
-	b, err := find(r.bindings, "Binding", from, *dm.DefaultBindingRef, nil)
-	r.fail(from, path, err)
-	if err != nil {
-		return
-	}
-	ref := b.Spec.Chat.ConnectionRef
-	// A Binding whose connection does not exist is reported on the Binding already.
-	if used := (identity{"ChatConnection", cmp.Or(ref.Namespace, b.Namespace), ref.Name}); used != from && r.conns[used] != nil {
-		r.fail(from, path, fmt.Errorf("%s belongs to %s, not this one", identity{"Binding", b.Namespace, b.Name}, used))
-	}
 }
 
 // index maps the identity of each object of one kind to the object.
@@ -206,14 +177,14 @@ func index[T any, PT interface {
 }
 
 // find looks up the object ref names, as seen from the object from. A target in another
-// namespace must list from's namespace in the list allowed returns; a nil allowed permits any.
+// namespace must list from's namespace in the list allowed returns.
 func find[T any](objects map[identity]*T, kind string, from identity, ref v1alpha1.ObjectRef, allowed func(*T) []string) (*T, error) {
 	id := identity{kind, cmp.Or(ref.Namespace, from.namespace), ref.Name}
 	target := objects[id]
 	switch {
 	case target == nil:
 		return nil, fmt.Errorf("%s not found", id)
-	case id.namespace != from.namespace && allowed != nil && !slices.Contains(allowed(target), from.namespace):
+	case id.namespace != from.namespace && !slices.Contains(allowed(target), from.namespace):
 		return nil, fmt.Errorf("%s does not allow namespace %s", id, from.namespace)
 	}
 	return target, nil

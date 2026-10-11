@@ -58,7 +58,7 @@ func (r *reader) Value(_ context.Context, ns, name, key string) (secret.Value, e
 type keys struct{}
 
 func (keys) Keys(context.Context, string, string) ([]string, error) {
-	return []string{"token", "botToken", "appToken", "signingSecret"}, nil
+	return []string{"token", "botToken", "appToken"}, nil
 }
 
 // auditor counts the calls it is asked to record.

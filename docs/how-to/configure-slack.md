@@ -43,7 +43,6 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
         slack:
           spec:
             platform: slack
-            mode: socket
             credentialsSecretRef: {name: agent-kourier-slack}
             allowedNamespaces: [payments] # (1)!
     ```
@@ -60,9 +59,8 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     !!! note "Not served yet"
 
-        A ChatConnection accepts `mode: http`, and the loader reads a `signingSecret` key for it, but the broker serves
-        Slack over Socket Mode only. Slack over the Events API is on the [roadmap](../explanation/roadmap.md). Use
-        Socket Mode.
+        The broker serves Slack over Socket Mode only, and a ChatConnection has no setting for another mode. Slack over
+        the Events API is on the [roadmap](../explanation/roadmap.md). Use Socket Mode.
 
 ## What the app is allowed to do
 

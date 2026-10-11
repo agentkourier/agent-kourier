@@ -23,4 +23,4 @@ spec:
     connectionRef: {namespace: agent-kourier, name: sandbox-slack}
     channel: C_REPLACE_WITH_CHANNEL_ID
     output: live
-  interactions: {askUser: true, toolApprovals: false}
+  interactions: {askUser: true}

@@ -23,13 +23,11 @@ func TestResolveSecrets(t *testing.T) {
 	}{
 		{"missing connection Secret", func(_ *Set, f fakeSecrets) { delete(f, "agent-kourier-system/slack-main") },
 			[]string{creds + "Secret agent-kourier-system/slack-main not found"}},
-		{"socket mode needs appToken", func(_ *Set, f fakeSecrets) {
-			f["agent-kourier-system/slack-main"] = []string{"botToken", "signingSecret"}
+		{"Socket Mode needs appToken", func(_ *Set, f fakeSecrets) {
+			f["agent-kourier-system/slack-main"] = []string{"botToken"}
 		},
 			[]string{creds + `Secret agent-kourier-system/slack-main has no key "appToken"`}},
-		{"http mode needs signingSecret", func(s *Set, _ fakeSecrets) { s.ChatConnections[0].Spec.Mode = v1alpha1.ModeHTTP },
-			[]string{creds + `Secret agent-kourier-system/slack-main has no key "signingSecret"`}},
-		{"every mode needs botToken", func(_ *Set, f fakeSecrets) { f["agent-kourier-system/slack-main"] = []string{"appToken"} },
+		{"botToken is needed", func(_ *Set, f fakeSecrets) { f["agent-kourier-system/slack-main"] = []string{"appToken"} },
 			[]string{creds + `Secret agent-kourier-system/slack-main has no key "botToken"`}},
 		{"identity key is the ref's key", func(s *Set, _ fakeSecrets) { sreAlerts(s).Spec.Identity.TokenSecretRef.Key = "jwt" },
 			[]string{oidc + `Secret sre/agent-kourier-sre-alerts-oidc has no key "jwt"`}},
@@ -50,10 +48,11 @@ func TestResolveSecrets(t *testing.T) {
 		})
 	}
 
-	t.Run("http mode does not need appToken", func(t *testing.T) {
+	// signingSecret was the key of the HTTP mode that was never served. It is not a known key now, and a Secret
+	// that still carries it, as one made for that mode would, is not a problem: only the keys that are needed are checked.
+	t.Run("an unknown key in the Secret is ignored", func(t *testing.T) {
 		set, secrets := specSet(t), specSecrets()
-		set.ChatConnections[0].Spec.Mode = v1alpha1.ModeHTTP
-		secrets["agent-kourier-system/slack-main"] = []string{"botToken", "signingSecret"}
+		secrets["agent-kourier-system/slack-main"] = []string{"botToken", "appToken", "signingSecret"}
 		if _, err := Resolve(context.Background(), set, secrets); err != nil {
 			t.Error(err)
 		}
@@ -104,7 +103,7 @@ type readNamespaces struct{ seen map[string]bool }
 
 func (r *readNamespaces) Keys(_ context.Context, namespace, _ string) ([]string, error) {
 	r.seen[namespace] = true
-	return []string{"token", "botToken", "appToken", "signingSecret", "value"}, nil
+	return []string{"token", "botToken", "appToken", "value"}, nil
 }
 
 // SecretNamespaces and the checks Resolve makes walk the same references, so a namespace that

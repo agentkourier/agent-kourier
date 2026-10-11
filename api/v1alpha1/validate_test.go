@@ -146,19 +146,9 @@ func TestAgentBackendValidate(t *testing.T) {
 func TestChatConnectionValidate(t *testing.T) {
 	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
 		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "teams" }, `spec.platform: unsupported value "teams", must be one of slack`},
-		{"bad mode", func(o *ChatConnection) { o.Spec.Mode = "carrier-pigeon" },
-			`spec.mode: unsupported value "carrier-pigeon", must be one of socket, http`},
-		{"http mode ok", func(o *ChatConnection) { o.Spec.Mode = ModeHTTP }, ""},
 		{"credentials without name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef = SecretRef{} }, "spec.credentialsSecretRef.name: required"},
 		{"credentials with bad name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef.Name = "Slack_Main" },
 			badName("spec.credentialsSecretRef.name", "Slack_Main")},
-		{"no direct messages ok", func(o *ChatConnection) { o.Spec.DirectMessages = nil }, ""},
-		{"default binding without name", func(o *ChatConnection) {
-			o.Spec.DirectMessages.DefaultBindingRef = &ObjectRef{Namespace: "sre"}
-		}, "spec.directMessages.defaultBindingRef.name: required"},
-		{"default binding with bad namespace", func(o *ChatConnection) {
-			o.Spec.DirectMessages.DefaultBindingRef = &ObjectRef{Namespace: "Bad_NS", Name: "b"}
-		}, badNamespace("spec.directMessages.defaultBindingRef.namespace", "Bad_NS")},
 		{"empty allowed namespace", func(o *ChatConnection) { o.Spec.AllowedNamespaces = []string{""} }, "spec.allowedNamespaces[0]: required"},
 	})
 }
@@ -195,9 +185,6 @@ func TestBindingValidate(t *testing.T) {
 			`spec.chat.threadReplies: unsupported value "Mention", must be one of all, mention`},
 		{"threadReplies none", func(o *Binding) { o.Spec.Chat.ThreadReplies = "none" },
 			`spec.chat.threadReplies: unsupported value "none", must be one of all, mention`},
-		{"toolApprovals without askUser ok", func(o *Binding) {
-			o.Spec.Interactions.AskUser, o.Spec.Interactions.ToolApprovals = false, true
-		}, ""},
 		{"negative interaction timeout", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = -1 }, "spec.interactions.timeout: must be positive"},
 		{"negative threadTTL", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = -1 }, "spec.session.threadTTL: must be positive"},
 	})

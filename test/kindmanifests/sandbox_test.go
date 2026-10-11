@@ -153,9 +153,9 @@ func TestSandboxBindingAndConnection(t *testing.T) {
 		t.Fatal("the sandbox channel resolves to no Binding")
 	}
 	spec := rb.Binding.Spec
-	if spec.Agent.Namespace != "kagent" || spec.Agent.Name != "sandbox-sre" || spec.Chat.Output != v1alpha1.OutputLive || !spec.Interactions.AskUser || spec.Interactions.ToolApprovals {
-		t.Errorf("Binding agent %s/%s, output %q, askUser %t, toolApprovals %t; want kagent/sandbox-sre, live, askUser on and tool approvals off",
-			spec.Agent.Namespace, spec.Agent.Name, spec.Chat.Output, spec.Interactions.AskUser, spec.Interactions.ToolApprovals)
+	if spec.Agent.Namespace != "kagent" || spec.Agent.Name != "sandbox-sre" || spec.Chat.Output != v1alpha1.OutputLive || !spec.Interactions.AskUser {
+		t.Errorf("Binding agent %s/%s, output %q, askUser %t; want kagent/sandbox-sre, live and askUser on",
+			spec.Agent.Namespace, spec.Agent.Name, spec.Chat.Output, spec.Interactions.AskUser)
 	}
 	// The verifying front door (4180), never the controller (8083), which does not verify tokens (spec D32, R4).
 	if rb.Backend.Spec.URL != "http://kagent-frontdoor.kagent.svc.cluster.local:4180" || rb.Backend.Spec.Dialect != "kagent-v1" {
@@ -165,8 +165,8 @@ func TestSandboxBindingAndConnection(t *testing.T) {
 		t.Errorf("identity %+v; want the Dex token Secret agent-kourier-agent-token, which the refresh keeps fresh", spec.Identity)
 	}
 	conn := rb.Connection.Spec
-	if conn.Platform != "slack" || conn.Mode != v1alpha1.ModeSocket || conn.CredentialsSecretRef.Name != "sandbox-slack" {
-		t.Errorf("connection %+v; want Slack over Socket Mode on the Secret sandbox-slack", conn)
+	if conn.Platform != "slack" || conn.CredentialsSecretRef.Name != "sandbox-slack" {
+		t.Errorf("connection %+v; want Slack on the Secret sandbox-slack", conn)
 	}
 	// Without the Secrets, as before they are made, the config does not resolve.
 	if _, err := config.Resolve(t.Context(), set, secrets{"agent-kourier/agent-kourier-agent-token": {"token"}}); err == nil {

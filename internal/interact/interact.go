@@ -25,15 +25,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// ErrDisallowed is returned for a tool approval on a Binding that allows them, which Phase 5 renders.
-var ErrDisallowed = errors.New("interact: the Binding does not allow that kind of pause")
-
-// Binding is what the intake needs of a thread's Binding: which pauses it allows, and how long one waits.
+// Binding is what the intake needs of a thread's Binding: whether it allows questions, and how long a pause waits.
+// Tool approvals are not built (Phase 5), so there is no flag for them: a tool approval is always denied.
 type Binding struct {
-	Dialect                dialect.Dialect
-	Identity               string // the Binding's service identity, for the audit rows
-	AskUser, ToolApprovals bool
-	Timeout                time.Duration
+	Dialect  dialect.Dialect
+	Identity string // the Binding's service identity, for the audit rows
+	AskUser  bool
+	Timeout  time.Duration
 }
 
 // Lookup returns the Binding of a name; the broker implements it (WP-35h).
@@ -130,10 +128,8 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 		return nil // nothing structured to answer: the thread's own replies carry on
 	}
 	switch {
-	case in.Kind == dialect.ToolApproval && !b.ToolApprovals:
+	case in.Kind == dialect.ToolApproval:
 		return i.autoDeny(ctx, p, b, *in)
-	case in.Kind == dialect.ToolApproval: // allowed, but Phase 5 renders it
-		return ErrDisallowed
 	case !b.AskUser:
 		return i.refuseAskUser(ctx, p, b, *in)
 	}

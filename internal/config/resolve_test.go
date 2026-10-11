@@ -8,13 +8,11 @@ import (
 	"sync"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // specSet loads spec 7's examples: one backend, one connection, the sre/sre-alerts Binding,
-// and a chat-only Binding, sre/chat-only, that has no webhook.
+// and a second Binding, sre/chat-only.
 func specSet(t *testing.T) *Set {
 	t.Helper()
 	set, err := Load(context.Background(), "../../api/v1alpha1/testdata")
@@ -65,18 +63,12 @@ func wantProblems(t *testing.T, set *Set, secrets SecretResolver, want ...string
 }
 
 func TestResolveSpecExample(t *testing.T) {
-	set := specSet(t)
-	for i := range set.Bindings {
-		set.Bindings[i].Status = v1alpha1.BindingStatus{ // status in a file is never input
-			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
-		}
-	}
-	snap, err := Resolve(context.Background(), set, specSecrets())
+	snap, err := Resolve(context.Background(), specSet(t), specSecrets())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rb, ok := snap.Binding("sre", "chat-only"); !ok || len(rb.Binding.Status.Conditions) != 0 {
-		t.Errorf("chat-only Binding = %+v, %v; want it resolved with the status of a file dropped", rb, ok)
+	if rb, ok := snap.Binding("sre", "chat-only"); !ok {
+		t.Errorf("chat-only Binding = %+v, %v; want it resolved", rb, ok)
 	}
 	lookups := map[string]func() (ResolvedBinding, bool){
 		"Binding": func() (ResolvedBinding, bool) { return snap.Binding("sre", "sre-alerts") },
@@ -86,8 +78,7 @@ func TestResolveSpecExample(t *testing.T) {
 	}
 	for name, lookup := range lookups {
 		rb, ok := lookup()
-		if !ok || rb.Binding.Name != "sre-alerts" || rb.Backend.Name != "kagent-pilot" || rb.Connection.Name != "slack-main" ||
-			len(rb.Binding.Status.Conditions) != 0 {
+		if !ok || rb.Binding.Name != "sre-alerts" || rb.Backend.Name != "kagent-pilot" || rb.Connection.Name != "slack-main" {
 			t.Errorf("%s = %+v, %v; want the sre-alerts Binding with its backend and connection", name, rb, ok)
 		}
 	}
@@ -124,7 +115,6 @@ func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 	// Same-namespace references need no allowedNamespaces.
 	b.Namespace = be.Namespace
 	b.Spec.Agent.BackendRef.Namespace, b.Spec.Chat.ConnectionRef.Namespace = "", ""
-	c.Spec.DirectMessages.DefaultBindingRef.Namespace = b.Namespace
 	be.Spec.AllowedNamespaces, c.Spec.AllowedNamespaces = nil, nil
 	secrets := specSecrets()
 	secrets["agent-kourier-system/agent-kourier-sre-alerts-oidc"] = []string{"token"} // Secrets follow the Binding's namespace
@@ -139,7 +129,6 @@ func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 
 func TestResolveRejects(t *testing.T) {
 	const from = "Binding sre/sre-alerts: "
-	dmFrom := "ChatConnection agent-kourier-system/slack-main: spec.directMessages.defaultBindingRef: "
 	tests := []struct {
 		name   string
 		mutate func(*Set)
@@ -162,20 +151,12 @@ func TestResolveRejects(t *testing.T) {
 			second.Name = "other"
 			s.Bindings = append(s.Bindings, second)
 		}, []string{"Binding sre/other: spec.chat.channel: C0123456789 on ChatConnection agent-kourier-system/slack-main is already bound by Binding sre/sre-alerts"}},
-		{"missing default Binding", func(s *Set) { s.ChatConnections[0].Spec.DirectMessages.DefaultBindingRef.Name = "nope" },
-			[]string{dmFrom + "Binding sre/nope not found"}},
-		{"default Binding uses another connection", func(s *Set) {
-			other := s.ChatConnections[0]
-			other.Name, other.Spec.DirectMessages = "other-conn", nil
-			s.ChatConnections = append(s.ChatConnections, other)
-			sreAlerts(s).Spec.Chat.ConnectionRef.Name = "other-conn"
-		}, []string{dmFrom + "Binding sre/sre-alerts belongs to ChatConnection agent-kourier-system/other-conn, not this one"}},
 		{"every problem is reported", func(s *Set) {
 			sreAlerts(s).Spec.Agent.BackendRef.Name = "nope"
-			s.ChatConnections[0].Spec.DirectMessages.DefaultBindingRef.Name = "nope"
+			sreAlerts(s).Spec.Chat.ConnectionRef.Name = "nope"
 		}, []string{
 			from + "spec.agent.backendRef: AgentBackend agent-kourier-system/nope not found",
-			dmFrom + "Binding sre/nope not found",
+			from + "spec.chat.connectionRef: ChatConnection agent-kourier-system/nope not found",
 		}},
 	}
 	for _, tc := range tests {
@@ -192,7 +173,7 @@ func TestResolveRejects(t *testing.T) {
 func TestResolveChannelsBelongToConnection(t *testing.T) {
 	set := specSet(t)
 	other := set.ChatConnections[0]
-	other.Name, other.Spec.DirectMessages = "other-conn", nil
+	other.Name = "other-conn"
 	set.ChatConnections = append(set.ChatConnections, other)
 	second := *sreAlerts(set)
 	second.Name, second.Spec.Chat.ConnectionRef.Name = "other", "other-conn" // same channel ID as sre-alerts
@@ -238,9 +219,9 @@ func TestSnapshotConcurrentLookups(t *testing.T) {
 // Binding uses it, sorted by namespace and name, so that a Slack client is started for each.
 func TestSnapshotListsEveryConnection(t *testing.T) {
 	set := specSet(t)
-	for _, name := range []string{"zzz-idle", "aaa-idle"} { // no Binding, and no DM default
+	for _, name := range []string{"zzz-idle", "aaa-idle"} { // no Binding uses them
 		c := set.ChatConnections[0]
-		c.Name, c.Spec.DirectMessages = name, nil
+		c.Name = name
 		set.ChatConnections = append(set.ChatConnections, c)
 	}
 	snap, err := Resolve(context.Background(), set, specSecrets())

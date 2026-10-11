@@ -27,7 +27,6 @@ config:
     slack-main:
       spec:
         platform: slack
-        mode: socket
         credentialsSecretRef: {name: slack-main}
         allowedNamespaces: [sre]
   agentBackends:

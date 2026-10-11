@@ -339,7 +339,7 @@ func TestRunRefusesTwoConnectionsBeforeItOpensTheStore(t *testing.T) {
 	second := `apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata: { name: slack-two, namespace: agent-kourier-system }
-spec: { platform: slack, mode: socket, credentialsSecretRef: { name: slack-two } }
+spec: { platform: slack, credentialsSecretRef: { name: slack-two } }
 `
 	if err := os.WriteFile(filepath.Join(c.ConfigDir, "second.yaml"), []byte(second), 0o600); err != nil {
 		t.Fatal(err)

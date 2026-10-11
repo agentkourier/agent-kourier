@@ -20,9 +20,7 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `platform` | string | Yes |  | One of `slack`. |
-| `mode` | string | No | `socket` | Mode defaults to socket. One of `socket`, `http`. |
-| `credentialsSecretRef` | [SecretRef](#secretref) | Yes |  | CredentialsSecretRef names one Secret with the fixed keys botToken, appToken (socket mode), and signingSecret (http mode). |
-| `directMessages` | [DirectMessages](#directmessages) | No |  |  |
+| `credentialsSecretRef` | [SecretRef](#secretref) | Yes |  | CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode). |
 | `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this connection. |
 
 ## SecretRef
@@ -31,23 +29,6 @@ SecretRef names a Secret in the referring object's namespace whose keys are fixe
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | At least 1 character. |
-
-## DirectMessages
-
-DirectMessages configures direct messages to the bot.
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `defaultBindingRef` | [ObjectRef](#objectref) | No |  | DefaultBindingRef is the Binding that answers direct messages. |
-
-## ObjectRef
-
-ObjectRef names a resource in a namespace. An empty namespace means the namespace of the referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a ChatConnection in another namespace only if that resource lists the Binding's namespace in its allowedNamespaces. A ChatConnection's directMessages.defaultBindingRef is not checked that way: it may name a Binding in any namespace, provided that Binding uses the connection.
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `namespace` | string | No |  |  |
 | `name` | string | Yes |  | At least 1 character. |
 
 ---

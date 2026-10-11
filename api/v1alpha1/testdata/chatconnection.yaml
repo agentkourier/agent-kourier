@@ -3,8 +3,5 @@ kind: ChatConnection
 metadata: { name: slack-main, namespace: agent-kourier-system }
 spec:
   platform: slack
-  mode: socket                       # socket | http
-  credentialsSecretRef: { name: slack-main }   # bot token, app token or signing secret
-  directMessages:
-    defaultBindingRef: { namespace: sre, name: sre-alerts }
+  credentialsSecretRef: { name: slack-main }   # keys botToken and appToken (Socket Mode)
   allowedNamespaces: ["sre", "payments"]

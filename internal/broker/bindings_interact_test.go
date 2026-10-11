@@ -44,15 +44,14 @@ func TestBackendCarriesTheBindingsOutputMode(t *testing.T) {
 
 func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	f := newFixture(t)
-	// Each flag on its own, so that a swap of the two is seen.
-	for _, flags := range []struct{ ask, tools bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
-		interactions(t, f, v1alpha1.Interactions{AskUser: flags.ask, ToolApprovals: flags.tools, Timeout: metav1.Duration{Duration: 7 * time.Minute}})
+	for _, ask := range []bool{false, true} {
+		interactions(t, f, v1alpha1.Interactions{AskUser: ask, Timeout: metav1.Duration{Duration: 7 * time.Minute}})
 		got, err := f.b.Binding("sre/oncall")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.AskUser != flags.ask || got.ToolApprovals != flags.tools || got.Timeout != 7*time.Minute {
-			t.Errorf("Binding = %+v, want AskUser %t, ToolApprovals %t and the 7m timeout of the spec", got, flags.ask, flags.tools)
+		if got.AskUser != ask || got.Timeout != 7*time.Minute {
+			t.Errorf("Binding = %+v, want AskUser %t and the 7m timeout of the spec", got, ask)
 		}
 	}
 

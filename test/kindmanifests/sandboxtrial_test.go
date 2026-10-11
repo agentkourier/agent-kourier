@@ -155,11 +155,11 @@ func TestTrialBindingNamesOnlyTheAlertBot(t *testing.T) {
 }
 
 // TestTrialBindingAsksNoOneAnything: interactions.askUser is the field that lets the agent ask people a question in the thread; it is off, in the
-// file and not by default alone, and so are tool approvals. The output streams live.
+// file and not by default alone. The output streams live.
 func TestTrialBindingAsksNoOneAnything(t *testing.T) {
 	b, _ := trialBinding(t)
-	if b.Spec.Interactions.AskUser || b.Spec.Interactions.ToolApprovals || b.Spec.Chat.Output != v1alpha1.OutputLive {
-		t.Errorf("interactions %+v, output %q; want askUser and toolApprovals off, output live", b.Spec.Interactions, b.Spec.Chat.Output)
+	if b.Spec.Interactions.AskUser || b.Spec.Chat.Output != v1alpha1.OutputLive {
+		t.Errorf("interactions %+v, output %q; want askUser off, output live", b.Spec.Interactions, b.Spec.Chat.Output)
 	}
 	raw, err := os.ReadFile(trialFile)
 	if err != nil {

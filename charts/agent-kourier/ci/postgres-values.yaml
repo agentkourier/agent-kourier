@@ -8,7 +8,6 @@ config:
     slack-main:
       spec:
         platform: slack
-        mode: socket
         credentialsSecretRef: {name: slack-main}
   agentBackends:
     agents:

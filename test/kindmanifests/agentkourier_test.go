@@ -182,9 +182,9 @@ func TestScenarioBindings(t *testing.T) {
 			continue
 		}
 		spec := rb.Binding.Spec
-		if spec.Agent.Name != tc.agent || spec.Agent.Namespace != "kagent" || spec.Interactions.AskUser != tc.askUser || spec.Interactions.ToolApprovals {
-			t.Errorf("%s: channel %s is bound to %s/%s with askUser %t and toolApprovals %t; want %s, askUser %t and toolApprovals off", tc.scenario, tc.channel,
-				spec.Agent.Namespace, spec.Agent.Name, spec.Interactions.AskUser, spec.Interactions.ToolApprovals, tc.agent, tc.askUser)
+		if spec.Agent.Name != tc.agent || spec.Agent.Namespace != "kagent" || spec.Interactions.AskUser != tc.askUser {
+			t.Errorf("%s: channel %s is bound to %s/%s with askUser %t; want %s and askUser %t", tc.scenario, tc.channel,
+				spec.Agent.Namespace, spec.Agent.Name, spec.Interactions.AskUser, tc.agent, tc.askUser)
 		}
 		if spec.Chat.Output != tc.output {
 			t.Errorf("%s: channel %s has output %q; want %q", tc.scenario, tc.channel, spec.Chat.Output, tc.output)

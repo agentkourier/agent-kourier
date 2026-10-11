@@ -13,4 +13,4 @@ spec:
     connectionRef: {namespace: agent-kourier, name: slack-fast}
     channel: CS2
     output: live
-  interactions: {askUser: true, toolApprovals: false}
+  interactions: {askUser: true}

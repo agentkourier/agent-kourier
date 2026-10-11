@@ -58,7 +58,6 @@ data:
       - sre
       credentialsSecretRef:
         name: slack-main
-      mode: socket
       platform: slack
 kind: ConfigMap
 metadata:
@@ -191,7 +190,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: d9f33082dd67860b73994ddc088a55e74d1f4876b09c5338f234220a59eb9501
+        checksum/config: 8ddf403b74d1318a863609dd2f7228837ad0d4e237e8ed50080b78114d3e1ae0
         example.test/scrape: "false"
       labels:
         app.kubernetes.io/instance: agent-kourier

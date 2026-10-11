@@ -13,4 +13,4 @@ spec:
     connectionRef: {namespace: agent-kourier, name: slack-fast}
     channel: CAXTIMEOUT
     output: live
-  interactions: {timeout: 5s, askUser: true, toolApprovals: false}
+  interactions: {timeout: 5s, askUser: true}

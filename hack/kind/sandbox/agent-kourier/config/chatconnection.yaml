@@ -6,5 +6,4 @@ kind: ChatConnection
 metadata: {name: sandbox-slack, namespace: agent-kourier}
 spec:
   platform: slack
-  mode: socket
   credentialsSecretRef: {name: sandbox-slack}

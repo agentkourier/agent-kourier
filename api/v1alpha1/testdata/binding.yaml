@@ -26,12 +26,8 @@ spec:
         limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
   interactions:
     askUser: true
-    toolApprovals: false             # Phase 5
     timeout: 30m
-    approverGroups: []               # reserved, see R1; empty = any channel member
   feedback:
     enabled: true
   session:
     threadTTL: 2160h                 # 90 days
-status:
-  conditions: []                     # Ready, BackendReachable, ChannelJoined

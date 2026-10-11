@@ -160,7 +160,7 @@ func TestRunPlatformStopsWhenTheContextEndsDuringABackoff(t *testing.T) {
 	}
 }
 
-// slackConnections resolves a snapshot of ChatConnections named by namespace/name and an optional mode.
+// slackConnections resolves a snapshot of ChatConnections named by namespace/name.
 func slackConnections(t *testing.T, names ...string) *config.Snapshot {
 	t.Helper()
 	set := &config.Set{}
@@ -213,11 +213,6 @@ func TestChooseConnectionRefusesWhatV1CannotRun(t *testing.T) {
 	r := &reader{vals: map[string]string{"platform/creds-a/botToken": "xoxb-fake", "platform/creds-a/appToken": "xapp-fake"}}
 	snap := slackConnections(t, "platform/a")
 	conn := snap.ChatConnections()[0]
-	conn.Spec.Mode = v1alpha1.ModeHTTP
-	if _, err := ChooseConnection(t.Context(), snap, r); !errors.Is(err, ErrWiring) {
-		t.Errorf("an http-mode connection: %v, want ErrWiring", err)
-	}
-	conn.Spec.Mode = v1alpha1.ModeSocket
 	conn.Spec.Platform = "teams"
 	if _, err := ChooseConnection(t.Context(), snap, r); !errors.Is(err, ErrWiring) {
 		t.Errorf("a connection that is not Slack's: %v, want ErrWiring", err)

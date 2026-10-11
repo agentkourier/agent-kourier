@@ -237,9 +237,32 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{`b.yaml#1 Binding sre/sre-alerts: spec.alerts: unknown field`},
 		},
 		{
-			name:  "removed status.webhookPath field",
-			files: map[string]string{"b.yaml": bindingDoc + "status:\n  webhookPath: /hooks/alertmanager/sre/sre-alerts\n"},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: status.webhookPath: unknown field`},
+			// A Binding has no status: its conditions were never set, and return with the controller that sets them.
+			name:  "removed status field",
+			files: map[string]string{"b.yaml": bindingDoc + "status:\n  conditions: []\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: status: unknown field`},
+		},
+		{
+			// Fields of features that are not built are not in the API: they return with the feature.
+			name:  "removed interactions.approverGroups field",
+			files: map[string]string{"b.yaml": bindingDoc + "  interactions: { approverGroups: [sre-oncall] }\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: spec.interactions.approverGroups: unknown field`},
+		},
+		{
+			name:  "removed interactions.toolApprovals field",
+			files: map[string]string{"b.yaml": bindingDoc + "  interactions: { toolApprovals: false }\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: spec.interactions.toolApprovals: unknown field`},
+		},
+		{
+			name: "removed directMessages field",
+			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "credentialsSecretRef: { name: slack-main } }",
+				"credentialsSecretRef: { name: slack-main }, directMessages: { defaultBindingRef: { name: sre-alerts, namespace: sre } } }", 1)},
+			want: []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.directMessages: unknown field`},
+		},
+		{
+			name:  "removed mode field",
+			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, mode: socket,", 1)},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.mode: unknown field`},
 		},
 		{
 			name:  "malformed YAML",

@@ -45,6 +45,6 @@ Without `askUser: true`, Agent Kourier refuses the agent's question and says so 
 
 ## Tool approvals
 
-`interactions.toolApprovals` is reserved for approving an agent's tool calls from Slack, which is not built yet. Keep
-it `false`. If an agent pauses for a tool approval anyway, Agent Kourier denies it, says so in the thread, and counts
-it, because the Binding was declared to point at a read-only agent.
+Approving an agent's tool calls from Slack is not built yet, and a Binding has no setting for it. If an agent pauses
+for a tool approval, Agent Kourier denies it, says so in the thread, and counts it, because the Binding is meant to
+point at a read-only agent.

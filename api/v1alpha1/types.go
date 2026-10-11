@@ -10,8 +10,6 @@ import (
 type (
 	// Dialect selects how Agent Kourier speaks to an agent backend.
 	Dialect string
-	// ChatMode selects how Agent Kourier receives chat events.
-	ChatMode string
 	// OutputMode selects how an agent's output is rendered into a thread.
 	OutputMode string
 	// ThreadReplies selects which replies in a thread Agent Kourier owns are turns (spec 8.2).
@@ -22,9 +20,6 @@ type (
 const (
 	DialectA2A      Dialect = "a2a"
 	DialectKagentV1 Dialect = "kagent-v1"
-
-	ModeSocket ChatMode = "socket"
-	ModeHTTP   ChatMode = "http"
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
@@ -38,8 +33,7 @@ const (
 // ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
 // referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a
 // ChatConnection in another namespace only if that resource lists the Binding's namespace in its
-// allowedNamespaces. A ChatConnection's directMessages.defaultBindingRef is not checked that way: it may
-// name a Binding in any namespace, provided that Binding uses the connection (WP-21; see Resolve).
+// allowedNamespaces.
 type ObjectRef struct {
 	Namespace string `json:"namespace,omitempty"`
 	// +kubebuilder:validation:MinLength=1
@@ -146,36 +140,21 @@ type ChatConnectionList struct {
 type ChatConnectionSpec struct {
 	// +kubebuilder:validation:Enum=slack
 	Platform string `json:"platform"`
-	// Mode defaults to socket.
-	// +kubebuilder:validation:Enum=socket;http
-	// +kubebuilder:default=socket
-	// +optional
-	Mode ChatMode `json:"mode"`
-	// CredentialsSecretRef names one Secret with the fixed keys botToken, appToken
-	// (socket mode), and signingSecret (http mode).
-	CredentialsSecretRef SecretRef       `json:"credentialsSecretRef"`
-	DirectMessages       *DirectMessages `json:"directMessages,omitempty"`
+	// CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode).
+	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the namespaces whose Bindings may reference this connection.
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
-// DirectMessages configures direct messages to the bot.
-type DirectMessages struct {
-	// DefaultBindingRef is the Binding that answers direct messages.
-	DefaultBindingRef *ObjectRef `json:"defaultBindingRef,omitempty"`
-}
-
-// Binding connects one agent to one chat channel and, optionally, one alert route.
+// Binding connects one agent to one chat channel.
 // Owned by an application team.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
 type Binding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	Spec   BindingSpec   `json:"spec"`
-	Status BindingStatus `json:"status,omitzero"`
+	Spec BindingSpec `json:"spec"`
 }
 
 // BindingList is a list of Binding.
@@ -262,15 +241,10 @@ type RateLimit struct {
 type Interactions struct {
 	// AskUser lets the agent ask questions in the thread. Defaults to false.
 	AskUser bool `json:"askUser,omitempty"`
-	// ToolApprovals gates tool calls on approval from the chat, which is not built yet (Phase 5): keep it
-	// false. Defaults to false.
-	ToolApprovals bool `json:"toolApprovals,omitempty"`
 	// Timeout is how long a pause waits for an answer. Defaults to 30m.
 	// +kubebuilder:default="30m"
 	// +optional
 	Timeout metav1.Duration `json:"timeout"`
-	// ApproverGroups is reserved for limiting who may answer (R1); empty means any channel member.
-	ApproverGroups []string `json:"approverGroups,omitempty"`
 }
 
 // Feedback configures the useful and not-useful buttons (D27, spec 8.7). The final message of an investigation that
@@ -291,25 +265,15 @@ type Session struct {
 	ThreadTTL metav1.Duration `json:"threadTTL"`
 }
 
-// BindingStatus is the observed state of a Binding. Conditions are for the controller that will serve these
-// resources (D30); they are not visible while resources are loaded from files.
-type BindingStatus struct {
-	// Conditions include Ready, BackendReachable, and ChannelJoined.
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
 // Defaults for fields left empty by Default.
 const (
 	DefaultInteractionTimeout = 30 * time.Minute
 	DefaultThreadTTL          = 90 * 24 * time.Hour
 )
 
-// Default fills the fields left empty. Call it before Validate.
-func (c *ChatConnection) Default() {
-	if c.Spec.Mode == "" {
-		c.Spec.Mode = ModeSocket
-	}
-}
+// Default fills the fields left empty. A ChatConnection has none to fill; the method keeps the shape that
+// every kind loaded from files has.
+func (c *ChatConnection) Default() {}
 
 // Default fills the fields left empty. Call it before Validate.
 func (b *Binding) Default() {

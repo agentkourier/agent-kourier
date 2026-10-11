@@ -244,25 +244,23 @@ func TestInteractionIDIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestPausesThatAreNotPrompts: no prompt is rendered or posted for them. A tool approval is denied; one the
-// Binding allows is not handled until Phase 5, and comes back as ErrDisallowed.
+// TestPausesThatAreNotPrompts: no prompt is rendered or posted for them. A tool approval is always denied: no
+// Binding can allow one until Phase 5, so there is no setting that makes the intake render it.
 func TestPausesThatAreNotPrompts(t *testing.T) {
 	approval := pausedOn(map[string]any{"type": "tool_approval_request", "id": "r", "tools": []map[string]any{{"id": "t1", "name": "x"}}})
 	for name, tc := range map[string]struct {
 		task a2a.Task
 		mod  func(*interact.Binding)
-		want error
 	}{
-		"an unusable pause":         {pausedOn(map[string]any{"type": "nonsense"}), nil, nil},
-		"a tool approval":           {approval, nil, nil},
-		"an approval, allowed":      {approval, func(b *interact.Binding) { b.ToolApprovals = true }, interact.ErrDisallowed},
-		"ask-user on askUser false": {askUser("req-1"), func(b *interact.Binding) { b.AskUser = false }, nil},
-		"a task that is not paused": {a2a.Task{ID: "task-9", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil, nil},
+		"an unusable pause":         {pausedOn(map[string]any{"type": "nonsense"}), nil},
+		"a tool approval":           {approval, nil},
+		"ask-user on askUser false": {askUser("req-1"), func(b *interact.Binding) { b.AskUser = false }},
+		"a task that is not paused": {a2a.Task{ID: "task-9", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t, tc.mod)
-			if err := r.paused(t, tc.task); !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
-				t.Errorf("Paused = %v; want %v", err, tc.want)
+			if err := r.paused(t, tc.task); err != nil {
+				t.Errorf("Paused = %v; want nil: the pause is turned away, not an error", err)
 			}
 			if len(r.asked) != 0 || len(r.slack.posted) != 0 {
 				t.Error("something was posted for a pause that is not a prompt")

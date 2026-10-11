@@ -17,7 +17,7 @@ const (
 	ChannelS4 = "CS4"
 	// ChannelS5 is S5's: test-agent, for the crash-after-post fault.
 	ChannelS5 = "CS5"
-	// ChannelS11 is S11's: spike-approve, with toolApprovals off.
+	// ChannelS11 is S11's: spike-approve, whose tool approval Agent Kourier denies.
 	ChannelS11 = "CS11"
 	// ChannelS12 is S12's: scenario-fails, whose task fails or completes with no output. The fast tier only:
 	// the full tier's kagent has no such agent.

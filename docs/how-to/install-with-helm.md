@@ -76,7 +76,6 @@ config:
     slack:
       spec:
         platform: slack
-        mode: socket
         credentialsSecretRef: {name: agent-kourier-slack}
   agentBackends:
     agent:
@@ -96,7 +95,7 @@ config:
           connectionRef: {name: slack}
           channel: C0123456789 # (3)!
           output: live
-        interactions: {askUser: false, toolApprovals: false}
+        interactions: {askUser: false}
 ```
 
 1. The `a2a` dialect sends to this URL exactly as written and follows no redirect. Write the trailing slash if the

@@ -163,9 +163,6 @@ func (t *Tap) run(caller context.Context, id string, p Pause) {
 		switch {
 		case err == nil || t.ctx.Err() != nil: // done, or cut off by Close: the next start finds the pause again
 			return
-		case errors.Is(err, ErrDisallowed): // no retry changes what the Binding allows
-			t.cfg.Logger.Error("interact: a pause cannot be rendered, and will not be tried again", "task", p.Task.ID, "binding", p.Binding, "err", err)
-			return
 		case !t.cfg.Now().Before(deadline):
 			t.cfg.Logger.Error("interact: giving up on a pause that was never taken up", "task", p.Task.ID, "binding", p.Binding, "tries", tries, "err", err)
 			return

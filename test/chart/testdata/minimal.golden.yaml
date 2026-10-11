@@ -40,7 +40,6 @@ data:
     spec:
       credentialsSecretRef:
         name: slack-main
-      mode: socket
       platform: slack
 kind: ConfigMap
 metadata:
@@ -75,7 +74,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: dcdce6f177eeba3e658320921720eadc2e63277f289fc763e560789cb4204525
+        checksum/config: fa3f4ef5c61b14338493c1f93fc350be474053a0c730e82d661bb1139d6e1f02
       labels:
         app.kubernetes.io/instance: agent-kourier
         app.kubernetes.io/name: agent-kourier

@@ -38,8 +38,7 @@ func TestSpecExamplesDecode(t *testing.T) {
 	}
 
 	cc := load[ChatConnection](t, "chatconnection.yaml")
-	if cc.Spec.Platform != PlatformSlack || cc.Spec.Mode != ModeSocket || cc.Spec.CredentialsSecretRef.Name != "slack-main" ||
-		cc.Spec.DirectMessages.DefaultBindingRef.Name != "sre-alerts" {
+	if cc.Spec.Platform != PlatformSlack || cc.Spec.CredentialsSecretRef.Name != "slack-main" {
 		t.Errorf("ChatConnection did not decode as in the spec: %+v", cc.Spec)
 	}
 
@@ -75,7 +74,7 @@ func TestDefaultThreadReplies(t *testing.T) {
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
 	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute ||
-		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Interactions.ToolApprovals || b.Spec.Feedback.Enabled {
+		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Feedback.Enabled {
 		t.Errorf("defaults not applied: %+v", b.Spec)
 	}
 
@@ -86,12 +85,6 @@ func TestDefault(t *testing.T) {
 	set.Default()
 	if set.Spec.Chat.Output != OutputFinal || set.Spec.Interactions.Timeout.Duration != time.Minute {
 		t.Errorf("Default overwrote explicit values: %+v", set.Spec)
-	}
-
-	cc := &ChatConnection{}
-	cc.Default()
-	if cc.Spec.Mode != ModeSocket {
-		t.Errorf("ChatConnection mode = %q, want %q", cc.Spec.Mode, ModeSocket)
 	}
 }
 
@@ -119,15 +112,37 @@ func TestDefaultSecretKey(t *testing.T) {
 	}
 }
 
-// A Binding that carries the removed alerts block (a per-Binding Alertmanager webhook) or status.webhookPath is
+// A Binding that carries the removed alerts block (a per-Binding Alertmanager webhook) is
 // refused by the strict decoder: alerts reach a Binding through a botMessage trigger only (DA-1).
 func TestBindingRefusesTheRemovedWebhookFields(t *testing.T) {
 	for _, tc := range []struct{ name, in, field string }{
 		{"alerts", "spec: { alerts: { type: alertmanager, promptTemplate: p } }", "alerts"},
-		{"status.webhookPath", "status: { webhookPath: /hooks/alertmanager/sre/sre-alerts }", "webhookPath"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := yaml.UnmarshalStrict([]byte(tc.in), &Binding{})
+			if err == nil || !strings.Contains(err.Error(), tc.field) || !strings.Contains(err.Error(), "unknown field") {
+				t.Errorf("strict decode error = %v, want an unknown-field error naming %s", err, tc.field)
+			}
+		})
+	}
+}
+
+// A field stays in the API only if it works (DA-3). The fields of features that are not built are refused by the strict
+// decoder, and return with the feature: the Binding's status, interactions.toolApprovals and interactions.approverGroups,
+// and the ChatConnection's mode and directMessages.
+func TestTheFieldsOfUnbuiltFeaturesAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, in, field string
+		into            any
+	}{
+		{"status", "status: { conditions: [] }", "status", &Binding{}},
+		{"interactions.toolApprovals", "spec: { interactions: { toolApprovals: false } }", "toolApprovals", &Binding{}},
+		{"interactions.approverGroups", "spec: { interactions: { approverGroups: [sre] } }", "approverGroups", &Binding{}},
+		{"mode", "spec: { mode: socket }", "mode", &ChatConnection{}},
+		{"directMessages", "spec: { directMessages: { defaultBindingRef: { name: b } } }", "directMessages", &ChatConnection{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := yaml.UnmarshalStrict([]byte(tc.in), tc.into)
 			if err == nil || !strings.Contains(err.Error(), tc.field) || !strings.Contains(err.Error(), "unknown field") {
 				t.Errorf("strict decode error = %v, want an unknown-field error naming %s", err, tc.field)
 			}
