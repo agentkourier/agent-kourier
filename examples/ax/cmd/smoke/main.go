@@ -13,10 +13,10 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/agentkourier/agent-kourier/examples/ax/agent"
 	"github.com/agentkourier/agent-kourier/examples/ax/bedrock"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"google.golang.org/adk/v2/model"
 )
 
