@@ -408,6 +408,10 @@ func TestFreeTextWholeSaysWhetherTheTextWasCut(t *testing.T) {
 		// Over the bound as it came, under it once the invisible characters are deleted: whole.
 		{"shrinks under the bound", strings.Repeat("\xe2\x80\x8b", MaxBytes/3) + strings.Repeat("a ", MaxBytes/2-10) + "ok", true, false},
 		{"shrinks by its line breaks", strings.Repeat("a\r\n", MaxBytes/3), true, false},
+		// Over what the token layer reads as it came, and under the bound once the invisible characters are gone: it was cut all the
+		// same, and the rest of the text was never read, so it is not whole. 18 KiB of zero-width spaces after a word is 6144
+		// characters of 3 bytes, a word more than rawCap, and nothing at all once the spaces are deleted.
+		{"over what the token layer reads, under the bound once normalized", "word " + strings.Repeat("\xe2\x80\x8b", 6144), false, true},
 	} {
 		text, whole := FreeTextWhole(tc.in)
 		if whole != tc.want || text != FreeText(tc.in) || strings.HasSuffix(text, Truncated) != tc.mark {

@@ -40,9 +40,10 @@ import (
 )
 
 const (
-	maxField  = 256 // longest identifier kept, in bytes
-	maxReason = 120 // longest agent-derived reason kept, in bytes
-	maxError  = 300 // longest returned error text, in bytes
+	maxToolName = 32  // longest tool name kept in a decision row, in bytes
+	maxField    = 256 // longest identifier kept, in bytes
+	maxReason   = 120 // longest agent-derived reason kept, in bytes
+	maxError    = 300 // longest returned error text, in bytes
 )
 
 // Actor is who an entry is attributed to, where known (spec 8.5): the Slack user, their
@@ -130,6 +131,19 @@ type Decision struct {
 	// Answer is the submitted answer, or nil. Only its shape is recorded: counts, never
 	// choices, free text or rejection reasons.
 	Answer *dialect.Answer
+	// ToolNames, for an answered tool approval, are the names of its tools, in the order of Answer.Decisions: ToolNames[i]
+	// is the tool that Decisions[i] decided. They are recorded beside the counts, each with its verdict, cleaned and
+	// cut to maxToolName bytes, and as many as fit in the row (see toolLists). The arguments are never recorded. There is
+	// one name for each decision, or none: any other number is an error, since it would name the wrong tools.
+	ToolNames []string
+	// Shape, for an incomplete tool approval, is how many tools had a usable verdict. It says nothing of which, or how.
+	Shape *ToolShape
+}
+
+// ToolShape is the shape of a press that left some tools of an approval undecided: Decided of Total tools had exactly one
+// valid verdict.
+type ToolShape struct {
+	Decided, Total int
 }
 
 // Options configures a Writer. OnFailure is required (New refuses without it; NoFailure meters nothing).
@@ -349,9 +363,18 @@ func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 				}
 			}
 			outcome += fmt.Sprintf(" approved=%d denied=%d", approved, len(d.Answer.Decisions)-approved)
+			if len(d.ToolNames) > 0 {
+				if len(d.ToolNames) != len(d.Answer.Decisions) {
+					return fail(store.ErrInvalid, "audit decision %q: %d tool names for %d decisions", d.InteractionID, len(d.ToolNames), len(d.Answer.Decisions))
+				}
+				outcome += toolLists(len(outcome), d.ToolNames, d.Answer.Decisions)
+			}
 		} else {
 			outcome += " questions=" + strconv.Itoa(len(d.Answer.Answers))
 		}
+	}
+	if d.Shape != nil {
+		outcome += fmt.Sprintf(" tools_decided=%d/%d", d.Shape.Decided, d.Shape.Total)
 	}
 	at := d.At
 	if at.IsZero() {
@@ -359,6 +382,61 @@ func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 	}
 	subj := "interaction=" + clean(d.InteractionID, maxField) + " task=" + clean(string(d.TaskID), maxField)
 	return w.append(ctx, store.AuditInteractionDecision, a, at, subj, outcome)
+}
+
+// toolLists is the part of a decision row that names the tools of an answered approval with their verdicts:
+// ` approved_tools=["a","b"] denied_tools=["c"]`, each list in the order of the request, a list left out when it is empty.
+// Each name is cleaned, cut to maxToolName bytes and written as a quoted string, so that a name with a comma or a bracket
+// in it is one name and cannot read as two tools. The row holds MaxAuditOutcome bytes in all, and 20 tools of long names
+// do not fit, so the lists share what is left of the row after the counts (used bytes): a list that is short gives its
+// spare room to the other, and a list that does not fit ends in `+K`, K being how many of its names are not listed. A name
+// is whole or left out. The counts before it are always exact, so what is left out is told by the difference.
+func toolLists(used int, names []string, decisions []dialect.Decision) string {
+	var approved, denied []string
+	for i, x := range decisions {
+		name := strconv.Quote(clean(names[i], maxToolName))
+		if x.Approved {
+			approved = append(approved, name)
+		} else {
+			denied = append(denied, name)
+		}
+	}
+	const unbounded = 1 << 20
+	room := store.MaxAuditOutcome - used
+	wantA, wantD := len(fitList("approved_tools", approved, unbounded)), len(fitList("denied_tools", denied, unbounded))
+	roomA, roomD := room/2, room-room/2
+	switch {
+	case wantA < roomA:
+		roomA, roomD = wantA, roomD+roomA-wantA
+	case wantD < roomD:
+		roomA, roomD = roomA+roomD-wantD, wantD
+	}
+	return fitList("approved_tools", approved, roomA) + fitList("denied_tools", denied, roomD)
+}
+
+// fitList is ` label=[item,item,+K]` in at most room bytes, or "" if items is empty or even `+K` does not fit. Whole items
+// are listed while they fit, with `+K` reserved at the end for the K that do not; K is left out when all fit. No item
+// starts with a plus, because an item is a quoted string.
+func fitList(label string, items []string, room int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	head, tail := " "+label+"=[", "]"
+	if whole := head + strings.Join(items, ",") + tail; len(whole) <= room {
+		return whole
+	}
+	used := len(head) + len(tail) + len(",+") + len(strconv.Itoa(len(items))) // the marker is reserved first
+	if used > room {
+		return ""
+	}
+	var kept []string
+	for _, it := range items {
+		if used+len(it)+1 > room {
+			break
+		}
+		kept, used = append(kept, it), used+len(it)+1
+	}
+	return head + strings.Join(append(kept, "+"+strconv.Itoa(len(items)-len(kept))), ",") + tail
 }
 
 // UnusablePause records a pause the dialect could not use (spec 8.4 step 1). cause wraps

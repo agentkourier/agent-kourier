@@ -19,8 +19,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// Outcome is what became of a pause that a Binding's policy turned away, as the approval-outcome
-// metric labels it. The set is closed, so the metric's cardinality is.
+// Outcome is what became of a pause, as the approval-outcome metric labels it: a pause that a Binding's policy turned away, or
+// a tool approval that was decided or timed out. The set is closed, so the metric's cardinality is.
 type Outcome string
 
 // The outcomes.
@@ -30,6 +30,14 @@ const (
 	// OutcomeAutoDenied: the agent asked to approve tool calls on a Binding that does not allow approvals
 	// (interact.Binding.ToolApprovals is false), so they were denied.
 	OutcomeAutoDenied Outcome = "auto_denied"
+	// OutcomeApproved: a person approved every tool call of an approval.
+	OutcomeApproved Outcome = "approved"
+	// OutcomeDenied: a person denied every tool call of an approval.
+	OutcomeDenied Outcome = "denied"
+	// OutcomePartiallyApproved: a person approved some tool calls of an approval and denied the rest.
+	OutcomePartiallyApproved Outcome = "partially_approved"
+	// OutcomeTimedOut: an approval timed out with no decision.
+	OutcomeTimedOut Outcome = "timed_out"
 )
 
 // The notices are fixed text: nothing the agent wrote reaches the thread through them (spec 8.4, R2).

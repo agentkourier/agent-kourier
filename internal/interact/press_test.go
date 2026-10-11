@@ -54,11 +54,16 @@ type pressRig struct {
 
 func newPressRig(t *testing.T) *pressRig {
 	t.Helper()
+	return newPressRigFor(t, interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"})
+}
+
+// newPressRigFor is newPressRig for a thread whose Binding is b.
+func newPressRigFor(t *testing.T, b interact.Binding) *pressRig {
+	t.Helper()
 	r := &pressRig{decideRig: newDecideRig(t), az: &authz{members: map[string]bool{"UALICE1": true, "UBOB22": true}}, now: d0.Add(time.Minute)}
 	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "ns/b", LastActivity: d0}); err != nil {
 		t.Fatal(err)
 	}
-	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
 	var err error
 	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizer: r.az, Ephemerals: r.eph, Decider: r.d, Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 2}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

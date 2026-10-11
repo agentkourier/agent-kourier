@@ -134,7 +134,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	}
 	decider, err := interact.NewDecider(interact.DecideConfig{
 		Store: d.st, Auditor: d.auditor, Ephemerals: d.platform, Session: late, Sessions: d.st, Outbox: d.ob, Replacer: replacer,
-		OnDecision: d.metrics.InteractionDecision, Logger: d.log,
+		OnDecision: d.metrics.InteractionDecision, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the decider: %w", err)

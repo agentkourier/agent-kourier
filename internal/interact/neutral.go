@@ -34,7 +34,8 @@ const answeredWord = "(answered)"
 // Every tool call is shown as it will run, except that secrets are replaced by the redaction's marker, invisible format
 // characters in values are not shown, line ends are shown as LF, and a number is shown as the nearest float64. Anything
 // else that cannot be shown is an error wrapping dialect.ErrUnusablePause (exactTools), for the caller to refuse: it is
-// checked here as well as by Paused, so that no caller can make a prompt that shows something else. The hint and the
+// checked here as well as by Paused, so that no caller can make a prompt that shows something else from a raw pause. The prompt
+// of an approval that is already stored is made by toolsOf instead (Intake.post): it is not checked or redacted again. The hint and the
 // sub-agent's name are context and may be shown cut.
 func promptOf(id string, in dialect.Interaction, deadline time.Time) (chat.Prompt, error) {
 	switch in.Kind {
@@ -104,12 +105,12 @@ func argsText(args map[string]any) (string, error) {
 //
 // An approval's ending shows its tools, hint and sub-agent as in, which must be the stored request: its secrets are
 // out already, and what it holds is what the prompt showed. When the approval timed out or was cancelled it needs
-// nothing more. An answered approval needs a verdict for each tool, which this does not yet build, so it is an error and not an
-// ending that says the wrong thing.
+// nothing more. An answered approval needs a verdict for each tool, which only the answer holds (approvalEnding), so
+// here it is an error and not an ending that says the wrong thing.
 func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interaction, answers [][]string) (chat.Ending, error) {
 	if in.Kind == dialect.ToolApproval {
 		if outcome == chat.Answered {
-			return chat.Ending{}, errors.New("interact: the verdicts of an answered tool approval are not built")
+			return chat.Ending{}, errors.New("interact: an answered tool approval has verdicts, which endingOf is not given: use approvalEnding")
 		}
 		p, err := toolsOf("", in, time.Time{})
 		if err != nil {
@@ -136,4 +137,39 @@ func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interact
 		}
 	}
 	return e, nil
+}
+
+// approvalEnding is the neutral ending of an answered tool approval: its tools as in (the stored request) shows them, and
+// the verdict of each, in the order of the tools and from the decisions by tool ID. The decisions must be exactly one for each
+// tool and for no other: an answer that does not match the request is an error, never an ending built from a guess. A
+// decision by the broker's own policy (auto) has no person to name, and so no By.
+func approvalEnding(by string, at time.Time, in dialect.Interaction, decisions []dialect.Decision) (chat.Ending, error) {
+	p, err := toolsOf("", in, time.Time{})
+	if err != nil {
+		return chat.Ending{}, err
+	}
+	if len(decisions) != len(in.Tools) {
+		return chat.Ending{}, fmt.Errorf("interact: %d decisions for %d tools", len(decisions), len(in.Tools))
+	}
+	// One decision for each tool, by ID: with as many decisions as tools, a tool decided twice leaves another with none.
+	byID := make(map[string]dialect.Decision, len(decisions))
+	for _, d := range decisions {
+		byID[d.ToolID] = d
+	}
+	verdicts := make([]chat.ToolVerdict, len(in.Tools))
+	for i, t := range in.Tools {
+		d, ok := byID[t.ID]
+		if !ok {
+			return chat.Ending{}, fmt.Errorf("interact: no decision for tool %d", i+1)
+		}
+		verdicts[i] = chat.ToolDenied
+		if d.Approved {
+			verdicts[i] = chat.ToolApproved
+		}
+	}
+	if by == autoDecider {
+		by = ""
+	}
+	e := chat.Ending{Outcome: chat.Answered, By: by, At: at, Prompt: p, Verdicts: verdicts}
+	return e, e.Validate()
 }

@@ -198,6 +198,8 @@ type decideRig struct {
 	d     *interact.Decider
 	mu    sync.Mutex
 	hooks []string
+	// outcomes are what OnApprovalOutcome was told, as "binding: outcome".
+	outcomes []string
 }
 
 func newDecideRig(t *testing.T) *decideRig {
@@ -214,6 +216,11 @@ func newDecideRig(t *testing.T) *decideRig {
 	r.d, err = interact.NewDecider(decideCfg(interact.DecideConfig{
 		Store: r.st, Auditor: r.aud, Ephemerals: r.eph, Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
+		OnApprovalOutcome: func(binding string, o interact.Outcome) {
+			r.mu.Lock()
+			r.outcomes = append(r.outcomes, binding+": "+string(o))
+			r.mu.Unlock()
+		},
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +234,12 @@ func (r *decideRig) task(t *testing.T, id string) {
 	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, ContextID: "ctx-1", TaskID: id, Binding: "ns/b", LastActivity: d0}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func (r *decideRig) counted() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.outcomes...)
 }
 
 func (r *decideRig) hooked() []string {

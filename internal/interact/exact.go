@@ -28,10 +28,11 @@ var (
 // unusable, before anything is recorded, and is never shown cut or changed.
 //
 // What the prompt shows of a tool call is its name and arguments as the agent sent them, except that secrets are
-// replaced by the redaction's marker, invisible format characters in a value (zero-width, bidirectional controls,
-// variation selectors) are not shown, every line end is shown as LF, and a number is shown as the nearest float64,
-// which for an integer below 2^53 is itself. Everything else that cannot be shown is refused. It reads the pause as
-// parsed, before the redaction, and refuses, at any depth of a map or a list:
+// replaced by the redaction's marker, the characters that redact.Normalize deletes (zero-width and bidirectional
+// controls, variation selectors and the rest of the set it names) are not shown in a name or a value, every line end is
+// shown as LF, and a number is shown as the nearest float64, which for an integer below 2^53 is itself. Everything else
+// that cannot be shown is refused. It reads the pause as parsed, before the redaction, and refuses, at any depth of a
+// map or a list:
 //
 //   - a tool name, an argument key or an argument string that the redaction would cut (errToolCut). The answer is
 //     the redaction's own (redact.FreeTextWhole); it is not inferred from the length or the end of the result,

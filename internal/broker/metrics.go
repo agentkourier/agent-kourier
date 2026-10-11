@@ -51,7 +51,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		reloadErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_config_reload_errors_total",
 			Help: "Config reloads that failed."}),
 		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_approval_outcomes_total",
-			Help: "Pauses a Binding's policy turned away, by Binding and outcome."}, []string{"binding", "outcome"}),
+			Help: "What became of pauses, by Binding and outcome: turned away by the Binding's policy (auto_denied, ask_user_cancelled), or a tool approval that was decided (approved, denied, partially_approved) or timed out (timed_out)."}, []string{"binding", "outcome"}),
 		timeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_interaction_timeouts_total",
 			Help: "Interactions that timed out unanswered."}),
 		removed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_retention_removed_total",
@@ -99,12 +99,14 @@ func (m *Metrics) CredentialRejected(binding string) { m.rejections.WithLabelVal
 // ReloadError counts a failed config reload: BootstrapOptions.OnReloadError.
 func (m *Metrics) ReloadError(error) { m.reloadErrors.Inc() }
 
-// ApprovalOutcome counts a pause a Binding's policy turned away: interact.Config.OnApprovalOutcome.
-// An outcome outside the closed set is one series, "other".
+// ApprovalOutcome counts what became of a pause, by Binding: one a Binding's policy turned away (interact.Config.OnApprovalOutcome),
+// or a tool approval that a person decided (interact.DecideConfig.OnApprovalOutcome). An outcome outside the closed set
+// (interact's Outcome constants) is one series, "other".
 func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 	label := string(outcome)
 	switch outcome {
-	case interact.OutcomeAskUserCancelled, interact.OutcomeAutoDenied:
+	case interact.OutcomeAskUserCancelled, interact.OutcomeAutoDenied,
+		interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut:
 	default:
 		label = otherLabel
 	}

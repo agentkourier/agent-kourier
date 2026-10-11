@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -39,7 +40,7 @@ type Ephemeral interface {
 	Ephemeral(ctx context.Context, t chat.Target, user string, m chat.Message) error
 }
 
-// PressDecision is a press whose answer is complete: the pipeline (WP-33d1c) has found its interaction,
+// PressDecision is a press whose answer is complete (an approval's is one decision for each tool): the pipeline (WP-33d1c) has found its interaction,
 // checked who pressed it and read its inputs, and hands over what is left to decide.
 type PressDecision struct {
 	// Interaction is the row the press was found for; its state is read again when it is decided.
@@ -67,7 +68,7 @@ type PromptReplacer interface {
 	Replace(ctx context.Context, id string) error
 }
 
-// DecideConfig configures a Decider. Everything but Logger and OnDecision is required.
+// DecideConfig configures a Decider. Everything but Now and Logger is required.
 type DecideConfig struct {
 	Store      store.Interactions
 	Auditor    Auditor
@@ -85,6 +86,11 @@ type DecideConfig struct {
 	// won), "superseded" (another decision came first), "late" (made at or after the deadline) or
 	// "invalid" (the dialect refused the answer). It is for a metric. Required.
 	OnDecision func(result string)
+	// OnApprovalOutcome is called once for each tool approval a press decides, with the Binding's name and how it was
+	// decided: OutcomeApproved (every tool), OutcomeDenied (every tool) or OutcomePartiallyApproved. It is for the
+	// approval-outcome metric. A press that does not win does not call it, and neither does the same person's press
+	// decided again after a crash, since the decision was counted when it was taken. A question never calls it. Required.
+	OnApprovalOutcome func(binding string, outcome Outcome)
 }
 
 // Decider takes the decision on a press: first answer wins (spec 8.4 step 5). It is safe for
@@ -105,6 +111,9 @@ func NewDecider(cfg DecideConfig) (*Decider, error) {
 	}
 	if cfg.OnDecision == nil {
 		return nil, errors.New("interact: OnDecision is required")
+	}
+	if cfg.OnApprovalOutcome == nil {
+		return nil, errors.New("interact: OnApprovalOutcome is required")
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -133,7 +142,7 @@ const (
 // audit write stops it (spec 8.6 step 7): the error is returned, and the press, which stays recorded, is
 // decided again. It returns nil when the press is decided for good, whichever way it came out. A send
 // that fails is an error too: the answer is recorded, so the press, decided again, is the same person's
-// retry, which sends it again without a second decision.
+// retry, which sends the recorded answer again (recorded) without a second decision, whatever the retry itself holds.
 //
 // The audit is at least once, and written before the decision takes effect, so it can be ahead of what
 // happened. If the sweep, or another process, decides in the window between the read and the write, the
@@ -148,10 +157,11 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 	telemetry.Link(ctx, pd.Interaction.TraceParent, pd.Interaction.TraceState)
 	defer func() { op.Finish(telemetryErr) }()
 	row := pd.Interaction
+	w := wordsOf(pd.In.Kind)
 	msg, err := AnswerMessage(pd.Binding.Dialect, row.ID, pd.In, pd.Answer, pd.User)
 	if err != nil {
 		d.cfg.Logger.InfoContext(ctx, "interact: the dialect refused an answer", "interaction", row.ID, "err", err)
-		d.tell(ctx, row, pd.User, chat.Message{Fallback: textInvalid})
+		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.invalid})
 		d.count("invalid")
 		return nil
 	}
@@ -164,13 +174,20 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 	switch v {
 	case won:
 		d.count("answered")
-	case again: // a retry: the decision was taken and counted before
+		d.countApproval(pd)
+	case again: // a retry: the decision was taken and counted before, and it is the recorded answer that is sent
+		var ok bool
+		if msg, ok, err = d.recorded(ctx, pd, cur); err != nil {
+			return err
+		} else if !ok {
+			return nil
+		}
 	case late:
-		d.tell(ctx, row, pd.User, chat.Message{Fallback: textLate})
+		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.late})
 		d.count("late")
 		return nil
 	case lost:
-		d.tell(ctx, row, pd.User, lostMessage(cur))
+		d.tell(ctx, row, pd.User, lostMessage(w, cur))
 		d.count("superseded")
 		return nil
 	case gone:
@@ -181,6 +198,28 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 	}
 	d.replacePrompt(ctx, row.ID)
 	return nil
+}
+
+// recorded is the message that sends the answer an interaction has recorded, built from its stored request and answer as
+// Intake.resend builds it, for a press of the person who decided it that finds it decided (verdict again). What that
+// person pressed this time is not what was audited, counted and stored, and could differ from it (a prompt keeps its
+// controls until it is replaced): only the recorded answer takes effect. ok is false, and nothing is to be sent, when
+// retention has cleared the request or the answer, since there is then no audited answer left to send.
+func (d *Decider) recorded(ctx context.Context, pd PressDecision, cur store.Interaction) (msg a2a.Message, ok bool, err error) {
+	if len(cur.Request) == 0 || len(cur.Answer) == 0 {
+		d.cfg.Logger.InfoContext(ctx, "interact: the recorded answer was cleared, so it is not sent again", "interaction", cur.ID)
+		return a2a.Message{}, false, nil
+	}
+	var in dialect.Interaction
+	var answer dialect.Answer
+	if err := errors.Join(json.Unmarshal(cur.Request, &in), json.Unmarshal(cur.Answer, &answer)); err != nil {
+		return a2a.Message{}, false, fmt.Errorf("interact: the stored request or answer of %s: %w", cur.ID, err)
+	}
+	msg, err = AnswerMessage(pd.Binding.Dialect, cur.ID, in, answer, cur.Decider)
+	if err != nil {
+		return a2a.Message{}, false, fmt.Errorf("interact: rebuild the answer of %s: %w", cur.ID, err)
+	}
+	return msg, true, nil
 }
 
 // replacePrompt takes the controls off the prompt. The decision is done and the answer sent, so a failed
@@ -208,7 +247,7 @@ func (d *Decider) take(ctx context.Context, pd PressDecision) (verdict, store.In
 		return late, cur, nil
 	}
 	actor := audit.Actor{User: pd.User, Binding: pd.BindingName, Identity: pd.Binding.Identity}
-	decision := audit.Decision{InteractionID: cur.ID, TaskID: a2a.TaskID(cur.TaskID), Result: audit.DecisionAnswered, At: pd.PressedAt, Answer: &pd.Answer}
+	decision := audit.Decision{InteractionID: cur.ID, TaskID: a2a.TaskID(cur.TaskID), Result: audit.DecisionAnswered, At: pd.PressedAt, Answer: &pd.Answer, ToolNames: toolNames(pd.In, pd.Answer)}
 	if err := d.cfg.Auditor.Decision(ctx, actor, decision); err != nil {
 		return 0, cur, fmt.Errorf("interact: audit the decision on %s: %w", cur.ID, err)
 	}
@@ -304,16 +343,54 @@ func (d *Decider) markDelivered(ctx context.Context, id string) {
 	}
 }
 
-// lostMessage says why a press did not decide the question. When another answer did, it names who: a mention of the
-// one who decided, which the adapter makes only of an ID of its platform's shape and otherwise shows as "someone".
-func lostMessage(cur store.Interaction) chat.Message {
+// lostMessage says why a press did not decide the question or the approval, in w's words. When another decision did, it
+// names who: a mention of the one who decided, which the adapter makes only of an ID of its platform's shape and otherwise
+// shows as "someone".
+func lostMessage(w words, cur store.Interaction) chat.Message {
 	switch {
 	case cur.State == store.InteractionTimedOut:
-		return chat.Message{Fallback: textTimedOut}
+		return chat.Message{Fallback: w.timedOut}
 	case cur.State != store.InteractionAnswered:
-		return chat.Message{Fallback: textClosed}
+		return chat.Message{Fallback: w.closed}
 	}
-	return chat.Message{Fallback: textFirstNone, Parts: []chat.Part{chat.Mention{User: cur.Decider, Text: textFirstWords}}}
+	return chat.Message{Fallback: w.firstNone, Parts: []chat.Part{chat.Mention{User: cur.Decider, Text: w.firstWords}}}
+}
+
+// toolNames are the names of the tools that an answer to an approval decides, one for each of its decisions and in their
+// order, from the request as it is stored (its names are redacted already), for the audit row. Nil for a question.
+func toolNames(in dialect.Interaction, a dialect.Answer) []string {
+	if in.Kind != dialect.ToolApproval || len(a.Decisions) == 0 {
+		return nil
+	}
+	names := make([]string, len(a.Decisions))
+	for i, x := range a.Decisions {
+		if k := slices.IndexFunc(in.Tools, func(t dialect.Tool) bool { return t.ID == x.ToolID }); k >= 0 {
+			names[i] = in.Tools[k].Name
+		}
+	}
+	return names
+}
+
+// countApproval counts the outcome of a tool approval that this press decided (d.cfg.OnApprovalOutcome): every tool approved,
+// every tool denied, or a mix. A question has no outcome to count.
+func (d *Decider) countApproval(pd PressDecision) {
+	if pd.In.Kind != dialect.ToolApproval || len(pd.Answer.Decisions) == 0 {
+		return
+	}
+	approved := 0
+	for _, x := range pd.Answer.Decisions {
+		if x.Approved {
+			approved++
+		}
+	}
+	outcome := OutcomePartiallyApproved
+	switch approved {
+	case len(pd.Answer.Decisions):
+		outcome = OutcomeApproved
+	case 0:
+		outcome = OutcomeDenied
+	}
+	d.cfg.OnApprovalOutcome(pd.BindingName, outcome)
 }
 
 // tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged.

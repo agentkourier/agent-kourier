@@ -45,6 +45,10 @@ func TestConstructorsRefuseAnUnwiredHookAndNameIt(t *testing.T) {
 			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: inertShow{}, Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, Replacer: noReplace{}})
 			return err
 		}},
+		{"the decider's OnApprovalOutcome", "OnApprovalOutcome", func() error {
+			_, err := interact.NewDecider(interact.DecideConfig{Store: inertStore{}, Auditor: inertAuditor{}, Ephemerals: inertShow{}, Session: inertSession{}, Sessions: inertReader{}, Outbox: inertEnqueuer{}, Replacer: noReplace{}, OnDecision: func(string) {}})
+			return err
+		}},
 		{"the press pipeline", "Notify", func() error {
 			_, err := interact.NewPipeline(interact.PressConfig{Store: inertPressStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Authorizer: inertAuthorizer{}, Ephemerals: inertShow{}, Decider: inertDecider{}, Auditor: inertAuditor{}})
 			return err

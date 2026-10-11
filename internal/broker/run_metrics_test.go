@@ -119,7 +119,7 @@ func TestRunCountsAFailedConfigReload(t *testing.T) {
 var (
 	_ = interact.Config{OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
 	_ = interact.SweepConfig{OnTimeout: (*Metrics)(nil).InteractionTimeout}
-	_ = interact.DecideConfig{OnDecision: (*Metrics)(nil).InteractionDecision}
+	_ = interact.DecideConfig{OnDecision: (*Metrics)(nil).InteractionDecision, OnApprovalOutcome: (*Metrics)(nil).ApprovalOutcome}
 )
 
 // The results of a decision are a closed set, so no text from a dialect or a person can grow the series.
@@ -143,6 +143,31 @@ func TestInteractionDecisionCountsByResultAndFoldsTheRest(t *testing.T) {
 	}
 	if strings.Contains(got, "nobody defined") {
 		t.Error("a result text became a label")
+	}
+}
+
+// The outcomes of a decided approval, and a timed-out one, are in the closed set: each is a series of its own, per
+// Binding, and not "other". The set is closed, so a new constant that is not listed here and in ApprovalOutcome folds into "other".
+func TestApprovalOutcomesOfADecidedApprovalAreSeriesOfTheirOwn(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for _, o := range []interact.Outcome{interact.OutcomeApproved, interact.OutcomeApproved, interact.OutcomeDenied, interact.OutcomePartiallyApproved, interact.OutcomeTimedOut} {
+		m.ApprovalOutcome("sre/sre-alerts", o)
+	}
+	m.ApprovalOutcome("sre/other", interact.OutcomeApproved)
+	got := strings.Join(samples(t, m), "\n")
+	for _, want := range []string{
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=approved} 2`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=denied} 1`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=partially_approved} 1`,
+		`agentkourier_approval_outcomes_total{binding=sre/sre-alerts,outcome=timed_out} 1`,
+		`agentkourier_approval_outcomes_total{binding=sre/other,outcome=approved} 1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the series lack %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "outcome=other") {
+		t.Errorf("a defined outcome was folded into other:\n%s", got)
 	}
 }
 

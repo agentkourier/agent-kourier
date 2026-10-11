@@ -60,6 +60,9 @@ func decideCfg(c interact.DecideConfig) interact.DecideConfig {
 	if c.OnDecision == nil {
 		c.OnDecision = func(string) {}
 	}
+	if c.OnApprovalOutcome == nil {
+		c.OnApprovalOutcome = func(string, interact.Outcome) {}
+	}
 	return c
 }
 

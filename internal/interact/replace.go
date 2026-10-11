@@ -231,7 +231,8 @@ func (r *Replacer) fail(ctx context.Context, id string, err error) {
 // time, and the questions, hint and sub-agent from its stored request. An answer is shown only as its
 // chosen choices, and never as free text (the owner's decision): endingOf says only that a free-text
 // question was answered. A tool approval that timed out or was cancelled has an ending of its tools as stored; an
-// answered one has none yet (endingOf), and is an error.
+// answered one adds the verdict of each tool from the stored answer (approvalEnding), and is an error if that answer does not
+// decide exactly the tools of the stored request.
 func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 	var outcome chat.Outcome
 	switch row.State {
@@ -253,6 +254,13 @@ func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 		var a dialect.Answer
 		if err := json.Unmarshal(row.Answer, &a); err != nil {
 			return chat.Outgoing{}, fmt.Errorf("the stored answer: %w", err)
+		}
+		if in.Kind == dialect.ToolApproval { // by the request's kind, not the row's: a sub-agent's approval is stored as "nested"
+			e, err := approvalEnding(row.Decider, row.DecidedAt, in, a.Decisions)
+			if err != nil {
+				return chat.Outgoing{}, err
+			}
+			return chat.End(e), nil
 		}
 		answers = a.Answers
 	}

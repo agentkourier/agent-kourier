@@ -32,8 +32,11 @@ type Binding struct {
 	Dialect  dialect.Dialect
 	Identity string // the Binding's service identity, for the audit rows
 	AskUser  bool
-	// ToolApprovals makes the intake post an approval as a prompt and leave it pending. With it false, an approval
-	// is denied through the dialect as soon as it arrives (autoDeny). A press on the prompt decides nothing yet.
+	// ToolApprovals makes the intake post an approval as a prompt and leave it pending, for a press to decide. With it
+	// false, an approval is denied through the dialect as soon as it arrives (autoDeny). A press on a prompt that was posted
+	// before it was turned off decides nothing. When that pause comes again, a pending approval is denied by policy, and
+	// for one that a person had already decided the thread is told that the request is being denied (a notice that is not
+	// true of that decision) and the recorded answer is sent again.
 	ToolApprovals bool
 	// ApproverGroups are the platform user groups whose members are to decide an approval; empty means any member of
 	// the channel. They are only carried here: nothing reads them yet.
@@ -117,8 +120,9 @@ func InteractionID(in dialect.Interaction) string {
 }
 
 // Paused takes up a pause. A tool approval on a Binding that does not allow them is denied, and a question on one
-// that does not allow questions is cancelled; any other pause is recorded and posted as a prompt. Every step is
-// idempotent, so a crash between two leaves the next call to
+// that does not allow questions is cancelled. An approval that the prompt cannot show exactly (exactTools) is refused
+// as unusable, and so is a pause whose prompt does not fit in one message. Any other pause is recorded and posted as a
+// prompt. Every step is idempotent, so a crash between two leaves the next call to
 // finish the work and never repeat it: it creates the interaction, posts the prompt if that is not
 // done (the outbox adopts a post made and not recorded), and records the message. It does I/O, so a
 // caller on the agent's stream goroutine runs it elsewhere.
@@ -267,11 +271,29 @@ func keyOf(in dialect.Interaction) pauseKey {
 }
 
 // post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5). A prompt
-// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, before anything is sent. It is
-// made from the pause as parsed; promptOf takes the secrets out of an approval's, which a question's does not need, and
-// refuses one it cannot show exactly (exactTools), which Paused has done already, before the pause was recorded.
+// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, before anything is sent.
+//
+// A question's prompt is made from the pause as parsed (promptOf). An approval's is made from the stored request
+// (row.Request) and not from the pause just parsed, with toolsOf and nothing else: the same tools in another order are the
+// same pause (keyOf), and a Submit's radios are positional, so what is shown, what a press indexes and what the ending shows
+// must be one order, the stored one. The stored request is already redacted, and it is neither checked again nor redacted
+// again: redaction lengthens text, so the stored form of a pause that was accepted can be longer than the bound that
+// exactTools holds a raw one to, and checking it again would refuse a pause that was accepted. The exactness of what is
+// shown is checked where the raw pause is: Paused calls exactTools on it before it records anything, and post is called
+// from nowhere else; promptOf, which checks and redacts, is the way to the prompt of a raw approval. Whether the stored
+// prompt fits the platform is Fits's to say, below, and a prompt that does not is refused as too large by the caller.
 func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in dialect.Interaction) error {
-	prompt, err := promptOf(row.ID, in, row.Deadline)
+	var prompt chat.Prompt
+	var err error
+	if in.Kind == dialect.ToolApproval {
+		var stored dialect.Interaction
+		if err := json.Unmarshal(row.Request, &stored); err != nil {
+			return fmt.Errorf("interact: the stored request of %s: %w", row.ID, err)
+		}
+		prompt, err = toolsOf(row.ID, stored, row.Deadline)
+	} else {
+		prompt, err = promptOf(row.ID, in, row.Deadline)
+	}
 	if err != nil {
 		return fmt.Errorf("interact: make the prompt of %s: %w", row.ID, err)
 	}

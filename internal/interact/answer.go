@@ -22,15 +22,22 @@ const (
 	Invalid
 )
 
-// Problem is a question whose answer cannot be used.
+// Problem is a question, or a tool of an approval, whose answer cannot be used.
 type Problem struct {
-	Question int // index into the interaction's Questions
+	Question int // index into the interaction's Questions, or for an approval into its Tools
 	Kind     ProblemKind
 }
 
 // ErrNotAskUser is returned for an interaction that has no questions to answer: another kind of
 // pause, or none. Nothing is read from a press for it.
 var ErrNotAskUser = errors.New("interact: not an ask-user pause with questions")
+
+// ErrNotToolApproval is returned for an interaction that has no tool calls to decide: a question, or none.
+var ErrNotToolApproval = errors.New("interact: not a tool approval pause with tools")
+
+// approverDenyReason is the one reason a denial from the chat carries to the agent. An approver gives none: no free text is
+// read from a press, so there is nothing of a person's to pass on. An approval carries no reason.
+const approverDenyReason = "denied by an approver in chat"
 
 // ExtractAnswer reads a press's answers (chat.Interaction.Answers, which the platform's adapter decoded from
 // its controls, one for each question answered) as the answer to in. The answer is complete only if
@@ -116,4 +123,83 @@ func dedupe(vals []string) []string {
 		}
 	}
 	return out
+}
+
+// ExtractDecisions reads a press of an approval as one decision per tool, in the order of the request and by tool ID.
+// action is the button that was pressed and answers what the controls held (chat.Interaction.Action and Answers, as
+// the platform's adapter decoded them). ActionApproveAll approves every tool and ActionDenyAll denies every tool,
+// whatever the controls held. ActionSubmit takes each tool's verdict from its own answer (chat.Answer.ToolVerdict).
+// A denial carries one fixed reason and an approval none.
+//
+// The decisions are complete only if problems is empty, and then every tool has exactly one decision. Anything
+// else is a problem and not a decision: a tool with no answer (Unanswered), a tool answered twice, a value that is
+// not a verdict, an answer for a tool the prompt does not have, and a button that is not one of the three (Invalid).
+// The adapter made the controls from this prompt, so a stray answer is no honest press and nothing in the press is
+// read: every tool of it is Invalid. A Submit that holds no verdict is therefore never a decision, which is what it is on a
+// prompt of one tool, whose Approve and Deny buttons are the only controls and have no Submit. A Submit that holds a valid
+// verdict for tool 0 of a one-tool prompt does decide: the neutral model has no layout, another adapter may show a radio for
+// one tool, and the Slack adapter cannot produce it. It returns
+// ErrNotToolApproval, and reads nothing, for an interaction that is not an approval of tools.
+func ExtractDecisions(in dialect.Interaction, action chat.Action, answers []chat.Answer) (answer dialect.Answer, problems []Problem, err error) {
+	if in.Kind != dialect.ToolApproval || len(in.Tools) == 0 {
+		return dialect.Answer{}, nil, ErrNotToolApproval
+	}
+	verdicts := make([]chat.ToolVerdict, len(in.Tools))
+	switch action {
+	case chat.ActionApproveAll, chat.ActionDenyAll:
+		v := chat.ToolApproved
+		if action == chat.ActionDenyAll {
+			v = chat.ToolDenied
+		}
+		for i := range verdicts {
+			verdicts[i] = v
+		}
+	case chat.ActionSubmit:
+		problems = submitted(verdicts, answers)
+	default: // a button that this version does not know
+		for i := range in.Tools {
+			problems = append(problems, Problem{i, Invalid})
+		}
+	}
+	if len(problems) > 0 {
+		return dialect.Answer{RequestID: in.RequestID}, problems, nil
+	}
+	answer = dialect.Answer{RequestID: in.RequestID, Decisions: make([]dialect.Decision, len(in.Tools))}
+	for i, t := range in.Tools {
+		d := dialect.Decision{ToolID: t.ID, Approved: verdicts[i] == chat.ToolApproved}
+		if !d.Approved {
+			d.Reason = approverDenyReason
+		}
+		answer.Decisions[i] = d
+	}
+	return answer, nil, nil
+}
+
+// submitted fills verdicts (one for each tool) from the answers of a Submit, and returns the tools that have none to use.
+func submitted(verdicts []chat.ToolVerdict, answers []chat.Answer) (problems []Problem) {
+	byTool := make([][]chat.Answer, len(verdicts))
+	stray := false
+	for _, a := range answers {
+		if a.Question < 0 || a.Question >= len(verdicts) {
+			stray = true
+			continue
+		}
+		byTool[a.Question] = append(byTool[a.Question], a)
+	}
+	for i := range verdicts {
+		switch {
+		case stray || len(byTool[i]) > 1:
+			problems = append(problems, Problem{i, Invalid})
+		case len(byTool[i]) == 0:
+			problems = append(problems, Problem{i, Unanswered})
+		default:
+			v, ok := byTool[i][0].ToolVerdict()
+			if !ok {
+				problems = append(problems, Problem{i, Invalid})
+				continue
+			}
+			verdicts[i] = v
+		}
+	}
+	return problems
 }

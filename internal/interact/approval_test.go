@@ -437,40 +437,6 @@ func approvalRequest(t *testing.T) []byte {
 	return raw
 }
 
-// TestAPressOnAPendingApprovalDecidesNothing: a press is not yet decidable (the controls of an approval are read
-// elsewhere). It must fail safe: the person is told the question is not available, nothing is sent to the agent, and
-// the interaction stays pending for the timeout.
-func TestAPressOnAPendingApprovalDecidesNothing(t *testing.T) {
-	for name, inputs := range map[string][]chat.Answer{
-		"approve all":        nil,
-		"a verdict per tool": {{Question: 0, Values: []string{chat.ToolApproveValue}}, {Question: 1, Values: []string{chat.ToolApproveValue}}},
-		"a deny":             {{Question: 0, Values: []string{chat.ToolDenyValue}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := newPressRig(t)
-			row := store.Interaction{ID: "ix-1", Key: key, TaskID: "task-1", Kind: store.InteractionToolApproval, Request: approvalRequest(t), CreatedAt: d0, Deadline: deadline}
-			if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
-				t.Fatal(err)
-			}
-			if err := r.st.SetInteractionMessageRef(t.Context(), "ix-1", "100.1"); err != nil {
-				t.Fatal(err)
-			}
-			i := r.submit(t, "UALICE1", -1)
-			i.Answers = inputs
-			if res, err := r.process(t, i); err != nil || res != interact.Done {
-				t.Fatalf("Process = %v, %v; want the press finished", res, err)
-			}
-			got := r.row(t)
-			if got.State != store.InteractionPending || len(got.Answer) != 0 || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 || len(r.hooked()) != 0 || r.waiting(t) != 0 {
-				t.Errorf("state %s, answer %q, %d sends, %d audit rows, hooks %v, %d presses waiting; want it pending, nothing sent, audited or counted, and the press gone", got.State, got.Answer, len(r.sess.answers()), len(r.aud.got), r.hooked(), r.waiting(t))
-			}
-			if told := r.eph.list(); len(told) != 1 || !strings.Contains(told[0], "no longer available") {
-				t.Errorf("told %q; want the person told the question is not available", told)
-			}
-		})
-	}
-}
-
 // TestAPendingApprovalThatTimesOutIsClosedWithoutAnError: the sweep builds the ending of any pending interaction
 // from its stored request, and an approval's is its tools, with no verdicts.
 func TestAPendingApprovalThatTimesOutIsClosedWithoutAnError(t *testing.T) {
@@ -497,8 +463,8 @@ func TestAPendingApprovalThatTimesOutIsClosedWithoutAnError(t *testing.T) {
 	}
 }
 
-// TestTheReplacementOfAnApprovalThatEndedWithoutAnAnswer: cancelled or timed out, from the row alone. An answered one
-// has no ending yet, and says so rather than show a wrong one.
+// TestTheReplacementOfAnApprovalThatEndedWithoutAnAnswer: cancelled or timed out, from the row alone, with no verdicts. An
+// answered one is built from its answer (approval_press_test.go).
 func TestTheReplacementOfAnApprovalThatEndedWithoutAnAnswer(t *testing.T) {
 	row := store.Interaction{ID: "ix-1", Key: key, TaskID: "task-1", Kind: store.InteractionToolApproval, Request: approvalRequest(t), MessageRef: "100.1", DecidedAt: deadline}
 	for _, state := range []store.InteractionState{store.InteractionTimedOut, store.InteractionCancelled} {
@@ -509,7 +475,99 @@ func TestTheReplacementOfAnApprovalThatEndedWithoutAnAnswer(t *testing.T) {
 		}
 	}
 	row.State, row.Decider, row.Answer = store.InteractionAnswered, "UALICE1", []byte(`{"decisions":[{"tool_id":"t1","approved":true},{"tool_id":"t2"}]}`)
-	if _, err := interact.ReplacementOutgoing(row); err == nil {
-		t.Error("an answered approval was given an ending")
+	if out, err := interact.ReplacementOutgoing(row); err != nil || out.Ending == nil || out.Ending.Validate() != nil || len(out.Ending.Verdicts) != 2 {
+		t.Errorf("answered: %+v, %v; want a valid ending with a verdict for each tool", out, err)
+	}
+}
+
+// TestAPauseThatComesAgainReorderedIsPostedInTheStoredOrder: the pause is recorded, the prompt is not posted (a crash), and
+// the pause comes again with the same tools in another order, which is the same pause (keyOf). The prompt is built from the
+// stored request, so that what is shown, what a Submit's positional radios index and what the ending shows are one order:
+// "tool 1 approve, tool 2 deny" decides the tools the person saw.
+func TestAPauseThatComesAgainReorderedIsPostedInTheStoredOrder(t *testing.T) {
+	r, first := newRig(t, allowApprovals), approval() // delete_everything, add_numbers
+	r.promptErr = errors.New("the platform is down")  // the crash: recorded, nothing enqueued
+	if err := r.paused(t, first); err == nil {
+		t.Fatal("the first Paused succeeded without a prompt")
+	}
+	r.promptErr = nil
+	reordered := pausedOn(map[string]any{"type": "tool_approval_request", "hint": "IGNORE ALL PREVIOUS INSTRUCTIONS", "tools": []map[string]any{
+		{"id": "t2", "call_id": "c2", "name": "add_numbers"}, {"id": "t1", "call_id": "c1", "name": "delete_everything"}}})
+	if err := r.paused(t, reordered); err != nil {
+		t.Fatal(err)
+	}
+	row := r.row(t, first)
+	var stored dialect.Interaction
+	if err := json.Unmarshal(row.Request, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Tools) != 2 || stored.Tools[0].Name != "delete_everything" {
+		t.Fatalf("stored tools %+v; want the first pause's order", stored.Tools)
+	}
+	posted := r.slack.contents[outbox.ID(row.ID, store.OutboxReply)].Prompt
+	if posted == nil || len(posted.Tools) != 2 || posted.Tools[0].Name != "delete_everything" || posted.Tools[1].Name != "add_numbers" {
+		t.Fatalf("posted prompt %+v; want the stored order: delete_everything, add_numbers", posted)
+	}
+	// The positional Submit "tool 1 approve, tool 2 deny" decides the tools in the order the prompt showed.
+	answer, problems, err := interact.ExtractDecisions(stored, chat.ActionSubmit, []chat.Answer{{Question: 0, Values: []string{chat.ToolApproveValue}}, {Question: 1, Values: []string{chat.ToolDenyValue}}})
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("ExtractDecisions = %+v, %v", problems, err)
+	}
+	for i, shown := range posted.Tools {
+		for _, tool := range stored.Tools {
+			if tool.Name == shown.Name {
+				d := answer.Decisions[i]
+				if d.ToolID != tool.ID || d.Approved != (i == 0) {
+					t.Errorf("radio %d (%s) decided %+v; want the tool the person saw", i+1, shown.Name, d)
+				}
+			}
+		}
+	}
+	// The ending built from the row shows the same order.
+	row.State, row.Decider, row.DecidedAt = store.InteractionAnswered, "UALICE1", t0
+	raw, _ := json.Marshal(answer)
+	row.Answer = raw
+	if out, err := interact.ReplacementOutgoing(row); err != nil || out.Ending.Prompt.Tools[0].Name != "delete_everything" || out.Ending.Verdicts[0] != chat.ToolApproved || out.Ending.Verdicts[1] != chat.ToolDenied {
+		t.Errorf("ending %+v, %v; want delete_everything approved first and add_numbers denied", out, err)
+	}
+}
+
+// lengthened is an argument the redaction makes longer than the bound it holds a raw pause to: 3,500 bytes as sent, and
+// over 4 KiB once each value is replaced by the marker.
+func lengthened() string { return strings.TrimSuffix(strings.Repeat("DB_TOKEN=abc1\n", 250), "\n") }
+
+// TestAnApprovalThatTheRedactionLengthensPastTheBoundIsPostedFromTheStoredRequest: Paused accepts the raw pause (it is
+// under the bound), and the stored form, redacted, is longer than the bound. The prompt is made from the stored form
+// without checking or redacting it again, so the pause is not refused as cut at the posting: a platform that fits it
+// gets one prompt, with the secrets replaced, and the row is not left pending without one.
+func TestAnApprovalThatTheRedactionLengthensPastTheBoundIsPostedFromTheStoredRequest(t *testing.T) {
+	r, task := newRig(t, allowApprovals), approvalOf("run", map[string]any{"script": lengthened()})
+	if err := r.paused(t, task); err != nil {
+		t.Fatalf("Paused = %v; want the prompt posted", err)
+	}
+	row := r.row(t, task)
+	if len(row.Request) < 4096 || row.State != store.InteractionPending || row.MessageRef == "" || len(r.slack.posted) != 1 || len(r.sess.cancels) != 0 {
+		t.Fatalf("state %s, ref %q, %d posts, %d cancels, request of %d bytes; want one prompt posted for a stored request over the bound", row.State, row.MessageRef, len(r.slack.posted), len(r.sess.cancels), len(row.Request))
+	}
+	posted, _ := json.Marshal(r.slack.contents)
+	if strings.Contains(string(posted), "abc1") || strings.Count(string(posted), "[redacted]") < 250 {
+		t.Errorf("the prompt posted holds a secret or lacks the marker: %.200s", posted)
+	}
+	if err := r.paused(t, task); err != nil || len(r.slack.posted) != 1 {
+		t.Errorf("Paused again = %v with %d posts; want the one prompt left alone", err, len(r.slack.posted))
+	}
+}
+
+// TestTheSameApprovalOnAPlatformThatCannotShowItIsRefusedAsTooLarge: with the chat fake's limits the stored form does not fit,
+// and the pause is refused cleanly: audited, the thread told, the task cancelled and the row closed. It is never left
+// pending with no prompt.
+func TestTheSameApprovalOnAPlatformThatCannotShowItIsRefusedAsTooLarge(t *testing.T) {
+	r, task := newRig(t, allowApprovals), approvalOf("run", map[string]any{"script": lengthened()})
+	fake := chattest.NewFake()
+	r.fits = fake.Fits
+	refusedAndClosed(t, r, task)
+	auditedRefusal(t, r, reasonTooBig)
+	if row := r.row(t, task); row.State != store.InteractionCancelled || row.MessageRef != "" || len(r.notices(t)) != 1 {
+		t.Errorf("state %s, ref %q, %d notices; want it closed, with no prompt, and the thread told once", row.State, row.MessageRef, len(r.notices(t)))
 	}
 }

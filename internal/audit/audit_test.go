@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -680,5 +682,155 @@ func TestASecretAcrossTheReasonCapIsNotShownInPart(t *testing.T) {
 		if strings.Contains(got, key[:10]) || strings.Contains(got, "SECRETVAL") {
 			t.Errorf("%s: stored %q; want the key gone whole", name, got)
 		}
+	}
+}
+
+// decisions is a verdict for each of the given tools: a name that starts with "!" is denied.
+func decisions(names ...string) (ds []dialect.Decision, ns []string) {
+	for i, n := range names {
+		ds = append(ds, dialect.Decision{ToolID: fmt.Sprintf("id-%d", i), Approved: !strings.HasPrefix(n, "!")})
+		ns = append(ns, strings.TrimPrefix(n, "!"))
+	}
+	return ds, ns
+}
+
+// TestDecisionOfAnApprovalNamesTheToolsWithTheirVerdicts: beside the counts, which are the row before it named tools, each tool's
+// name with its verdict, in the order of the request; never the arguments, and no free text of the person's or the agent's.
+func TestDecisionOfAnApprovalNamesTheToolsWithTheirVerdicts(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tools []string
+		want  string
+	}{
+		{"one approved", []string{"delete_pod"}, `answered approved=1 denied=0 approved_tools=["delete_pod"]`},
+		{"one denied", []string{"!delete_pod"}, `answered approved=0 denied=1 denied_tools=["delete_pod"]`},
+		{"mixed, in the order of the request", []string{"a", "!c", "b", "!d"}, `answered approved=2 denied=2 approved_tools=["a","b"] denied_tools=["c","d"]`},
+		{"a name with a comma, a bracket and a quote is one name", []string{`x","y]`}, `answered approved=1 denied=0 approved_tools=["x\",\"y]"]`},
+		{"an empty name is still a tool", []string{""}, `answered approved=1 denied=0 approved_tools=[""]`},
+		{"white space and line breaks are one space", []string{"a\n b\t c"}, `answered approved=1 denied=0 approved_tools=["a b c"]`},
+		{"invisible characters are deleted", []string{"de\u200blete"}, `answered approved=1 denied=0 approved_tools=["delete"]`},
+		{"a long name is cut and says so", []string{strings.Repeat("n", 40)}, `answered approved=1 denied=0 approved_tools=["` + strings.Repeat("n", 29) + `..."]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s := newWriter(t)
+			ds, ns := decisions(tc.tools...)
+			d := Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered, Answer: &dialect.Answer{Decisions: ds}, ToolNames: ns}
+			if err := w.Decision(context.Background(), who, d); err != nil {
+				t.Fatalf("Decision: %v", err)
+			}
+			if got := only(t, s).Outcome; got != tc.want {
+				t.Errorf("outcome = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDecisionOfAnApprovalKeepsTheCountsExactWhenTheNamesDoNotFit: the row holds 200 bytes, and 20 tools of long names do not fit
+// in it. The counts are written first and are exact; each list keeps the whole names that fit and ends in +K, the number
+// of names it left out; and the shorter list gives its spare room to the longer.
+func TestDecisionOfAnApprovalKeepsTheCountsExactWhenTheNamesDoNotFit(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	for _, tc := range []struct {
+		name          string
+		tools         []string
+		prefix        string
+		approvedLeft  int // names the approved list left out
+		deniedLeft    int
+		wantAllNamed  bool
+		wantKeepsSome bool
+	}{
+		{"20 approved of 300 units", repeat(20, long), "answered approved=20 denied=0 approved_tools=[", 0, 0, false, false},
+		{"20 denied of 300 units", repeat(20, "!"+long), "answered approved=0 denied=20 denied_tools=[", 0, 0, false, false},
+		{"10 and 10 of 300 units", append(repeat(10, long), repeat(10, "!"+long)...), "answered approved=10 denied=10 approved_tools=[", 0, 0, false, false},
+		{"20 short names fit whole", repeat(20, "tool"), "answered approved=20 denied=0 approved_tools=[", 0, 0, true, true},
+		{"19 approved of 10 bytes and 1 denied", append(repeat(19, "kubectl_get"), "!kubectl_delete"), "answered approved=19 denied=1 approved_tools=[", 0, 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s := newWriter(t)
+			ds, ns := decisions(tc.tools...)
+			d := Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered, Answer: &dialect.Answer{Decisions: ds}, ToolNames: ns}
+			if err := w.Decision(context.Background(), who, d); err != nil {
+				t.Fatalf("Decision: %v", err)
+			}
+			got := only(t, s).Outcome
+			if len(got) > store.MaxAuditOutcome || !strings.HasPrefix(got, tc.prefix) || strings.HasSuffix(got, "...") && !strings.HasSuffix(got, `..."]`) {
+				t.Fatalf("outcome (%d bytes) = %q; want at most %d bytes, the exact counts first, and no row cut in the middle", len(got), got, store.MaxAuditOutcome)
+			}
+			if listed := strings.Count(got, `"`) / 2; tc.wantAllNamed && (listed != len(tc.tools) || strings.Contains(got, ",+")) {
+				t.Errorf("outcome = %q; want all %d names and no marker", got, len(tc.tools))
+			} else if !tc.wantAllNamed && !strings.Contains(got, "+") {
+				t.Errorf("outcome = %q; want a +K marker for the names left out", got)
+			}
+			if tc.wantKeepsSome && strings.Count(got, `"`) < 2 {
+				t.Errorf("outcome = %q; want some names kept", got)
+			}
+		})
+	}
+}
+
+func repeat(n int, name string) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = name
+	}
+	return out
+}
+
+// The marker says how many names a list left out: with the counts, the row accounts for every tool.
+func TestDecisionOfAnApprovalMarkerCountsTheNamesLeftOut(t *testing.T) {
+	w, s := newWriter(t)
+	ds, ns := decisions(repeat(20, "kubectl_get_pods_in_namespace")...)
+	if err := w.Decision(context.Background(), who, Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered, Answer: &dialect.Answer{Decisions: ds}, ToolNames: ns}); err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, s).Outcome
+	m := regexp.MustCompile(`^answered approved=20 denied=0 approved_tools=\[((?:"[a-z_]+",)*)\+(\d+)\]$`).FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("outcome = %q; want the counts, the whole names that fit, and +K", got)
+	}
+	kept, _ := strconv.Atoi(m[2])
+	if listed := strings.Count(m[1], `"`) / 2; listed+kept != 20 || listed == 0 || kept == 0 {
+		t.Errorf("outcome = %q: %d names listed and %d left out; want them to add up to 20", got, listed, kept)
+	}
+}
+
+// TestDecisionOfAnApprovalWithTheWrongNumberOfNamesIsAnErrorAndWritesNothing: names that do not match the decisions would
+// name the wrong tools, and the row authorizes the decision, so it is not written at all.
+func TestDecisionOfAnApprovalWithTheWrongNumberOfNamesIsAnErrorAndWritesNothing(t *testing.T) {
+	w, s := newWriter(t)
+	ds, _ := decisions("a", "b")
+	d := Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered, Answer: &dialect.Answer{Decisions: ds}, ToolNames: []string{"a"}}
+	if err := w.Decision(context.Background(), who, d); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("Decision = %v; want ErrInvalid", err)
+	}
+	if rows := allRows(t, s); len(rows) != 0 {
+		t.Errorf("%d rows written; want none", len(rows))
+	}
+}
+
+// TestDecisionOfAnApprovalNeverWritesASecretInAName: a name goes through the same cleaning as every identifier.
+func TestDecisionOfAnApprovalNeverWritesASecretInAName(t *testing.T) {
+	w, s := newWriter(t)
+	ds, ns := decisions("run "+fakes[0], fakes[1], "!"+fakes[2])
+	d := Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered, Answer: &dialect.Answer{Decisions: ds}, ToolNames: ns}
+	if err := w.Decision(context.Background(), who, d); err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, s).Outcome
+	for _, f := range fakes {
+		if strings.Contains(got, f) {
+			t.Errorf("outcome %q holds %q", got, f)
+		}
+	}
+}
+
+// An incomplete press of an approval is written with the shape of what was decided and nothing else: no tool, no verdict.
+func TestDecisionOfAnIncompleteApprovalHasOnlyItsShape(t *testing.T) {
+	w, s := newWriter(t)
+	if err := w.Decision(context.Background(), who, Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionIncomplete, Shape: &ToolShape{Decided: 1, Total: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := only(t, s).Outcome; got != "incomplete tools_decided=1/3" {
+		t.Errorf("outcome = %q; want %q", got, "incomplete tools_decided=1/3")
 	}
 }

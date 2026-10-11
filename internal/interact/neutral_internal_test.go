@@ -284,3 +284,45 @@ func TestExactToolsErrorsHoldNoAgentText(t *testing.T) {
 		}
 	}
 }
+
+// promptOf checks the approval itself, as Paused does: no caller can make a prompt that shows a tool cut or changed. A name,
+// a key or a string that the redaction would cut at 4 KiB is an error that wraps dialect.ErrUnusablePause, and no prompt is
+// made. Without its own call to exactTools, promptOf would build a prompt of the stored (cut) text and the person would be
+// asked to approve something other than what will run.
+func TestPromptOfRefusesAToolTheRedactionWouldCut(t *testing.T) {
+	long := strings.Repeat("word ", 1000) // 5000 bytes, past the 4 KiB bound
+	for name, tool := range map[string]dialect.Tool{
+		"a name":       {ID: "t1", Name: long},
+		"a string":     {ID: "t1", Name: "run", Args: map[string]any{"command": long}},
+		"a nested one": {ID: "t1", Name: "run", Args: map[string]any{"a": []any{map[string]any{"b": long}}}},
+		"a key":        {ID: "t1", Name: "run", Args: map[string]any{strings.Repeat("k", 5000): 1}},
+	} {
+		in := dialect.Interaction{Kind: dialect.ToolApproval, TaskID: "t", Tools: []dialect.Tool{{ID: "t0", Name: "fine"}, tool}}
+		p, err := promptOf("ix-1", in, askBy)
+		if !errors.Is(err, dialect.ErrUnusablePause) || len(p.Tools) != 0 {
+			t.Errorf("%s: promptOf = %+v, %v; want an unusable pause and no prompt", name, p, err)
+		}
+	}
+}
+
+// Text that is not valid UTF-8 is refused wherever a tool call holds text: the name, a key and a string at any depth. The
+// cleaning would delete it silently, and a person would read a call other than the one that runs.
+func TestExactToolsRefusesInvalidUTF8(t *testing.T) {
+	bad := "ab\xffcd"
+	for name, tool := range map[string]dialect.Tool{
+		"a name":                       {ID: "c", Name: bad},
+		"a string":                     {ID: "c", Name: "n", Args: map[string]any{"v": bad}},
+		"a key":                        {ID: "c", Name: "n", Args: map[string]any{bad: 1}},
+		"a string in a list":           {ID: "c", Name: "n", Args: map[string]any{"v": []any{"ok", bad}}},
+		"a string in a nested map":     {ID: "c", Name: "n", Args: map[string]any{"v": map[string]any{"w": bad}}},
+		"a truncated multi-byte start": {ID: "c", Name: "n", Args: map[string]any{"v": "x\xe2\x80"}},
+		"a lone continuation byte":     {ID: "c", Name: "n", Args: map[string]any{"v": "\x80"}},
+	} {
+		if err := exactTools([]dialect.Tool{tool}); !errors.Is(err, errToolControl) {
+			t.Errorf("%s: %v; want errToolControl", name, err)
+		}
+	}
+	if err := exactTools([]dialect.Tool{{ID: "c", Name: "名前", Args: map[string]any{"キー": "値 é \U0001f600"}}}); err != nil {
+		t.Errorf("valid multi-byte text: %v; want it shown", err)
+	}
+}
