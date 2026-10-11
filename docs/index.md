@@ -81,7 +81,7 @@ answers there. People reply in the same thread and the same agent session contin
 readiness probe and restart. The last crash log ends with "pool size must be &gt;= 5".</span>
 </div>
 <div class="ak-thread__post ak-thread__post--reply">
-<span class="ak-thread__who">dana</span>
+<span class="ak-thread__who">Engineer</span>
 <span>what changed in that rollout?</span>
 </div>
 <div class="ak-thread__post ak-thread__post--reply">

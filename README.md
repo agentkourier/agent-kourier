@@ -32,7 +32,7 @@ Alertmanager     FIRING (1) - PaymentsApiErrorRate
   Agent Kourier  The 5xx rate rose at 14:02, two minutes after the 14:00 rollout
                  of payments-api. The new pods fail their readiness probe and
                  restart. The last crash log ends with "pool size must be >= 5".
-  dana           what changed in that rollout?
+  Engineer       what changed in that rollout?
   Agent Kourier  The ConfigMap payments-api-env changed DB_POOL_SIZE from 20 to 2.
                  Nothing else in the Deployment differs from the previous revision.
 ```
@@ -165,7 +165,8 @@ To have the agent investigate the alerts a bot posts to that channel, list the
 triggers in the Binding's `chat` block. The example below is for Alertmanager, the one
 alert source with a preset; for another bot, write the trigger's `match`, `extract`
 and prompt template yourself, as
-[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows. `botId` is the `bot_id` carried by the alert
+[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows. `botId`
+is the `bot_id` carried by the alert
 messages themselves, which starts with `B`. It is not the Slack app ID, which starts
 with `A`, and Agent Kourier rejects a name. The dry run in the
 [sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is

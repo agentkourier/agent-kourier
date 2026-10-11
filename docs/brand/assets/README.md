@@ -67,3 +67,5 @@ HTML head:
 - Clear space: one head-width on every side of the ink.
 - Never recolour the head purple or put the mark in a hexagon (kagent).
 - Always "Agent Kourier", never "Kourier" alone (Knative's net-kourier).
+- Addresses have no hyphen, artifacts do: the GitHub org, domain and handles are `agentkourier`; the repo,
+  binary, chart, image and namespace are `agent-kourier`. So `github.com/agentkourier/agent-kourier`.
