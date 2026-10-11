@@ -1,7 +1,7 @@
 ---
 description: >-
-  Agent Kourier is a Kubernetes-native broker that carries Alertmanager alerts and Slack messages to any A2A agent,
-  wakes it if needed, and brings its findings back into the Slack thread where people can keep the session going.
+  Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A agent, wakes it if
+  needed, and brings its findings back into the Slack thread where people can keep the session going.
 hide:
   - navigation
   - toc
@@ -15,9 +15,9 @@ hide:
 <h1 class="ak-hero__name">Agent Kourier</h1>
 </div>
 
-<p class="ak-hero__pitch">Agent Kourier is a Kubernetes-native broker that carries Alertmanager alerts and Slack messages
-to any A2A agent, wakes it if needed, and brings its findings back into the Slack thread where people can keep the
-session going.</p>
+<p class="ak-hero__pitch">Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A
+agent, wakes it if needed, and brings its findings back into the Slack thread where people can keep the session
+going.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
@@ -94,7 +94,8 @@ previous revision.</span>
 Agent Kourier carries them.</p>
 
 A repeat of the same alert attaches to its thread, and its resolve posts a note there. Agent Kourier reads the alert
-that Alertmanager already posts to Slack, so it is never in the paging path.
+your alerting tool already posts to Slack, so it is never in the paging path. Alertmanager has a ready-made preset;
+another tool's bot needs a trigger of its own.
 
 <div class="ak-strip">
 <p class="ak-strip__label">Works with</p>

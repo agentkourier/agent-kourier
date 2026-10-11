@@ -4,7 +4,9 @@ For a team whose Alertmanager already posts alerts to a Slack channel: at the en
 agent investigation in that alert's thread, with one thread per alert, a cooldown, a rate limit and a daily cap.
 
 Agent Kourier reads the message Alertmanager posts. Alertmanager's own receivers and routes are untouched, so the
-alert still reaches people if Agent Kourier is down.
+alert still reaches people if Agent Kourier is down. This guide uses the `alertmanager` preset, the one preset that
+ships. For alerts another tool's bot posts, see
+[Start investigations from any bot's messages](any-bot-trigger.md).
 
 !!! note "The webhook receiver is not served yet"
 

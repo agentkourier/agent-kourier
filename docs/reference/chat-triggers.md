@@ -31,6 +31,9 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 
 ## `botMessage` fields
 
+A `botMessage` trigger works for any bot, named by its bot ID. The `alertmanager` preset is the only preset that ships:
+for another bot, write `match`, `extract`, `thread`, `limits` and `promptTemplate` yourself.
+
 | Field | Meaning |
 |---|---|
 | `from.botId` | The one bot whose messages the trigger accepts, by Slack bot ID (`B...`), never by display name. Agent Kourier's own messages are never handed on, even if a trigger names its bot ID; that mistake is logged once, at warn. |

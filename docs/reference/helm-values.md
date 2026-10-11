@@ -43,7 +43,7 @@ Agent Kourier's process settings. These are the environment cmd/agent-kourier re
 
 | Key | Default | Description |
 |---|---|---|
-| `listen.port` | `8080` | The port of /healthz, /readyz and /metrics (AGENTKOURIER_LISTEN). The Alertmanager receiver is not served yet. |
+| `listen.port` | `8080` | The port of /healthz, /readyz and /metrics (AGENTKOURIER_LISTEN). The alert webhook receiver is not served yet. |
 
 ## logLevel
 

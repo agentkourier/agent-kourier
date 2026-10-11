@@ -3,8 +3,8 @@
 site_name: Agent Kourier
 site_url: https://agentkourier.dev/
 site_description: >-
-  Agent Kourier is a Kubernetes-native broker that carries Alertmanager alerts and Slack messages to any A2A agent,
-  wakes it if needed, and brings its findings back into the Slack thread where people can keep the session going.
+  Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A agent, wakes it if
+  needed, and brings its findings back into the Slack thread where people can keep the session going.
 repo_url: https://github.com/agentkourier/agent-kourier
 repo_name: agentkourier/agent-kourier
 edit_uri: edit/main/docs/
@@ -123,6 +123,7 @@ nav:
       - Configure Slack: how-to/configure-slack.md
       - Write a Binding: how-to/write-a-binding.md
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
+      - Start investigations from any bot's messages: how-to/any-bot-trigger.md
       - Tune triggers with a dry run: how-to/tune-triggers.md
       - Connect a kagent agent: how-to/connect-kagent.md
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md

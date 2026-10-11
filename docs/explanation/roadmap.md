@@ -11,8 +11,9 @@ chart, Postgres, a standby and published images) came before the pilot, so that 
 - Recovery after a restart, and an outbox that does not repeat a post after a crash. A streamed reply cut off as it
   starts is the one exception.
 - Questions from the agent, answered in the thread.
-- `botMessage` triggers, with a preset for the alerts Alertmanager posts to Slack: one thread per alert, a cooldown, a
-  rate limit and a daily cap.
+- `botMessage` triggers, which start investigations from the alerts a bot posts to the channel: one thread per alert,
+  a cooldown, a rate limit and a daily cap. A preset fills them in for Alertmanager; another bot's trigger is written
+  in full.
 - Two agent dialects, `kagent-v1` and generic `a2a`, reading A2A 1.0 and 0.3 agents, and an experimental Google AX
   reference agent.
 - An audit log, Prometheus metrics and optional OpenTelemetry traces.
@@ -35,7 +36,7 @@ These wait for the pilot's verdict or for an upstream release.
 
 - Custom resource definitions and a controller, so `kubectl get bindings` works.
 - Slack over the Events API, and direct messages.
-- An Alertmanager webhook that Agent Kourier receives directly.
+- A webhook receiver, so an alert source can post to Agent Kourier directly instead of through Slack.
 - Tool approvals from Slack, for agents that can change things.
 - The move to kagent 1.0 when it is released.
 - More chat platforms. The candidates are Mattermost, Microsoft Teams and Discord.
@@ -56,5 +57,5 @@ These wait for the pilot's verdict or for an upstream release.
 | Agent backend | Google AX, through an A2A agent in an AX Task and the `a2a` dialect | Experimental |
 | Agent backend | Tool approvals answered from Slack | Planned |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
-| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full | Implemented |
+| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; no preset, and not exercised in the sandbox or the end-to-end tests | Implemented |
 | Alert source | Alertmanager webhook, received by Agent Kourier directly | Planned |

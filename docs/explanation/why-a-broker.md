@@ -8,7 +8,7 @@ proxy in front of an agent or a feature of one agent platform.
 Agents on Kubernetes can read logs, check rollouts and find causes, but they work only when someone opens a prompt and
 asks. Alerts fire in monitoring and questions come up in chat, and neither reaches the agent on its own.
 
-When the project started (research of 2026-09-29), kagent had no webhook trigger and no Alertmanager ingestion, and
+When the project started (research of 2026-09-29), kagent had no webhook trigger and no way to take in alerts, and
 upstream had declined a Slack bot in core. A kagent maintainer stated that events arriving while an agent is asleep need
 a third party to act as a broker. The chat half of the problem was partly solved elsewhere; what was missing was the
 combination:
@@ -41,8 +41,8 @@ oauth2-proxy in front of the agent. See [Security model](security.md).
 
 ## Why outside the paging path
 
-Agent Kourier is an additional reader of alerts, never a replacement. It reads the message Alertmanager already posts
-to Slack, and a future webhook route to it must use `continue: true`. An Agent Kourier outage therefore never loses a
+Agent Kourier is an additional reader of alerts, never a replacement. It reads the alert your alerting tool already posts
+to Slack, and a future direct webhook route to it must leave the existing receivers in place. An Agent Kourier outage therefore never loses a
 page: the alert has already reached people through its own receiver. For the same reason, an alert that a rate limit or
 daily cap stops is not posted about one by one; it is counted in one digest line.
 

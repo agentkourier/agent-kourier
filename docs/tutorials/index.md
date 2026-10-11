@@ -21,7 +21,8 @@ Tutorials teach by doing. They make the choices for you and do not stop to expla
 
     ---
 
-    Have Alertmanager post an alert to Slack and watch the agent investigate it in the alert's thread.
+    Have the sandbox's Alertmanager post an alert to Slack and watch the agent investigate it in the alert's
+    thread. Alertmanager is the example; any bot's alerts can start an investigation.
 
     [:octicons-arrow-right-24: Start](first-alert-investigation.md)
 

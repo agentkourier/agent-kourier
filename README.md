@@ -4,11 +4,13 @@
 
 <p align="center"><strong>Declarative chat gateway for Kubernetes agents.</strong></p>
 
-Agent Kourier puts your A2A agents in Slack. A team commits a `Binding` next to its
+Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to
+any A2A agent, wakes it if needed, and brings its findings back into the Slack thread
+where people can keep the session going. A team commits a `Binding` next to its
 agent's manifests, and the agent answers mentions, follows up in threads, and
-investigates the alerts Alertmanager already posts to the channel. The broker holds
-the Slack connection, the reply queue and the delivery state, so an Agent Kourier restart
-loses no message.
+investigates the alerts a bot already posts to the channel. The broker holds the Slack
+connection, the reply queue and the delivery state, so an Agent Kourier restart loses
+no message.
 
 [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
 [Architecture](docs/explanation/architecture.md) · [Roadmap](ROADMAP.md) ·
@@ -51,10 +53,11 @@ a note there.
 - **Questions are answered in the thread.** With `interactions.askUser` set on the
   `Binding`, Agent Kourier renders the agent's question in the thread and resumes the same
   agent task with the answer.
-- **Alerts become conversations.** A `botMessage` trigger reads the message
-  Alertmanager posts to Slack and starts an investigation in that alert's thread,
-  with a cooldown per alert, a rate limit and a daily cap. Agent Kourier reads what is
-  already posted, so it is never in the paging path.
+- **Alerts become conversations.** A `botMessage` trigger reads the alerts a bot
+  posts to the channel, named by its bot ID, and starts an investigation in each
+  alert's thread, with a cooldown per alert, a rate limit and a daily cap. A preset
+  fills it in for Alertmanager; another bot's trigger is written in full. Agent
+  Kourier reads what is already posted, so it is never in the paging path.
 - **Any streaming A2A backend.** A kagent agent, an agent running in Google AX and any
   other A2A 1.0 or 0.3 agent whose card advertises streaming use the same `Binding`.
   Backend-specific behaviour lives in a dialect.
@@ -158,8 +161,11 @@ keys; `payments-agent-token` belongs in `payments` with a `token` key. Each bind
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
 
-To have the agent investigate the alerts Alertmanager posts to that channel, list the
-triggers in the Binding's `chat` block. `botId` is the `bot_id` carried by the alert
+To have the agent investigate the alerts a bot posts to that channel, list the
+triggers in the Binding's `chat` block. The example below is for Alertmanager, the one
+alert source with a preset; for another bot, write the trigger's `match`, `extract`
+and prompt template yourself, as
+[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows. `botId` is the `bot_id` carried by the alert
 messages themselves, which starts with `B`. It is not the Slack app ID, which starts
 with `A`, and Agent Kourier rejects a name. The dry run in the
 [sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is
@@ -209,7 +215,7 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Agent backend | Tool approvals answered from Slack | Planned |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
-| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full | Implemented |
+| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; no preset, and not exercised in the sandbox or the end-to-end tests | Implemented |
 | Alert source | Alertmanager webhook, received by Agent Kourier directly | Planned |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
