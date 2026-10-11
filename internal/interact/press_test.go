@@ -23,13 +23,15 @@ import (
 
 // authz is who may answer. The zero value says nobody is a member; members and bots are by user. groups lists, by group ID,
 // who is in it; a group not listed has nobody, as one that is listed empty. groupCalls is the groups each IsInAnyGroup was
-// asked about, and groupErr fails every one.
+// asked about, and groupErr fails every one. unreadable fails a group by ID, as a platform does: the groups are read in order and the
+// first unreadable one ends the call with its error, even if a later group lists the user.
 type authz struct {
 	mu                sync.Mutex
 	members, bots     map[string]bool
 	groups            map[string][]string
 	memberErr, botErr error
 	groupErr          error
+	unreadable        map[string]error
 	onGroup           func() // run by IsInAnyGroup before it answers, if set
 	asked             int
 	groupCalls        [][]string
@@ -46,6 +48,9 @@ func (a *authz) IsInAnyGroup(_ context.Context, groups []string, user string) (b
 		return false, a.groupErr
 	}
 	for _, g := range groups {
+		if err := a.unreadable[g]; err != nil {
+			return false, err
+		}
 		if slices.Contains(a.groups[g], user) {
 			return true, nil
 		}

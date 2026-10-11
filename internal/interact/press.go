@@ -36,7 +36,8 @@ const (
 )
 
 // Authorizer says who may answer: a chat.Platform. All fail closed: IsBot by returning true with its error, and IsInAnyGroup
-// by returning false with its error, so an error is never a yes. IsInAnyGroup is asked only for a tool approval on a Binding
+// by returning false with its error, so an error is never a yes; an error that wraps chat.ErrGroupsMisconfigured says the check
+// can never succeed until an operator fixes the groups, and any other may pass. IsInAnyGroup is asked only for a tool approval on a Binding
 // that names approver groups.
 type Authorizer interface {
 	IsMember(ctx context.Context, channel, user string) (bool, error)
@@ -158,7 +159,9 @@ const (
 // with the answer's shape and no values: how many were answered, or for an approval how many tools were decided); a press on a question that is already decided is not, since only
 // a press that races into the decider is a decision lost. A failure to check, to audit or to decide is an
 // error and leaves the press for another try, however old it is: a check that cannot be made is no decision,
-// and only the worker's cap ends such a press (GiveUp).
+// and only the worker's cap ends such a press (GiveUp). The one exception is an approver-group check that the platform
+// says can never succeed until an operator fixes the groups (chat.ErrGroupsMisconfigured): that press is ended at once,
+// told and deleted, with nothing decided or audited, so that it does not hold the later presses of its interaction.
 func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, error) {
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
@@ -190,7 +193,7 @@ func (p *Pipeline) open(row store.Interaction, user string) bool {
 // authorized checks who pressed, reads the answer and decides it. A person refused as not a member, or a bot, or in none of
 // the approver groups, or whose answer is incomplete or unreadable, is a decision of its own and is audited, before the
 // person is told, and a failed audit write keeps the press for another try (spec 8.6 step 7). A check that
-// itself fails is no decision, and is only told.
+// itself fails is no decision and is never audited: the press is kept for another try if the failure may pass, and ended at once, with the person told, if it never will.
 //
 // What the press means depends on the kind of the decoded request, never on the row's kind (a tool approval that a
 // sub-agent raised is stored as "nested"). A question reads the controls' answers (ExtractAnswer); an approval reads
@@ -256,10 +259,27 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		// the recorded answer again; refusing it would leave a decision audited and not delivered, and put a refusal after it.
 		if len(b.ApproverGroups) > 0 && (row.State != store.InteractionAnswered || row.Decider != press.User) {
 			switch approver, err := p.cfg.Authorizer.IsInAnyGroup(ctx, b.ApproverGroups, press.User); {
+			case errors.Is(err, chat.ErrGroupsMisconfigured):
+				// The platform says no retry mends this until an operator fixes the Binding's groups (a group that does not exist or is
+				// disabled, an app without the scope to read groups, a workspace without groups), and the check ends at the first
+				// group it cannot read, so it fails for everyone not in an earlier group, an approver in a later one among them.
+				// Retrying would hold this press, and with it every later press of the interaction (the worker takes them in order),
+				// until the worker's cap: an approver's press behind it, recorded in time, would still win, and the tool would run up
+				// to an hour after the Approve. So the press ends now, with the person told in fixed words and one Error line for
+				// the operator naming the Binding.
+				//
+				// It is no decision and no denial of the person: nothing is audited against them, and the interaction stays pending,
+				// so a press by a member of an earlier group, which the check reads without reaching the bad one, can still decide
+				// it. It is not audited at all: an audit row is a decision about a person's press (audit.DecisionResult), and this is a
+				// fault of the configuration that the Error line carries. It fails closed for the approver who hits it as well as for
+				// anyone else: their press is ended, not held, and nothing they pressed takes effect (no answer is read, decided or
+				// sent), so they press again once the groups are fixed.
+				p.cfg.Logger.ErrorContext(ctx, "interact: the approver groups of a Binding cannot be read until an operator fixes them; the press is ended and nothing is decided", "binding", name, "interaction", row.ID, "err", err)
+				return p.finish(ctx, press, &row, w.groupsBroken)
 			case err != nil:
-				// Usually a fault in the configuration (a group that is mistyped or disabled, a scope the app was installed without)
-				// that no retry mends, so it is logged where an operator will see it. It is no denial of the person: never audited as one.
-				// A cancelled context is a shutdown with the press in flight, not a fault of the groups, and is not logged.
+				// Usually a fault in the platform that may pass (a timeout, a server error, a rate limit), so the press is kept and
+				// tried again, and logged where an operator will see it. It is no denial of the person: never audited as one. A
+				// cancelled context is a shutdown with the press in flight, not a fault of the groups, and is not logged.
 				if ctx.Err() == nil {
 					p.cfg.Logger.ErrorContext(ctx, "interact: the approver-group check failed; the press is kept and tried again", "binding", name, "interaction", row.ID, "err", err)
 				}

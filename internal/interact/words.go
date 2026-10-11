@@ -17,6 +17,11 @@ type words struct {
 	// notApprover is told to a member who is in none of the Binding's approver groups. Only an approval has it: a question
 	// is not gated by groups. It names no group.
 	notApprover string
+	// groupsBroken is told to anyone whose press needed the approver-group check when the platform said the check can never
+	// succeed until an operator fixes the Binding's groups (chat.ErrGroupsMisconfigured). Only an approval has it. It is true
+	// of the one told, member of a group or not: their decision could not be checked, so it was not taken. It names no group
+	// and holds nothing from the platform's error.
+	groupsBroken string
 	// firstNone is told when someone else decided first and is not named; firstWords follows the mention of the one who did.
 	firstNone, firstWords string
 }
@@ -25,17 +30,18 @@ type words struct {
 func wordsOf(k dialect.Kind) words {
 	if k == dialect.ToolApproval {
 		return words{
-			gone:        "This request is no longer available.",
-			notReady:    "This request is not ready yet. Please press again in a moment.",
-			notMember:   "Only members of this channel can decide this request.",
-			notApprover: "Only approvers of this Binding can decide this request.",
-			late:        "This request has timed out, so your decision was not taken.",
-			invalid:     "That decision could not be used. Please check it and press again.",
-			timedOut:    "This request has timed out.",
-			closed:      "This request is closed.",
-			gaveUp:      "Couldn't process your decision. Please press again.",
-			firstNone:   "Someone else decided this request first.",
-			firstWords:  "decided this request first.",
+			gone:         "This request is no longer available.",
+			notReady:     "This request is not ready yet. Please press again in a moment.",
+			notMember:    "Only members of this channel can decide this request.",
+			notApprover:  "Only approvers of this Binding can decide this request.",
+			groupsBroken: "Your decision could not be checked, because this Binding's approver groups cannot be read, so it was not taken. An operator must fix this.",
+			late:         "This request has timed out, so your decision was not taken.",
+			invalid:      "That decision could not be used. Please check it and press again.",
+			timedOut:     "This request has timed out.",
+			closed:       "This request is closed.",
+			gaveUp:       "Couldn't process your decision. Please press again.",
+			firstNone:    "Someone else decided this request first.",
+			firstWords:   "decided this request first.",
 		}
 	}
 	return words{

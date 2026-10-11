@@ -228,13 +228,23 @@ func TestGroupMembershipFailsClosed(t *testing.T) {
 		{"a group the fake was not told of", []string{"G404"}, "U1", false, true},
 		{"an unknown group before a hit is still an error", []string{"G404", "G1"}, "U1", false, true},
 	} {
-		if got, err := f.IsInAnyGroup(ctx, tc.groups, tc.user); got != tc.want || (err != nil) != tc.err {
+		got, err := f.IsInAnyGroup(ctx, tc.groups, tc.user)
+		if got != tc.want || (err != nil) != tc.err {
 			t.Errorf("%s: IsInAnyGroup(%v, %s) = %t, %v; want %t, error %t", tc.name, tc.groups, tc.user, got, err, tc.want, tc.err)
 		}
+		// A group that does not exist is the permanent kind: the contract of chat.Platform.IsInAnyGroup.
+		if tc.err && !errors.Is(err, chat.ErrGroupsMisconfigured) {
+			t.Errorf("%s: the error %v does not wrap chat.ErrGroupsMisconfigured", tc.name, err)
+		}
 	}
-	f.FailNext("IsInAnyGroup", errors.New("boom"))
-	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); got || err == nil {
-		t.Errorf("IsInAnyGroup with an injected failure = %t, %v; want false and the error", got, err)
+	// The two kinds of failure a caller must tell apart: one injected as a plain error may pass on a retry, and one that
+	// wraps the sentinel never will. Both are false.
+	f.FailNext("IsInAnyGroup", errors.New("boom"), fmt.Errorf("scope: %w", chat.ErrGroupsMisconfigured))
+	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); got || err == nil || errors.Is(err, chat.ErrGroupsMisconfigured) {
+		t.Errorf("IsInAnyGroup with an injected plain failure = %t, %v; want false and an error that is not the permanent kind", got, err)
+	}
+	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); got || !errors.Is(err, chat.ErrGroupsMisconfigured) {
+		t.Errorf("IsInAnyGroup with an injected permanent failure = %t, %v; want false and chat.ErrGroupsMisconfigured", got, err)
 	}
 	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); err != nil || !got {
 		t.Errorf("IsInAnyGroup after the failure = %t, %v; want true", got, err)

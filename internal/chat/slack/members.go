@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	slackgo "github.com/slack-go/slack"
@@ -89,6 +90,12 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 // means. Disabled groups are not asked for (include_disabled is not sent). The error holds no token. The app needs
 // the usergroups:read scope.
 //
+// An error wraps chat.ErrGroupsMisconfigured when Slack's code says the read cannot succeed until the configuration is
+// fixed (groupsMisconfiguredCode: a group that does not exist, a missing scope, a plan without user groups, and the
+// like). Every other error, a timeout, a 5xx, a rate limit, a cancelled context, a token Slack rejects, is not wrapped
+// and may pass on another try. The first error ends the call either way, so one bad ID fails everyone not in an
+// earlier group. Neither kind is ever a yes.
+//
 // From Slack's method page (docs.slack.dev/reference/methods/usergroups.users.list, read 2026-10-11): the scope is
 // usergroups:read for a bot token; the call takes usergroup and the optional include_disabled and team_id, and has
 // no cursor; an unknown ID is no_such_subteam ("No usergroup found with the given ID"); and the page lists the error
@@ -98,9 +105,9 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 //
 // UNCONFIRMED(WP-04), because the page is silent or no live workspace was asked: what Slack answers for a disabled
 // group when include_disabled is not sent (an error, or a list), and so whether a disabled group's members would
-// count (the fake has no disabled groups); that a bot token with only usergroups:read is enough in a real workspace; that the
-// error for a missing usergroup is invalid_arguments (the fake says it); and whether a free workspace gets
-// plan_upgrade_required or another code.
+// count (the fake has no disabled groups); that a bot token with only usergroups:read is enough in a real workspace; and whether a free workspace gets
+// plan_upgrade_required or another code. Which errors are permanent (groupsMisconfiguredCode) is a reading of the page's
+// codes, not something it states.
 func (c *Client) IsInAnyUserGroup(ctx context.Context, groups []string, user string) (telemetryResult0 bool, telemetryErr error) {
 	if len(groups) == 0 || user == "" {
 		return false, nil
@@ -112,7 +119,11 @@ func (c *Client) IsInAnyUserGroup(ctx context.Context, groups []string, user str
 	for _, group := range groups {
 		members, err := c.api.GetUserGroupMembersContext(ctx, group)
 		if err != nil {
-			return false, c.scrub("usergroups.users.list", err)
+			err = c.scrub("usergroups.users.list", err)
+			if groupsMisconfiguredCode(err) != "" {
+				err = fmt.Errorf("%w: %w", chat.ErrGroupsMisconfigured, err)
+			}
+			return false, err
 		}
 		if slices.Contains(members, user) {
 			return true, nil

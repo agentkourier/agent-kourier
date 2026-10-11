@@ -154,6 +154,12 @@ var (
 	// one call. No retry mends it: the same window is as long the next time. The caller goes on without the replies, as
 	// for ErrNoThreadReads.
 	ErrThreadTooLong = errors.New("chat: the window of the thread is too long to read")
+	// ErrGroupsMisconfigured is wrapped by the error of an IsInAnyGroup that can never succeed until an operator changes
+	// the configuration: a group that does not exist or is disabled, an app that is not allowed to read groups (it was
+	// installed before it asked for the scope), a workspace that has no groups. A caller checks it with errors.Is and ends
+	// the press at once instead of retrying. An error that does not wrap it may pass on another try (a timeout, a server
+	// error, a rate limit), and a cancelled context is never wrapped in it.
+	ErrGroupsMisconfigured = errors.New("chat: the approver groups cannot be read until the platform's configuration is fixed")
 )
 
 // Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
@@ -201,7 +207,11 @@ type Platform interface {
 	// group is refused at once, and the groups are read in order, stopping at the first that lists user. It fails
 	// closed: an error is never "yes". A group the platform cannot read (it does not exist, the app may not read
 	// groups, the platform does not answer in time) is false and the error: the first error ends the call, even if a
-	// later group lists user. An empty groups, or an empty user, is false with no error and no call: what no groups
+	// later group lists user. An error wraps ErrGroupsMisconfigured when the platform says the read can never succeed
+	// until an operator fixes the configuration (a group that does not exist or is disabled, an app without the
+	// permission to read groups, a workspace without groups): the caller checks it with errors.Is and does not retry.
+	// Any other error (a timeout, a server error, a rate limit, a cancelled context) may pass on another try. Neither is
+	// ever "yes". An empty groups, or an empty user, is false with no error and no call: what no groups
 	// means is the caller's to decide, and it asks only when groups are configured.
 	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
 	// IsBot says whether user is a bot. It fails closed: a user it cannot read is a bot, with the error.

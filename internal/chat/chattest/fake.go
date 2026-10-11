@@ -126,7 +126,9 @@ func (f *FakePlatform) SetMembers(channel string, users ...string) {
 }
 
 // SetGroup sets who is in the group with the platform ID id. A group the fake was not told of is unreadable: IsInAnyGroup
-// is false, with an error.
+// is false, with an error that wraps chat.ErrGroupsMisconfigured, as a platform's answer for a group that does not exist
+// does. FailNext("IsInAnyGroup", errors.New(...)) makes the other kind, an error that may pass on a retry, and
+// FailNext with an error that wraps chat.ErrGroupsMisconfigured makes the first for a group that is set.
 func (f *FakePlatform) SetGroup(id string, users ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -495,7 +497,7 @@ func (f *FakePlatform) IsMember(_ context.Context, channel, user string) (bool, 
 }
 
 // IsInAnyGroup implements chat.Platform: groups are read in order, up to the first that lists user, and a group the fake
-// was not told of is an error that ends the call.
+// was not told of is an error that ends the call and wraps chat.ErrGroupsMisconfigured.
 func (f *FakePlatform) IsInAnyGroup(_ context.Context, groups []string, user string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -508,7 +510,7 @@ func (f *FakePlatform) IsInAnyGroup(_ context.Context, groups []string, user str
 	for _, g := range groups {
 		members, ok := f.groups[g]
 		if !ok {
-			return false, fmt.Errorf("fake platform: no such group %q", g)
+			return false, fmt.Errorf("fake platform: no such group %q: %w", g, chat.ErrGroupsMisconfigured)
 		}
 		if slices.Contains(members, user) {
 			return true, nil

@@ -12,6 +12,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -181,6 +182,73 @@ func TestIsInAnyUserGroupFailsClosed(t *testing.T) {
 	calls.status, calls.body = http.StatusBadGateway, "bad gateway"
 	if got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1"); got || err == nil {
 		t.Errorf("IsInAnyUserGroup on a 502 = %v, %v; want false and the error", got, err)
+	}
+}
+
+// TestIsInAnyUserGroupSaysWhichFailuresCanNeverSucceed: the codes Slack lists for usergroups.users.list that only an operator
+// can mend wrap chat.ErrGroupsMisconfigured, so the press that asked is ended and not retried for an hour. Everything that
+// may pass on a retry does not, and neither is a yes, even though the user is in a group.
+func TestIsInAnyUserGroupSaysWhichFailuresCanNeverSucceed(t *testing.T) {
+	slackError := func(code string) string { return `{"ok":false,"error":"` + code + `"}` }
+	for name, tc := range map[string]struct {
+		status    int
+		body      string
+		err       error
+		hang      bool
+		permanent bool
+	}{
+		"a group that does not exist":              {status: http.StatusOK, body: slackError("no_such_subteam"), permanent: true},
+		"an app without the scope":                 {status: http.StatusOK, body: slackError("missing_scope"), permanent: true},
+		"a plan without user groups":               {status: http.StatusOK, body: slackError("plan_upgrade_required"), permanent: true},
+		"a token type the method denies":           {status: http.StatusOK, body: slackError("not_allowed_token_type"), permanent: true},
+		"a token without permission":               {status: http.StatusOK, body: slackError("no_permission"), permanent: true},
+		"an enterprise grid":                       {status: http.StatusOK, body: slackError("enterprise_is_restricted"), permanent: true},
+		"a rate limit as a 429":                    {status: http.StatusTooManyRequests, body: ""},
+		"a rate limit as a code":                   {status: http.StatusOK, body: slackError("ratelimited")},
+		"a 500":                                    {status: http.StatusInternalServerError, body: "oops"},
+		"a 502":                                    {status: http.StatusBadGateway, body: "bad gateway"},
+		"an internal error":                        {status: http.StatusOK, body: slackError("internal_error")},
+		"service unavailable":                      {status: http.StatusOK, body: slackError("service_unavailable")},
+		"a rejected token is fatal auth, not this": {status: http.StatusOK, body: slackError("invalid_auth")},
+		"a network error":                          {err: errors.New("connection reset")},
+		"a timeout":                                {hang: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, c, calls := groupsClient(t, func(cfg *slack.Config) { cfg.AuthzTimeout = 200 * time.Millisecond })
+			calls.status, calls.body, calls.err, calls.hang = tc.status, tc.body, tc.err, tc.hang
+			// U1 is in S1, and the failure is the first read: a failed read is never a yes.
+			got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1")
+			if got || err == nil {
+				t.Fatalf("IsInAnyUserGroup = %v, %v; want false and the error", got, err)
+			}
+			if permanent := errors.Is(err, chat.ErrGroupsMisconfigured); permanent != tc.permanent {
+				t.Errorf("IsInAnyUserGroup error %v: permanent = %t; want %t", err, permanent, tc.permanent)
+			}
+		})
+	}
+}
+
+// TestAPermanentGroupErrorKeepsTheSlackCodeAndNoToken: the sentinel does not replace what Slack said, and the error still holds
+// no token, so an operator reads the code in the log line.
+func TestAPermanentGroupErrorKeepsTheSlackCodeAndNoToken(t *testing.T) {
+	const bot = "canary-bot-token"
+	_, c, calls := groupsClient(t, func(cfg *slack.Config) { cfg.BotToken = secret.New(bot) })
+	calls.status, calls.body = http.StatusOK, `{"ok":false,"error":"missing_scope"}`
+	_, err := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1")
+	var resp slackgo.SlackErrorResponse
+	if !errors.Is(err, chat.ErrGroupsMisconfigured) || !errors.As(err, &resp) || resp.Err != "missing_scope" || strings.Contains(err.Error(), bot) || !strings.Contains(err.Error(), "missing_scope") {
+		t.Errorf("error %v; want the sentinel, Slack's code missing_scope and no token", err)
+	}
+}
+
+// TestACancelledGroupReadIsNotPermanent: a shutdown in the middle of the read is not a fault of the groups.
+func TestACancelledGroupReadIsNotPermanent(t *testing.T) {
+	_, c, _ := groupsClient(t, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got, err := c.IsInAnyUserGroup(ctx, []string{"S1"}, "U1")
+	if got || !errors.Is(err, context.Canceled) || errors.Is(err, chat.ErrGroupsMisconfigured) {
+		t.Errorf("IsInAnyUserGroup on a cancelled context = %v, %v; want false and a cancellation that is not the permanent kind", got, err)
 	}
 }
 

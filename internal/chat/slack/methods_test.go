@@ -160,8 +160,8 @@ func TestReactAndTheChecksOfWhoIsInTheChannel(t *testing.T) {
 	if ok, err := w.p.IsInAnyGroup(t.Context(), []string{"S1"}, "U2"); err != nil || ok {
 		t.Errorf("IsInAnyGroup(U2) = %t, %v; want not a member", ok, err)
 	}
-	if ok, err := w.p.IsInAnyGroup(t.Context(), []string{"S404"}, "U1"); err == nil || ok {
-		t.Errorf("IsInAnyGroup of an unknown group = %t, %v; want false, with an error: fail closed", ok, err)
+	if ok, err := w.p.IsInAnyGroup(t.Context(), []string{"S404"}, "U1"); err == nil || ok || !errors.Is(err, chat.ErrGroupsMisconfigured) {
+		t.Errorf("IsInAnyGroup of an unknown group = %t, %v; want false, with an error that wraps chat.ErrGroupsMisconfigured: fail closed", ok, err)
 	}
 	if bot, err := w.p.IsBot(t.Context(), "B1"); err != nil || !bot {
 		t.Errorf("IsBot(B1) = %t, %v", bot, err)

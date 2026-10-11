@@ -72,3 +72,35 @@ func fatalAuthCode(err error) string {
 	}
 	return ""
 }
+
+// groupsMisconfiguredCode returns the Slack error code in err if it says that usergroups.users.list will fail the same
+// way on every try until an operator changes the configuration, and "" otherwise (including for an error that is not
+// Slack's own). The codes are a group that does not exist (no_such_subteam), an app installed without usergroups:read
+// (missing_scope), a workspace whose plan has no user groups (plan_upgrade_required), a token of a type the method does
+// not take (not_allowed_token_type), a token without the permission (no_permission), and a method an Enterprise grid
+// cannot call (enterprise_is_restricted). A rate limit, a server error, a timeout and a cancelled context may pass on
+// another try. A rejected, revoked or missing token (invalid_auth, token_revoked, account_inactive, not_authed) is
+// fatalAuthCode's, the restart policy's, and is not reclassified here: the group read is as transient as any other
+// call on a token that Run is about to find rejected. It reads the code scrub keeps, through any wrapping.
+//
+// From Slack's method page (docs.slack.dev/reference/methods/usergroups.users.list, read 2026-10-11), which lists each
+// of these codes: no_such_subteam, missing_scope, plan_upgrade_required, not_allowed_token_type, no_permission and
+// enterprise_is_restricted. The page does not say which of its codes are permanent; that each is, is this adapter's
+// reading of what the code names.
+//
+// UNCONFIRMED(WP-04): that a live workspace answers with these codes for the causes named (in particular that a
+// disabled group, asked for without include_disabled, is no_such_subteam and not an empty list, and that a free
+// workspace gets plan_upgrade_required), and that no other code on the page is permanent for this call (invalid_arguments
+// and access_denied are left transient: the first may come from a call Agent Kourier built wrong, and the second names no
+// cause).
+func groupsMisconfiguredCode(err error) string {
+	var resp slackgo.SlackErrorResponse
+	if !errors.As(err, &resp) {
+		return ""
+	}
+	switch resp.Err {
+	case "no_such_subteam", "missing_scope", "plan_upgrade_required", "not_allowed_token_type", "no_permission", "enterprise_is_restricted":
+		return resp.Err
+	}
+	return ""
+}
