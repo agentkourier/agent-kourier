@@ -55,6 +55,8 @@ type Ephemeral struct {
 type FakePlatform struct {
 	// MaxQuestions is how many questions a prompt may have before Fits says it is too large (default 20).
 	MaxQuestions int
+	// MaxTools is how many tools a prompt may have before Fits says it is too large (default 20).
+	MaxTools int
 	// Now is the clock (time.Now by default).
 	Now func() time.Time
 
@@ -78,7 +80,7 @@ type FakePlatform struct {
 // NewFake returns a fake with every capability, and limits like a real platform's.
 func NewFake() *FakePlatform {
 	return &FakePlatform{
-		MaxQuestions: 20, Now: time.Now,
+		MaxQuestions: 20, MaxTools: 20, Now: time.Now,
 		caps: chat.Caps{
 			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000,
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
@@ -542,7 +544,9 @@ func (f *FakePlatform) ResolveUser(_ context.Context, id string) (chat.User, err
 	return u, nil
 }
 
-// Fits implements chat.Platform: a prompt of more than MaxQuestions questions is too large.
+// Fits implements chat.Platform: a prompt of more than MaxQuestions questions, or of more than MaxTools tools, is
+// too large, and so is one with a tool whose name or arguments, cleaned, are longer than the limit of their place:
+// the text of a tool awaiting approval is refused and never shown cut.
 func (f *FakePlatform) Fits(p chat.Prompt) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -552,6 +556,17 @@ func (f *FakePlatform) Fits(p chat.Prompt) error {
 func (f *FakePlatform) fits(p chat.Prompt) error {
 	if len(p.Questions) > f.MaxQuestions {
 		return fmt.Errorf("%w: %d questions, at most %d", chat.ErrTooLarge, len(p.Questions), f.MaxQuestions)
+	}
+	if len(p.Tools) > f.MaxTools {
+		return fmt.Errorf("%w: %d tools, at most %d", chat.ErrTooLarge, len(p.Tools), f.MaxTools)
+	}
+	for i, t := range p.Tools {
+		if n, lim := chat.Units(chat.Clean(t.Name, chat.WhereToolName.Line())), f.caps.Limit(chat.WhereToolName); n > lim {
+			return fmt.Errorf("%w: the name of tool %d is %d units, at most %d", chat.ErrTooLarge, i, n, lim)
+		}
+		if n, lim := chat.Units(chat.Clean(t.Args, chat.WhereToolArgs.Line())), f.caps.Limit(chat.WhereToolArgs); n > lim {
+			return fmt.Errorf("%w: the arguments of tool %d are %d units, at most %d", chat.ErrTooLarge, i, n, lim)
+		}
 	}
 	return nil
 }
@@ -573,7 +588,7 @@ func (f *FakePlatform) Capabilities() chat.Caps {
 }
 
 // Subject is the fake as a conformance subject: it shows every field as chat.Literal does, and acts on
-// nothing, so Sent reports no construct.
+// nothing, so Sent reports no construct. It shows tool approvals.
 func (f *FakePlatform) Subject() Subject {
 	return Subject{
 		Platform: f,
@@ -584,7 +599,9 @@ func (f *FakePlatform) Subject() Subject {
 			f.sent = nil
 			return s
 		},
-		Inert: func() error { return nil },
+		Inert:         func() error { return nil },
+		ToolApprovals: true,
+		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, f.MaxTools+1)},
 	}
 }
 

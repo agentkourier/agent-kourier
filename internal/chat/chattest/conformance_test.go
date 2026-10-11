@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -46,6 +47,10 @@ type leaks struct {
 	noStepError                                 bool // says it has no steps, and shows one when asked
 	stopRepeats                                 bool // a stop with nothing to add shows the streamed text again
 	tooLargeFits                                bool
+	tooLargeToolsFit                            bool // a prompt of too many tools is said to fit
+	smallToolsDoNotFit                          bool // a prompt of one tool is said to be too large
+	cutToolArgs                                 bool // a tool too long for a prompt is cut and shown, not refused as too large
+	undeclaredTools                             bool // shows tool approvals, and does not say so (Subject.ToolApprovals false)
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
 	backslashAll      bool // a backslash before every ASCII punctuation: Slack honours none, and the "<" is a token
@@ -217,10 +222,26 @@ func (m *markupPlatform) record(mode string, fields []Field) {
 	}
 }
 
+// cutTools is o with the text of each tool of a prompt cut to its place's limit and marked, which is what the leak
+// cutToolArgs does in place of refusing the prompt.
+func (m *markupPlatform) cutTools(o chat.Outgoing) chat.Outgoing {
+	if !m.leaks.cutToolArgs || o.Prompt == nil || len(o.Prompt.Tools) == 0 {
+		return o
+	}
+	p := *o.Prompt
+	p.Tools = slices.Clone(p.Tools)
+	for i, tl := range p.Tools {
+		p.Tools[i] = chat.Tool{Name: chat.Literal(tl.Name, chat.WhereToolName, m.caps), Args: chat.Literal(tl.Args, chat.WhereToolArgs, m.caps)}
+	}
+	o.Prompt = &p
+	return o
+}
+
 func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
 	if m.leaks.acceptsMalformed && o.Validate() != nil {
 		return chat.Ref{}, nil
 	}
+	o = m.cutTools(o)
 	ref, err := m.FakePlatform.Post(ctx, t, o, tag)
 	if err == nil {
 		m.record("Post", Fields(o))
@@ -229,6 +250,7 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 }
 
 func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
+	o = m.cutTools(o)
 	err := m.FakePlatform.Update(ctx, r, o)
 	if err == nil {
 		m.record("Update", Fields(o))
@@ -301,8 +323,11 @@ func (m *markupPlatform) StreamAt(r chat.Ref) chat.Stream {
 }
 
 func (m *markupPlatform) Fits(p chat.Prompt) error {
-	if m.leaks.tooLargeFits {
+	switch {
+	case m.leaks.tooLargeFits, m.leaks.tooLargeToolsFit && len(p.Tools) > 0, m.leaks.cutToolArgs && len(p.Tools) > 0 && len(p.Tools) <= m.MaxTools:
 		return nil
+	case m.leaks.smallToolsDoNotFit && len(p.Tools) > 0:
+		return chat.ErrTooLarge
 	}
 	return m.FakePlatform.Fits(p)
 }
@@ -317,7 +342,9 @@ func (m *markupPlatform) subject() Subject {
 			}
 			return nil
 		},
-		TooLarge: &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
+		TooLarge:      &chat.Prompt{ID: "ix-big", Questions: make([]chat.Question, 500)},
+		ToolApprovals: !m.leaks.undeclaredTools,
+		TooLargeTools: &chat.Prompt{ID: "ix-big-tools", Tools: make([]chat.Tool, 500)},
 	}
 	if m.leaks.mentions {
 		s.MentionUser = "U0123456789"
@@ -369,6 +396,12 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a step title dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepTitle}, RuleDropped, ""},
 		{"a step detail dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepDetail}, RuleDropped, ""},
 		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},
+		{"a prompt of too many tools said to fit", slackPlainText, leaks{tooLargeToolsFit: true}, RuleContract, ""},
+		{"tool arguments cut rather than refused", slackPlainText, leaks{cutToolArgs: true}, RuleContract, ""},
+		{"tool arguments cut rather than refused, CommonMark", commonMark, leaks{cutToolArgs: true}, RuleContract, ""},
+		{"tool approvals shown by an adapter that does not say so", slackPlainText, leaks{undeclaredTools: true}, RuleContract, ""},
+		{"a prompt of one tool said to be too large", slackPlainText, leaks{smallToolsDoNotFit: true}, RuleContract, ""},
+		{"a tool's arguments dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereToolArgs}, RuleDropped, ""},
 
 		{"Slack: a backslash before every punctuation, which Slack does not honour", slackPlainText, leaks{backslashAll: true}, RuleActive, KindHTML},
 		{"Slack: a backslash before < and & only", slackPlainText, leaks{backslashLt: true}, RuleActive, KindMention},
@@ -624,5 +657,140 @@ func TestTheRichPlaceMayBeStyledButNotNotify(t *testing.T) {
 	}
 	if !notified {
 		t.Error("a mention in the body was not caught")
+	}
+}
+
+// The cases of tool approvals are opt-in, for an adapter that cannot show a tool yet, and an adapter that opts in is
+// held to the whole corpus in a tool's name and arguments, in a prompt and in its ending.
+func TestToolApprovalsAreCheckedOnlyForASubjectThatShowsThem(t *testing.T) {
+	t.Parallel()
+	where := func(ps []placement) map[string]chat.Where {
+		out := map[string]chat.Where{}
+		for _, p := range ps {
+			if strings.Contains(p.name, "approval") {
+				out[p.name] = p.where
+			}
+		}
+		return out
+	}
+	if got := where(placements("", false)); len(got) != 0 {
+		t.Errorf("places of tool approvals %v for a subject that does not show them, want none", got)
+	}
+	got := where(placements("", true))
+	want := map[string]chat.Where{
+		"approval tool name": chat.WhereToolName, "approval tool arguments": chat.WhereToolArgs,
+		"ending approval tool name": chat.WhereToolName, "ending approval tool arguments": chat.WhereToolArgs,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("places of tool approvals %v, want %v", got, want)
+	}
+
+	// An adapter that does not show tool approvals refuses them as invalid, and is not held to the places above.
+	n := &noTools{FakePlatform: NewFake()}
+	s := n.Subject()
+	s.ToolApprovals, s.TooLargeTools = false, nil
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	for _, m := range n.Messages() {
+		if m.Out.Prompt != nil && len(m.Out.Prompt.Tools) > 0 {
+			t.Fatalf("a check posted a prompt of tools for a subject that does not show them: %+v", m.Out.Prompt)
+		}
+	}
+	// The flag cannot be left off to skip the checks: an adapter that shows tools while saying it does not is found.
+	s = NewFake().Subject()
+	s.ToolApprovals = false
+	if vs := Check(t.Context(), s); len(vs) == 0 || vs[0].Rule != RuleContract {
+		t.Errorf("a platform that shows tool approvals and says it does not gave %v, want a contract violation", vs)
+	}
+	f := NewFake()
+	if vs := CheckWith(t.Context(), f.Subject(), Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	var prompts, endings int
+	for _, m := range f.Messages() {
+		switch {
+		case m.Out.Prompt != nil && len(m.Out.Prompt.Tools) > 0:
+			prompts++
+		case m.Out.Ending != nil && len(m.Out.Ending.Prompt.Tools) > 0:
+			endings++
+		}
+	}
+	if prompts == 0 || endings == 0 {
+		t.Errorf("the checks posted %d prompts and %d endings of tools, want some of each", prompts, endings)
+	}
+}
+
+// Hostile text in a tool's arguments is caught when nothing is escaped.
+func TestNoEscapingIsCaughtInAToolsArguments(t *testing.T) {
+	t.Parallel()
+	for _, v := range noEscape() {
+		if v.Rule == RuleActive && v.Where == chat.WhereToolArgs {
+			return
+		}
+	}
+	t.Error("markup in a tool's arguments was not caught as an active construct when nothing is escaped")
+}
+
+// noTools is a platform that cannot show tool approvals yet: it refuses a prompt of tools, and the ending of one, as
+// invalid, as the Slack adapter does until it has a layout for them.
+type noTools struct{ *FakePlatform }
+
+func (n *noTools) refuse(o chat.Outgoing) error {
+	if o.Prompt != nil && len(o.Prompt.Tools) > 0 || o.Ending != nil && len(o.Ending.Prompt.Tools) > 0 {
+		return fmt.Errorf("%w: no tool approvals here", chat.ErrInvalid)
+	}
+	return nil
+}
+
+func (n *noTools) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (chat.Ref, error) {
+	if err := n.refuse(o); err != nil {
+		return chat.Ref{}, err
+	}
+	return n.FakePlatform.Post(ctx, t, o, tag)
+}
+
+func (n *noTools) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
+	if err := n.refuse(o); err != nil {
+		return err
+	}
+	return n.FakePlatform.Update(ctx, r, o)
+}
+
+func (n *noTools) Fits(p chat.Prompt) error {
+	if len(p.Tools) > 0 {
+		return fmt.Errorf("%w: no tool approvals here", chat.ErrInvalid)
+	}
+	return n.FakePlatform.Fits(p)
+}
+
+func (n *noTools) Subject() Subject {
+	s := n.FakePlatform.Subject()
+	s.Platform = n
+	return s
+}
+
+// Each place of a tool approval puts its text where its name says: in a prompt or an ending, as a tool's name or its
+// arguments. A place whose builder put the text somewhere else would check nothing of it.
+func TestEachPlaceOfAToolApprovalPutsItsTextWhereItsNameSays(t *testing.T) {
+	t.Parallel()
+	for _, p := range toolPlacements() {
+		o := p.build(canary).out
+		if inEnding := strings.HasPrefix(p.name, "ending "); inEnding != (o.Ending != nil) || inEnding == (o.Prompt != nil) {
+			t.Errorf("%s: builds %+v, want the %s", p.name, o, map[bool]string{true: "ending", false: "prompt"}[inEnding])
+			continue
+		}
+		held := 0
+		for _, f := range Fields(o) {
+			if strings.Contains(f.Text, canary) {
+				held++
+				if f.Where != p.where {
+					t.Errorf("%s: the text is at %s, want %s", p.name, f.Where, p.where)
+				}
+			}
+		}
+		if held != 1 {
+			t.Errorf("%s: %d fields hold the text, want exactly one", p.name, held)
+		}
 	}
 }

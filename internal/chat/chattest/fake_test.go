@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -417,5 +419,97 @@ func TestThreadBetweenReadsWhatWasPostedAndSaidInTheThread(t *testing.T) {
 	}
 	if _, _, err := f.ThreadBetween(ctx, tgt, "", "", 0); !errors.Is(err, chat.ErrInvalid) {
 		t.Errorf("ThreadBetween with no room = %v; want ErrInvalid", err)
+	}
+}
+
+func TestFieldsListsTheNameAndArgumentsOfEachToolOfAnApproval(t *testing.T) {
+	approval := chat.Prompt{ID: "ix", Hint: "h", Subagent: "s", Tools: []chat.Tool{{Name: "kubectl", Args: "get\npods"}, {Name: "ping"}}}
+	for name, o := range map[string]chat.Outgoing{
+		"prompt": chat.Ask(approval),
+		"ending": chat.End(chat.Ending{Outcome: chat.Answered, By: "U1", Prompt: approval, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}}),
+	} {
+		var names, args []string
+		for _, f := range Fields(o) {
+			switch f.Where {
+			case chat.WhereToolName:
+				names = append(names, f.Text)
+			case chat.WhereToolArgs:
+				args = append(args, f.Text)
+			}
+		}
+		if !slices.Equal(names, []string{"kubectl", "ping"}) || !slices.Equal(args, []string{"get\npods", ""}) {
+			t.Errorf("%s: tool names %q, arguments %q; want both tools in order", name, names, args)
+		}
+	}
+}
+
+func TestAnApprovalIsKeptAsPostedAndAPromptOfTooManyToolsIsTooLarge(t *testing.T) {
+	f := NewFake()
+	if f.MaxTools != 20 {
+		t.Errorf("MaxTools = %d, want 20", f.MaxTools)
+	}
+	prompt := chat.Prompt{ID: "ix-1", Tools: []chat.Tool{{Name: "kubectl", Args: "get pods"}}}
+	ref, err := f.Post(ctx, tgt, chat.Ask(prompt), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Messages()[0]; got.Ref != ref || !reflect.DeepEqual(got.Out.Prompt, &prompt) {
+		t.Errorf("the fake kept %+v, want the prompt of tools as posted", got.Out)
+	}
+	big := chat.Prompt{ID: "ix-2", Tools: make([]chat.Tool, f.MaxTools+1)}
+	if err := f.Fits(big); !errors.Is(err, chat.ErrTooLarge) {
+		t.Errorf("Fits of %d tools = %v, want ErrTooLarge", len(big.Tools), err)
+	}
+	if _, err := f.Post(ctx, tgt, chat.Ask(big), "t2"); !errors.Is(err, chat.ErrTooLarge) {
+		t.Errorf("Post of %d tools = %v, want ErrTooLarge", len(big.Tools), err)
+	}
+	if err := f.Fits(chat.Prompt{ID: "ix-3", Tools: big.Tools[:f.MaxTools]}); err != nil {
+		t.Errorf("Fits of %d tools = %v", f.MaxTools, err)
+	}
+}
+
+func TestAPressOfAnApprovalReachesTheSinkWithItsAction(t *testing.T) {
+	f := NewFake()
+	rec := &sinkRec{}
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = f.Run(run, rec) }()
+	press := chat.Interaction{User: "U1", PromptID: "ix-1", Action: chat.ActionDenyAll, Answers: []chat.Answer{{Question: 1, Values: []string{chat.ToolDenyValue}}}}
+	if err := f.Press(ctx, press); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.presses) != 1 || !reflect.DeepEqual(rec.presses[0], press) {
+		t.Errorf("the sink got %+v, want the press whole, action included", rec.presses)
+	}
+}
+
+func TestATooLongToolIsRefusedNotCutAndALongEndingIsShown(t *testing.T) {
+	f := NewFake()
+	f.SetCaps(chat.Caps{MaxText: 100, Limits: map[chat.Where]int{chat.WhereToolName: 20, chat.WhereToolArgs: 50}})
+	tool := func(name, args string) chat.Prompt {
+		return chat.Prompt{ID: "ix-1", Tools: []chat.Tool{{Name: "ok", Args: "{}"}, {Name: name, Args: args}}}
+	}
+	for name, tc := range map[string]struct {
+		p    chat.Prompt
+		fits bool
+	}{
+		"at both limits":                 {tool(strings.Repeat("n", 20), strings.Repeat("a", 50)), true},
+		"a name one unit over":           {tool(strings.Repeat("n", 21), "{}"), false},
+		"arguments one unit over":        {tool("n", strings.Repeat("a", 51)), false},
+		"astral arguments over in units": {tool("n", strings.Repeat("\U0001F389", 26)), false},
+		"over only before it is cleaned": {tool("n", strings.Repeat("a", 50)+strings.Repeat("\u200b", 30)), true},
+		"a name over by its line breaks": {tool(strings.Repeat("n \n ", 8), "{}"), true},
+	} {
+		err := f.Fits(tc.p)
+		if tc.fits && err != nil || !tc.fits && !errors.Is(err, chat.ErrTooLarge) {
+			t.Errorf("%s: Fits = %v, want fits %t", name, err, tc.fits)
+		}
+		if _, err := f.Post(ctx, tgt, chat.Ask(tc.p), "t-"+name); tc.fits != (err == nil) {
+			t.Errorf("%s: Post = %v, want it accepted: %t", name, err, tc.fits)
+		}
+	}
+	over := tool(strings.Repeat("n", 21), strings.Repeat("a", 51))
+	if _, err := f.Post(ctx, tgt, chat.End(chat.Ending{Outcome: chat.TimedOut, Prompt: over}), "t-end"); err != nil {
+		t.Errorf("Post of an ending of a tool over the limit = %v, want it accepted: an ending is cut, not refused", err)
 	}
 }

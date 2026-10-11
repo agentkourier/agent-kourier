@@ -255,6 +255,9 @@ func renderPrompt(p chat.Prompt) (Content, error) {
 	if err := p.Validate(); err != nil {
 		return Content{}, err
 	}
+	if len(p.Tools) > 0 { // until the layout of a tool approval exists, a prompt of tools is refused, not shown with no content
+		return Content{}, fmt.Errorf("%w: this adapter does not lay out a prompt of tools", chat.ErrInvalid)
+	}
 	if n := chat.Units(p.ID); n > maxValue {
 		return Content{}, fmt.Errorf("%w: the prompt ID is %d units; a button's value holds at most %d", chat.ErrInvalid, n, maxValue)
 	}
@@ -393,6 +396,9 @@ func mentionLine(m chat.Mention) map[string]any {
 // prompt a line for each question and its answer. No input or button is left. The only mrkdwn in it is the
 // status line, which is built from a verified user ID, a time and a fixed word.
 func renderEnding(e chat.Ending) (Content, error) {
+	if len(e.Prompt.Tools) > 0 { // as renderPrompt: refused until the layout of a tool approval exists
+		return Content{}, fmt.Errorf("%w: this adapter does not lay out the ending of a prompt of tools", chat.ErrInvalid)
+	}
 	verb := map[chat.Outcome]string{chat.Answered: "Answered", chat.TimedOut: "Timed out", chat.Cancelled: "Cancelled"}[e.Outcome]
 	status := "*" + verb + "*"
 	if e.By != "" {

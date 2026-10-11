@@ -51,6 +51,20 @@ type Subject struct {
 	Concessions []Concession
 	// TooLarge, if set, is a prompt too large for the platform: Fits must refuse it with chat.ErrTooLarge.
 	TooLarge *chat.Prompt
+	// ToolApprovals says that the adapter shows a Prompt of tools and the Ending of one. The checks of them (a tool's name
+	// and arguments, in the prompt and in its ending, and Fits for a prompt of tools) run only when it is set, so that an
+	// adapter that cannot show tool approvals yet is not held to them. It cannot be left unset to skip them: when it is
+	// unset the contract checks that Fits and Post refuse a prompt of tools, and Post the ending of one, with
+	// chat.ErrInvalid.
+	//
+	// A tool that does not fit is refused and never cut: a prompt with a tool whose cleaned name or arguments are longer
+	// than Caps.Limit of their place (WhereToolName, WhereToolArgs) gets chat.ErrTooLarge from Fits, Post and Update, and
+	// shows nothing of it. The ending of a prompt of tools is cut and marked like any other text, since an ending
+	// cannot be refused without stranding the prompt with its controls.
+	ToolApprovals bool
+	// TooLargeTools, if set and ToolApprovals is, is a prompt of tools too large for the platform: Fits must refuse it
+	// with chat.ErrTooLarge.
+	TooLargeTools *chat.Prompt
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
 	// of it and nothing else the platform acts on; every other user ID they send is forged, and must never act.
@@ -138,7 +152,7 @@ func Check(ctx context.Context, s Subject) []Violation { return CheckWith(ctx, s
 
 // CheckWith is Check with options.
 func CheckWith(ctx context.Context, s Subject, opts Options) []Violation {
-	return checkShard(ctx, s, opts, placements(s.MentionUser), true)
+	return checkShard(ctx, s, opts, placements(s.MentionUser, s.ToolApprovals), true)
 }
 
 // ConformanceSharded is Conformance for an adapter whose checks are slow, such as one that is tested over HTTP
@@ -151,7 +165,7 @@ func ConformanceSharded(t *testing.T, shards int, newSubject func(t *testing.T) 
 	for i := range subjects {
 		subjects[i] = newSubject(t)
 	}
-	all := placements(subjects[0].MentionUser)
+	all := placements(subjects[0].MentionUser, subjects[0].ToolApprovals)
 	var wg sync.WaitGroup
 	for i := range shards {
 		var mine []placement
@@ -258,6 +272,19 @@ func (c *checker) contract() {
 			c.add(RuleContract, 0, "Fits", "too large", "the prompt given as too large gave %v, want chat.ErrTooLarge", err)
 		}
 	}
+	if !c.s.ToolApprovals {
+		c.noToolApprovals()
+	}
+	if c.s.ToolApprovals {
+		if err := p.Fits(chat.Prompt{ID: "ix-conformance", Tools: []chat.Tool{{Name: "tool", Args: "{}"}}}); err != nil {
+			c.add(RuleContract, chat.WhereToolName, "Fits", "small prompt of tools", "a one-tool prompt does not fit: %v", err)
+		}
+		if c.s.TooLargeTools != nil {
+			if err := p.Fits(*c.s.TooLargeTools); !errors.Is(err, chat.ErrTooLarge) {
+				c.add(RuleContract, chat.WhereToolName, "Fits", "too large prompt of tools", "the prompt of tools given as too large gave %v, want chat.ErrTooLarge", err)
+			}
+		}
+	}
 	for _, err := range []error{errors.New("boom"), context.Canceled, context.DeadlineExceeded} {
 		for _, op := range []chat.Op{chat.OpPost, chat.OpReact, chat.OpOther} {
 			if v := p.Classify(op, err); v.Class != chat.Transient {
@@ -279,6 +306,21 @@ func (c *checker) contract() {
 	}
 	c.s.Sent() // the contract checks are not text checks
 	_ = c.s.Inert()
+}
+
+// noToolApprovals checks that an adapter that does not say it shows tool approvals refuses them as invalid: Fits and Post
+// of a prompt of one tool, and Post of the ending of one. Without it the flag could be left unset to skip the checks.
+func (c *checker) noToolApprovals() {
+	p := c.s.Platform
+	prompt := toolPrompt("tool", "{}")
+	if err := p.Fits(prompt); !errors.Is(err, chat.ErrInvalid) {
+		c.add(RuleContract, chat.WhereToolName, "Fits", "tools not declared", "a prompt of tools gave %v, want an error wrapping chat.ErrInvalid: Subject.ToolApprovals is false", err)
+	}
+	for name, o := range map[string]chat.Outgoing{"prompt": chat.Ask(prompt), "ending": toolEnding("tool", "{}").out} {
+		if _, err := p.Post(c.ctx, c.target, o, "tag-tools"); !errors.Is(err, chat.ErrInvalid) {
+			c.add(RuleContract, chat.WhereToolName, "Post", "tools not declared", "a %s of tools gave %v, want an error wrapping chat.ErrInvalid: Subject.ToolApprovals is false", name, err)
+		}
+	}
 }
 
 // zeroStop checks that a stream ends without showing anything more when it is stopped with no markdown and the zero
@@ -462,7 +504,35 @@ func ending(mod func(*chat.Ending)) call {
 	return call{out: chat.End(e)}
 }
 
-func placements(mentionUser string) []placement {
+// toolPrompt is a prompt of two tools whose first holds the text, and a benign second, so that the first is told from
+// the rest.
+func toolPrompt(name, args string) chat.Prompt {
+	return chat.Prompt{ID: "ix-conformance", Tools: []chat.Tool{{Name: name, Args: args}, {Name: "other", Args: "{}"}}}
+}
+
+// toolEnding is the ending of toolPrompt, answered.
+func toolEnding(name, args string) call {
+	return ending(func(e *chat.Ending) {
+		e.Prompt = toolPrompt(name, args)
+		e.Answers = nil
+		e.Verdicts = []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}
+	})
+}
+
+// toolPlacements are the places of a tool approval: a tool's name and its arguments, in the prompt and in its ending.
+// The ending shows each tool's arguments as well as its name, so the places are not optional: the thread keeps a record of
+// what was approved or denied. Text too long for the prompt's places is refused and not cut (oversize); in the ending's
+// it is cut and marked.
+func toolPlacements() []placement {
+	return []placement{
+		{chat.WhereToolName, "approval tool name", func(s string) call { return call{out: chat.Ask(toolPrompt(s, "{}"))} }, false, false},
+		{chat.WhereToolArgs, "approval tool arguments", func(s string) call { return call{out: chat.Ask(toolPrompt("tool", s))} }, false, false},
+		{chat.WhereToolName, "ending approval tool name", func(s string) call { return toolEnding(s, "{}") }, false, false},
+		{chat.WhereToolArgs, "ending approval tool arguments", func(s string) call { return toolEnding("tool", s) }, false, false},
+	}
+}
+
+func placements(mentionUser string, approvals bool) []placement {
 	out := []placement{
 		{chat.WhereFallback, "fallback", func(s string) call { return call{out: chat.Say(chat.Message{Fallback: s})} }, false, false},
 		{chat.WhereHeader, "header", func(s string) call { return msg(chat.Header{Text: s}) }, false, false},
@@ -498,6 +568,9 @@ func placements(mentionUser string) []placement {
 		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false, false},
 		{chat.WhereStepTitle, "step title", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: s}} }, false, false},
 		{chat.WhereStepDetail, "step detail", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: "tool", Detail: s}} }, false, false},
+	}
+	if approvals {
+		out = append(out, toolPlacements()...)
 	}
 	// The words of a Mention, beside a user the platform shows as a mention, and beside one it does not: the words
 	// of the first must stay text next to a live mention, which is where a renderer that builds one text of the
@@ -780,6 +853,65 @@ func (c *checker) oversize(p placement) {
 		return
 	}
 	limit := c.caps.Limit(p.where)
-	c.run(p, "oversize", canary+strings.Repeat("x", limit+64))
-	c.run(p, "oversize astral", canary+strings.Repeat("\U0001F389", limit/2+32))
+	texts := []struct{ name, text string }{{"oversize", canary + strings.Repeat("x", limit+64)}, {"oversize astral", canary + strings.Repeat("\U0001F389", limit/2+32)}}
+	for _, tc := range texts {
+		if p.refusesOversize() {
+			c.refused(p, tc.name, tc.text)
+			continue
+		}
+		c.run(p, tc.name, tc.text)
+	}
+}
+
+// refusesOversize says whether text over the limit of the place p is refused and not cut: the place is a tool of a prompt
+// of tools, which a person cannot approve unless they can read all of it.
+func (p placement) refusesOversize() bool {
+	o := p.build("x").out
+	return o.Prompt != nil && len(o.Prompt.Tools) > 0
+}
+
+// refused sends text too long for a tool of a prompt, by Fits, Post and Update, and checks that each refuses the prompt as
+// too large, and that nothing of the text is shown.
+func (c *checker) refused(p placement, name, text string) {
+	pl := c.s.Platform
+	out := p.build(text).out
+	var ref chat.Ref
+	calls := []struct {
+		method string
+		prep   func() error
+		do     func() error
+	}{
+		{"Fits", nil, func() error { return pl.Fits(*out.Prompt) }},
+		{"Post", nil, func() error { _, err := pl.Post(c.ctx, c.target, out, "tag-1"); return err }},
+		{"Update",
+			func() (err error) {
+				ref, err = pl.Post(c.ctx, c.target, chat.Say(chat.Message{Fallback: "seed"}), "tag-seed")
+				return err
+			},
+			func() error { return pl.Update(c.ctx, ref, out) }},
+	}
+	for _, m := range calls {
+		if m.prep != nil {
+			if err := m.prep(); err != nil {
+				c.add(RuleRejected, p.where, m.method, name, "a plain message was refused while preparing: %v", err)
+				continue
+			}
+		}
+		c.s.Sent()
+		_ = c.s.Inert()
+		err := m.do()
+		shown := c.s.Sent()
+		if inert := c.s.Inert(); inert != nil {
+			c.add(RuleInert, p.where, m.method, name, "%v", inert)
+		}
+		if !errors.Is(err, chat.ErrTooLarge) {
+			c.add(RuleContract, p.where, m.method, name, "a tool of %d units gave %v, want an error wrapping chat.ErrTooLarge: text over the limit of %d is refused and never cut", chat.Units(text), err, c.caps.Limit(p.where))
+		}
+		for _, s := range shown {
+			if strings.Contains(s.Displayed, canary) {
+				c.add(RuleContract, p.where, m.method, name, "a prompt refused as too large still showed some of the text: %q", s.Displayed)
+				break
+			}
+		}
+	}
 }

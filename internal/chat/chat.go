@@ -64,7 +64,7 @@ const (
 	WhereBody                    // Body.Markdown: the one rich place
 	WhereContext                 // Context.Text
 	WhereNote                    // Note.Text
-	WhereToolName                // ToolLine.Name
+	WhereToolName                // ToolLine.Name, and Tool.Name
 	WhereToolArg                 // ToolLine.Summary
 	WhereButton                  // Button.Label
 	WhereHint                    // Prompt.Hint
@@ -76,6 +76,7 @@ const (
 	WhereStepTitle               // Step.Title
 	WhereStepDetail              // Step.Detail
 	WhereUser                    // Ending.By, a user ID Agent Kourier verified, shown as a mention only if it is one
+	WhereToolArgs                // Tool.Args, the arguments of a tool awaiting approval: text of several lines
 	wherePast                    // one past the last, for loops
 )
 
@@ -101,7 +102,7 @@ func (w Where) Line() bool {
 }
 
 func (w Where) String() string {
-	names := [...]string{"fallback", "header", "body", "context", "note", "tool name", "tool argument", "button", "hint", "sub-agent", "question", "choice", "answer", "stream", "step title", "step detail", "user"}
+	names := [...]string{"fallback", "header", "body", "context", "note", "tool name", "tool argument", "button", "hint", "sub-agent", "question", "choice", "answer", "stream", "step title", "step detail", "user", "tool arguments"}
 	if w < 0 || int(w) >= len(names) {
 		return "unknown"
 	}

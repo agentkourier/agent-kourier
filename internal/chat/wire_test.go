@@ -18,6 +18,9 @@ func TestTheStoredV1FormIsPinned(t *testing.T) {
 		{Text: "Env?", Choices: []string{"prod", "dev"}, Multiple: true},
 		{Text: "Why?"},
 	}}
+	approval := chat.Prompt{ID: "ix-3", Hint: "Approve?", Deadline: deadline, Subagent: "sre", Tools: []chat.Tool{
+		{Name: "kubectl", Args: `{"verb":"get"}`}, {Name: "ping"},
+	}}
 	for name, tc := range map[string]struct {
 		out  chat.Outgoing
 		want string
@@ -42,6 +45,18 @@ func TestTheStoredV1FormIsPinned(t *testing.T) {
 				`"answers":[["prod","dev"],["(answered)"]]}}`},
 		"ending that timed out": {chat.End(chat.Ending{Outcome: chat.TimedOut, Prompt: chat.Prompt{Questions: []chat.Question{{Text: "q"}}}}),
 			`{"v":1,"ending":{"outcome":"timed_out","prompt":{"id":"","questions":[{"text":"q"}]}}}`},
+		"ending with a zero prompt": {chat.End(chat.Ending{Outcome: chat.TimedOut}),
+			`{"v":1,"ending":{"outcome":"timed_out","prompt":{"id":""}}}`},
+		"prompt of tools": {chat.Ask(approval),
+			`{"v":1,"prompt":{"id":"ix-3","hint":"Approve?","tools":[{"name":"kubectl","args":"{\"verb\":\"get\"}"},{"name":"ping"}],` +
+				`"deadline":"2026-10-02T12:00:00Z","subagent":"sre"}}`},
+		"ending of tools, answered": {chat.End(chat.Ending{Outcome: chat.Answered, By: "U1", At: deadline.Add(5 * time.Minute), Prompt: approval,
+			Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}}),
+			`{"v":1,"ending":{"outcome":"answered","by":"U1","at":"2026-10-02T12:05:00Z","prompt":{"id":"ix-3","hint":"Approve?",` +
+				`"tools":[{"name":"kubectl","args":"{\"verb\":\"get\"}"},{"name":"ping"}],"deadline":"2026-10-02T12:00:00Z","subagent":"sre"},` +
+				`"verdicts":["approved","denied"]}}`},
+		"ending of tools, timed out": {chat.End(chat.Ending{Outcome: chat.TimedOut, Prompt: chat.Prompt{Tools: []chat.Tool{{Name: "ping"}}}}),
+			`{"v":1,"ending":{"outcome":"timed_out","prompt":{"id":"","tools":[{"name":"ping"}]}}}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := json.Marshal(tc.out)

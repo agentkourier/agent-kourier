@@ -210,7 +210,10 @@ type Platform interface {
 	ResolveUser(ctx context.Context, id string) (User, error)
 
 	// Fits says whether p can be shown in one message, and is ErrTooLarge if it cannot. It is pure, and
-	// is asked before a prompt is stored, so that a pause that cannot be shown is refused at once.
+	// is asked before a prompt is stored, so that a pause that cannot be shown is refused at once. A prompt
+	// of tools is ErrTooLarge too when the text of one tool, cleaned, is longer than its place's limit
+	// (Caps.Limit): the text of a tool awaiting approval is never shown cut. A platform that shows no tool
+	// approvals gives ErrInvalid for a prompt of tools.
 	Fits(p Prompt) error
 	// Classify says what an error returned by one of the methods means for a retry.
 	Classify(op Op, err error) Verdict

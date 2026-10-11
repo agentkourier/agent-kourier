@@ -68,5 +68,8 @@ func promptFields(p chat.Prompt) []Field {
 			out = append(out, Field{c, chat.WhereChoice})
 		}
 	}
+	for _, t := range p.Tools {
+		out = append(out, Field{t.Name, chat.WhereToolName}, Field{t.Args, chat.WhereToolArgs})
+	}
 	return out
 }

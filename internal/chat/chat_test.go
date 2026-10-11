@@ -90,7 +90,13 @@ func TestWhereClassesAreExactlyTheRichAndLinePlaces(t *testing.T) {
 	if !reflect.DeepEqual(rich, []string{"body", "stream"}) {
 		t.Errorf("rich places = %v, want body and stream only", rich)
 	}
-	if len(line) == 0 || len(chat.AllWheres()) != 17 {
+	if chat.WhereToolArgs.Line() || chat.WhereToolArgs.Rich() {
+		t.Error("a tool's arguments are text of several lines, neither a line nor rich")
+	}
+	if !chat.WhereToolName.Line() {
+		t.Error("a tool's name is one line")
+	}
+	if len(line) == 0 || len(chat.AllWheres()) != 18 {
 		t.Errorf("%d places, %d lines; a place was added without deciding its class", len(chat.AllWheres()), len(line))
 	}
 }
@@ -108,6 +114,9 @@ func TestOutgoingSurvivesTheOutboxRoundTrip(t *testing.T) {
 		"a message with every part": chat.Say(everyPart),
 		"a prompt":                  chat.Ask(prompt),
 		"an ending":                 chat.End(chat.Ending{Outcome: chat.Answered, By: "U1", At: deadline, Prompt: prompt, Answers: [][]string{{"0", "1"}, {"because"}}}),
+		"a prompt of tools":         chat.Ask(chat.Prompt{ID: "ix-2", Tools: []chat.Tool{{Name: "kubectl", Args: "get pods"}, {Name: "ping"}}, Deadline: deadline}),
+		"an ending of tools": chat.End(chat.Ending{Outcome: chat.Answered, By: "U1", At: deadline, Prompt: chat.Prompt{Tools: []chat.Tool{{Name: "a"}, {Name: "b"}}},
+			Verdicts: []chat.ToolVerdict{chat.ToolDenied, chat.ToolApproved}}),
 	} {
 		raw, err := json.Marshal(o)
 		if err != nil {
