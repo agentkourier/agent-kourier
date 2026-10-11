@@ -24,7 +24,7 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept for the pilot's review (D33). No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
 | `sessions.alert_name`, `sessions.agent_name` | The alert name a trigger started the thread for, in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) or empty, and the agent of the Binding when the session was made. A vote is stored and counted under them, whatever the Binding says later. | As long as the session row, which is deleted with its thread (below). |
 | `audit` | IDs, codes, outcomes and lengths, never message text. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
-| `events.payload` | Nothing writes it yet. The webhook receiver, when it is built, comes with its own purge. | n/a |
+| `events.payload` | Nothing writes it. | n/a |
 
 ### Feedback
 

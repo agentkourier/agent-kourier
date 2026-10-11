@@ -89,9 +89,9 @@ func (r *Readiness) current() []Check {
 // naming those that do not) and /metrics. A nil r is a Readiness that is still starting.
 //
 // Slack is not one of the checks, on purpose (WP-35f1, and WP-39b weighed it again): a pod that is not ready leaves its
-// Services, and the same pod is to take the Alertmanager webhook (spec 6), so a Slack outage would turn alerts away that
-// Agent Kourier can queue and post later; and Socket Mode runs on the leader alone (spec 11), so a replica that is not the
-// leader could never be ready. The connection's state is agentkourier_chat_connected, and the log lines of the Slack adapter.
+// Services, so a Slack outage would drop the pod out of the metrics Service and stall a rollout, for an outage that the
+// pod recovers from by itself; and Socket Mode runs on the leader alone (spec 11), so a replica that is not the leader
+// could never be ready. The connection's state is agentkourier_chat_connected, and the log lines of the Slack adapter.
 func NewHandler(m *Metrics, r *Readiness) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") })

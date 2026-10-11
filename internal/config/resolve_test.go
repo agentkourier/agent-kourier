@@ -45,7 +45,6 @@ func specSecrets() fakeSecrets {
 	return fakeSecrets{
 		"agent-kourier-system/slack-main":   {"botToken", "appToken"},
 		"sre/agent-kourier-sre-alerts-oidc": {"token"},
-		"sre/agent-kourier-webhook-token":   {"token"},
 	}
 }
 
@@ -69,32 +68,26 @@ func TestResolveSpecExample(t *testing.T) {
 	set := specSet(t)
 	for i := range set.Bindings {
 		set.Bindings[i].Status = v1alpha1.BindingStatus{ // status in a file is never input
-			WebhookPath: "/hooks/stale",
-			Conditions:  []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
 		}
 	}
 	snap, err := Resolve(context.Background(), set, specSecrets())
 	if err != nil {
 		t.Fatal(err)
 	}
-	const path = "/hooks/alertmanager/sre/sre-alerts"
-	if rb, ok := snap.Binding("sre", "chat-only"); !ok || rb.Binding.Status.WebhookPath != "" || len(rb.Binding.Status.Conditions) != 0 {
-		t.Errorf("chat-only Binding = %+v, %v; want it resolved with no webhook path", rb, ok)
-	}
-	if _, ok := snap.BindingForWebhook("/hooks/stale"); ok {
-		t.Error("BindingForWebhook found a path taken from a file")
+	if rb, ok := snap.Binding("sre", "chat-only"); !ok || len(rb.Binding.Status.Conditions) != 0 {
+		t.Errorf("chat-only Binding = %+v, %v; want it resolved with the status of a file dropped", rb, ok)
 	}
 	lookups := map[string]func() (ResolvedBinding, bool){
 		"Binding": func() (ResolvedBinding, bool) { return snap.Binding("sre", "sre-alerts") },
 		"BindingForChannel": func() (ResolvedBinding, bool) {
 			return snap.BindingForChannel("agent-kourier-system", "slack-main", "C0123456789")
 		},
-		"BindingForWebhook": func() (ResolvedBinding, bool) { return snap.BindingForWebhook(path) },
 	}
 	for name, lookup := range lookups {
 		rb, ok := lookup()
 		if !ok || rb.Binding.Name != "sre-alerts" || rb.Backend.Name != "kagent-pilot" || rb.Connection.Name != "slack-main" ||
-			rb.Binding.Status.WebhookPath != path || len(rb.Binding.Status.Conditions) != 0 {
+			len(rb.Binding.Status.Conditions) != 0 {
 			t.Errorf("%s = %+v, %v; want the sre-alerts Binding with its backend and connection", name, rb, ok)
 		}
 	}
@@ -103,7 +96,6 @@ func TestResolveSpecExample(t *testing.T) {
 		"BindingForChannel": func() (ResolvedBinding, bool) {
 			return snap.BindingForChannel("agent-kourier-system", "slack-main", "C0000000000")
 		},
-		"BindingForWebhook": func() (ResolvedBinding, bool) { return snap.BindingForWebhook("/hooks/alertmanager/sre/other") },
 	}
 	for name, lookup := range misses {
 		if _, ok := lookup(); ok {
@@ -136,7 +128,6 @@ func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 	be.Spec.AllowedNamespaces, c.Spec.AllowedNamespaces = nil, nil
 	secrets := specSecrets()
 	secrets["agent-kourier-system/agent-kourier-sre-alerts-oidc"] = []string{"token"} // Secrets follow the Binding's namespace
-	secrets["agent-kourier-system/agent-kourier-webhook-token"] = []string{"token"}
 	snap, err := Resolve(context.Background(), set, secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -232,9 +223,8 @@ func TestSnapshotConcurrentLookups(t *testing.T) {
 		wg.Go(func() {
 			for range 100 {
 				a, okA := snap.BindingForChannel("agent-kourier-system", "slack-main", "C0123456789")
-				b, okB := snap.BindingForWebhook("/hooks/alertmanager/sre/sre-alerts")
-				c, okC := snap.Binding("sre", "sre-alerts")
-				if !okA || !okB || !okC || a != b || b != c {
+				b, okB := snap.Binding("sre", "sre-alerts")
+				if !okA || !okB || a != b {
 					t.Error("lookups disagree")
 					return
 				}

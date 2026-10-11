@@ -32,8 +32,7 @@ const (
 	ThreadRepliesAll     ThreadReplies = "all"
 	ThreadRepliesMention ThreadReplies = "mention"
 
-	PlatformSlack     = "slack"
-	AlertAlertmanager = "alertmanager"
+	PlatformSlack = "slack"
 )
 
 // ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
@@ -194,9 +193,6 @@ type BindingSpec struct {
 	Agent    AgentRef    `json:"agent"`
 	Identity Identity    `json:"identity"`
 	Chat     ChatBinding `json:"chat"`
-	// Alerts configures an Alertmanager webhook for the Binding. The loader accepts it, but the webhook
-	// receiver is not served yet; alerts reach a Binding today through a botMessage trigger.
-	Alerts *Alerts `json:"alerts,omitempty"`
 	// +optional
 	Interactions Interactions `json:"interactions,omitzero"`
 	// +optional
@@ -252,22 +248,6 @@ type ChatBinding struct {
 	Triggers []Trigger `json:"triggers,omitempty"`
 }
 
-// Alerts configures the Binding's alert webhook.
-type Alerts struct {
-	// +kubebuilder:validation:Enum=alertmanager
-	Type string `json:"type"`
-	// TokenSecretRef holds the webhook bearer token, in the Binding's namespace.
-	TokenSecretRef SecretKeyRef `json:"tokenSecretRef"`
-	// PromptTemplate is a Go template over the normalized AlertEvent.
-	// +kubebuilder:validation:MinLength=1
-	PromptTemplate string `json:"promptTemplate"`
-	// RateLimit bounds agent runs per window; omitted means unlimited.
-	RateLimit *RateLimit `json:"rateLimit,omitempty"`
-	// MaxRunsPerDay caps agent runs per day (D31); 0 means no cap.
-	// +kubebuilder:validation:Minimum=0
-	MaxRunsPerDay int32 `json:"maxRunsPerDay,omitempty"`
-}
-
 // RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 type RateLimit struct {
 	// +kubebuilder:validation:Minimum=1
@@ -311,13 +291,11 @@ type Session struct {
 	ThreadTTL metav1.Duration `json:"threadTTL"`
 }
 
-// BindingStatus is the observed state of a Binding. The loader sets webhookPath in memory; conditions are for
-// the controller that will serve these resources (D30). Neither is visible while resources are loaded from files.
+// BindingStatus is the observed state of a Binding. Conditions are for the controller that will serve these
+// resources (D30); they are not visible while resources are loaded from files.
 type BindingStatus struct {
 	// Conditions include Ready, BackendReachable, and ChannelJoined.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// WebhookPath is the path Alertmanager posts to; set only when Alerts is.
-	WebhookPath string `json:"webhookPath,omitempty"`
 }
 
 // Defaults for fields left empty by Default.
@@ -349,9 +327,6 @@ func (b *Binding) Default() {
 		b.Spec.Session.ThreadTTL.Duration = DefaultThreadTTL
 	}
 	b.Spec.Identity.TokenSecretRef.defaultKey()
-	if b.Spec.Alerts != nil {
-		b.Spec.Alerts.TokenSecretRef.defaultKey()
-	}
 }
 
 // Default fills the fields left empty. Call it before Validate.

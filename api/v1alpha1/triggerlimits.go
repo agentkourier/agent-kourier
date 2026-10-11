@@ -19,9 +19,9 @@ const (
 	DefaultDigestWindow = time.Hour
 )
 
-// TriggerLimits bounds how many investigations a botMessage trigger starts (spec 8.2, D26, D31). It has the shape
-// of the Binding's alerts.rateLimit and alerts.maxRunsPerDay (spec 7), and the preset supplies the defaults, so a
-// Binding sets only what it changes. Only a start is limited: a repeat, a close and a note never are.
+// TriggerLimits bounds how many investigations a botMessage trigger starts (spec 8.2, D26, D31): a rate limit over
+// a window and a cap for a day. The preset supplies the defaults, so a Binding sets only what it changes. Only a
+// start is limited: a repeat, a close and a note never are.
 type TriggerLimits struct {
 	// RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once.
 	// What the Binding leaves out of it comes from the preset, field by field.

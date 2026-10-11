@@ -1021,8 +1021,8 @@ func TestTierValuesRenderWhatTheScriptsAndTestsRely(t *testing.T) {
 }
 
 // TestFastTiersServiceIsTheHealthPortAndNothingPublished: the E2E runner reaches Agent Kourier's health and metrics port through a
-// ClusterIP Service, selecting the tier's release alone, and the Service has that one port: the Alertmanager receiver is not
-// served yet, and its port must not reach the Service until it is.
+// ClusterIP Service, selecting the tier's release alone, and the Service has that one port: Agent Kourier receives no
+// webhook, so no other port reaches the Service.
 func TestFastTiersServiceIsTheHealthPortAndNothingPublished(t *testing.T) {
 	t.Parallel()
 	helmPath(t)

@@ -265,9 +265,8 @@ func TestNilReadinessIsStarting(t *testing.T) {
 	}
 }
 
-// The handler serves health, readiness and metrics, and nothing else: the Alertmanager receiver is not
-// on this mux (WP-47 serves it separately), so a request for a webhook path is a 404 and the receiver
-// cannot be reached through the Service that exposes this port.
+// The handler serves health, readiness and metrics, and nothing else: Agent Kourier is not an Alertmanager
+// receiver (alerts reach a Binding through a botMessage trigger), so a request for a webhook path is a 404.
 func TestHandlerHasNoReceiver(t *testing.T) {
 	h := NewHandler(mustMetrics(t, nil), &Readiness{})
 	for _, path := range []string{"/hooks/alertmanager/sre/sre-alerts", "/hooks/", "/hooks", "/", "/api/v2/alerts"} {

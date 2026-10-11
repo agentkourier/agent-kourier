@@ -37,7 +37,7 @@ type secretRef struct {
 }
 
 // secretRefs lists every Secret that set refers to: each ChatConnection's credentials, an
-// AgentBackend's header Secrets, and a Binding's token and webhook token. Resolve checks them, and
+// AgentBackend's header Secrets, and a Binding's token. Resolve checks them, and
 // SecretNamespaces reads the namespaces off them, so the two cannot drift apart. An empty key
 // means the default, for a Set that has not been through Default.
 func (s *Set) secretRefs() []secretRef {
@@ -65,9 +65,6 @@ func (s *Set) secretRefs() []secretRef {
 		b := &s.Bindings[i]
 		from := identity{"Binding", b.Namespace, b.Name}
 		keyRef(from, "spec.identity.tokenSecretRef", b.Spec.Identity.TokenSecretRef)
-		if a := b.Spec.Alerts; a != nil {
-			keyRef(from, "spec.alerts.tokenSecretRef", &a.TokenSecretRef)
-		}
 	}
 	return refs
 }

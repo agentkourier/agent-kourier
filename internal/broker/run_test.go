@@ -345,7 +345,7 @@ spec: { platform: slack, mode: socket, credentialsSecretRef: { name: slack-two }
 		t.Fatal(err)
 	}
 	c.Client = fake.NewClientset(secretOf("agent-kourier-system", "slack-main", "botToken", "appToken"), secretOf("agent-kourier-system", "slack-two", "botToken", "appToken"),
-		secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"), secretOf("sre", "agent-kourier-webhook-token", "token"))
+		secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"))
 	r := start(t, c)
 
 	if err := r.wait(); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "slack-two") {

@@ -239,8 +239,8 @@ func presetTrigger(name string) (Trigger, bool) {
 			Cooldown:  metav1.Duration{Duration: 4 * time.Hour},
 			CloseWhen: map[string]string{extractState: "RESOLVED"},
 		},
-		// Five investigations in 10 minutes, two at a time, 40 a day: the Binding's alerts example (spec 7). The
-		// cooldown already folds repeats of an alert into its thread, so these bound distinct alerts, such as a storm.
+		// Five investigations in 10 minutes, two at a time, 40 a day. The cooldown already folds repeats of an alert into
+		// its thread, so these bound distinct alerts, such as a storm.
 		Limits: TriggerLimits{
 			RateLimit:     &RateLimit{MaxRuns: 5, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 2},
 			MaxRunsPerDay: new(int32(40)),

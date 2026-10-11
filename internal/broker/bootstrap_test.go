@@ -44,7 +44,6 @@ func cluster() *fake.Clientset {
 	return fake.NewClientset(
 		secretOf("agent-kourier-system", "slack-main", "botToken", "appToken"),
 		secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"),
-		secretOf("sre", "agent-kourier-webhook-token", "token"),
 	)
 }
 
@@ -74,7 +73,6 @@ func TestBootstrapStopsTheResolverWhenTheConfigDoesNotResolve(t *testing.T) {
 	before := goleak.IgnoreCurrent()
 	client := fake.NewClientset( // the Binding's token Secret, sre/agent-kourier-sre-alerts-oidc, is missing
 		secretOf("agent-kourier-system", "slack-main", "botToken", "appToken"),
-		secretOf("sre", "agent-kourier-webhook-token", "token"),
 	)
 
 	c, err := Bootstrap(t.Context(), client, options(configDir(t)))

@@ -1,6 +1,6 @@
 # Agent Kourier
 
-Installs [agent-kourier](../../spec.md), the broker between Alertmanager, Slack and A2A agents: one Deployment of the
+Installs [agent-kourier](../../spec.md), the broker between chat and A2A agents: one Deployment of the
 production image, its state (a SQLite volume, or a Postgres database you run), the ConfigMap of its resources, and the read
 access to the Secrets they name.
 
@@ -31,7 +31,7 @@ tier's, with the token-refresh CronJob).
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
-| Service | `service.enabled` | ClusterIP on the health and metrics port; the Alertmanager receiver is not served yet |
+| Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
 | NetworkPolicy | `networkPolicy.enabled` | see below |
 | PodDisruptionBudget | `podDisruptionBudget.enabled` | off; `minAvailable: 1` keeps a drain from taking both replicas at `replicaCount: 2`; the render refuses a budget that keeps every pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
@@ -195,7 +195,7 @@ object yet.
 
 `/healthz` is the process, for the startup (80 s) and liveness probes. `/readyz` is the config loaded, the Secret caches synced and the store
 answering. **Ready does not mean Slack is connected**, by design: a Slack outage must not take Agent Kourier out of its Service or restart
-it, and queued alerts post later. Watch `agentkourier_chat_connected`.
+it: the pod recovers when Slack does, and a not-ready pod would stall a rollout meanwhile. Watch `agentkourier_chat_connected`.
 
 ## Token refresh
 
@@ -247,10 +247,6 @@ properties above, and what the kind tiers' values render (the object names, labe
 on), and the fast and AX tiers' config, which is loaded through Agent Kourier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;
 set `AGENTKOURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping. After a deliberate chart change:
 `go test ./test/chart -update`, and read the diff.
-
-## What comes next
-
-- The Alertmanager receiver (WP-47) adds its port, a Service and an Ingress or route when it is served.
 
 ## Upgrading across the rename to Agent Kourier
 

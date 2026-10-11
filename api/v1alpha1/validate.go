@@ -195,19 +195,6 @@ func (b *Binding) Validate() error {
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
 	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
 	p.triggers("spec.chat.triggers", s.Chat.Triggers)
-	if a := s.Alerts; a != nil {
-		p.oneOf("spec.alerts.type", a.Type, AlertAlertmanager)
-		p.secretRef("spec.alerts.tokenSecretRef", &a.TokenSecretRef)
-		p.required("spec.alerts.promptTemplate", a.PromptTemplate)
-		if r := a.RateLimit; r != nil {
-			p.positive("spec.alerts.rateLimit.maxRuns", int64(r.MaxRuns))
-			p.duration("spec.alerts.rateLimit.per", r.Per)
-			p.positive("spec.alerts.rateLimit.maxConcurrent", int64(r.MaxConcurrent))
-		}
-		if a.MaxRunsPerDay < 0 {
-			p.add("spec.alerts.maxRunsPerDay", "must not be negative")
-		}
-	}
 	p.duration("spec.interactions.timeout", s.Interactions.Timeout)
 	p.duration("spec.session.threadTTL", s.Session.ThreadTTL)
 	return errors.Join(p...)

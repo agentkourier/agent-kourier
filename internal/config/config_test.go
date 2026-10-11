@@ -225,8 +225,21 @@ func TestLoadRejects(t *testing.T) {
 		},
 		{
 			name:  "type error",
-			files: map[string]string{"b.yaml": bindingDoc + "  alerts: { maxRunsPerDay: x }\n"},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: json: cannot unmarshal string into Go struct field Alerts.spec.alerts.maxRunsPerDay of type int32`},
+			files: map[string]string{"b.yaml": bindingDoc + "  interactions: { askUser: x }\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: json: cannot unmarshal string into Go struct field Interactions.spec.interactions.askUser of type bool`},
+		},
+		{
+			// A Binding's alerts block (a per-Binding Alertmanager webhook) was removed in DA-1: alerts reach a Binding
+			// through a botMessage trigger, so a file that still carries the block no longer loads.
+			name: "removed alerts field",
+			files: map[string]string{"b.yaml": bindingDoc + "  alerts:\n    type: alertmanager\n    tokenSecretRef: { name: agent-kourier-webhook-token }\n" +
+				"    promptTemplate: investigate\n    maxRunsPerDay: 40\n"},
+			want: []string{`b.yaml#1 Binding sre/sre-alerts: spec.alerts: unknown field`},
+		},
+		{
+			name:  "removed status.webhookPath field",
+			files: map[string]string{"b.yaml": bindingDoc + "status:\n  webhookPath: /hooks/alertmanager/sre/sre-alerts\n"},
+			want:  []string{`b.yaml#1 Binding sre/sre-alerts: status.webhookPath: unknown field`},
 		},
 		{
 			name:  "malformed YAML",

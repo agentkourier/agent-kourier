@@ -8,12 +8,6 @@ alert still reaches people if Agent Kourier is down. This guide uses the `alertm
 ships. For alerts another tool's bot posts, see
 [Start investigations from any bot's messages](any-bot-trigger.md).
 
-!!! note "The webhook receiver is not served yet"
-
-    A Binding also has an `alerts` block, for an Alertmanager webhook that Agent Kourier receives directly. The loader
-    accepts it, but the receiver is not served yet. This guide uses the path that works today: a `botMessage` trigger on
-    the alert channel.
-
 ## Before you start
 
 - A [Binding](write-a-binding.md) for the alert channel, or the details to write one, and the bot invited to that

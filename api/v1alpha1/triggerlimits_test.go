@@ -15,8 +15,8 @@ func rate(maxRuns int32, per time.Duration, maxConcurrent int32) *RateLimit {
 	return &RateLimit{MaxRuns: maxRuns, Per: metav1.Duration{Duration: per}, MaxConcurrent: maxConcurrent}
 }
 
-// The alertmanager preset limits a trigger to the Binding alerts example of spec 7 (five in 10 minutes, two at a
-// time, 40 a day), and a Binding that sets nothing gets them.
+// The alertmanager preset limits a trigger to five starts in 10 minutes, two at a time, and 40 a day, and a Binding
+// that sets nothing gets them.
 func TestAlertmanagerPresetHasLimits(t *testing.T) {
 	want := TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(40)}
 	if got := alertmanagerTrigger().Limits; !reflect.DeepEqual(got, want) {

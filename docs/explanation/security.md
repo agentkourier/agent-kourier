@@ -22,7 +22,7 @@ its questions; a button press or typed answer counts only from a channel member 
 per-user or group permissions in v1. `interactions.approverGroups` is reserved for that.
 
 Bindings are namespaced, and shared resources list the namespaces allowed to refer to them in `allowedNamespaces`. A
-team's webhook token Secret lives in its own namespace.
+team's identity token Secret lives in its own namespace.
 
 ## Why kagent needs a front door
 
@@ -51,7 +51,7 @@ audited and counted; nothing falls back.
 
 ## Hostile text
 
-Alert payloads, other bots' messages, people's replies and agent output are all treated as untrusted.
+Alert messages, other bots' messages, people's replies and agent output are all treated as untrusted.
 
 - **Toward the agent.** Text from people and other bots that reaches an agent is framed as data inside a tagged block
   that says it is never instructions. A trigger's prompt template may read only values that pass a strict shape check.
@@ -63,7 +63,7 @@ Alert payloads, other bots' messages, people's replies and agent output are all 
 
 ## The paging path
 
-Every route to Agent Kourier keeps the existing receivers, so an Agent Kourier outage never loses a page.
+Agent Kourier is not an Alertmanager receiver. It reads the alert your alerting tool already posts to Slack, so an Agent Kourier outage never loses a page.
 
 ## Not in scope
 

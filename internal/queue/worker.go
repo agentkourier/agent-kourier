@@ -1,7 +1,7 @@
 // Package queue turns the store's durable event queue into handled events.
 //
 // A Worker claims one event at a time, hands it to a Handler, and records the
-// outcome. Delivery is at-least-once (spec 8.1, 11): a worker that crashes
+// outcome. Delivery is at-least-once (spec 6.1): a worker that crashes
 // between claim and completion leaves the event in processing, and it is
 // redelivered once its lease expires.
 package queue

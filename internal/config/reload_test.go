@@ -141,7 +141,7 @@ func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 		t.Errorf("forced: not rebuilt (%d more reads)", secrets.reads-reads)
 	}
 	kept := r.Current()
-	delete(secrets.fakeSecrets, "sre/agent-kourier-webhook-token") // Secrets change without a file change
+	delete(secrets.fakeSecrets, "sre/agent-kourier-sre-alerts-oidc") // Secrets change without a file change
 	if err := r.reload(context.Background(), true); err == nil || r.Current() != kept || r.Status().Errors != 1 {
 		t.Errorf("a vanished Secret: err %v, status %+v", err, r.Status())
 	}
@@ -309,8 +309,12 @@ func TestReloaderLoop(t *testing.T) {
 func TestReloaderGivesUpOnAMovingConfig(t *testing.T) {
 	dir := mountDir(t, twoGenerations(t), "one")
 	secrets := &countingSecrets{fakeSecrets: specSecrets()}
-	// Each attempt reads three Secrets, so an odd number of swaps leaves it on the other generation.
-	secrets.onRead = func(reads int) { swapGeneration(t, dir, []string{"two", "one"}[(reads+1)%2]) }
+	// Each attempt reads two Secrets, and the first of them moves the config to the other generation.
+	secrets.onRead = func(reads int) {
+		if reads%2 == 1 {
+			swapGeneration(t, dir, []string{"two", "one"}[reads/2%2])
+		}
+	}
 	r := newTestReloader(dir, secrets)
 	if err := r.reload(context.Background(), true); !errors.Is(err, errConfigMoving) ||
 		r.Current() != nil || r.Status().Errors != 0 || r.Status().Stale || r.lastFingerprint != "" {

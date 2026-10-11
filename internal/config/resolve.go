@@ -31,7 +31,6 @@ type Snapshot struct {
 	conns     map[identity]*v1alpha1.ChatConnection
 	bindings  map[identity]ResolvedBinding
 	byChannel map[channelKey]ResolvedBinding
-	byPath    map[string]ResolvedBinding
 }
 
 // Binding returns the Binding with the given namespace and name. The result is read-only.
@@ -74,19 +73,6 @@ func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 	return out
 }
 
-// WebhookPath is the path Alertmanager posts to for the Binding with the given namespace and
-// name. Resolve records it in the Binding's status, and the HTTP router serves it.
-func WebhookPath(namespace, name string) string {
-	return "/hooks/alertmanager/" + namespace + "/" + name
-}
-
-// BindingForWebhook returns the Binding whose alert webhook is at path, as in
-// "/hooks/alertmanager/sre/sre-alerts". The result is read-only.
-func (s *Snapshot) BindingForWebhook(path string) (ResolvedBinding, bool) {
-	rb, ok := s.byPath[path]
-	return rb, ok
-}
-
 // Resolve checks the references between the objects of set and builds a Snapshot. Empty
 // namespaces in references mean the referrer's. A reference into another namespace needs the
 // target to list the referrer's namespace in allowedNamespaces, except that a ChatConnection
@@ -95,7 +81,7 @@ func (s *Snapshot) BindingForWebhook(path string) (ResolvedBinding, bool) {
 // requires every referenced Secret to exist with the keys it needs, without reading values.
 //
 // Resolve takes ownership of set: the caller must not use or change it afterwards. It resets
-// each Binding's status, which is never input, and sets Status.WebhookPath. On any problem it
+// each Binding's status, which is never input. On any problem it
 // returns every one, joined and grouped by object, and a nil Snapshot. If ctx ends first, the
 // error also wraps ctx's, once, ahead of the reference problems found so far; Secret
 // problems are then incomplete.
@@ -108,7 +94,6 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 		snap: &Snapshot{
 			bindings:  map[identity]ResolvedBinding{},
 			byChannel: map[channelKey]ResolvedBinding{},
-			byPath:    map[string]ResolvedBinding{},
 		},
 	}
 	r.snap.conns = r.conns
@@ -185,10 +170,6 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 	}
 	r.snap.byChannel[key] = rb
 	b.Status = v1alpha1.BindingStatus{}
-	if b.Spec.Alerts != nil {
-		b.Status.WebhookPath = WebhookPath(b.Namespace, b.Name)
-		r.snap.byPath[b.Status.WebhookPath] = rb
-	}
 }
 
 func (r *resolver) connection(c *v1alpha1.ChatConnection) {

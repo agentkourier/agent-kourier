@@ -15,7 +15,6 @@ import (
 
 func TestResolveSecrets(t *testing.T) {
 	const oidc = "Binding sre/sre-alerts: spec.identity.tokenSecretRef: "
-	const webhook = "Binding sre/sre-alerts: spec.alerts.tokenSecretRef: "
 	const creds = "ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: "
 	tests := []struct {
 		name   string
@@ -35,9 +34,9 @@ func TestResolveSecrets(t *testing.T) {
 		{"identity key is the ref's key", func(s *Set, _ fakeSecrets) { sreAlerts(s).Spec.Identity.TokenSecretRef.Key = "jwt" },
 			[]string{oidc + `Secret sre/agent-kourier-sre-alerts-oidc has no key "jwt"`}},
 		{"Secrets are read in the Binding's namespace", func(_ *Set, f fakeSecrets) {
-			f["payments/agent-kourier-webhook-token"] = f["sre/agent-kourier-webhook-token"]
-			delete(f, "sre/agent-kourier-webhook-token")
-		}, []string{webhook + "Secret sre/agent-kourier-webhook-token not found"}},
+			f["payments/agent-kourier-sre-alerts-oidc"] = f["sre/agent-kourier-sre-alerts-oidc"]
+			delete(f, "sre/agent-kourier-sre-alerts-oidc")
+		}, []string{oidc + "Secret sre/agent-kourier-sre-alerts-oidc not found"}},
 		{"header Secret is read in the backend's namespace", func(s *Set, f fakeSecrets) {
 			s.AgentBackends[0].Spec.Headers = []v1alpha1.Header{{Name: "X-Team", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "team", Key: "value"}}}
 			f["agent-kourier-system/team"] = []string{"token"}
@@ -72,7 +71,6 @@ func TestResolveSecretReadErrors(t *testing.T) {
 	wantProblems(t, specSet(t), failingSecrets{},
 		// Grouped by object, in the order the checks ran within each.
 		"Binding sre/sre-alerts: spec.identity.tokenSecretRef: read Secret sre/agent-kourier-sre-alerts-oidc: connection refused",
-		"Binding sre/sre-alerts: spec.alerts.tokenSecretRef: read Secret sre/agent-kourier-webhook-token: connection refused",
 		"ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: read Secret agent-kourier-system/slack-main: connection refused",
 	)
 }
@@ -125,7 +123,7 @@ func TestSecretNamespacesAreTheNamespacesResolveReads(t *testing.T) {
 }
 
 // Only an object that refers to a Secret needs its namespace watched: every ChatConnection does,
-// a backend does for a header Secret, a Binding for its token or its webhook token.
+// a backend does for a header Secret, a Binding for its token.
 func TestSecretNamespaces(t *testing.T) {
 	ref := &v1alpha1.SecretKeyRef{Name: "s"}
 	meta := func(ns string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: "x"} }
@@ -137,12 +135,11 @@ func TestSecretNamespaces(t *testing.T) {
 		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: meta("conn")}},
 		Bindings: []v1alpha1.Binding{
 			{ObjectMeta: meta("b-token"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{TokenSecretRef: ref}}},
-			{ObjectMeta: meta("b-alerts"), Spec: v1alpha1.BindingSpec{Alerts: &v1alpha1.Alerts{TokenSecretRef: *ref}}},
 			{ObjectMeta: meta("b-none"), Spec: v1alpha1.BindingSpec{Identity: v1alpha1.Identity{UserID: "u"}}},
 			{ObjectMeta: meta("conn")}, // a namespace named twice is listed once
 		},
 	}
-	if got, want := set.SecretNamespaces(), []string{"b-alerts", "b-token", "be-secret", "conn"}; !slices.Equal(got, want) {
+	if got, want := set.SecretNamespaces(), []string{"b-token", "be-secret", "conn"}; !slices.Equal(got, want) {
 		t.Errorf("SecretNamespaces = %v, want %v", got, want)
 	}
 }

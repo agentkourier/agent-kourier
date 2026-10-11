@@ -84,8 +84,8 @@ func TestSpecExamplesValidate(t *testing.T) {
 func TestValidateJoinsAllProblems(t *testing.T) {
 	b := load[Binding](t, "binding.yaml")
 	b.Spec.Chat.Channel = ""
-	b.Spec.Alerts.RateLimit.Per = metav1.Duration{}
-	want := []string{"spec.chat.channel: required", "spec.alerts.rateLimit.per: must be positive"}
+	b.Spec.Interactions.Timeout = metav1.Duration{Duration: -time.Minute}
+	want := []string{"spec.chat.channel: required", "spec.interactions.timeout: must be positive"}
 	if got := problemsOf(b.Validate()); !slices.Equal(got, want) {
 		t.Fatalf("Validate() problems = %q, want %q", got, want)
 	}
@@ -195,16 +195,6 @@ func TestBindingValidate(t *testing.T) {
 			`spec.chat.threadReplies: unsupported value "Mention", must be one of all, mention`},
 		{"threadReplies none", func(o *Binding) { o.Spec.Chat.ThreadReplies = "none" },
 			`spec.chat.threadReplies: unsupported value "none", must be one of all, mention`},
-		{"bad alert type", func(o *Binding) { o.Spec.Alerts.Type = "grafana" }, `spec.alerts.type: unsupported value "grafana", must be one of alertmanager`},
-		{"alerts without tokenSecretRef", func(o *Binding) { o.Spec.Alerts.TokenSecretRef = SecretKeyRef{} }, "spec.alerts.tokenSecretRef.name: required"},
-		{"alerts without prompt", func(o *Binding) { o.Spec.Alerts.PromptTemplate = "" }, "spec.alerts.promptTemplate: required"},
-		{"maxRuns zero", func(o *Binding) { o.Spec.Alerts.RateLimit.MaxRuns = 0 }, "spec.alerts.rateLimit.maxRuns: must be positive"},
-		{"per negative", func(o *Binding) { o.Spec.Alerts.RateLimit.Per.Duration = -time.Minute }, "spec.alerts.rateLimit.per: must be positive"},
-		{"maxConcurrent negative", func(o *Binding) { o.Spec.Alerts.RateLimit.MaxConcurrent = -1 }, "spec.alerts.rateLimit.maxConcurrent: must be positive"},
-		{"negative maxRunsPerDay", func(o *Binding) { o.Spec.Alerts.MaxRunsPerDay = -1 }, "spec.alerts.maxRunsPerDay: must not be negative"},
-		{"zero maxRunsPerDay means uncapped", func(o *Binding) { o.Spec.Alerts.MaxRunsPerDay = 0 }, ""},
-		{"no rate limit ok", func(o *Binding) { o.Spec.Alerts.RateLimit = nil }, ""},
-		{"chat-only binding ok", func(o *Binding) { o.Spec.Alerts = nil }, ""},
 		{"toolApprovals without askUser ok", func(o *Binding) {
 			o.Spec.Interactions.AskUser, o.Spec.Interactions.ToolApprovals = false, true
 		}, ""},

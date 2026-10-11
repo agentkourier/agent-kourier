@@ -12,7 +12,7 @@ type Env struct {
 	StubURL         string // the stub agent: /agents/ and /_control/release/
 	AlertmanagerURL string // Alertmanager's API
 	// AgentKourierURL is Agent Kourier's health and metrics port: the fast tier's Service of that port alone
-	// (the chart's Service, with charts/agent-kourier/ci/fast-values.yaml). The Alertmanager receiver is not behind it.
+	// (the chart's Service, with charts/agent-kourier/ci/fast-values.yaml).
 	AgentKourierURL string
 	// SignalerURL is the container signaler (test/signaler), which the fast tier brings up with two Agent Kourier replicas
 	// and the failover scenario uses to freeze or kill a replica's process.

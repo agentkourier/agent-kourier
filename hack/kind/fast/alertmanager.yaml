@@ -1,7 +1,8 @@
 # The fast tier's Alertmanager, run by prometheus-operator, and the route that sends every alert
 # to the sink receiver (spec 12.1): tests assert the sink still gets alerts while Agent Kourier is
-# down (D22). A test posts alerts to alertmanager.monitoring.svc:9093/api/v2/alerts. Agent Kourier's
-# own route joins this one as another AlertmanagerConfig (WP-14, WP-47).
+# down (D22). A test posts alerts to alertmanager.monitoring.svc:9093/api/v2/alerts. Agent Kourier is
+# not an Alertmanager receiver: it reads an alert from the Slack message a Slack receiver posts. In the
+# sandbox, `make sandbox-up` adds that receiver (hack/kind/sandbox/alertmanager/config.yaml).
 apiVersion: monitoring.coreos.com/v1
 kind: Alertmanager
 metadata:
@@ -24,7 +25,8 @@ metadata:
 spec:
   route:
     receiver: sink
-    # Short timers keep a test fast; `continue` lets a later route (Agent Kourier's) see the alert too.
+    # Short timers keep a test fast; `continue` lets a later route see the alert too: in the sandbox, its Slack
+    # receiver, whose message Agent Kourier reads.
     continue: true
     groupBy: [alertname]
     groupWait: 1s

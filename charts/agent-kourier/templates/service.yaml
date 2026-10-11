@@ -1,5 +1,5 @@
 {{- if .Values.service.enabled }}
-# Agent Kourier's health and metrics port, and nothing else: the Alertmanager receiver is not served yet.
+# Agent Kourier's health and metrics port, and nothing else: Agent Kourier receives no webhook.
 apiVersion: v1
 kind: Service
 metadata:

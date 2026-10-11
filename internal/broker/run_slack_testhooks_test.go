@@ -121,7 +121,7 @@ func rejectedWorld(t *testing.T) *slackWorld {
 	conn.Data["botToken"], conn.Data["appToken"] = []byte("xoxb-fake-bot"), []byte("xapp-fake-app")
 	oidc := secretOf("sre", "agent-kourier-sre-alerts-oidc", "token")
 	oidc.Data["token"] = []byte("not-a-jwt")
-	w.cfg.Client = fake.NewClientset(conn, oidc, secretOf("sre", "agent-kourier-webhook-token", "token"))
+	w.cfg.Client = fake.NewClientset(conn, oidc)
 	return w
 }
 

@@ -24,13 +24,6 @@ spec:
         exclude: { title: '^Prometheus heartbeat$' }
         thread: { cooldown: 2h }     # overrides the preset's 4h
         limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
-  alerts:
-    type: alertmanager
-    tokenSecretRef: { name: agent-kourier-webhook-token }  # same namespace as the Binding
-    promptTemplate: |                # Go template over the normalized AlertEvent
-      Investigate this alert and report likely cause and next steps.
-    rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }
-    maxRunsPerDay: 40
   interactions:
     askUser: true
     toolApprovals: false             # Phase 5
@@ -42,4 +35,3 @@ spec:
     threadTTL: 2160h                 # 90 days
 status:
   conditions: []                     # Ready, BackendReachable, ChannelJoined
-  webhookPath: /hooks/alertmanager/sre/sre-alerts

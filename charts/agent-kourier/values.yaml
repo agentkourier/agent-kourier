@@ -35,7 +35,7 @@ serviceAccount:
 
 # Agent Kourier's process settings. These are the environment cmd/agent-kourier reads (its package comment lists all of them).
 listen:
-  # The port of /healthz, /readyz and /metrics (AGENTKOURIER_LISTEN). The alert webhook receiver is not served yet.
+  # The port of /healthz, /readyz and /metrics (AGENTKOURIER_LISTEN).
   port: 8080
 logLevel: info # debug, info, warn or error (AGENTKOURIER_LOG_LEVEL)
 # client-go's verbosity (AGENTKOURIER_KLOG_V). Keep it 0: at 8 and above client-go logs response bodies, Secret lists included.

@@ -85,9 +85,4 @@ happened to the output in chat. A completed task can have a failed final render.
 Backlog scrapes query SQLite with a one-second timeout. A failed query produces an
 invalid metric and a failed scrape rather than reporting a false zero backlog.
 
-Ingress and routing limits and alert verdicts for alerts posted to Agent Kourier directly wait for
-the webhook receiver, which is not built yet. The generic event queue now
-preserves trace context, so those adapters can connect their incoming HTTP traces
-to queued execution without another persistence change.
-
 Reference: [OpenTelemetry HTTP span conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) and [span links](https://opentelemetry.io/docs/specs/otel/trace/api/#links-between-spans).

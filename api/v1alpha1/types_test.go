@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,17 +44,11 @@ func TestSpecExamplesDecode(t *testing.T) {
 	}
 
 	b := load[Binding](t, "binding.yaml")
-	a := b.Spec.Alerts
-	if a == nil || a.RateLimit == nil || a.RateLimit.Per.Duration != 10*time.Minute ||
-		a.RateLimit.MaxRuns != 5 || a.RateLimit.MaxConcurrent != 2 || a.MaxRunsPerDay != 40 {
-		t.Errorf("alerts did not decode as in the spec: %+v", a)
-	}
 	if b.Spec.Chat.ThreadReplies != ThreadRepliesAll {
 		t.Errorf("Binding threadReplies = %q, want %q", b.Spec.Chat.ThreadReplies, ThreadRepliesAll)
 	}
 	if b.Spec.Identity.UserID != "agent-kourier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
-		!b.Spec.Interactions.AskUser || !b.Spec.Feedback.Enabled ||
-		b.Status.WebhookPath != "/hooks/alertmanager/sre/sre-alerts" {
+		!b.Spec.Interactions.AskUser || !b.Spec.Feedback.Enabled {
 		t.Errorf("Binding did not decode as in the spec: %+v", b)
 	}
 }
@@ -105,8 +100,8 @@ func TestDefaultSecretKey(t *testing.T) {
 	be := &AgentBackend{Spec: AgentBackendSpec{Headers: []Header{
 		{Name: "A", ValueSecretRef: ref("")}, {Name: "B", ValueSecretRef: ref("custom")}, {Name: "C", Value: "v"},
 	}}}
-	unset := &Binding{Spec: BindingSpec{Identity: Identity{TokenSecretRef: ref("")}, Alerts: &Alerts{TokenSecretRef: *ref("")}}}
-	set := &Binding{Spec: BindingSpec{Identity: Identity{TokenSecretRef: ref("custom")}, Alerts: &Alerts{TokenSecretRef: *ref("custom")}}}
+	unset := &Binding{Spec: BindingSpec{Identity: Identity{TokenSecretRef: ref("")}}}
+	set := &Binding{Spec: BindingSpec{Identity: Identity{TokenSecretRef: ref("custom")}}}
 	var none Binding
 	for _, d := range []interface{ Default() }{be, unset, set, &none} {
 		d.Default()
@@ -114,14 +109,29 @@ func TestDefaultSecretKey(t *testing.T) {
 
 	got := []string{
 		be.Spec.Headers[0].ValueSecretRef.Key, be.Spec.Headers[1].ValueSecretRef.Key,
-		unset.Spec.Identity.TokenSecretRef.Key, unset.Spec.Alerts.TokenSecretRef.Key,
-		set.Spec.Identity.TokenSecretRef.Key, set.Spec.Alerts.TokenSecretRef.Key,
+		unset.Spec.Identity.TokenSecretRef.Key, set.Spec.Identity.TokenSecretRef.Key,
 	}
-	if want := []string{"token", "custom", "token", "token", "custom", "custom"}; !slices.Equal(got, want) {
+	if want := []string{"token", "custom", "token", "custom"}; !slices.Equal(got, want) {
 		t.Errorf("keys after Default = %v, want %v", got, want)
 	}
-	if be.Spec.Headers[2].ValueSecretRef != nil || none.Spec.Identity.TokenSecretRef != nil || none.Spec.Alerts != nil {
+	if be.Spec.Headers[2].ValueSecretRef != nil || none.Spec.Identity.TokenSecretRef != nil {
 		t.Errorf("Default allocated a nil ref: %+v %+v", be.Spec, none.Spec)
+	}
+}
+
+// A Binding that carries the removed alerts block (a per-Binding Alertmanager webhook) or status.webhookPath is
+// refused by the strict decoder: alerts reach a Binding through a botMessage trigger only (DA-1).
+func TestBindingRefusesTheRemovedWebhookFields(t *testing.T) {
+	for _, tc := range []struct{ name, in, field string }{
+		{"alerts", "spec: { alerts: { type: alertmanager, promptTemplate: p } }", "alerts"},
+		{"status.webhookPath", "status: { webhookPath: /hooks/alertmanager/sre/sre-alerts }", "webhookPath"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := yaml.UnmarshalStrict([]byte(tc.in), &Binding{})
+			if err == nil || !strings.Contains(err.Error(), tc.field) || !strings.Contains(err.Error(), "unknown field") {
+				t.Errorf("strict decode error = %v, want an unknown-field error naming %s", err, tc.field)
+			}
+		})
 	}
 }
 

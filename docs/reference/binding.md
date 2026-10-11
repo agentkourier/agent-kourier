@@ -23,7 +23,6 @@ BindingSpec is the desired state of a Binding.
 | `agent` | [AgentRef](#agentref) | Yes |  |  |
 | `identity` | [Identity](#identity) | Yes |  |  |
 | `chat` | [ChatBinding](#chatbinding) | Yes |  |  |
-| `alerts` | [Alerts](#alerts) | No |  | Alerts configures an Alertmanager webhook for the Binding. The loader accepts it, but the webhook receiver is not served yet; alerts reach a Binding today through a botMessage trigger. |
 | `interactions` | [Interactions](#interactions) | No |  |  |
 | `feedback` | [Feedback](#feedback) | No |  |  |
 | `session` | [Session](#session) | No |  |  |
@@ -123,7 +122,7 @@ TriggerThread decides which thread a message joins and when it closes the thread
 
 ## TriggerLimits
 
-TriggerLimits bounds how many investigations a botMessage trigger starts. It has the shape of the Binding's alerts.rateLimit and alerts.maxRunsPerDay, and the preset supplies the defaults, so a Binding sets only what it changes. Only a start is limited: a repeat, a close and a note never are.
+TriggerLimits bounds how many investigations a botMessage trigger starts: a rate limit over a window and a cap for a day. The preset supplies the defaults, so a Binding sets only what it changes. Only a start is limited: a repeat, a close and a note never are.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -139,18 +138,6 @@ RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 | `maxRuns` | integer | Yes |  | Minimum 1. |
 | `per` | duration | Yes |  | Per is the window length. |
 | `maxConcurrent` | integer | Yes |  | Minimum 1. |
-
-## Alerts
-
-Alerts configures the Binding's alert webhook.
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `type` | string | Yes |  | One of `alertmanager`. |
-| `tokenSecretRef` | [SecretKeyRef](#secretkeyref) | Yes |  | TokenSecretRef holds the webhook bearer token, in the Binding's namespace. |
-| `promptTemplate` | string | Yes |  | PromptTemplate is a Go template over the normalized AlertEvent. At least 1 character. |
-| `rateLimit` | [RateLimit](#ratelimit) | No |  | RateLimit bounds agent runs per window; omitted means unlimited. |
-| `maxRunsPerDay` | integer | No |  | MaxRunsPerDay caps agent runs per day; 0 means no cap. Minimum 0. |
 
 ## Interactions
 
@@ -181,12 +168,11 @@ Session configures thread-to-session mapping.
 
 ## BindingStatus
 
-BindingStatus is the observed state of a Binding. The loader sets webhookPath in memory; conditions are for the controller that will serve these resources. Neither is visible while resources are loaded from files.
+BindingStatus is the observed state of a Binding. Conditions are for the controller that will serve these resources; they are not visible while resources are loaded from files.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `conditions` | []Condition | No |  | Conditions include Ready, BackendReachable, and ChannelJoined. |
-| `webhookPath` | string | No |  | WebhookPath is the path Alertmanager posts to; set only when Alerts is. |
 
 ---
 

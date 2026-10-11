@@ -33,7 +33,7 @@ func slackCluster(botToken string) *fake.Clientset {
 	conn.Data["appToken"] = []byte("xapp-fake-app")
 	oidc := secretOf("sre", "agent-kourier-sre-alerts-oidc", "token")
 	oidc.Data["token"] = []byte(jwt("agentkourier@example.test"))
-	return fake.NewClientset(conn, oidc, secretOf("sre", "agent-kourier-webhook-token", "token"))
+	return fake.NewClientset(conn, oidc)
 }
 
 // stepTrace records the shutdown steps of a Run in the order they began.

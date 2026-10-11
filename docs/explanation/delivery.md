@@ -39,9 +39,11 @@ harmless for a read-only agent and not for one that changes things.
 
 ## Audit writes
 
-A record that authorizes an action is written first, and the action fails if the write fails: an inbound event before
-it is queued, and an answer to a question before it is sent. A record of something already done is logged and counted
-but never blocks the follow-up.
+A record that authorizes an action is written first, and the action fails if the write fails: an answer to a question is
+recorded before it is sent. A record of something already done is logged and counted but never blocks the follow-up.
+These are what the audit log holds for the chat path: agent calls, the decisions on a question (such as answered, denied
+or timed out), a pause that could not be used and its cancel, a vote on a message, a trigger's start that was
+refused, and a stale task that was ended. A message that arrives is not recorded as such.
 
 ## With two replicas
 

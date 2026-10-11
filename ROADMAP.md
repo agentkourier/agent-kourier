@@ -42,8 +42,6 @@ These wait for the pilot's verdict or for an upstream release.
 
 - Custom resource definitions and a controller, so `kubectl get bindings` works.
 - Slack over the Events API, and direct messages.
-- An Alertmanager webhook receiver, so alerts can reach Agent Kourier directly
-  instead of through Slack.
 - Tool approvals from Slack, for agents that can change things.
 - The move to kagent 1.0 when it is released.
 - More chat platforms. The candidates are Mattermost, Microsoft Teams and Discord.

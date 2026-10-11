@@ -15,8 +15,8 @@
 // Failure policy (spec 8.6 step 7). No write is dropped silently: each failure is logged
 // (without the entry), counted through Options.OnFailure, and returned. The caller then
 // follows the spec. A record that authorizes an action fails the action: Event before the
-// event is queued (the webhook answers 5xx, so Alertmanager retries) and Decision before
-// the answer is sent. A record of something already done (AgentCall, UnusablePause and
+// event is queued (an event whose record cannot be written is not queued; nothing in
+// production calls Event today) and Decision before the answer is sent. A record of something already done (AgentCall, UnusablePause and
 // its cancel, UnusablePauseCancel) is logged, metered and returned, and never blocks the
 // follow-up, above all the cancel.
 package audit

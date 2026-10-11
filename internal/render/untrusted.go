@@ -16,7 +16,7 @@ import (
 // reaches an agent goes through one module, so the sanitising, the escaping, the cut, the tag, the safety sentence
 // and the budget are written, and tested, once. A caller describes a block and says what its content is; the module
 // writes the rules. The two blocks today are the alert fields of a chat trigger (prompt.go) and the replies of a thread
-// (threadreplies.go); the next, an Alertmanager payload, is built on it too.
+// (threadreplies.go).
 //
 // A block is written as
 //
