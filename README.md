@@ -29,13 +29,13 @@ An illustration of one alert thread, not captured output:
 ```text
 #payments-alerts
 
-Alertmanager   FIRING (1) - PaymentsApiErrorRate
-  courier      The 5xx rate rose at 14:02, two minutes after the 14:00 rollout
-               of payments-api. The new pods fail their readiness probe and
-               restart. The last crash log ends with "pool size must be >= 5".
-  dana         what changed in that rollout?
-  courier      The ConfigMap payments-api-env changed DB_POOL_SIZE from 20 to 2.
-               Nothing else in the Deployment differs from the previous revision.
+Alertmanager     FIRING (1) - PaymentsApiErrorRate
+  Agent Kourier  The 5xx rate rose at 14:02, two minutes after the 14:00 rollout
+                 of payments-api. The new pods fail their readiness probe and
+                 restart. The last crash log ends with "pool size must be >= 5".
+  dana           what changed in that rollout?
+  Agent Kourier  The ConfigMap payments-api-env changed DB_POOL_SIZE from 20 to 2.
+                 Nothing else in the Deployment differs from the previous revision.
 ```
 
 The alert's thread is the agent session. People in the channel reply in it without
