@@ -35,10 +35,13 @@ const (
 	textNotMember = "Only members of this channel can answer this question."
 )
 
-// Authorizer says who may answer: a chat.Platform. Both fail closed, IsBot by returning true with its error.
+// Authorizer says who may answer: a chat.Platform. All fail closed: IsBot by returning true with its error, and IsInAnyGroup
+// by returning false with its error, so an error is never a yes. IsInAnyGroup is asked only for a tool approval on a Binding
+// that names approver groups.
 type Authorizer interface {
 	IsMember(ctx context.Context, channel, user string) (bool, error)
 	IsBot(ctx context.Context, user string) (bool, error)
+	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
 }
 
 // PressDecider takes the decision on a complete press: *Decider.
@@ -146,10 +149,12 @@ const (
 // Process works one recorded press through, in this order: find the interaction (a press for none, or
 // for another message than the prompt's, is dropped), see that it is still open (anyone else's press on
 // an answered or closed one is told who answered, or that it is closed), check that the person is a
-// member and not a bot, read their answer (a question's answers, or an approval's button and per-tool verdicts), and hand a
+// member and not a bot (for an approval on a Binding with approver groups, also in one of them, unless their own answer is
+// already recorded), read their answer (a question's answers, or an approval's button and per-tool verdicts), and hand a
 // complete one to the decider. The press is deleted
 // only when it is finished: after the decider returns nil, or after a refusal that is final. A person
-// refused as not a member, or a bot, or for an incomplete answer, is audited first (denied, or incomplete
+// refused as not a member, or a bot (denied), or in none of the approver groups (denied_not_approver), or for an incomplete
+// answer, is audited first (incomplete
 // with the answer's shape and no values: how many were answered, or for an approval how many tools were decided); a press on a question that is already decided is not, since only
 // a press that races into the decider is a decision lost. A failure to check, to audit or to decide is an
 // error and leaves the press for another try, however old it is: a check that cannot be made is no decision,
@@ -176,13 +181,14 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 }
 
 // open reports whether user's press can still be decided: the question is pending, or user's own answer
-// is recorded and the press is the same person's retry after a crash, which the decider sends again.
+// is recorded and the press is the same person's retry after a crash, which the decider sends again. That retry decides
+// nothing, so it is not asked about the approver groups.
 func (p *Pipeline) open(row store.Interaction, user string) bool {
 	return row.State == store.InteractionPending || (row.State == store.InteractionAnswered && row.Decider == user)
 }
 
-// authorized checks who pressed, reads the answer and decides it. A person refused as not a member, or a bot, or
-// whose answer is incomplete or unreadable, is a decision of its own and is audited, before the
+// authorized checks who pressed, reads the answer and decides it. A person refused as not a member, or a bot, or in none of
+// the approver groups, or whose answer is incomplete or unreadable, is a decision of its own and is audited, before the
 // person is told, and a failed audit write keeps the press for another try (spec 8.6 step 7). A check that
 // itself fails is no decision, and is only told.
 //
@@ -245,6 +251,22 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		if !b.ToolApprovals {
 			p.cfg.Logger.WarnContext(ctx, "interact: a press on an approval whose Binding no longer allows approvals; nothing is decided", "interaction", row.ID)
 			return p.finish(ctx, press, &row, w.gone)
+		}
+		// The winner's own retry (open) is not asked: their approval was authorized when it was made, and the retry only sends
+		// the recorded answer again; refusing it would leave a decision audited and not delivered, and put a refusal after it.
+		if len(b.ApproverGroups) > 0 && (row.State != store.InteractionAnswered || row.Decider != press.User) {
+			switch approver, err := p.cfg.Authorizer.IsInAnyGroup(ctx, b.ApproverGroups, press.User); {
+			case err != nil:
+				// Usually a fault in the configuration (a group that is mistyped or disabled, a scope the app was installed without)
+				// that no retry mends, so it is logged where an operator will see it. It is no denial of the person: never audited as one.
+				// A cancelled context is a shutdown with the press in flight, not a fault of the groups, and is not logged.
+				if ctx.Err() == nil {
+					p.cfg.Logger.ErrorContext(ctx, "interact: the approver-group check failed; the press is kept and tried again", "binding", name, "interaction", row.ID, "err", err)
+				}
+				return Retry, fmt.Errorf("interact: check the approver groups of %s for %s: %w", name, row.ID, err)
+			case !approver:
+				return refuse(audit.Decision{Result: audit.DecisionNotApprover}, w.notApprover)
+			}
 		}
 		answer, problems, err = ExtractDecisions(in, inputs.Action, inputs.Answers)
 		shape = audit.Decision{Result: audit.DecisionIncomplete, Shape: &audit.ToolShape{Decided: len(in.Tools) - len(problems), Total: len(in.Tools)}}

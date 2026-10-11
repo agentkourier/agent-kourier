@@ -21,12 +21,42 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// authz is who may answer. The zero value says nobody is a member; members and bots are by user.
+// authz is who may answer. The zero value says nobody is a member; members and bots are by user. groups lists, by group ID,
+// who is in it; a group not listed has nobody, as one that is listed empty. groupCalls is the groups each IsInAnyGroup was
+// asked about, and groupErr fails every one.
 type authz struct {
 	mu                sync.Mutex
 	members, bots     map[string]bool
+	groups            map[string][]string
 	memberErr, botErr error
+	groupErr          error
+	onGroup           func() // run by IsInAnyGroup before it answers, if set
 	asked             int
+	groupCalls        [][]string
+}
+
+func (a *authz) IsInAnyGroup(_ context.Context, groups []string, user string) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.groupCalls = append(a.groupCalls, slices.Clone(groups))
+	if a.onGroup != nil {
+		a.onGroup()
+	}
+	if a.groupErr != nil {
+		return false, a.groupErr
+	}
+	for _, g := range groups {
+		if slices.Contains(a.groups[g], user) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (a *authz) groupAsked() [][]string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.groupCalls)
 }
 
 func (a *authz) IsMember(_ context.Context, _, user string) (bool, error) {

@@ -52,6 +52,11 @@ func (a *authz) IsMember(_ context.Context, _, user string) (bool, error) {
 	return a.members[user] && a.memberErr == nil, a.memberErr
 }
 
+// IsInAnyGroup is part of interact.Authorizer; voting on feedback is not gated by groups, so nobody is asked.
+func (a *authz) IsInAnyGroup(context.Context, []string, string) (bool, error) {
+	return false, errors.New("feedback: no group is ever asked about")
+}
+
 func (a *authz) IsBot(_ context.Context, user string) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -14,6 +14,9 @@ import (
 // (wordsOf), never by the row's kind, which says "nested" for an approval that a sub-agent raised.
 type words struct {
 	gone, notReady, notMember, late, invalid, timedOut, closed, gaveUp string
+	// notApprover is told to a member who is in none of the Binding's approver groups. Only an approval has it: a question
+	// is not gated by groups. It names no group.
+	notApprover string
 	// firstNone is told when someone else decided first and is not named; firstWords follows the mention of the one who did.
 	firstNone, firstWords string
 }
@@ -22,16 +25,17 @@ type words struct {
 func wordsOf(k dialect.Kind) words {
 	if k == dialect.ToolApproval {
 		return words{
-			gone:       "This request is no longer available.",
-			notReady:   "This request is not ready yet. Please press again in a moment.",
-			notMember:  "Only members of this channel can decide this request.",
-			late:       "This request has timed out, so your decision was not taken.",
-			invalid:    "That decision could not be used. Please check it and press again.",
-			timedOut:   "This request has timed out.",
-			closed:     "This request is closed.",
-			gaveUp:     "Couldn't process your decision. Please press again.",
-			firstNone:  "Someone else decided this request first.",
-			firstWords: "decided this request first.",
+			gone:        "This request is no longer available.",
+			notReady:    "This request is not ready yet. Please press again in a moment.",
+			notMember:   "Only members of this channel can decide this request.",
+			notApprover: "Only approvers of this Binding can decide this request.",
+			late:        "This request has timed out, so your decision was not taken.",
+			invalid:     "That decision could not be used. Please check it and press again.",
+			timedOut:    "This request has timed out.",
+			closed:      "This request is closed.",
+			gaveUp:      "Couldn't process your decision. Please press again.",
+			firstNone:   "Someone else decided this request first.",
+			firstWords:  "decided this request first.",
 		}
 	}
 	return words{

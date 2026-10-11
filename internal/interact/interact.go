@@ -38,8 +38,8 @@ type Binding struct {
 	// for one that a person had already decided the thread is told that the request is being denied (a notice that is not
 	// true of that decision) and the recorded answer is sent again.
 	ToolApprovals bool
-	// ApproverGroups are the platform user groups whose members are to decide an approval; empty means any member of
-	// the channel. They are only carried here: nothing reads them yet.
+	// ApproverGroups are the platform user groups whose members decide a tool approval: a channel member who is in none of
+	// them is refused (a press, never an ask-user answer). Empty means any member of the channel.
 	ApproverGroups []string
 	Timeout        time.Duration
 }

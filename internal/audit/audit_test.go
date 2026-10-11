@@ -383,6 +383,7 @@ func TestDecision(t *testing.T) {
 		{"tool approval", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswered,
 			Answer: &dialect.Answer{Decisions: []dialect.Decision{{ToolID: "x", Approved: true}, {ToolID: "y", Reason: "my reason " + fakes[1]}}}}, t0, "answered approved=1 denied=1"},
 		{"incomplete", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionIncomplete}, t0, "incomplete"},
+		{"not an approver", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionNotApprover}, t0, "denied_not_approver"},
 		{"timed out", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionTimedOut, At: decided}, decided, "timed_out"},
 		{"answer cleared", Decision{InteractionID: "i1", TaskID: "t1", Result: DecisionAnswerCleared, At: decided}, decided, "answer_cleared"},
 	} {

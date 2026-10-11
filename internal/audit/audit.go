@@ -112,10 +112,14 @@ type DecisionResult string
 const (
 	DecisionAnswered   DecisionResult = "answered"
 	DecisionIncomplete DecisionResult = "incomplete"
-	DecisionDenied     DecisionResult = "denied" // not a channel member, or a bot
+	DecisionDenied     DecisionResult = "denied" // not a channel member, or a bot (an approver-group refusal is DecisionNotApprover)
 	DecisionSuperseded DecisionResult = "superseded"
 	DecisionTimedOut   DecisionResult = "timed_out"
 	DecisionAutoDenied DecisionResult = "auto_denied" // tool approval on a read-only Binding
+	// DecisionNotApprover is a channel member, not a bot, who pressed a tool approval on a Binding that names approver groups
+	// and is in none of them. It is apart from DecisionDenied so that a reader of the log can tell someone outside the
+	// approver group trying to decide from someone outside the channel.
+	DecisionNotApprover DecisionResult = "denied_not_approver"
 	// DecisionAnswerCleared is an answered interaction whose pause came again after retention had cleared the
 	// answer: it cannot be sent again, and the task is cancelled.
 	DecisionAnswerCleared DecisionResult = "answer_cleared"
@@ -349,7 +353,7 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 // Decision records who decided an interaction, when, and the shape of the answer.
 func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 	switch d.Result {
-	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared:
+	case DecisionAnswered, DecisionIncomplete, DecisionDenied, DecisionSuperseded, DecisionTimedOut, DecisionAutoDenied, DecisionAnswerCleared, DecisionNotApprover:
 	default:
 		return fail(store.ErrInvalid, "audit decision %q: unknown result %q", d.InteractionID, d.Result)
 	}
