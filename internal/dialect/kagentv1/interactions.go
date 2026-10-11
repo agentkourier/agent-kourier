@@ -52,10 +52,13 @@ type hitlRequest struct {
 }
 
 // The most a pause may ask, so that a broken or hostile agent cannot make Agent Kourier render
-// an unbounded prompt. Slack's own select menus stop at 100 options.
+// an unbounded prompt. Slack's own select menus stop at 100 options. A message holds at most
+// 50 blocks, and a prompt that showed each tool in its own blocks would not fit more than 20
+// with room for the header and the controls, so a pause is capped at 20 tools.
 const (
 	maxQuestions = 20
 	maxChoices   = 100
+	maxTools     = 20
 )
 
 // unusable returns an error that wraps dialect.ErrUnusablePause and says why. The reason
@@ -69,8 +72,8 @@ func unusable(reason string) error {
 // cannot be answered gives an error wrapping dialect.ErrUnusablePause, because kagent-v1
 // never falls back to free text: no payload (the request lacked the extension header,
 // which Connect sends), an unknown type, no id, no questions or tools, a tool without an
-// id, more than 20 questions or 100 choices, or a nested request that fails the checks
-// below.
+// id, more than 20 questions, 100 choices or 20 tools, or a nested request that fails the
+// checks below.
 //
 // A nested request (a sub-agent's) is usable only when kagent's resume code can correlate
 // the answer (v1.0.0-alpha5 go/adk/pkg/a2a/hitl.go, source only, never captured). It
@@ -155,8 +158,11 @@ func parseToolApproval(req hitlRequest, in *dialect.Interaction) error {
 		}
 		tools = n.Tools
 	}
-	if len(tools) == 0 {
+	switch {
+	case len(tools) == 0:
 		return unusable("tool approval has no tools")
+	case len(tools) > maxTools:
+		return unusable(fmt.Sprintf("tool approval has more than %d tools", maxTools))
 	}
 	for _, w := range tools {
 		if w.ID == "" {

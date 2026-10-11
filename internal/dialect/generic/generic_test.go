@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
@@ -135,6 +136,55 @@ func TestRejectRequiredExtensionAndRedirect(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "service") {
 				t.Fatal("credential appears in error")
+			}
+		})
+	}
+}
+
+// The generic dialect reads a pause as text and nothing else: even a task carrying kagent's
+// HITL tool-approval metadata never becomes a tool approval, because Agent Kourier would then
+// answer with a decision the backend does not understand. It is a text question, or unusable.
+func TestNeverReturnsToolApproval(t *testing.T) {
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	approval := map[string]any{
+		"type":  "tool_approval_request",
+		"hint":  "Please approve or reject the tool call add_numbers()",
+		"tools": []any{map[string]any{"id": "adk-1", "call_id": "call_1", "name": "add_numbers", "args": map[string]any{"a": 3, "b": 5}}},
+	}
+	paused := func(msg *a2a.Message) a2a.Task {
+		return a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: msg}}
+	}
+	withMeta := func(msg *a2a.Message, meta map[string]any) *a2a.Message {
+		msg.ID, msg.Metadata = "m1", meta
+		return msg
+	}
+	hitl := map[string]any{kagentv1.HITLExtension: approval}
+	for _, tc := range []struct {
+		name string
+		task a2a.Task
+		text bool // a text question; otherwise ErrUnusablePause
+	}{
+		{"plain text question", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Which service?")), nil)), true},
+		{"HITL approval metadata with the hint as text", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Please approve or reject add_numbers()")), hitl)), true},
+		{"HITL approval metadata with a data part", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewDataPart(approval)), hitl)), false},
+		{"HITL approval metadata and no parts", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent), hitl)), false},
+		{"nested HITL approval metadata", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), map[string]any{kagentv1.HITLExtension: map[string]any{
+			"type": "tool_approval_request", "tools": approval["tools"],
+			"nested": map[string]any{"subagent_name": "k8s-agent", "task_id": "sub", "tools": approval["tools"]},
+		}})), true},
+		{"no message", paused(nil), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, err := d.ParseInteraction(tc.task)
+			if !tc.text {
+				if in != nil || !errors.Is(err, dialect.ErrUnusablePause) {
+					t.Errorf("got %+v, %v; want ErrUnusablePause", in, err)
+				}
+				return
+			}
+			if err != nil || in == nil || in.Kind != dialect.AskUser || !in.TextReplies || len(in.Questions) != 1 || len(in.Tools) != 0 || in.Nested != nil {
+				t.Errorf("got %+v, %v; want a text question with no tools", in, err)
 			}
 		})
 	}

@@ -199,6 +199,57 @@ func TestParseInteractionCaps(t *testing.T) {
 	}
 }
 
+// A tool-approval pause is capped too, plain and nested, counted on the tools to decide: the
+// nested tools for a nested request, not the one outer tool. The error is fixed text, so
+// nothing the agent sent reaches a thread.
+func TestParseInteractionToolCap(t *testing.T) {
+	const hostile = "HOSTILE-TOOL-NAME"
+	tools := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = map[string]any{"id": fmt.Sprintf("t%d", i), "call_id": fmt.Sprintf("c%d", i), "name": hostile, "args": map[string]any{}}
+		}
+		return out
+	}
+	plain := func(n int) map[string]any {
+		return map[string]any{"type": "tool_approval_request", "tools": tools(n)}
+	}
+	nested := func(n int) map[string]any {
+		return withNested(adkNestedApproval(), "tools", tools(n))
+	}
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+		want    int // tools in the interaction; 0: over the cap; -1: fails the one-outer-tool check first
+	}{
+		{"20 tools", plain(20), 20},
+		{"21 tools", plain(21), 0},
+		{"20 nested tools", nested(20), 20},
+		{"21 nested tools", nested(21), 0},
+		{"21 outer tools on a nested request", merge(nested(1), "tools", tools(21)), -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, err := (&Dialect{}).ParseInteraction(pausedOn(tc.payload))
+			if tc.want > 0 {
+				if err != nil || in == nil || in.Kind != dialect.ToolApproval || len(in.Tools) != tc.want {
+					t.Errorf("got %+v, %v; want a usable pause of %d tools", in, err, tc.want)
+				}
+				return
+			}
+			reason := "tool approval has more than 20 tools"
+			if tc.want < 0 {
+				reason = "nested tool approval needs exactly one outer tool with an id"
+			}
+			if in != nil || !errors.Is(err, dialect.ErrUnusablePause) || !strings.Contains(err.Error(), reason) {
+				t.Errorf("got %+v, %v; want ErrUnusablePause mentioning %q", in, err, reason)
+			}
+			if err != nil && strings.Contains(err.Error(), hostile) {
+				t.Errorf("the error carries agent text: %v", err)
+			}
+		})
+	}
+}
+
 // checkParse parses task. A non-nil want is the usable pause it must give. Otherwise
 // reason "" means (nil, nil): no structured pause. Any other reason means an error that
 // wraps dialect.ErrUnusablePause and names that reason.
