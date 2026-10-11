@@ -12,21 +12,22 @@
 Agent Kourier is a Kubernetes-native broker that sits between the outside world and
 A2A-speaking agents. It does two things:
 
-1. Turns alerts (Alertmanager first) into agent investigations. The first source is
-   the message Alertmanager already posts to Slack, read by a `botMessage` trigger
-   (8.2). The webhook receiver (8.1) follows.
+1. Turns alerts (Alertmanager first) into agent investigations. An alert enters as the
+   message Alertmanager already posts to Slack, read by a `botMessage` trigger (8.1, 8.2).
+   Agent Kourier has no webhook endpoint of its own (D39).
 2. Lets people talk to agents from a messaging app (Slack first), including answering
    the agent's questions.
 
-The two paths meet in one place: an alert opens a thread in an investigation channel,
-the agent posts its findings there, and anyone in the channel can reply in that thread
-to continue the same agent session.
+The two paths meet in one place: an alert gets a thread under its message, the agent
+posts its findings there, and anyone in the channel can reply in that thread to continue
+the same agent session.
 
-Agent Kourier is an additional alert receiver, never a replacement. Existing alert
-notifications are untouched, so an Agent Kourier outage never loses a page.
+Agent Kourier is not an alert receiver. It reads the message Alertmanager already posts
+to Slack, so existing alert notifications are untouched and an Agent Kourier outage never
+loses a page.
 
 Agent Kourier is always on. Agents may be suspended, scaled to zero, or restarting; Agent Kourier
-holds the connection to Slack and the webhook endpoint and wakes the agent by calling it.
+holds the connection to Slack and wakes the agent by calling it.
 
 The first deployment is a four-week pilot: one team, a read-only investigation agent,
 and a separate kagent 1.0 alpha environment alongside the production kagent 0.10
@@ -68,7 +69,7 @@ Research on 2026-09-29 (sources in Appendix A) found:
 The chat half of this problem is partly solved (klaus-gateway). The unsolved part, and
 Agent Kourier's reason to exist, is the combination:
 
-1. An Alertmanager alert group becomes a Slack thread that is also a live agent session.
+1. An Alertmanager alert, as the message Alertmanager posts to Slack, gets a thread that is also a live agent session.
 2. Humans continue that session and answer agent interactions in the thread.
 3. It works with any A2A agent, not one platform's roster.
 4. It is configured declaratively and runs independently of the agents.
@@ -120,12 +121,14 @@ upstream webhook trigger stays compatible with Agent Kourier.
 
 ## 3. Goals
 
-- G1. Alertmanager webhook to agent investigation, with dedup, rate limits, and a daily
-  cap. Agent Kourier is never in the paging path.
-- G2. Slack conversations with agents through @mention, thread replies, and DMs.
+- G1. An Alertmanager alert, read from the Slack message Alertmanager already posts, to an
+  agent investigation, with a cooldown per alert key, rate limits, and a daily cap. Agent
+  Kourier is never in the paging path.
+- G2. Slack conversations with agents through @mention, thread replies, and DMs. DMs arrive with
+  Phase 4 (D40); the Slack adapter drops them today.
 - G3. One thread per alert, conversational, sharing a session with the investigation.
 - G4. Agent interactions answered from Slack: questions with choices as selects in the
-  MVP; tool approvals as buttons once a write-capable agent is bound.
+  MVP; tool approvals as buttons once a write-capable agent is bound (Phase 5, D25, D40).
 - G5. Live-updating agent output in Slack.
 - G6. Declarative configuration, suitable for GitOps: the same resource schema is
   loaded from files during the pilot and served as CRDs after hardening.
@@ -142,7 +145,8 @@ upstream webhook trigger stays compatible with Agent Kourier.
 - Replacing existing alert notifications or sitting in the paging path.
 - Tool approvals before a write-capable agent is bound (Phase 5).
 - Chat platforms other than Slack, and alert sources other than Alertmanager. The
-  interfaces allow them; v1 does not ship them.
+  chat interface and the `botMessage` trigger (8.2) allow them; v1 does not ship them.
+- A direct Alertmanager webhook receiver. Dropped for good, not deferred (D39).
 - Per-user or group-based authorization. Access is channel-scoped.
 - Per-user identity at the backend. Every turn runs as the Binding's service identity
   (D14).
@@ -160,31 +164,31 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D4 | kagent version | 1.0 alpha, A2A 1.0 (see D24 for where it runs) |
 | D5 | MVP scope | Thin slice of both ingress paths |
 | D6 | Deployment | Kubernetes-native; CRDs and controller arrive in hardening (see D30) |
-| D7 | Resource shape | Separate composable resources: `AgentBackend`, `ChatConnection`, `Binding` (`AlertSource` removed in v0.3, see D29) |
-| D8 | Alert source | Alertmanager |
-| D9 | Alert flow | Thread per alert, conversational, in a dedicated investigation channel (see D22) |
-| D10 | Alert noise | Dedup by group key plus per-binding rate limits and daily cap |
+| D7 | Resource shape | Separate composable resources: `AgentBackend`, `ChatConnection`, `Binding` (`AlertSource` removed in v0.3, see D29, which D39 supersedes) |
+| D8 | Alert source | Alertmanager. Since D39 its source is the message it posts to Slack, read by a `botMessage` trigger; the direct webhook is dropped |
+| D9 | Alert flow | Thread per alert, conversational, in a dedicated investigation channel (see D22). Since D39 the thread is under the alert's own message, in the channel Alertmanager posted it to |
+| D10 | Alert noise | Dedup by group key plus per-binding rate limits and daily cap. Since D39 the dedup is a trigger's thread key and cooldown (8.2), and the limits are a trigger's `limits` |
 | D11 | On resolve | Post a note; the session stays open for the thread's lifetime (see D28) |
 | D12 | Authorization | Channel-scoped bindings |
 | D13 | Approvals | Slack buttons, any channel member may approve. Deferred to Phase 5 (see D25). |
 | D14 | Identity | One service identity per Binding for every turn; the Slack user is carried as attribution (revised in v0.2, was per-user email) |
 | D15 | State | Pluggable store, SQLite default, Postgres for HA |
-| D16 | Slack transport | Socket Mode and Events API over HTTP, both supported |
-| D17 | Invocation | @mention, replies in Agent Kourier-owned threads, DMs |
+| D16 | Slack transport | Socket Mode and Events API over HTTP, both supported. Only Socket Mode is served today (D40); HTTP mode arrives in Phase 4 |
+| D17 | Invocation | @mention, replies in Agent Kourier-owned threads, DMs. DMs arrive in Phase 4 (D40); the Slack adapter drops them today |
 | D18 | Output | Live-updating message |
 | D19 | Language | Go |
 | D20 | Positioning | Build Agent Kourier rather than extend klaus-gateway or contribute to kagent; rationale in 2.3 (added v0.2) |
 | D21 | Reply while busy | Queue the reply and send it when the active task finishes or a pause ends (answered, timed out or cancelled); a reply never lands while an interaction is pending (added v0.2; pause rule from the WP-28 split) |
-| D22 | Alert path | Agent Kourier is an additional Alertmanager receiver (`continue: true`). Existing notifications are unchanged. Investigation threads go to a dedicated channel and link back to the alert. (v0.3) |
+| D22 | Alert path | Agent Kourier is an additional Alertmanager receiver (`continue: true`). Existing notifications are unchanged. Investigation threads go to a dedicated channel and link back to the alert. (v0.3) **Superseded by D39:** Agent Kourier is no longer an Alertmanager receiver, and the thread is under the alert's own message. What holds is that existing notifications are unchanged and Agent Kourier is never in the paging path. |
 | D23 | First agent | Read-only investigation agent: queries metrics, logs, and Kubernetes state; recommends, never changes. (v0.3) |
 | D24 | Pilot environment | Production runs kagent 0.10.x. The pilot uses a separate kagent 1.0 alpha install with a read-only agent holding production read credentials, fed by production Alertmanager. Agent Kourier moves to production kagent at 1.0 GA. (v0.3) |
-| D25 | Interactions scope | Ask-user (including nested ask-user) ships in the MVP, because an unanswered pause stalls a thread. Tool approvals move to Phase 5, with the first write-capable agent. (v0.3) |
+| D25 | Interactions scope | Ask-user (including nested ask-user) ships in the MVP, because an unanswered pause stalls a thread. Tool approvals move to Phase 5, with the first write-capable agent. (v0.3) Since D40 `toolApprovals` lands then too, and `approverGroups` if the R1 decision calls for it; until then every tool-approval pause is denied (8.4). |
 | D26 | Rate-limited alerts | One digest line per window in the investigation channel plus a metric; no per-alert message. (v0.3) |
 | D27 | Value signal | Useful and not-useful buttons on each investigation, stored per alert name and agent. (v0.3) |
 | D28 | Session lifetime | Agent Kourier keeps the thread-to-session mapping for 90 days and resumes the same `contextId`; kagent handles suspend and resume. No Agent Kourier idle timeout. (v0.3) |
-| D29 | Alert routing | Teams route alerts to their Binding through their own prometheus-operator `AlertmanagerConfig`. The webhook token is a Secret in the Binding's namespace. Cluster-level alerts go to a platform-team Binding through the central Alertmanager config. (v0.3) |
-| D30 | Config loading | Resources are Go types with kubebuilder markers from day one, loaded from YAML files in Phases 1 to 3. CRDs and the controller land in hardening. (v0.3) |
-| D31 | Spend cap | `maxRunsPerDay` per Binding, in addition to the rate limit. (v0.3) |
+| D29 | Alert routing | Teams route alerts to their Binding through their own prometheus-operator `AlertmanagerConfig`. The webhook token is a Secret in the Binding's namespace. Cluster-level alerts go to a platform-team Binding through the central Alertmanager config. (v0.3) **Superseded by D39:** there is no webhook, no webhook token and no route to Agent Kourier. An alert reaches a Binding through the channel Alertmanager's Slack receiver posts it to. |
+| D30 | Config loading | Resources are Go types with kubebuilder markers from day one, loaded from YAML files in Phases 1 to 3. CRDs and the controller land in hardening. (v0.3) Since D40 `Binding.status` and its conditions land with the controller; the file loader reports a problem as a load error (7). |
+| D31 | Spend cap | `maxRunsPerDay` per Binding, in addition to the rate limit. (v0.3) Since D39 it is a trigger's `limits.maxRunsPerDay` (8.2). |
 | D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Agent Kourier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). NetworkPolicies restrict the controller port to that front door and kagent's own components, and fence each relay to the controller (the kagent UI) to its own verifying proxy (the chart's oauth2-proxy), which must not accept the Binding's audience. The front door strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity` from every request, because kagent lets them select the acting user or session (WP-03, WP-01d; implemented and proven in the full tier by WP-01d). The cluster's CNI must enforce NetworkPolicy. (v0.3, corrected after WP-01, WP-01b, WP-03, WP-01d and their reviews) |
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 | D34 | Binding token source | For the pilot, a Binding's bearer token is read from `identity.tokenSecretRef` on every call (cached from a watch, never stored elsewhere), and rotated outside Agent Kourier before it expires (Dex: 24 h). A rejected credential (`ErrCredentialsRejected`, HTTP 401/403 at the front door) fails the turn, re-reads the Secret, is audited and raises a metric; Agent Kourier never falls back to `userId`. Minting with the client-credentials grant plugs in behind the same `TokenSource` interface once H-02 picks a provider that supports it (Q9). Secret values are held in a type whose every formatting path redacts. Secrets Agent Kourier reads are type `Opaque`; the watch keeps values for Opaque Secrets only (key names for every other type), in the namespaces Agent Kourier is granted. After the pilot, narrow to one watch per referenced Secret (a `metadata.name` field selector plus RBAC `resourceNames`). (Resolves Q10, after WP-03; narrowed by the WP-21e1 review.) |
@@ -192,24 +196,23 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the bot by ID, never by display name. Agent Kourier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial, CT-1; accepted by the owner 2026-10-04.) |
 | D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: owner, 2026-10-05, H4-5b.) |
 | D38 | Thread replies | A Binding's `chat.threadReplies` is `all` (default) or `mention`. In `mention`, only a reply that mentions Agent Kourier is a turn, and it carries the unmentioned replies since the last turn as untrusted data; a typed answer to a question that takes text replies needs no mention. (Owner, 2026-10-05; mention-only thread replies, TM-8.) |
+| D39 | Direct webhook dropped | Agent Kourier has no Alertmanager webhook endpoint and is not an Alertmanager receiver. The Binding has no `alerts` field and no `status.webhookPath`. Alerts reach a Binding only through `chat.triggers`: a `botMessage` trigger reads the message Alertmanager already posts to Slack (8.2, D36), and alert-specific behaviour lives in a preset and a prompt template, not in the API. Dropped for good, not deferred. Supersedes D22 and D29, and the webhook parts of D8, D9, D10 and D31. A Binding with an `alerts:` block no longer loads (the decoder is strict), so a deployed config drops the block first. (Owner, 2026-10-10; DA-1, DA-2.) |
+| D40 | Fields that work | The API carries only fields that work. A planned feature's fields land with the feature, so five fields are not in the types until their phase: `Binding.spec.interactions.toolApprovals` (Phase 5; a tool-approval pause is always denied) and `approverGroups` (Phase 5, if the R1 decision calls for it), `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). Phases 4 and 5 and their designs stay (7 says which field comes back with which). A config that sets any of the five no longer loads (the decoder is strict), so a deployed config drops them first. (Owner, 2026-10-10; DA-3, DA-4.) |
 
 ## 6. Architecture
 
 ### 6.1 Components
 
 ```
- Alertmanager ──webhook──┐
-                         ▼
                   ┌──────────────┐      ┌───────────────┐
- Slack ◄─────────►│   Ingress    │─────►│  Event queue  │  (durable, in store)
-  Socket Mode     │  adapters    │      └──────┬────────┘
-  or Events API   └──────────────┘             ▼
-                                        ┌───────────────┐
-                  ┌──────────────┐      │    Router     │  resolves Binding,
-                  │ Config loader│─────►│  + policy     │  dedup, rate limit,
-                  │ (file → CRD) │      └──────┬────────┘  daily cap
-                  └──────────────┘             ▼
-                                        ┌───────────────┐     A2A 1.0
+ Slack ◄─────────►│   Ingress    │─────►│    Router     │  resolves Binding,
+  Socket Mode     │  adapters    │      │  + policy     │  matches triggers,
+  or Events API   └──────────────┘      └─┬──────────▲──┘  cooldown, rate limit,
+                  ┌──────────────┐        │          │     daily cap
+                  │ Config loader│────────┼──────────┘
+                  │ (file → CRD) │        │
+                  └──────────────┘        │
+                                        ┌─▼─────────────┐     A2A 1.0
                   ┌──────────────┐      │ Session mgr   │────────────► Agent backend
                   │    Store     │◄────►│ + A2A client  │◄──stream──── (kagent 1.0, or any
                   │ SQLite / PG  │      │ + dialect     │              A2A agent)
@@ -220,12 +223,15 @@ upstream webhook trigger stays compatible with Agent Kourier.
                                         └───────────────┘
 ```
 
+Alertmanager is not a component: its alerts arrive as Slack messages and enter through the Slack ingress (8.1).
+Only Socket Mode is served today; the Events API over HTTP, which the diagram also shows, arrives with HTTP mode in Phase 4 (D40).
+
 | Component | Responsibility |
 |---|---|
 | Ingress adapters | Authenticate the inbound request, normalize it to an internal event, persist it, acknowledge fast. Slack requires a response within 3 seconds, so no agent call happens on the request path. For chat messages the persist step is the session manager's `Submit`: a local, idempotent (by messageId) write of the turn, after which the adapter acknowledges; a failed Submit is not acknowledged, so Slack redelivers (WP-29). |
-| Event queue | Durable table in the store. Gives at-least-once processing across restarts. |
-| Config loader | Validates references and builds the in-memory routing table. Phases 1 to 3: reads YAML files and reloads on change. Hardening: a controller watches CRDs and writes status conditions. Both produce the same Go types. |
-| Router | Finds the Binding for an event, then applies dedup, rate limits, and the daily cap. |
+| Event queue | Durable table in the store, with a worker, for at-least-once processing across restarts. It was built for the webhook; since D39 no ingress adapter writes to it, and a chat message persists through the session manager's `Submit` (above). It is not in the diagram for that reason. |
+| Config loader | Validates references and builds the in-memory routing table. Phases 1 to 3: reads YAML files and reloads on change. Hardening: a controller watches CRDs and writes status conditions (`Binding.status` arrives with it, D40); until then a problem in the config is a load error (7). Both produce the same Go types. |
+| Router | Finds the Binding for a message, then applies the trigger's cooldown, rate limits, and daily cap. In the code the chat intake does this for a trigger (8.2). |
 | Session manager | Maps a conversation key to an A2A `contextId`. Owns task lifecycle, stream reconnects, and the reply queue. |
 | Dialect | Per-backend differences: URL layout, agent card location, identity header, HITL payload. |
 | Renderer | Turns A2A stream events into Slack messages, edits, and interactive blocks. Posts through the outbox (8.6). |
@@ -233,18 +239,15 @@ upstream webhook trigger stays compatible with Agent Kourier.
 
 ### 6.2 Interfaces
 
-Four Go interfaces carry the extension points. Only one implementation of each ships in v1,
+Three Go interfaces carry the extension points. Only one implementation of each ships in v1,
 except Store.
 
-```go
-// AlertEvent is source-neutral: Status, Fingerprint (dedup key), StartsAt, Summary,
-// Labels, Annotations, SourceURL. Prompt templates see only this type, never the raw
-// payload, so a second source type needs no template changes.
-type AlertAdapter interface {  // Alertmanager; selected by Binding.spec.alerts.type
-    Authenticate(*http.Request) error
-    Parse(*http.Request) ([]AlertEvent, error)
-}
+An alert source is not an interface. An alert is a bot's message in the Binding's channel, and
+a `botMessage` trigger (8.2) turns it into the trigger's view (`.Channel`, `.State`, `.Key`,
+`.Fields`, `.Link`, `.Source`), the only thing a prompt template sees. A second source is a
+preset, or a trigger written in full, not code behind an interface.
 
+```go
 // chat.Platform is the one seam between Agent Kourier and a chat platform (Slack in v1; package
 // internal/chat, the adapter in internal/chat/slack, selected by ChatConnection.spec.platform).
 // Run delivers what people write (Inbound) and press (Interaction, already decoded into
@@ -383,11 +386,12 @@ referring namespace in `spec.allowedNamespaces`. In Phases 1 to 3 these resource
 loaded from YAML files with the same schema (D30).
 
 Ownership split: the platform team owns `AgentBackend` and `ChatConnection`. Application
-teams own `Binding` and the webhook token Secret next to it.
+teams own `Binding`.
 
-v0.2 had a platform-owned `AlertSource` holding the webhook token. Teams now route
-alerts through their own `AlertmanagerConfig`, which can only read Secrets in its own
-namespace, so the token moved to the Binding and `AlertSource` had nothing left to hold.
+There is no alert resource and no alert field on a Binding. An alert is a bot's message in
+the Binding's channel, and a trigger of the Binding matches it (D39, 8.2). v0.2's
+platform-owned `AlertSource` held a webhook token; it was removed in v0.3 (D29), and the
+webhook itself was dropped in D39.
 
 ```yaml
 apiVersion: agentkourier.dev/v1alpha1
@@ -400,16 +404,15 @@ spec:
                                      # identity headers are reserved; see section 7
   allowedNamespaces: ["sre", "payments"]
 ---
+apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata: { name: slack-main, namespace: agent-kourier-system }
 spec:
   platform: slack
-  mode: socket                       # socket | http
-  credentialsSecretRef: { name: slack-main }   # bot token, app token or signing secret
-  directMessages:
-    defaultBindingRef: { namespace: sre, name: sre-alerts }
+  credentialsSecretRef: { name: slack-main }   # keys botToken and appToken
   allowedNamespaces: ["sre", "payments"]
 ---
+apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: sre-alerts, namespace: sre }
 spec:
@@ -429,63 +432,48 @@ spec:
       - type: mention
       - type: botMessage             # alerts Alertmanager itself posts to this channel
         from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
-        preset: alertmanager         # fills in match, extract, thread and promptTemplate
+        preset: alertmanager         # fills in match, extract, thread, limits and promptTemplate
         # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
         match: { titleLink: 'receiver=slack-critical$' }
         exclude: { title: '^Prometheus heartbeat$' }
         thread: { cooldown: 2h }     # overrides the preset's 4h
         limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
-  alerts:
-    type: alertmanager
-    tokenSecretRef: { name: agent-kourier-webhook-token }  # same namespace as the Binding
-    promptTemplate: |                # Go template over the normalized AlertEvent
-      Investigate this alert and report likely cause and next steps.
-    rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }
-    maxRunsPerDay: 40
   interactions:
     askUser: true
-    toolApprovals: false             # Phase 5
     timeout: 30m
-    approverGroups: []               # reserved, see R1; empty = any channel member
   feedback:
     enabled: true
   session:
     threadTTL: 2160h                 # 90 days
-status:
-  conditions: []                     # Ready, BackendReachable, ChannelJoined
-  webhookPath: /hooks/alertmanager/sre/sre-alerts
 ```
 
-The matching team-owned route, next to the Binding:
+The three documents above (`AgentBackend` `kagent-pilot`, `ChatConnection` `slack-main`, `Binding`
+`sre-alerts`) load as one config with the file loader, and carry only fields that work
+(D40). These fields are designed and not in the API yet; each arrives with its phase, and a config
+that sets one is refused as an unknown field (the decoder is strict):
 
-```yaml
-apiVersion: monitoring.coreos.com/v1alpha1
-kind: AlertmanagerConfig
-metadata: { name: agent-kourier, namespace: sre }
-spec:
-  route:
-    receiver: agent-kourier
-    continue: true                   # existing notifications still fire
-    matchers: [{ name: severity, value: critical }]
-  receivers:
-    - name: agent-kourier
-      webhookConfigs:
-        - url: https://agent-kourier.example.internal/hooks/alertmanager/sre/sre-alerts
-          sendResolved: true
-          httpConfig:
-            authorization:
-              credentials: { name: agent-kourier-webhook-token, key: token }
-```
+| Field | Arrives with | What it will do | Today |
+|---|---|---|---|
+| `Binding.spec.interactions.toolApprovals` | Phase 5 | Allows a tool-approval pause to be rendered as Approve and Deny buttons (8.4) | Every tool-approval pause is denied, with a notice in the thread and a metric (8.4) |
+| `Binding.spec.interactions.approverGroups` | Phase 5, if the R1 decision calls for it | Names who may approve a write action; empty means any channel member (R1) | Any member of the Binding's channel may answer a question (8.4) |
+| `ChatConnection.spec.directMessages.defaultBindingRef` | Phase 4 | Routes a DM to the named Binding, which may be in any namespace and must use the same connection, because the platform team owns connections; DM access is gated on membership in that Binding's channel (8.2, R8) | A DM is not routed: the Slack adapter drops it, and the intake finds a Binding by channel only |
+| `ChatConnection.spec.mode` (`socket` or `http`) and the Secret key `signingSecret` | Phase 4 | HTTP mode, with signing-secret verification (10) | Only Socket Mode is served, so `credentialsSecretRef` needs the keys `botToken` and `appToken` |
+| `Binding.status.conditions` (`Ready`, `BackendReachable`, `ChannelJoined`) | Phase 4, with the controller (D30) | The controller reports each Binding's state | Nothing sets a status; a problem with the config is a load error (below) |
+
+Alertmanager needs no route to Agent Kourier: its Slack receiver posts to the Binding's
+channel as it does for people today. The `alertmanager` preset does need the receiver's title
+in the shape `FIRING (n) - <alertname>` or `RESOLVED - <alertname>` (optionally behind a
+bracketed tag), with Alertmanager's default fallback text (8.2). Alertmanager's default Slack
+title begins `[FIRING:n]` and does not match, so a receiver that keeps it needs its title
+changed, or `match` and `extract` overrides in the trigger. `agent-kourier dry-run` checks
+either against the channel's history.
 
 Rules:
 
-- **Secret keys.** A single-value Secret reference (`alerts.tokenSecretRef`,
-  `identity.tokenSecretRef`, and a header's `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
-  fixed keys: `botToken`, `appToken` (Socket Mode), and `signingSecret` (HTTP mode).
+- **Secret keys.** A single-value Secret reference (`identity.tokenSecretRef` and a header's
+  `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
+  fixed keys: `botToken` and `appToken` (Socket Mode).
 - An empty namespace in a reference means the referring resource's namespace.
-- `ChatConnection.spec.directMessages.defaultBindingRef` may name a Binding in any
-  namespace, because the platform team owns connections and DM access is gated on
-  membership in that Binding's channel (8.2). The Binding must use the same connection.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
   backend, such as agentgateway, validates the Binding's OIDC token. Static headers may
@@ -496,45 +484,62 @@ Rules:
   cannot be read, the turn fails; it never falls back to `userId` alone. A Binding with
   `tokenSecretRef` must target an OIDC-mode backend: kagent's insecure mode ignores the
   token and, with no `X-User-Id`, runs every turn as `admin@kagent.dev` (source).
-- One channel maps to at most one Binding. A second Binding for the same channel is
-  rejected with a status condition.
-- Each Binding with `alerts` gets its own webhook path. Alertmanager routing decides
-  which alerts reach which agent; Agent Kourier does no label filtering in v1.
-- prometheus-operator adds a namespace matcher to every `AlertmanagerConfig` route, so a
-  team's route only sees alerts labelled with its namespace. Cluster-level alerts reach
-  a platform-team Binding through a route in the central Alertmanager config.
-- `continue: true` is required on every route to Agent Kourier, so Agent Kourier stays out of the
-  paging path. The pilot runbook checks this before enabling a route.
+- One channel maps to at most one Binding. A second Binding for the same connection and
+  channel is a config error that names both ("`<channel>` on `ChatConnection <ns>/<name>` is
+  already bound by `Binding <ns>/<name>`"). The load fails as a whole: at start-up Agent
+  Kourier does not start, and while it runs it keeps the last good config, which the reload
+  status marks stale. A status condition on the Binding comes with the controller (D40).
+- Which alerts reach a channel is Alertmanager's routing, through its Slack receiver, and
+  not Agent Kourier's. Which of a bot's messages in that channel start an investigation is
+  the trigger's `match` and `exclude` (8.2).
+- Agent Kourier is not an Alertmanager receiver, so it is on no route and cannot be in the
+  paging path. It only reads what Alertmanager already posted to Slack (D39).
 
 ## 8. Flows
 
 ### 8.1 Alert to thread
 
-1. Alertmanager POSTs to the Binding's webhook path with a bearer token. The same alert
-   also reaches its existing receivers, because the Agent Kourier route uses `continue: true`.
-2. The adapter checks the token in constant time against the Binding's Secret, parses
-   the payload, writes the event to the queue, returns 200. Alertmanager retries only
-   on 5xx, so a 200 is returned only after the event is durable.
-3. Router computes the dedup key: `hash(binding, groupKey)`.
-   - **No open session for the key:** check the rate limit and daily cap. If allowed,
-     post the root message to the investigation channel with a link back to the alert
-     (the Alertmanager `externalURL` and the alert's `generatorURL`), create a session,
-     and send the first A2A message.
-   - **Open session, status firing:** update the root message (alert count, last seen).
-     No new agent run.
-   - **Status resolved:** post a resolved note in the thread and mark the root message.
-     The session stays open for the thread's lifetime (D28). The in-flight task is not
-     cancelled.
-4. When the rate limit or daily cap blocks an investigation, Agent Kourier posts nothing for
-   that alert. It increments a metric and, once per window, posts a single digest line:
-   "7 alerts not investigated in the last 10m (rate limit)". The alert itself already
-   reached people through its existing receiver.
-5. The A2A `messageId` is derived from the dedup key and `startsAt`, so a retried
-   delivery cannot start a second conversation.
+An alert reaches a Binding only as a message in the Binding's channel (D39). Alertmanager's
+Slack receiver posts it, as it does for people today. Agent Kourier is on no Alertmanager
+route and reads the message afterwards, so an Agent Kourier outage loses no notification.
+
+1. Alertmanager posts the alert to the Binding's channel through its existing Slack
+   receiver. That post is unchanged by Agent Kourier and reaches people whether or not
+   Agent Kourier is running.
+2. Slack delivers the message to Agent Kourier like any other message in the channel. The
+   Slack adapter hands on a bot's message only if a `botMessage` trigger of the channel's
+   Binding names the bot by ID (D36, 8.2). The intake acknowledges Slack once its local
+   writes are done; an event it fails to take is not acknowledged, and Slack redelivers it.
+3. The trigger matches the message and extracts its `state` and `key`. For a trigger with
+   `thread.by: key` (the `alertmanager` preset's key is the alert group's label values) the
+   decision table of 8.2 says what follows:
+   - **No thread for the key (`started`):** the investigation runs in a thread under the
+     alert's own message, which is the link back to the alert. The Slack permalink of that
+     message is available to the prompt template as `.Link`; the preset's template does not
+     use it.
+   - **The alert fires again while its thread is open or inside the cooldown (`repeat`):**
+     a note "Fired again at `<time>`." in that thread. No turn.
+   - **The alert resolves (`closed`):** a note "Resolved at `<time>`." in that thread, and
+     the thread is closed. No turn, and the in-flight task is not cancelled. The session
+     stays open for the thread's lifetime (D28).
+4. When a limit of the trigger stops a start, Agent Kourier posts nothing in the alert's
+   thread. It counts the start and, once per window, posts a single digest line at the top
+   level of the channel: "7 alert messages not investigated in the last 10m (rate limit)."
+   (8.2). The alert itself already reached people through Alertmanager's own post.
+5. The A2A `messageId` is the alert message's own ID, `slack:<connection>:<channel>:<ts>`,
+   so a redelivered event is the same turn and cannot start a second conversation.
 6. When the investigation's task completes, its final message carries Useful and Not
    useful buttons (8.7).
 
-Alert payload content is inserted into the prompt inside a delimited block labelled as
+There is no catch-up. An alert Alertmanager posts while Agent Kourier is down past Slack's
+retry window (8.2; Slack's exact Socket Mode retry behaviour is unverified here) gets no
+investigation until it fires again, and that repeat finds no thread and is `started`.
+
+Agent Kourier posts no root message of its own for an alert and updates none: the alert's
+message is Alertmanager's, and a repeat is a note in its thread. A person's reply in the
+thread continues the session as in any thread Agent Kourier owns (8.2).
+
+Alert message content is inserted into the prompt inside a delimited block labelled as
 untrusted data. See risk R2.
 
 ### 8.2 Chat
@@ -551,7 +556,7 @@ them (below the table).
 | Any message posted by Agent Kourier itself (including `message_changed` from its own edits) | Ignored, always: Agent Kourier would otherwise answer itself without end |
 | A message posted by any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID (D36): two bots could otherwise reply to each other without end, and bot text is untrusted (R2) |
 | An edit or deletion of any message (`message_changed`, `message_deleted`), or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages |
-| DM | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. |
+| DM (Phase 4, D40) | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. Today a DM is not routed: the Slack adapter drops it, and the intake finds a Binding by channel only |
 
 **`chat.triggers` (D36).** An empty list is `[{type: mention}]`, the table above. A list that
 names triggers is the whole list: a Binding that lists only `botMessage` triggers starts no session
@@ -574,12 +579,14 @@ from one bot, named by `from.botId` and never by display name, and then:
   an open thread that has had no message of its key for that long.
 - `promptTemplate` is a Go template over the trigger's view of the message. It is parsed and run
   once at load against a placeholder view, so a mistyped field name rejects the Binding.
-- `limits` bounds how many investigations the trigger starts (below): `rateLimit` (`maxRuns`,
-  `per`, `maxConcurrent`) and `maxRunsPerDay`, the shapes of `alerts.rateLimit` and
-  `alerts.maxRunsPerDay` in section 7. A trigger with neither a preset nor `limits` is unlimited.
+- `limits` bounds how many investigations the trigger starts (below): `rateLimit` (`maxRuns`
+  starts in any `per`, and `maxConcurrent` investigations running at once; `maxRuns` and
+  `maxConcurrent` are at least 1, and `per` is 10s to 24h) and `maxRunsPerDay` (at least 0;
+  0 is no cap). A trigger with neither a preset nor `limits` is unlimited.
 - `preset: alertmanager` fills in `match`, `extract`, `thread`, `limits` and `promptTemplate` for
-  Alertmanager's Slack receiver (title `FIRING (n) - <alertname>` or `RESOLVED - <alertname>`,
-  the default fallback with the group label values). Whatever the Binding sets overrides it per
+  Alertmanager's Slack receiver, whose title is `FIRING (n) - <alertname>` or
+  `RESOLVED - <alertname>` (Alertmanager's default title, `[FIRING:n] ...`, does not match, so
+  the receiver sets its title) and whose fallback is the default one with the group label values. Whatever the Binding sets overrides it per
   entry: a `match`, `exclude` or `extract` entry replaces the preset's entry of that name, and
   `thread.by`, `thread.cooldown`, `thread.closeWhen` and `promptTemplate` replace the preset's.
   `limits` merges by field: each of `rateLimit.maxRuns`, `rateLimit.per`, `rateLimit.maxConcurrent`
@@ -657,15 +664,15 @@ Every decision is counted as `agentkourier_trigger_decisions_total{binding,decis
 
 **Limits of a trigger (D26, D31).** `limits` holds a start to the trigger's `rateLimit.maxRuns` in
 any `rateLimit.per`, `rateLimit.maxConcurrent` investigations running at once and `maxRunsPerDay`
-in any 24 hours. The alertmanager preset's are the example of section 7: 5 in 10m, 2 at once, 40
+in any 24 hours. The alertmanager preset's are 5 in 10m, 2 at once and 40
 a day (the cooldown folds an alert's repeats into its thread already, so they bound distinct
 alerts, a storm). `per` is 10s to 24h. Only a start is limited: a repeat, a close and a note are
 never. The check is the last step before the turn is asked for, and when it stops a start the
 decision is `limited`: no turn, no note (D26), the key's reservation is given back so that it
 holds nothing, and `agentkourier_trigger_limited_total{binding,trigger,limit}` is counted, where
 `limit` is `rate`, `concurrent` or `daily` (when several are reached, the daily is reported
-first, then the rate, then the concurrency). A stopped alert reached people through its own
-receiver. Giving the reservation back, rather than holding the key with no investigation behind
+first, then the rate, then the concurrency). A stopped alert reached people through Alertmanager's
+own post. Giving the reservation back, rather than holding the key with no investigation behind
 it, means a repeat of that alert, or a re-fire after the storm, starts an investigation as soon as
 there is a place, and no thread of the key says "fired again" about an alert nobody looked at.
 
@@ -795,7 +802,7 @@ never drops the reply.
 Agent Kourier owns is a turn) or `mention`. In `mention`, a reply is a turn only if it mentions Agent Kourier, whether the thread
 was started by a mention or by a trigger. The adapter decides what a mention is: on Slack, what Slack reports as one
 (an `app_mention`), which includes Agent Kourier's user token anywhere in the text, in a quote or in code; plain text such as
-`@agent_kourier` is not one, and a mention added by an edit does not count. Direct messages need none. An unmentioned reply is
+`@agent_kourier` is not one, and a mention added by an edit does not count. Direct messages (Phase 4) will need none. An unmentioned reply is
 ignored: nothing is written, no reaction is added, and the thread's `threadTTL` is not extended. It is counted
 (`agentkourier_thread_unmentioned_total{binding}`). The one exception is a reply while the agent waits on a question that
 takes text replies (8.4): it is that question's answer, and never a turn. It
@@ -851,10 +858,10 @@ making the prefix optional breaks multi-turn context.
 
 ### 8.4 Interactions
 
-Ask-user and nested ask-user ship in the MVP. Tool approvals ship in Phase 5 (D25). Until
-then, a Binding has `toolApprovals: false`; if its agent pauses for a tool approval
-anyway, Agent Kourier denies it, says so in the thread, and raises a metric, because the
-Binding was declared to point at a read-only agent.
+Ask-user and nested ask-user ship in the MVP. Tool approvals ship in Phase 5 (D25), with
+the Binding's `toolApprovals` field, and `approverGroups` if the R1 decision calls for it (D40). Until then, if an agent
+pauses for a tool approval, Agent Kourier denies it, says so in the thread, and raises a
+metric, because the Binding is expected to point at a read-only agent.
 
 1. The task enters `input-required`. The dialect parses it into an `Interaction`. A pause
    the dialect can't use (for `kagent-v1`: a missing or malformed payload) is reported in
@@ -938,12 +945,12 @@ Binding's single service identity (`spec.identity`).
 
 ### 8.6 Delivery guarantees
 
-The event queue is at-least-once, and `chat.postMessage` has no idempotency key. A crash
+Inbound delivery is at-least-once (Slack redelivers an event that is not acknowledged), and `chat.postMessage` has no idempotency key. A crash
 between posting and recording the result would otherwise post twice. Agent Kourier prevents
 this with an outbox:
 
 1. Before posting, Agent Kourier writes an outbox row with a deterministic ID derived from
-   the event and the message's role (root, reply, digest, notice).
+   the event and the message's role (reply, digest, notice; reactions in step 4). The store still accepts a `root` role; nothing in production has ever posted one, because it was for the webhook's root message, which was never built (D39).
 2. Every post carries Slack message metadata (`event_type: agentkourier_message`, payload
    holding the outbox ID).
 3. On recovery, an outbox row with no recorded message ref is reconciled first: Agent Kourier
@@ -964,16 +971,19 @@ this with an outbox:
    Slack's stream timeout. If WP-04 finds `startStream` accepts metadata, the window
    closes and this exception is removed.
 7. **Audit writes are never dropped silently.** A record that authorizes an action is
-   written first and fails the action if the write fails: an inbound event before it is
-   queued (the webhook answers 5xx, so Alertmanager retries) and an interaction decision
-   before the answer is sent (an unaudited approval never takes effect). A record of
-   something already done (an agent call, an unusable pause and its cancel) is logged,
-   metered and returned, but never blocks the follow-up, above all the cancel. A decision
+   written first and fails the action if the write fails: an interaction decision before
+   the answer is sent (an unaudited approval never takes effect). The inbound-event record
+   (`audit.Writer.Event`) was the webhook's, written before the event was queued so that a
+   failed write answered 5xx; nothing calls it now, and a chat message or a trigger match
+   writes no audit row before it is taken. A record of something already done (an agent call,
+   an unusable pause and its cancel, a feedback vote, a refused trigger start, a stale task
+   ended at retention) is logged, metered and returned, but never blocks the follow-up, above
+   all the cancel. A decision
    records who, when and the answer's shape (counts), never its choices or free text.
 
 ### 8.7 Feedback
 
-- The final message of every investigation that a trigger or an alert started carries Useful and Not useful buttons;
+- The final message of every investigation that a trigger started carries Useful and Not useful buttons;
   the final message of an answer to a person carries them when the Binding has `feedback.enabled`. A message that ends
   on a question to a person (input-required or auth-required) carries none; the answer that follows does.
 - A vote counts only from a member of the bound channel and never from a bot, and only for the message that was
@@ -994,12 +1004,11 @@ this with an outbox:
 
 | Table | Key | Purpose |
 |---|---|---|
-| `events` | event ID | Durable inbound queue with processing status |
+| `events` | event ID | Durable inbound queue with processing status. Built for the webhook; since D39 nothing writes to it |
 | `outbox` | outbox ID | Intended Slack posts and their resulting message refs (8.6) |
 | `sessions` | conversation key | `contextId`, current task ID, binding, agent and alert name at creation, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
-| `alert_groups` | dedup key | Session link, root message ref, firing or resolved |
-| `run_counters` | binding, window | Rate-limit and daily-cap counters, and skipped counts for the digest |
-| `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours. The alert Binding's `run_counters` (WP-43) is a separate counter for the webhook |
+| `trigger_threads` | binding, key hash | The thread of each key of a Binding's chat triggers (8.2): its thread, when it opened, was last seen and closed, and when its cooldown ends. The key is stored only as a hash. Swept hourly |
+| `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours |
 | `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored normalized (invisible characters deleted) and with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays until its session is deleted (below). |
 | `reply_queue` | session, sequence | Thread replies waiting for the active task to finish. Text is cleared on delivery; a reply undelivered for 30 days whose session has no active task is dropped, text cleared. |
 | `feedback` | session, turn, Slack user | Verdict, kind (investigation or answer), alert name, agent, binding, timestamps. Kept (not deleted with its session) |
@@ -1009,7 +1018,7 @@ Retention (hourly, leader only): a session, and the rows of `reply_queue`, `inte
 that belong to it, are deleted when its last activity is older than its Binding's `threadTTL` plus 90 days, unless it holds work
 as listed in 8.2 (a task older than that horizon is ended first, counted as `stale_tasks`); only rows already settled (delivered, decided, posted or abandoned) are deleted. `feedback` is kept until the
 pilot's review (D33). The counts are in `agentkourier_retention_removed_total`. Kept with no rule yet: the outbox rows of a digest or
-a root post, and a notice posted into a thread after its session was deleted.
+a root post (a role the store accepts and nothing in production has ever posted), and a notice posted into a thread after its session was deleted.
 
 - **SQLite** (default): single replica, PersistentVolume, WAL mode.
 - **Postgres**: required for more than one replica.
@@ -1027,15 +1036,15 @@ a root post, and a notice posted into a thread after its session was deleted.
 
 | Concern | Control |
 |---|---|
-| Webhook authenticity | Alertmanager does not sign payloads. Bearer token per Binding, stored in the Binding's namespace, constant-time compare. Optional mTLS at the ingress. |
+| Bot message authenticity | A bot's message counts only through a `botMessage` trigger that names the bot by the ID Slack reports, never by display name (D36). Several senders can share one bot ID (an incoming webhook that carries Alertmanager, Grafana and a heartbeat), so `match` and `exclude` narrow what counts, and anyone who can post as that bot can start investigations, held to the trigger's limits, when it has any. The message is untrusted text (R2). |
 | Pilot environment | The kagent 1.0 alpha install holds production read credentials. Agent Kourier reaches it only through a verifying front door; NetworkPolicies restrict the controller port to that door and kagent's own components, and fence the kagent UI to its own verifying proxy (the UI's nginx relays `/mcp` and `/api` to the controller). The pilot cluster's CNI must enforce NetworkPolicy, or none of these fences exist; whose nginx forwards `/mcp` and `/api` with `Authorization` intact (D32). The agent's credentials are read-only. |
-| Paging path | Every route to Agent Kourier uses `continue: true`; Agent Kourier never replaces an existing receiver (D22). |
-| Slack authenticity | Signing secret verification with timestamp check for HTTP mode. Socket Mode uses the app token. |
+| Paging path | Agent Kourier is not an Alertmanager receiver and is on no alert route. It only reads what Alertmanager already posted to Slack, so it cannot sit in the paging path and its outage loses no page (D39, which replaces D22's `continue: true`). |
+| Slack authenticity | Socket Mode, the only mode served today, uses the app token. HTTP mode (Phase 4, D40) will verify the signing secret with a timestamp check. |
 | Backend trust | kagent's controller port (8083) trusts identity without verifying it: in insecure mode via `X-User-Id`, and in OIDC mode by decoding the JWT without checking its signature (a forged `alg: none` token was accepted in WP-01). It also takes the acting user from `X-User-Id` or `?user_id=` whenever `X-Agent-Name` is present, even with a valid token (WP-03). Agent Kourier must therefore call a verifying front door (oauth2-proxy or agentgateway) that validates the Binding's token and strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`, never 8083 directly. The chart's UI nginx already strips both in trusted-proxy mode (source). A NetworkPolicy limits 8083 to that front door and kagent's own components (UI, Substrate egress for TaskStore traffic), and a second policy fences the UI (8080) to its own oauth2-proxy, because its nginx relays `/mcp` and `/api` to 8083 with `Authorization` intact. That UI proxy must not accept the Binding's audience; otherwise the Binding token is valid through a second, wider door (WP-01b removed `oidc-extra-audience: agent-kourier-binding` for this reason). |
 | Binding identity scope | Each Binding identity gets only the permissions every member of its channel is trusted with. Separate Bindings, not one shared identity, for channels with different trust levels. |
 | Secrets | Read from Kubernetes Secrets by reference. Never written to CRD status, logs, or the audit table. An agent's tool arguments, hint and question text are normalized and redacted before a request is stored; a question's choices and a person's answer are stored as given until the interaction is cleared. Text written to logs and to the audit table is normalized and redacted the same way. |
 | Tenancy | Namespaced Bindings with explicit `allowedNamespaces` on shared resources. |
-| Spend | Per-binding rate limit, concurrency cap, and daily cap on alert runs. |
+| Spend | Per-trigger rate limit, concurrency cap, and daily cap on the investigations a trigger starts, for a trigger that has limits (8.2); one with neither a preset nor `limits` is unlimited. |
 | Audit | Every event, agent call, and approval is recorded with identity. Subject to retention (`AGENTKOURIER_AUDIT_RETENTION`; kept for ever by default). |
 
 ## 11. Operations
@@ -1052,7 +1061,9 @@ a root post, and a notice posted into a thread after its session was deleted.
   turn the session recorded for it, which ends and replaces a stream the old leader left open.
   Active/active (workers on all replicas) is deferred until one replica's throughput is not enough.
   The design is in `tasks/plans/h4-4-ha-design.md`.
-- **Observability.** Prometheus metrics: events received, deduped, rate limited; agent
+- **Observability.** Prometheus metrics: intake (`agentkourier_intake_total`), trigger
+  decisions (`agentkourier_trigger_decisions_total`) and the starts a limit stopped
+  (`agentkourier_trigger_limited_total`); agent
   call latency and errors; stream reconnects; approval outcomes; Slack API errors; and, for
   `chat.threadReplies: mention` (D38), `agentkourier_thread_unmentioned_total{binding}` (replies ignored for want
   of a mention) and `agentkourier_thread_context_total{binding,outcome}` (what a mentioned turn's thread read
@@ -1061,8 +1072,12 @@ a root post, and a notice posted into a thread after its session was deleted.
 - **Packaging.** Pilot: a single Deployment with a mounted config file and a
   PersistentVolume for SQLite. After hardening: a Helm chart containing CRDs,
   controller, RBAC, and an optional NetworkPolicy.
-- **Network path.** Production Alertmanager must reach Agent Kourier's webhook endpoint over
-  TLS. During the pilot Agent Kourier runs alongside the kagent 1.0 alpha install.
+- **Network path.** Alertmanager does not reach Agent Kourier (D39); it posts to Slack.
+  Agent Kourier serves nothing that Alertmanager or Slack calls in Socket Mode: its only
+  listener is the health and metrics port (`/healthz`, `/readyz`, `/metrics`). It calls Slack,
+  the backend, the Kubernetes API, with Postgres the database and, when an OTLP endpoint is
+  configured for tracing, the collector (OTLP over HTTP). During the pilot Agent
+  Kourier runs alongside the kagent 1.0 alpha install.
 - **Failure behavior.** If the backend is unreachable, Agent Kourier retries with backoff; the
   first failed send is retried silently (the first call of a new pod can fail where the next
   works), and if the retry fails too it posts a visible notice in the thread. After 15 minutes (`sendGiveUp`) the turn fails with
@@ -1074,16 +1089,16 @@ a root post, and a notice posted into a thread after its session was deleted.
 |---|---|---|
 | 0. Pilot environment and spike | Stand up a pinned kagent 1.0 alpha in OIDC mode behind a NetworkPolicy, with a read-only investigation agent holding production read credentials. A2A client spike: send, stream, reconnect, ask-user and nested HITL, service-token auth, busy-session rejection. Slack streaming limits. | The agent answers a question about production over A2A with a Binding service token. Q1 to Q3 answered. |
 | 1. Chat | Resource Go types with a file loader, Slack Socket Mode, @mention and thread replies, reply queue, live output, ask-user interactions, outbox, SQLite store | Two different users hold one multi-turn conversation that survives an Agent Kourier restart. An ask-user question is answered from Slack. A crash-during-post test produces no duplicate messages. |
-| 2. Alerts | Alertmanager receiver with per-Binding token, team `AlertmanagerConfig` and platform central route, normalized AlertEvent, dedup, rate limit, daily cap, digest line, thread per alert with link back, resolve handling, feedback buttons | A firing alert produces one thread; repeats update it; replies continue the session. A 50-alert burst yields capped investigations and one digest line, not 50 messages. Votes are recorded. |
+| 2. Alerts | `botMessage` triggers (8.2) that read the message Alertmanager already posts to Slack: the `alertmanager` preset, a thread under each alert with a cooldown per key and notes for repeats and resolves, rate limit, daily cap, digest line, the prompt template with the alert in the untrusted block, feedback buttons. Built as CT-1 to CT-7b; the webhook receiver was dropped (D39) | A firing alert produces one thread; repeats add a note to it; replies continue the session. A 50-alert burst yields capped investigations and one digest line, not 50 messages. Votes are recorded. |
 | 3. Pilot | Four weeks, one team plus the platform Binding. Feedback dashboard. Weekly review of not-useful investigations. | Go or no-go recorded against D33 (section 13) |
-| 4. Hardening (if go) | CRDs and controller, Postgres, HA, HTTP mode, DMs, Helm chart. Move the backend to production kagent at 1.0 GA and retire the pilot install. | Two replicas pass a failover test with no lost or duplicated events |
-| 5. Tool approvals | Bind the first write-capable agent. Decide R1 (`approverGroups`) first. Approval buttons, timeout, audit. | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
+| 4. Hardening (if go) | CRDs and controller, Postgres, HA, HTTP mode, DMs, Helm chart. These add back the fields that wait for them (D40): `ChatConnection.spec.mode` and `signingSecret`, `ChatConnection.spec.directMessages`, and `Binding.status`. Move the backend to production kagent at 1.0 GA and retire the pilot install. | Two replicas pass a failover test with no lost or duplicated events |
+| 5. Tool approvals | Bind the first write-capable agent. Decide R1 (`approverGroups`) first. Approval buttons, timeout, audit. Adds back `toolApprovals`, and `approverGroups` if the R1 decision calls for it (D40). | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
 | 6. OSS readiness | Docs, generic `a2a` dialect conformance tests, ax example (reference agent and AX kind tier shipped) | A non-kagent A2A agent works with no code changes |
 
 ### 12.1 Testing strategy
 
 Every behavior in the exit criteria is proven end to end in a local kind cluster, with
-simulated alert webhooks and a simulated Slack, before it reaches the pilot.
+simulated alert messages and a simulated Slack, before it reaches the pilot.
 
 | Tier | Runs | Contents | Purpose |
 |---|---|---|---|
@@ -1095,12 +1110,15 @@ simulated alert webhooks and a simulated Slack, before it reaches the pilot.
 
 Components:
 
-- **Simulated alerts.** Two paths. Alerts posted to Alertmanager's API
-  (`POST /api/v2/alerts`) go through real grouping, `AlertmanagerConfig` routing,
-  `continue: true`, repeats, and resolves. Fixture payloads posted directly to Agent Kourier
-  cover edge cases: bad token, malformed body, oversized body, retries.
-- **Sink receiver.** A second webhook receiver on every test route. Tests assert it still
-  receives alerts while Agent Kourier is down, which proves D22.
+- **Simulated alerts.** An alert is posted to the fake Slack's incoming-webhook endpoint as a
+  bot, the way Alertmanager's Slack receiver posts it, and goes through the whole trigger path
+  of 8.2 (S14, S15, S17). What a real Alertmanager renders from the receiver's template is
+  exercised in the sandbox (CT-7a, CT-7b), where a kind cluster's Alertmanager posts through a
+  real incoming webhook into a real channel.
+- **Sink receiver.** A second webhook receiver on every test route, built to prove D22: an
+  alert still reaches it while Agent Kourier is down. D39 removed Agent Kourier from
+  Alertmanager's routes, so there is nothing left for it to prove. The kind tiers still deploy
+  it, and their Alertmanager, as a routing check, until the owner decides to remove them.
 - **Fake Slack.** A Go server implementing the Web API methods Agent Kourier uses and a Socket
   Mode WebSocket, plus a control API for tests to act as users (mention, reply, click,
   submit) and read what Agent Kourier posted. Agent Kourier points at it through slack-go's API URL
@@ -1133,35 +1151,36 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 
 **Engineering criteria.**
 
-- Alert received to root message posted: under 5 seconds at p95.
+- ~~Alert received to root message posted: under 5 seconds at p95.~~ **Void (D39):** Agent Kourier posts no root message for an alert; the alert's message is Alertmanager's. No replacement is set yet; whether to set one (for example alert message to the first post in its thread) is the owner's call at H-31.
 - An Agent Kourier outage causes no missed alert notification.
-- No duplicate agent runs for one alert group during a firing period.
+- No duplicate agent runs for one alert key inside its cooldown (8.2).
 - No lost events across an Agent Kourier restart.
 - Adding a chat platform requires implementing `chat.Platform` in its own package,
   passing `chattest.Conformance`, and adding it to the broker's platform factory. It
   changes no package except the adapter and the broker, whose factory names it: a lint rule
   denies every other package the Slack adapter and its client library. Adding an alert
-  source requires implementing one interface and touches no router, session, or store code.
+  source that posts to a chat channel is a `botMessage` trigger in the Binding (a preset only
+  supplies its defaults) and touches no router, session, or store code.
 - Moving to a new kagent API revision changes the dialect package only.
 
 ## 14. Risks
 
 | # | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). Phase 5 cannot exit without a recorded R1 decision. `interactions.approverGroups` is reserved in the schema so it can be added without a breaking change. |
-| R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, webhook auth, rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. The message's fields have their secrets taken out before they reach the agent. |
+| R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). Phase 5 cannot exit without a recorded R1 decision. `interactions.approverGroups` is not in the schema today (D40); Phase 5 adds it with `toolApprovals` if the R1 decision calls for it, and adding an optional field breaks no config. |
+| R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, the bot-ID check (D36), rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. The message's fields have their secrets taken out before they reach the agent. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
 | R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode, and in OIDC mode `X-Agent-Name` plus `X-User-Id` or `?user_id=`, which selects the acting user even with a valid token (WP-03: oauth2-proxy forwards them). | High | Agent Kourier talks only to a verifying front door (oauth2-proxy or agentgateway) that strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`; NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. Proven for the header path (WP-01d): through the door, B's valid token with `X-Agent-Name` plus `X-User-Id` or `?user_id=`, in any case, gets `-31403` on send, stream, `GetTask`, `SubscribeToTask` and `CancelTask`, and a bogus `X-Share-Token` is dropped, while the same spoof works at 8083 (canary) and the Binding's own send, SSE and `GetTask` still work. The `X-User-Id` and runtime-identity strips are defence in depth (config and source; no observable while `X-Agent-Name` is stripped). The pilot door must use the same config (WP-05). The risk stays High: the controller is unchanged, only mitigated. |
 | R5 | No stream replay in kagent. Text produced during a disconnect may be lost from the live view. | Medium | Reconcile from `GetTask` on reconnect and render the final task output. |
 | R6 | Slack rate limits on message edits under many concurrent streams. | Medium | Per-message throttle, global limiter, fall back to `final` output under pressure. |
 | R7 | SQLite limits the default install to one replica. | Low | Documented. Postgres path for HA. |
-| R8 | DMs have no channel to scope access. | Low | Membership check against the default Binding's channel. |
+| R8 | DMs (Phase 4) have no channel to scope access. | Low | Membership check against the default Binding's channel, when DMs arrive. Today the Slack adapter drops DMs, so none reaches a Binding. |
 | R9 | kagent ships a native broker or `WebhookTrigger` (#2185, and the redesign mentioned in #2261), overlapping Agent Kourier. | Medium | No maintainer progress on #2185 yet. Watch both. If one lands, Agent Kourier keeps the alert-to-thread mapping and backend neutrality, and consumes kagent-triggered sessions instead of starting them. |
 | R10 | klaus-gateway generalizes and adds alert ingress, overlapping Agent Kourier. | Low | Track it. Agent Kourier's differentiators are alert-to-session threads and backend neutrality. |
 | R11 | **The pilot install holds production read credentials** on alpha software, and kagent's TaskStore trusts an unsigned identity header from agent actors (kagent #1660), so a compromised actor can act as another identity inside kagent. | High | Read-only credentials only; the verifying front door; NetworkPolicy; a pinned alpha; nothing in the pilot environment that isn't needed; torn down at the end of the pilot or at 1.0 GA. Revisit if kagent fixes #1660. |
 | R12 | **Sparse or biased feedback.** Few votes, or votes only on bad answers, skew the go/no-go. | Medium | Minimum of 20 rated investigations. Weekly review. Engagement is measured alongside ratings. |
 | R13 | **kagent 1.0 GA slips or changes shape**, stranding Agent Kourier on an alpha. | Medium | The pilot is explicitly disposable. Changes stay in the dialect. The go/no-go is about value, independent of GA timing. |
-| R14 | A team forgets `continue: true`, putting Agent Kourier in its paging path. | Medium | Runbook check before enabling a route during the pilot. In hardening, the controller reads `AlertmanagerConfig` resources that target Agent Kourier's webhook URL and sets a warning condition on the Binding when a route lacks `continue: true`. |
+| R14 | ~~A team forgets `continue: true`, putting Agent Kourier in its paging path.~~ **Void (D39):** Agent Kourier is no longer an Alertmanager receiver, so no route to it exists. | Dropped | Nothing to check. Agent Kourier only reads what Alertmanager already posted to Slack, so it cannot sit in the paging path. |
 | R17 | **A malformed HITL reply wedges the kagent task** in `WORKING` (WP-02: an empty answer list or a wrong request id; still `WORKING` after 20 s, and every send to the session, including a new turn, gets `-32004`). `CancelTask` recovers it; other recovery is untested. After an Agent Kourier crash, a wedged task is indistinguishable from a long-running one. | Medium | The dialect validates answers before sending (6.3); on `-32603` from an answer, Agent Kourier cancels the task and tells the thread; a maximum WORKING age (`maxWorkingAge`, default 1 h, measured on Agent Kourier's clock from the later of the task's status timestamp and the last new progress Agent Kourier saw for it (new text, a new tool call or a state change; a replayed snapshot is not progress), so recent progress never looks wedged; with no timestamp, from that last progress or the stream loss). Agent Kourier's record of recent progress is in memory, so after a restart the age falls back to the status timestamp: a healthy task that has streamed for longer than maxWorkingAge since entering WORKING is cancelled at recovery (accepted limit; a restart-surviving progress signal such as kagent's per-artifact `timeline-position` is on the backlog) cancels a WORKING task as wedged at restart reconciliation, after a lost stream and when an answer gets `-32004`; it never cuts a live stream, which the inactivity watchdog covers. Consider an upstream issue. |
 | R18 | **kagent has two agent runtimes that validate differently.** WP-02 measured the Go ADK runtime only. From alpha5 source (not measured), the harness runtime (`go/harness/runtime/a2a/executor.go`, `validateRequest`) refuses a plain user message unless it has exactly one text part. | Medium | Attribution goes into the first text part (8.5, WP-25c). The dialect's wire-shape tests pin the single-text-part shape. Measure against the harness runtime before any pilot agent uses it. |
 | R19 | **kagent 1.0 cannot run on a cluster that does not serve the pod-certificate APIs.** kagent 1.0.0-alpha5 runs every session as an Agent Substrate actor, and Substrate 0.3.0-alpha1's chart requires the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` feature gates and the `certificates.k8s.io/v1beta1` API. Through Kubernetes 1.36 these are beta and off by default. Kubernetes 1.37 makes them GA in `certificates.k8s.io/v1` with the gates locked on (KEP-4317, KEP-3257), but Substrate 0.3.0-alpha1 calls ClusterTrustBundles through `v1beta1` only, so a 1.37 cluster still needs `--runtime-config=certificates.k8s.io/v1beta1=true`. Managed EKS sets neither feature gates nor runtime config; there the chart installs cleanly and every Substrate workload fails to start (kagent #3071). Found 2026-10-07 on a 1.35 cluster with the gates off. The kind tiers turn them on (`hack/kind/full/kind-config.yaml`), so no tier showed it. | High | Check the target cluster before any kagent 1.0 install (WP-50b): `kubectl api-resources --api-group=certificates.k8s.io` must list `clustertrustbundles` and `podcertificaterequests`, and `kubectl api-versions` must list `certificates.k8s.io/v1beta1`. Where they cannot be enabled (EKS through 1.36 at least), the pilot needs another cluster or a backend without Substrate through the generic `a2a` dialect (Q8). Unverified: whether Substrate 0.4.0-alpha1, kagent main's pin, moved to the `v1` APIs. |
@@ -1178,8 +1197,8 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | Q4 | Final API group name ~~and project license~~ for the OSS release. **License resolved (owner, 2026-10-05):** Apache-2.0 (`LICENSE`). | Phase 6 |
 | Q6 | Is one Binding per channel too restrictive for teams wanting several agents in one channel? | Pilot review |
 | Q7 | ~~Which team runs the pilot, and which alerts (by name and severity) are routed first?~~ **Resolved (owner, 2026-10-05):** the production `#alerts-critical` channel; anyone in it rates; the owner reviews weekly for four weeks; first alerts `KubePodCrashLooping`, `KubePodNotReady`, `KubeContainerWaiting`, `TargetDown`, `KubeContainerOOMKilled` (`tasks/plans/pilot-production-alerts.md`, decisions 3 and 4). | Before Phase 2 |
-| Q8 | Where does the pilot kagent install run, and how does production Alertmanager reach Agent Kourier over TLS? The cluster must serve the pod-certificate APIs that Substrate needs (R19). | Phase 0 |
-| Q10 | How does Agent Kourier obtain and refresh the Binding's OIDC bearer token? A token stored in a Secret expires (Dex: 24 h) and needs external rotation; alternatively Agent Kourier holds client credentials and mints tokens itself (client-credentials grant; see Q9). Also: Agent Kourier needs Secret VALUES (Slack tokens, webhook tokens, header values, identity credentials), but the WP-21d resolver returns key names only by design. | **Resolved by D34.** |
+| Q8 | Where does the pilot kagent install run, ~~and how does production Alertmanager reach Agent Kourier over TLS~~ (void, D39: Alertmanager posts to Slack, not to Agent Kourier)? The cluster must serve the pod-certificate APIs that Substrate needs (R19). | Phase 0 |
+| Q10 | How does Agent Kourier obtain and refresh the Binding's OIDC bearer token? A token stored in a Secret expires (Dex: 24 h) and needs external rotation; alternatively Agent Kourier holds client credentials and mints tokens itself (client-credentials grant; see Q9). Also: Agent Kourier needs Secret VALUES (Slack tokens, header values, identity credentials, and, before D39 dropped the webhook, webhook tokens), but the WP-21d resolver returns key names only by design. | **Resolved by D34.** |
 | Q9 | Which OIDC provider issues Binding service tokens? It must support the client-credentials grant (Dex does not); otherwise a static service user with the password grant, which is weaker. Client-credentials tokens often lack an `email` claim. The front door accepts one with no configuration change (`oidc-email-claim` is not needed), and kagent then owns sessions by `sub` (WP-03, measured). From source only, for H-02 to check against the real provider: the token must be a signed JWT (an opaque access token fails at the door and at kagent); `aud` must contain the door's client ID or an `--oidc-extra-audience` (`--oidc-audience-claim` selects `azp` if the provider puts the client there); `email_verified: false` is refused unless `--insecure-oidc-allow-unverified-email` is set; the issuer must match discovery. | Phase 0 (H-02) |
 
 Q5 (queue rate-limited alerts) was resolved in v0.3 by D26: digest line, no queue.
@@ -1256,3 +1275,48 @@ Four rounds of adversarial questions against v0.2. Findings and resolutions:
 | Pilot install would hold production credentials with kagent's default no-auth mode | OIDC mode plus NetworkPolicy (D32; corrected after WP-01 to require a verifying front door) |
 | At-least-once queue plus non-idempotent Slack posts could duplicate messages | Outbox with Slack message metadata reconciliation (8.6) |
 | Team `AlertmanagerConfig` routes only see their own namespace's alerts | Platform Binding with a central route for cluster-level alerts (7) |
+
+### Direct webhook dropped (2026-10-10)
+
+The owner decided that the Binding's `alerts` field, a per-Binding Alertmanager webhook, is too tied to
+Alertmanager. The field is removed, and the direct path is dropped for good, not deferred (D39). Alerts reach a
+Binding only through `chat.triggers`, where a `botMessage` trigger reads the message Alertmanager already posts
+to Slack (D36, 8.2); alert-specific behaviour lives in a preset and a prompt template. Nothing was built of the
+receiver itself: the Alertmanager adapter and the webhook server (WP-40, WP-41) were never dispatched. What changed in
+this document:
+
+| Earlier text | Now |
+|---|---|
+| D22 (additional receiver, `continue: true`), D29 (team `AlertmanagerConfig`, webhook token), and the webhook parts of D8, D9, D10 and D31 | Marked superseded by D39; the rows stay as history |
+| Section 7: the `alerts` block, `status.webhookPath`, the `AlertmanagerConfig` example, the webhook-path, namespace-matcher and `continue: true` rules, the webhook token Secret | Removed. A rule says that Alertmanager's routing decides what reaches a channel and the trigger's `match` and `exclude` decide what starts an investigation |
+| 6.1 diagram: the Alertmanager webhook arrow and the Event queue box; the Router, its policy and the Config loader | Redrawn. The Alertmanager arrow and the Event queue box are gone, Ingress feeds the Router directly, and the Router matches triggers. The Event queue row of the components table says why it is not drawn |
+| 6.2 `AlertAdapter`, `AlertEvent`, "Four Go interfaces" | Removed; three interfaces. The trigger's view of a message (8.2) is what a prompt template sees |
+| 8.1 (webhook flow: bearer token, `groupKey` dedup, root message update, `messageId` from `startsAt`) | Rewritten as the Slack-sourced flow: a thread under the alert's own message, a note for a repeat and for a resolve, the limits and digest of 8.2, `messageId` from the alert message's ID |
+| 8.2: limits defined as "the shapes of `alerts.rateLimit` and `alerts.maxRunsPerDay`" | Defined where they are used |
+| Section 9: `alert_groups`, `run_counters`, and the webhook counter in `trigger_runs` | Neither table was built; `trigger_threads` (migration 0013) is listed. `events` is marked as unwritten |
+| Section 10: webhook authenticity, and the paging path as `continue: true` on every route | A bot-message authenticity row; the paging path holds because Agent Kourier reads Slack and is on no Alertmanager route |
+| R14 (a team forgets `continue: true`), the 5-second root-message criterion, Q8's TLS path for Alertmanager | Void |
+| Phase 2 (section 12), simulated alert webhooks, and the sink receiver of 12.1 | The Phase 2 row is what CT-1 to CT-7b built; the simulated alert is a bot message posted to the fake Slack; the sink has nothing left to prove |
+
+The rows of the v0.1 and v0.2 tables above are not edited; where they name the webhook, D22 or D29, this entry
+supersedes them.
+
+### Fields that work (2026-10-10)
+
+The owner decided that the API carries only fields that work, and that a planned feature's fields land with the
+feature (D40). Five fields were in the types and did nothing, or did the wrong thing, so they are removed until
+their phase: `Binding.spec.interactions.approverGroups` (validated, never read), `Binding.spec.interactions.toolApprovals`
+(`false` denied a tool-approval pause; `true` left it unanswered, with an error in the log, because nothing renders a tool approval until Phase 5), `ChatConnection.spec.directMessages` with `defaultBindingRef`
+(a direct message is dropped by the Slack adapter and the intake routes by channel only), `ChatConnection.spec.mode`
+with the `signingSecret` Secret key (only Socket Mode is served), and `Binding.status` (never set). Phases 4 and 5
+and their designs are unchanged. What changed in this document:
+
+| Earlier text | Now |
+|---|---|
+| Section 7: the `mode`, `directMessages`, `toolApprovals`, `approverGroups` and `status` lines of the examples, and the rule for `directMessages.defaultBindingRef` | Removed from the examples and the rules. One table after the examples says which field arrives with which phase and what happens today |
+| Section 7: `signingSecret` as a key of `credentialsSecretRef`; "a second Binding for the same channel is rejected with a status condition" | The keys are `botToken` and `appToken`. A second Binding is a load error that names both Bindings, because the file loader has no status (D30) |
+| G2, D16, D17, D25, D30 | A note on each that the DM, HTTP mode, tool-approval and status parts arrive in their phase (D40). The decisions are not rewritten |
+| 6.1 and the config loader row; 8.2 DM row and the mention rule of D38; 8.4 opening; section 10 Slack authenticity; section 12 Phase 4 and 5 rows; R1 and R8 | Each keeps its design and says what happens today: DMs dropped, only Socket Mode served, every tool-approval pause denied, no status. The Phase 4 and 5 rows name the fields they add back |
+
+The rows of the v0.1 and v0.2 tables above are not edited; where they name these fields, this entry and D40 qualify
+them.
