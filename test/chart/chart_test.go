@@ -403,8 +403,8 @@ func TestDatabaseFileIsInTheVolume(t *testing.T) {
 		}
 		return ""
 	}
-	if got := dbPath(); got != "/data/courier.db" {
-		t.Errorf("AGENTKOURIER_DB_PATH %q; want /data/courier.db by default", got)
+	if got := dbPath(); got != "/data/agent-kourier.db" {
+		t.Errorf("AGENTKOURIER_DB_PATH %q; want /data/agent-kourier.db by default", got)
 	}
 	if got := dbPath("--set", "persistence.dbFile=other.db"); got != "/data/other.db" {
 		t.Errorf("AGENTKOURIER_DB_PATH %q; want /data/other.db with persistence.dbFile set", got)
@@ -483,7 +483,7 @@ func TestPostgresStore(t *testing.T) {
 
 	// SQLite: the same pod as before, which now says so, and no Role in a namespace the config does not name.
 	d, objs, env = deployment("--set-json", bindingInSRE)
-	if env["AGENTKOURIER_STORE"] != "sqlite" || env["AGENTKOURIER_DB_PATH"] != "/data/courier.db" || env["AGENTKOURIER_POSTGRES_DSN_SECRET"] != "" {
+	if env["AGENTKOURIER_STORE"] != "sqlite" || env["AGENTKOURIER_DB_PATH"] != "/data/agent-kourier.db" || env["AGENTKOURIER_POSTGRES_DSN_SECRET"] != "" {
 		t.Errorf("env %v with SQLite; want AGENTKOURIER_STORE sqlite, the database file and no DSN Secret", env)
 	}
 	if !slices.Contains(kinds(objs), "PersistentVolumeClaim/agent-kourier-system/agent-kourier-data") || slices.Contains(kinds(objs), "Role/agent-kourier-system/agent-kourier-secrets") {
@@ -923,13 +923,13 @@ var tierCases = []struct {
 	slackAPIOverride      bool     // the testhooks image's AGENTKOURIER_SLACK_API_URL: the fake Slack
 	objects               []string // Kind/namespace/name of every object
 }{
-	{"fast", "fast", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/courier.db", true, []string{
+	{"fast", "fast", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/agent-kourier.db", true, []string{
 		"Deployment/agent-kourier/agent-kourier", "PersistentVolumeClaim/agent-kourier/agent-kourier-data", "Role/agent-kourier/agent-kourier-secrets",
 		"RoleBinding/agent-kourier/agent-kourier-secrets", "Service/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier"}},
 	{"ax", "ax", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/agent-kourier-ax.db", true, []string{
 		"Deployment/agent-kourier/agent-kourier", "PersistentVolumeClaim/agent-kourier/agent-kourier-data", "Role/agent-kourier/agent-kourier-secrets",
 		"RoleBinding/agent-kourier/agent-kourier-secrets", "Service/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier"}},
-	{"sandbox", "sandbox", "agent-kourier-sandbox", "agent-kourier:dev", "Never", "agent-kourier-sandbox-config", "agent-kourier-sandbox-data", "/data/courier.db", false, []string{
+	{"sandbox", "sandbox", "agent-kourier-sandbox", "agent-kourier:dev", "Never", "agent-kourier-sandbox-config", "agent-kourier-sandbox-data", "/data/agent-kourier.db", false, []string{
 		"CronJob/agent-kourier/agent-kourier-sandbox-token-refresh", "Deployment/agent-kourier/agent-kourier-sandbox", "PersistentVolumeClaim/agent-kourier/agent-kourier-sandbox-data",
 		"Role/agent-kourier/agent-kourier-sandbox-secrets", "Role/agent-kourier/agent-kourier-sandbox-token-refresh", "RoleBinding/agent-kourier/agent-kourier-sandbox-secrets",
 		"RoleBinding/agent-kourier/agent-kourier-sandbox-token-refresh", "ServiceAccount/agent-kourier/agent-kourier-sandbox", "ServiceAccount/agent-kourier/agent-kourier-sandbox-token-refresh"}},

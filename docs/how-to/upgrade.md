@@ -42,9 +42,18 @@ The chart was called `courier` before the project became Agent Kourier. A releas
 new Deployment and, with SQLite, a new and empty `<fullname>-data` claim beside the old one.
 <!-- name-check: on -->
 
-The old claim survives, because `persistence.retainOnUninstall` defaults to true, and the database file in it keeps
-its old name (the default `persistence.dbFile`), so there is nothing to convert. To carry the data over, upgrade with
+The old claim survives, because `persistence.retainOnUninstall` defaults to true. To carry the data over, upgrade with
 `persistence.existingClaim: <old release>-data`, or keep the old names with `fullnameOverride: <old release>`.
 
-With Postgres nothing is stored in the chart's volume: a migration adds the renamed purge functions beside the old
-ones, and a replica from before the rename keeps working until the rollout finishes.
+**The SQLite file.** The default `persistence.dbFile` is now `agent-kourier.db`. A database from before the rename is in
+`courier.db`, whatever the release is called: set `persistence.dbFile: courier.db` to keep it, or Agent Kourier starts
+with an empty database. There is no fallback in the code.
+
+**Postgres.** Nothing is stored in the chart's volume: migration 0024 drops the old purge function and setting, and
+renames the stored system user and the auto-deny decider. The Deployment rolls with `maxSurge: 1` and
+`maxUnavailable: 0` at any replica count, so the new pod runs 0024 while the old leader is still working, and an
+alert's turn that the old leader enqueues or runs until it stops is read by the new version as a person's turn. Scaling to one replica
+does not avoid that; stopping every old pod first does. Upgrade once with `replicaCount: 0` (the kill switch), wait
+until the old pods have terminated, then upgrade again with `replicaCount` restored. Agent Kourier is down in between;
+if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to zero (see the chart's
+values).

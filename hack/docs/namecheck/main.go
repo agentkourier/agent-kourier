@@ -1,7 +1,7 @@
 // Command namecheck fails when the documentation site misspells the product's name. The name is always "Agent
 // Kourier": never "Kourier" alone (Knative's net-kourier) and never "courier" (courier.com, and the project's old
-// name). The identifiers agent-kourier and agentkourier are fine. The exceptions: the SQLite file courier.db, which kept
-// its name across the rename, the Postgres function courier_audit_purge, which stays for the release before it, and
+// name). The identifiers agent-kourier and agentkourier are fine. The exceptions: the SQLite file courier.db, which an
+// install from before the rename keeps, the Postgres function courier_audit_purge, which migration 0024 dropped, and
 // lines between <!-- name-check: off --> and <!-- name-check: on -->, for a
 // historical note such as an upgrade from the old chart name.
 //

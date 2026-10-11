@@ -96,7 +96,7 @@ func TestAuditIsAppendOnly(t *testing.T) {
 	}
 }
 
-// PurgeAudit deletes in batches through agentkourier_audit_purge(cutoff, batch) (migration 0023, from 0020's courier_audit_purge), and like the
+// PurgeAudit deletes in batches through agentkourier_audit_purge(cutoff, batch) (migration 0023, which replaced 0020's courier_audit_purge), and like the
 // unbatched function leaves the table as strict as it was: the setting that lets the trigger through is gone
 // when the call returns, and the call gives no way to change an entry.
 func TestAuditPurgeInBatchesLeavesTheLogAppendOnly(t *testing.T) {

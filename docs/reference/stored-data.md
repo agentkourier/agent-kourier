@@ -316,7 +316,7 @@ that are cleared count as `cleared_interactions`, and deleted sessions as above)
 
 How each store lets the purge through the trigger:
 
-- **Postgres**: `agentkourier_audit_purge(cutoff, batch)` (migration 0023, beside its `agentkourier_audit_purge(cutoff)`; `courier_audit_purge` of 0006 and 0020 stays for the release before the rename) sets
+- **Postgres**: `agentkourier_audit_purge(cutoff, batch)` (migration 0023, beside its `agentkourier_audit_purge(cutoff)`; migration 0024 dropped the `courier_audit_purge` of 0006 and 0020) sets
   `agentkourier.audit_retention` for its own transaction, deletes the oldest `batch` entries before the cutoff, and switches the
   setting off before it returns. Only the leader purges (every write checks the epoch).
 - **SQLite**: the delete trigger permits a `DELETE` only while the table `audit_purge` holds a cutoff later than the entry

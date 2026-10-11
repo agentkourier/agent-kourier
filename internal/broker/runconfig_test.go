@@ -20,7 +20,7 @@ func valid(t *testing.T) RunConfig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/courier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
+	return RunConfig{ConfigDir: "/etc/agent-kourier", DBPath: "/data/agent-kourier.db", Listener: ln, Logger: slog.New(slog.DiscardHandler)}
 }
 
 // No build can start without the renderer or the interactions, or with different ones, and none can

@@ -146,7 +146,7 @@ SQLite lives here (store.type sqlite; with postgres none of this is used or rend
 | Key | Default | Description |
 |---|---|---|
 | `persistence.existingClaim` | `""` | Use a claim you manage instead of creating one. |
-| `persistence.dbFile` | `courier.db` | The SQLite file in the volume (AGENTKOURIER_DB_PATH is /data/&lt;dbFile&gt;). Change it to start a fresh database beside an old one. The default predates the project's rename and is kept so that the file in an existing volume keeps its name (upgrading across the rename: docs/how-to/upgrade.md, "Upgrade across the rename"). |
+| `persistence.dbFile` | `agent-kourier.db` | The SQLite file in the volume (AGENTKOURIER_DB_PATH is /data/&lt;dbFile&gt;). Change it to start a fresh database beside an old one; an install from before the rename sets it to courier.db to keep its database (docs/how-to/upgrade.md, "Upgrade across the rename"). |
 | `persistence.size` | `1Gi` |  |
 | `persistence.storageClassName` | `""` | Empty is the cluster's default class; "-" is an explicitly empty one. |
 | `persistence.accessModes` | `[ReadWriteOnce]` |  |

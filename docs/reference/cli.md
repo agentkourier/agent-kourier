@@ -12,7 +12,7 @@ The broker is configured by environment variables, which the Helm chart sets fro
 |---|---|---|
 | `AGENTKOURIER_CONFIG_DIR` | `/etc/agent-kourier` | The directory of resource files (`*.yaml`). |
 | `AGENTKOURIER_STORE` | `sqlite` | `sqlite` (one replica) or `postgres`. |
-| `AGENTKOURIER_DB_PATH` | `/data/courier.db` | The SQLite file, on the volume. The name predates the rename and is kept so an existing volume's file keeps its name. |
+| `AGENTKOURIER_DB_PATH` | `/data/agent-kourier.db` | The SQLite file, on the volume. A database from before the rename is in `courier.db`; point this at it to keep it (see [Upgrade](../how-to/upgrade.md#upgrade-across-the-rename)). |
 | `AGENTKOURIER_POSTGRES_DSN_SECRET` | | With `postgres`: where the DSN is, as `namespace/name/key` of a Secret, read through the Secret caches. Its namespace needs the same list and watch Role as the config's. |
 | `AGENTKOURIER_POSTGRES_TIMEOUTS` | `agent-kourier` | With `postgres`: `agent-kourier` sets the idle-in-transaction and statement timeouts on each connection; `role` leaves them to the database role, for a pooler that refuses startup parameters. |
 | `AGENTKOURIER_LEASE_NAMESPACE` | | With `postgres`, required: the namespace of the leader-election Lease. |

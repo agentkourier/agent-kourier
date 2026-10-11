@@ -258,7 +258,16 @@ The chart was `courier` before the project became Agent Kourier. A release insta
 (`helm install courier ...`) gets the fullname `courier-agent-kourier` from this chart, so an upgrade makes a new
 Deployment and, with `store.type: sqlite`, a new and empty `<fullname>-data` claim beside the old one. The old claim
 survives, because `persistence.retainOnUninstall` defaults to true, and the database file in it keeps its old name
-(`courier.db`, the default `persistence.dbFile`), so there is nothing to convert. To carry the data over, upgrade with
+(`courier.db`). The default `persistence.dbFile` is now `agent-kourier.db`, so set `persistence.dbFile: courier.db` to keep an
+existing database; there is no fallback in the code. To carry the data over, upgrade with
 `persistence.existingClaim: <old release>-data`, or keep the old names with `fullnameOverride: <old release>`.
-With `store.type: postgres` nothing is stored in the chart's volume: migration 0023 adds the renamed purge functions
-beside the old ones, and a replica from before the rename keeps working until the rollout finishes.
+With `store.type: postgres` nothing is stored in the chart's volume: migration 0024 drops the purge function and setting
+that carried the old name, and renames the stored system user and the auto-deny decider. The rollout is the one thing to
+watch. The Postgres Deployment rolls with `maxSurge: 1` and `maxUnavailable: 0`, at any replica count, so the new pod starts
+and runs 0024 while the old leader is still working. Until the old pods are gone, a turn the old leader enqueues for an
+alert, or runs (it records the turn's user on the session as the task starts), is stored under the old system user, which
+this version then reads as a person's turn. Scaling to one replica does not close that window; only stopping every old
+pod first does. Upgrade once with `replicaCount: 0` (the kill switch), then again with `replicaCount` restored. Agent
+Kourier is down between the two; if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to
+zero (see values.yaml).
+`store.type: sqlite` uses the Recreate strategy and is not affected.

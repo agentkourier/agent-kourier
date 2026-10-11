@@ -52,8 +52,8 @@ func (s *adapter) ListAudit(ctx context.Context, since time.Time, afterSeq int64
 	return out, nil
 }
 
-// PurgeAudit implements store.AuditRetention through agentkourier_audit_purge (migration 0023 adds it beside the
-// courier_audit_purge of 0006 and 0020, which stays until a later migration drops it), which sets the setting that
+// PurgeAudit implements store.AuditRetention through agentkourier_audit_purge (migration 0023 added it, and 0024 dropped
+// the courier_audit_purge of 0006 and 0020 that it replaced), which sets the setting that
 // lets the audit table's delete trigger through, local to its transaction. It is a write like any other: the epoch
 // is checked first, so only the leader purges.
 func (s *adapter) PurgeAudit(ctx context.Context, before time.Time, limit int) (int, error) {

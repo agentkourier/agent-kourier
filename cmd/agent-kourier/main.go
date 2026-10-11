@@ -5,7 +5,7 @@
 // reads Slack with a bot token from a file or SLACK_BOT_TOKEN:
 //
 //	AGENTKOURIER_CONFIG_DIR     the resource files (default /etc/agent-kourier)
-//	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/courier.db)
+//	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/agent-kourier.db)
 //	AGENTKOURIER_STORE          sqlite (the default, one replica) or postgres
 //	AGENTKOURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
 //	                       Secret caches (its namespace needs the list and watch Role the config's do)
@@ -106,7 +106,7 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		}
 		return def
 	}
-	c := envConfig{configDir: get("AGENTKOURIER_CONFIG_DIR", "/etc/agent-kourier"), dbPath: get("AGENTKOURIER_DB_PATH", "/data/courier.db"), listen: get("AGENTKOURIER_LISTEN", ":8080")}
+	c := envConfig{configDir: get("AGENTKOURIER_CONFIG_DIR", "/etc/agent-kourier"), dbPath: get("AGENTKOURIER_DB_PATH", "/data/agent-kourier.db"), listen: get("AGENTKOURIER_LISTEN", ":8080")}
 	bad := func(key string, want string, err error) error {
 		return fmt.Errorf("%w: %s is %q, want %s: %w", broker.ErrWiring, key, getenv(key), want, err)
 	}

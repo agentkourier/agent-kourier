@@ -70,7 +70,7 @@ func TestEnvConfigDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.configDir != "/etc/agent-kourier" || d.dbPath != "/data/courier.db" || d.listen != ":8080" || d.syncTimeout != 30*time.Second || d.klogV != 0 || d.logLevel != slog.LevelInfo {
+	if d.configDir != "/etc/agent-kourier" || d.dbPath != "/data/agent-kourier.db" || d.listen != ":8080" || d.syncTimeout != 30*time.Second || d.klogV != 0 || d.logLevel != slog.LevelInfo {
 		t.Errorf("defaults = %+v", d)
 	}
 	o, err := loadEnv(env{
