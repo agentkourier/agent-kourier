@@ -23,7 +23,7 @@ func TestAlertmanagerPresetHasLimits(t *testing.T) {
 		t.Errorf("preset limits = %+v, want %+v", got, want)
 	}
 	b := load[Binding](t, "binding-minimal.yaml")
-	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}, Preset: PresetAlertmanager}}
+	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatalf("a bare alertmanager trigger is invalid: %v", err)
@@ -48,7 +48,7 @@ func TestPresetLimitsMergeFieldByField(t *testing.T) {
 		{"a daily cap of 0 is no cap, not unset", TriggerLimits{MaxRunsPerDay: i32(0)}, TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(0)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}, Preset: PresetAlertmanager, Limits: tt.set}
+			tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager, Limits: tt.set}
 			tr.applyPreset()
 			if !reflect.DeepEqual(tr.Limits, tt.want) {
 				t.Errorf("limits = %+v (rate %+v), want %+v (rate %+v)", tr.Limits, tr.Limits.RateLimit, tt.want, tt.want.RateLimit)
@@ -73,7 +73,7 @@ func TestPresetLimitsAreCopies(t *testing.T) {
 	}
 
 	set := TriggerLimits{RateLimit: rate(3, 0, 0), MaxRunsPerDay: i32(7)}
-	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}, Preset: PresetAlertmanager, Limits: set}
+	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager, Limits: set}
 	tr.applyPreset()
 	tr.Limits.RateLimit.MaxRuns, *tr.Limits.MaxRunsPerDay = 99, 99
 	if set.RateLimit.MaxRuns != 3 || *set.MaxRunsPerDay != 7 {
@@ -83,7 +83,7 @@ func TestPresetLimitsAreCopies(t *testing.T) {
 
 // A trigger with no preset takes no default: it is unlimited unless the Binding limits it.
 func TestNoPresetNoLimits(t *testing.T) {
-	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}}
+	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}}
 	tr.applyPreset()
 	if !tr.Limits.IsZero() {
 		t.Errorf("a trigger with no preset got limits %+v", tr.Limits)

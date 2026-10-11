@@ -1,8 +1,8 @@
 # The Alertmanager configuration of the sandbox's alert source (CT-7a): what the full tier's Alertmanager (monitoring/agent-kourier,
 # run by prometheus-operator) is given by `make sandbox-up`, as the Secret alertmanager-kind-config (the Alertmanager's
-# configSecret, overlay.yaml). It posts alerts to the owner's real Slack alert channel through a copy of the production
-# receiver `slack-critical` (cluster-apps, templates/prometheus-operator.yaml), so Agent Kourier's chat trigger sees the
-# messages that the real template makes. test/kindmanifests pins the copy: the same slack_configs as the owner's, except
+# configSecret, overlay.yaml). It posts alerts to your real Slack alert channel through a copy of the production
+# receiver `slack-critical` (your production Alertmanager config), so Agent Kourier's chat trigger sees the
+# messages that the real template makes. test/kindmanifests pins the copy: the same slack_configs as production's, except
 # that the title is prefixed `[kind] `, and the receiver is named slack-critical-kind, which is what Agent Kourier's trial trigger
 # matches (Alertmanager puts the receiver's name in the title_link, `<externalUrl>/#/alerts?receiver=<name>`, and in no
 # other place a trigger can read it). The webhook URL is not here: api_url_file reads it from the Secret
@@ -39,7 +39,7 @@ receivers:
   - name: slack-critical-kind
     slack_configs:
       - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url
-        channel: "#alerts-critical"
+        channel: "#your-alert-channel"
         send_resolved: true
         title: '[kind] {{ .Status | toUpper }}{{ if eq .Status "firing" }} ({{ .Alerts.Firing | len }}){{ end }} - {{ .CommonLabels.alertname }}'
         text: >-

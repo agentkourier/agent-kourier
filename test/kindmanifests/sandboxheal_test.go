@@ -318,15 +318,15 @@ func TestSandboxReadmeNamesTheHealAndWhatToLookAt(t *testing.T) {
 		}
 	}
 	// Three things were confirmed (stopStream, chunk streams with cards, Bedrock) and the rest is still marked.
-	if n := strings.Count(readme, "dogfood 2026-10-03"); n < 4 {
-		t.Errorf("the README says dogfood 2026-10-03 confirmed something %d times; want the stop blocks, the chunk streams and the Bedrock turn, at least", n)
+	if n := strings.Count(readme, "a live sandbox run"); n < 4 {
+		t.Errorf("the README says a live sandbox run confirmed something %d times; want the stop blocks, the chunk streams and the Bedrock turn, at least", n)
 	}
 	for _, stale := range []string{"Nothing has run against Bedrock", "has not been run", "UNCONFIRMED, to check in the first real Bedrock turn"} {
 		if strings.Contains(readme, stale) {
 			t.Errorf("the README still says %q, which dogfood settled", stale)
 		}
 	}
-	if !strings.Contains(readme, "UNCONFIRMED(WP-04)") || !strings.Contains(readme, "UNCONFIRMED, still") {
+	if !strings.Contains(readme, "UNCONFIRMED") || !strings.Contains(readme, "UNCONFIRMED, still") {
 		t.Error("the README has lost the UNCONFIRMED items dogfood did not settle")
 	}
 }

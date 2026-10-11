@@ -24,7 +24,7 @@ const (
 	startConn    = "agent-kourier-system/slack-main"
 	startBinding = "sre/sre-alerts"
 	alertTS      = "1759560000.123456"
-	alertLink    = "https://example.slack.com/archives/C0EXAMPLE01/p1759560000123456"
+	alertLink    = "https://example.slack.com/archives/C0123456789/p1759560000123456"
 	evilLink     = "https://evil.example/click-me"
 )
 
@@ -104,17 +104,17 @@ func newStarter(t *testing.T) *starter {
 func firing(t *testing.T) chat.TriggerMatch {
 	t.Helper()
 	var b v1alpha1.Binding
-	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0EXAMPLE01"}, Preset: v1alpha1.PresetAlertmanager}}
+	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0123456789"}, Preset: v1alpha1.PresetAlertmanager}}
 	b.Default()
 	tr := b.Spec.Chat.Triggers[0]
 	const link = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind"
 	return chat.TriggerMatch{
-		Binding: startBinding, Index: 1, Preset: tr.Preset, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0EXAMPLE01:" + alertTS,
+		Binding: startBinding, Index: 1, Preset: tr.Preset, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0123456789:" + alertTS,
 		Fields:   map[string]string{"state": "FIRING", "key": "KubePodCrashLooping shop", "alertname": "KubePodCrashLooping"},
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
 		Message: chat.Inbound{
-			At: chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0EXAMPLE01", ID: alertTS},
-			Bot: &chat.BotMessage{BotID: "B0EXAMPLE01", Title: "[kind] FIRING (1) - KubePodCrashLooping", TitleLink: link,
+			At: chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: alertTS},
+			Bot: &chat.BotMessage{BotID: "B0123456789", Title: "[kind] FIRING (1) - KubePodCrashLooping", TitleLink: link,
 				Fallback:       "[FIRING:1] KubePodCrashLooping shop (checkout critical) | " + link,
 				AttachmentText: "*KubePodCrashLooping* - critical\nPod shop/checkout-7d9f8b6c5-x2x4k is in waiting state (reason: \"CrashLoopBackOff\").\n"},
 		},
@@ -144,11 +144,11 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
 	}
 	in := s.sub.got[0]
-	wantKey := session.Key{Connection: startConn, Channel: "C0EXAMPLE01", Thread: alertTS}
+	wantKey := session.Key{Connection: startConn, Channel: "C0123456789", Thread: alertTS}
 	if in.Key != wantKey || in.Binding != startBinding || !in.Create || in.MessageRef != alertTS {
 		t.Errorf("submitted %+v; want a new session under %s in the key %+v, for the alert's own message", in, startBinding, wantKey)
 	}
-	if want := "slack:" + startConn + ":C0EXAMPLE01:" + alertTS; in.MessageID != want {
+	if want := "slack:" + startConn + ":C0123456789:" + alertTS; in.MessageID != want {
 		t.Errorf("MessageID = %q; want %q, so that a redelivery is the same turn", in.MessageID, want)
 	}
 	if in.UserID != "" {
@@ -157,7 +157,7 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 	if in.Alert != "KubePodCrashLooping" {
 		t.Errorf("Alert = %q; want the alert's name, which the session keeps for the votes on its messages (spec 8.7)", in.Alert)
 	}
-	if want := "An alert is FIRING in channel C0EXAMPLE01: KubePodCrashLooping."; !strings.HasPrefix(in.Text, want) {
+	if want := "An alert is FIRING in channel C0123456789: KubePodCrashLooping."; !strings.HasPrefix(in.Text, want) {
 		t.Errorf("the turn's text starts %q; want the template's output %q", firstLine(in.Text), want)
 	}
 	tag := untrustedTag(t, in.Text)
@@ -308,18 +308,18 @@ func TestOnStartRefusesAValueThatFailsItsCheck(t *testing.T) {
 		t.Fatalf("%d notices; want the one note", len(s.notes.got))
 	}
 	n, key := s.notes.got[0], s.notes.keys[0]
-	wantID := "slack:" + startConn + ":C0EXAMPLE01:" + alertTS + "/trigger_refused"
+	wantID := "slack:" + startConn + ":C0123456789:" + alertTS + "/trigger_refused"
 	if n.Kind != session.NoticeTriggerRefused || n.ID != wantID || n.MessageRef != alertTS || n.Detail != ".Fields.alertname failed the prompt check." {
 		t.Errorf("notice %+v; want kind trigger_refused, ID %s, the alert's message and the fixed detail", n, wantID)
 	}
-	if want := (session.Key{Connection: startConn, Channel: "C0EXAMPLE01", Thread: alertTS}); key != want {
+	if want := (session.Key{Connection: startConn, Channel: "C0123456789", Thread: alertTS}); key != want {
 		t.Errorf("the note is for %+v; want the alert's thread %+v", key, want)
 	}
 
 	if len(s.aud.got) != 1 {
 		t.Fatalf("%d audit entries; want 1", len(s.aud.got))
 	}
-	want := audit.TriggerRefusal{MessageID: "slack:" + startConn + ":C0EXAMPLE01:" + alertTS, Trigger: 1, Ref: "Fields.alertname", Reason: "characters", Len: len(hostile)}
+	want := audit.TriggerRefusal{MessageID: "slack:" + startConn + ":C0123456789:" + alertTS, Trigger: 1, Ref: "Fields.alertname", Reason: "characters", Len: len(hostile)}
 	if s.aud.got[0] != want || s.aud.who[0].Binding != startBinding {
 		t.Errorf("audited %+v for %+v; want %+v for Binding %s", s.aud.got[0], s.aud.who[0], want, startBinding)
 	}

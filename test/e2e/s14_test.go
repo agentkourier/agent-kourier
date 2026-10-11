@@ -29,7 +29,7 @@ func alertPost(state, name, group string) fakeslack.WebhookPost {
 }
 
 // TestS14_AnAlertStartsOneInvestigationInItsOwnThread: an Alertmanager alert posted through the channel's incoming
-// webhook (a bot message, the way the owner's channel gets them) starts exactly one investigation, in the alert's own
+// webhook (a bot message, the way the alert channel gets them) starts exactly one investigation, in the alert's own
 // thread. The agent's first turn is the preset's prompt with the whole alert in the hashed untrusted block, which the
 // scenario agent says it saw. The alert firing again is a note in that thread and starts no second turn, and the
 // resolve is a note, "Resolved at". The decisions are counted.

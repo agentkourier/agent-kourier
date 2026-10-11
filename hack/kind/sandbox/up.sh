@@ -6,13 +6,13 @@
 # The secrets come from the file $SANDBOX_ENV (default ~/.config/agent-kourier/sandbox.env), which is checked first, before
 # anything else is touched, and parsed, never sourced (env.sh). Their values go into Secret manifests that are piped to
 # `kubectl apply -f -`: on no command line, in no file, in no output.
-# Optionally, it also makes the full tier's Alertmanager the sandbox's alert source: posting, through a copy of the owner's receiver, to
-# the owner's real alert channel, tagged [kind] (alertmanager/, alert.sh). Its webhook URL comes from the file
+# Optionally, it also makes the full tier's Alertmanager the sandbox's alert source: posting, through a copy of your production receiver, to
+# your real alert channel, tagged [kind] (alertmanager/, alert.sh). Its webhook URL comes from the file
 # $ALERTMANAGER_WEBHOOK_FILE (default ~/.config/agent-kourier/alertmanager-webhook-url). With no such file the alert source is skipped, and
 # the run says so; a file that is there is checked second, right after the secrets file (webhook.sh), refused as strictly, and handled as
 # the secrets are: parsed, never printed, and only ever piped to `kubectl apply -f -`. Nothing posts until `make sandbox-alert` fires an alert.
 # With the alert source, Agent Kourier's config also gets the alert trial's Binding (agent-kourier/alert-trial): it watches that real channel for the [kind]
-# alerts, and only them (README, Run the alert trial). Without the webhook file the config is the dogfood Binding's alone, as it was.
+# alerts, and only them (README, Run the alert trial). Without the webhook file the config is the sandbox Binding's alone, as it was.
 # Brings the full tier up first if it is not (up-full.sh), replaces its Agent Kourier with the sandbox's (down.sh puts it back),
 # and is safe to re-run. It also restarts the full tier's egress gateway if its certificate is stale, and refuses a tier whose network plugin has stopped applying NetworkPolicy (heal.sh; `make sandbox-heal` heals both).
 # Exit 0: up, and Agent Kourier is connected to Slack. 1: a refused secrets file, or something failed. 3: deployed and verified, but
@@ -129,7 +129,7 @@ render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml" | "${K[@]}" apply -f - >/dev/
 "${K[@]}" -n kagent wait --for=condition=Accepted remotemcpserver/sandbox-tools modelconfig/sandbox-model --timeout=180s
 "${K[@]}" -n kagent wait --for=condition=Ready agent/sandbox-sre --timeout=300s
 
-# The alert source: Alertmanager's receiver slack-critical-kind, a copy of the owner's slack-critical with a [kind] title prefix, reading
+# The alert source: Alertmanager's receiver slack-critical-kind, a copy of your slack-critical with a [kind] title prefix, reading
 # the webhook URL by api_url_file from a Secret that the Alertmanager mounts. The Secrets first, so that the operator never rolls the
 # Alertmanager onto a Secret that is not there; then the three fields of the Alertmanager (overlay.yaml), which the operator rolls out.
 if [ "${ALERT_SOURCE}" = 1 ]; then

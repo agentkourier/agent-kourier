@@ -25,7 +25,7 @@ import (
 
 // webhookBot is the incoming webhook's bot ID in the owner's alert channel: it posts Alertmanager's alerts,
 // Grafana's and the Watchdog heartbeat.
-const webhookBot = "B0EXAMPLE01"
+const webhookBot = "B0123456789"
 
 // The messages of the owner's alert channel, as the adapter flattens them. The kind ones are what the full
 // tier's Alertmanager posts through the same webhook (the title tagged [kind], the receiver in the link);

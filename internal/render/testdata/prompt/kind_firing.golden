@@ -1,4 +1,4 @@
-An alert is FIRING in channel C0EXAMPLE01: KubePodCrashLooping.
+An alert is FIRING in channel C0123456789: KubePodCrashLooping.
 Investigate it with your read-only tools. Report the likely cause, the evidence you
 checked, and the next steps a person should take.
 

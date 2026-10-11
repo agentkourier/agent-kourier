@@ -52,7 +52,7 @@ func evaluate(tr Trigger, m message) (map[string]string, bool) {
 
 // alertmanagerTrigger returns the alertmanager preset applied to a bare trigger.
 func alertmanagerTrigger() Trigger {
-	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}, Preset: PresetAlertmanager}
+	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager}
 	tr.applyPreset()
 	return tr
 }
@@ -236,7 +236,7 @@ func TestAnchoredReceiverSeparatesKindFromProduction(t *testing.T) {
 
 func TestAlertmanagerPresetIsValid(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
-	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0EXAMPLE01"}, Preset: PresetAlertmanager}}
+	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatalf("a bare alertmanager trigger is invalid: %v", err)
@@ -251,7 +251,7 @@ func TestPresetOverridesFieldByField(t *testing.T) {
 	preset := alertmanagerTrigger()
 	tr := Trigger{
 		Type:    TriggerBotMessage,
-		From:    &BotSource{BotID: "B0EXAMPLE01"},
+		From:    &BotSource{BotID: "B0123456789"},
 		Preset:  PresetAlertmanager,
 		Match:   map[MessageField]string{FieldTitleLink: "receiver=slack-critical-kind", FieldTitle: "^custom$"},
 		Exclude: map[MessageField]string{FieldTitle: "^Prometheus heartbeat$"},
@@ -298,7 +298,7 @@ func TestPresetOverridesFieldByField(t *testing.T) {
 func TestPresetCloseWhenIsReplacedWhole(t *testing.T) {
 	tr := Trigger{
 		Type:   TriggerBotMessage,
-		From:   &BotSource{BotID: "B0EXAMPLE01"},
+		From:   &BotSource{BotID: "B0123456789"},
 		Preset: PresetAlertmanager,
 		Extract: map[string]Extract{
 			"severity": {Field: FieldText, Regex: `(?P<severity>critical|info)`},

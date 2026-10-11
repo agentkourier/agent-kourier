@@ -22,7 +22,7 @@ import (
 
 // webhookBot is the bot of the incoming webhook in the owner's alert channel, which posts Alertmanager's alerts, Grafana's
 // and the heartbeat.
-const webhookBot = "B0EXAMPLE01"
+const webhookBot = "B0123456789"
 
 // alert is what Alertmanager's Slack receiver posts through the webhook for a kind alert: no text, one legacy
 // attachment, whose text Slack is asked to render as mrkdwn.

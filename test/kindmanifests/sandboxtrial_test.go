@@ -20,14 +20,14 @@ import (
 )
 
 // These tests pin the alert trial's Binding (hack/kind/sandbox/agent-kourier/alert-trial): the second Binding of the sandbox's Agent Kourier, which
-// watches the owner's real alert channel and investigates the [kind] alerts of kind's Alertmanager, and nothing else. A Binding that
+// watches the real alert channel and investigates the [kind] alerts of kind's Alertmanager, and nothing else. A Binding that
 // strays (a mention trigger, a looser receiver, another bot, a question to people) acts in the production channel, so each rule is a test.
 // Every test builds the config with up.sh's own render_agentkourier_config (env.sh), not a copy of its steps.
 
 const (
-	// The owner's alert channel and the incoming webhook's bot, as the trial is meant to be pointed at them (chat-triggers.md, "The trial channel").
-	trialChannel = "C0EXAMPLE01"
-	trialBot     = "B0EXAMPLE01"
+	// The alert channel and the incoming webhook's bot, as the trial is meant to be pointed at them (chat-triggers.md, "The trial channel").
+	trialChannel = "C0123456789"
+	trialBot     = "B0123456789"
 	// trialReceiver is the one receiver the trial takes: kind's copy of the owner's, anchored so that slack-critical (production) does not match.
 	trialReceiver = `receiver=slack-critical-kind$`
 )
@@ -75,7 +75,7 @@ func trialBinding(t *testing.T) (*v1alpha1.Binding, *config.Set) {
 }
 
 // TestTrialBindingLoadsThroughTheRealLoader: with the alert source on, the config holds the dogfood Binding and the trial's, both loadable and
-// resolvable against the one connection, each on its own channel; the trial's channel is the owner's alert channel.
+// resolvable against the one connection, each on its own channel; the trial's channel is the alert channel.
 func TestTrialBindingLoadsThroughTheRealLoader(t *testing.T) {
 	b, set := trialBinding(t)
 	if len(set.Bindings) != 2 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 1 {
@@ -304,7 +304,7 @@ func TestTrialChannelIsValidated(t *testing.T) {
 		ok             bool
 		want           string
 	}{
-		"the owner's channel":     {trialChannel, "C0SANDBOX01", true, ""},
+		"the alert channel":       {trialChannel, "C0SANDBOX01", true, ""},
 		"a private channel's ID":  {"G0EXAMPLE01", "C0SANDBOX01", true, ""},
 		"a name":                  {"alerts-critical", "C0SANDBOX01", false, "ALERT_CHANNEL_ID"},
 		"lower case":              {"C0EXAMPLE01", "C0SANDBOX01", false, "ALERT_CHANNEL_ID"},
@@ -382,7 +382,7 @@ func TestTrialChannelIsOneConstantEverywhere(t *testing.T) {
 }
 
 // Alert-channel samples, as the adapter flattens them: kind's Alertmanager posts through the same incoming webhook as production's Alertmanager, Grafana's
-// alerting and the Watchdog heartbeat. The shapes are the README's ("Alert trial") and the owner's channel's (chat-triggers.md, "Facts gathered").
+// alerting and the Watchdog heartbeat. The shapes are the README's ("Alert trial") and the alert channel's (chat-triggers.md, "Facts gathered").
 const (
 	sampleKindLink = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind"
 	sampleProdLink = "https://alertmanager.example.com/#/alerts?receiver=slack-critical"
@@ -394,7 +394,7 @@ func sample(bot, title, link, fallback string) chat.BotMessage {
 }
 
 // TestTrialTriggerOverTheChannelsMessages runs the intake's matcher (chat.Replay, the dry run's engine) over the sandbox's real config files, with the
-// kind alerts and what else is in the owner's channel: only the kind alerts match.
+// kind alerts and what else is in the alert channel: only the kind alerts match.
 func TestTrialTriggerOverTheChannelsMessages(t *testing.T) {
 	b, _ := trialBinding(t)
 	replay, err := chat.NewReplay(b)
@@ -476,6 +476,6 @@ func TestAlertTrialRunbook(t *testing.T) {
 		}
 	}
 	if !strings.Contains(strings.ToLower(section), "warning") {
-		t.Error("the runbook has no warning that it posts into the owner's real channel")
+		t.Error("the runbook has no warning that it posts into the real alert channel")
 	}
 }

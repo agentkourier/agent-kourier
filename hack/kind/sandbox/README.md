@@ -1,14 +1,14 @@
 # The sandbox tier: Agent Kourier against a real Slack and a real model
 
 Everything else in `hack/kind/` proves Agent Kourier against our own doubles: the fake Slack, mockllm, the stub agent. The
-sandbox tier lets people try the chat path for real, before the Phase 1 sign-off: Agent Kourier on its **production image**
+sandbox tier lets people try the chat path for real: Agent Kourier on its **production image**
 in a **real Slack sandbox workspace** (Socket Mode), answered by `sandbox-sre`, a **read-only SRE agent** on a **real
 model**, investigating **faults seeded** into the kind cluster.
 
 It is an overlay on the full tier (`kind-agent-kourier-full`), never a new cluster: only one full tier fits a Docker host.
 It does not carry over to another cluster as it is: the full tier's kind config turns on the pod-certificate feature gates
 and `certificates.k8s.io/v1beta1`, which Agent Substrate (and so kagent 1.0) needs and most clusters do not serve, managed
-EKS included. See the README's "Running kagent 1.0 off kind" and spec risk R19.
+EKS included. See [Connect a kagent agent](../../../docs/how-to/connect-kagent.md).
 
 ```
 Slack sandbox workspace  <-- wss/https -->  agent-kourier-sandbox (agent-kourier:dev, production image)
@@ -28,7 +28,7 @@ Slack sandbox workspace  <-- wss/https -->  agent-kourier-sandbox (agent-kourier
 |---|---|
 | `make sandbox-up` | Checks the secrets file, and the alert webhook file if there is one (optional; see "Alert trial"), first, before it touches anything (with the file, it also checks the alert trial's channel). Brings the full tier up if it is not (`make e2e-full-up`), builds and loads `agent-kourier:dev`, then applies the overlay and verifies it. Safe to re-run. Exit 0: up, Agent Kourier connected to Slack. Exit 1: a refused file or a failure. **Exit 3: deployed, but Slack rejected the tokens** (everything else is up and verified; Agent Kourier crash-loops until the file is fixed). |
 | `make sandbox-down` | Removes the overlay, takes the Alertmanager off the alert source, and restores the full tier's own Agent Kourier (the testhooks image on the fake Slack), so `make e2e-full` works again. The cluster stays. |
-| `make sandbox-alert ALERT=<name> [STATE=firing\|resolved]` | Fires, or resolves, the alert of one seeded fault in the full tier's Alertmanager, which posts it to the owner's **real alert channel**, tagged `[kind]`. Needs `make sandbox-up` first. See "Alert trial". |
+| `make sandbox-alert ALERT=<name> [STATE=firing\|resolved]` | Fires, or resolves, the alert of one seeded fault in the full tier's Alertmanager, which posts it to your **real alert channel**, tagged `[kind]`. Needs `make sandbox-up` first. See "Alert trial". |
 | `make sandbox-heal` | Heals two things in the full tier, each only if it needs it, and otherwise says `ok` and changes nothing. First **kindnet** (`ds/kindnet` in `kube-system`, the network plugin): if an agent-kourier-labelled probe pod reaches the kagent controller on 8083, which `controller-admit-frontdoor-only` must refuse, it restarts kindnet, waits, and probes again (about 13 s when healthy). Then the **egress gateway** (`deploy/atenet-egress`): if its pod is more than 20 hours old or a log holds `CertificateExpired`, it restarts it and waits. For a **long session**: the gateway's certificate lives 24 hours and is never reloaded, so after about a day every agent turn fails with "not ready" (see "If it does not come up"). `make sandbox-up` does the gateway's check before it verifies, and **refuses** (does not heal) a stale kindnet. Changes nothing else; needs no secrets file. |
 
 While the sandbox is up, `make e2e-full` and `make e2e-full-up` **refuse**
@@ -43,7 +43,7 @@ use `deploy/agent-kourier-sandbox`.
 
 1. **Create the Slack app.** Open <https://api.slack.com/apps>, Create New App, From a manifest, pick the sandbox
    workspace, and paste `hack/kind/sandbox/slack-app-manifest.yaml` (YAML tab). It asks for Socket Mode, interactivity, the
-   `app_mention`, `message.channels` and `message.groups` events and the bot scopes below. **Use the sandbox workspace only**, unless you run the alert trial: its channel is in the owner's workspace, so the app is installed there (see "Run the alert trial").
+   `app_mention`, `message.channels` and `message.groups` events and the bot scopes below. **Use the sandbox workspace only**, unless you run the alert trial: its channel is in that workspace, so the app is installed there (see "Run the alert trial").
 2. **Make an app-level token.** Basic Information, App-Level Tokens, Generate Token, with the scope
    `connections:write`. That is `SLACK_APP_TOKEN` (`xapp-...`). The manifest cannot make it.
 3. **Install the app** to the sandbox workspace (Install App). The Bot User OAuth Token is `SLACK_BOT_TOKEN` (`xoxb-...`).
@@ -94,7 +94,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
   Bedrock on every request (the ADK's `headerTransport`). The key itself is never in the sandbox: the SDK holds a placeholder
   (`kagent-credential-injected`) and the gateway swaps in the key.
   All of this was read from the source, and `TestBedrockModelConfigPutsItsEndpointInTheModelJSON` pins the header, its rendered host, and a copy of the walk that finds it.
-- **Confirmed in dogfood 2026-10-03**, in a real Bedrock turn through the workaround (read from the egress gateway's log: `kubectl --context kind-agent-kourier-full -n ate-system logs deploy/atenet-egress -c agentgateway`):
+- **Confirmed in a live sandbox run**, in a real Bedrock turn through the workaround (read from the egress gateway's log: `kubectl --context kind-agent-kourier-full -n ate-system logs deploy/atenet-egress -c agentgateway`):
   the gateway reached **exactly `bedrock-runtime.us-east-1.amazonaws.com`**, with the key injected; **no other AWS host** was reached; and Bedrock **ignored the extra
   `X-Agent-Kourier-Egress-Host` header** (no request was rejected for it).
 - UNCONFIRMED, still (the ate-api-server log's `GetActorEgressPolicy` for the actor shows the first):
@@ -117,9 +117,9 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
 | events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
-The manifest covers every call. **Confirmed in dogfood 2026-10-03:** `chat.stopStream` appends the stop blocks Agent Kourier sends
-(WP-39c), and chunk-mode streams work: the `task_update` cards of tool calls are placed in the text where the calls were made,
-and a finished step shows status complete (WP-39e). Still UNCONFIRMED(WP-04): that the streaming methods need no app feature
+The manifest covers every call. **Confirmed in a live sandbox run:** `chat.stopStream` appends the stop blocks Agent Kourier sends
+, and chunk-mode streams work: the `task_update` cards of tool calls are placed in the text where the calls were made,
+and a finished step shows status complete . Still UNCONFIRMED: that the streaming methods need no app feature
 beyond `chat:write` (the "Agents & AI Apps" feature and `assistant:write` are named on none of the three method pages, and
 nothing here enables them); that `chat.startStream` accepts the channel form Agent Kourier sends (`recipient_user_id` and
 `recipient_team_id` are documented as required in channels, and Agent Kourier sends both); and that `chat.stopStream` takes the
@@ -156,7 +156,7 @@ it is exactly `api.anthropic.com` (or `api.openai.com`), `kagent-controller.kage
 (read from the Substrate API's `GetActorEgressPolicy` response). The gateway also **injects the API key** into the
 request from the Secret `sandbox-model`, so the key never enters the agent's sandbox. Nothing was added to any policy.
 For `bedrock` the host is `bedrock-runtime.<MODEL_REGION>.amazonaws.com`, but kagent does not infer it: the ModelConfig carries a header that
-puts it in the allowlist (see "The model", above). That was read from kagent's source, and the Bedrock turn of dogfood 2026-10-03 confirmed the host it reaches.
+puts it in the allowlist (see "The model", above). That was read from kagent's source, and the Bedrock turn of a live sandbox run confirmed the host it reaches.
 
 **The Binding's token.** The Binding identity's Dex ID token (the Secret `agent-kourier-agent-token`) lasts 24 hours and Agent Kourier reads
 it on every request. A CronJob in `agent-kourier` (hourly, `0 * * * *`) mints one and patches it in, from inside the cluster, with a ServiceAccount whose
@@ -174,12 +174,12 @@ Agent Kourier answers in the one channel. Watch it while you try each row (where
 
 | # | Try | Look for |
 |---|---|---|
-| 1 | `@Agent Kourier why is checkout crashlooping?` | A thread opens under your message. The reply **streams** (it grows as the model writes) and shows **tool steps** as cards (`k8s_get_pod_logs ...`, one per call, placed in the text where the call was made, status complete once it is done; confirmed in dogfood 2026-10-03). It quotes the `FATAL: cannot resolve payments-db` line, says what it checked, and changes nothing. If it streams in one piece, or fails at `chat.startStream`, that is a WP-04 finding. |
+| 1 | `@Agent Kourier why is checkout crashlooping?` | A thread opens under your message. The reply **streams** (it grows as the model writes) and shows **tool steps** as cards (`k8s_get_pod_logs ...`, one per call, placed in the text where the call was made, status complete once it is done; confirmed in a live sandbox run). It quotes the `FATAL: cannot resolve payments-db` line, says what it checked, and changes nothing. If it streams in one piece, or fails at `chat.startStream`, that is a WP-04 finding. |
 | 2 | Other questions: `why is catalog stuck?`, `is recommender healthy?`, `why does inventory have no endpoints?`, `what is wrong with search?`, `is frontend ok?` | Each finds its fault: ImagePullBackOff and the missing tag; OOMKilled and the 48Mi limit; the Service's selector against the pods' labels; the readiness probe's 404; and `frontend` fine, with how it knows. |
 | 3 | **A thread reply**, in the same thread, after the answer: `and which pods does that affect?` | The answer comes in the same thread, and knows the earlier turn (same session). No new thread. |
 | 4 | **A reply while a turn is running**: send a long question (`check every deployment in shop and tell me about each`), and answer or add to it before it finishes | Agent Kourier queues it: a notice says it is queued, and the answer follows when the first turn ends, in order. Never two answers at once, never a lost message. |
 | 5 | **The agent asks the user a question**: `ask me which app to look at, then look at it` (the agent's `ask_user` tool) | A prompt with the question and its choices, as input blocks, and a **Submit** button. Submitting posts the answer back and the agent carries on. Only a channel member can submit, the first press wins, and an incomplete answer gets an ephemeral "answer every question", not a changed prompt. Leave one unanswered: after 30 minutes it times out and says so. If the model will not call `ask_user`, say so here: that is the model, not Agent Kourier. |
-| 6 | **Inert text, which gates the pilot (WP-04 item (b))**: ask the agent to quote the probe text below, one item per line | Every one stays **inert**: **no** `@channel` or `@here` notification (check with a second account, or the sandbox's notification log), no mention chip, no link rendered, no channel link. The text shows as typed (or escaped) and notifies nobody. Try it three ways: in the streamed reply, in a tool line (ask it to look up a resource named `<!channel>`: the call fails, and the tool line shows the name), and in the Submit prompt (ask it to ask you a question whose text and choices hold `<!channel>`). Also in inline code and a code block. A single notification or live link is a pilot-blocker: record where it came from. |
+| 6 | **Inert text, which gates a release**: ask the agent to quote the probe text below, one item per line | Every one stays **inert**: **no** `@channel` or `@here` notification (check with a second account, or the sandbox's notification log), no mention chip, no link rendered, no channel link. The text shows as typed (or escaped) and notifies nobody. Try it three ways: in the streamed reply, in a tool line (ask it to look up a resource named `<!channel>`: the call fails, and the tool line shows the name), and in the Submit prompt (ask it to ask you a question whose text and choices hold `<!channel>`). Also in inline code and a code block. A single notification or live link is a pilot-blocker: record where it came from. |
 | 7 | **Delete the Agent Kourier pod mid-turn**: send the long question, and once it is streaming, `kubectl --context kind-agent-kourier-full -n agent-kourier delete pod -l app.kubernetes.io/instance=agent-kourier-sandbox` | A new pod starts (the volume survives). Agent Kourier **recovers** the turn from its outbox: the thread is completed or ends with an honest notice, and **there is no double post**: no duplicate of a message that was already sent, and no orphaned half-streamed message. Read the new pod's log for the `recover:` lines. |
 | 8 | **Long output**: `list every resource in shop with its full YAML, then describe each pod` | The answer is split or cut cleanly, within Slack's limits, with no truncated markdown or code fence, no error from Slack in the log, and nothing lost without a notice. |
 | 9 | Refusals: `delete the checkout deployment`, `scale checkout to 3`, `show me the Secrets in agent-kourier` | The agent says it cannot, says what a person would run, and nothing in `shop` changes. |
@@ -198,14 +198,14 @@ The probe text for row 6 (paste it after `quote exactly, one item per line:`):
 
 ## Alert trial
 
-**Warning: this posts to the owner's real alert channel.** The alert source is optional: it exists only if the webhook file below is there. When it is,
-`make sandbox-up` makes the full tier's Alertmanager post, through the owner's own incoming webhook, to `#alerts-critical`, the channel where production's alerts also arrive. Nothing is posted until
+**Warning: this posts to your real alert channel.** The alert source is optional: it exists only if the webhook file below is there. When it is,
+`make sandbox-up` makes the full tier's Alertmanager post, through your own incoming webhook, to the alert channel you chose, where production's alerts may also arrive. Nothing is posted until
 someone fires an alert (there is no Prometheus in the tier to do it), and everything the tier posts is tagged: the title begins `[kind] `, and the
 link under it says `receiver=slack-critical-kind` where production's says `receiver=slack-critical`. Fire alerts only for a trial, and
 resolve them when it is done.
 
 **What it is.** Alertmanager (`monitoring/agent-kourier`, run by prometheus-operator, pod `alertmanager-agent-kourier-0`) gets a second receiver,
-`slack-critical-kind`: a copy of the owner's `slack-critical` receiver (`cluster-apps`, `templates/prometheus-operator.yaml`) with the
+`slack-critical-kind`: a copy of your production `slack-critical` receiver with the
 `[kind] ` prefix on the title and nothing else changed (same text template, `send_resolved: true`, `group_by [alertname, namespace]`, `repeat_interval 4h`).
 A test compares the two. One thing differs by design, outside the receiver: `group_interval` is 30s, not production's 5m, so that a resolve shows
 in the channel in under a minute and not in up to five. Its `externalUrl` is `http://alertmanager.kind.local`, which no one mistakes for production's, and it is what
@@ -295,7 +295,7 @@ before going live. It **only reads** Slack (`conversations.history`): it posts n
 **What it runs.** It loads the config directory with the same loader as the broker, so the defaults, the `alertmanager` preset and the validation apply as
 in production. It reads the channel with the bot token, decodes each message with the code that decodes a live event (the first attachment is flattened into
 `title`, `titleLink`, `fallback`, `footer` and `attachmentText`), and runs the intake's own matcher over it. The two Bindings below are in
-`hack/kind/sandbox/dryrun/`; they set the channel to `#alerts-critical` (`C0EXAMPLE01`) and the bot to the webhook's (`B0EXAMPLE01`), and differ in one line.
+`hack/kind/sandbox/dryrun/`; they set the channel to your alert channel and the bot to the webhook's (`B0123456789`), and differ in one line.
 
 **The token** is read from `--token-file`, else from `SLACK_BOT_TOKEN`; it is never an argument and never printed. The file holds the token alone or `SLACK_BOT_TOKEN=...`
 among other lines, so the sandbox's own secrets file works as it is. It is refused unless it is a regular file, not a link, that the group and others cannot read (`chmod 600`).
@@ -323,8 +323,8 @@ messages, `--limit 50` only the newest 50 of what was read (reading is not cut s
 
 ```
 TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME            KEY                       TITLE
-1791104398.621498  B0EXAMPLE01  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
-1791104398.621757  B0EXAMPLE01  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
+1791104398.621498  B0123456789  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
+1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
 1791104398.621854  person:U1    person     -        -         -                    -                         <@UFAKEBOT> is this real?
 ```
 
@@ -352,12 +352,12 @@ Read it as a check on the triggers:
 - **The keys.** A key is the thread an alert will share. A good key is the same for repeats of one alert and different for different alerts. A key that has a pod name in it, or that is different on every line, means the `key` regex is too narrow and no repeat will ever find its thread; one key that covers unrelated alerts means it is too wide.
 - **The flapping hint.** A cycle is a closing state (the trigger's `thread.closeWhen.state`, `RESOLVED` by default) after an opening one for the same key. A key with several cycles is one the `cooldown` and the close rule are for; a `cooldown` shorter than the gap between its cycles starts a new investigation each time.
 
-`--render`, which would show whether each match's prompt would be refused (ref and reason), is not built yet: it waits for the prompt renderer (CT-4a).
+`--render`, which would show whether each match's prompt would be refused (ref and reason), is not built yet: it waits for the prompt renderer.
 
 ## Run the alert trial
 
-**Warning: this posts into the owner's real alert channel, `#alerts-critical` (`C0EXAMPLE01`), where production's alerts arrive.** Two things post there: kind's
-Alertmanager, tagged `[kind]`, when someone fires an alert, and Agent Kourier, in the threads of the `[kind]` alerts it investigates, and nowhere else. Do it with the owner at hand, and resolve
+**Warning: this posts into your real alert channel, where production's alerts arrive.** Two things post there: kind's
+Alertmanager, tagged `[kind]`, when someone fires an alert, and Agent Kourier, in the threads of the `[kind]` alerts it investigates, and nowhere else. Do it with your team at hand, and resolve
 what you fire.
 
 **What `make sandbox-up` adds when the webhook file is there** (without the file nothing changes from the dogfood sandbox: the same one Binding, and no `alert-binding.yaml` in Agent Kourier's config).
@@ -365,7 +365,7 @@ A second Binding, `agent-kourier/alert-trial` (`agent-kourier/alert-trial/alert-
 
 | | |
 |---|---|
-| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0EXAMPLE01` (by ID), the `alertmanager` preset, and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
+| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the `alertmanager` preset, and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
 | What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
 | Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
 | Limits | The `alertmanager` preset's: 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
@@ -376,9 +376,9 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
 
 **Before you start**
 
-1. **A regenerated webhook in the file.** The URL was pasted into a chat once, so regenerate it in Slack (the app's Incoming Webhooks, add one for `#alerts-critical`, revoke the old one), put the new URL in
+1. **A regenerated webhook in the file.** The URL was pasted into a chat once, so regenerate it in Slack (the app's Incoming Webhooks, add one for your alert channel, revoke the old one), put the new URL in
    `~/.config/agent-kourier/alertmanager-webhook-url` (see "Alert trial", Setup) and `chmod 600` it.
-2. **Agent Kourier invited to the alert channel**: `/invite @Agent Kourier` in `#alerts-critical`. The tokens in the secrets file must belong to an app installed in the workspace that channel is in (a channel ID is only good in its own workspace),
+2. **Agent Kourier invited to the alert channel**: `/invite @Agent Kourier` in your alert channel. The tokens in the secrets file must belong to an app installed in the workspace that channel is in (a channel ID is only good in its own workspace),
    which is also the workspace of `SLACK_CHANNEL_ID`; the one connection serves both Bindings. The dry run below needs the same membership and `channels:history`.
 3. **The dry run shows 0 trial matches on production history.** From the repo root (see "Tune triggers with a dry run" for the options):
 
@@ -395,7 +395,7 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
 **Run it**
 
 1. `make sandbox-up`. It checks the webhook file and the channel first, and ends with `ok: Agent Kourier is connected to Slack` (the log line `slack: socket mode connected`) and
-   `alert source up, and Agent Kourier watches C0EXAMPLE01 for [kind] alerts`. Check the Binding is in Agent Kourier's config and the connection is up:
+   `alert source up, and Agent Kourier watches C0123456789 for [kind] alerts`. Check the Binding is in Agent Kourier's config and the connection is up:
 
    ```
    CTX=kind-agent-kourier-full
@@ -407,7 +407,7 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
    webhook, with `receiver=slack-critical-kind` in its link. Within seconds Agent Kourier opens a thread under that post and a **Agent Kourier investigation streams into it**, with **step cards** for the tool calls
    (`k8s_get_pod_logs ...`, one per call). It should find checkout's `FATAL: cannot resolve payments-db` line and say what it checked. Nothing else in the channel reacts.
 
-3. **Fire it again**, and nothing happens. Alertmanager deduplicates: an alert it already holds, with the same labels and still firing, is not notified again until the receiver's `repeat_interval` (4 hours, copied from the owner's receiver), so
+3. **Fire it again**, and nothing happens. Alertmanager deduplicates: an alert it already holds, with the same labels and still firing, is not notified again until the receiver's `repeat_interval` (4 hours, copied from your receiver), so
    there is no second post for Agent Kourier to see, and `make sandbox-alert` only refreshes the alert's end time. A **"Fired again at" note** comes only after a resolve and a re-fire:
 
    ```
@@ -483,7 +483,7 @@ Did the turn run, and how did it end? Agent Kourier logs every turn at INFO, by 
   line is logged, so a line you see is already in the count.
 - WARN `slack: the chunks mode of a stream was refused; streams are in markdown_text mode from now on and show no steps`, logged once
   per process: Slack turned away the chunk form of `chat.startStream`, so replies still stream, as text, with no step cards until
-  Agent Kourier restarts. Chunk-mode streams work (confirmed in dogfood 2026-10-03), so this line is a finding: its `err` field is Slack's answer.
+  Agent Kourier restarts. Chunk-mode streams work (confirmed in a live sandbox run), so this line is a finding: its `err` field is Slack's answer.
 
 Agent Kourier's other metrics (`/metrics`): `agentkourier_credential_rejections_total` (the Binding's token was refused),
 `agentkourier_interaction_decisions_total` and `agentkourier_interaction_timeouts_total` (row 5), `agentkourier_outbox_abandoned_total` (row 7),
@@ -505,7 +505,7 @@ error text is shown in the thread, though: a **wrong** API key makes OpenAI answ
   (kagent answers Agent Kourier `-32004`, "session not ready", for good): the **egress gateway's certificate expired**. Every agent connection leaves through
   `deploy/atenet-egress` in `ate-system`, whose pod certificate lives 24 hours and is read once, when the pod starts, so a gateway that has run for about a day turns all of
   them away while it shows Running and 0 restarts. Run **`make sandbox-heal`**: it restarts the gateway and waits for it, and the next message works (`make sandbox-up`
-  does the same before it verifies, if the pod is more than 20 hours old or a log has the line). Seen in dogfood 2026-10-03. After 31 hours the other `ate-system`
+  does the same before it verifies, if the pod is more than 20 hours old or a log has the line). Seen in a live sandbox run. After 31 hours the other `ate-system`
   pods that carry such certificates (`ate-controller`, `atenet-router`, `k8s-credential-provider`) showed no expiry in their logs, so only the gateway is restarted; if another
   starts rejecting, that is a finding.
 - **`make sandbox-up` or `make e2e-full` refuses: `the network policy is not live in agent-kourier-full`**: kindnet, the network plugin (it also enforces NetworkPolicy),

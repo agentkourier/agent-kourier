@@ -19,7 +19,7 @@ import (
 )
 
 // These tests pin the sandbox's alert source (hack/kind/sandbox/alertmanager, webhook.sh, alert.sh): the full tier's
-// Alertmanager posting to the owner's real alert channel through a copy of the owner's receiver, and the tool that fires
+// Alertmanager posting to the real alert channel through a copy of the production receiver, and the tool that fires
 // the seeded faults' alerts. Nothing here touches a cluster or the real webhook file: every secret below is a fake constant.
 const (
 	alertDir = sandboxDir + "alertmanager/"
@@ -27,27 +27,23 @@ const (
 	// fakeWebhook is shaped as the webhook file demands, and its parts are found by name in any output that holds them.
 	fakeWebhook = "https://hooks.slack.com/services/T0LEAKCHECK/B0LEAKCHECK/LEAKCHECKwebhook0007"
 	leakMarker  = "LEAKCHECK"
-
-	// ownerTemplate is where the owner's production Alertmanager configuration lives; the test that compares against it
-	// skips when it is not there.
-	ownerTemplate = "development/cluster-apps/templates/prometheus-operator.yaml"
 )
 
-// ownerSample is the owner's receivers as that file had them on 2026-10-03 (lines 447-467), Helm escapes and all. It is what
-// the comparison runs against where the owner's repository is not checked out, and what it is shown to catch a changed copy on.
-const ownerSample = `            receivers:
+// productionSample is a production Alertmanager template's receivers, Helm escapes and all. The comparison runs against it, and it is
+// what a changed copy is shown to be caught on.
+const productionSample = `            receivers:
               - name: "null"
               - name: slack-heartbeat
                 slack_configs:
                   - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url
-                    channel: "#alerts-critical"
+                    channel: "#your-alert-channel"
                     send_resolved: false
                     title: 'Prometheus heartbeat'
                     text: 'Watchdog firing — Prometheus + Alertmanager are alive.'
               - name: slack-critical
                 slack_configs:
                   - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-secret/webhook-url
-                    channel: "#alerts-critical"
+                    channel: "#your-alert-channel"
                     send_resolved: true
                     title: '{{ "{{" }} .Status | toUpper {{ "}}" }}{{ "{{" }} if eq .Status "firing" {{ "}}" }} ({{ "{{" }} .Alerts.Firing | len {{ "}}" }}){{ "{{" }} end {{ "}}" }} - {{ "{{" }} .CommonLabels.alertname {{ "}}" }}'
                     text: >-
@@ -61,9 +57,9 @@ const ownerSample = `            receivers:
               enabled: true
 `
 
-// ownerReceiver returns the receiver called name from the owner's Helm template src, as a map, with Helm's escapes of
+// productionReceiver returns the receiver called name from the owner's Helm template src, as a map, with Helm's escapes of
 // Alertmanager's own braces undone. It finds the receiver's list item by its name and takes the lines indented below it.
-func ownerReceiver(t *testing.T, src, name string) map[string]any {
+func productionReceiver(t *testing.T, src, name string) map[string]any {
 	t.Helper()
 	lines := strings.Split(src, "\n")
 	indentOf := func(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
@@ -75,7 +71,7 @@ func ownerReceiver(t *testing.T, src, name string) map[string]any {
 		}
 	}
 	if start < 0 {
-		t.Fatalf("the owner's template has no receiver %q", name)
+		t.Fatalf("the production template has no receiver %q", name)
 	}
 	indent := indentOf(lines[start])
 	block := []string{lines[start][indent:]}
@@ -91,7 +87,7 @@ func ownerReceiver(t *testing.T, src, name string) map[string]any {
 	text := strings.NewReplacer(`{{ "{{" }}`, "{{", `{{ "}}" }}`, "}}").Replace(strings.Join(block, "\n"))
 	var items []map[string]any
 	if err := yaml.Unmarshal([]byte(text), &items); err != nil || len(items) != 1 {
-		t.Fatalf("the owner's receiver %q: %d items, %v\n%s", name, len(items), err, text)
+		t.Fatalf("the production receiver %q: %d items, %v\n%s", name, len(items), err, text)
 	}
 	return items[0]
 }
@@ -118,7 +114,7 @@ func kindReceiver(t *testing.T) map[string]any {
 	return nil
 }
 
-// expectedKindReceiver is what the owner's receiver becomes for the sandbox: renamed, and each title prefixed `[kind] `.
+// expectedKindReceiver is what the production receiver becomes for the sandbox: renamed, and each title prefixed `[kind] `.
 func expectedKindReceiver(t *testing.T, owner map[string]any) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(owner) // a deep copy
@@ -132,7 +128,7 @@ func expectedKindReceiver(t *testing.T, owner map[string]any) map[string]any {
 	want["name"] = "slack-critical-kind"
 	configs, ok := want["slack_configs"].([]any)
 	if !ok || len(configs) == 0 {
-		t.Fatal("the owner's receiver has no slack_configs")
+		t.Fatal("the production receiver has no slack_configs")
 	}
 	for _, c := range configs {
 		m := c.(map[string]any)
@@ -156,32 +152,14 @@ func jsonForm(t *testing.T, v any) any {
 }
 
 // TestKindReceiverIsACopyOfTheOwnersExceptTheTitlePrefix: slack_configs of slack-critical-kind are those of the owner's
-// slack-critical receiver, with the one change of the `[kind] ` prefix on the title. It runs against the owner's file as it is
-// now when that is checked out (and skips that half with a message when it is not), and always against the owner's template as
-// it was on 2026-10-03, so that a copy edited here is caught either way.
+// slack-critical receiver, with the one change of the `[kind] ` prefix on the title. It runs against a sample of the production
+// template, so that a copy edited here is caught.
 func TestKindReceiverIsACopyOfTheOwnersExceptTheTitlePrefix(t *testing.T) {
 	kind := jsonForm(t, kindReceiver(t))
-	t.Run("the template as it was on 2026-10-03", func(t *testing.T) {
-		want := jsonForm(t, expectedKindReceiver(t, ownerReceiver(t, ownerSample, "slack-critical")))
+	t.Run("the sample production template", func(t *testing.T) {
+		want := jsonForm(t, expectedKindReceiver(t, productionReceiver(t, productionSample, "slack-critical")))
 		if !reflect.DeepEqual(kind, want) {
-			t.Errorf("slack-critical-kind is not the owner's slack-critical with the [kind] prefix:\n got %v\nwant %v", kind, want)
-		}
-	})
-	t.Run("the owner's file now", func(t *testing.T) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("no home directory (%v): cannot find the owner's repository", err)
-		}
-		raw, err := os.ReadFile(filepath.Join(home, ownerTemplate))
-		if errors.Is(err, os.ErrNotExist) {
-			t.Skipf("the owner's template %s is not checked out: only the copy of 2026-10-03 was compared", ownerTemplate)
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := jsonForm(t, expectedKindReceiver(t, ownerReceiver(t, string(raw), "slack-critical")))
-		if !reflect.DeepEqual(kind, want) {
-			t.Errorf("the owner changed slack-critical, or the sandbox's copy drifted; update alertmanager/config.yaml:\n got %v\nwant %v", kind, want)
+			t.Errorf("slack-critical-kind is not the production slack-critical with the [kind] prefix:\n got %v\nwant %v", kind, want)
 		}
 	})
 }
@@ -189,11 +167,11 @@ func TestKindReceiverIsACopyOfTheOwnersExceptTheTitlePrefix(t *testing.T) {
 // TestKindReceiverComparisonCatchesADrift: the comparison above is not vacuous. Each change to the copy that it must refuse
 // is refused, and the prefix is the only change it accepts.
 func TestKindReceiverComparisonCatchesADrift(t *testing.T) {
-	want := jsonForm(t, expectedKindReceiver(t, ownerReceiver(t, ownerSample, "slack-critical"))).(map[string]any)
+	want := jsonForm(t, expectedKindReceiver(t, productionReceiver(t, productionSample, "slack-critical"))).(map[string]any)
 	cfg := want["slack_configs"].([]any)[0].(map[string]any)
 	if cfg["title"] != `[kind] {{ .Status | toUpper }}{{ if eq .Status "firing" }} ({{ .Alerts.Firing | len }}){{ end }} - {{ .CommonLabels.alertname }}` ||
 		cfg["send_resolved"] != true || !strings.HasPrefix(cfg["text"].(string), "{{ range .Alerts }} *{{ .Labels.alertname }}*") {
-		t.Fatalf("the owner's receiver was read as %v", cfg)
+		t.Fatalf("the production receiver was read as %v", cfg)
 	}
 	for name, mutate := range map[string]func(map[string]any){
 		"no prefix":         func(c map[string]any) { c["title"] = strings.TrimPrefix(c["title"].(string), "[kind] ") },
@@ -265,7 +243,7 @@ func routeMatches(t *testing.T, matchers []string, labels map[string]string) boo
 func TestAlertRouting(t *testing.T) {
 	cfg := loadAlertConfig(t)
 	if cfg.Route.Receiver != "null" || !reflect.DeepEqual(cfg.Route.GroupBy, []string{"alertname", "namespace"}) || cfg.Route.RepeatInterval != "4h" {
-		t.Errorf("the root route is %+v; want receiver null, group_by [alertname namespace], repeat_interval 4h as the owner's", cfg.Route)
+		t.Errorf("the root route is %+v; want receiver null, group_by [alertname namespace], repeat_interval 4h as production's", cfg.Route)
 	}
 	if len(cfg.Route.Routes) != 1 {
 		t.Fatalf("routes %+v; want the one for slack-critical-kind", cfg.Route.Routes)
@@ -446,12 +424,12 @@ func webhookFile(t *testing.T, mode os.FileMode, content string) string {
 
 func TestWebhookFileAcceptsAGoodFile(t *testing.T) {
 	for name, content := range map[string]string{
-		"a line":                  fakeWebhook + "\n",
-		"no final newline":        fakeWebhook,
-		"windows line ending":     fakeWebhook + "\r\n",
-		"trailing blanks":         fakeWebhook + "  \n",
-		"blank lines around it":   "\n" + fakeWebhook + "\n\n",
-		"the owner's usual shape": "https://hooks.slack.com/services/T0LEAKCHECK/B0LEAKCHECK/abcDEF123\n",
+		"a line":                     fakeWebhook + "\n",
+		"no final newline":           fakeWebhook,
+		"windows line ending":        fakeWebhook + "\r\n",
+		"trailing blanks":            fakeWebhook + "  \n",
+		"blank lines around it":      "\n" + fakeWebhook + "\n\n",
+		"the production usual shape": "https://hooks.slack.com/services/T0LEAKCHECK/B0LEAKCHECK/abcDEF123\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			want := strings.TrimSpace(content)
@@ -1224,7 +1202,7 @@ func TestSandboxAlertTarget(t *testing.T) {
 		section = section[:j+3]
 	}
 	for _, want := range []string{
-		"real alert channel", "[kind]", "#alerts-critical", "make sandbox-alert ALERT=", "STATE=resolved",
+		"real alert channel", "[kind]", "make sandbox-alert ALERT=", "STATE=resolved",
 		"receiver=slack-critical-kind", "make sandbox-up", "api/v2/status", "alertmanager-webhook-url", "chmod 600",
 	} {
 		if !strings.Contains(section, want) {

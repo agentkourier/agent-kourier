@@ -4,7 +4,7 @@
 #
 # There is no Prometheus in the tier, so the alert is posted straight to Alertmanager's v2 API, from a probe pod in the cluster,
 # with the labels and annotations a kube-prometheus rule would give it for one of the faults seeded in namespace shop
-# (alertmanager/alerts.json, the presets). With the sandbox up, Alertmanager sends it to the owner's REAL alert channel,
+# (alertmanager/alerts.json, the presets). With the sandbox up, Alertmanager sends it to your REAL alert channel,
 # tagged [kind], through the receiver slack-critical-kind (alertmanager/config.yaml); hack/kind/sandbox/README.md, Alert trial.
 # ALERT must be a preset: nothing else is ever posted. Every alert it posts carries the label agentkourier_trial="true", which the receiver's
 # route requires (alertmanager/config.yaml), so nothing else in the cluster can reach the production channel through it.

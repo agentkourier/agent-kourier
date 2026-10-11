@@ -18,7 +18,7 @@ import (
 // alertPost is what Alertmanager's Slack receiver posts through an incoming webhook: no text, and one
 // legacy attachment with its title, link, fallback, colour and the fields it asks Slack to render as mrkdwn.
 func alertPost() fakeslack.WebhookPost {
-	return fakeslack.WebhookPost{Channel: "C1", BotID: "B0EXAMPLE01", Username: "Alertmanager", Attachments: []fakeslack.Attachment{{
+	return fakeslack.WebhookPost{Channel: "C1", BotID: "B0123456789", Username: "Alertmanager", Attachments: []fakeslack.Attachment{{
 		Color:      "danger",
 		Fallback:   "[FIRING:1] KubeAPIErrorBudgetBurn kube-system (critical) | http://am/#/alerts?receiver=slack-critical",
 		Title:      "FIRING (1) - KubeAPIErrorBudgetBurn",
@@ -30,7 +30,7 @@ func alertPost() fakeslack.WebhookPost {
 }
 
 // An incoming webhook's post reaches the client as a bot_message event: the bot's ID and a name, no user and
-// no app_id, empty text and the attachments, as the owner's channel shows it.
+// no app_id, empty text and the attachments, as the alert channel shows it.
 func TestWebhookDeliversABotMessageEvent(t *testing.T) {
 	fake, smc := connected(t)
 	got, err := fake.Webhook(alertPost())
@@ -39,7 +39,7 @@ func TestWebhookDeliversABotMessageEvent(t *testing.T) {
 	}
 	env, _, inner := nextInner(t, smc)
 	m, ok := inner.(*slackevents.MessageEvent)
-	if !ok || env != got.Envelopes[0] || m.SubType != "bot_message" || m.BotID != "B0EXAMPLE01" || m.Username != "Alertmanager" ||
+	if !ok || env != got.Envelopes[0] || m.SubType != "bot_message" || m.BotID != "B0123456789" || m.Username != "Alertmanager" ||
 		m.User != "" || m.Text != "" || m.TimeStamp != got.TS || m.Channel != "C1" || m.ChannelType != "channel" || m.ThreadTimeStamp != "" {
 		t.Fatalf("event = %#v; want a top-level bot_message from the webhook's bot with no user and no text", inner)
 	}
@@ -85,13 +85,13 @@ func TestWebhookEventShapeOnTheWire(t *testing.T) {
 	_, hasUser := ev["user"]
 	_, hasApp := ev["app_id"]
 	text, hasText := ev["text"]
-	if hasUser || hasApp || !hasText || text != "" || ev["type"] != "message" || ev["subtype"] != "bot_message" || ev["bot_id"] != "B0EXAMPLE01" {
+	if hasUser || hasApp || !hasText || text != "" || ev["type"] != "message" || ev["subtype"] != "bot_message" || ev["bot_id"] != "B0123456789" {
 		t.Fatalf("event = %v; want type message, subtype bot_message, bot_id, empty text and neither user nor app_id", ev)
 	}
 }
 
 // The post is stored like any message, so conversations.history and the control surface show it in the shape of
-// the owner's channel too.
+// the alert channel too.
 func TestWebhookPostIsStoredAndRead(t *testing.T) {
 	fake, _ := connected(t)
 	api := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))
@@ -99,12 +99,12 @@ func TestWebhookPostIsStoredAndRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	msgs := fake.Messages("C1")
-	if len(msgs) != 1 || msgs[0].Subtype != "bot_message" || msgs[0].BotID != "B0EXAMPLE01" || msgs[0].AppID != "" || msgs[0].User != "" ||
+	if len(msgs) != 1 || msgs[0].Subtype != "bot_message" || msgs[0].BotID != "B0123456789" || msgs[0].AppID != "" || msgs[0].User != "" ||
 		len(msgs[0].Attachments) != 1 {
 		t.Fatalf("stored = %+v; want one bot_message with its attachment", msgs)
 	}
 	h := history(t, api, slack.GetConversationHistoryParameters{})
-	if len(h.Messages) != 1 || h.Messages[0].SubType != "bot_message" || h.Messages[0].BotID != "B0EXAMPLE01" ||
+	if len(h.Messages) != 1 || h.Messages[0].SubType != "bot_message" || h.Messages[0].BotID != "B0123456789" ||
 		len(h.Messages[0].Attachments) != 1 || h.Messages[0].Attachments[0].Title != "FIRING (1) - KubeAPIErrorBudgetBurn" {
 		t.Fatalf("history = %+v; want the webhook post", h.Messages)
 	}

@@ -22,7 +22,7 @@ import (
 const (
 	digestBinding = "sre/sre-alerts"
 	digestConn    = "agent-kourier-system/slack-main"
-	digestChannel = "C0EXAMPLE01"
+	digestChannel = "C0123456789"
 )
 
 var digestNow = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)

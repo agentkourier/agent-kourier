@@ -23,11 +23,11 @@ type Attachment struct {
 }
 
 // WebhookPost is a post through an incoming webhook: what Alertmanager's Slack receiver does, and so what
-// the owner's alert channel holds. It has a bot ID, no user and no app_id, and its content is in legacy
+// the alert channel holds. It has a bot ID, no user and no app_id, and its content is in legacy
 // attachments, with the message's own text usually empty.
 type WebhookPost struct {
 	Channel string `json:"channel"`
-	// BotID is the bot the webhook posts as, such as B0EXAMPLE01. It may be the fake's own bot, which is how
+	// BotID is the bot the webhook posts as, such as B0123456789. It may be the fake's own bot, which is how
 	// a test shows Agent Kourier ignoring itself.
 	BotID string `json:"bot_id"`
 	// Username is the name the post shows; "incoming-webhook" if empty.
@@ -47,7 +47,7 @@ const defaultWebhookName = "incoming-webhook"
 //
 // UNCONFIRMED(WP-04): the event's fields: type message, subtype bot_message, bot_id, username, the text
 // (present even when empty), the attachments with an id each, channel_type, and neither user nor app_id.
-// They come from the history of the owner's channel (conversations.history), not from a captured event.
+// They come from the history of the alert channel (conversations.history), not from a captured event.
 // The post is always top-level, though a real webhook can post into a thread.
 func (s *Server) Webhook(p WebhookPost) (UserMessage, error) {
 	if p.Channel == "" || p.BotID == "" {

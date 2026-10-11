@@ -1,4 +1,4 @@
-# A dry-run Binding for the alert trial: the owner's alert channel, replayed through the trial trigger.
+# A dry-run Binding for the alert trial: your alert channel, replayed through the trial trigger.
 # `agent-kourier dry-run` (hack/kind/sandbox/README.md, "Tune triggers with a dry run") loads it with the real loader, so
 # the defaults and the alertmanager preset apply as they do in production. Nothing here is applied to a cluster, and
 # the references (backend, connection, Secret) are never resolved: only the channel and the triggers are used.
@@ -18,12 +18,12 @@ spec:
     tokenSecretRef: {name: agent-kourier-agent-token}
   chat:
     connectionRef: {namespace: agent-kourier, name: sandbox-slack}
-    channel: C0EXAMPLE01 # #alerts-critical
+    channel: C0123456789 # replace with your alert channel's ID
     output: live
     triggers:
       - type: mention
       - type: botMessage
-        from: {botId: B0EXAMPLE01} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
+        from: {botId: B0123456789} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
         preset: alertmanager
         match: {titleLink: 'receiver=slack-critical-kind$'}
         exclude: {title: '^Prometheus heartbeat$'}

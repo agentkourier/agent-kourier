@@ -19,19 +19,19 @@ func ref(channel, ts string) chat.Ref {
 // The permalink of a message is built from the workspace URL that auth.test returned when Run connected, with no call
 // of its own: it is for the acknowledgement path, which allows Slack's API none. Until Run has asked, there is none.
 func TestPermalinkIsBuiltFromTheCachedWorkspaceURL(t *testing.T) {
-	fake := newFake(t, fakeslack.WithTeam("T0example1", "example"))
+	fake := newFake(t, fakeslack.WithTeam("T0EXAMPLE1", "example"))
 	client := slack.New(clientConfig(fake))
 	p := slack.NewPlatform(client, intakeConn)
 	var _ chat.Permalinker = p
 
-	if got, ok := p.Permalink(ref("C0EXAMPLE01", "1759560000.123456")); ok || got != "" {
+	if got, ok := p.Permalink(ref("C0123456789", "1759560000.123456")); ok || got != "" {
 		t.Fatalf("Permalink before Run = %q, %v; want none: auth.test has not been asked", got, ok)
 	}
 	run(t, client, &sink{})
 	waitConnected(t, fake)
 
-	got, ok := p.Permalink(ref("C0EXAMPLE01", "1759560000.123456"))
-	if want := "https://example.slack.com/archives/C0EXAMPLE01/p1759560000123456"; !ok || got != want {
+	got, ok := p.Permalink(ref("C0123456789", "1759560000.123456"))
+	if want := "https://example.slack.com/archives/C0123456789/p1759560000123456"; !ok || got != want {
 		t.Errorf("Permalink = %q, %v; want %q", got, ok, want)
 	}
 }

@@ -1,4 +1,4 @@
-# A dry-run Binding for production: the owner's alert channel, replayed through the trigger that production would run.
+# A dry-run Binding for production: your alert channel, replayed through the trigger that production would run.
 # Same as trial.yaml, with the receiver anchored at slack-critical: it takes production's alerts and not the kind ones.
 # See trial.yaml for what loads it and why the $ matters.
 apiVersion: agentkourier.dev/v1alpha1
@@ -14,12 +14,12 @@ spec:
     tokenSecretRef: {name: agent-kourier-agent-token}
   chat:
     connectionRef: {namespace: agent-kourier, name: sandbox-slack}
-    channel: C0EXAMPLE01 # #alerts-critical
+    channel: C0123456789 # replace with your alert channel's ID
     output: live
     triggers:
       - type: mention
       - type: botMessage
-        from: {botId: B0EXAMPLE01} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
+        from: {botId: B0123456789} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
         preset: alertmanager
         match: {titleLink: 'receiver=slack-critical$'}
         exclude: {title: '^Prometheus heartbeat$'}

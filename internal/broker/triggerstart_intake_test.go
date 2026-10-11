@@ -28,7 +28,7 @@ func (everyKey) Keys(context.Context, string, string) ([]string, error) {
 }
 
 // alertWorld is a real Intake over a real store and the starter, with a clock the test moves, for the paths where the
-// thread rules and the start meet. The Binding sre/sre-alerts owns C0EXAMPLE01 with the alertmanager preset.
+// thread rules and the start meet. The Binding sre/sre-alerts owns C0123456789 with the alertmanager preset.
 type alertWorld struct {
 	in    *chat.Intake
 	sub   *startSubmitter
@@ -60,8 +60,8 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	b := v1alpha1.Binding{ObjectMeta: meta("sre", "sre-alerts"), Spec: v1alpha1.BindingSpec{
 		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
 		Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
-		Chat: v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: "C0EXAMPLE01",
-			Triggers: []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0EXAMPLE01"}, Preset: v1alpha1.PresetAlertmanager}}}}}
+		Chat: v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: "C0123456789",
+			Triggers: []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0123456789"}, Preset: v1alpha1.PresetAlertmanager}}}}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatal(err)
@@ -107,8 +107,8 @@ func alertOf(ts, state, name, group string) chat.Inbound {
 		title, tag = "RESOLVED - "+name, "[RESOLVED]"
 	}
 	return chat.Inbound{
-		At: chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0EXAMPLE01", ID: ts},
-		Bot: &chat.BotMessage{BotID: "B0EXAMPLE01", Title: title, TitleLink: link,
+		At: chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: ts},
+		Bot: &chat.BotMessage{BotID: "B0123456789", Title: title, TitleLink: link,
 			Fallback: tag + " " + group + " (checkout critical) | " + link, AttachmentText: "*Alert* - critical\n"},
 	}
 }
@@ -153,7 +153,7 @@ func TestAnAlertStartsOneTurnAndItsRepeatAndResolveStartNone(t *testing.T) {
 		t.Errorf("notes %v; want a repeat and a close", got)
 	}
 	in := w.sub.got[0]
-	if !in.Create || in.Binding != "sre/sre-alerts" || !strings.HasPrefix(in.Text, "An alert is FIRING in channel C0EXAMPLE01: KubePodCrashLooping.") || !strings.Contains(in.Text, "<untrusted-data-") {
+	if !in.Create || in.Binding != "sre/sre-alerts" || !strings.HasPrefix(in.Text, "An alert is FIRING in channel C0123456789: KubePodCrashLooping.") || !strings.Contains(in.Text, "<untrusted-data-") {
 		t.Errorf("the turn %+v; want a new session whose text is the rendered prompt with its untrusted block", in)
 	}
 }

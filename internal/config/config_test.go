@@ -79,7 +79,7 @@ func withTriggers(triggers string) string {
 func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
 	trial := withTriggers(`      - type: mention
       - type: botMessage
-        from: { botId: B0EXAMPLE01 }
+        from: { botId: B0123456789 }
         preset: alertmanager
         match: { titleLink: 'receiver=slack-critical-kind$' }
         exclude: { title: '^Prometheus heartbeat$' }
@@ -103,7 +103,7 @@ func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
 		t.Fatalf("loaded %d triggers, want 2: %+v", len(ts), ts)
 	}
 	tr := ts[1]
-	if tr.From.BotID != "B0EXAMPLE01" {
+	if tr.From.BotID != "B0123456789" {
 		t.Errorf("botId = %q", tr.From.BotID)
 	}
 	if got := tr.Match[v1alpha1.FieldTitleLink]; got != "receiver=slack-critical-kind$" {
@@ -127,7 +127,7 @@ func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
 // the preset's value for the same field.
 func TestLoadPresetYieldsToTheBinding(t *testing.T) {
 	doc := withTriggers(`      - type: botMessage
-        from: { botId: B0EXAMPLE01 }
+        from: { botId: B0123456789 }
         preset: alertmanager
         match: { title: '^MyAlert' }
         thread: { cooldown: 30m }
@@ -154,7 +154,7 @@ func TestLoadRejectsBadTriggers(t *testing.T) {
 		},
 		{
 			name:     "regex that does not compile",
-			triggers: "      - { type: botMessage, from: { botId: B0EXAMPLE01 }, preset: alertmanager, match: { title: '(' } }\n",
+			triggers: "      - { type: botMessage, from: { botId: B0123456789 }, preset: alertmanager, match: { title: '(' } }\n",
 			want:     "b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].match.title: invalid regular expression: error parsing regexp: missing closing ): `(`",
 		},
 	}

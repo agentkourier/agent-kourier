@@ -28,8 +28,8 @@ import (
 
 // The owner's channel and the bot of the webhook that posts into it: Alertmanager's alerts, Grafana's and the heartbeat.
 const (
-	alertChannel = "C0EXAMPLE01"
-	webhookBot   = "B0EXAMPLE01"
+	alertChannel = "C0123456789"
+	webhookBot   = "B0123456789"
 	// dryRunConfig holds the Bindings that hack/kind/sandbox/README.md has the owner run, so the tests prove those.
 	dryRunConfig = "../../hack/kind/sandbox/dryrun"
 
