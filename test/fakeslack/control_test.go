@@ -14,7 +14,7 @@ import (
 )
 
 // slashCommand is a payload slack-go's client can parse (it wants the string).
-var slashCommand = map[string]string{"command": "/courier", "is_enterprise_install": "false"}
+var slashCommand = map[string]string{"command": "/agent-kourier", "is_enterprise_install": "false"}
 
 const mentionText = "<@UFAKEBOT> investigate"
 

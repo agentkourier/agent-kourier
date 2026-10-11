@@ -73,7 +73,7 @@ func ThreadRepliesCounted(entries []ThreadReply, dropped int) (section string, l
 	return untrustedBlock{
 		// The clause ends in the comma that closes its aside, before the verb of the sentence the module writes. The aside
 		// says which of the two shows who wrote a reply: the name is what a person calls themselves, and is theirs to choose.
-		Opening: "Replies that people wrote in this thread since the previous turn, without mentioning courier " +
+		Opening: "Replies that people wrote in this thread since the previous turn, without mentioning Agent Kourier " +
 			"(in each, the id is who wrote it, by the platform's ID, and the from is only the name they call themselves),",
 		Plural:    true,
 		Order:     "oldest first",

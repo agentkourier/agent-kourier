@@ -72,9 +72,9 @@ func TestTheNoMentionTriggerNoticeTellsTheTruthAboutReplies(t *testing.T) {
 		mode        v1alpha1.ThreadReplies
 		want, avoid string
 	}{
-		{v1alpha1.ThreadRepliesAll, "replies in a thread Agent Kourier owns still continue it", "only a reply that mentions courier"},
-		{"", "replies in a thread Agent Kourier owns still continue it", "only a reply that mentions courier"},
-		{v1alpha1.ThreadRepliesMention, "only a reply that mentions courier continues it", "replies in a thread Agent Kourier owns still continue it"},
+		{v1alpha1.ThreadRepliesAll, "replies in a thread Agent Kourier owns still continue it", "only a reply that mentions Agent Kourier"},
+		{"", "replies in a thread Agent Kourier owns still continue it", "only a reply that mentions Agent Kourier"},
+		{v1alpha1.ThreadRepliesMention, "only a reply that mentions Agent Kourier continues it", "replies in a thread Agent Kourier owns still continue it"},
 	} {
 		h := newTriggered(t, kindOnly())
 		rb, _ := h.snap.Load().Binding("sre", "sre-alerts")

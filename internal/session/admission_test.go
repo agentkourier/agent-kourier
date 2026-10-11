@@ -56,7 +56,7 @@ func TestReplyAdmission(t *testing.T) {
 		{"gone: no Binding owns the channel, so the default mode is all", func(f *ReplyFacts) { f.BindingGone, f.ChannelMode = true, "" }, admGone, false},
 		{"gone: the channel's Binding takes all replies", func(f *ReplyFacts) { f.BindingGone, f.ChannelMode = true, modeAll }, admGone, false},
 		{"gone: the channel's Binding takes mentions, and the reply has none, though a question is pending", func(f *ReplyFacts) { f.BindingGone, f.ChannelMode = true, modeMention }, admGoneQuietly, false},
-		{"gone: the channel's Binding takes mentions, and the reply mentions courier", func(f *ReplyFacts) { f.BindingGone, f.ChannelMode = true, modeMention; withMention(f) }, admGone, false},
+		{"gone: the channel's Binding takes mentions, and the reply mentions Agent Kourier", func(f *ReplyFacts) { f.BindingGone, f.ChannelMode = true, modeMention; withMention(f) }, admGone, false},
 		{"gone: the channel's Binding takes mentions, and the turn may create", func(f *ReplyFacts) { f.BindingGone, f.ChannelMode, f.Create = true, modeMention, true }, admGone, false},
 		{"gone: the session's own mode is not asked, all", func(f *ReplyFacts) { f.BindingGone, f.Mode, f.ChannelMode = true, modeAll, modeMention }, admGoneQuietly, false},
 		{"gone: the session's own mode is not asked, mention", func(f *ReplyFacts) { f.BindingGone, f.Mode, f.ChannelMode = true, modeMention, modeAll }, admGone, false},

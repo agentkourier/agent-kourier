@@ -144,7 +144,7 @@ func decode(me self, inner any) (Message, verdict) {
 
 // mentionedIn reports whether text holds Agent Kourier's user token, <@UID> or <@UID|label>, anywhere in it: Slack sends
 // an app_mention for a token in a quote or in code, so the message event of that text counts as one too. Plain
-// "@courier", another user's token, <!here>, <!channel> and a user group are not mentions.
+// "@agent_kourier", another user's token, <!here>, <!channel> and a user group are not mentions.
 func (me self) mentionedIn(text string) bool {
 	if !strings.Contains(text, "<@") { // most text has none: skip the scan
 		return false

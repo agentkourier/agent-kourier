@@ -329,7 +329,7 @@ func (in *Intake) binding(ctx context.Context, channel string) (name string, ok 
 		if _, told := in.mentionless.LoadOrStore(name, struct{}{}); !told {
 			replies := "replies in a thread Agent Kourier owns still continue it"
 			if rb.Binding.Spec.Chat.ThreadReplies == v1alpha1.ThreadRepliesMention {
-				replies = "in a thread Agent Kourier owns only a reply that mentions courier continues it"
+				replies = "in a thread Agent Kourier owns only a reply that mentions Agent Kourier continues it"
 			}
 			in.log.InfoContext(ctx, "chat: the triggers of a Binding have no mention trigger, so an @mention in its channel starts no session; "+replies, "binding", name)
 		}

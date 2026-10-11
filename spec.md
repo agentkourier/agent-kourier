@@ -461,7 +461,7 @@ The matching team-owned route, next to the Binding:
 ```yaml
 apiVersion: monitoring.coreos.com/v1alpha1
 kind: AlertmanagerConfig
-metadata: { name: courier, namespace: sre }
+metadata: { name: agent-kourier, namespace: sre }
 spec:
   route:
     receiver: agent-kourier
@@ -795,7 +795,7 @@ never drops the reply.
 Agent Kourier owns is a turn) or `mention`. In `mention`, a reply is a turn only if it mentions Agent Kourier, whether the thread
 was started by a mention or by a trigger. The adapter decides what a mention is: on Slack, what Slack reports as one
 (an `app_mention`), which includes Agent Kourier's user token anywhere in the text, in a quote or in code; plain text such as
-`@courier` is not one, and a mention added by an edit does not count. Direct messages need none. An unmentioned reply is
+`@agent_kourier` is not one, and a mention added by an edit does not count. Direct messages need none. An unmentioned reply is
 ignored: nothing is written, no reaction is added, and the thread's `threadTTL` is not extended. It is counted
 (`agentkourier_thread_unmentioned_total{binding}`). The one exception is a reply while the agent waits on a question that
 takes text replies (8.4): it is that question's answer, and never a turn. It
