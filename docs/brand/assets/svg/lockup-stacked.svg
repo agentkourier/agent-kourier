@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" width="960" height="720">
+  <title>Agent Kourier stacked lockup</title>
+  <g transform="translate(60 0)"><rect x="10" y="44" width="26" height="6" rx="3" fill="#326CE5"/><rect x="84" y="44" width="26" height="6" rx="3" fill="#326CE5"/><rect x="14" y="53" width="22" height="6" rx="3" fill="#326CE5"/><rect x="84" y="53" width="22" height="6" rx="3" fill="#326CE5"/><rect x="18" y="62" width="18" height="6" rx="3" fill="#326CE5"/><rect x="84" y="62" width="18" height="6" rx="3" fill="#326CE5"/><rect x="38" y="34" width="44" height="52" rx="12" fill="#1E3A8A"/><rect x="44" y="48" width="32" height="16" rx="8" fill="#FFFFFF"/><circle cx="53" cy="56" r="4" fill="#1E3A8A"/><circle cx="67" cy="56" r="4" fill="#1E3A8A"/></g>
+  <text x="120" y="150" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="-0.6" fill="#1E3A8A">Agent Kourier</text>
+</svg>
