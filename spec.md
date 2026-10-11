@@ -170,7 +170,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D10 | Alert noise | Dedup by group key plus per-binding rate limits and daily cap. Since D39 the dedup is a trigger's thread key and cooldown (8.2), and the limits are a trigger's `limits` |
 | D11 | On resolve | Post a note; the session stays open for the thread's lifetime (see D28) |
 | D12 | Authorization | Channel-scoped bindings |
-| D13 | Approvals | Slack buttons, any channel member may approve. Deferred to Phase 5 (see D25). |
+| D13 | Approvals | Slack buttons, any channel member may approve, narrowed to the members of the Binding's `approverGroups` when it names any (R1). Deferred to Phase 5 (see D25). |
 | D14 | Identity | One service identity per Binding for every turn; the Slack user is carried as attribution (revised in v0.2, was per-user email) |
 | D15 | State | Pluggable store, SQLite default, Postgres for HA |
 | D16 | Slack transport | Socket Mode and Events API over HTTP, both supported. Only Socket Mode is served today (D40); HTTP mode arrives in Phase 4 |
@@ -182,7 +182,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D22 | Alert path | Agent Kourier is an additional Alertmanager receiver (`continue: true`). Existing notifications are unchanged. Investigation threads go to a dedicated channel and link back to the alert. (v0.3) **Superseded by D39:** Agent Kourier is no longer an Alertmanager receiver, and the thread is under the alert's own message. What holds is that existing notifications are unchanged and Agent Kourier is never in the paging path. |
 | D23 | First agent | Read-only investigation agent: queries metrics, logs, and Kubernetes state; recommends, never changes. (v0.3) |
 | D24 | Pilot environment | Production runs kagent 0.10.x. The pilot uses a separate kagent 1.0 alpha install with a read-only agent holding production read credentials, fed by production Alertmanager. Agent Kourier moves to production kagent at 1.0 GA. (v0.3) |
-| D25 | Interactions scope | Ask-user (including nested ask-user) ships in the MVP, because an unanswered pause stalls a thread. Tool approvals move to Phase 5, with the first write-capable agent. (v0.3) Since D40 `toolApprovals` lands then too, and `approverGroups` if the R1 decision calls for it; until then every tool-approval pause is denied (8.4). |
+| D25 | Interactions scope | Ask-user (including nested ask-user) ships in the MVP, because an unanswered pause stalls a thread. Tool approvals move to Phase 5, with the first write-capable agent. (v0.3) Since D40 `toolApprovals` and `approverGroups` land then too (R1); until then every tool-approval pause is denied (8.4). |
 | D26 | Rate-limited alerts | One digest line per window in the investigation channel plus a metric; no per-alert message. (v0.3) |
 | D27 | Value signal | Useful and not-useful buttons on each investigation, stored per alert name and agent. (v0.3) |
 | D28 | Session lifetime | Agent Kourier keeps the thread-to-session mapping for 90 days and resumes the same `contextId`; kagent handles suspend and resume. No Agent Kourier idle timeout. (v0.3) |
@@ -197,7 +197,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: owner, 2026-10-05, H4-5b.) |
 | D38 | Thread replies | A Binding's `chat.threadReplies` is `all` (default) or `mention`. In `mention`, only a reply that mentions Agent Kourier is a turn, and it carries the unmentioned replies since the last turn as untrusted data; a typed answer to a question that takes text replies needs no mention. (Owner, 2026-10-05; mention-only thread replies, TM-8.) |
 | D39 | Direct webhook dropped | Agent Kourier has no Alertmanager webhook endpoint and is not an Alertmanager receiver. The Binding has no `alerts` field and no `status.webhookPath`. Alerts reach a Binding only through `chat.triggers`: a `botMessage` trigger reads the message Alertmanager already posts to Slack (8.2, D36), and alert-specific behaviour lives in a preset and a prompt template, not in the API. Dropped for good, not deferred. Supersedes D22 and D29, and the webhook parts of D8, D9, D10 and D31. A Binding with an `alerts:` block no longer loads (the decoder is strict), so a deployed config drops the block first. (Owner, 2026-10-10; DA-1, DA-2.) |
-| D40 | Fields that work | The API carries only fields that work. A planned feature's fields land with the feature, so five fields are not in the types until their phase: `Binding.spec.interactions.toolApprovals` (Phase 5; a tool-approval pause is always denied) and `approverGroups` (Phase 5, if the R1 decision calls for it), `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). Phases 4 and 5 and their designs stay (7 says which field comes back with which). A config that sets any of the five no longer loads (the decoder is strict), so a deployed config drops them first. (Owner, 2026-10-10; DA-3, DA-4.) |
+| D40 | Fields that work | The API carries only fields that work. A planned feature's fields land with the feature, so five fields are not in the types until their phase: `Binding.spec.interactions.toolApprovals` (Phase 5; a tool-approval pause is always denied) and `approverGroups` (Phase 5, decided in R1; until then no tool approval is rendered, so there is none to gate), `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). Phases 4 and 5 and their designs stay (7 says which field comes back with which). A config that sets any of the five no longer loads (the decoder is strict), so a deployed config drops them first. (Owner, 2026-10-10; DA-3, DA-4.) |
 
 ## 6. Architecture
 
@@ -455,7 +455,7 @@ that sets one is refused as an unknown field (the decoder is strict):
 | Field | Arrives with | What it will do | Today |
 |---|---|---|---|
 | `Binding.spec.interactions.toolApprovals` | Phase 5 | Allows a tool-approval pause to be rendered as Approve and Deny buttons (8.4) | Every tool-approval pause is denied, with a notice in the thread and a metric (8.4) |
-| `Binding.spec.interactions.approverGroups` | Phase 5, if the R1 decision calls for it | Names who may approve a write action; empty means any channel member (R1) | Any member of the Binding's channel may answer a question (8.4) |
+| `Binding.spec.interactions.approverGroups` | Phase 5 | Names the user groups whose members may approve a tool call; empty means any member of the Binding's channel (R1). It gates tool approvals only, not ask-user answers, and an approver must also be a channel member and not a bot. A Binding with `toolApprovals: true` and no group loads, with a logged warning | Every tool-approval pause is denied, so there is no approval to gate; any member of the Binding's channel may answer a question (8.4) |
 | `ChatConnection.spec.directMessages.defaultBindingRef` | Phase 4 | Routes a DM to the named Binding, which may be in any namespace and must use the same connection, because the platform team owns connections; DM access is gated on membership in that Binding's channel (8.2, R8) | A DM is not routed: the Slack adapter drops it, and the intake finds a Binding by channel only |
 | `ChatConnection.spec.mode` (`socket` or `http`) and the Secret key `signingSecret` | Phase 4 | HTTP mode, with signing-secret verification (10) | Only Socket Mode is served, so `credentialsSecretRef` needs the keys `botToken` and `appToken` |
 | `Binding.status.conditions` (`Ready`, `BackendReachable`, `ChannelJoined`) | Phase 4, with the controller (D30) | The controller reports each Binding's state | Nothing sets a status; a problem with the config is a load error (below) |
@@ -859,7 +859,7 @@ making the prefix optional breaks multi-turn context.
 ### 8.4 Interactions
 
 Ask-user and nested ask-user ship in the MVP. Tool approvals ship in Phase 5 (D25), with
-the Binding's `toolApprovals` field, and `approverGroups` if the R1 decision calls for it (D40). Until then, if an agent
+the Binding's `toolApprovals` and `approverGroups` fields (D40, R1), which are not in the types yet. Until then, if an agent
 pauses for a tool approval, Agent Kourier denies it, says so in the thread, and raises a
 metric, because the Binding is expected to point at a read-only agent.
 
@@ -894,7 +894,9 @@ metric, because the Binding is expected to point at a read-only agent.
      step, never twice and never unescaped (WP-32b review).
 3. On submit, Agent Kourier verifies the request came from Slack, confirms the user is a
    channel member and not a bot, and checks the answer is complete. An incomplete
-   answer is rejected in Slack; nothing is sent to the backend.
+   answer is rejected in Slack; nothing is sent to the backend. For a tool approval
+   (Phase 5) on a Binding that names `approverGroups`, the user must also be in one of
+   them (R1); the groups do not gate an ask-user answer.
 4. Agent Kourier records the decision and sends it through the dialect under the Binding's
    identity, with the Slack user as attribution.
 5. First complete submission wins. The message is updated to show who decided and
@@ -1092,7 +1094,7 @@ a root post (a role the store accepts and nothing in production has ever posted)
 | 2. Alerts | `botMessage` triggers (8.2) that read the message Alertmanager already posts to Slack: the `alertmanager` preset, a thread under each alert with a cooldown per key and notes for repeats and resolves, rate limit, daily cap, digest line, the prompt template with the alert in the untrusted block, feedback buttons. Built as CT-1 to CT-7b; the webhook receiver was dropped (D39) | A firing alert produces one thread; repeats add a note to it; replies continue the session. A 50-alert burst yields capped investigations and one digest line, not 50 messages. Votes are recorded. |
 | 3. Pilot | Four weeks, one team plus the platform Binding. Feedback dashboard. Weekly review of not-useful investigations. | Go or no-go recorded against D33 (section 13) |
 | 4. Hardening (if go) | CRDs and controller, Postgres, HA, HTTP mode, DMs, Helm chart. These add back the fields that wait for them (D40): `ChatConnection.spec.mode` and `signingSecret`, `ChatConnection.spec.directMessages`, and `Binding.status`. Move the backend to production kagent at 1.0 GA and retire the pilot install. | Two replicas pass a failover test with no lost or duplicated events |
-| 5. Tool approvals | Bind the first write-capable agent. Decide R1 (`approverGroups`) first. Approval buttons, timeout, audit. Adds back `toolApprovals`, and `approverGroups` if the R1 decision calls for it (D40). | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
+| 5. Tool approvals | Bind the first write-capable agent. R1 is decided (2026-10-11): `approverGroups` is added. Approval buttons, timeout, audit. Adds back `toolApprovals` and `approverGroups` (D40). | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
 | 6. OSS readiness | Docs, generic `a2a` dialect conformance tests, ax example (reference agent and AX kind tier shipped) | A non-kagent A2A agent works with no code changes |
 
 ### 12.1 Testing strategy
@@ -1167,7 +1169,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 
 | # | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). Phase 5 cannot exit without a recorded R1 decision. `interactions.approverGroups` is not in the schema today (D40); Phase 5 adds it with `toolApprovals` if the R1 decision calls for it, and adding an optional field breaks no config. |
+| R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). **Decided 2026-10-11 (owner), optional approver groups:** Phase 5 adds `Binding.spec.interactions.approverGroups` with `toolApprovals`, and adding an optional field breaks no config. Empty means any member of the Binding's channel may approve. A Binding with `toolApprovals: true` and no group loads, with a logged warning. The groups gate tool approvals only, not ask-user answers, and an approver must be in a group, a channel member and not a bot. The backend still sees only the Binding identity (D14); the audit row is the accountable record. **Residual risk:** a Binding with no group still lets any channel member approve a write action, and the backend cannot tell who. Neither field is in the schema today (D40), so every tool-approval pause is denied until Phase 5 lands them. |
 | R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, the bot-ID check (D36), rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. The message's fields have their secrets taken out before they reach the agent. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
 | R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode, and in OIDC mode `X-Agent-Name` plus `X-User-Id` or `?user_id=`, which selects the acting user even with a valid token (WP-03: oauth2-proxy forwards them). | High | Agent Kourier talks only to a verifying front door (oauth2-proxy or agentgateway) that strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`; NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. Proven for the header path (WP-01d): through the door, B's valid token with `X-Agent-Name` plus `X-User-Id` or `?user_id=`, in any case, gets `-31403` on send, stream, `GetTask`, `SubscribeToTask` and `CancelTask`, and a bogus `X-Share-Token` is dropped, while the same spoof works at 8083 (canary) and the Binding's own send, SSE and `GetTask` still work. The `X-User-Id` and runtime-identity strips are defence in depth (config and source; no observable while `X-Agent-Name` is stripped). The pilot door must use the same config (WP-05). The risk stays High: the controller is unchanged, only mitigated. |
@@ -1320,3 +1322,21 @@ and their designs are unchanged. What changed in this document:
 
 The rows of the v0.1 and v0.2 tables above are not edited; where they name these fields, this entry and D40 qualify
 them.
+
+### R1 decided (2026-10-11)
+
+The owner took the R1 decision, optional approver groups: `Binding.spec.interactions.approverGroups` is added in Phase 5, with
+`toolApprovals` (D40). Empty means any member of the Binding's channel may approve. A Binding with `toolApprovals: true`
+and no approver group loads, with a logged warning. The groups gate tool approvals only, not ask-user answers, and an
+approver must be in a group, a channel member and not a bot. The backend still sees only the Binding identity (D14);
+the audit row is the accountable record. The residual risk stays in R1: a Binding with no group still lets any channel
+member approve. Neither field is in the types yet and every tool-approval pause is still denied; this entry records the
+decision, not a change in behaviour. What changed in this document:
+
+| Earlier text | Now |
+|---|---|
+| D13, D25, D40, and the `approverGroups` row of the section 7 table | `approverGroups` lands in Phase 5 unconditionally, no longer conditional on the R1 decision; D13 says approval is narrowed to the groups when a Binding names any |
+| 8.4 opening and step 3, and the Phase 5 row of section 12 | The opening names both fields as Phase 5 additions that are not in the types yet; step 3 adds the group check for a tool approval in Phase 5; the row says R1 is decided and drops the condition |
+| R1 | The decision, its date and the residual risk |
+
+The rows of the tables above are not edited.
