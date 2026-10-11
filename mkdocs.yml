@@ -157,6 +157,7 @@ nav:
       - explanation/index.md
       - Architecture: explanation/architecture.md
       - Why a broker: explanation/why-a-broker.md
+      - Why A2A: explanation/why-a2a.md
       - Threads and sessions: explanation/threads-and-sessions.md
       - Delivery guarantees: explanation/delivery.md
       - High availability and failover: explanation/high-availability.md

@@ -36,6 +36,8 @@ from an alert rather than a person. Agent Kourier queues the reply that arrives 
 question and validates the answer, streams the output into one message, and recovers the task after a crash. None of
 that fits in a stateless hop.
 
+The choice of A2A as the one protocol to agents is explained in [Why A2A](why-a2a.md).
+
 Authentication of A2A traffic is a different job, and Agent Kourier leaves it to tools built for it: agentgateway or
 oauth2-proxy in front of the agent. See [Security model](security.md).
 

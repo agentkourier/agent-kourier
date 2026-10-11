@@ -17,6 +17,12 @@ built that way, and what it deliberately does not do.
 
     Why a separate, always-on process sits between the chat, the alerts and the agents.
 
+-   **[Why A2A](why-a2a.md)**
+
+    ---
+
+    Why one protocol to every agent, what A2A gives the broker, and what it does not.
+
 -   **[Threads and sessions](threads-and-sessions.md)**
 
     ---
