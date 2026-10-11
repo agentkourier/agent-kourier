@@ -12,7 +12,7 @@ investigates the alerts a bot already posts to the channel. The broker holds the
 connection, the reply queue and the delivery state, so an Agent Kourier restart loses
 no message.
 
-[Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
+[Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
 [Architecture](docs/explanation/architecture.md) · [Roadmap](ROADMAP.md) ·
 [Specification](spec.md)
 
