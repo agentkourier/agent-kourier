@@ -196,6 +196,14 @@ type Platform interface {
 	// IsMember says whether user is in the conversation channel. It fails closed: an error is never
 	// "yes".
 	IsMember(ctx context.Context, channel, user string) (bool, error)
+	// IsInAnyGroup says whether user is a member of at least one of groups, which are the platform's own group IDs (a
+	// Slack user group's, for one). The membership is read at the call and never cached, so a person removed from a
+	// group is refused at once, and the groups are read in order, stopping at the first that lists user. It fails
+	// closed: an error is never "yes". A group the platform cannot read (it does not exist, the app may not read
+	// groups, the platform does not answer in time) is false and the error: the first error ends the call, even if a
+	// later group lists user. An empty groups, or an empty user, is false with no error and no call: what no groups
+	// means is the caller's to decide, and it asks only when groups are configured.
+	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
 	// IsBot says whether user is a bot. It fails closed: a user it cannot read is a bot, with the error.
 	IsBot(ctx context.Context, user string) (bool, error)
 	// ResolveUser returns the user with the platform's ID id.

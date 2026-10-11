@@ -91,6 +91,10 @@ func (idleSlack) IsBot(context.Context, string) (bool, error)                   
 func (idleSlack) React(context.Context, string, string, string) error           { return nil }
 func (idleSlack) Unreact(context.Context, string, string, string) error         { return nil }
 
+func (idleSlack) IsInAnyUserGroup(context.Context, []string, string) (bool, error) {
+	return false, nil
+}
+
 // revokedReacts is idleSlack whose reactions fail the way a revoked bot token fails them.
 type revokedReacts struct{ idleSlack }
 

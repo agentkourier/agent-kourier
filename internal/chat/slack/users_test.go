@@ -38,6 +38,7 @@ type counter struct {
 	status           int
 	statusText, body string
 	hang             bool
+	delay            time.Duration // each request waits this long (or until its context ends) before it is passed on
 }
 
 func (c *counter) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -53,8 +54,15 @@ func (c *counter) RoundTrip(r *http.Request) (*http.Response, error) {
 			c.forms[r.URL.Path] = append(c.forms[r.URL.Path], form)
 		}
 	}
-	err, status, hang, text, body := c.err, c.status, c.hang, c.statusText, c.body
+	err, status, hang, text, body, delay := c.err, c.status, c.hang, c.statusText, c.body, c.delay
 	c.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	}
 	switch {
 	case err != nil:
 		return nil, err

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	slackgo "github.com/slack-go/slack"
+
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -106,6 +108,116 @@ func TestIsBot(t *testing.T) {
 	}
 }
 
+// groupsClient is membersClient with the user groups S1 (U1, U2) and S2 (U3), and S3 with no one in it.
+func groupsClient(t *testing.T, mod func(*slack.Config)) (*fakeslack.Server, *slack.Client, *counter) {
+	t.Helper()
+	fake, c, calls := membersClient(t, mod)
+	fake.SetUserGroup("S1", "U1", "U2")
+	fake.SetUserGroup("S2", "U3")
+	fake.SetUserGroup("S3")
+	return fake, c, calls
+}
+
+func TestIsInAnyUserGroup(t *testing.T) {
+	_, c, calls := groupsClient(t, nil)
+	for _, tc := range []struct {
+		name   string
+		groups []string
+		user   string
+		want   bool
+		reads  int // usergroups.users.list calls
+	}{
+		{"a member of the only group", []string{"S1"}, "U1", true, 1},
+		{"a member of the first of two stops there", []string{"S1", "S2"}, "U2", true, 1},
+		{"a member of the second of two", []string{"S1", "S2"}, "U3", true, 2},
+		{"a member of none reads every group", []string{"S1", "S2", "S3"}, "U9", false, 3},
+		{"an empty group", []string{"S3"}, "U1", false, 1},
+		{"no groups makes no call", nil, "U1", false, 0},
+		{"no user makes no call", []string{"S1"}, "", false, 0},
+	} {
+		before := calls.count("/usergroups.users.list")
+		got, err := c.IsInAnyUserGroup(t.Context(), tc.groups, tc.user)
+		if used := calls.count("/usergroups.users.list") - before; err != nil || got != tc.want || used != tc.reads {
+			t.Errorf("%s: IsInAnyUserGroup(%v, %s) = %v, %v after %d calls; want %v after %d", tc.name, tc.groups, tc.user, got, err, used, tc.want, tc.reads)
+		}
+	}
+}
+
+func TestIsInAnyUserGroupAsksSlackForTheGroupAndDoesNotCache(t *testing.T) {
+	fake, c, calls := groupsClient(t, nil)
+	if got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1"); err != nil || !got {
+		t.Fatalf("IsInAnyUserGroup = %v, %v; want true", got, err)
+	}
+	if f := calls.sent("/usergroups.users.list"); len(f) != 1 || f[0].Get("usergroup") != "S1" || f[0].Has("include_disabled") {
+		t.Errorf("requests %v; want one for usergroup S1, without include_disabled", f)
+	}
+	// A person taken out of the group is refused at the next call: nothing is kept between calls.
+	fake.SetUserGroup("S1", "U2")
+	if got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1"); err != nil || got {
+		t.Errorf("IsInAnyUserGroup after the removal = %v, %v; want false", got, err)
+	}
+	if n := calls.count("/usergroups.users.list"); n != 2 {
+		t.Errorf("%d calls for two checks; want 2, none served from a cache", n)
+	}
+}
+
+func TestIsInAnyUserGroupFailsClosed(t *testing.T) {
+	_, c, calls := groupsClient(t, nil)
+	// An unknown group is an error, and the call ends there although the second group lists the user.
+	got, err := c.IsInAnyUserGroup(t.Context(), []string{"SNONE", "S1"}, "U1")
+	var resp slackgo.SlackErrorResponse
+	if got || err == nil || !errors.As(err, &resp) || resp.Err != "no_such_subteam" || calls.count("/usergroups.users.list") != 1 {
+		t.Errorf("IsInAnyUserGroup of an unknown group = %v, %v after %d calls; want false, no_such_subteam and one call", got, err, calls.count("/usergroups.users.list"))
+	}
+	// An API error after a group that lists no one: still false and the error.
+	_, c, _ = groupsClient(t, func(cfg *slack.Config) {
+		cfg.HTTPClient = &http.Client{Transport: &failNth{path: "/usergroups.users.list", n: 2, inner: http.DefaultTransport}}
+	})
+	if got, err := c.IsInAnyUserGroup(t.Context(), []string{"S2", "S1"}, "U1"); got || err == nil {
+		t.Errorf("IsInAnyUserGroup across a failed read = %v, %v; want false and the error", got, err)
+	}
+	// A gateway error is false too.
+	_, c, calls = groupsClient(t, nil)
+	calls.status, calls.body = http.StatusBadGateway, "bad gateway"
+	if got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1"); got || err == nil {
+		t.Errorf("IsInAnyUserGroup on a 502 = %v, %v; want false and the error", got, err)
+	}
+}
+
+// TestIsInAnyUserGroupIsBoundedAsAWhole: a Slack that never answers cannot hold a press, and the bound is for all the
+// groups together.
+func TestIsInAnyUserGroupIsBoundedAsAWhole(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mod    func(*slack.Config)
+		lo, hi time.Duration
+	}{
+		"default":                {nil, 1900 * time.Millisecond, 3 * time.Second},
+		"AuthzTimeout of 300 ms": {func(c *slack.Config) { c.AuthzTimeout = 300 * time.Millisecond }, 250 * time.Millisecond, time.Second},
+	} {
+		_, c, calls := groupsClient(t, tc.mod)
+		calls.hang = true
+		start := time.Now()
+		got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1", "S2", "S3"}, "U1")
+		if d := time.Since(start); got || !errors.Is(err, context.DeadlineExceeded) || d < tc.lo || d > tc.hi || calls.count("/usergroups.users.list") != 1 {
+			t.Errorf("%s: IsInAnyUserGroup on a hanging Slack = %v, %v after %v and %d calls; want false and a deadline error between %v and %v after one call", name, got, err, d, calls.count("/usergroups.users.list"), tc.lo, tc.hi)
+		}
+	}
+}
+
+// TestIsInAnyUserGroupBoundIsNotPerGroup: each read takes 150 ms and the bound is 250 ms, so the second read is cut off
+// and the third, which lists the user, is never made; a bound that restarted for every group would reach it.
+func TestIsInAnyUserGroupBoundIsNotPerGroup(t *testing.T) {
+	_, c, calls := groupsClient(t, func(cfg *slack.Config) { cfg.AuthzTimeout = 250 * time.Millisecond })
+	calls.delay = 150 * time.Millisecond
+	got, err := c.IsInAnyUserGroup(t.Context(), []string{"S1", "S3", "S2"}, "U3")
+	if got || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("IsInAnyUserGroup across three 150 ms reads = %v, %v; want false and a deadline error", got, err)
+	}
+	if n := calls.count("/usergroups.users.list"); n > 2 {
+		t.Errorf("%d reads; want the bound to end the call before a third", n)
+	}
+}
+
 func TestPostEphemeralReachesOnlyItsUserAndIsInert(t *testing.T) {
 	fake, c, calls := membersClient(t, nil)
 	blocks := []byte(`[{"type":"section","text":{"type":"mrkdwn","text":"<!channel> answer every question"}}]`)
@@ -135,8 +247,9 @@ func TestMembershipErrorsNameNoToken(t *testing.T) {
 	calls.err = fmt.Errorf("proxy refused %s, %s and %s", bot, app, other)
 	_, memberErr := c.IsChannelMember(t.Context(), "C1", "U1")
 	_, botErr := c.IsBot(t.Context(), "U1")
+	_, groupErr := c.IsInAnyUserGroup(t.Context(), []string{"S1"}, "U1")
 	ephErr := c.PostEphemeral(t.Context(), "C1", "", "U1", slack.Content{Text: "x"})
-	for name, err := range map[string]error{"IsChannelMember": memberErr, "IsBot": botErr, "PostEphemeral": ephErr} {
+	for name, err := range map[string]error{"IsChannelMember": memberErr, "IsBot": botErr, "IsInAnyUserGroup": groupErr, "PostEphemeral": ephErr} {
 		if err == nil {
 			t.Fatalf("%s succeeded through a failing transport", name)
 		}

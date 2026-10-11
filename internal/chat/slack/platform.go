@@ -53,6 +53,7 @@ type API interface {
 	React(ctx context.Context, channel, ts, name string) error
 	Unreact(ctx context.Context, channel, ts, name string) error
 	IsChannelMember(ctx context.Context, channel, user string) (bool, error)
+	IsInAnyUserGroup(ctx context.Context, groups []string, user string) (bool, error)
 	IsBot(ctx context.Context, user string) (bool, error)
 	ResolveUser(ctx context.Context, id string) (dialect.User, error)
 }
@@ -424,6 +425,11 @@ func (p *Platform) Unreact(ctx context.Context, r chat.Ref, name string) error {
 // IsMember says whether user is in channel; it fails closed.
 func (p *Platform) IsMember(ctx context.Context, channel, user string) (bool, error) {
 	return p.c.IsChannelMember(ctx, channel, user)
+}
+
+// IsInAnyGroup says whether user is in any of the Slack user groups with the IDs groups; it fails closed.
+func (p *Platform) IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error) {
+	return p.c.IsInAnyUserGroup(ctx, groups, user)
 }
 
 // IsBot says whether user is a bot; it fails closed.

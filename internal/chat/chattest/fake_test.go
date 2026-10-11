@@ -208,6 +208,37 @@ func TestMembershipAndBotChecksFailClosed(t *testing.T) {
 	}
 }
 
+func TestGroupMembershipFailsClosed(t *testing.T) {
+	f := NewFake()
+	f.SetGroup("G1", "U1", "U2")
+	f.SetGroup("G2", "U3")
+	for _, tc := range []struct {
+		name   string
+		groups []string
+		user   string
+		want   bool
+		err    bool
+	}{
+		{"in the first group", []string{"G1", "G2"}, "U1", true, false},
+		{"in the second group", []string{"G1", "G2"}, "U3", true, false},
+		{"in neither", []string{"G1", "G2"}, "U9", false, false},
+		{"no groups", nil, "U1", false, false},
+		{"a group the fake was not told of", []string{"G404"}, "U1", false, true},
+		{"an unknown group before a hit is still an error", []string{"G404", "G1"}, "U1", false, true},
+	} {
+		if got, err := f.IsInAnyGroup(ctx, tc.groups, tc.user); got != tc.want || (err != nil) != tc.err {
+			t.Errorf("%s: IsInAnyGroup(%v, %s) = %t, %v; want %t, error %t", tc.name, tc.groups, tc.user, got, err, tc.want, tc.err)
+		}
+	}
+	f.FailNext("IsInAnyGroup", errors.New("boom"))
+	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); got || err == nil {
+		t.Errorf("IsInAnyGroup with an injected failure = %t, %v; want false and the error", got, err)
+	}
+	if got, err := f.IsInAnyGroup(ctx, []string{"G1"}, "U1"); err != nil || !got {
+		t.Errorf("IsInAnyGroup after the failure = %t, %v; want true", got, err)
+	}
+}
+
 func TestInjectedFailuresComeInTurnAndClassify(t *testing.T) {
 	f := NewFake()
 	gone := &FakeError{Verdict: chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}, Msg: "gone"}

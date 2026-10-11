@@ -123,6 +123,29 @@ func TestConversationsMembers(t *testing.T) {
 	}
 }
 
+func TestUsergroupsUsersList(t *testing.T) {
+	fake, api := newFake(t)
+	fake.SetUserGroup("S1", "U1", "U2", "U1")
+	fake.SetUserGroup("S2") // a group with no one in it
+
+	if got, err := api.GetUserGroupMembers("S1"); err != nil || fmt.Sprint(got) != "[U1 U2]" {
+		t.Fatalf("members of S1 = %v, %v; want [U1 U2], deduped", got, err)
+	}
+	body := rawBody(t, fake, "usergroups.users.list", url.Values{"token": {testToken}, "usergroup": {"S2"}})
+	if !strings.Contains(body, `"users":[]`) {
+		t.Fatalf("body = %s; want \"users\":[] rather than null", body)
+	}
+	fake.SetUserGroup("S1", "U9") // replaces the membership
+	if got, err := api.GetUserGroupMembers("S1"); err != nil || fmt.Sprint(got) != "[U9]" {
+		t.Fatalf("members of S1 after SetUserGroup = %v, %v", got, err)
+	}
+	for group, want := range map[string]string{"S404": "no_such_subteam", "": "invalid_arguments"} {
+		if _, err := api.GetUserGroupMembers(group); err == nil || err.Error() != want {
+			t.Errorf("members of %q = %v; want %s", group, err, want)
+		}
+	}
+}
+
 func TestOldestLatestAndInclusive(t *testing.T) {
 	_, api := newFake(t)
 	a, b, c := post(t, api, text("a")), post(t, api, text("b")), post(t, api, text("c"))

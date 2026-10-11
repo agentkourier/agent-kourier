@@ -210,6 +210,11 @@ func (p *recordingPlatform) IsMember(context.Context, string, string) (bool, err
 	return false, nil
 }
 
+func (p *recordingPlatform) IsInAnyGroup(context.Context, []string, string) (bool, error) {
+	p.note("IsInAnyGroup")
+	return false, nil
+}
+
 func (p *recordingPlatform) IsBot(context.Context, string) (bool, error) {
 	p.note("IsBot")
 	return false, nil
@@ -244,7 +249,7 @@ func (s *recordingStream) Stop(context.Context, string, chat.Message, string) er
 // TestEveryChatMethodIsClassified, so that a method added to the interface is decided on before it can be called unfenced.
 var (
 	chatPlatformWrites = map[string]bool{"Post": true, "Update": true, "Stream": true, "Ephemeral": true, "React": true, "Unreact": true}
-	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsBot": true,
+	chatPlatformReads  = map[string]bool{"Run": true, "Find": true, "RefAt": true, "StreamAt": true, "IsMember": true, "IsInAnyGroup": true, "IsBot": true,
 		"ResolveUser": true, "Fits": true, "Classify": true, "Capabilities": true}
 	chatStreamWrites = map[string]bool{"Append": true, "Step": true, "Stop": true}
 	chatStreamReads  = map[string]bool{"Ref": true}

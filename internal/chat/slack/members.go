@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	// authzTimeout is the default bound of IsChannelMember (as a whole, every page of it) and of IsBot:
+	// authzTimeout is the default bound of IsChannelMember (as a whole, every page of it), of IsInAnyUserGroup (as a whole, every group of it) and of IsBot:
 	// a press waits on the answers, and the caller's context may have no deadline. Config.AuthzTimeout
 	// changes it, for a caller that is not on Slack's 3 second acknowledgement path.
 	authzTimeout = 2 * time.Second
@@ -78,6 +79,46 @@ func (c *Client) IsChannelMember(ctx context.Context, channel, user string) (tel
 		}
 		cursor = next
 	}
+}
+
+// IsInAnyUserGroup reports whether user is a member of at least one of the user groups, whose IDs are Slack's
+// (usergroups.users.list, one call per group, in order, stopping at the first that lists user). Nothing is cached: a
+// person taken out of a group is refused at the next call. It fails closed: an error from any group read, the bound
+// included (2 seconds for all the groups together, or Config.AuthzTimeout), is false and the error, even if a later
+// group lists user. No groups or no user is false with no call and no error: the caller decides what no groups
+// means. Disabled groups are not asked for (include_disabled is not sent). The error holds no token. The app needs
+// the usergroups:read scope.
+//
+// From Slack's method page (docs.slack.dev/reference/methods/usergroups.users.list, read 2026-10-11): the scope is
+// usergroups:read for a bot token; the call takes usergroup and the optional include_disabled and team_id, and has
+// no cursor; an unknown ID is no_such_subteam ("No usergroup found with the given ID"); and the page lists the error
+// plan_upgrade_required ("only available on Standard and above plans"). Slack's help center article "Create a user
+// group" (https://slack.com/help/articles/212906697-Create-a-user-group) says user groups are "available on paid
+// plans".
+//
+// UNCONFIRMED(WP-04), because the page is silent or no live workspace was asked: what Slack answers for a disabled
+// group when include_disabled is not sent (an error, or a list), and so whether a disabled group's members would
+// count (the fake has no disabled groups); that a bot token with only usergroups:read is enough in a real workspace; that the
+// error for a missing usergroup is invalid_arguments (the fake says it); and whether a free workspace gets
+// plan_upgrade_required or another code.
+func (c *Client) IsInAnyUserGroup(ctx context.Context, groups []string, user string) (telemetryResult0 bool, telemetryErr error) {
+	if len(groups) == 0 || user == "" {
+		return false, nil
+	}
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.IsInAnyUserGroup")
+	defer func() { finishChat(ctx, op, "IsInAnyUserGroup", telemetryErr) }()
+	ctx, cancel := context.WithTimeout(ctx, c.authz)
+	defer cancel()
+	for _, group := range groups {
+		members, err := c.api.GetUserGroupMembersContext(ctx, group)
+		if err != nil {
+			return false, c.scrub("usergroups.users.list", err)
+		}
+		if slices.Contains(members, user) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // IsBot reports whether user is a bot (users.info is_bot), uncached: ResolveUser's cache does not

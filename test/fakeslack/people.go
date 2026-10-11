@@ -91,3 +91,42 @@ func (s *Server) conversationsMembers(form url.Values) (response, string) {
 	}
 	return response{"members": out, "response_metadata": map[string]string{"next_cursor": next}}, ""
 }
+
+// SetUserGroup registers the user group id and replaces its membership. Duplicate IDs are
+// dropped and the first occurrences keep their order; the slice is copied. An empty
+// membership is a registered group with no members. usergroups.users.list reports
+// no_such_subteam for any group that was never registered. The fake has no disabled groups.
+func (s *Server) SetUserGroup(id string, users ...string) {
+	members := []string{}
+	for _, u := range users {
+		if !slices.Contains(members, u) {
+			members = append(members, u)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usergroups[id] = members
+}
+
+// usergroupsUsersList implements usergroups.users.list
+// (https://docs.slack.dev/reference/methods/usergroups.users.list/), which takes a bot token
+// with the usergroups:read scope and has no paging. Error code from the docs: no_such_subteam
+// for a group ID Slack does not know.
+//
+// UNCONFIRMED(WP-04): invalid_arguments for a missing usergroup (the page lists the code among
+// its general ones), what Slack says of a group that is disabled when include_disabled is not
+// set (this fake has no disabled groups and ignores include_disabled and team_id), and
+// plan_upgrade_required, which a workspace without user groups gets and this fake never says.
+func (s *Server) usergroupsUsersList(form url.Values) (response, string) {
+	id := form.Get("usergroup")
+	if id == "" {
+		return nil, "invalid_arguments"
+	}
+	s.mu.Lock()
+	users, ok := s.usergroups[id]
+	s.mu.Unlock()
+	if !ok {
+		return nil, "no_such_subteam"
+	}
+	return response{"users": users}, ""
+}

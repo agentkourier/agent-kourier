@@ -129,6 +129,12 @@ func TestControlSetsUpAndInspects(t *testing.T) {
 	if members, _, err := api.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: "C1"}); err != nil || len(members) != 2 {
 		t.Fatalf("conversations.members = %v, %v; want the two set", members, err)
 	}
+	if s := control(t, fake, "POST", "/_control/usergroups", map[string]any{"usergroup": "S1", "users": []string{"U1"}}, nil); s != 200 {
+		t.Fatalf("usergroups status = %d", s)
+	}
+	if got, err := api.GetUserGroupMembers("S1"); err != nil || len(got) != 1 || got[0] != "U1" {
+		t.Fatalf("usergroups.users.list = %v, %v; want the one set", got, err)
+	}
 
 	if _, err := fake.Reply("C1", root, "U1", "hello"); err != nil {
 		t.Fatalf("Reply: %v", err)
@@ -167,6 +173,7 @@ func TestControlMapsErrorsToStatuses(t *testing.T) {
 		{"trailing garbage", "/_control/dm", `{"user": "U1", "text": "hi"} {"user": "U2"}`, 400},
 		{"user without an id", "/_control/users", `{"name": "ada"}`, 400},
 		{"members without a channel", "/_control/members", `{"users": ["U1"]}`, 400},
+		{"user group without an id", "/_control/usergroups", `{"users": ["U1"]}`, 400},
 		{"dm without text", "/_control/dm", `{"user": "U1"}`, 400},
 		{"mention without a channel", "/_control/mention", map[string]string{"user": "U1", "text": mentionText}, 400},
 		{"submit an option the select does not offer", "/_control/submit", map[string]any{"user": "U1", "message_ts": ask, "action_id": "submit",

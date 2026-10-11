@@ -53,6 +53,10 @@ type (
 		Channel string   `json:"channel"`
 		Users   []string `json:"users"`
 	}
+	usergroupReq struct {
+		Usergroup string   `json:"usergroup"`
+		Users     []string `json:"users"`
+	}
 )
 
 // MessageView is a Message as the control surface shows it: the Slack shape
@@ -126,6 +130,13 @@ func (s *Server) newControlRoutes() controlRoutes {
 			return nil, invalid("fakeslack: a channel's members need a channel")
 		}
 		s.SetMembers(q.Channel, q.Users...)
+		return struct{}{}, nil
+	}))
+	mux.HandleFunc("POST /_control/usergroups", post(func(q usergroupReq) (any, error) {
+		if q.Usergroup == "" {
+			return nil, invalid("fakeslack: a user group needs an id")
+		}
+		s.SetUserGroup(q.Usergroup, q.Users...)
 		return struct{}{}, nil
 	}))
 	mux.HandleFunc("GET /_control/connections", func(w http.ResponseWriter, _ *http.Request) {

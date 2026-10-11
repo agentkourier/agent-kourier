@@ -87,6 +87,9 @@
 //     cap (999), and use invalid_ts_oldest and invalid_ts_latest; the oldest
 //     and latest window applies to replies but not the parent.
 //   - conversations.members reuses history's invalid_limit, default and cap.
+//   - usergroups.users.list (people.go): invalid_arguments for a missing usergroup, which
+//     Slack's page lists only among its general codes; no disabled groups, with include_disabled
+//     and team_id ignored; and plan_upgrade_required never being said.
 //   - users.info: invalid_arguments for a missing user; the email is always
 //     returned, whatever the app's scopes.
 //   - Streaming: recipient_team_id being required in channels alongside
@@ -138,6 +141,8 @@ type Server struct {
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu
 	members  map[string][]string   // guarded by mu
+
+	usergroups map[string][]string // user group ID to its members, guarded by mu
 
 	chunkRefusal string // the code that requests in chunks mode are refused with, set by RefuseChunkMode, guarded by mu
 
@@ -200,6 +205,8 @@ func NewHandler(opts ...Option) *Server {
 		channels:  map[string][]*Message{},
 		users:     map[string]User{},
 		members:   map[string][]string{},
+
+		usergroups: map[string][]string{},
 
 		channelTypes: map[string]string{},
 		ephemerals:   map[string][]Ephemeral{},
@@ -316,6 +323,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.usersInfo(r.Form)
 	case "conversations.members":
 		return s.conversationsMembers(r.Form)
+	case "usergroups.users.list":
+		return s.usergroupsUsersList(r.Form)
 	default:
 		return nil, "unknown_method"
 	}

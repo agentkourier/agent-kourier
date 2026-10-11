@@ -48,7 +48,7 @@ type Config struct {
 	// IsChannelMember does (default 1000, Slack's largest). A test sets it small. It also sets how much of a thread
 	// ThreadBetween reads: five pages of it, and a window of more is chat.ErrThreadTooLong.
 	PageLimit int
-	// AuthzTimeout bounds each IsChannelMember and each IsBot call (default 2 seconds, which a zero or negative value also means). A caller off
+	// AuthzTimeout bounds each IsChannelMember and each IsBot call, and each IsInAnyUserGroup call as a whole, every group of it (default 2 seconds, which a zero or negative value also means). A caller off
 	// Slack's 3 second acknowledgement path may allow more.
 	AuthzTimeout time.Duration
 }
@@ -63,7 +63,7 @@ type Client struct {
 	timeout  time.Duration
 	max      int
 	pageSize int
-	// membersPage and authz are IsChannelMember's page size and the bound of it and IsBot.
+	// membersPage is IsChannelMember's page size, and authz the bound of it, of IsBot and of IsInAnyUserGroup.
 	membersPage int
 	authz       time.Duration
 	onConn      func(connected bool) // Config.OnConnection

@@ -64,6 +64,7 @@ type FakePlatform struct {
 	byRef      map[chat.Ref]*Message // the index of messages, which find reads
 	ephemerals []Ephemeral
 	members    map[string][]string // channel to users
+	groups     map[string][]string // group ID to users
 	users      map[string]chat.User
 	bots       map[string]bool
 	failures   map[string][]error // method to the errors the next calls return
@@ -82,7 +83,7 @@ func NewFake() *FakePlatform {
 			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000,
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
-		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, ready: make(chan struct{}),
+		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, ready: make(chan struct{}),
 	}
 }
 
@@ -120,6 +121,14 @@ func (f *FakePlatform) SetMembers(channel string, users ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.members[channel] = users
+}
+
+// SetGroup sets who is in the group with the platform ID id. A group the fake was not told of is unreadable: IsInAnyGroup
+// is false, with an error.
+func (f *FakePlatform) SetGroup(id string, users ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.groups[id] = users
 }
 
 // Messages returns what is posted, oldest first, as copies.
@@ -481,6 +490,29 @@ func (f *FakePlatform) IsMember(_ context.Context, channel, user string) (bool, 
 		return false, err
 	}
 	return slices.Contains(f.members[channel], user), nil
+}
+
+// IsInAnyGroup implements chat.Platform: groups are read in order, up to the first that lists user, and a group the fake
+// was not told of is an error that ends the call.
+func (f *FakePlatform) IsInAnyGroup(_ context.Context, groups []string, user string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(groups) == 0 || user == "" {
+		return false, nil
+	}
+	if err := f.fail("IsInAnyGroup"); err != nil {
+		return false, err
+	}
+	for _, g := range groups {
+		members, ok := f.groups[g]
+		if !ok {
+			return false, fmt.Errorf("fake platform: no such group %q", g)
+		}
+		if slices.Contains(members, user) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // IsBot implements chat.Platform: a user the fake was not told of is a bot, with an error.
