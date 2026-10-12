@@ -23,6 +23,8 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -40,7 +42,16 @@ import (
 )
 
 const (
-	maxToolName = 32  // longest tool name kept in a decision row, in bytes
+	// maxToolUnits is the longest tool name a person can be asked to approve: the Slack adapter refuses a prompt whose
+	// cleaned name is over 300 UTF-16 units before anyone sees it (internal/chat/slack/layout.go, chat.WhereToolName). A
+	// name is an identifier, nearly always ASCII and under 100 bytes, and ASCII is one byte a unit, so such a name is
+	// whole in the row. The rule is in bytes, not units (see toolName): a name of other characters is whole to fewer than
+	// 300 of them, and is cut and marked beyond that.
+	maxToolUnits = 300
+	// maxToolName is the longest a name is written in a decision row, in bytes, counted as written: quoted, with its
+	// two quotes. 20 tools at this size, with the counts and the punctuation, are the row store.MaxDecisionOutcome holds
+	// (6122 bytes at the longest).
+	maxToolName = maxToolUnits + 2
 	maxField    = 256 // longest identifier kept, in bytes
 	maxReason   = 120 // longest agent-derived reason kept, in bytes
 	maxError    = 300 // longest returned error text, in bytes
@@ -136,8 +147,9 @@ type Decision struct {
 	// choices, free text or rejection reasons.
 	Answer *dialect.Answer
 	// ToolNames, for an answered tool approval, are the names of its tools, in the order of Answer.Decisions: ToolNames[i]
-	// is the tool that Decisions[i] decided. They are recorded beside the counts, each with its verdict, cleaned and
-	// cut to maxToolName bytes, and as many as fit in the row (see toolLists). The arguments are never recorded. There is
+	// is the tool that Decisions[i] decided. They are recorded beside the counts, each with its verdict, cleaned and whole
+	// unless it is over maxToolName bytes written, or the redaction of the whole row would rewrite it (it ends in "Bearer:",
+	// say): then it is cut and marked with a hash of the whole name (see toolName). The arguments are never recorded. There is
 	// one name for each decision, or none: any other number is an error, since it would name the wrong tools.
 	ToolNames []string
 	// Shape, for an incomplete tool approval, is how many tools had a usable verdict. It says nothing of which, or how.
@@ -372,6 +384,12 @@ func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 					return fail(store.ErrInvalid, "audit decision %q: %d tool names for %d decisions", d.InteractionID, len(d.ToolNames), len(d.Answer.Decisions))
 				}
 				outcome += toolLists(len(outcome), d.ToolNames, d.Answer.Decisions)
+				// A backstop that no test reaches through Decision: every name is stable and the lists are bounded by
+				// construction, so no input is known that makes the row change or grow (4000 random rows of hostile names never did),
+				// and the names are the only text a caller supplies. checkDecisionRow itself is tested.
+				if err := checkDecisionRow(outcome); err != nil {
+					return err
+				}
 			}
 		} else {
 			outcome += " questions=" + strconv.Itoa(len(d.Answer.Answers))
@@ -390,15 +408,16 @@ func (w *Writer) Decision(ctx context.Context, a Actor, d Decision) error {
 
 // toolLists is the part of a decision row that names the tools of an answered approval with their verdicts:
 // ` approved_tools=["a","b"] denied_tools=["c"]`, each list in the order of the request, a list left out when it is empty.
-// Each name is cleaned, cut to maxToolName bytes and written as a quoted string, so that a name with a comma or a bracket
-// in it is one name and cannot read as two tools. The row holds MaxAuditOutcome bytes in all, and 20 tools of long names
-// do not fit, so the lists share what is left of the row after the counts (used bytes): a list that is short gives its
-// spare room to the other, and a list that does not fit ends in `+K`, K being how many of its names are not listed. A name
-// is whole or left out. The counts before it are always exact, so what is left out is told by the difference.
+// Each name is written by toolName, a quoted string, so that a name with a comma or a bracket in it is one name and cannot
+// read as two tools. The row holds store.MaxDecisionOutcome bytes in all, which is 20 tools at the longest a name is
+// written, with their counts: 20 names always fit, and Decision refuses the row if it does not. A list that would not fit (a
+// caller with more tools than an approval holds) shares what is left of the row after the counts (used bytes), a short list
+// giving its spare room to the other, and ends in `+K`, K being how many of its names are not listed. A name is written
+// (whole, or cut and marked) or left out. The counts before it are always exact, so what is left out is told by the difference.
 func toolLists(used int, names []string, decisions []dialect.Decision) string {
 	var approved, denied []string
 	for i, x := range decisions {
-		name := strconv.Quote(clean(names[i], maxToolName))
+		name := toolName(names[i])
 		if x.Approved {
 			approved = append(approved, name)
 		} else {
@@ -406,7 +425,7 @@ func toolLists(used int, names []string, decisions []dialect.Decision) string {
 		}
 	}
 	const unbounded = 1 << 20
-	room := store.MaxAuditOutcome - used
+	room := store.MaxDecisionOutcome - used
 	wantA, wantD := len(fitList("approved_tools", approved, unbounded)), len(fitList("denied_tools", denied, unbounded))
 	roomA, roomD := room/2, room-room/2
 	switch {
@@ -416,6 +435,79 @@ func toolLists(used int, names []string, decisions []dialect.Decision) string {
 		roomA, roomD = roomA+roomD-wantD, wantD
 	}
 	return fitList("approved_tools", approved, roomA) + fitList("denied_tools", denied, roomD)
+}
+
+// toolName is name as a row writes it: cleaned (redact.IdentifierText, on one line, the shapes of a token taken out) and
+// quoted, so that nothing in it can end the string, start another list or pass for a count.
+//
+// It is written whole when its quoted form is at most maxToolName bytes (the two quotes among them) and the redaction of
+// the whole row, which the writer and then the store apply, would leave it as it is (see stableName). The first is a rule
+// of bytes, not of units: 300 ASCII bytes are whole, and so are 150 backslashes or quotes or two-byte characters, 100
+// three-byte (CJK) characters, 75 emoji and 50 unassigned characters (which strconv.Quote writes as \u0378, six bytes). A
+// name that is longer, or that the second pass would change (it ends in "Bearer:", or an unassigned character
+// splits a credential, so that it reads as a gap), is written cut and marked: up to 280 quoted bytes of the cleaned name, at
+// a character and never inside an escape, then "...#" and the first 16 hex digits of the SHA-256 of the whole cleaned name.
+// The cut is shorter only when a longer one would not be stable, and then by as many characters as that takes. Whatever a
+// name holds, it is at most maxToolName bytes as written, and what is written is never rewritten. The verdict, the order and
+// the counts of the row stay exact. The cut cannot make two names read alike: they would need the same prefix and the same
+// 64 bits of hash, which cannot be ground for on purpose. A name that is whole and ends as a mark does, "...#" and 16 hex
+// digits, reads like a cut one; it is that tool's own name, and cannot pass for another's. A person who has the tool's full
+// name from the agent can check it against the row by hashing its cleaned text.
+func toolName(name string) string {
+	cleaned := redact.IdentifierText(name)
+	if q := strconv.Quote(cleaned); len(q) <= maxToolName && stableName(q) {
+		return q
+	}
+	sum := sha256.Sum256([]byte(cleaned))
+	mark := "...#" + hex.EncodeToString(sum[:8])
+	room, end := maxToolName-len(`""`)-len(mark), 0
+	for i := 0; i < len(cleaned); {
+		_, w := utf8.DecodeRuneInString(cleaned[i:])
+		escaped := len(strconv.Quote(cleaned[i:i+w])) - len(`""`)
+		if escaped > room {
+			break
+		}
+		room, i = room-escaped, i+w
+		end = i
+	}
+	// The end of a cut name can make a token shape with the mark after it ("xoxb-" and "...#"), so the cut is made shorter,
+	// a character at a time, until the name is stable. The mark alone is: it has nothing to read as a secret.
+	for ; end > 0; end = lastRuneStart(cleaned[:end]) {
+		if q := strconv.Quote(cleaned[:end] + mark); stableName(q) {
+			return q
+		}
+	}
+	return strconv.Quote(mark)
+}
+
+// stableName reports whether the redaction of a whole row leaves the quoted name q as it is in the two places a row puts it:
+// first in a list, after the "[" and before the "]", and after a comma and before the next. A name that fails would be
+// rewritten ("Bearer:" followed by the "]" reads as a credential and takes it), and a row that is rewritten is not the row
+// that was built.
+func stableName(q string) bool {
+	first, next := "["+q+"]", ","+q+","
+	return redact.IdentifierText(first) == first && redact.IdentifierText(next) == next
+}
+
+// checkDecisionRow is the last check of a decision row that names tools: that what the writer and then the store do to the
+// row (redact it as an identifier, and cut it at the limit of its kind) changes nothing. A row that is changed is not the
+// record that was built, so it is an error and nothing is written; Decision then fails, and an approval whose audit row
+// cannot be written does not take effect. The names are stable one by one (stableName), so this is the guard against
+// what that does not foresee.
+func checkDecisionRow(outcome string) error {
+	if len(outcome) > store.MaxDecisionOutcome {
+		return fail(store.ErrInvalid, "audit decision: the row is %d bytes, over the limit of %d", len(outcome), store.MaxDecisionOutcome)
+	}
+	if redact.IdentifierText(outcome) != outcome {
+		return fail(store.ErrInvalid, "audit decision: the row would be redacted again when it is stored")
+	}
+	return nil
+}
+
+// lastRuneStart is the index at which the last character of s starts, or 0 for an empty s.
+func lastRuneStart(s string) int {
+	_, w := utf8.DecodeLastRuneInString(s)
+	return len(s) - w
 }
 
 // fitList is ` label=[item,item,+K]` in at most room bytes, or "" if items is empty or even `+K` does not fit. Whole items
@@ -476,7 +568,7 @@ func (w *Writer) pause(ctx context.Context, a Actor, taskID a2a.TaskID, contextI
 // append cleans a's fields and writes the entry, detached from ctx's cancellation.
 func (w *Writer) append(ctx context.Context, kind store.AuditKind, a Actor, at time.Time, subject, outcome string) error {
 	e := store.AuditEntry{At: at, Kind: kind, User: clean(a.User, maxField), Email: clean(a.Email, maxField),
-		Identity: clean(a.Identity, maxField), Binding: clean(a.Binding, maxField), Subject: subject, Outcome: clean(outcome, store.MaxAuditOutcome)}
+		Identity: clean(a.Identity, maxField), Binding: clean(a.Binding, maxField), Subject: subject, Outcome: clean(outcome, kind.MaxOutcome())}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.opts.Timeout)
 	defer cancel()
 	if err := w.log.AppendAudit(wctx, e); err != nil {

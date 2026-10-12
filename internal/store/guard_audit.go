@@ -11,9 +11,9 @@ import (
 func (g *Guarded) AppendAudit(ctx context.Context, e AuditEntry) error {
 	return g.run(ctx, "agentkourier.store.AppendAudit", func(ctx context.Context) error {
 		e = e.Redacted()
-		if !e.Kind.Valid() || e.At.IsZero() || e.Subject == "" || e.Outcome == "" || len(e.Outcome) > MaxAuditOutcome {
+		if !e.Kind.Valid() || e.At.IsZero() || e.Subject == "" || e.Outcome == "" || len(e.Outcome) > e.Kind.MaxOutcome() {
 			return fmt.Errorf("append audit %q: valid Kind, At, Subject and an Outcome of 1 to %d bytes are required: %w",
-				e.Kind, MaxAuditOutcome, ErrInvalid)
+				e.Kind, e.Kind.MaxOutcome(), ErrInvalid)
 		}
 		return g.a.AppendAudit(ctx, e)
 	})

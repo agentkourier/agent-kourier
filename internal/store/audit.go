@@ -27,8 +27,26 @@ func (k AuditKind) Valid() bool {
 	return false
 }
 
-// MaxAuditOutcome is the longest Outcome, in bytes.
+// MaxAuditOutcome is the longest Outcome, in bytes, of every kind but AuditInteractionDecision (see MaxOutcome).
 const MaxAuditOutcome = 200
+
+// MaxDecisionOutcome is the longest Outcome of an AuditInteractionDecision, in bytes. The row of an answered tool
+// approval names every tool with its verdict, and the stored request it links to is cleared about 25 hours after a
+// delivered decision, so the row is the only record of what was approved. It holds the 20 tools one approval has, each
+// written in 302 bytes at most (a name of 300 ASCII bytes whole; a longer or escape-heavy one cut and marked with a hash
+// of the whole name), with the counts and the punctuation around them: package audit measures the longest row at 6122
+// bytes, and refuses to write a row that is over this limit or that the redaction would change. A decision of any other
+// shape is a few dozen bytes. The columns are unbounded text, so this is no schema limit.
+const MaxDecisionOutcome = 6144
+
+// MaxOutcome is the longest Outcome of an entry of kind k, in bytes: MaxDecisionOutcome for an interaction decision
+// and MaxAuditOutcome for every other kind.
+func (k AuditKind) MaxOutcome() int {
+	if k == AuditInteractionDecision {
+		return MaxDecisionOutcome
+	}
+	return MaxAuditOutcome
+}
 
 // AuditEntry records who did what to which subject, and how it ended.
 //
@@ -52,7 +70,7 @@ type AuditEntry struct {
 	// or a resource name.
 	Subject string
 	// Outcome is a short result such as "accepted" or "denied: not a member",
-	// at most MaxAuditOutcome bytes.
+	// at most Kind.MaxOutcome bytes.
 	Outcome string
 }
 
@@ -74,7 +92,7 @@ func (e AuditEntry) Redacted() AuditEntry {
 // retention purge (AuditRetention).
 type Audit interface {
 	// AppendAudit adds e to the log. Kind, At, Subject and Outcome are
-	// required, and Outcome must fit MaxAuditOutcome (ErrInvalid otherwise), measured after
+	// required, and Outcome must fit Kind.MaxOutcome (ErrInvalid otherwise), measured after
 	// redaction, on the text that is kept. The store assigns Sequence; the value in e is ignored.
 	// A reader that pages with ListAudit must never miss an entry appended while it pages: an
 	// entry becomes visible only after every entry with a lower Sequence is.

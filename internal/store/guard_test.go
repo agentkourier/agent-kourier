@@ -819,6 +819,30 @@ func TestAppendAuditStoresTheRedactedEntry(t *testing.T) {
 	}
 }
 
+// TestAppendAuditLimitIsPerKind: an interaction decision may be longer than the other kinds, which keep 200 bytes.
+func TestAppendAuditLimitIsPerKind(t *testing.T) {
+	for _, tc := range []struct {
+		kind store.AuditKind
+		n    int
+		ok   bool
+	}{
+		{store.AuditEvent, store.MaxAuditOutcome, true},
+		{store.AuditEvent, store.MaxAuditOutcome + 1, false},
+		{store.AuditAgentCall, store.MaxAuditOutcome + 1, false},
+		{store.AuditConfigChange, store.MaxAuditOutcome + 1, false},
+		{store.AuditInteractionDecision, store.MaxAuditOutcome + 1, true},
+		{store.AuditInteractionDecision, store.MaxDecisionOutcome, true},
+		{store.AuditInteractionDecision, store.MaxDecisionOutcome + 1, false},
+	} {
+		a := &fakeAdapter{}
+		e := store.AuditEntry{Kind: tc.kind, At: t0, Subject: "s", Outcome: strings.Repeat("a", tc.n)}
+		err := store.Guard(a).AppendAudit(t.Context(), e)
+		if tc.ok != (err == nil) || !tc.ok && !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s with %d bytes = %v; want ok=%v (ErrInvalid when refused)", tc.kind, tc.n, err, tc.ok)
+		}
+	}
+}
+
 // TestClaimReplyInteraction: an empty ID or question is refused before the adapter, and a legal claim passes through,
 // error and all.
 func TestClaimReplyInteraction(t *testing.T) {

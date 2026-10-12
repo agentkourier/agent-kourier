@@ -90,7 +90,9 @@ func (su suite) audit(t *testing.T) {
 			"zero time":     func(e *store.AuditEntry) { e.At = time.Time{} },
 			"empty subject": func(e *store.AuditEntry) { e.Subject = "" },
 			"empty outcome": func(e *store.AuditEntry) { e.Outcome = "" },
-			"long outcome":  func(e *store.AuditEntry) { e.Outcome = strings.Repeat("x", store.MaxAuditOutcome+1) },
+			"long outcome": func(e *store.AuditEntry) {
+				e.Kind, e.Outcome = store.AuditAgentCall, strings.Repeat("x", store.MaxAuditOutcome+1)
+			},
 		} {
 			bad := newAudit("s", t0)
 			mutate(&bad)
@@ -111,11 +113,45 @@ func (su suite) audit(t *testing.T) {
 		}
 	})
 
+	// The decision kind alone holds a row long enough to name the 20 tools of an approval whole; every other kind
+	// keeps the short limit. Both backends store and read back the longest row of each kind.
+	su.run(t, "the outcome limit is per kind: a decision row holds the names of 20 tools, every other kind 200 bytes", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		if store.AuditInteractionDecision.MaxOutcome() != store.MaxDecisionOutcome || store.MaxDecisionOutcome <= store.MaxAuditOutcome {
+			t.Fatalf("the decision limit is %d, MaxDecisionOutcome %d, MaxAuditOutcome %d", store.AuditInteractionDecision.MaxOutcome(), store.MaxDecisionOutcome, store.MaxAuditOutcome)
+		}
+		for _, k := range []store.AuditKind{store.AuditEvent, store.AuditAgentCall, store.AuditConfigChange} {
+			if k.MaxOutcome() != 200 {
+				t.Errorf("%s limit = %d; want 200 exactly", k, k.MaxOutcome())
+			}
+			e := newAudit("short-"+string(k), t0)
+			e.Kind, e.Outcome = k, strings.Repeat("y", store.MaxAuditOutcome+1)
+			isErr(t, s.AppendAudit(ctx, e), store.ErrInvalid, string(k)+": 201 bytes")
+		}
+		for _, k := range []store.AuditKind{store.AuditEvent, store.AuditAgentCall, store.AuditInteractionDecision, store.AuditConfigChange} {
+			e := newAudit("max-"+string(k), t0)
+			e.Kind, e.Outcome = k, strings.Repeat("y", k.MaxOutcome())
+			noErr(t, s.AppendAudit(ctx, e), string(k)+": append at its limit")
+		}
+		over := newAudit("over-decision", t0)
+		over.Outcome = strings.Repeat("y", store.MaxDecisionOutcome+1)
+		isErr(t, s.AppendAudit(ctx, over), store.ErrInvalid, "decision: over its limit")
+		l, err := s.ListAudit(ctx, time.Time{}, 0, 100)
+		if err != nil || len(l) != 4 {
+			t.Fatalf("log = %d entries, %v; want the four rows at their limits and none of the refused", len(l), err)
+		}
+		for _, e := range l {
+			if e.Outcome != strings.Repeat("y", e.Kind.MaxOutcome()) {
+				t.Errorf("%s row reads back %d bytes; want its %d, whole", e.Kind, len(e.Outcome), e.Kind.MaxOutcome())
+			}
+		}
+	})
+
 	// Implicit in the interface: the store redacts the entry before it checks it, so the limit is on the
 	// text that is kept, and a long secret that redaction shortens fits.
 	su.run(t, "the outcome limit is measured after redaction", func(t *testing.T, s store.Store) {
 		e := newAudit("s", t0)
-		e.Outcome = "denied Bearer " + strings.Repeat("x", 2*store.MaxAuditOutcome)
+		e.Kind, e.Outcome = store.AuditAgentCall, "denied Bearer "+strings.Repeat("x", 2*store.MaxAuditOutcome)
 		noErr(t, s.AppendAudit(t.Context(), e), "append of a long secret")
 		l, err := s.ListAudit(t.Context(), time.Time{}, 0, 10)
 		if err != nil || len(l) != 1 || l[0].Outcome != "denied [redacted]" {
