@@ -4,13 +4,16 @@
 
 <p align="center"><strong>Declarative chat gateway for Kubernetes agents.</strong></p>
 
-Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to
-any A2A agent, including one that is suspended until it is called, and brings its findings back
-into the Slack thread where people can keep the session going. A team commits a `Binding` next to its
-agent's manifests, and the agent answers mentions, follows up in threads, and
-investigates the alerts a bot already posts to the channel. The broker holds the Slack
-connection, the reply queue and the delivery state, so an Agent Kourier restart loses
-no message.
+Agent Kourier connects Kubernetes agents to Slack without adding Slack-specific code to
+each agent. It carries messages and alerts to a supported streaming A2A endpoint and
+brings the agent's answers back to the same thread. Developers connect an agent to a
+channel through a declarative `Binding`.
+
+Connecting an agent to Slack adds work beyond building the agent itself: handling Slack
+events, tracking threads, formatting replies, and recovering conversations after a restart.
+Repeating that integration for each agent means maintaining the same messaging code in
+multiple places. Agent Kourier handles that work in a shared broker. The agent owns its
+tools and task logic; the broker owns the Slack connection and conversation delivery.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
 [Architecture](docs/explanation/architecture.md) · [Specification](spec.md)
@@ -39,6 +42,9 @@ a note there.
 
 ## Why a broker
 
+- **Connect agents without writing Slack handlers.** A `Binding` connects a channel to
+  an agent that exposes a supported streaming A2A endpoint. Multiple bindings share
+  the broker's Slack connection and conversation handling.
 - **Conversations survive a restart.** Agent Kourier persists sessions, queued replies and
   pending questions. After a restart it continues each conversation where it stopped.
 - **A crash does not repeat a post.** Posts go through a durable outbox. After a

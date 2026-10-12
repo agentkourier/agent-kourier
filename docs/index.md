@@ -1,8 +1,7 @@
 ---
 description: >-
-  Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A agent, including one
-  that is suspended until it is called, and brings its findings back into the Slack thread where people can keep the
-  session going.
+  Connect Kubernetes agents to Slack without adding Slack-specific code to each agent.
+  Agent Kourier handles messaging and conversation delivery through declarative bindings to streaming A2A agents.
 hide:
   - navigation
   - toc
@@ -16,15 +15,26 @@ hide:
 <h1 class="ak-hero__name">Agent Kourier</h1>
 </div>
 
-<p class="ak-hero__pitch">Agent Kourier is a Kubernetes-native broker that carries alerts and Slack messages to any A2A
-agent, including one that is suspended until it is called, and brings its findings back into the Slack thread where
-people can keep the session going.</p>
+<p class="ak-hero__pitch">Connect your Kubernetes agents to Slack without writing Slack handlers for each agent.
+Agent Kourier carries messages and alerts to a supported streaming A2A endpoint and brings answers back to the same
+thread. Connect an agent to a channel with a declarative Binding.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
 <a class="md-button" href="how-to/install-with-helm/">Install with Helm</a>
 </div>
 </div>
+
+## Build the agent, configure its Slack connection
+
+Handling Slack events, tracking threads, formatting replies, and recovering conversations after a restart adds work
+beyond the agent's own task logic. Repeating that integration for each agent means maintaining the same messaging code
+in multiple places.
+
+Agent Kourier handles that work in a shared broker. Your agent owns its tools and task logic; Agent Kourier owns the
+Slack connection and conversation delivery. An agent that already exposes a supported streaming A2A endpoint needs
+configuration to connect to Slack, with no Slack-specific code added to the agent.
+[Why a broker](explanation/why-a-broker.md) explains the separation of responsibilities.
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="assets/film/agent-kourier-teaser-poster-16x9.jpg" aria-label="Agent Kourier teaser, 20 seconds, narrated">
