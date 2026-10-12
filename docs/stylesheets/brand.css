@@ -89,9 +89,10 @@
   text-underline-offset: 0.18em;
 }
 
-/* Header and tabs: the ground colour, with a hairline, so the blue mark reads on it. */
+/* Header, tabs and drawer title: the ground colour so the blue mark reads on it. */
 .md-header,
-.md-tabs {
+.md-tabs,
+.md-nav--primary .md-nav__title[for="__drawer"] {
   background-color: var(--ak-header-bg);
   color: var(--ak-header-fg);
 }

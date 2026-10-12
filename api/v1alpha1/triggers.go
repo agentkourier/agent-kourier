@@ -71,22 +71,28 @@ type Trigger struct {
 	// +optional
 	Preset string `json:"preset,omitempty"`
 	// Match maps a message field to a regex it must match. Every entry must match.
+	// +doc:default=From preset, if set
 	Match map[MessageField]string `json:"match,omitempty"`
 	// Exclude maps a message field to a regex; a message matching any entry is ignored.
+	// +doc:default=From preset, if set
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
 	// regexes does not match does not match the trigger.
+	// +doc:default=From preset, if set
 	Extract map[string]Extract `json:"extract,omitempty"`
 	// Thread ties messages that share an extracted key to one thread.
 	// +optional
+	// +doc:default=From preset, if set
 	Thread TriggerThread `json:"thread,omitzero"`
 	// PromptTemplate is a Go template over the trigger's view of the message (.Channel,
 	// .State, .Key, .Fields, .Link, .Source). Required for botMessage, directly or from the
 	// preset.
+	// +doc:default=From preset, if set
 	PromptTemplate string `json:"promptTemplate,omitempty"`
 	// Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). What the
 	// Binding leaves out comes from the preset; a trigger with no preset and no limits is unlimited.
 	// +optional
+	// +doc:default=From preset, if set
 	Limits TriggerLimits `json:"limits,omitzero"`
 }
 
@@ -113,10 +119,12 @@ type TriggerThread struct {
 	// By is key: messages with the same extracted "key" share a thread.
 	// +kubebuilder:validation:Enum=key
 	// +optional
+	// +doc:default=From preset, if set
 	By ThreadBy `json:"by,omitempty"`
 	// Cooldown is how long after a turn the same key starts no new turn. Required with by,
 	// and between 1m and 168h.
 	// +optional
+	// +doc:default=From preset, if set
 	Cooldown metav1.Duration `json:"cooldown,omitzero"`
 	// MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it
 	// abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a
@@ -128,10 +136,12 @@ type TriggerThread struct {
 	// cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set
 	// above it.
 	// +optional
+	// +doc:default=Larger of `24h` and twice the cooldown
 	MaxIdle metav1.Duration `json:"maxIdle,omitzero"`
 	// CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a
 	// note and starts no turn. Every entry must equal.
 	// +optional
+	// +doc:default=From preset, if set
 	CloseWhen map[string]string `json:"closeWhen,omitempty"`
 }
 

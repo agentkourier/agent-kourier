@@ -49,6 +49,7 @@ type WidgetSpec struct {
 	// Paint maps a color to a shade.
 	Paint map[Color]string `json:"paint,omitempty"`
 	// Every is a duration.
+	// +doc:default=Larger of `1h` and the interval | minimum
 	Every metav1.Duration `json:"every,omitzero"`
 	// +kubebuilder:validation:Minimum=0
 	Count   int32 `json:"count,omitempty"`
