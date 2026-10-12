@@ -4,7 +4,9 @@ This page explains how Agent Kourier is put together: what it owns, what the age
 conversation takes through the broker.
 
 Agent Kourier connects declarative messaging bindings to agents deployed with a chosen runtime. The runtime hosts and
-executes the agents. Agent Kourier owns the messaging connection, conversation lifecycle, and delivery state.
+executes the agents. The agents own their tools and task logic. Agent Kourier owns the messaging connection,
+conversation lifecycle, and delivery state. An agent that exposes a supported streaming A2A endpoint can connect through
+a `Binding` without adding Slack event handlers or reply formatting to the agent.
 
 ```mermaid
 flowchart LR
