@@ -164,6 +164,14 @@ keys; `payments-agent-token` belongs in `payments` with a `token` key. Each bind
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
 
+This lets an alert start an investigation and several channel members continue it
+under the same backend account, without each supplying a backend token. In the tested
+kagent 1.0.0-alpha5 OIDC setup, keeping that account stable matters because a session
+accepts requests only from its owner.
+
+[Create the Binding identity](docs/how-to/create-binding-identity.md) explains how to choose a user ID or obtain
+and store an issued token, including a Dex example. Agent Kourier does not create accounts or mint tokens.
+
 To have the agent investigate the alerts a bot posts to that channel, list the
 triggers in the Binding's `chat` block. The example below is for Alertmanager, the one
 alert source with a preset; for another bot, write the trigger's `match`, `extract`

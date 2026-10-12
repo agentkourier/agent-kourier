@@ -5,15 +5,29 @@ and how text from people, alerts and agents is kept inert.
 
 ## One identity per Binding
 
+Slack access and agent access are separate. The Slack tokens let Agent Kourier read and post messages; the Binding
+identity is the caller it presents to the agent backend. A backend that verifies bearer tokens checks that caller
+through the agent itself or a front door.
+
 Every turn in a Binding, chat or alert, runs as the Binding's single service identity: a bearer token from
 `identity.tokenSecretRef`, or a user ID sent as `X-User-Id`. The person who typed or clicked is resolved and carried as
 attribution, a prefix the agent can read and metadata, and recorded in the audit log with the Binding identity. The
 prefix is informational; agents must not treat it as authorization.
 
-This is a deliberate choice. An alert has no person, so an alert-driven run cannot use a person's token, and kagent
-binds a session to the identity that created it and refuses turns from any other. The consequence is that the agent's
-tools see the Binding identity, not the person. So the Binding identity should hold only the permissions every member
+This is a deliberate choice. An alert has no person, so an alert-driven run cannot use a person's token. In the
+tested kagent 1.0.0-alpha5 OIDC setup, a session belongs to the identity that created it and turns from another owner
+are refused. The backend sees the Binding identity; the agent's tools use the credentials configured for those tools.
+So the Binding identity should hold only the permissions every member
 of its channel is trusted with, and channels with different trust levels need separate Bindings.
+
+For example, an alert starts an investigation, one channel member asks a follow-up, and another answers the agent's
+question. All use the same backend identity, so they can continue the same kagent session without each obtaining a
+backend token. You manage the credentials for the Binding, and automated alerts work without a person signing in.
+The Slack people remain attributable in Agent Kourier's audit log.
+
+The identity does not automatically grant tool permissions or configure Kubernetes RBAC. Configure those in the
+backend and its tools. [Create the Binding identity](../how-to/create-binding-identity.md) explains the choices and
+setup steps.
 
 ## The channel is the boundary
 

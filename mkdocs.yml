@@ -128,6 +128,7 @@ nav:
       - how-to/index.md
       - Install with Helm: how-to/install-with-helm.md
       - Configure Slack: how-to/configure-slack.md
+      - Create the Binding identity: how-to/create-binding-identity.md
       - Write a Binding: how-to/write-a-binding.md
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
       - Start investigations from any bot's messages: how-to/any-bot-trigger.md

@@ -10,6 +10,8 @@ agent to your channel, through the backend and Slack connection the platform tea
   `allowedNamespaces`.
 - The Agent Kourier bot is a member of your channel, and you have the channel's ID (it starts with `C`; a private channel created before March 2021 may start with `G`).
 - If the backend verifies tokens, a Secret in your namespace holds the Binding's token under the key `token`.
+  [Create the Binding identity](create-binding-identity.md) explains the account, how to obtain its token, and how
+  to store it. For a backend that trusts `X-User-Id`, that guide explains how to choose a stable name instead.
 
 ## Write it
 

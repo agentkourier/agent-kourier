@@ -57,7 +57,9 @@ kubectl -n agent-kourier create secret generic agent-kourier-slack \
   --from-literal=appToken="$SLACK_APP_TOKEN"
 ```
 
-If the agent, or a front door in front of it, verifies tokens, add the Binding's token too:
+If the agent, or a front door in front of it, verifies tokens, first
+[create the Binding identity](create-binding-identity.md) and obtain its token from the accepted issuer.
+Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store it in the Binding's namespace:
 
 ```sh
 kubectl -n agent-kourier create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"

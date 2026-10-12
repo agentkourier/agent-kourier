@@ -37,7 +37,9 @@ Binding's turns reach one of its agents.
     ```
 
     **4. Give each Binding its own token.** A Binding's `identity.tokenSecretRef` names a Secret with an OIDC token the
-    front door accepts. kagent binds a session to the identity that created it, so every turn of a Binding uses the
+    front door accepts. [Create the Binding identity](create-binding-identity.md) shows how to provision the account
+    and issue the first token with Dex. In the tested 1.0.0-alpha5 OIDC setup, kagent binds a session to the identity
+    that created it, so every turn of a Binding uses the
     same token owner. A Binding with `tokenSecretRef` must target an OIDC-mode kagent: in insecure mode kagent ignores
     the token and takes the user from `?user_id=` or `X-User-Id`; with neither, it runs every turn as `admin@kagent.dev`.
 

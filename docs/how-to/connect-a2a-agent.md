@@ -35,6 +35,8 @@ config:
 
 ## Choose how the Binding identifies itself
 
+See [Create the Binding identity](create-binding-identity.md) for choosing the account or name and obtaining a token.
+
 In the Binding's `identity`:
 
 - `tokenSecretRef` sends the Secret's value as `Authorization: Bearer`. Something must verify it: the agent itself, or

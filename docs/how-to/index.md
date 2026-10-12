@@ -7,6 +7,7 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 
 - [Install with Helm](install-with-helm.md): the chart, the Secrets and a first answer in a thread.
 - [Configure Slack](configure-slack.md): the Slack app, its tokens and the ChatConnection.
+- [Create the Binding identity](create-binding-identity.md): choose a user ID or issue and store a bearer token.
 - [Write a Binding](write-a-binding.md): your agent in your channel.
 
 ## Agents
