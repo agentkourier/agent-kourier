@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -131,8 +132,14 @@ type retentionConfig struct {
 	StaleBatch, MaxStaleBatches int
 	// OnRemoved is told what each pass removed (the Removed constants) and how many, when it removed any, for a metric.
 	OnRemoved func(what string, n int)
-	Now       func() time.Time // time.Now if nil
-	Logger    *slog.Logger     // slog.Default() if nil
+	// EnsureAcknowledgment queues a durable add for a queued reply. It is optional for stores and tests that do not
+	// run a chat sink; the leader wires it to the renderer's outbox path so a transient intake failure is retried.
+	EnsureAcknowledgment func(context.Context, store.Reply) error
+	// ClearAcknowledgment queues a durable removal for a delivered reply. It is optional for stores and tests that do
+	// not run a chat sink; the leader wires it to the renderer's outbox path.
+	ClearAcknowledgment func(context.Context, store.Reply) error
+	Now                 func() time.Time // time.Now if nil
+	Logger              *slog.Logger     // slog.Default() if nil
 }
 
 // retention is the time backstop of what the store keeps that no other loop owns: the text of replies that were
@@ -218,7 +225,38 @@ func (r *retention) Run(ctx context.Context) error {
 }
 
 func (r *retention) abandonReplies(ctx context.Context) {
-	n, err := r.cfg.Store.AbandonStrandedReplies(ctx, r.cfg.Now(), r.cfg.ReplyAge)
+	now := r.cfg.Now()
+	var n int
+	var err error
+	if r.cfg.EnsureAcknowledgment != nil {
+		if lister, ok := r.cfg.Store.(store.PendingAcknowledgmentLister); ok {
+			var rows []store.Reply
+			rows, err = lister.ListPendingAcknowledgmentReplies(ctx)
+			if err == nil {
+				for _, row := range rows {
+					if err = r.cfg.EnsureAcknowledgment(ctx, row); err != nil {
+						break
+					}
+				}
+			}
+		}
+	}
+	if err == nil && r.cfg.ClearAcknowledgment != nil {
+		if lister, ok := r.cfg.Store.(store.AcknowledgmentLister); ok {
+			var rows []store.Reply
+			rows, err = lister.ListAcknowledgmentReplies(ctx, now, r.cfg.ReplyAge)
+			if err == nil {
+				for _, row := range rows {
+					if err = r.cfg.ClearAcknowledgment(ctx, row); err != nil {
+						break
+					}
+				}
+			}
+		}
+	}
+	if err == nil {
+		n, err = r.cfg.Store.AbandonStrandedReplies(ctx, now, r.cfg.ReplyAge)
+	}
 	switch {
 	case err != nil && ctx.Err() == nil:
 		r.cfg.Logger.WarnContext(ctx, "retention: replies that were never delivered could not be dropped; it will be tried again", "err", err)
@@ -284,6 +322,13 @@ list:
 			if ctx.Err() != nil { // shutting down: the cancel may not have been made, and the next run makes it
 				break list
 			}
+			ack, err := r.staleAcknowledgment(ctx, t)
+			if err != nil {
+				if ctx.Err() == nil {
+					r.cfg.Logger.WarnContext(ctx, "retention: acknowledgment removal for a stale task could not be queued", "err", err)
+				}
+				continue
+			}
 			ended, err := r.cfg.Store.EndStaleTask(ctx, h, t, now)
 			switch {
 			case err != nil:
@@ -291,6 +336,11 @@ list:
 					r.cfg.Logger.WarnContext(ctx, "retention: a stale task could not be ended; it will be tried again", "err", err)
 				}
 			case ended.Ended:
+				if ack != nil && r.cfg.ClearAcknowledgment != nil {
+					if err := r.cfg.ClearAcknowledgment(ctx, *ack); err != nil && ctx.Err() == nil {
+						r.cfg.Logger.WarnContext(ctx, "retention: acknowledgment removal for an ended stale task could not be queued", "err", err)
+					}
+				}
 				tally.add(cancel.how, ended.Interactions)
 				r.auditStale(ctx, t, cancel, ended.Interactions)
 			}
@@ -310,6 +360,27 @@ list:
 		r.cfg.Logger.InfoContext(ctx, "retention: ended tasks that a crash left on sessions that have been expired for good",
 			"tasks", tally.tasks, "interactions", tally.interactions, "cancelled", tally.cancelled, "cancel_failed", tally.failed, "cancel_skipped", tally.skipped)
 	}
+}
+
+func (r *retention) staleAcknowledgment(ctx context.Context, t store.StaleTask) (*store.Reply, error) {
+	if r.cfg.ClearAcknowledgment == nil {
+		return nil, nil
+	}
+	reader, ok := r.cfg.Store.(store.StaleTaskTurnReader)
+	if !ok {
+		return nil, nil
+	}
+	turn, err := reader.StaleTaskTurn(ctx, t.Key, t.TaskID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if turn.ID == "" || turn.Acknowledgment == "" || turn.MessageRef == "" {
+		return nil, nil
+	}
+	return &store.Reply{ID: cmp.Or(turn.AcknowledgmentID, turn.ID), Key: t.Key, MessageRef: turn.MessageRef, Acknowledgment: turn.Acknowledgment}, nil
 }
 
 // staleTally counts what one tick of endStaleTasks did.

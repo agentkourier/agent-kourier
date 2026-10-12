@@ -21,6 +21,9 @@ type Reply struct {
 	UserID   string // the platform's ID of the user who wrote the reply
 	// MessageRef is the platform's ID of the reply message, for the queued reaction.
 	MessageRef string
+	// Acknowledgment is the configured bare reaction name to remove when this reply's processing ends.
+	// It is persisted with the reply so a restart or configuration reload keeps the reaction it added.
+	Acknowledgment string
 	// InteractionID pins a text reply to its first question across recovery.
 	InteractionID string
 	Text          string
@@ -84,4 +87,21 @@ type ReplyQueue interface {
 	// however old: it waits behind that task by design. age must be positive and now not zero
 	// (ErrInvalid otherwise).
 	AbandonStrandedReplies(ctx context.Context, now time.Time, age time.Duration) (int, error)
+}
+
+// AcknowledgmentLister is an optional retention extension. It lists delivered
+// tombstones whose acknowledgment metadata still exists and whose originating
+// task is no longer active, so the broker can enqueue durable removals without
+// racing a task that is still processing the message.
+type AcknowledgmentLister interface {
+	ListAcknowledgmentReplies(ctx context.Context, now time.Time, age time.Duration) ([]Reply, error)
+}
+
+// PendingAcknowledgmentLister is an optional retention extension. It lists replies
+// that carry acknowledgment metadata while their add may still be needed: an
+// undelivered reply, or a delivered reply whose originating task is still active.
+// The broker can retry the durable add. A paired removal in the outbox makes a
+// retry harmless after the task has ended.
+type PendingAcknowledgmentLister interface {
+	ListPendingAcknowledgmentReplies(ctx context.Context) ([]Reply, error)
 }

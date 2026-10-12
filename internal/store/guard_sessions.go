@@ -118,3 +118,21 @@ func (g *Guarded) EndStaleTask(ctx context.Context, h SessionHorizons, t StaleTa
 	})
 	return ended, err
 }
+
+// StaleTaskTurn implements StaleTaskTurnReader. It is an optional read used by
+// retention before EndStaleTask clears a stale session's source metadata.
+func (g *Guarded) StaleTaskTurn(ctx context.Context, key ConversationKey, taskID string) (turn TaskTurn, err error) {
+	err = g.run(ctx, "agentkourier.store.StaleTaskTurn", func(ctx context.Context) error {
+		if !validKey(key) || taskID == "" {
+			return fmt.Errorf("stale task turn %+v: a complete key and task are required: %w", key, ErrInvalid)
+		}
+		reader, ok := g.a.(StaleTaskTurnReader)
+		if !ok {
+			return fmt.Errorf("stale task turn %+v/%s: adapter does not support retention metadata: %w", key, taskID, ErrInvalid)
+		}
+		var err error
+		turn, err = reader.StaleTaskTurn(ctx, key, taskID)
+		return err
+	})
+	return turn, err
+}

@@ -14,7 +14,7 @@ import (
 )
 
 func newReply(id string, k store.ConversationKey) store.Reply {
-	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Text: "hello", EnqueuedAt: t0}
+	return store.Reply{ID: id, Key: k, UserID: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", Text: "hello", EnqueuedAt: t0}
 }
 
 // replyClaimer is the part of a store that the interactions package asks for by type assertion and that
@@ -145,7 +145,7 @@ func (su suite) replyQueue(t *testing.T) {
 		var last int64
 		for _, want := range []string{"r1", "r2", "r3"} {
 			got, err := s.NextReply(ctx, key)
-			if err != nil || got.ID != want || got.UserID != "U1" || got.Text != "hello" || got.MessageRef != "1700.01" || got.Key != key || got.Sequence <= last {
+			if err != nil || got.ID != want || got.UserID != "U1" || got.Text != "hello" || got.MessageRef != "1700.01" || got.Acknowledgment != "eyes" || got.Key != key || got.Sequence <= last {
 				t.Fatalf("next = %+v, %v; want %s with a sequence above %d", got, err, want, last)
 			}
 			last = got.Sequence

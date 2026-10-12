@@ -195,6 +195,9 @@ func TestBackendCarriesWhatTheSessionNeeds(t *testing.T) {
 	if be.Agent == nil || be.Rejected == nil || be.Attribute == nil {
 		t.Fatalf("Backend = %+v, want Agent, Rejected and Attribute set", be)
 	}
+	if !be.AcknowledgmentConfigured || !be.AcknowledgmentEnabled || be.AcknowledgmentEmoji != v1alpha1.DefaultAcknowledgmentEmoji {
+		t.Errorf("Backend acknowledgment = configured=%v enabled=%v emoji=%q; want enabled by default with %q", be.AcknowledgmentConfigured, be.AcknowledgmentEnabled, be.AcknowledgmentEmoji, v1alpha1.DefaultAcknowledgmentEmoji)
+	}
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
 	be.Attribute(msg, dialect.User{ID: "U1", Name: "Ada"})
 	if _, ok := msg.Metadata["agentkourier.dev/actor"]; !ok {

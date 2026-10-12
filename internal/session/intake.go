@@ -75,6 +75,11 @@ type Inbound struct {
 type Result struct {
 	Disposition Disposition
 	Queued      bool
+	// Acknowledgment is the bare reaction name captured for this accepted message, or empty when disabled.
+	// It is returned so the durable queue and the add notice use the same resolved configuration.
+	Acknowledgment string
+	// AcknowledgmentConfigured is true for a Binding that selected the acknowledgment lifecycle, even when disabled.
+	AcknowledgmentConfigured bool
 	// Admission is what the reply was classified as (admission.go). The caller acts on it: acknowledges a turn or
 	// an answer, and posts the notice of a notice. It is the zero value only for an error.
 	Admission Admission
@@ -101,7 +106,9 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	// Both outside the intake lock: a slow wake or notice must not hold up other turns. The notice comes first, so
 	// that the runner never sends the turn, and takes its reaction off, before the reaction was asked for (the
 	// sink is made to cope with that order too, but this is the cheap half of it).
-	if res.Queued && m.markPending(in.MessageID) {
+	if res.Acknowledgment != "" {
+		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: acknowledgmentID(in.MessageID), Kind: NoticeAcknowledged, MessageRef: in.MessageRef, Reaction: res.Acknowledgment})
+	} else if !res.AcknowledgmentConfigured && res.Queued && m.markPending(in.MessageID) {
 		m.cfg.Sink.Notice(ctx, in.Key, Notice{ID: queuedID(in.MessageID), Kind: NoticeQueued, MessageRef: in.MessageRef})
 	}
 	m.wake(in.Key)
@@ -111,6 +118,8 @@ func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 // queuedID is the ID of the notice that asks for the queued reaction of the turn id, and of the one that
 // takes it off.
 func queuedID(id string) string { return id + "/queued" }
+
+func acknowledgmentID(id string) string { return id + "/acknowledgment" }
 
 // markPending remembers that the turn id may carry the queued reaction (see Manager.marked), and reports
 // whether the reaction is still wanted: it is while this process has the turn to send (fresh). A turn that was
@@ -144,11 +153,14 @@ func (m *Manager) queue(ctx context.Context, in Inbound) (Result, error) {
 	}
 	// A duplicate, or a turn already delivered, is not queued again, and still wakes the runner.
 	parent, state := telemetry.Capture(ctx)
-	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, InteractionID: pin, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
+	enqueued, err := m.cfg.Store.EnqueueReply(ctx, store.Reply{ID: in.MessageID, Key: in.Key, UserID: user, MessageRef: in.MessageRef, Acknowledgment: res.Acknowledgment, InteractionID: pin, Text: in.Text, EnqueuedAt: now, TraceParent: parent, TraceState: state})
 	if err != nil {
 		return Result{}, fmt.Errorf("queue turn %s: %w", in.MessageID, err)
 	}
 	if !enqueued {
+		// A duplicate was already acknowledged by the original intake. Do not add a reaction again,
+		// especially after the original turn has already ended.
+		res.Acknowledgment = ""
 		telemetry.Count(ctx, "agentkourier_intake_total", "reply_queue", "duplicate")
 	}
 	if enqueued { // this process made the row, so nothing has sent the turn yet
@@ -250,11 +262,23 @@ func (m *Manager) carryOut(ctx context.Context, in Inbound, owned bool, binding 
 		if err := m.cfg.Store.UpsertSession(ctx, store.Session{Key: in.Key, Binding: in.Binding, Alert: in.Alert, Agent: backend.AgentName, LastActivity: now}); err != nil {
 			return Result{}, "", fmt.Errorf("create session %+v: %w", in.Key, err)
 		}
+		res.AcknowledgmentConfigured = backend.AcknowledgmentConfigured
+		if backend.AcknowledgmentEnabled {
+			res.Acknowledgment = backend.AcknowledgmentEmoji
+		}
 		res.Disposition = Created
 		return res, "", nil
 	}
 	if err := m.cfg.Store.TouchSession(ctx, in.Key, now); err != nil {
 		return Result{}, "", fmt.Errorf("touch session %+v: %w", in.Key, err)
+	}
+	backend, err := m.cfg.Bindings.Backend(binding)
+	if err != nil {
+		return Result{}, "", fmt.Errorf("read Binding %q: %w", binding, err)
+	}
+	res.AcknowledgmentConfigured = backend.AcknowledgmentConfigured
+	if backend.AcknowledgmentEnabled {
+		res.Acknowledgment = backend.AcknowledgmentEmoji
 	}
 	res.Disposition = Accepted
 	return res, adm.Question, nil

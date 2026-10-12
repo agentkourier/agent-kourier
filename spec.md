@@ -787,7 +787,7 @@ the SSE stream for streaming sends; WP-02). A rejected message is not recorded: 
 it unchanged, with the same `messageId`, after the active task ends (cancelled or
 completed) starts a new task in the same context (WP-02, measured). A queued reply
 therefore keeps its `messageId`, and a resend that still gets `-32004` stays queued. Agent Kourier queues the reply per session, marks it
-with a reaction, and sends queued replies in order, one per turn, when the active task
+with the configured acknowledgment reaction when enabled, and sends queued replies in order, one per turn, when the active task
 reaches a terminal state, or when a pause ends (answered, timed out or cancelled). A reply
 sent while an interaction is pending is held the same way, and is not its answer, unless the question takes
 text replies (the `a2a` dialect's single free-text question): then the first such reply after the question is
@@ -797,6 +797,14 @@ the active task from the thread; the stop control calls `CancelTask`, and queued
 message are one turn. When `-32004` comes from a task Agent Kourier did not record, Agent Kourier
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
 never drops the reply.
+
+**Message acknowledgment.** `chat.acknowledgment` defaults to `{enabled: true, emoji: hourglass_flowing_sand}`.
+The emoji is a bare Slack reaction name, without colons. Every accepted message gets the reaction while waiting or
+processing, including the first message in a session. The reaction is removed when its turn ends or the agent pauses
+to ask a question; an accepted typed answer gets its own reaction while the continuation runs. `enabled: false` suppresses
+the reaction for newly accepted messages, including queued replies. Ignored messages are not marked. The original emoji
+and message reference are persisted with the reply and active turn so cleanup uses those values after reload or recovery.
+Adds and removals share the original source identity in the outbox, so a delayed add cannot undo a removal.
 
 **Mention-only thread replies (D38).** `chat.threadReplies` is `all` (the default: any person's reply in a thread
 Agent Kourier owns is a turn) or `mention`. In `mention`, a reply is a turn only if it mentions Agent Kourier, whether the thread
@@ -959,7 +967,7 @@ this with an outbox:
    reads recent channel or thread history with metadata included and adopts a matching
    message instead of posting again.
 4. Edits (`chat.update`) are naturally idempotent and need no reconciliation. Reactions
-   (role `reaction`, e.g. the queued marker of 8.2) also go through the outbox for
+   (role `reaction`, e.g. the acknowledgment marker of 8.2) also go through the outbox for
    durability but need no reconciliation: `reactions.add` on a message that already has
    the reaction answers `already_reacted`, which counts as delivered.
 5. Interaction prompts (8.4) are posts too, so they go through the outbox with role

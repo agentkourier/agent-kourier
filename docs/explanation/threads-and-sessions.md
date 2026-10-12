@@ -41,9 +41,14 @@ agent's own output.
 
 ## Replies while the agent works
 
-An agent runs one task per session at a time. A reply that arrives while a task runs is queued, marked with a
-reaction, and sent when the task ends, in order, one per turn. A reply while the agent waits on a question is held the
+An agent runs one task per session at a time. A reply that arrives while a task runs is queued and sent when the task
+ends, in order, one per turn. A reply while the agent waits on a question is held the
 same way, unless the question takes typed replies, in which case the first reply is its answer.
+
+By default, Agent Kourier adds an hourglass reaction to each accepted message. It stays while the message waits or the
+agent processes it, and is removed when the turn ends or the agent asks a question and waits for an answer. A typed answer
+gets its own reaction. Set `chat.acknowledgment.enabled: false` on the Binding to disable it, or set
+`chat.acknowledgment.emoji` to another bare Slack reaction name such as `eyes`.
 
 With `chat.threadReplies: mention`, only replies that mention Agent Kourier are turns, except a typed answer to the agent's pending question. The
 others are ignored, and the next mentioned turn carries them to the agent as context, in a block marked as untrusted data.

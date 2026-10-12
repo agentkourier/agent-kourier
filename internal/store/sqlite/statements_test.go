@@ -20,7 +20,7 @@ func TestStatementsBindTheirArgumentsInTheOrderOfTheirPlaceholders(t *testing.T)
 	stale := store.TriggerStale{Unstarted: t0, Idle: t0.Add(time.Minute)}
 	open := store.TriggerThread{Binding: "ns/a", KeyHash: "h", Thread: "1.1", Opened: t0}
 	query, args := endStaleTaskQuery(horizons, task)
-	if want := `UPDATE sessions AS s SET task_id = '', turn_id = '', turn_user = '', turn_task = '' WHERE s.connection = ? AND s.channel = ? AND s.thread_ts = ? AND s.task_id = ? ` +
+	if want := `UPDATE sessions AS s SET task_id = '', turn_id = '', turn_user = '', turn_task = '', turn_message_ts = '', turn_acknowledgment = '', turn_acknowledgment_id = '' WHERE s.connection = ? AND s.channel = ? AND s.thread_ts = ? AND s.task_id = ? ` +
 		`AND s.last_activity < ? AND s.last_activity < CASE s.binding WHEN ? THEN ? ELSE ? END`; squash(query) != want {
 		t.Errorf("endStaleTaskQuery = %s; want %s", squash(query), want)
 	}

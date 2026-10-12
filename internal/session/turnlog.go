@@ -9,6 +9,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/redact"
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // TurnOutcome is how a turn ended: the state its task reached, or the class of what stopped it. It is
@@ -77,6 +78,11 @@ func (m *Manager) unqueue(t *tstate) {
 	_, marked := m.marked[t.r.ID]
 	delete(m.marked, t.r.ID)
 	m.mu.Unlock()
+	if !marked && (t.r.Acknowledgment != "" || t.ackReply.Acknowledgment != "") {
+		// The acknowledgment reaction covers both waiting and processing. The legacy queued
+		// marker must not compete with it or remove the same emoji early.
+		return
+	}
 	if marked {
 		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: queuedID(t.r.ID), Kind: NoticeDequeued, MessageRef: t.r.MessageRef})
 	}
@@ -104,12 +110,56 @@ func (m *Manager) finish(t *tstate, outcome TurnOutcome, extra ...any) {
 	delete(m.begun, t.r.ID)
 	m.mu.Unlock()
 	m.unqueue(t) // however it ended, the reply waits no more: most turns have been unqueued, when they were sent
+	m.unacknowledge(t)
 	attrs := append(m.turnAttrs(t), "outcome", string(outcome))
 	if begun {
 		attrs = append(attrs, "duration_ms", m.cfg.Now().Sub(start).Milliseconds())
 	}
 	m.cfg.OnTurnEnd(t.sess.Binding, outcome)
 	m.cfg.Logger.InfoContext(m.turnContext(t), "session turn ended", append(attrs, extra...)...) // after the report: whoever sees the line finds it counted
+}
+
+// unacknowledge removes every durable acknowledgment source held by the turn. An answer keeps the
+// paused question in t.r and its own accepted reply in t.ackReply, so both are settled when the
+// continued task reaches a terminal end. The outbox makes repeated removals idempotent.
+func (m *Manager) unacknowledge(t *tstate) {
+	seen := map[string]struct{}{}
+	for i, r := range []store.Reply{t.r, t.ackReply} {
+		if r.Acknowledgment == "" || r.MessageRef == "" {
+			continue
+		}
+		sourceID := r.ID
+		if i == 0 && t.ackID != "" {
+			sourceID = t.ackID
+		}
+		if sourceID == "" {
+			continue
+		}
+		if _, ok := seen[sourceID]; ok {
+			continue
+		}
+		seen[sourceID] = struct{}{}
+		m.unacknowledgeReply(t.key, r, sourceID)
+	}
+}
+
+// unacknowledgeReply queues the removal of one source's reaction. The source ID is supplied separately because a recovered
+// task can be represented by a synthetic queue row while its reaction still belongs to the original reply.
+func (m *Manager) unacknowledgeReply(key Key, r store.Reply, sourceID string) {
+	if sourceID == "" || r.MessageRef == "" || r.Acknowledgment == "" {
+		return
+	}
+	m.cfg.Sink.Notice(m.ctx, key, Notice{ID: acknowledgmentID(sourceID), Kind: NoticeUnacknowledged, MessageRef: r.MessageRef, Reaction: r.Acknowledgment})
+}
+
+// discardAnswer settles a consumed text reply when the interaction policy did not enqueue a continuation. A consumed
+// reply is still a valid accepted message, so its temporary acknowledgment must not depend on a later task ending.
+func (m *Manager) discardAnswer(c *convo) {
+	r := c.answerReply
+	c.answerReply = store.Reply{}
+	if r.ID != "" {
+		m.unacknowledgeReply(r.Key, r, r.ID)
+	}
 }
 
 // turnAttrs says where the turn t runs. It names ids and places only, never what anyone wrote.

@@ -20,13 +20,18 @@ import (
 // fakeRetentionStore records what the loop asks for. purged is what each PurgeAudit returns, in turn (the last one
 // again after that), and failReplies the number of AbandonStrandedReplies calls that fail.
 type fakeRetentionStore struct {
-	mu          sync.Mutex
-	abandons    []time.Duration
-	purges      []auditPurge
-	purged      []int
-	failReplies int
-	failAudit   bool
-	dropped     int // what AbandonStrandedReplies reports
+	mu             sync.Mutex
+	abandons       []time.Duration
+	purges         []auditPurge
+	purged         []int
+	failReplies    int
+	failAudit      bool
+	dropped        int // what AbandonStrandedReplies reports
+	ackReplies     []store.Reply
+	ackLists       int
+	pendingReplies []store.Reply
+	pendingLists   int
+	staleTurns     map[string]store.TaskTurn
 
 	sessionCalls []sessionPurge
 	swept        []store.PurgedSessions // what each PurgeExpiredSessions returns, in turn (the last one again after that)
@@ -61,6 +66,33 @@ func (f *fakeRetentionStore) AbandonStrandedReplies(_ context.Context, _ time.Ti
 		return 0, errors.New("disk full")
 	}
 	return f.dropped, nil
+}
+
+func (f *fakeRetentionStore) ListAcknowledgmentReplies(_ context.Context, _ time.Time, _ time.Duration) ([]store.Reply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, "ListAcknowledgmentReplies")
+	f.ackLists++
+	return append([]store.Reply(nil), f.ackReplies...), nil
+}
+
+func (f *fakeRetentionStore) ListPendingAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, "ListPendingAcknowledgmentReplies")
+	f.pendingLists++
+	return append([]store.Reply(nil), f.pendingReplies...), nil
+}
+
+func (f *fakeRetentionStore) StaleTaskTurn(_ context.Context, _ store.ConversationKey, taskID string) (store.TaskTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, "StaleTaskTurn")
+	turn, ok := f.staleTurns[taskID]
+	if !ok {
+		return store.TaskTurn{}, store.ErrNotFound
+	}
+	return turn, nil
 }
 
 func (f *fakeRetentionStore) PurgeAudit(_ context.Context, before time.Time, limit int) (int, error) {
@@ -182,6 +214,59 @@ func TestRetentionAbandonsStrandedRepliesAndKeepsTheAuditLogByDefault(t *testing
 	}
 	if len(purges) != 0 {
 		t.Errorf("%d audit purges with no retention set; want none: nothing changes until an operator sets one", len(purges))
+	}
+}
+
+func TestRetentionRetriesAcknowledgmentAddBeforeDroppingReplies(t *testing.T) {
+	f := &fakeRetentionStore{pendingReplies: []store.Reply{{ID: "reply-1", Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, MessageRef: "1.1", Acknowledgment: "eyes"}}, dropped: 1}
+	boom := errors.New("outbox unavailable")
+	attempts := 0
+	r, err := newRetention(harmless(retentionConfig{Store: f, EnsureAcknowledgment: func(context.Context, store.Reply) error {
+		attempts++
+		if attempts == 1 {
+			return boom
+		}
+		return nil
+	}, Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.abandonReplies(t.Context())
+	if attempts != 1 || f.dropped != 1 || slices.Contains(f.order, "AbandonStrandedReplies") {
+		t.Fatalf("first retry pass: attempts=%d dropped=%d order=%v; want the failed add to stop abandonment", attempts, f.dropped, f.order)
+	}
+	r.abandonReplies(t.Context())
+	if attempts != 2 || len(f.abandons) != 1 || f.dropped != 1 {
+		t.Fatalf("second retry pass: attempts=%d abandons=%v dropped=%d; want add retry then one abandonment", attempts, f.abandons, f.dropped)
+	}
+}
+
+func TestRetentionRetriesAcknowledgmentRemovalBeforeDroppingReplies(t *testing.T) {
+	f := &fakeRetentionStore{ackReplies: []store.Reply{{ID: "reply-1", Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, MessageRef: "1.1", Acknowledgment: "eyes"}}, dropped: 1}
+	boom := errors.New("outbox unavailable")
+	attempts := 0
+	var cleared []string
+	r, err := newRetention(harmless(retentionConfig{Store: f, ClearAcknowledgment: func(_ context.Context, r store.Reply) error {
+		attempts++
+		if attempts == 1 {
+			return boom
+		}
+		cleared = append(cleared, r.ID)
+		return nil
+	}, Now: func() time.Time { return sweepNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.abandonReplies(t.Context())
+	if attempts != 1 || len(f.abandons) != 0 {
+		t.Fatalf("first cleanup pass: attempts=%d abandons=%v; want the failed removal to stop abandonment", attempts, f.abandons)
+	}
+	r.abandonReplies(t.Context())
+	if attempts != 2 || !slices.Equal(cleared, []string{"reply-1"}) || len(f.abandons) != 1 {
+		t.Fatalf("second cleanup pass: attempts=%d cleared=%v abandons=%v; want removal retry before one abandonment", attempts, cleared, f.abandons)
+	}
+	if want := []string{"ListAcknowledgmentReplies", "ListAcknowledgmentReplies", "AbandonStrandedReplies"}; !slices.Equal(f.order, want) {
+		t.Errorf("retention call order = %v; want %v", f.order, want)
 	}
 }
 

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -90,7 +91,7 @@ func (m *Manager) recoverKey(key Key) {
 	// is that task's own turn (a crash between recording the task and marking the turn delivered),
 	// the task's history says so: the turn is then the task's, marked delivered by following it, and
 	// never sent again.
-	turnRow := store.Reply{ID: recoveredPrefix + sess.TaskID, Key: key}
+	turnRow := store.Reply{ID: recoveredPrefix + sess.TaskID, Key: key, MessageRef: sess.Turn.MessageRef, Acknowledgment: sess.Turn.Acknowledgment}
 	headIsTask := false
 	if herr == nil && sess.ContextID != "" {
 		for attempt := 1; ; attempt++ { // asked again until it answers: a fallback would render t's output twice
@@ -123,6 +124,11 @@ func (m *Manager) recoverKey(key Key) {
 	}
 	t := &tstate{key: key, r: turnRow, sess: sess, b: backend,
 		follow: true, taskID: a2a.TaskID(sess.TaskID), recovered: true}
+	if !headIsTask && sess.Turn.Acknowledgment != "" {
+		// The synthetic row identifies the task for recovery. Reaction removal
+		// must keep using the original accepted message's source ID.
+		t.ackID = cmp.Or(sess.Turn.AcknowledgmentID, sess.Turn.ID)
+	}
 	if !headIsTask && sess.TurnTask == sess.TaskID { // no turn of the queue is the task's: the session says whose output it is, if it does for this task
 		t.began = sess.Turn // (a turn recorded for another task is a binary's that did not know of turns: it starts tasks and leaves it)
 	}

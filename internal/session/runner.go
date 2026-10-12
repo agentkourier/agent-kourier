@@ -23,33 +23,35 @@ import (
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
 // Only the runner reads and writes tries and ttl; the Manager's mutex guards the rest.
 type convo struct {
-	again        bool            // a wake arrived while the runner was busy
-	tries        int             // sends of the head turn that failed in a way to retry, in a row
-	since        time.Time       // when the first of them failed, for SendGiveUp
-	unreached    int             // sends or lookups of the head turn that failed to reach the agent, in a row: the second tells the thread
-	busyNoted    bool            // the thread was told the reply is queued behind a task nobody recorded
-	waitSince    time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
-	waitNoted    bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
-	lastSeen     time.Time       // when Agent Kourier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
-	life         life            // what Agent Kourier already holds of that task, so a replayed snapshot is not life
-	cancelFrom   time.Time       // when the first attempt to cancel a wedged task was made, for SendGiveUp
-	cancelNow    bool            // the task is known to be wedged: cancel it at once, without waiting for its age
-	patient      bool            // the turn is never given up on: the agent may have taken it
-	follow       *tstate         // the turn whose task is followed again, after its stream was lost
-	paused       *tstate         // the turn whose task waits for input, while it does
-	answers      chan answerWork // answers to the paused task, for the parked runner to send
-	attach       *tstate         // a recovered task for the runner to take up; guarded by the Manager's mutex
-	ttl          time.Duration   // the Binding's threadTTL, for end
-	parked       a2a.TaskID      // the task the runner waits on, while it waits for input
-	driving      a2a.TaskID      // the task the runner streams or follows, between named and ended
-	released     bool            // the pause ended, and the runner has not yet moved on
-	resume       chan struct{}   // tells the parked runner that the pause ended
-	textRejected bool            // credential rejection was reported for this pause
-	textTries    int
-	textAfter    int64         // queue cursor for the current question; skipped replies stay queued
-	pendingReply store.Reply   // decided reply whose delivery write must succeed before its answer is sent
-	queued       chan struct{} // wakes a parked text-question runner
-	window       windowText    // the thread context of the head turn, so that a resend does not ask for it again
+	again         bool            // a wake arrived while the runner was busy
+	tries         int             // sends of the head turn that failed in a way to retry, in a row
+	since         time.Time       // when the first of them failed, for SendGiveUp
+	unreached     int             // sends or lookups of the head turn that failed to reach the agent, in a row: the second tells the thread
+	busyNoted     bool            // the thread was told the reply is queued behind a task nobody recorded
+	waitSince     time.Time       // when the head turn first got -32004 in this run of trouble, for waitNoticeAfter
+	waitNoted     bool            // the thread was told the turn has waited long (NoticeStillBusy or NoticeNotReady)
+	lastSeen      time.Time       // when Agent Kourier last saw NEW life of task life.task: the later of this and the status timestamp is its age (R17)
+	life          life            // what Agent Kourier already holds of that task, so a replayed snapshot is not life
+	cancelFrom    time.Time       // when the first attempt to cancel a wedged task was made, for SendGiveUp
+	cancelNow     bool            // the task is known to be wedged: cancel it at once, without waiting for its age
+	patient       bool            // the turn is never given up on: the agent may have taken it
+	follow        *tstate         // the turn whose task is followed again, after its stream was lost
+	paused        *tstate         // the turn whose task waits for input, while it does
+	answers       chan answerWork // answers to the paused task, for the parked runner to send
+	attach        *tstate         // a recovered task for the runner to take up; guarded by the Manager's mutex
+	ttl           time.Duration   // the Binding's threadTTL, for end
+	parked        a2a.TaskID      // the task the runner waits on, while it waits for input
+	driving       a2a.TaskID      // the task the runner streams or follows, between named and ended
+	released      bool            // the pause ended, and the runner has not yet moved on
+	resume        chan struct{}   // tells the parked runner that the pause ended
+	textRejected  bool            // credential rejection was reported for this pause
+	textTries     int
+	textAfter     int64         // queue cursor for the current question; skipped replies stay queued
+	pendingReply  store.Reply   // decided reply whose delivery write must succeed before its answer is sent
+	answerReply   store.Reply   // the accepted answer whose acknowledgment ends with the continued task
+	pendingAnswer *answerWork   // an answer whose source is being durably recorded or delivered
+	queued        chan struct{} // wakes a parked text-question runner
+	window        windowText    // the thread context of the head turn, so that a resend does not ask for it again
 }
 
 // windowText is the thread context (Config.ThreadContext) of one turn, kept for as long as the turn is the head of its
@@ -248,6 +250,14 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 		return m.releasePause(key, c)
 	default:
 	}
+	if c.pendingAnswer != nil {
+		return m.answer(c, *c.pendingAnswer)
+	}
+	select {
+	case msg := <-c.answers:
+		return m.answer(c, msg)
+	default:
+	}
 	// Persist consumption before sending a decided answer, including after a write retry.
 	if err := m.flushTextReply(c); err != nil {
 		return m.waitTextReply(key, c, err)
@@ -256,6 +266,7 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 	case msg := <-c.answers:
 		return m.answer(c, msg)
 	default:
+		m.discardAnswer(c)
 	}
 	if c.paused != nil && TakesTextReplies(c.paused.b.Dialect) {
 		r, err := m.cfg.Store.NextReplyAfter(m.ctx, key, c.textAfter)
@@ -288,29 +299,35 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 				m.unpark(c)
 				return m.resume(c)
 			}
+			m.mu.Lock()
+			c.pendingReply = r
+			m.mu.Unlock()
 			verdict, err := m.cfg.TextReply(telemetry.Restore(m.ctx, r.TraceParent, r.TraceState), key, r, *task)
 			if err != nil {
+				m.clearPendingReply(c)
 				return m.waitTextReply(key, c, err)
 			}
 			switch verdict {
 			case TextReplyNotAnswer:
+				m.clearPendingReply(c)
 				c.textAfter = r.Sequence
 				return paused, nil
 			case TextReplyWait:
+				m.clearPendingReply(c)
 				return m.waitTextReply(key, c, nil)
 			case TextReplyConsumed:
 			default:
 				return m.waitTextReply(key, c, fmt.Errorf("text reply %s: invalid outcome %d without a retry cause", r.ID, verdict))
 			}
-			c.pendingReply = r
-			if err := m.flushTextReply(c); err != nil {
-				return m.waitTextReply(key, c, err)
-			}
 			select {
 			case msg := <-c.answers:
 				return m.answer(c, msg)
 			default:
+				if err := m.flushTextReply(c); err != nil {
+					return m.waitTextReply(key, c, err)
+				}
 				// Drain rejected replies even when their enqueue wakes coalesced.
+				m.discardAnswer(c)
 				return paused, nil
 			}
 		}
@@ -350,6 +367,7 @@ func (m *Manager) releasePause(key Key, c *convo) (outcome, error) {
 	}
 	m.mu.Unlock()
 	if over != nil {
+		m.discardAnswer(c)
 		m.finish(over, TurnPauseEnded)
 	}
 	return ended, nil
@@ -357,29 +375,42 @@ func (m *Manager) releasePause(key Key, c *convo) (outcome, error) {
 
 // flushTextReply retries only the queue write; the decision and answer are not repeated.
 func (m *Manager) flushTextReply(c *convo) error {
-	if c.pendingReply.ID == "" {
+	m.mu.Lock()
+	r := c.pendingReply
+	m.mu.Unlock()
+	if r.ID == "" {
 		return nil
 	}
-	if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), c.pendingReply.ID, m.cfg.Now()); err != nil {
+	if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), r.ID, m.cfg.Now()); err != nil {
 		return err
 	}
 	m.mu.Lock()
-	if _, fresh := m.fresh[c.pendingReply.ID]; !fresh {
-		m.marked[c.pendingReply.ID] = struct{}{}
+	if _, fresh := m.fresh[r.ID]; !fresh {
+		m.marked[r.ID] = struct{}{}
 	}
-	delete(m.fresh, c.pendingReply.ID)
-	m.mu.Unlock()
-	m.unqueue(&tstate{key: c.pendingReply.Key, r: c.pendingReply})
+	delete(m.fresh, r.ID)
 	c.pendingReply = store.Reply{}
+	m.mu.Unlock()
+	m.unqueue(&tstate{key: r.Key, r: r})
+	c.answerReply = r
 	c.textTries, c.tries = 0, 0
 	return nil
+}
+
+func (m *Manager) clearPendingReply(c *convo) {
+	m.mu.Lock()
+	c.pendingReply = store.Reply{}
+	m.mu.Unlock()
 }
 
 // waitTextReply bounds retries and handles cancellation without sending an unrecorded answer.
 func (m *Manager) waitTextReply(key Key, c *convo, err error) (outcome, error) {
 	c.textTries++
 	answers := c.answers
-	if c.pendingReply.ID != "" {
+	m.mu.Lock()
+	pending := c.pendingReply.ID != "" || c.pendingAnswer != nil
+	m.mu.Unlock()
+	if pending {
 		// A decided text answer must wait until its queue delivery write succeeds.
 		answers = nil
 	}
@@ -469,12 +500,15 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 			}
 			return blocked, err
 		}
+		m.mu.Lock()
 		c.pendingReply = r
+		m.mu.Unlock()
 		if err := m.flushTextReply(c); err != nil {
 			c.tries++
 			return blocked, err
 		}
 		c.tries = 0
+		m.discardAnswer(c)
 		return ended, nil
 	}
 	c.ttl = backend.ThreadTTL
@@ -670,6 +704,8 @@ type tstate struct {
 	key       Key
 	c         *convo
 	r         store.Reply
+	ackReply  store.Reply // an answer's own reply, when r is the paused question it continues
+	ackID     string      // the original source ID when r is a synthetic recovered task row
 	sess      store.Session
 	b         Backend
 }
@@ -678,7 +714,19 @@ type tstate struct {
 // answer's continuation is the answer's own (its output is a message of its own, never the paused turn's), a task found again
 // is the turn the session recorded for it, so that the message that turn began is found, and any other is the turn itself.
 func (t *tstate) outputTurn() store.TaskTurn {
-	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(t.r.UserID, t.began.User)}
+	ack := t.r
+	if t.ackReply.Acknowledgment != "" {
+		ack = t.ackReply
+	}
+	ackID := cmp.Or(t.ackID, t.began.AcknowledgmentID, t.began.ID, t.r.ID)
+	if t.ackReply.Acknowledgment != "" {
+		ackID = t.ackReply.ID
+	}
+	ackEmoji := cmp.Or(ack.Acknowledgment, t.r.Acknowledgment, t.began.Acknowledgment)
+	if ackEmoji == "" {
+		ackID = ""
+	}
+	return store.TaskTurn{ID: cmp.Or(t.nid, t.began.ID, t.r.ID), User: cmp.Or(ack.UserID, t.r.UserID, t.began.User), MessageRef: cmp.Or(ack.MessageRef, t.r.MessageRef, t.began.MessageRef), Acknowledgment: ackEmoji, AcknowledgmentID: ackID}
 }
 
 // feedbackOf is the feedback buttons the final message of a turn written by user carries (TurnRef.Feedback).
@@ -749,6 +797,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	var recordErr error
 	named := false // the agent named the task
 	err = send(tctx, func(e agent.Event) {
+		paused := false
 		if c.life.renews(e) { // only what is new counts: a follow replays the snapshot it began with
 			c.lastSeen = m.cfg.Now()
 		}
@@ -793,9 +842,29 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 				c.textAfter, c.textTries, c.textRejected = 0, 0, false
 				c.parked, c.paused, c.driving = final.ID, t, "" // a pause is not a stream
 				m.mu.Unlock()
+				paused = true
 			}
 		}
 		h(e)
+		if paused {
+			// The agent has posted its question or prompt, so the source message no longer needs
+			// to advertise that it is being picked up. Clear the in-memory copy as well: an answer
+			// continues the paused task and owns its own acknowledgment.
+			m.unacknowledge(t)
+			t.r.Acknowledgment = ""
+			t.ackReply.Acknowledgment = ""
+			t.began.Acknowledgment = ""
+			t.began.AcknowledgmentID = ""
+			t.ackID = ""
+			if t.taskID != "" {
+				// Keep recovery's durable turn metadata in step with the removal. If this write
+				// fails, the old metadata is harmless: recovery will issue the same idempotent
+				// removal rather than consulting the reloaded Binding.
+				if err := m.cfg.Store.SetSessionTask(context.WithoutCancel(sctx), t.key, t.sess.ContextID, string(t.taskID), t.outputTurn()); err != nil {
+					m.cfg.Logger.WarnContext(sctx, "session: could not clear paused acknowledgment metadata", "message", t.r.ID, "error", err)
+				}
+			}
+		}
 	})
 	if err == nil {
 		c.follow = nil
@@ -835,20 +904,52 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 type answerWork struct {
 	msg           *a2a.Message
 	parent, state string
+	reply         store.Reply
 }
 
 func (m *Manager) answer(c *convo, work answerWork) (outcome, error) {
+	if c.pendingAnswer == nil {
+		c.pendingAnswer = &work
+	} else {
+		work = *c.pendingAnswer
+	}
 	msg := work.msg
 	t := *c.paused
-	m.mu.Lock()
-	c.parked, c.released, c.paused, c.driving = "", false, nil, msg.TaskID // no gap between parked and driving
-	m.mu.Unlock()
 	t.answer, t.nid, t.taskID, t.follow = true, msg.ID, msg.TaskID, false
+	if work.reply.ID == "" {
+		m.mu.Lock()
+		work.reply = c.pendingReply
+		m.mu.Unlock()
+	}
+	t.ackReply = work.reply
 	t.r.TraceParent, t.r.TraceState = work.parent, work.state
 	t.texted = false // the answer's output is a message of its own: what the question said is not part of it
 	if msg.ContextID == "" {
 		msg.ContextID = t.sess.ContextID
 	}
+	if work.reply.ID != "" {
+		// Record the answer's output and its acknowledgment source before settling the incoming reply. If
+		// the process stops after either write, recovery still owns the original source and can remove it.
+		if err := m.cfg.Store.SetSessionTask(context.WithoutCancel(m.ctx), t.key, msg.ContextID, string(msg.TaskID), t.outputTurn()); err != nil {
+			return m.waitTextReply(t.key, c, fmt.Errorf("record the answer's turn: %w", err))
+		}
+		if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), work.reply.ID, m.cfg.Now()); err != nil {
+			return m.waitTextReply(t.key, c, err)
+		}
+		m.mu.Lock()
+		if _, fresh := m.fresh[work.reply.ID]; !fresh {
+			m.marked[work.reply.ID] = struct{}{}
+		}
+		delete(m.fresh, work.reply.ID)
+		c.pendingReply = store.Reply{}
+		c.answerReply = store.Reply{}
+		m.mu.Unlock()
+		m.unqueue(&tstate{key: work.reply.Key, r: work.reply})
+	}
+	m.mu.Lock()
+	c.pendingAnswer = nil
+	c.parked, c.released, c.paused, c.driving = "", false, nil, msg.TaskID // no gap between parked and driving
+	m.mu.Unlock()
 	return m.drive(&t, func(ctx context.Context, h agent.Handler) error {
 		// The answer's turn is recorded before the agent is asked, and not when it first names the task: a process that ends
 		// between the two would otherwise leave the session naming the turn that paused, and the recovery would stop that
@@ -937,12 +1038,25 @@ func (m *Manager) readAnswered(t *tstate, refused error) (outcome, error) {
 
 // repark reopens the pause of the task an answer was not delivered to.
 func (m *Manager) repark(t *tstate) outcome {
+	if t.answer && t.ackReply.Acknowledgment != "" {
+		// The answer was accepted by intake but the agent did not take it. Its reaction belongs to this
+		// attempt, so settle it before the paused question can accept another answer. Persist the paused
+		// question again as well; otherwise a crash between the repark and the next answer would recover
+		// the failed answer's source and leave its reaction behind.
+		m.unacknowledgeReply(t.key, t.ackReply, t.ackReply.ID)
+		t.ackReply = store.Reply{}
+	}
 	m.mu.Lock()
 	t.c.parked, t.c.released = t.taskID, false
 	pt := *t
 	pt.answer, pt.nid = false, ""
 	t.c.paused = &pt
 	m.mu.Unlock()
+	if t.answer {
+		if err := m.cfg.Store.SetSessionTask(context.WithoutCancel(m.ctx), t.key, t.sess.ContextID, string(t.taskID), pt.outputTurn()); err != nil {
+			m.cfg.Logger.WarnContext(m.ctx, "session: could not restore paused acknowledgment metadata", "message", t.r.ID, "error", err)
+		}
+	}
 	return paused
 }
 
@@ -1136,7 +1250,7 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 			// that starts one looks.
 			m.waiting(t, NoticeNotReady)
 		} else {
-			if !t.c.busyNoted { // Submit saw no task recorded, so it did not mark the reply queued: do it now
+			if !t.c.busyNoted && !t.b.AcknowledgmentConfigured && t.r.Acknowledgment == "" { // the acknowledgment already marks the reply while it waits
 				t.c.busyNoted = true
 				m.mu.Lock()
 				m.marked[t.r.ID] = struct{}{}
@@ -1228,8 +1342,11 @@ func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (o
 	m.mu.Unlock()
 	m.notice(t, NoticeFailed, why)
 	m.cfg.Logger.Warn("session turn failed", "key", t.key, "message", t.r.ID, "reason", why, "error", cause)
+	if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now()); err != nil {
+		return ended, err
+	}
 	m.finish(t, class)
-	return ended, m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now())
+	return ended, nil
 }
 
 func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {

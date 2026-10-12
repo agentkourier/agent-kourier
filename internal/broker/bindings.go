@@ -138,20 +138,32 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	if err != nil {
 		return session.Backend{}, fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
+	ackEnabled, ackEmoji := true, v1alpha1.DefaultAcknowledgmentEmoji
+	if ack := rb.Binding.Spec.Chat.Acknowledgment; ack != nil {
+		if ack.Enabled != nil {
+			ackEnabled = *ack.Enabled
+		}
+		if ack.Emoji != "" {
+			ackEmoji = ack.Emoji
+		}
+	}
 	var ag session.AgentAPI = k.pool.Agent(src.Target())
 	if b.opts.fence != nil {
 		ag = fenceAgent(ag, b.opts.fence)
 	}
 	return session.Backend{
 		Name: v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), AgentName: v1alpha1.NamespacedName(rb.Binding.Spec.Agent.Namespace, rb.Binding.Spec.Agent.Name), Dialect: string(rb.Backend.Spec.Dialect),
-		ThreadTTL:     rb.Binding.Spec.Session.ThreadTTL.Duration,
-		Agent:         ag,
-		Attribute:     k.attribute,
-		Rejected:      src.Rejected,
-		Identity:      src.Identity(),
-		Output:        rb.Binding.Spec.Chat.Output,
-		Feedback:      rb.Binding.Spec.Feedback.Enabled,
-		ThreadReplies: rb.Binding.Spec.Chat.ThreadReplies,
+		ThreadTTL:                rb.Binding.Spec.Session.ThreadTTL.Duration,
+		Agent:                    ag,
+		Attribute:                k.attribute,
+		Rejected:                 src.Rejected,
+		Identity:                 src.Identity(),
+		Output:                   rb.Binding.Spec.Chat.Output,
+		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
+		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
+		AcknowledgmentEnabled:    ackEnabled,
+		AcknowledgmentEmoji:      ackEmoji,
+		AcknowledgmentConfigured: true,
 	}, nil
 }
 

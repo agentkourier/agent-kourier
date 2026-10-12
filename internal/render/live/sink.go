@@ -121,7 +121,11 @@ func (s *Sink) Notice(ctx context.Context, key session.Key, n session.Notice) {
 // notice that is no valid row (a reaction on no message).
 func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notice) error {
 	var err error
-	if name, remove, ok := s.reactions.of(n.Kind); ok {
+	name, remove, ok := s.reactions.of(n.Kind)
+	if n.Kind == session.NoticeAcknowledged || n.Kind == session.NoticeUnacknowledged {
+		name, remove, ok = n.Reaction, n.Kind == session.NoticeUnacknowledged, true
+	}
+	if ok {
 		r := outbox.Reaction{Source: n.ID, Channel: key.Channel, TS: n.MessageRef, Name: name}
 		if remove {
 			_, err = s.queue.EnqueueUnreaction(ctx, r)

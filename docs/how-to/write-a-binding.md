@@ -37,6 +37,9 @@ spec:
     channel: C0123456789
     output: live # (4)!
     threadReplies: all # (5)!
+    acknowledgment:
+      enabled: true # (6)!
+      emoji: hourglass_flowing_sand
 ```
 
 1. The platform team's AgentBackend. A reference to another namespace works only if that resource lists your
@@ -46,6 +49,8 @@ spec:
    which is sent as `X-User-Id`.
 4. `live` streams the answer as the agent writes it; `final` posts it once, when the turn ends.
 5. `all` makes every person's reply in a thread Agent Kourier owns a turn. `mention` takes only the replies that mention the bot.
+6. `acknowledgment` adds a temporary reaction to each accepted message while its turn is processing. It defaults to enabled with
+   `hourglass_flowing_sand`; set `enabled: false` to omit it, or set `emoji` to another bare Slack reaction name such as `eyes`.
 
 ## Load it
 
@@ -84,5 +89,7 @@ already holds the channel.
   [Start investigations from any bot's messages](any-bot-trigger.md) for another tool's bot.
 - **Keep threads around for less than 90 days:** set `session.threadTTL`, for example `720h`.
 - **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them.
+- **Change the processing reaction:** set `chat.acknowledgment.emoji` to a bare Slack reaction name. The reaction is removed when
+  the turn ends; a question removes it before the thread waits for an answer, and the answer gets its own reaction.
 
 Every field, with its default, is in the [Binding reference](../reference/binding.md).

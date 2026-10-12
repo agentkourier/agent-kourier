@@ -30,9 +30,9 @@ func (s *adapter) UpsertSession(ctx context.Context, sess store.Session) error {
 func (s *adapter) GetSession(ctx context.Context, key store.ConversationKey, ttl time.Duration, now time.Time) (store.Session, error) {
 	sess := store.Session{Key: key}
 	var last int64
-	err := s.read.QueryRowContext(ctx, `SELECT context_id, task_id, turn_id, turn_user, turn_task, binding, alert_name, agent_name, last_activity, trace_parent, trace_state FROM sessions
+	err := s.read.QueryRowContext(ctx, `SELECT context_id, task_id, turn_id, turn_user, turn_task, turn_message_ts, turn_acknowledgment, turn_acknowledgment_id, binding, alert_name, agent_name, last_activity, trace_parent, trace_state FROM sessions
 		WHERE connection = ? AND channel = ? AND thread_ts = ?`, key.Connection, key.Channel, key.Thread).
-		Scan(&sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Binding, &sess.Alert, &sess.Agent, &last, &sess.TraceParent, &sess.TraceState)
+		Scan(&sess.ContextID, &sess.TaskID, &sess.Turn.ID, &sess.Turn.User, &sess.TurnTask, &sess.Turn.MessageRef, &sess.Turn.Acknowledgment, &sess.Turn.AcknowledgmentID, &sess.Binding, &sess.Alert, &sess.Agent, &last, &sess.TraceParent, &sess.TraceState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Session{}, fmt.Errorf("get session %+v: %w", key, store.ErrNotFound)
 	}

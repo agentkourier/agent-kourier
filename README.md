@@ -148,6 +148,7 @@ spec:
     channel: C0123456789
     output: live
     threadReplies: all   # the default; "mention" ignores thread replies that do not @mention Agent Kourier
+    acknowledgment: {enabled: true, emoji: hourglass_flowing_sand} # enabled by default; use a bare Slack reaction name
 ```
 
 This example assumes the agent and authenticated backend endpoint already exist.

@@ -17,7 +17,7 @@ import (
 // botMention is how a person addresses Agent Kourier in a channel: the fake's bot user.
 const botMention = "<@UFAKEBOT> "
 
-// queuedReaction is the emoji Agent Kourier puts on a reply that waits for the active task (spec 8.2).
+// queuedReaction is the default acknowledgment emoji on accepted messages while they wait or run.
 const queuedReaction = "hourglass_flowing_sand"
 
 // stepTimeout is how long a scenario waits for one thing Agent Kourier does: a stream starting, a reply ending.

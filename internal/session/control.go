@@ -189,6 +189,6 @@ func (m *Manager) Answer(ctx context.Context, key Key, msg *a2a.Message) error {
 	}
 	c.released = true
 	parent, state := telemetry.Capture(ctx)
-	c.answers <- answerWork{msg: msg, parent: parent, state: state} // one per park, and the channel holds one: never blocks
+	c.answers <- answerWork{msg: msg, parent: parent, state: state, reply: c.pendingReply} // one per park, and the channel holds one: never blocks
 	return nil
 }

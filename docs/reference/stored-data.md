@@ -201,8 +201,12 @@ days** with no active task on its session is dropped, as a turn is when its Bind
 is marked delivered, so a replayed chat event is not queued again, and it is never sent. A reply whose session records an
 active task is never dropped, however old: it waits behind that task by design (a long task, a pause that waits for an
 answer, a busy or not-ready session that is waited out without limit). 30 days is far longer than any of those, and a third
-of the default `threadTTL`, after which a session is expired and recovery skips it. A drop is logged at WARN, with a count, and counted in `agentkourier_retention_removed_total{what="stranded_replies"}`. The queued
-reaction (the hourglass) stays on the dropped reply's message, since nothing takes it off.
+of the default `threadTTL`, after which a session is expired and recovery skips it. A drop is logged at WARN, with a count,
+and counted in `agentkourier_retention_removed_total{what="stranded_replies"}`. The retention sweep queues removal of a
+dropped reply's configured acknowledgment reaction through the outbox.
+
+The reply row keeps the original acknowledgment emoji and source message reference, and an active task's session keeps
+them with its turn. These values let recovery remove the same reaction after a restart or Binding configuration change.
 
 ### Thread replies in a mention-only Binding
 
@@ -228,8 +232,9 @@ transaction:
 - its **reply queue**: the delivered replies, which stay as tombstones so that a replayed chat event is not queued twice;
 - its **interactions**, settled by then, and the **presses** on them;
 - its **outbox rows**, posted or abandoned: those made for the thread (a reply, a notice), and those made for one of its replies,
-  which have no thread and are found by their source: the queued reaction of a reply, and the removal of it, are made for the
-  source `<reply ID>/queued`, so a row whose source starts with a reply's ID and a `/` belongs to that reply's session.
+  which have no thread and are found by their source: the acknowledgment reaction and its removal use the source
+  `<reply ID>/acknowledgment`, and older queued reactions use `<reply ID>/queued`. A row whose source starts with a reply's
+  ID and a `/` belongs to that reply's session.
 
 Only **settled rows** are deleted (a delivered reply, a decided interaction, a posted or abandoned outbox row): a row written
 after the sweep chose its sessions, such as a notice for a reply in the thread that is not posted yet, is kept even if its

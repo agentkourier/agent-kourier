@@ -46,6 +46,9 @@ func TestSpecExamplesDecode(t *testing.T) {
 	if b.Spec.Chat.ThreadReplies != ThreadRepliesAll {
 		t.Errorf("Binding threadReplies = %q, want %q", b.Spec.Chat.ThreadReplies, ThreadRepliesAll)
 	}
+	if b.Spec.Chat.Acknowledgment == nil || b.Spec.Chat.Acknowledgment.Enabled == nil || !*b.Spec.Chat.Acknowledgment.Enabled || b.Spec.Chat.Acknowledgment.Emoji != DefaultAcknowledgmentEmoji {
+		t.Errorf("Binding acknowledgment defaults = %+v, want enabled %q", b.Spec.Chat.Acknowledgment, DefaultAcknowledgmentEmoji)
+	}
 	if b.Spec.Identity.UserID != "agent-kourier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
 		!b.Spec.Interactions.AskUser || !b.Spec.Feedback.Enabled {
 		t.Errorf("Binding did not decode as in the spec: %+v", b)
@@ -70,6 +73,34 @@ func TestDefaultThreadReplies(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultAcknowledgment(t *testing.T) {
+	enabled := false
+	for _, tc := range []struct {
+		name string
+		in   *ChatAcknowledgment
+		want bool
+	}{
+		{"omitted", nil, true},
+		{"enabled", &ChatAcknowledgment{Enabled: boolPtr(true)}, true},
+		{"disabled", &ChatAcknowledgment{Enabled: &enabled}, false},
+		{"custom emoji", &ChatAcknowledgment{Enabled: boolPtr(true), Emoji: "eyes"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Binding{Spec: BindingSpec{Chat: ChatBinding{Acknowledgment: tc.in}}}
+			b.Default()
+			got := b.Spec.Chat.Acknowledgment
+			if got == nil || got.Enabled == nil || *got.Enabled != tc.want || got.Emoji == "" {
+				t.Fatalf("acknowledgment after Default = %+v; want enabled=%t and an emoji", got, tc.want)
+			}
+			if tc.name != "custom emoji" && got.Emoji != DefaultAcknowledgmentEmoji {
+				t.Errorf("emoji after Default = %q, want %q", got.Emoji, DefaultAcknowledgmentEmoji)
+			}
+		})
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")

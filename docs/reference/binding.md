@@ -75,7 +75,17 @@ ChatBinding places the Binding in a channel.
 | `channel` | string | Yes | None | Channel is the channel ID, not its name. Pattern `^[CG][A-Z0-9]+$`. |
 | `output` | string | No | `live` | Output defaults to live. One of `live`, `final`. |
 | `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
+| `acknowledgment` | [ChatAcknowledgment](#chatacknowledgment) | No | None | Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed. It defaults to enabled with the hourglass_flowing_sand reaction. |
 | `triggers` | [][Trigger](#trigger) | No | `[{type: mention}]` | Triggers decide which events in the channel start or continue a turn. Empty means [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. |
+
+## ChatAcknowledgment
+
+ChatAcknowledgment configures the temporary reaction on an accepted message.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `enabled` | boolean | No | `true` | Enabled adds the reaction after the message is durably accepted and removes it when processing ends. It defaults to true. |
+| `emoji` | string | No | `hourglass_flowing_sand` | Emoji is the Slack reaction name without colons. It defaults to hourglass_flowing_sand. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`. |
 
 ## Trigger
 

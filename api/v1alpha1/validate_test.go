@@ -185,6 +185,11 @@ func TestBindingValidate(t *testing.T) {
 			`spec.chat.threadReplies: unsupported value "Mention", must be one of all, mention`},
 		{"threadReplies none", func(o *Binding) { o.Spec.Chat.ThreadReplies = "none" },
 			`spec.chat.threadReplies: unsupported value "none", must be one of all, mention`},
+		{"acknowledgment emoji with colons", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = ":eyes:" },
+			`spec.chat.acknowledgment.emoji: invalid reaction name ":eyes:": use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed`},
+		{"acknowledgment emoji with uppercase", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "Eyes" },
+			`spec.chat.acknowledgment.emoji: invalid reaction name "Eyes": use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed`},
+		{"acknowledgment custom emoji ok", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "eyes+1" }, ""},
 		{"negative interaction timeout", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = -1 }, "spec.interactions.timeout: must be positive"},
 		{"negative threadTTL", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = -1 }, "spec.session.threadTTL: must be positive"},
 	})

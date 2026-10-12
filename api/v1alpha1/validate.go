@@ -18,6 +18,11 @@ import (
 // channelID matches Slack channel IDs; its literal must equal ChatBinding.Channel's Pattern marker.
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
+// reactionName matches Slack's bare reaction names. The platform adds and removes
+// the surrounding colons; accepting only names keeps configuration out of the
+// platform adapter and prevents an invalid outbox row.
+var reactionName = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`)
+
 // botID matches Slack bot IDs; its literal must equal BotSource.BotID's Pattern marker.
 var botID = regexp.MustCompile(`^B[A-Z0-9]+$`)
 
@@ -190,6 +195,18 @@ func (b *Binding) Validate() error {
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
 	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
+	if a := s.Chat.Acknowledgment; a == nil {
+		p.add("spec.chat.acknowledgment", "required after defaulting")
+	} else {
+		if a.Enabled == nil {
+			p.add("spec.chat.acknowledgment.enabled", "required after defaulting")
+		}
+		if a.Emoji == "" {
+			p.add("spec.chat.acknowledgment.emoji", "required")
+		} else if !reactionName.MatchString(a.Emoji) {
+			p.add("spec.chat.acknowledgment.emoji", "invalid reaction name %q: use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed", a.Emoji)
+		}
+	}
 	p.triggers("spec.chat.triggers", s.Chat.Triggers)
 	p.duration("spec.interactions.timeout", s.Interactions.Timeout)
 	p.duration("spec.session.threadTTL", s.Session.ThreadTTL)

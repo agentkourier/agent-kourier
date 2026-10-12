@@ -45,8 +45,15 @@ type Session struct {
 
 // TaskTurn is the turn whose output a task belongs to: the turn that began it, or for the continuation of a task that was
 // paused and answered, the answer. ID names the outbox row of the output (and so the message, a stream's included), and User
-// is the platform's ID of the person it is shown to, which a stream needs. The zero value is none.
-type TaskTurn struct{ ID, User string }
+// is the platform's ID of the person it is shown to, which a stream needs. MessageRef and Acknowledgment preserve the
+// source message and reaction for recovery. AcknowledgmentID names the accepted chat reply that owns
+// that reaction when it differs from the output ID (as it does for a typed answer). The zero value is none.
+type TaskTurn struct {
+	ID, User         string
+	MessageRef       string
+	Acknowledgment   string
+	AcknowledgmentID string
+}
 
 // Sessions persists the thread-to-session mapping. Key (all three parts),
 // Binding and LastActivity are required; ContextID and TaskID are optional.

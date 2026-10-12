@@ -19,7 +19,7 @@ func TestStatementsNumberTheirArgumentsInTheOrderTheyAreBound(t *testing.T) {
 	task := store.StaleTask{Key: store.ConversationKey{Connection: "slack", Channel: "C1", Thread: "1.1"}, TaskID: "task1"}
 
 	query, args := endStaleTaskQuery(horizons, task)
-	if want := `UPDATE sessions s SET task_id = '', turn_id = '', turn_user = '', turn_task = '' WHERE s.connection = $1 AND s.channel = $2 AND s.thread_ts = $3 AND s.task_id = $4 ` +
+	if want := `UPDATE sessions s SET task_id = '', turn_id = '', turn_user = '', turn_task = '', turn_message_ts = '', turn_acknowledgment = '', turn_acknowledgment_id = '' WHERE s.connection = $1 AND s.channel = $2 AND s.thread_ts = $3 AND s.task_id = $4 ` +
 		`AND s.last_activity < $5::timestamptz AND s.last_activity < CASE s.binding WHEN $6::text THEN $7::timestamptz ELSE $8::timestamptz END`; squash(query) != want {
 		t.Errorf("endStaleTaskQuery = %s; want %s", squash(query), want)
 	}

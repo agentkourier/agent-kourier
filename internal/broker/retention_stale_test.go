@@ -207,6 +207,27 @@ func TestRetentionEndsAStaleTaskAfterCancellingItAtItsAgent(t *testing.T) {
 	}
 }
 
+func TestRetentionClearsStaleAcknowledgmentAfterEndingTheTask(t *testing.T) {
+	task := stale("1.1", "ns/long", "t1")
+	g := newStaleRig(t, []store.StaleTask{task}, nil)
+	g.f.staleTurns = map[string]store.TaskTurn{"t1": {ID: "question/answer", AcknowledgmentID: "message-1", MessageRef: "1.1", Acknowledgment: "eyes"}}
+	var cleared []store.Reply
+	g.r.cfg.ClearAcknowledgment = func(_ context.Context, r store.Reply) error {
+		g.f.mu.Lock()
+		defer g.f.mu.Unlock()
+		cleared = append(cleared, r)
+		if len(g.f.order) == 0 || g.f.order[len(g.f.order)-1] != "EndStaleTask" {
+			t.Errorf("acknowledgment cleared before stale task was ended: %v", g.f.order)
+		}
+		return nil
+	}
+	g.r.endStaleTasks(t.Context())
+	want := []store.Reply{{ID: "message-1", Key: task.Key, MessageRef: "1.1", Acknowledgment: "eyes"}}
+	if !equal(cleared, want) {
+		t.Errorf("cleared acknowledgments = %+v; want %+v", cleared, want)
+	}
+}
+
 func equal[T comparable](a, b []T) bool {
 	if len(a) != len(b) {
 		return false

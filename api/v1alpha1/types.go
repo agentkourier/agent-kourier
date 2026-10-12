@@ -229,12 +229,30 @@ type ChatBinding struct {
 	// +kubebuilder:default=all
 	// +optional
 	ThreadReplies ThreadReplies `json:"threadReplies"`
+	// Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed.
+	// It defaults to enabled with the hourglass_flowing_sand reaction.
+	// +optional
+	Acknowledgment *ChatAcknowledgment `json:"acknowledgment,omitempty"`
 	// Triggers decide which events in the channel start or continue a turn (spec 8.2). Empty means
 	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list
 	// (see defaultTriggers).
 	// +doc:default=`[{type: mention}]`
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
+}
+
+// ChatAcknowledgment configures the temporary reaction on an accepted message.
+type ChatAcknowledgment struct {
+	// Enabled adds the reaction after the message is durably accepted and removes it when processing ends.
+	// It defaults to true.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// Emoji is the Slack reaction name without colons. It defaults to hourglass_flowing_sand.
+	// +kubebuilder:default=hourglass_flowing_sand
+	// +kubebuilder:validation:Pattern=`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`
+	// +optional
+	Emoji string `json:"emoji,omitempty"`
 }
 
 // RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
@@ -282,8 +300,9 @@ type Session struct {
 
 // Defaults for fields left empty by Default.
 const (
-	DefaultInteractionTimeout = 30 * time.Minute
-	DefaultThreadTTL          = 90 * 24 * time.Hour
+	DefaultInteractionTimeout  = 30 * time.Minute
+	DefaultThreadTTL           = 90 * 24 * time.Hour
+	DefaultAcknowledgmentEmoji = "hourglass_flowing_sand"
 )
 
 // Default fills the fields left empty. A ChatConnection has none to fill; the method keeps the shape that
@@ -297,6 +316,16 @@ func (b *Binding) Default() {
 	}
 	if b.Spec.Chat.ThreadReplies == "" {
 		b.Spec.Chat.ThreadReplies = ThreadRepliesAll
+	}
+	if b.Spec.Chat.Acknowledgment == nil {
+		b.Spec.Chat.Acknowledgment = &ChatAcknowledgment{}
+	}
+	if b.Spec.Chat.Acknowledgment.Enabled == nil {
+		enabled := true
+		b.Spec.Chat.Acknowledgment.Enabled = &enabled
+	}
+	if b.Spec.Chat.Acknowledgment.Emoji == "" {
+		b.Spec.Chat.Acknowledgment.Emoji = DefaultAcknowledgmentEmoji
 	}
 	b.Spec.Chat.defaultTriggers()
 	if b.Spec.Interactions.Timeout.Duration == 0 {

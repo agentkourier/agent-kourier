@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,7 +19,7 @@ func endStaleTaskQuery(h store.SessionHorizons, t store.StaleTask) (string, []an
 	b := store.NewBinder(Dialect{})
 	key := `s.connection = ` + b.Arg(t.Key.Connection) + ` AND s.channel = ` + b.Arg(t.Key.Channel) + ` AND s.thread_ts = ` + b.Arg(t.Key.Thread)
 	task := `s.task_id = ` + b.Arg(t.TaskID)
-	return `UPDATE sessions s SET task_id = '', turn_id = '', turn_user = '', turn_task = ''
+	return `UPDATE sessions s SET task_id = '', turn_id = '', turn_user = '', turn_task = '', turn_message_ts = '', turn_acknowledgment = '', turn_acknowledgment_id = ''
 			WHERE ` + key + ` AND ` + task + ` AND ` + b.Render(store.PastHorizon("s", h)), b.Args()
 }
 
@@ -46,6 +47,21 @@ func (s *adapter) ListStaleTasks(ctx context.Context, h store.SessionHorizons, l
 		return nil, fmt.Errorf("list stale tasks: %w", err)
 	}
 	return stale, nil
+}
+
+// StaleTaskTurn implements store.StaleTaskTurnReader.
+func (s *adapter) StaleTaskTurn(ctx context.Context, key store.ConversationKey, taskID string) (store.TaskTurn, error) {
+	var turn store.TaskTurn
+	err := s.pool.QueryRow(ctx, `SELECT turn_id, turn_user, turn_message_ts, turn_acknowledgment, turn_acknowledgment_id FROM sessions
+		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND task_id = $4`,
+		key.Connection, key.Channel, key.Thread, taskID).Scan(&turn.ID, &turn.User, &turn.MessageRef, &turn.Acknowledgment, &turn.AcknowledgmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.TaskTurn{}, fmt.Errorf("stale task turn %+v/%s: %w", key, taskID, store.ErrNotFound)
+	}
+	if err != nil {
+		return store.TaskTurn{}, fmt.Errorf("stale task turn %+v/%s: %w", key, taskID, err)
+	}
+	return turn, nil
 }
 
 // EndStaleTask implements store.StaleTasks. It is a write like any other: the epoch is checked first, so only the leader

@@ -245,7 +245,7 @@ func (su suite) sessionTasks(t *testing.T) {
 		if got := getSession(t, s, key); got.Turn != (store.TaskTurn{}) {
 			t.Fatalf("a new session's turn = %+v; want none", got.Turn)
 		}
-		first, answer := store.TaskTurn{ID: "slack:c:C1:1.1", User: "U1"}, store.TaskTurn{ID: "answer-1", User: "U2"}
+		first, answer := store.TaskTurn{ID: "slack:c:C1:1.1", User: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", AcknowledgmentID: "message-1"}, store.TaskTurn{ID: "answer-1", User: "U2", MessageRef: "1700.02", Acknowledgment: "eyes", AcknowledgmentID: "answer-message-1"}
 		noErr(t, s.SetSessionTask(ctx, key, "c1", "t1", first), "the task begins")
 		if got := getSession(t, s, key); got.TaskID != "t1" || got.Turn != first || got.TurnTask != "t1" {
 			t.Errorf("session = %+v; want task t1 of turn %+v, recorded for t1", got, first)

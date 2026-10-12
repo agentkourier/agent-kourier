@@ -574,7 +574,9 @@ func TestTheAnswersTurnIsRecordedBeforeTheAgentIsAsked(t *testing.T) {
 	f, sink := pausedFirst(t, func(*a2a.Message, agent.Handler) error { <-gate; return nil }) // takes the answer, says nothing
 	defer close(gate)
 
+	f.st.mu.Lock()
 	f.st.fail = map[string]error{"set": errors.New("the database is busy")}
+	f.st.mu.Unlock()
 	if err := f.m.Answer(t.Context(), key, answerMsg("ans-1")); err != nil {
 		t.Fatal(err)
 	}

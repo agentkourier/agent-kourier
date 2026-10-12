@@ -125,6 +125,40 @@ func TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction(t *testing.T) {
 	}
 }
 
+func TestAcknowledgmentNoticeUsesItsConfiguredReaction(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kinds []session.NoticeKind
+	}{
+		{"acknowledged, then settled", []session.NoticeKind{session.NoticeAcknowledged, session.NoticeUnacknowledged}},
+		{"settled, then acknowledged", []session.NoticeKind{session.NoticeUnacknowledged, session.NoticeAcknowledged}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			sink := e.sink(t, e.ob)
+			key := thread
+			key.Thread = e.root
+			for _, kind := range tc.kinds {
+				sink.Notice(t.Context(), key, session.Notice{ID: "message-1/acknowledgment", Kind: kind, MessageRef: e.root, Reaction: "eyes"})
+			}
+			rowID := outbox.ID("message-1/acknowledgment", store.OutboxReaction)
+			if tc.kinds[0] == session.NoticeUnacknowledged {
+				rowID = outbox.UnreactionID("message-1/acknowledgment")
+			}
+			row, err := e.store.GetOutbox(t.Context(), rowID)
+			if err != nil || !strings.Contains(row.Payload, `"name":"eyes"`) {
+				t.Fatalf("acknowledgment row = %+v, %v; want the configured reaction", row, err)
+			}
+			if err := e.ob.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile = %v", err)
+			}
+			if got := e.fake.Reactions("C1", e.root); len(got) != 0 {
+				t.Fatalf("reactions after acknowledgment settles = %+v; want none", got)
+			}
+		})
+	}
+}
+
 // TestQueuedReactionIsTakenOffTheMessage runs the rows to Slack, in both orders the notices can come: the
 // hourglass is on while the reply waits, and off once it was sent; and a removal that comes first leaves nothing.
 func TestQueuedReactionIsTakenOffTheMessage(t *testing.T) {

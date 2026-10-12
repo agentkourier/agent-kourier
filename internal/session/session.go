@@ -80,6 +80,13 @@ type Backend struct {
 	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
 	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
 	Feedback bool
+	// AcknowledgmentEnabled adds a temporary reaction to each accepted message. AcknowledgmentEmoji is the
+	// bare platform reaction name kept with the queued reply so a reload cannot change what is removed.
+	AcknowledgmentEnabled bool
+	AcknowledgmentEmoji   string
+	// AcknowledgmentConfigured distinguishes a Binding that explicitly selected the new lifecycle (including disabled)
+	// from older direct session configurations that still use the queued marker.
+	AcknowledgmentConfigured bool
 }
 
 // Auditor records agent calls: *audit.Writer. A failed write is logged, never fatal (spec 8.6).
@@ -138,6 +145,10 @@ const (
 	// place finds the first from the second, whichever it sees first. It is raised only for a turn that may
 	// carry the reaction.
 	NoticeDequeued NoticeKind = "dequeued"
+	// NoticeAcknowledged asks for the configured temporary acknowledgment reaction to be added to an accepted message.
+	NoticeAcknowledged NoticeKind = "acknowledged"
+	// NoticeUnacknowledged asks for the temporary acknowledgment reaction to be removed when processing ends.
+	NoticeUnacknowledged NoticeKind = "unacknowledged"
 	// NoticeStillBusy says a turn has waited, for a task of the session that Agent Kourier did not record, longer
 	// than waitNoticeAfter: it is sent again after each backoff, and never dropped.
 	NoticeStillBusy NoticeKind = "still_busy"
@@ -196,6 +207,7 @@ type Notice struct {
 	ID         string
 	Kind       NoticeKind
 	MessageRef string // the platform's ID of the message the notice is about
+	Reaction   string // the bare reaction name for acknowledgment notices
 	Detail     string // a short reason, fixed text: never agent output, never a secret
 }
 

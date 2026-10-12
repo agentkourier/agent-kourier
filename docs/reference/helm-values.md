@@ -96,7 +96,7 @@ config:
       spec:
         agent: {backendRef: {name: agents}, namespace: kagent, name: k8s-agent}
         identity: {userId: agent-kourier-sre, tokenSecretRef: {name: agent-kourier-agent-token}}
-        chat: {connectionRef: {name: slack-main}, channel: C0123456789, output: live, threadReplies: all}  # all (default) | mention
+        chat: {connectionRef: {name: slack-main}, channel: C0123456789, output: live, threadReplies: all, acknowledgment: {enabled: true, emoji: hourglass_flowing_sand}}  # enabled by default; emoji is a bare Slack reaction name
 ```
 
 | Key | Default | Description |

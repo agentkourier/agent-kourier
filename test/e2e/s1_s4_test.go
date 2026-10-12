@@ -90,6 +90,17 @@ func s4(t *testing.T, s *scenario, channel string) {
 		bots := BotMessages(th)
 		return len(bots) == 1 && bots[0].Streaming && strings.Contains(bots[0].Text, "Holding on gate "+first)
 	})
+	if err := Wait(s.ctx, stepTimeout, "the first message acknowledgment while its task runs", func(ctx context.Context) (bool, error) {
+		rs, err := s.slack.Reactions(ctx, channel, m.TS)
+		for _, x := range rs {
+			if x.Name == queuedReaction {
+				return true, err
+			}
+		}
+		return false, err
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	r := s.reply(channel, m.TS, "US4B", "two gate:"+second)
 	err := Wait(s.ctx, stepTimeout, "the reaction that marks the reply as waiting", func(ctx context.Context) (bool, error) {
@@ -122,15 +133,26 @@ func s4(t *testing.T, s *scenario, channel string) {
 	if bots := BotMessages(th); !strings.Contains(bots[0].Text, "Holding on gate "+first) || CompareTS(bots[1].TS, r.TS) <= 0 {
 		t.Errorf("replies %q and %q; want the first task's text, then the second's, which began after the reply it answers (%s)", bots[0].Text, bots[1].Text, r.TS)
 	}
-	// The reply no longer waits: its turn was sent, so the marker comes off, while the second task still runs.
-	err = Wait(s.ctx, stepTimeout, "the reaction that marked the reply as waiting to be taken off", func(ctx context.Context) (bool, error) {
-		rs, err := s.slack.Reactions(ctx, channel, r.TS)
+	if err := Wait(s.ctx, stepTimeout, "the first message acknowledgment to clear after its task ends", func(ctx context.Context) (bool, error) {
+		rs, err := s.slack.Reactions(ctx, channel, m.TS)
 		for _, x := range rs {
 			if x.Name == queuedReaction {
 				return false, err
 			}
 		}
 		return true, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The reply's acknowledgment stays while its task is processing, even after it leaves the queue behind the first task.
+	err = Wait(s.ctx, stepTimeout, "the acknowledgment to remain while the second task runs", func(ctx context.Context) (bool, error) {
+		rs, err := s.slack.Reactions(ctx, channel, r.TS)
+		for _, x := range rs {
+			if x.Name == queuedReaction {
+				return true, err
+			}
+		}
+		return false, err
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,4 +164,16 @@ func s4(t *testing.T, s *scenario, channel string) {
 		bots := BotMessages(th)
 		return len(bots) == 2 && finished(bots[1]) && strings.Contains(bots[1].Text, "Released.")
 	})
+	err = Wait(s.ctx, stepTimeout, "the acknowledgment to be removed after the second task ends", func(ctx context.Context) (bool, error) {
+		rs, err := s.slack.Reactions(ctx, channel, r.TS)
+		for _, x := range rs {
+			if x.Name == queuedReaction {
+				return false, err
+			}
+		}
+		return true, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

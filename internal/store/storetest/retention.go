@@ -206,6 +206,82 @@ func (su suite) replyRetention(t *testing.T) {
 		}
 	})
 
+	su.run(t, "acknowledgment retention lists completed removals and live additions separately", func(t *testing.T, s store.Store) {
+		lister, ok := s.(store.AcknowledgmentLister)
+		if !ok {
+			t.Fatal("store does not implement AcknowledgmentLister")
+		}
+		pending, ok := s.(store.PendingAcknowledgmentLister)
+		if !ok {
+			t.Fatal("store does not implement PendingAcknowledgmentLister")
+		}
+		ctx := t.Context()
+		old := newReply("ack-old", key)
+		old.EnqueuedAt = t0
+		young := newReply("ack-young", key)
+		young.EnqueuedAt = t0.Add(time.Hour)
+		active := newReply("ack-active", other)
+		active.EnqueuedAt = t0
+		delivered := newReply("ack-delivered", keyOf("3.3"))
+		delivered.EnqueuedAt = t0
+		for _, r := range []store.Reply{old, young, active, delivered} {
+			if _, err := s.EnqueueReply(ctx, r); err != nil {
+				t.Fatalf("enqueue %s: %v", r.ID, err)
+			}
+		}
+		noErr(t, s.MarkReplyDelivered(ctx, delivered.ID, t0.Add(time.Hour)), "deliver acknowledgment reply")
+		noErr(t, s.UpsertSession(ctx, store.Session{Key: other, Binding: "ns/b", LastActivity: t0}), "active session")
+		noErr(t, s.MarkReplyDelivered(ctx, active.ID, t0.Add(time.Hour)), "deliver active acknowledgment reply")
+		noErr(t, s.SetSessionTask(ctx, other, "c1", "task1", store.TaskTurn{ID: active.ID, MessageRef: active.MessageRef, Acknowledgment: active.Acknowledgment}), "active task")
+
+		got, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+		noErr(t, err, "list acknowledgment replies")
+		ids := make([]string, 0, len(got))
+		for _, r := range got {
+			ids = append(ids, r.ID)
+		}
+		slices.Sort(ids)
+		if want := []string{"ack-delivered"}; !slices.Equal(ids, want) {
+			t.Fatalf("acknowledgment replies = %v; want completed, inactive tombstones only %v", ids, want)
+		}
+
+		gotPending, err := pending.ListPendingAcknowledgmentReplies(ctx)
+		noErr(t, err, "list pending acknowledgment replies")
+		ids = ids[:0]
+		for _, r := range gotPending {
+			ids = append(ids, r.ID)
+		}
+		slices.Sort(ids)
+		if want := []string{"ack-active", "ack-old", "ack-young"}; !slices.Equal(ids, want) {
+			t.Fatalf("pending acknowledgment replies = %v; want undelivered and active sources %v", ids, want)
+		}
+		for _, tc := range []struct{ name, outputID, sourceID string }{
+			{"normal pause", active.ID, ""},
+			{"recovered pause with a stale source ID", "question/answer", active.ID},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				noErr(t, s.SetSessionTask(ctx, other, "c1", "task1", store.TaskTurn{ID: tc.outputID, MessageRef: active.MessageRef, AcknowledgmentID: tc.sourceID}), "pause without an active acknowledgment")
+				removed, err := lister.ListAcknowledgmentReplies(ctx, t0.Add(age), age)
+				noErr(t, err, "list paused acknowledgment removals")
+				removalIDs := make([]string, 0, len(removed))
+				for _, r := range removed {
+					removalIDs = append(removalIDs, r.ID)
+				}
+				slices.Sort(removalIDs)
+				if want := []string{"ack-active", "ack-delivered"}; !slices.Equal(removalIDs, want) {
+					t.Fatalf("paused removals = %v; want %v", removalIDs, want)
+				}
+				added, err := pending.ListPendingAcknowledgmentReplies(ctx)
+				noErr(t, err, "list paused acknowledgment additions")
+				for _, r := range added {
+					if r.ID == active.ID {
+						t.Fatal("the paused source was scheduled for another acknowledgment add")
+					}
+				}
+			})
+		}
+	})
+
 	su.run(t, "AbandonStrandedReplies refuses arguments that are not legal", func(t *testing.T, s store.Store) {
 		ctx := t.Context()
 		_, err := s.AbandonStrandedReplies(ctx, time.Time{}, age)

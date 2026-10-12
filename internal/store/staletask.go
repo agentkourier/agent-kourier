@@ -18,6 +18,12 @@ type StaleTask struct {
 	TaskID string
 }
 
+// StaleTaskTurnReader is an optional retention extension. It reads the source turn
+// metadata of a stale task before EndStaleTask clears it.
+type StaleTaskTurnReader interface {
+	StaleTaskTurn(ctx context.Context, key ConversationKey, taskID string) (TaskTurn, error)
+}
+
 // EndedStaleTask is what EndStaleTask did.
 type EndedStaleTask struct {
 	// Ended is true when the session's task was cleared. It is false when the session was no longer a stale task's:
