@@ -1,0 +1,3 @@
+# The current maintainer reviews all changes, including security and release automation.
+# CODEOWNERS requests review; enforcing approval also requires repository branch protection.
+* @tbickford
