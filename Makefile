@@ -24,9 +24,10 @@ test-race: ## Run unit tests with the race detector (the chart tests need helm; 
 test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
 	go test -race -timeout 20m -tags testhooks ./internal/...
 
-test-scripts: ## Run the kind scripts' own tests (no cluster)
+test-scripts: ## Run kind, security policy and release gate tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
+	hack/release/test.sh
 
 security: security-govulncheck security-gitleaks ## Run source vulnerability and secret scans (the image scan needs IMAGE_REF)
 
