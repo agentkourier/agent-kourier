@@ -1,0 +1,9 @@
+# Deliberate exceptions to `make docs-check` (hack/docs/contentcheck). One entry a line:
+#
+#   path | rule | text on the line | reason
+#
+# path is relative to the repository root. rule is an ID from the table in main.go, or dead-link or dead-anchor. The
+# text must appear on the offending line. The reason is required and says why the page may name it. An entry that
+# matches nothing is itself a finding, so delete it when the line goes.
+#
+# The list starts empty: fix the page first.

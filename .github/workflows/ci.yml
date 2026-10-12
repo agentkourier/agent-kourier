@@ -36,6 +36,10 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain)"
       - run: make lint
+      # The public docs' content check (hack/docs/contentcheck) needs only Go. The docs workflow runs it too, as part
+      # of make docs-build, on a pull request or a push to main that touches the docs, and on a pull request that
+      # touches either README; this job runs it on every pull request and every push to main.
+      - run: make docs-check
       - run: make build
 
   # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that.
