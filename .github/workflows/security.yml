@@ -1,0 +1,199 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '27 3 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/agentkourier/agent-kourier
+
+jobs:
+  govulncheck:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: root
+            directory: .
+          - module: ax
+            directory: examples/ax
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run govulncheck
+        run: hack/security/govulncheck.sh "${{ matrix.directory }}"
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Gitleaks
+        id: gitleaks
+        run: |
+          path=$(hack/security/install-gitleaks.sh "${RUNNER_TEMP}/security-tools")
+          echo "path=${path}" >>"${GITHUB_OUTPUT}"
+      - name: Verify fixture exceptions cannot hide new credentials
+        env:
+          GITLEAKS_BIN: ${{ steps.gitleaks.outputs.path }}
+        run: hack/security/test-secrets.sh
+      - name: Scan repository history
+        env:
+          GITLEAKS_BIN: ${{ steps.gitleaks.outputs.path }}
+        run: hack/security/scan-secrets.sh . "${RUNNER_TEMP}/gitleaks.sarif"
+      - name: Upload redacted Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-report
+          path: ${{ runner.temp }}/gitleaks.sarif
+          if-no-files-found: warn
+
+  image:
+    name: trivy (${{ matrix.name }})
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            platform: linux/amd64
+          - name: linux-arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Install pinned Trivy
+        id: trivy
+        run: |
+          path=$(hack/security/install-trivy.sh "${RUNNER_TEMP}/security-tools")
+          echo "path=${path}" >>"${GITHUB_OUTPUT}"
+      - name: Build the production image
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE_REF: agent-kourier-security:${{ matrix.name }}
+        run: |
+          source hack/kind/lib.sh
+          docker buildx build \
+            --platform "${PLATFORM}" \
+            --build-arg "GO_IMAGE=${GO_IMAGE}" \
+            --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" \
+            --build-arg "VERSION=security-${GITHUB_SHA}" \
+            --load \
+            --tag "${IMAGE_REF}" \
+            .
+      - name: Scan the production image
+        env:
+          IMAGE_REF: agent-kourier-security:${{ matrix.name }}
+          PLATFORM: ${{ matrix.platform }}
+          TRIVY_BIN: ${{ steps.trivy.outputs.path }}
+        run: hack/security/scan-image.sh "${IMAGE_REF}" "${PLATFORM}" "${RUNNER_TEMP}/trivy-${{ matrix.name }}.sarif"
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-${{ matrix.name }}
+          path: ${{ runner.temp }}/trivy-${{ matrix.name }}.sarif
+          if-no-files-found: warn
+
+  released-image-rescan:
+    name: rescan released image digests
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install pinned Trivy
+        id: trivy
+        run: |
+          path=$(hack/security/install-trivy.sh "${RUNNER_TEMP}/security-tools")
+          echo "path=${path}" >>"${GITHUB_OUTPUT}"
+      - name: Select released image digests
+        id: releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          releases_file="${RUNNER_TEMP}/github-releases.json"
+          images_file="${RUNNER_TEMP}/released-images"
+          gh api --paginate --slurp "/repos/${RELEASE_REPOSITORY}/releases?per_page=100" |
+            jq -e 'if type == "array" then add else error("GitHub Release pages are not an array") end' >"${releases_file}"
+          hack/security/select-release-images.sh "${releases_file}" "${images_file}"
+          echo "images_file=${images_file}" >>"${GITHUB_OUTPUT}"
+          if test -s "${images_file}"; then
+            echo "has_images=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo '::notice::No published release is available for the released-image rescan.'
+            echo "has_images=false" >>"${GITHUB_OUTPUT}"
+          fi
+      - name: Rescan every published digest on both platforms
+        if: ${{ steps.releases.outputs.has_images == 'true' }}
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          IMAGES_FILE: ${{ steps.releases.outputs.images_file }}
+          TRIVY_BIN: ${{ steps.trivy.outputs.path }}
+        run: |
+          status=0
+          while IFS= read -r image_ref; do
+            digest=${image_ref##*@}
+            for platform in linux/amd64 linux/arm64; do
+              report="${RUNNER_TEMP}/trivy-released-${digest#sha256:}-${platform//\//-}.sarif"
+              if ! hack/security/scan-image.sh "${image_ref}" "${platform}" "${report}"; then
+                status=1
+              fi
+            done
+          done <"${IMAGES_FILE}"
+          exit "${status}"
+      - name: Upload released-image Trivy reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-released-images
+          path: ${{ runner.temp }}/trivy-*.sarif
+          if-no-files-found: warn

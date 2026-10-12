@@ -1,0 +1,79 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "gomod",
+    "github-actions",
+    "dockerfile",
+    "pip-compile",
+    "custom.regex"
+  ],
+  "dependencyDashboard": true,
+  "labels": [
+    "dependencies"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "groupName": "Go modules"
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions",
+      "pinDigests": true
+    },
+    {
+      "matchManagers": [
+        "dockerfile",
+        "custom.regex"
+      ],
+      "groupName": "container base images",
+      "digest": {
+        "enabled": true
+      }
+    },
+    {
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "groupName": "documentation Python dependencies"
+    }
+  ],
+  "pip-compile": {
+    "managerFilePatterns": [
+      "/(^|/)hack/docs/requirements\\.txt$/"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^hack\\/.*\\.sh$/"
+      ],
+      "matchStrings": [
+        "(?:^|[=\\s\"'])(?<depName>[a-z0-9][a-z0-9./_-]*):(?<currentValue>[a-zA-Z0-9][a-zA-Z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        "(?:^|[=\\s\"'])(?<depName>[a-z0-9][a-z0-9./_-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^hack\\/security\\/govulncheck\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=go depName=golang.org\\/x\\/vuln\\nGOVULNCHECK_VERSION=(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "golang.org/x/vuln"
+    }
+  ]
+}

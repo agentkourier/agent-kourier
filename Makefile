@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full e2e-full-down e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres security security-govulncheck security-gitleaks security-image-scan build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,13 +19,29 @@ lint: ## Run golangci-lint (also over the e2e, image and testhooks tagged code)
 test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, the testhooks-tagged ones, the kind scripts' own (CI runs the three apart)
 
 test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
-	go test -race ./...
+	go test -race -timeout 20m ./...
 
 test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
-	go test -race -tags testhooks ./internal/...
+	go test -race -timeout 20m -tags testhooks ./internal/...
 
 test-scripts: ## Run the kind scripts' own tests (no cluster)
 	hack/kind/netpol_test.sh
+	hack/security/test.sh
+
+security: security-govulncheck security-gitleaks ## Run source vulnerability and secret scans (the image scan needs IMAGE_REF)
+
+security-govulncheck: ## Run govulncheck against the root and AX modules
+	hack/security/govulncheck.sh .
+	hack/security/govulncheck.sh examples/ax
+
+security-gitleaks: ## Scan repository history for leaked credentials (GITLEAKS_BIN may select a pinned binary)
+	hack/security/scan-secrets.sh .
+
+security-image-scan: ## Scan IMAGE_REF for PLATFORM (linux/amd64 or linux/arm64) into OUTFILE
+	test -n "$(IMAGE_REF)" || (printf '%s\n' 'IMAGE_REF is required' >&2; exit 1)
+	test -n "$(PLATFORM)" || (printf '%s\n' 'PLATFORM is required' >&2; exit 1)
+	test -n "$(OUTFILE)" || (printf '%s\n' 'OUTFILE is required' >&2; exit 1)
+	hack/security/scan-image.sh "$(IMAGE_REF)" "$(PLATFORM)" "$(OUTFILE)"
 
 test-postgres: ## Run the Postgres store's tests, the store conformance suite and the broker's Postgres test against a throwaway Postgres container (Docker; hack/postgres/test.sh)
 	hack/postgres/test.sh
@@ -86,7 +102,7 @@ sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a
 
 .PHONY: ax-test ax-image ax-smoke
 ax-test: ## Test the separate AX/ADK/Bedrock reference module with the race detector
-	cd examples/ax && go test -race ./...
+	cd examples/ax && go test -race -timeout 20m ./...
 	cd examples/ax && go vet ./...
 
 ax-image: ## Build the AX reference agent and runner image
