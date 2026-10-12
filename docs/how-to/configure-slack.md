@@ -17,9 +17,23 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     **2. Make the two tokens.**
 
+    Agent Kourier needs both tokens from the same Slack app. They have different jobs:
+
+    | Token | Why Agent Kourier needs it | Secret key |
+    |---|---|---|
+    | Bot User OAuth Token, `xoxb-` | Calls Slack's Web API as the bot to post, update and stream agent replies, add reactions, read channel and thread history, and look up users and channel membership. | `botToken` |
+    | App-level token, `xapp-` | Opens the Socket Mode WebSocket that delivers mentions, channel messages and button presses to Agent Kourier. This lets it receive Slack events without a public HTTP endpoint. | `appToken` |
+
     1. Under **Install App**, install the app to the workspace and copy the **Bot User OAuth Token** (`xoxb-`).
-    2. Under **Basic Information**, **App-Level Tokens**, generate a token with the scope `connections:write` and copy
-       it (`xapp-`). The manifest cannot make it.
+       Installing the app grants the bot permissions from the manifest. The bot token lets Agent Kourier use those
+       permissions; the [scope table below](#what-the-app-is-allowed-to-do) lists the calls they allow.
+    2. Open **Basic Information** and scroll to **App-Level Tokens**. Choose **Generate Token and Scopes**, give the
+       token a name, add `connections:write`, and generate it. Copy the token (`xapp-`). Slack requires
+       [this scope](https://docs.slack.dev/reference/scopes/connections.write/) to open a Socket Mode connection.
+       The manifest enables Socket Mode, but you must generate this token separately.
+
+    **Basic Information** is the settings page containing **App-Level Tokens**. Agent Kourier only needs the two tokens
+    above; you do not need to copy the App ID, Client ID, Client Secret or Signing Secret from that page.
 
     **3. Invite the bot and copy the channel ID.** In each channel a Binding will use, send `/invite @Agent Kourier`
     (or the display name you gave the bot). Copy the channel ID from the channel's details: it starts with `C` (a private
