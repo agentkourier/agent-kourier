@@ -97,8 +97,9 @@ signed by the same identity, and its default image is the image:
       --certificate-identity "$IDENTITY"
     helm show values oci://$CHART --version X.Y.Z | grep -A8 '^image:'   # repository and digest stamped
 
-Runtime verification is pending until the first release candidate completes this path: GHCR publishing, both
-cosign checks, chart pull and generated release notes have not yet been exercised by a live release run.
+The [v0.0.0-dev.4 release run](https://github.com/agentkourier/agent-kourier/actions/runs/38279793017) completed
+GHCR publishing, signing, both signature checks and GitHub Release creation. Its
+[release record](https://github.com/agentkourier/agent-kourier/releases/tag/v0.0.0-dev.4) names the verified digests.
 
 ## Roll back
 

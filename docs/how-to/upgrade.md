@@ -3,8 +3,7 @@
 For an operator running the Helm chart: at the end, Agent Kourier runs a newer build with its sessions, outbox and
 audit log intact, and you know how to roll back.
 
-There is no tagged release yet. Once there is, each release publishes a signed multi-arch image and a chart whose
-default image is that image by digest.
+Each release publishes a signed multi-arch image and a chart whose default image is that image by digest.
 
 ## Upgrade the chart
 
