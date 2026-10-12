@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Minimal gh fixture used by hack/release/test.sh.
+set -euo pipefail
+
+[ -n "${GH_FIXTURE:-}" ] || { echo "GH_FIXTURE is required" >&2; exit 2; }
+
+if [ "${1:-}" = api ]; then
+  endpoint=
+  for arg in "$@"; do
+    case "${arg}" in
+      repos/*) endpoint=${arg} ;;
+    esac
+  done
+  case "${endpoint}" in
+    */releases/tags/*)
+      if [ -f "${GH_FIXTURE}/release.json" ]; then
+        cat "${GH_FIXTURE}/release.json"
+      elif [ -f "${GH_FIXTURE}/release-error" ]; then
+        cat "${GH_FIXTURE}/release-error" >&2
+        exit 1
+      else
+        echo 'gh: HTTP 404: Not Found' >&2
+        exit 1
+      fi
+      ;;
+    */actions/workflows/*/runs\?*)
+      workflow=${endpoint#*/actions/workflows/}
+      workflow=${workflow%%/runs*}
+      cat "${GH_FIXTURE}/${workflow}-runs.json"
+      ;;
+    */actions/runs/*/jobs\?*)
+      run=${endpoint#*/actions/runs/}
+      run=${run%%/jobs*}
+      cat "${GH_FIXTURE}/jobs-${run}.json"
+      ;;
+    *)
+      echo "unknown fixture API endpoint: ${endpoint}" >&2
+      exit 2
+      ;;
+  esac
+  exit 0
+fi
+
+echo "unsupported fake gh invocation: $*" >&2
+exit 2

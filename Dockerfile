@@ -28,19 +28,22 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 # verify refuses to go on if the binary is not the one to ship, for the platform being built: the final
 # stage copies the binary from here, so no production image of any architecture exists without passing.
-# It runs two tests of internal/testhooks on the build host against the cross-compiled binary, which it
-# cannot run: the one `make image-check` shares (no test hook in it, with a testhooks build of the same
-# platform as the control), and one that it is an ELF of this GOARCH with main.version set to VERSION.
+# It builds the testhooks control for the target platform, then runs two tests of internal/testhooks on the
+# build host against the cross-compiled binaries, which the host cannot run: the one `make image-check`
+# shares (no test hook in it, with a testhooks build of the same platform as the control), and one that it is
+# an ELF of this GOARCH with main.version set to VERSION.
 # It requires each test's own PASS line, so a renamed test ("no tests to run" exits 0) fails the build.
 # Only TAGS exactly "testhooks", the kind tiers' image, skips it: that build has the hooks by design.
 FROM build AS verify
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build <<'EOF'
 set -eu
 [ "${TAGS}" != testhooks ] || exit 0
-export GOFLAGS= GOENV=off CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}"
-go build -trimpath -tags testhooks -o /tmp/agent-kourier-hooked ./cmd/agent-kourier
+export GOFLAGS= GOENV=off CGO_ENABLED=0
+GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -tags testhooks -o /tmp/agent-kourier-hooked ./cmd/agent-kourier
+host_os=$(go env GOHOSTOS)
+host_arch=$(go env GOHOSTARCH)
 AGENTKOURIER_BINARY=/out/agent-kourier AGENTKOURIER_HOOKED_BINARY=/tmp/agent-kourier-hooked AGENTKOURIER_VERSION="${VERSION}" AGENTKOURIER_GOARCH="${TARGETARCH}" \
-  go test -v -tags image -count=1 -run '^TestBinary(HasNoHooks|Identity)$' ./internal/testhooks >/tmp/verify.log 2>&1 || { cat /tmp/verify.log; exit 1; }
+  GOOS="${host_os}" GOARCH="${host_arch}" go test -v -tags image -count=1 -run '^TestBinary(HasNoHooks|Identity)$' ./internal/testhooks >/tmp/verify.log 2>&1 || { cat /tmp/verify.log; exit 1; }
 cat /tmp/verify.log
 for t in TestBinaryHasNoHooks TestBinaryIdentity; do
   grep -q "^--- PASS: ${t} " /tmp/verify.log || { echo "verify: ${t} did not run and pass" >&2; exit 1; }

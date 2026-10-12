@@ -1,6 +1,8 @@
-# A pushed tag v* builds the multi-arch image, refuses it if any platform's binary carries a test hook, pushes
-# it to GHCR with the workflow's own token, attaches SBOM and provenance attestations, packages the Helm chart
-# with that image's digest as its default image and pushes it, and then signs both digests with cosign keyless.
+# A pushed tag v* first proves that the exact tagged commit passed the push-to-main CI and security workflows.
+# It then builds the multi-arch image, refuses it if any platform's binary carries a test hook, scans every
+# platform image before push, pushes it to GHCR with the workflow's own token, attaches SBOM and provenance
+# attestations, packages the Helm chart with that image's digest as its default image and pushes it, and then
+# signs and verifies both digests with cosign keyless. Only the verified artifacts get a GitHub Release.
 # The build, the checks and the pushes are hack/release/release.sh, the script `make release-image` runs, so a
 # human builds the same artifacts. RELEASING.md describes the whole path and the repository settings that
 # decide who can start it.
@@ -23,7 +25,34 @@ env:
   CHARTS: oci://ghcr.io/agentkourier/charts
 
 jobs:
+  # The tag's workflow file runs this read-only gate before the build job receives package-write access. A run
+  # from a pull request, another branch, another SHA or a skipped/failed job never satisfies the release gate.
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # list the exact workflow runs and their jobs
+      contents: read # checkout the gate script from the tagged commit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Require successful CI and security runs for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: hack/release/check-ci.sh "${REPOSITORY}" "${SHA}" ci.yml security.yml
+      - name: Refuse tags with an existing GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: hack/release/check-release.sh "${REPOSITORY}" "${TAG}"
+
   build:
+    needs: gate
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -48,6 +77,13 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
+      # install-trivy.sh pins the Aqua Security release and verifies its official SHA-256 checksum. The
+      # release script invokes the shared scanner before any image or chart push.
+      - name: Install pinned Trivy
+        run: |
+          path=$(hack/security/install-trivy.sh "${RUNNER_TEMP}/agent-kourier-security-tools")
+          test -x "${path}"
+          echo "TRIVY_BIN=${path}" >>"${GITHUB_ENV}"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -92,6 +128,8 @@ jobs:
       id-token: write # the OIDC token cosign trades for a short-lived signing certificate; no secret
     steps:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
       - name: Sign the image and the chart by digest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,3 +140,99 @@ jobs:
           printf '%s' "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${ACTOR}" --password-stdin
           cosign sign --yes "${IMAGE_REF}"
           cosign sign --yes "${CHART_REF}"
+
+  # Verification is separate from signing so a successful sign step cannot by itself publish a release. The
+  # identity is the exact tagged workflow, not a repository-wide or branch-wide identity.
+  verify:
+    needs: [build, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: read # read the signatures from GHCR
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Verify the image and chart signatures
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          IMAGE_REF: ${{ needs.build.outputs.image }}
+          CHART_REF: ${{ needs.build.outputs.chart }}
+          ISSUER: https://token.actions.githubusercontent.com
+          IDENTITY: https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
+        run: |
+          printf '%s' "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${ACTOR}" --password-stdin
+          cosign verify "${IMAGE_REF}" \
+            --certificate-oidc-issuer "${ISSUER}" \
+            --certificate-identity "${IDENTITY}"
+          cosign verify "${CHART_REF}" \
+            --certificate-oidc-issuer "${ISSUER}" \
+            --certificate-identity "${IDENTITY}"
+
+  # No checkout is intentional: this job only publishes the already verified digests and generated notes. It
+  # has the only contents:write permission in the workflow; it has no registry or signing permission.
+  publish:
+    needs: [build, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the GitHub Release after signature verification
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      SHA: ${{ github.sha }}
+      IMAGE_REF: ${{ needs.build.outputs.image }}
+      CHART_REF: ${{ needs.build.outputs.chart }}
+    steps:
+      - name: Create or confirm the immutable release record
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_api="repos/${REPOSITORY}/releases/tags/${TAG}"
+          existing="${RUNNER_TEMP}/release.json"
+          error="${RUNNER_TEMP}/release-error"
+          set +e
+          gh api "${release_api}" >"${existing}" 2>"${error}"
+          status=$?
+          set -e
+          prerelease=false
+          [[ "${TAG}" == *-* ]] && prerelease=true
+          if [ "${status}" -eq 0 ]; then
+            # The jq program intentionally uses jq variables, not shell variables.
+            # shellcheck disable=SC2016
+            if jq -e --arg tag "${TAG}" --arg image "${IMAGE_REF}" --arg chart "${CHART_REF}" \
+              --argjson prerelease "${prerelease}" '
+                .tag_name == $tag
+                and (.draft // false) == false
+                and (.prerelease // false) == $prerelease
+                and ((.body // "") | contains("Image: `" + $image + "`"))
+                and ((.body // "") | contains("Chart: `" + $chart + "`"))
+              ' "${existing}" >/dev/null; then
+              echo "release ${TAG} already contains the verified image and chart digests; leaving it unchanged"
+              exit 0
+            fi
+            echo "error: release ${TAG} exists with conflicting tag, prerelease state or artifact digests" >&2
+            exit 1
+          fi
+          if ! grep -F -- 'HTTP 404' "${error}"; then
+            cat "${error}" >&2
+            echo "error: could not determine whether release ${TAG} exists" >&2
+            exit 1
+          fi
+
+          generated=$(gh api --method POST "repos/${REPOSITORY}/releases/generate-notes" \
+            --field "tag_name=${TAG}" --field "target_commitish=${SHA}")
+          # shellcheck disable=SC2016
+          body=$(jq -r '.body // empty' <<<"${generated}")
+          [ -n "${body}" ] || { echo "error: GitHub generated no release notes" >&2; exit 1; }
+          body=$(printf "%s\n\n## Verified artifacts\n\n- Image: \`%s\`\n- Chart: \`%s\`\n" \
+            "${body}" "${IMAGE_REF}" "${CHART_REF}")
+          payload="${RUNNER_TEMP}/release-payload.json"
+          # shellcheck disable=SC2016
+          jq -n --arg tag "${TAG}" --arg name "${TAG}" --arg body "${body}" \
+            --argjson prerelease "${prerelease}" \
+            '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: $prerelease}' >"${payload}"
+          gh api --method POST "repos/${REPOSITORY}/releases" --input "${payload}" >/dev/null
+          echo "created release ${TAG} with verified image and chart digests"

@@ -9,6 +9,8 @@
 #   CHART_REGISTRY  where the chart is pushed, e.g. oci://ghcr.io/agentkourier/charts; required to push, no default
 #   OUT       the output directory, default bin/release
 #   BUILDER   a buildx builder name, if the current one cannot build multi-platform images with attestations
+#   SCAN_IMAGES  1 to scan local platform images too; PUSH=1 always scans before it pushes
+#   SCAN_IMAGE_SCRIPT  scanner path, default hack/security/scan-image.sh
 #
 # After the image it packages charts/agent-kourier with the version stamped and the image's digest as the default
 # image (package-chart.sh), and with PUSH=1 pushes the chart; the digests are written to OUT/digest and
@@ -31,14 +33,21 @@ CHART_REGISTRY=${CHART_REGISTRY:-}
 PUSH=${PUSH:-}
 PLATFORMS=${PLATFORMS:-linux/amd64,linux/arm64}
 OUT=${OUT:-${ROOT}/bin/release}
+SCAN_IMAGES=${SCAN_IMAGES:-}
+SCAN_IMAGE_SCRIPT=${SCAN_IMAGE_SCRIPT:-${ROOT}/hack/security/scan-image.sh}
 SOURCE_URL=https://github.com/agentkourier/agent-kourier
 
 [[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] ||
   die "VERSION must be a version tag such as v1.2.3 (got '${VERSION}')"
 case "${PUSH}" in "" | 0 | 1) ;; *) die "PUSH must be 1 or unset (got '${PUSH}')" ;; esac
+case "${SCAN_IMAGES}" in "" | 0 | 1) ;; *) die "SCAN_IMAGES must be 1 or unset (got '${SCAN_IMAGES}')" ;; esac
 command -v docker >/dev/null || die "docker is required"
 command -v helm >/dev/null || die "helm is required"
 command -v jq >/dev/null || die "jq is required"
+
+if [ "${PUSH}" = 1 ] || [ "${SCAN_IMAGES}" = 1 ]; then
+  [ -f "${SCAN_IMAGE_SCRIPT}" ] || die "image scanning is required, but ${SCAN_IMAGE_SCRIPT} is missing"
+fi
 
 REVISION=$(git -C "${ROOT}" rev-parse HEAD)
 DIRTY=$(git -C "${ROOT}" status --porcelain)
@@ -78,10 +87,21 @@ for l in "${LABELS[@]}"; do
 done
 
 CHECKS=()
+mkdir -p "${OUT}"
 cleanup() {
   [ ${#CHECKS[@]} -eq 0 ] || docker rmi -f "${CHECKS[@]}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+# scan_platform PLATFORM IMAGE: scan the local image with the shared scanner. PUSH=1 always scans; SCAN_IMAGES=1
+# opts into the same scan for local release-image builds. The output is retained beside the release metadata.
+scan_platform() {
+  local platform=$1 ref=$2
+  local outfile="${OUT}/trivy-${platform//\//-}.sarif"
+  echo "==> ${platform}: vulnerability scan"
+  bash "${SCAN_IMAGE_SCRIPT}" "${ref}" "${platform}" "${outfile}"
+  [ -s "${outfile}" ] || die "${platform}: image scanner did not write ${outfile}"
+}
 
 # check_platform PLATFORM: build that platform alone into the local image store (this is where the Dockerfile's
 # verify stage runs for it: no test hook in the binary, an ELF of this architecture, main.version set to
@@ -97,12 +117,14 @@ check_platform() {
     die "${platform}: the image does not run as 65532:65532"
   [ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${ref}")" = "${platform}" ] ||
     die "${platform}: the image was built for $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${ref}")"
+  if [ "${PUSH}" = 1 ] || [ "${SCAN_IMAGES}" = 1 ]; then
+    scan_platform "${platform}" "${ref}"
+  fi
   echo "    ok: no hooks, no label, non-root, ${platform}, version ${VERSION}"
 }
 
 for p in "${PLATFORM_LIST[@]}"; do check_platform "${p}"; done
 
-mkdir -p "${OUT}"
 rm -f "${OUT}/metadata.json" "${OUT}/digest" "${OUT}/chart-digest"
 # "${ANNOTATIONS[@]+...}": an empty array is unset to bash 3.2.
 if [ "${PUSH}" = 1 ]; then
