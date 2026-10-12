@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -65,14 +67,14 @@ func TestAPIReferenceFieldRows(t *testing.T) {
 	page := fixturePages(t)["Widget"]
 	spec := section(t, page, "WidgetSpec")
 	for _, want := range []string{
-		"| `name` | string | Yes |  | Name is required and \\*short\\*. At least 1 character. At most 63 characters. |",
+		"| `name` | string | Yes | None | Name is required and \\*short\\*. At least 1 character. At most 63 characters. |",
 		"| `mode` | string | No | `fast` | Mode defaults to fast. One of `fast`, `slow`. |",
-		"| `parts` | [][Part](#part) | No |  | Parts are the widget's parts. |",
-		"| `ref` | [Ref](#ref) | No |  | Ref points elsewhere. |",
-		"| `paint` | map[string]string | No |  | Paint maps a color to a shade. Keys: `red`, `blue`. |",
-		"| `every` | duration | No |  | Every is a duration. |",
-		"| `count` | integer | No |  | Minimum 0. |",
-		"| `enabled` | boolean | No |  |  |",
+		"| `parts` | [][Part](#part) | No | None | Parts are the widget's parts. |",
+		"| `ref` | [Ref](#ref) | No | None | Ref points elsewhere. |",
+		"| `paint` | map[string]string | No | None | Paint maps a color to a shade. Keys: `red`, `blue`. |",
+		"| `every` | duration | No | Larger of `1h` and the interval \\| minimum | Every is a duration. |",
+		"| `count` | integer | No | None | Minimum 0. |",
+		"| `enabled` | boolean | No | None |  |",
 	} {
 		if !strings.Contains(spec, want) {
 			t.Errorf("WidgetSpec lacks the row\n%s\nin:\n%s", want, spec)
@@ -82,11 +84,11 @@ func TestAPIReferenceFieldRows(t *testing.T) {
 		t.Errorf("an unexported field is listed:\n%s", spec)
 	}
 	part := section(t, page, "Part")
-	if want := "| `id` | string | Yes |  | ID matches a pattern. Pattern `^P[0-9]+$`. |"; !strings.Contains(part, want) {
+	if want := "| `id` | string | Yes | None | ID matches a pattern. Pattern `^P[0-9]+$`. |"; !strings.Contains(part, want) {
 		t.Errorf("Part lacks %q:\n%s", want, part)
 	}
 	status := section(t, page, "WidgetStatus")
-	if want := "| `conditions` | []Condition | No |  | Conditions say how it is. |"; !strings.Contains(status, want) {
+	if want := "| `conditions` | []Condition | No | None | Conditions say how it is. |"; !strings.Contains(status, want) {
 		t.Errorf("WidgetStatus lacks %q:\n%s", want, status)
 	}
 	top := section(t, page, "Widget")
@@ -94,6 +96,40 @@ func TestAPIReferenceFieldRows(t *testing.T) {
 		if !strings.Contains(top, want) {
 			t.Errorf("Widget lacks %q:\n%s", want, top)
 		}
+	}
+}
+
+// TestAPIReferenceDefaultsMatchRuntime checks the default column against defaulted resources,
+// rather than checking only the generator's interpretation of comment markers.
+func TestAPIReferenceDefaultsMatchRuntime(t *testing.T) {
+	pages, err := apiReference(filepath.Join(root, "api/v1alpha1"), "api/v1alpha1", v1alpha1.APIVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding v1alpha1.Binding
+	binding.Default()
+	backend := v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Headers: []v1alpha1.Header{
+		{Name: "X-Test", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "test"}},
+	}}}
+	backend.Default()
+	for _, tt := range []struct {
+		kind, section, field, typ, value string
+	}{
+		{"AgentBackend", "SecretKeyRef", "key", "string", backend.Spec.Headers[0].ValueSecretRef.Key},
+		{"Binding", "ChatBinding", "output", "string", string(binding.Spec.Chat.Output)},
+		{"Binding", "ChatBinding", "threadReplies", "string", string(binding.Spec.Chat.ThreadReplies)},
+		{"Binding", "ChatBinding", "triggers", "[][Trigger](#trigger)", "[{type: " + string(binding.Spec.Chat.Triggers[0].Type) + "}]"},
+		{"Binding", "Interactions", "askUser", "boolean", fmt.Sprint(binding.Spec.Interactions.AskUser)},
+		{"Binding", "Interactions", "timeout", "duration", fmt.Sprintf("%dm", binding.Spec.Interactions.Timeout.Duration/time.Minute)},
+		{"Binding", "Feedback", "enabled", "boolean", fmt.Sprint(binding.Spec.Feedback.Enabled)},
+		{"Binding", "Session", "threadTTL", "duration", fmt.Sprintf("%dh", binding.Spec.Session.ThreadTTL.Duration/time.Hour)},
+	} {
+		t.Run(tt.kind+"/"+tt.section+"/"+tt.field, func(t *testing.T) {
+			want := fmt.Sprintf("| `%s` | %s | No | `%s` |", tt.field, tt.typ, tt.value)
+			if body := section(t, pages[tt.kind], tt.section); !strings.Contains(body, want) {
+				t.Errorf("reference lacks runtime default %q:\n%s", want, body)
+			}
+		})
 	}
 }
 
