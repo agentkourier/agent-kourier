@@ -47,19 +47,20 @@ const providerError = "Incorrect API key provided: sk-proj-********************w
 // reliably (providerError), so it reaches neither the thread nor the log.
 func TestTerminalTaskTellsTheThread(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		script func(context.Context, int, agent.Handler) error
-		want   NoticeKind // "" for no notice
+		name    string
+		script  func(context.Context, int, agent.Handler) error
+		want    NoticeKind // "" for no notice
+		failure failureCategory
 	}{
-		{"failed, with a status message and no output", ending(a2a.TaskStateFailed, "", providerError), NoticeTaskFailed},
-		{"failed, with no message either", ending(a2a.TaskStateFailed, "", ""), NoticeTaskFailed},
-		{"failed after some output", ending(a2a.TaskStateFailed, "partial answer", providerError), NoticeTaskFailed},
-		{"rejected", ending(a2a.TaskStateRejected, "", providerError), NoticeTaskRejected},
-		{"canceled", ending(a2a.TaskStateCanceled, "", ""), NoticeTaskCanceled},
-		{"canceled after some output", ending(a2a.TaskStateCanceled, "partial answer", ""), NoticeTaskCanceled},
-		{"completed with no output", ending(a2a.TaskStateCompleted, "", "the answer, in a status message"), NoticeNoOutput},
-		{"completed with output that is white space and hidden characters", ending(a2a.TaskStateCompleted, " \n\t\u200b\u2800\u3164\x00 ", ""), NoticeNoOutput},
-		{"completed with output", ending(a2a.TaskStateCompleted, "the answer", ""), ""},
+		{"failed, with a status message and no output", ending(a2a.TaskStateFailed, "", providerError), NoticeTaskFailed, failureAuth},
+		{"failed, with no message either", ending(a2a.TaskStateFailed, "", ""), NoticeTaskFailed, failureUnknown},
+		{"failed after some output", ending(a2a.TaskStateFailed, "partial answer", providerError), NoticeTaskFailed, failureAuth},
+		{"rejected", ending(a2a.TaskStateRejected, "", providerError), NoticeTaskRejected, failureUnknown},
+		{"canceled", ending(a2a.TaskStateCanceled, "", ""), NoticeTaskCanceled, failureUnknown},
+		{"canceled after some output", ending(a2a.TaskStateCanceled, "partial answer", ""), NoticeTaskCanceled, failureUnknown},
+		{"completed with no output", ending(a2a.TaskStateCompleted, "", "the answer, in a status message"), NoticeNoOutput, failureUnknown},
+		{"completed with output that is white space and hidden characters", ending(a2a.TaskStateCompleted, " \n\t\u200b\u2800\u3164\x00 ", ""), NoticeNoOutput, failureUnknown},
+		{"completed with output", ending(a2a.TaskStateCompleted, "the answer", ""), "", failureUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -80,6 +81,10 @@ func TestTerminalTaskTellsTheThread(t *testing.T) {
 				return
 			}
 			want := Notice{ID: "task:slack:C1:1700.01:t1/" + string(tc.want), Kind: tc.want, MessageRef: "1"}
+			if tc.want == NoticeTaskFailed {
+				ref := failureReference(key, "t1")
+				want.Detail = failureDetail(tc.failure, ref)
+			}
 			if len(sink.notices) != 1 || sink.notices[0] != want {
 				t.Errorf("notices = %+v; want exactly %+v: no detail, for the agent's text is not Agent Kourier's to show", sink.notices, want)
 			}
@@ -92,6 +97,7 @@ func TestTerminalTaskTellsTheThread(t *testing.T) {
 // row the follower holds.
 func TestTerminalTaskNoticeIsOneAcrossFollowAndRestart(t *testing.T) {
 	failedID := "task:slack:C1:1700.01:t1/" + string(NoticeTaskFailed)
+	wantDetail := failureDetail(failureAuth, failureReference(key, "t1"))
 	t.Run("a stream lost before the end, then followed", func(t *testing.T) {
 		f := newFixture(t)
 		sink := f.live()
@@ -106,7 +112,7 @@ func TestTerminalTaskNoticeIsOneAcrossFollowAndRestart(t *testing.T) {
 		}
 		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeTaskFailed)) >= 1 })
 		f.retired(t)
-		if got := sink.noticesOf(NoticeTaskFailed); len(got) != 1 || got[0].ID != failedID {
+		if got := sink.noticesOf(NoticeTaskFailed); len(got) != 1 || got[0].ID != failedID || got[0].Detail != wantDetail {
 			t.Errorf("notices = %+v; want one, %s", got, failedID)
 		}
 	})
@@ -118,7 +124,7 @@ func TestTerminalTaskNoticeIsOneAcrossFollowAndRestart(t *testing.T) {
 		f.recover(t)
 		eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeTaskFailed)) >= 1 })
 		f.retired(t)
-		if got := sink.noticesOf(NoticeTaskFailed); len(got) != 1 || got[0].ID != failedID {
+		if got := sink.noticesOf(NoticeTaskFailed); len(got) != 1 || got[0].ID != failedID || got[0].Detail != wantDetail {
 			t.Errorf("notices = %+v; want one, %s: the same post as the one the turn that sent it would have raised", got, failedID)
 		}
 	})
@@ -275,7 +281,7 @@ func TestTurnLogsItsStartAndEnd(t *testing.T) {
 			default:
 				t.Errorf("the %s line has %s = %T; want a plain string, number or flag", name, k, v)
 			}
-			if !slices.Contains([]string{"binding", "connection", "channel", "thread", "message", "session", "task", "recovered", "outcome", "duration_ms", "output"}, k) {
+			if !slices.Contains([]string{"binding", "connection", "channel", "thread", "message", "session", "task", "recovered", "outcome", "duration_ms", "output", "failure_category", "failure_ref"}, k) {
 				t.Errorf("the %s line has the attribute %q; want only the known ones", name, k)
 			}
 		}
@@ -283,6 +289,10 @@ func TestTurnLogsItsStartAndEnd(t *testing.T) {
 	end := endings[0].attrs
 	if end["outcome"] != "failed" || end["duration_ms"] != int64(5000) || end["task"] != "t1" || end["session"] != "c1" || end["output"] != true {
 		t.Errorf("the end line = %v; want outcome failed after 5000 ms, task t1, session c1, and output true", end)
+	}
+	wantRef := failureReference(key, "t1")
+	if end["failure_category"] != string(failureAuth) || end["failure_ref"] != wantRef {
+		t.Errorf("failure log fields = category %v, reference %v; want %q and %q", end["failure_category"], end["failure_ref"], failureAuth, wantRef)
 	}
 	for _, secret := range []string{"FAKE-PROMPT", "FAKE-OUTPUT", "sk-proj", "wxyz", "HTTP 401"} {
 		if all := logs.everything(); strings.Contains(all, secret) {
@@ -436,8 +446,16 @@ func TestStubTerminalTasksTellTheThread(t *testing.T) {
 			e.retired(t)
 			e.sink.mu.Lock()
 			defer e.sink.mu.Unlock()
-			if len(e.sink.notices) != 1 || e.sink.notices[0].Kind != tc.want || e.sink.notices[0].Detail != "" {
-				t.Errorf("notices = %+v; want one %s, with no detail", e.sink.notices, tc.want)
+			switch {
+			case len(e.sink.notices) != 1 || e.sink.notices[0].Kind != tc.want:
+				t.Errorf("notices = %+v; want one %s", e.sink.notices, tc.want)
+			case tc.want == NoticeTaskFailed:
+				want := failureDetail(failureAuth, failureReference(key, "task-2"))
+				if e.sink.notices[0].Detail != want || strings.Contains(e.sink.notices[0].Detail, "wxyz") {
+					t.Errorf("failure notice detail = %q; want fixed detail %q", e.sink.notices[0].Detail, want)
+				}
+			case e.sink.notices[0].Detail != "":
+				t.Errorf("notice detail = %q; want empty", e.sink.notices[0].Detail)
 			}
 			if all := logs.everything(); strings.Contains(all, "wxyz") {
 				t.Errorf("the log holds the agent's status text:\n%s", all)

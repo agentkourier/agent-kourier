@@ -177,7 +177,7 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 	case session.NoticeDuplicateRun:
 		return "The agent ran this request more than once. Check that its work has not been done twice.", true
 	case session.NoticeTaskFailed:
-		return "The agent's task failed, so there is no answer. Its own logs say why.", true
+		return "The agent's task failed.", true
 	case session.NoticeTaskRejected:
 		return "The agent rejected this request, so there is no answer.", true
 	case session.NoticeTaskCanceled:

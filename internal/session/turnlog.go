@@ -180,25 +180,35 @@ func (m *Manager) turnAttrs(t *tstate) []any {
 // taskEnded handles a turn whose task reached a terminal state: the thread is told what it would
 // otherwise not read, and the end of the turn is logged. A failed, rejected or cancelled task is told always
 // (a half answer is no sign that the task failed); a completed one only if it had nothing to show: t.texted
-// says whether the turn said any text. The agent's status message is not shown: it is untrusted, and a
-// provider's error can hold a fragment of a key that no redaction knows (spec 8.4, R2).
+// says whether the turn said any text. A failed task's bounded status text is inspected only for a known category;
+// its text and metadata never reach a Notice or log (spec 8.4, R2).
 func (m *Manager) taskEnded(t *tstate, task *a2a.Task) {
 	output := t.texted
 	var kind NoticeKind
+	var detail string
+	var logExtra []any
 	switch state := task.Status.State; {
 	case state == a2a.TaskStateCompleted && !output:
 		kind = NoticeNoOutput
 	case state == a2a.TaskStateFailed:
 		kind = NoticeTaskFailed
+		category := classifyTaskFailure(task.Status.Message)
+		reference := failureReference(t.key, task.ID)
+		detail = failureDetail(category, reference)
+		logExtra = []any{"failure_category", string(category), "failure_ref", reference}
 	case state == a2a.TaskStateRejected:
 		kind = NoticeTaskRejected
 	case state == a2a.TaskStateCanceled:
 		kind = NoticeTaskCanceled
 	}
 	if kind != "" {
-		m.taskNotice(m.ctx, t.key, task.ID, kind, t.r.MessageRef)
+		if kind == NoticeTaskFailed {
+			m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, task.ID, kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
+		} else {
+			m.taskNotice(m.ctx, t.key, task.ID, kind, t.r.MessageRef)
+		}
 	}
-	m.finish(t, stateOutcome(task.Status.State), "output", output)
+	m.finish(t, stateOutcome(task.Status.State), append([]any{"output", output}, logExtra...)...)
 }
 
 // visible reports whether s has anything to read: some character that is not white space once the invisible

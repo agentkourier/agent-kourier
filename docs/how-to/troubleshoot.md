@@ -17,6 +17,17 @@ install is likely to meet. For the install itself, see [Install with Helm](insta
 Keep the pod log open while you reproduce a problem. The `session turn` lines say what the
 turn did and why it stopped.
 
+## Slack says the agent's task failed
+
+For recognized context-limit, rate-limit, authentication, timeout or permission failures, the Slack notice gives a
+fixed cause and next step. Other failures get a generic notice. Agent Kourier does not copy the task's raw status text
+or arbitrary metadata into Slack or its own logs.
+
+Copy the `AK-` troubleshooting reference from the Slack notice and search the Agent Kourier pod log for that exact
+`failure_ref`. The matching `session turn ended` entry includes the bounded `failure_category`, full `task` ID and
+`session` context ID when one is available. Use those IDs to find the corresponding agent or controller log entries;
+the backend's own logs may have details Agent Kourier deliberately leaves out.
+
 ## The pod exits with code 3
 
 The API server refused the pod access to Secrets. The pod reads the Secrets its config names

@@ -798,6 +798,14 @@ message are one turn. When `-32004` comes from a task Agent Kourier did not reco
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
 never drops the reply.
 
+**Failed task notices.** A failed task always gets a notice, even if it streamed a partial answer. Agent Kourier reads at
+most 4096 bytes of the status message's text and recognizes only known context-limit, rate-limit, authentication,
+timeout and permission signals, including exact supported metadata codes. A generic backend error code does not
+identify a cause. The notice uses a fixed explanation and next step for a recognized category; an unknown failure gets
+a generic explanation and operator next step. Both include a bounded `AK-` reference derived from the thread and task
+IDs. The same reference is recorded as `failure_ref` with `failure_category` on the turn-end log, where the full task ID
+is also available. Raw status text and arbitrary metadata are never included in chat or logs.
+
 **Message acknowledgment.** `chat.acknowledgment` defaults to `{enabled: true, emoji: hourglass_flowing_sand}`.
 The emoji is a bare Slack reaction name, without colons. Every accepted message gets the reaction while waiting or
 processing, including the first message in a session. The reaction is removed when its turn ends or the agent pauses

@@ -394,20 +394,25 @@ func TestNoticesOfAThreadThatCannotContinueAreFixedText(t *testing.T) {
 	}
 }
 
-// The notices of a turn that ended without an answer say what happened in Agent Kourier's own fixed words, and
-// name no cause: the agent's status text is untrusted and not Agent Kourier's to repeat (spec 8.4, R2).
+// The notices of a turn that ended without an answer use Agent Kourier's fixed words. Failure detail is also fixed
+// broker text; backend status text is never repeated (spec 8.4, R2).
 func TestNoticesOfATaskThatEndedWithoutAnAnswerAreFixedText(t *testing.T) {
 	e := setup(t)
 	sink := e.sink(t, newOutbox(t, outbox.Config{Store: e.store, Platform: noCalls{t}}))
 	thread := thread
 	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
-		session.NoticeTaskFailed:   "The agent's task failed, so there is no answer. Its own logs say why.",
+		session.NoticeTaskFailed:   "The agent's task failed.",
 		session.NoticeTaskRejected: "The agent rejected this request, so there is no answer.",
 		session.NoticeTaskCanceled: "The agent's task was canceled before it finished.",
 		session.NoticeNoOutput:     "The agent finished without any output.",
 	} {
-		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, MessageRef: "5.5"}
+		detail := ""
+		if kind == session.NoticeTaskFailed {
+			detail = "The request exceeded the model input limit. Ask a narrower question in a new thread. Troubleshooting reference: AK-0123456789abcdef01234567."
+			want += " " + detail
+		}
+		n := session.Notice{ID: "task:t1/" + string(kind), Kind: kind, MessageRef: "5.5", Detail: detail}
 		sink.Notice(t.Context(), thread, n)
 		row, err := e.store.GetOutbox(t.Context(), outbox.ID(n.ID, "notice"))
 		var out chat.Outgoing
