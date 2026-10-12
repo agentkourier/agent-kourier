@@ -26,11 +26,13 @@ type TriggerLimits struct {
 	// RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once.
 	// What the Binding leaves out of it comes from the preset, field by field.
 	// +optional
+	// +doc:default=From preset, otherwise unlimited
 	RateLimit *RateLimit `json:"rateLimit,omitempty"`
 	// MaxRunsPerDay caps starts in any 24 hours (D31). An explicit 0 means no cap; leaving it out takes the
 	// preset's cap.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
+	// +doc:default=From preset, otherwise no cap
 	MaxRunsPerDay *int32 `json:"maxRunsPerDay,omitempty"`
 }
 

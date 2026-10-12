@@ -35,6 +35,7 @@ const (
 // ChatConnection in another namespace only if that resource lists the Binding's namespace in its
 // allowedNamespaces.
 type ObjectRef struct {
+	// +doc:default=Namespace of the referring object
 	Namespace string `json:"namespace,omitempty"`
 	// Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a
 	// letter or digit.
@@ -103,9 +104,12 @@ type AgentBackendSpec struct {
 	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
-	// Headers are sent on every request.
+	// Headers are sent on every request. Omitted headers add no static headers.
+	// +doc:default=Empty list
 	Headers []Header `json:"headers,omitempty"`
-	// AllowedNamespaces lists the namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
+	// AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label.
+	// An empty list permits references only from the backend's own namespace.
+	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
@@ -146,7 +150,9 @@ type ChatConnectionSpec struct {
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode).
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
-	// AllowedNamespaces lists the namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
+	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
+	// An empty list permits references only from the connection's own namespace.
+	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
@@ -226,6 +232,7 @@ type ChatBinding struct {
 	// Triggers decide which events in the channel start or continue a turn (spec 8.2). Empty means
 	// [{type: mention}]: a mention starts a session. A list that names triggers is the whole list
 	// (see defaultTriggers).
+	// +doc:default=`[{type: mention}]`
 	// +optional
 	Triggers []Trigger `json:"triggers,omitempty"`
 }
@@ -233,16 +240,20 @@ type ChatBinding struct {
 // RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 type RateLimit struct {
 	// +kubebuilder:validation:Minimum=1
+	// +doc:default=From preset, if set
 	MaxRuns int32 `json:"maxRuns"`
 	// Per is the window length.
+	// +doc:default=From preset, if set
 	Per metav1.Duration `json:"per"`
 	// +kubebuilder:validation:Minimum=1
+	// +doc:default=From preset, if set
 	MaxConcurrent int32 `json:"maxConcurrent"`
 }
 
 // Interactions configures agent pauses that wait on a person.
 type Interactions struct {
 	// AskUser lets the agent ask questions in the thread. Defaults to false.
+	// +kubebuilder:default=false
 	AskUser bool `json:"askUser,omitempty"`
 	// Timeout is how long a pause waits for an answer. Defaults to 30m.
 	// +kubebuilder:default="30m"
@@ -255,6 +266,7 @@ type Interactions struct {
 type Feedback struct {
 	// Enabled puts the buttons on the final message of an answer to a person's message in a thread. It does not
 	// switch them off for an investigation a trigger started. Defaults to false.
+	// +kubebuilder:default=false
 	// +optional
 	Enabled bool `json:"enabled,omitempty"`
 }

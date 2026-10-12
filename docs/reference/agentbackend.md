@@ -2,6 +2,8 @@
 
 This page lists every field of the AgentBackend resource, as the Go types in `api/v1alpha1` define it.
 
+The Default column shows what happens when a field is omitted. None means no default is supplied.
+
 `apiVersion: agentkourier.dev/v1alpha1` · `kind: AgentBackend`
 
 AgentBackend describes an A2A server that hosts agents. Owned by the platform team.
@@ -10,8 +12,8 @@ AgentBackend describes an A2A server that hosts agents. Owned by the platform te
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `metadata` | ObjectMeta | Yes |  | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |
-| `spec` | [AgentBackendSpec](#agentbackendspec) | Yes |  |  |
+| `metadata` | ObjectMeta | Yes | None | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |
+| `spec` | [AgentBackendSpec](#agentbackendspec) | Yes | None |  |
 
 ## AgentBackendSpec
 
@@ -19,10 +21,10 @@ AgentBackendSpec is the desired state of an AgentBackend.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `dialect` | string | Yes |  | One of `a2a`, `kagent-v1`. |
-| `url` | string | Yes |  | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At least 1 character. |
-| `headers` | [][Header](#header) | No |  | Headers are sent on every request. |
-| `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. |
+| `dialect` | string | Yes | None | One of `a2a`, `kagent-v1`. |
+| `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At least 1 character. |
+| `headers` | [][Header](#header) | No | Empty list | Headers are sent on every request. Omitted headers add no static headers. |
+| `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. An empty list permits references only from the backend's own namespace. |
 
 ## Header
 
@@ -30,9 +32,9 @@ Header is a static HTTP header. Set exactly one of value and valueSecretRef; val
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | At least 1 character. |
-| `value` | string | No |  |  |
-| `valueSecretRef` | [SecretKeyRef](#secretkeyref) | No |  |  |
+| `name` | string | Yes | None | At least 1 character. |
+| `value` | string | No | None |  |
+| `valueSecretRef` | [SecretKeyRef](#secretkeyref) | No | None |  |
 
 ## SecretKeyRef
 
@@ -40,7 +42,7 @@ SecretKeyRef names one value in a Secret in the referring object's namespace.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
+| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
 | `key` | string | No | `token` | Key selects the entry of the Secret. It defaults to "token". It consists of alphanumeric characters, '-', '_' or '.'. |
 
 ---

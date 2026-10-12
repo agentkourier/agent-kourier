@@ -113,6 +113,7 @@ func (p *apiPackage) page(kind, apiVersion, from string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", kind)
 	fmt.Fprintf(&b, "This page lists every field of the %s resource, as the Go types in `%s` define it.\n\n", kind, from)
+	b.WriteString("The Default column shows what happens when a field is omitted. None means no default is supplied.\n\n")
 	fmt.Fprintf(&b, "`apiVersion: %s` · `kind: %s`\n\n", apiVersion, kind)
 	if d := description(p.docs[kind]); d != "" {
 		b.WriteString(escapeText(d, false) + "\n")
@@ -159,7 +160,7 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 	name, opts, _ := strings.Cut(tag, ",")
 	if len(f.Names) == 0 { // embedded: TypeMeta is apiVersion and kind; ObjectMeta is metadata
 		if sel, ok := f.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "ObjectMeta" && rootKind {
-			return "| `metadata` | ObjectMeta | Yes |  | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |\n", "", true
+			return "| `metadata` | ObjectMeta | Yes | None | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |\n", "", true
 		}
 		return "", "", false
 	}
@@ -176,9 +177,11 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 		required = "No"
 	}
 	typ, ref := p.typeName(f.Type)
-	def := ""
+	def := "None"
 	if v, ok := marker(ms, "+kubebuilder:default="); ok {
 		def = "`" + strings.Trim(v, `"`) + "`"
+	} else if v, ok := marker(ms, "+doc:default="); ok {
+		def = escapeText(v, true)
 	}
 	desc := escapeText(description(f.Doc), true)
 	var extra []string

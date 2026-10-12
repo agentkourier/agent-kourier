@@ -2,6 +2,8 @@
 
 This page lists every field of the ChatConnection resource, as the Go types in `api/v1alpha1` define it.
 
+The Default column shows what happens when a field is omitted. None means no default is supplied.
+
 `apiVersion: agentkourier.dev/v1alpha1` · `kind: ChatConnection`
 
 ChatConnection is a workspace connection. Owned by the platform team.
@@ -10,8 +12,8 @@ ChatConnection is a workspace connection. Owned by the platform team.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `metadata` | ObjectMeta | Yes |  | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |
-| `spec` | [ChatConnectionSpec](#chatconnectionspec) | Yes |  |  |
+| `metadata` | ObjectMeta | Yes | None | Standard Kubernetes object metadata. Agent Kourier reads `name` and `namespace`. |
+| `spec` | [ChatConnectionSpec](#chatconnectionspec) | Yes | None |  |
 
 ## ChatConnectionSpec
 
@@ -19,9 +21,9 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `platform` | string | Yes |  | One of `slack`. |
-| `credentialsSecretRef` | [SecretRef](#secretref) | Yes |  | CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode). |
-| `allowedNamespaces` | []string | No |  | AllowedNamespaces lists the namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. |
+| `platform` | string | Yes | None | One of `slack`. |
+| `credentialsSecretRef` | [SecretRef](#secretref) | Yes | None | CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode). |
+| `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. An empty list permits references only from the connection's own namespace. |
 
 ## SecretRef
 
@@ -29,7 +31,7 @@ SecretRef names a Secret in the referring object's namespace whose keys are fixe
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | string | Yes |  | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
+| `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. |
 
 ---
 
