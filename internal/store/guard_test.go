@@ -153,6 +153,12 @@ func setSessionTask(k store.ConversationKey) call {
 	}
 }
 
+func clearSessionAcknowledgment(k store.ConversationKey, taskID, turnID string) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.ClearSessionAcknowledgment(ctx, k, taskID, turnID)
+	}
+}
+
 func resetSession(k store.ConversationKey) call {
 	return func(ctx context.Context, s store.Store) error { return s.ResetSession(ctx, k) }
 }
@@ -455,6 +461,12 @@ func specs() []spec {
 			withKeys(func(k store.ConversationKey) call { return touchSession(k, t0) }),
 			map[string]call{"no time": touchSession(key, time.Time{})})},
 		{"SetSessionTask", setSessionTask(key), withKeys(setSessionTask)},
+		{"ClearSessionAcknowledgment", clearSessionAcknowledgment(key, "t1", "turn1"), with(
+			withKeys(func(k store.ConversationKey) call { return clearSessionAcknowledgment(k, "t1", "turn1") }),
+			map[string]call{
+				"no TaskID":  clearSessionAcknowledgment(key, "", "turn1"),
+				"no turn ID": clearSessionAcknowledgment(key, "t1", ""),
+			})},
 		{"ResetSession", resetSession(key), withKeys(resetSession)},
 		{"ListActiveSessions", func(ctx context.Context, s store.Store) error { _, err := s.ListActiveSessions(ctx); return err }, nil},
 		{"ListQueuedSessions", func(ctx context.Context, s store.Store) error { _, err := s.ListQueuedSessions(ctx); return err }, nil},

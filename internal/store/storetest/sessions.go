@@ -237,6 +237,34 @@ func (su suite) sessionTasks(t *testing.T) {
 		isErr(t, s.SetSessionTask(ctx, store.ConversationKey{}, "c", "t", store.TaskTurn{}), store.ErrInvalid, "set with an empty key")
 	})
 
+	su.run(t, "ClearSessionAcknowledgment clears only the matching task turn", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		first := store.TaskTurn{ID: "turn1", User: "U1", MessageRef: "1700.01", Acknowledgment: "eyes", AcknowledgmentID: "source1"}
+		noErr(t, s.UpsertSession(ctx, store.Session{Key: key, ContextID: "ctx1", Binding: "ns/b", LastActivity: t0}), "UpsertSession")
+		noErr(t, s.SetSessionTask(ctx, key, "ctx1", "task1", first), "SetSessionTask")
+		noErr(t, s.ClearSessionAcknowledgment(ctx, key, "task1", "turn1"), "clear matching acknowledgment")
+		got := getSession(t, s, key)
+		wantTurn := first
+		wantTurn.Acknowledgment, wantTurn.AcknowledgmentID = "", ""
+		if got.ContextID != "ctx1" || got.TaskID != "task1" || got.Turn != wantTurn || got.TurnTask != "task1" {
+			t.Errorf("session after matching clear = %+v; want same context/task/turn with only acknowledgment fields cleared", got)
+		}
+
+		newer := store.TaskTurn{ID: "turn2", User: "U2", MessageRef: "1700.02", Acknowledgment: "eyes", AcknowledgmentID: "source2"}
+		noErr(t, s.SetSessionTask(ctx, key, "", "task2", newer), "SetSessionTask for newer task")
+		noErr(t, s.ClearSessionAcknowledgment(ctx, key, "task1", "turn1"), "clear stale acknowledgment")
+		if got := getSession(t, s, key); got.ContextID != "ctx1" || got.TaskID != "task2" || got.Turn != newer || got.TurnTask != "task2" {
+			t.Errorf("stale clear changed newer task = %+v; want its context and turn preserved", got)
+		}
+		noErr(t, s.ClearSessionAcknowledgment(ctx, key, "task2", "turn1"), "clear stale turn")
+		if got := getSession(t, s, key); got.Turn != newer {
+			t.Errorf("stale turn clear changed newer turn = %+v; want %+v", got.Turn, newer)
+		}
+		noErr(t, s.ResetSession(ctx, key), "ResetSession")
+		noErr(t, s.ClearSessionAcknowledgment(ctx, key, "task2", "turn2"), "clear after reset")
+		noErr(t, s.ClearSessionAcknowledgment(ctx, keyOf("missing"), "task", "turn"), "clear on missing session")
+	})
+
 	// The turn is recorded with the task, in the same write, so that a recovery that finds the task again knows whose
 	// output it is: the turn that began it, and after an answer the answer's.
 	su.run(t, "SetSessionTask records the turn with the task, replaces it with the next, and clears it with the task", func(t *testing.T, s store.Store) {

@@ -50,6 +50,16 @@ func (g *Guarded) SetSessionTask(ctx context.Context, key ConversationKey, conte
 	})
 }
 
+// ClearSessionAcknowledgment implements SessionTasks.
+func (g *Guarded) ClearSessionAcknowledgment(ctx context.Context, key ConversationKey, taskID, turnID string) error {
+	return g.run(ctx, "agentkourier.store.ClearSessionAcknowledgment", func(ctx context.Context) error {
+		if !validKey(key) || taskID == "" || turnID == "" {
+			return fmt.Errorf("clear session acknowledgment: key, task ID and turn ID are required: %w", ErrInvalid)
+		}
+		return g.a.ClearSessionAcknowledgment(ctx, key, taskID, turnID)
+	})
+}
+
 // ResetSession implements SessionTasks.
 func (g *Guarded) ResetSession(ctx context.Context, key ConversationKey) error {
 	return g.run(ctx, "agentkourier.store.ResetSession", func(ctx context.Context) error {

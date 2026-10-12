@@ -71,6 +71,13 @@ func (s *adapter) SetSessionTask(ctx context.Context, key store.ConversationKey,
 	return errIfUnchanged(n, err, fmt.Sprintf("set session task %+v", key))
 }
 
+// ClearSessionAcknowledgment implements store.SessionTasks.
+func (s *adapter) ClearSessionAcknowledgment(ctx context.Context, key store.ConversationKey, taskID, turnID string) error {
+	_, err := s.exec(ctx, `UPDATE sessions SET turn_acknowledgment = '', turn_acknowledgment_id = ''
+		WHERE connection = $1 AND channel = $2 AND thread_ts = $3 AND task_id = $4 AND turn_id = $5 AND turn_task = $4`, key.Connection, key.Channel, key.Thread, taskID, turnID)
+	return err
+}
+
 // ResetSession implements store.SessionTasks.
 func (s *adapter) ResetSession(ctx context.Context, key store.ConversationKey) error {
 	n, err := s.exec(ctx, `UPDATE sessions SET context_id = '', task_id = '', turn_id = '', turn_user = '', turn_task = '', turn_message_ts = '', turn_acknowledgment = '', turn_acknowledgment_id = ''

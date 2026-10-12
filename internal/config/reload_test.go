@@ -289,7 +289,7 @@ func TestReloaderLoop(t *testing.T) {
 	}
 
 	path := filepath.Join(dir, "binding.yaml")
-	writeFile(t, path, strings.Replace(mustRead(t, path), "C0123456789", "C0999999999", 1))
+	writeFileAtomic(t, path, strings.Replace(mustRead(t, path), "C0123456789", "C0999999999", 1))
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		if _, ok := r.Current().BindingForChannel("agent-kourier-system", "slack-main", "C0999999999"); ok {
 			break
@@ -304,6 +304,31 @@ func TestReloaderLoop(t *testing.T) {
 	cancel()
 	r.Wait()
 	goleak.VerifyNone(t)
+}
+
+// writeFileAtomic keeps the reload loop from observing the truncate window of an in-place edit.
+func writeFileAtomic(t *testing.T, path, contents string) {
+	t.Helper()
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".reload-*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.WriteString(contents); err != nil {
+		_ = tmp.Close()
+		t.Fatal(err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		t.Fatal(err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReloaderGivesUpOnAMovingConfig(t *testing.T) {

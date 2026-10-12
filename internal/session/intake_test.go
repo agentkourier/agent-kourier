@@ -33,15 +33,16 @@ var (
 // SetSessionTask, "get" for GetSession or "mark" for MarkReplyDelivered), once or every time, over a real SQLite store.
 type spyStore struct {
 	Store
-	mu      sync.Mutex
-	touches int
-	upserts int
-	fail    map[string]error // fails a call once
-	stuck   map[string]error // fails a call every time
-	onSet   func()           // runs when a task is cleared
-	onNext  func()           // runs before NextReply reads the queue
-	gate    chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
-	reads   int
+	mu         sync.Mutex
+	touches    int
+	upserts    int
+	fail       map[string]error // fails a call once
+	stuck      map[string]error // fails a call every time
+	onSet      func()           // runs when a task is cleared
+	onClearAck func()           // runs before ClearSessionAcknowledgment updates the active task turn
+	onNext     func()           // runs before NextReply reads the queue
+	gate       chan struct{}    // when set, the first GetSession waits for a second, or 200 ms
+	reads      int
 }
 
 func (s *spyStore) GetSession(ctx context.Context, k Key, ttl time.Duration, now time.Time) (store.Session, error) {
@@ -86,6 +87,16 @@ func (s *spyStore) SetSessionTask(ctx context.Context, k Key, contextID, taskID 
 		return err
 	}
 	return s.Store.SetSessionTask(ctx, k, contextID, taskID, turn)
+}
+
+func (s *spyStore) ClearSessionAcknowledgment(ctx context.Context, k Key, taskID, turnID string) error {
+	s.mu.Lock()
+	hook := s.onClearAck
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return s.Store.ClearSessionAcknowledgment(ctx, k, taskID, turnID)
 }
 
 func (s *spyStore) NextReply(ctx context.Context, k Key) (store.Reply, error) {

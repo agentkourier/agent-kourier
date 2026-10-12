@@ -796,6 +796,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	var final *a2a.Task
 	var recordErr error
 	named := false // the agent named the task
+	var pausedTaskID, pausedTurnID string
 	err = send(tctx, func(e agent.Event) {
 		paused := false
 		if c.life.renews(e) { // only what is new counts: a follow replays the snapshot it began with
@@ -836,6 +837,8 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 		case agent.FinalEvent:
 			final = ev.Task
 			if !final.Status.State.Terminal() {
+				pausedTaskID = string(final.ID)
+				pausedTurnID = t.outputTurn().ID
 				// The pause is rendered inside this handler, and whoever renders it may end it at
 				// once: the runner must already be parked on this task.
 				m.mu.Lock()
@@ -856,11 +859,11 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 			t.began.Acknowledgment = ""
 			t.began.AcknowledgmentID = ""
 			t.ackID = ""
-			if t.taskID != "" {
-				// Keep recovery's durable turn metadata in step with the removal. If this write
-				// fails, the old metadata is harmless: recovery will issue the same idempotent
-				// removal rather than consulting the reloaded Binding.
-				if err := m.cfg.Store.SetSessionTask(context.WithoutCancel(sctx), t.key, t.sess.ContextID, string(t.taskID), t.outputTurn()); err != nil {
+			if pausedTaskID != "" && pausedTurnID != "" {
+				// A task-owned update cannot restore task or context if Stop reset the session
+				// while the rendered pause was being handled. The turn ID also protects a newer
+				// continuation of the same agent task.
+				if err := m.cfg.Store.ClearSessionAcknowledgment(context.WithoutCancel(sctx), t.key, pausedTaskID, pausedTurnID); err != nil {
 					m.cfg.Logger.WarnContext(sctx, "session: could not clear paused acknowledgment metadata", "message", t.r.ID, "error", err)
 				}
 			}

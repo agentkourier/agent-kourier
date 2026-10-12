@@ -328,6 +328,11 @@ func (f *fakeAdapter) SetSessionTask(_ context.Context, _ store.ConversationKey,
 	return f.err
 }
 
+func (f *fakeAdapter) ClearSessionAcknowledgment(_ context.Context, _ store.ConversationKey, _, _ string) error {
+	f.record("ClearSessionAcknowledgment")
+	return f.err
+}
+
 func (f *fakeAdapter) SubmitInteraction(_ context.Context, _ string, _ []byte, _ string, _ time.Time) error {
 	f.record("SubmitInteraction")
 	return f.err

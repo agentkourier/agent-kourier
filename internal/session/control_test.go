@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,6 +86,106 @@ func TestStopEndsAPause(t *testing.T) {
 	}
 	if got := f.cancelled(); len(got) != 1 || got[0] != "t1" {
 		t.Errorf("cancelled %v; want t1", got)
+	}
+}
+
+// A pause becomes controllable before its renderer finishes. If the renderer blocks, Stop can
+// reset the session while FinalEvent is still being handled; that handler must not later restore
+// the old context while clearing its acknowledgment metadata.
+func TestStopResetSurvivesPausedFinalHandler(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = pauseFirst
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releasePause := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releasePause()
+	sink.onFinal = func(task *a2a.Task) {
+		if task.Status.State == a2a.TaskStateInputRequired {
+			close(entered)
+			<-release
+		}
+	}
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause final handler did not block")
+	}
+	f.nextSent() // turn 1 is already at the agent; the held turn is checked below
+
+	f.agent.mu.Lock()
+	f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}, nil
+	}
+	f.agent.cancelErr = func(int) error { return a2a.NewError(a2a.ErrTaskNotFound, "gone") }
+	f.agent.mu.Unlock()
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+		t.Fatalf("Stop = %v, %v; want session reset", did, err)
+	}
+	releasePause()
+	waitFinal(t, sink)
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Fatalf("sent %s after Stop; want held reply %s", id, want)
+	}
+	f.agent.mu.Lock()
+	last := f.agent.msgs[len(f.agent.msgs)-1]
+	f.agent.mu.Unlock()
+	if last.ContextID != "" {
+		t.Errorf("held reply context = %q after Stop reset; want empty", last.ContextID)
+	}
+}
+
+// Clearing acknowledgment metadata after a rendered pause can race with Stop's session reset.
+// The store update must be conditional on the task and turn that still own those fields.
+func TestStopResetSurvivesPausedAcknowledgmentCleanup(t *testing.T) {
+	f := newFixture(t)
+	sink := f.live()
+	f.agent.script = pauseFirst
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCleanup := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseCleanup()
+	f.st.mu.Lock()
+	f.st.onClearAck = func() {
+		close(entered)
+		<-release
+	}
+	f.st.mu.Unlock()
+	for _, ts := range []string{"1", "2"} {
+		if _, err := f.submit(inbound(ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("paused acknowledgment cleanup did not block")
+	}
+	f.nextSent() // turn 1 is already at the agent; the held turn is checked below
+	f.agent.mu.Lock()
+	f.agent.get = func(id a2a.TaskID) (*a2a.Task, error) {
+		return &a2a.Task{ID: id, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}, nil
+	}
+	f.agent.cancelErr = func(int) error { return a2a.NewError(a2a.ErrTaskNotFound, "gone") }
+	f.agent.mu.Unlock()
+	if did, err := f.m.Stop(t.Context(), key, "t1", "U9"); err != nil || !did {
+		t.Fatalf("Stop = %v, %v; want session reset", did, err)
+	}
+	releaseCleanup()
+	waitFinal(t, sink)
+	if id, want := f.nextSent(), inbound("2").MessageID; id != want {
+		t.Fatalf("sent %s after Stop; want held reply %s", id, want)
+	}
+	f.agent.mu.Lock()
+	last := f.agent.msgs[len(f.agent.msgs)-1]
+	f.agent.mu.Unlock()
+	if last.ContextID != "" {
+		t.Errorf("held reply context = %q after Stop reset; want empty", last.ContextID)
 	}
 }
 
