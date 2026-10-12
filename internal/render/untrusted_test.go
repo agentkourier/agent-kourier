@@ -732,14 +732,14 @@ func TestUntrustedBlockDropOldestAtTheUnit(t *testing.T) {
 		b.Items[6].Fields[1].Value = strings.Repeat("d", last)
 		return b.render()
 	}
-	fit := -1
-	for last := 1; last <= 400; last++ {
-		if got, left := section(last); left == 0 && chat.Units(got) == 3000 {
-			fit = last
-		}
-	}
-	if fit < 0 {
-		t.Fatal("no length of the last item makes a section of exactly the cap")
+	// The last plain-text field grows monotonically. Locate its boundary,
+	// then retain the exact-cap and one-unit-over checks below.
+	fit := sort.Search(400, func(i int) bool {
+		_, left := section(i + 1)
+		return left > 0
+	})
+	if fit == 0 || fit == 400 {
+		t.Fatal("no boundary within the last item's length range")
 	}
 	if got, left := section(fit); left != 0 || chat.Units(got) != 3000 {
 		t.Fatalf("a section of exactly the cap left %d out, with %d units", left, chat.Units(got))

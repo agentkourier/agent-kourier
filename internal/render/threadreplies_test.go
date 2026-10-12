@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -663,14 +664,14 @@ func TestThreadRepliesBlockAtTheUnit(t *testing.T) {
 		entries[6].Text = strings.Repeat("d", last)
 		return ThreadRepliesCounted(entries, 0)
 	}
-	fit := -1
-	for last := 1; last <= MaxThreadReplyUnits; last++ {
-		if got, left := section(last); left == 0 && chat.Units(got) == MaxThreadBlockUnits {
-			fit = last
-		}
-	}
-	if fit < 0 {
-		t.Fatal("no length of the last reply makes a section of exactly the cap")
+	// These plain-text fixtures grow by one unit at a time. Find the first
+	// dropped reply without repeatedly redacting every possible input length.
+	fit := sort.Search(MaxThreadReplyUnits, func(i int) bool {
+		_, left := section(i + 1)
+		return left > 0
+	})
+	if fit == 0 || fit == MaxThreadReplyUnits {
+		t.Fatal("no boundary within the last reply's length range")
 	}
 	if got, left := section(fit); left != 0 || chat.Units(got) != 6000 {
 		t.Fatalf("a section of exactly 6000 units left %d out, with %d units", left, chat.Units(got))
