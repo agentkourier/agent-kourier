@@ -13,13 +13,17 @@
 # only wrangler on the built site.
 name: docs
 
+# The two READMEs are in the pull request paths only: the content check reads them, but the site does not publish
+# them, so a README-only push to main must not redeploy it (ci.yml runs the check on main).
 on:
   pull_request:
     paths:
       - docs/**
       - mkdocs.yml
+      - README.md
       - hack/docs/**
       - api/v1alpha1/**
+      - charts/agent-kourier/README.md
       - charts/agent-kourier/values.yaml
       - .github/workflows/docs.yml
   push:
@@ -48,7 +52,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Go runs the reference generator (hack/docs/refgen) and the name check (hack/docs/namecheck).
+      # Go runs the reference generator (hack/docs/refgen), the name check (hack/docs/namecheck) and the content check
+      # (hack/docs/contentcheck: internal IDs, removed names, workspace identifiers, and the READMEs' links).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -58,8 +63,9 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: hack/docs/requirements.txt
-      # Generates the reference pages, fails on a misspelt product name, and builds with --strict, so a broken
-      # internal link or anchor, a page missing from the nav, or any other warning fails the build.
+      # Generates the reference pages, fails on a misspelt product name or a content-check finding, and builds with
+      # --strict, so a broken internal link or anchor, a page missing from the nav, or any other warning fails the
+      # build.
       - run: make docs-build
       - name: The committed reference pages are current
         run: git diff --exit-code -- docs/reference
