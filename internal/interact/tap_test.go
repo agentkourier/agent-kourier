@@ -138,19 +138,26 @@ func TestAPausedFinalEventIsHandedOffOnceAndTheCallReturnsAtOnce(t *testing.T) {
 	}
 }
 
+// TestAnAuthPauseIsHandedOff: a task that asks for authentication is a pause as well, for the intake to refuse: nothing
+// else would end it.
+func TestAnAuthPauseIsHandedOff(t *testing.T) {
+	r := newTap(t, nil)
+	task := pausedTask("task-1", "msg-1", d0)
+	task.Status.State = a2a.TaskStateAuthRequired
+	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task})
+	waitFor(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
+}
+
 func TestOtherEventsAreNotHandedOff(t *testing.T) {
 	working := pausedTask("task-1", "m", d0)
 	working.Status.State = a2a.TaskStateWorking
 	done := pausedTask("task-2", "m", d0)
 	done.Status.State = a2a.TaskStateCompleted
-	auth := pausedTask("task-3", "m", d0)
-	auth.Status.State = a2a.TaskStateAuthRequired
 	for name, ev := range map[string]agent.Event{
 		"text":               agent.TextEvent{Text: "hello"},
 		"a final of no task": agent.FinalEvent{},
 		"a working task":     agent.FinalEvent{Task: &working},
 		"a finished task":    agent.FinalEvent{Task: &done},
-		"an auth pause":      agent.FinalEvent{Task: &auth},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newTap(t, nil)

@@ -886,7 +886,9 @@ unusable and cancels the task.
 
 1. The task enters `input-required`. The dialect parses it into an `Interaction`. A pause
    the dialect can't use (for `kagent-v1`: a missing or malformed payload) is reported in
-   the thread with its reason, audited, and the task is cancelled (6.3).
+   the thread with its reason, audited, and the task is cancelled (6.3). A task in
+   `auth-required` is refused the same way on every dialect, before any parsing: no dialect
+   can answer it from the thread, and without an interaction it would have no timeout.
    For a stored interaction whose prompt is too large or permanently abandoned, the
    `unusable_pause` audit is written before the fixed notice is queued and the interaction
    is closed. Recovery retries the cancellation of that closed row and records only a

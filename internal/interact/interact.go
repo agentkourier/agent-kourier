@@ -130,8 +130,12 @@ func InteractionID(in dialect.Interaction) string {
 	return "ix-" + hex.EncodeToString(sum[:])[:32]
 }
 
-// Paused takes up a pause. A tool approval on a Binding that does not allow them is denied, and a question on one
-// that does not allow questions is cancelled. An approval that the prompt cannot show exactly (exactTools) is refused
+// errAuthRequired is the cause of refusing a task that asks for authentication: no dialect can answer it from the thread,
+// and with no interaction it would have no prompt and no timeout, so the runner parked on it would never be released.
+var errAuthRequired = fmt.Errorf("%w: the agent asked for authentication (auth-required), which Agent Kourier does not support", dialect.ErrUnusablePause)
+
+// Paused takes up a pause. A task that asks for authentication is refused as unusable. A tool approval on a Binding
+// that does not allow them is denied, and a question on one that does not allow questions is cancelled. An approval that the prompt cannot show exactly (exactTools) is refused
 // as unusable, and so is a pause whose prompt does not fit in one message. Any other pause is recorded and posted as a
 // prompt. Every step is idempotent, so a crash between two leaves the next call to
 // finish the work and never repeat it: it creates the interaction, posts the prompt if that is not
@@ -141,6 +145,9 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	b, err := i.cfg.Lookup.Binding(p.Binding)
 	if err != nil {
 		return fmt.Errorf("interact: Binding %q: %w", p.Binding, err)
+	}
+	if p.Task.Status.State == a2a.TaskStateAuthRequired {
+		return i.refuseUnusable(ctx, p, b, errAuthRequired)
 	}
 	in, err := b.Dialect.ParseInteraction(p.Task)
 	switch {

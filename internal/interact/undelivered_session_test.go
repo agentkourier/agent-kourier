@@ -38,9 +38,11 @@ type scriptedAgent struct {
 	state    a2a.TaskState
 	answers  []*a2a.Message
 	cancels  []a2a.TaskID
-	answerAt func(n int) error // the error of the n-th answer (from 0), nil to take it
-	cancelAt func(n int) error // the error of the n-th cancel
-	gate     chan struct{}     // if set, an answer waits for it to be closed
+	answerAt func(n int) error    // the error of the n-th answer (from 0), nil to take it
+	cancelAt func(n int) error    // the error of the n-th cancel
+	gate     chan struct{}        // if set, an answer waits for it to be closed
+	sendAt   func(n int) a2a.Task // the task the n-th send ends on (from 0); nil: the approval
+	sends    int
 }
 
 func newScriptedAgent() *scriptedAgent { return &scriptedAgent{state: a2a.TaskStateInputRequired} }
@@ -56,7 +58,15 @@ func (a *scriptedAgent) emit(h agent.Handler, task a2a.Task) {
 }
 
 func (a *scriptedAgent) Send(_ context.Context, _ *a2a.Message, h agent.Handler) error {
-	a.emit(h, a.paused())
+	a.mu.Lock()
+	n, at := a.sends, a.sendAt
+	a.sends++
+	a.mu.Unlock()
+	task := a.paused()
+	if at != nil {
+		task = at(n)
+	}
+	a.emit(h, task)
 	return nil
 }
 
@@ -118,6 +128,7 @@ func (*scriptedAgent) FindTask(context.Context, string, string) (*a2a.Task, []a2
 }
 
 func (a *scriptedAgent) answered() int { a.mu.Lock(); defer a.mu.Unlock(); return len(a.answers) }
+func (a *scriptedAgent) sent() int     { a.mu.Lock(); defer a.mu.Unlock(); return a.sends }
 func (a *scriptedAgent) cancelled() []a2a.TaskID {
 	a.mu.Lock()
 	defer a.mu.Unlock()

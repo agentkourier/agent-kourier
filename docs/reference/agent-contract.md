@@ -81,7 +81,7 @@ and tool result parts as step cards.
 | `failed` | Ends the turn and posts "The agent's task failed." with a category when one is recognised (see [Errors](#errors)) |
 | `rejected`, `canceled` | Ends the turn and posts a notice |
 | `input-required` | A question: see [Let the agent ask questions](../how-to/agent-questions.md) |
-| `auth-required` | Not supported. The task is treated as paused, with no prompt and no timeout, and later replies wait behind it. On `a2a`, a typed reply makes Agent Kourier read the task again, and follow it if the agent has moved on |
+| `auth-required` | Not supported, on either dialect. Agent Kourier tells the thread that the agent paused in a way it cannot use, cancels the task, and then sends the replies queued behind it |
 | Any other terminal state | Treated as `failed` |
 
 A question on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status

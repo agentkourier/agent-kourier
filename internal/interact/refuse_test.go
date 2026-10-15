@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -89,6 +90,15 @@ func askUserHint() a2a.Task {
 		"questions": []map[string]any{{"question": "Which?"}}})
 }
 
+// authPause is a task that asks for authentication, whose status message carries agent text that must not reach the thread.
+const authAudit = "unusable_pause: unusable pause: the agent asked for authentication (auth-required), which Agent Kourier does not support"
+
+func authPause() a2a.Task {
+	task := askUserHint()
+	task.Status.State = a2a.TaskStateAuthRequired
+	return task
+}
+
 // TestRefusalsAreOnceOnly: each refusal tells the thread, cancels, audits and counts once, and a pause
 // that comes again (the task no longer paused) does none of it again.
 func TestRefusalsAreOnceOnly(t *testing.T) {
@@ -98,8 +108,10 @@ func TestRefusalsAreOnceOnly(t *testing.T) {
 		wantAudit []string
 		wantHook  int
 	}{
-		"an unusable pause":         {unusable(), nil, []string{"unusable_pause: unusable pause: unknown request type", "unusable_pause_cancel: ok"}, 0},
-		"ask-user on askUser false": {askUserHint(), func(b *interact.Binding) { b.AskUser = false }, []string{"auto_denied"}, 1},
+		"an unusable pause":          {unusable(), nil, []string{"unusable_pause: unusable pause: unknown request type", "unusable_pause_cancel: ok"}, 0},
+		"ask-user on askUser false":  {askUserHint(), func(b *interact.Binding) { b.AskUser = false }, []string{"auto_denied"}, 1},
+		"an auth pause on kagent-v1": {authPause(), nil, []string{authAudit, "unusable_pause_cancel: ok"}, 0},
+		"an auth pause on a2a":       {authPause(), func(b *interact.Binding) { b.Dialect = generic.New(30 * time.Second) }, []string{authAudit, "unusable_pause_cancel: ok"}, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t, tc.mod)

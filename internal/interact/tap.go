@@ -36,7 +36,7 @@ type TapConfig struct {
 }
 
 // Tap is a session.Sink that passes everything to the sink it wraps and watches the turns' final events
-// for a task paused on input, which it hands to the intake (spec 8.4 step 1). The handler that a turn
+// for a task paused on input or on authentication, which it hands to the intake (spec 8.4 step 1). The handler that a turn
 // is given runs on the agent's stream goroutine and must not block, so the hand-off is a goroutine of its
 // own and the call returns at once. The goroutine tries Intake.Paused again after a backoff for as long
 // as the pause can still be answered, which is until its own deadline: every path of Paused is idempotent,
@@ -87,7 +87,7 @@ func (t *Tap) Turn(ctx context.Context, ref session.TurnRef) agent.Handler {
 		if inner != nil {
 			inner(e)
 		}
-		if f, ok := e.(agent.FinalEvent); ok && f.Task != nil && f.Task.Status.State == a2a.TaskStateInputRequired {
+		if f, ok := e.(agent.FinalEvent); ok && f.Task != nil && (f.Task.Status.State == a2a.TaskStateInputRequired || f.Task.Status.State == a2a.TaskStateAuthRequired) {
 			t.handOff(ctx, ref, *f.Task)
 		}
 	}
