@@ -79,3 +79,6 @@ call gives it nothing to ask about after a restart.
 To point a Binding at an agent that speaks A2A, see [Connect a generic A2A agent](../how-to/connect-a2a-agent.md). For
 kagent, whose dialect adds structured questions and tool steps, see [Connect a kagent agent](../how-to/connect-kagent.md).
 AX uses the generic dialect: see [Connect an agent on Google AX](../how-to/connect-ax.md).
+
+Plain A2A leaves some choices open, such as where an answer's text goes. The
+[agent contract](../reference/agent-contract.md) lists the ones Agent Kourier makes, and what it expects of an agent.

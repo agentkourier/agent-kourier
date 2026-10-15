@@ -14,6 +14,11 @@ files, usually a mounted ConfigMap, rather than served as custom resources.
 | [AgentBackend](agentbackend.md) | The agent endpoint, its dialect, and the namespaces allowed to use it | Platform team |
 | [ChatConnection](chatconnection.md) | The chat platform connection and its Secret | Platform team |
 
+## Agents
+
+- [Agent contract](agent-contract.md): what an agent must do beyond speaking A2A: methods, message shape, replies,
+  task states and errors.
+
 ## Configuration
 
 - [Helm values](helm-values.md): every value of the chart, with its default.

@@ -148,6 +148,7 @@ nav:
       - Binding: reference/binding.md
       - AgentBackend: reference/agentbackend.md
       - ChatConnection: reference/chatconnection.md
+      - Agent contract: reference/agent-contract.md
       - Helm values: reference/helm-values.md
       - Command line and environment: reference/cli.md
       - Chat triggers: reference/chat-triggers.md

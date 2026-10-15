@@ -10,7 +10,11 @@ The agent must:
 - serve an A2A 1.0 or 0.3 agent card whose capabilities advertise streaming. Agent Kourier rejects an agent whose card
   does not;
 - offer a JSON-RPC interface. A card that lists only gRPC or REST is refused;
-- serve its card at the endpoint URL plus `/.well-known/agent-card.json`, with a trailing slash on the URL trimmed.
+- serve its card at the endpoint URL plus `/.well-known/agent-card.json`, with a trailing slash on the URL trimmed;
+- put its answer in artifact text parts, and answer with task events, not a bare message.
+
+The [agent contract](../reference/agent-contract.md) lists the rest: the methods it must serve, what each message
+carries, and how replies, task states and errors are read.
 
 ## Declare the backend
 
