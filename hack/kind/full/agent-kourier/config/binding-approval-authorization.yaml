@@ -1,0 +1,19 @@
+# S22: a non-member and a member outside the approver group are refused before an approver decides.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: full-s22, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-approval
+  identity:
+    userId: agent-kourier-full
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS22
+    output: live
+  interactions:
+    toolApprovals: true
+    approverGroups: [S0123456789]

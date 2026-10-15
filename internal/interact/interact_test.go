@@ -90,7 +90,15 @@ func (*poster) Classify(chat.Op, error) chat.Verdict { return chat.Verdict{Class
 type refStore struct {
 	*sqlite.Store
 	failRef      bool
+	resolveErr   error
 	beforeSubmit func(id string, answer []byte, decider string, now time.Time) // runs as a submit is made
+}
+
+func (s *refStore) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) error {
+	if s.resolveErr != nil {
+		return s.resolveErr
+	}
+	return s.Store.ResolveInteraction(ctx, id, state, now)
 }
 
 func (s *refStore) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
@@ -154,7 +162,7 @@ func newRig(t *testing.T, mod func(*interact.Binding)) *rig {
 	if mod != nil {
 		mod(&b)
 	}
-	if r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }})); err != nil {
+	if r.in, err = interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: ob, Session: r.sess, Audit: r.audit, OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) }})); err != nil {
 		t.Fatal(err)
 	}
 	return r

@@ -52,8 +52,9 @@ In the Binding's `identity`:
 - Chat and alert investigations, with streamed answers.
 - An agent's question, when it pauses with `input-required` and text, if the Binding sets `interactions.askUser: true`.
   A single question with no choices also takes a typed reply in the thread.
-- Not: structured choices, tool approvals, or tool calls as step cards. Those come from kagent's extension, which only
-  the `kagent-v1` dialect speaks.
+- Not: structured choices, tool approvals, or tool calls as step cards. The generic `a2a` dialect accepts only a
+  text-only input-required question; a structured pause is refused and the task is cancelled. These capabilities come
+  from kagent's extension, which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it

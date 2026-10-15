@@ -249,11 +249,17 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 	)
 	if in.Kind == dialect.ToolApproval {
 		// Switched off since the prompt was posted: nothing is decided from this press. What the pause does when it comes again
-		// depends on the row (autoDeny): a pending one is denied by policy, and for one that a person already decided the thread is
-		// told that the request is being denied (not true of that decision) and the recorded answer is sent again.
-		if !b.ToolApprovals {
+		// depends on the row (autoDeny): a pending one remains pending until autoDeny records the policy decision, and for one that
+		// a person already decided the recorded answer is sent again without announcing a policy denial that did not make that
+		// decision. A row already denied by autoDeny has its policy decision told to the person.
+		humanWinnerRetry := row.State == store.InteractionAnswered && row.Decider == press.User && row.Decider != autoDecider
+		if !b.ToolApprovals && !humanWinnerRetry {
 			p.cfg.Logger.WarnContext(ctx, "interact: a press on an approval whose Binding no longer allows approvals; nothing is decided", "interaction", row.ID)
-			return p.finish(ctx, press, &row, w.gone)
+			text := w.gone
+			if row.State == store.InteractionAnswered && row.Decider == autoDecider {
+				text = w.policyDenied
+			}
+			return p.finish(ctx, press, &row, text)
 		}
 		// The winner's own retry (open) is not asked: their approval was authorized when it was made, and the retry only sends
 		// the recorded answer again; refusing it would leave a decision audited and not delivered, and put a refusal after it.

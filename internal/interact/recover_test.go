@@ -18,8 +18,10 @@ import (
 type sess struct {
 	answers              []*a2a.Message
 	cancels              []a2a.TaskID
+	cancelReasons        []string
 	answerErr, cancelErr error
 	onAnswer             func() // runs as an answer arrives
+	onCancel             func() // runs before a cancel is recorded
 }
 
 func (s *sess) Answer(_ context.Context, _ store.ConversationKey, m *a2a.Message) error {
@@ -30,8 +32,12 @@ func (s *sess) Answer(_ context.Context, _ store.ConversationKey, m *a2a.Message
 	return s.answerErr
 }
 
-func (s *sess) Cancel(_ context.Context, _ store.ConversationKey, id a2a.TaskID, _ string) error {
+func (s *sess) Cancel(_ context.Context, _ store.ConversationKey, id a2a.TaskID, reason string) error {
+	if s.onCancel != nil {
+		s.onCancel()
+	}
 	s.cancels = append(s.cancels, id)
+	s.cancelReasons = append(s.cancelReasons, reason)
 	return s.cancelErr
 }
 

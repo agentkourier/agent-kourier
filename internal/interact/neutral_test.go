@@ -112,7 +112,7 @@ func TestAnEndingIsNotMadeOfAPendingInteraction(t *testing.T) {
 func TestTheIntakeAsksTheRealPlatformWhetherAPromptFits(t *testing.T) {
 	r := newRig(t, nil)
 	platform := slack.NewPlatform(nil, "ns/main") // Fits is pure: no client is needed
-	intake, err := interact.New(intakeCfg(interact.Config{Store: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(30 * time.Second), AskUser: true, Timeout: timeout}},
+	intake, err := interact.New(intakeCfg(interact.Config{Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: kagentv1.New(30 * time.Second), AskUser: true, Timeout: timeout}},
 		Platform: platform, Outbox: r.outbox, Session: r.sess, Audit: r.audit, Now: func() time.Time { return t0 }}))
 	if err != nil {
 		t.Fatal(err)

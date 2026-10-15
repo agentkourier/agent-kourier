@@ -135,6 +135,7 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		r.failures++
 		r.log.Error("config reload failed; keeping the last good snapshot", "error", err)
 	} else {
+		warnPolicies := r.snap.Load() == nil || changed || st.Stale
 		switch { // a recheck that finds nothing new stays silent
 		case st.Stale:
 			r.log.Info("config reloaded after failed reloads", "failed_reloads", r.failures)
@@ -143,12 +144,27 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 		}
 		st.Stale, st.LastSuccess, r.failures = false, r.lastAttempt, 0
 		r.snap.Store(snap)
+		if warnPolicies {
+			r.warnToolApprovalPolicies(snap)
+		}
 	}
 	r.status.Store(&st)
 	if err != nil && r.onError != nil { // after the status, so a hook that reads Status sees Stale
 		r.onError(err)
 	}
 	return err
+}
+
+// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible.
+// The warning belongs to the config load, so it is emitted even before a Binding is used by the broker.
+func (r *Reloader) warnToolApprovalPolicies(snap *Snapshot) {
+	for _, rb := range snap.Bindings() {
+		in := rb.Binding.Spec.Interactions
+		if in.ToolApprovals && len(in.ApproverGroups) == 0 {
+			r.log.Warn("config: tool approvals are enabled without approver groups; any non-bot channel member may decide",
+				"binding", rb.Binding.Namespace+"/"+rb.Binding.Name)
+		}
+	}
 }
 
 // build loads and resolves the config from one generation of the directory. If the

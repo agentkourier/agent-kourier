@@ -1,5 +1,5 @@
 # S5 over the a2a dialect: Agent Kourier is killed between posting and recording (the testhooks fault); one message after the restart,
-# with the stub agent reached as a plain pod (see agentbackend-a2a.yaml). The same scenario as binding-s5.yaml, so the output is
+# with the stub agent reached as a plain pod (see agentbackend-a2a.yaml). The same scenario as binding-crash-recovery.yaml, so the output is
 # final here too: only a post through the outbox reaches the fault hook. A channel of its own on the fake Slack; the identity
 # token is the same Secret as fast-chat's. The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
 apiVersion: agentkourier.dev/v1alpha1

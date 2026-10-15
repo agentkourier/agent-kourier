@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,14 +45,22 @@ func TestBackendCarriesTheBindingsOutputMode(t *testing.T) {
 
 func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	f := newFixture(t)
-	for _, ask := range []bool{false, true} {
-		interactions(t, f, v1alpha1.Interactions{AskUser: ask, Timeout: metav1.Duration{Duration: 7 * time.Minute}})
+	for _, tc := range []struct {
+		ask       bool
+		approvals bool
+		groups    []string
+	}{
+		{ask: false},
+		{ask: true},
+		{ask: true, approvals: true, groups: []string{"S0123456789", "S9876543210"}},
+	} {
+		interactions(t, f, v1alpha1.Interactions{AskUser: tc.ask, ToolApprovals: tc.approvals, ApproverGroups: tc.groups, Timeout: metav1.Duration{Duration: 7 * time.Minute}})
 		got, err := f.b.Binding("sre/oncall")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.AskUser != ask || got.Timeout != 7*time.Minute {
-			t.Errorf("Binding = %+v, want AskUser %t and the 7m timeout of the spec", got, ask)
+		if got.AskUser != tc.ask || got.ToolApprovals != tc.approvals || !slices.Equal(got.ApproverGroups, tc.groups) || got.Timeout != 7*time.Minute {
+			t.Errorf("Binding = %+v, want AskUser %t, ToolApprovals %t, groups %v and the 7m timeout of the spec", got, tc.ask, tc.approvals, tc.groups)
 		}
 	}
 

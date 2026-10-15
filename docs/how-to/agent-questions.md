@@ -47,6 +47,50 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
 ## Tool approvals
 
-Approving an agent's tool calls from Slack is not built yet, and a Binding has no setting for it. If an agent pauses
-for a tool approval, Agent Kourier denies it, says so in the thread, and counts it, because the Binding is meant to
-point at a read-only agent.
+Tool approvals are available for a Binding that uses the `kagent-v1` dialect. They are disabled by default. Enable them
+with a separate policy from questions:
+
+```yaml
+spec:
+  interactions:
+    askUser: true
+    toolApprovals: true
+    approverGroups: [S0123456789] # optional Slack user group IDs
+    timeout: 30m
+```
+
+`approverGroups` is optional; a nonempty list requires `toolApprovals: true`. When it is omitted or empty, any non-bot member of
+the Binding's channel may decide an approval; the config loader warns and names the Binding. When groups are listed, a
+press must come from a member of at least one listed group, a member of the channel, and a non-bot user. Groups gate tool
+approvals only, so they do not restrict ask-user answers. The list accepts at most 10 Slack user group IDs, and rejects
+empty or duplicate entries. Membership is read on each press in the order the groups are listed and is not cached. A
+permanent group-read failure, such as an unknown group or missing Slack permission, ends that press with a fixed
+ephemeral message, makes no decision and writes no audit row, and leaves the approval pending. The error log names the
+Binding and interaction. A timeout, server error or rate limit keeps the press for retry; the first group-read error
+stops the check even if a later group would contain the person, while a member found in an earlier group may decide.
+
+When approvals are enabled, a one-tool prompt shows the tool name, its redacted arguments, and **Approve** and **Deny**.
+A prompt with several tools shows each tool and its arguments with an Approve/Deny choice, plus **Submit**, **Approve
+all**, and **Deny all**. The prompt refuses a tool name or argument that cannot be shown exactly, contains an unsupported
+value, or does not fit in one message; Agent Kourier does not truncate an approval prompt. Secrets are replaced with
+`[redacted]` before the prompt is stored and shown.
+
+The first complete, authorized decision wins. An incomplete press is rejected with an ephemeral message and does not reach
+the agent. Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
+prompt with an ending that shows each tool's Approved or Denied verdict and removes the controls. The audit records the
+Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
+dialect's fixed reason.
+
+At the deadline (30 minutes by default), the sweeper audits `timed_out` before denying every tool through the kagent
+dialect, then updates the posted prompt with a timed-out ending and queues a fixed notice. Recovery reuses that timeout audit; if it is missing, recovery writes it
+before retrying the denial. A denial that the agent does not take causes the task to be cancelled on a later sweep.
+If a person's recorded decision wins a race with the sweep after its timeout audit, the sweep appends a `superseded`
+audit for that timeout. A failure to write the compensation is logged.
+
+A permanently abandoned or oversized approval prompt is refused as unusable. Agent Kourier queues the fixed refusal
+notice and closes the interaction before cancelling the task, so a restart can retry the cancellation without reporting
+another timeout. A transient posting failure remains retryable.
+
+A pinned kagent 1.0.0-alpha5 runtime check emitted one two-tool pause. Approving `add_numbers` and denying
+`check_status` completed the task, and only `add_numbers` executed. The broker's end-to-end suite verifies this with fake Slack
+and pinned kagent 1.0.0-alpha5.

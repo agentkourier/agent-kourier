@@ -33,6 +33,33 @@ func (s *Server) Click(user, messageTS, actionID, value string) (string, error) 
 	return s.blockActions(user, channel, m, btn, blocks, nil)
 }
 
+// ClickStale presses a button using the message snapshot a person saw before
+// the message was edited. It still requires the message to exist in the fake,
+// but reads the action and its value from snapshot so an interaction can arrive
+// after the broker has removed the prompt's controls.
+func (s *Server) ClickStale(user string, snapshot Message, actionID, value string) (string, error) {
+	channel, current, _, err := s.findMessage(snapshot.TS)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.TS != current.TS {
+		return "", invalid("fakeslack: stale message %s does not match the stored message", snapshot.TS)
+	}
+	blocks := findElements(snapshot.Blocks)
+	if slices.ContainsFunc(blocks, func(e element) bool { return e.blockID == "" }) {
+		return "", invalid("fakeslack: message %s has an interactive block with no block_id; Slack would generate one, so set explicit block IDs", snapshot.TS)
+	}
+	btn, err := blocks.button(actionID)
+	if err != nil {
+		return "", err
+	}
+	if v, _ := btn.element["value"].(string); v != value {
+		return "", invalid("fakeslack: button %q has value %q, not %q", actionID, v, value)
+	}
+	snapshot.Metadata = nil
+	return s.blockActions(user, channel, snapshot, btn, blocks, nil)
+}
+
 // Submit answers an inline ask-user prompt: it presses the Submit button
 // submitActionID on a message the bot posted, as user, with values as the state
 // of the message's input elements, and delivers a block_actions envelope. Every

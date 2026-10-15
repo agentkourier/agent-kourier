@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
@@ -10,6 +11,7 @@ import (
 
 func main() {
 	fmt.Printf("slack=%q\n", testhooks.SlackAPIURL())
+	_ = testhooks.BeforeSend(context.Background(), "probe")
 	testhooks.AfterPost()
 	fmt.Println("after-post-returned")
 }

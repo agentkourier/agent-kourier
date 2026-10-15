@@ -190,6 +190,34 @@ func TestBindingValidate(t *testing.T) {
 		{"acknowledgment emoji with uppercase", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "Eyes" },
 			`spec.chat.acknowledgment.emoji: invalid reaction name "Eyes": use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed`},
 		{"acknowledgment custom emoji ok", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "eyes+1" }, ""},
+		{"tool approvals with valid groups", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"S0123456789", "S9876543210"}
+		}, ""},
+		{"tool approvals without groups ok", func(o *Binding) { o.Spec.Interactions.ToolApprovals = true }, ""},
+		{"approver groups require tool approvals", func(o *Binding) { o.Spec.Interactions.ApproverGroups = []string{"S0123456789"} },
+			"spec.interactions.approverGroups: requires spec.interactions.toolApprovals: true"},
+		{"empty approver group list without tool approvals ok", func(o *Binding) { o.Spec.Interactions.ApproverGroups = []string{} }, ""},
+		{"empty approver group", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{""}
+		}, "spec.interactions.approverGroups[0]: must not be empty"},
+		{"invalid approver group", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"C0123456789"}
+		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a Slack user group ID such as S0123456789`},
+		{"duplicate approver group", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"S0123456789", "S0123456789"}
+		}, "spec.interactions.approverGroups[1]: duplicate of index 0"},
+		{"too many approver groups", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			groups := make([]string, maxApproverGroups+1)
+			for i := range groups {
+				groups[i] = fmt.Sprintf("S%010d", i)
+			}
+			o.Spec.Interactions.ApproverGroups = groups
+		}, fmt.Sprintf("spec.interactions.approverGroups: has %d items, maximum is %d", maxApproverGroups+1, maxApproverGroups)},
 		{"negative interaction timeout", func(o *Binding) { o.Spec.Interactions.Timeout.Duration = -1 }, "spec.interactions.timeout: must be positive"},
 		{"negative threadTTL", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = -1 }, "spec.session.threadTTL: must be positive"},
 	})

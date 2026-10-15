@@ -32,8 +32,10 @@ type Input struct {
 // decodeInteraction returns the Interaction a callback carries, and whether it is one:
 // the press of a button on a message by a person. A press by Agent Kourier itself, by no one,
 // of another kind (a modal's submission or close), or with no action is dropped.
-// UNCONFIRMED(WP-04): the payload's fields, and that state.values holds null or empty for
-// an unanswered input.
+// A live probe on 2026-10-13 captured a real Submit block_actions payload with both rendered
+// radio buttons unanswered. Slack sent the input entries with no selected value; the decoder
+// consequently produces no answers for them. Other callback fields are decoded only as needed
+// by this adapter and are not inferred from that probe.
 func decodeInteraction(botUser string, cb slackgo.InteractionCallback) (Interaction, bool) {
 	if cb.Type != slackgo.InteractionTypeBlockActions || len(cb.ActionCallback.BlockActions) == 0 {
 		return Interaction{}, false

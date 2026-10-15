@@ -147,6 +147,46 @@ func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 	}
 }
 
+func TestReloaderWarnsWhenApprovalsHaveNoApproverGroups(t *testing.T) {
+	dir := specDir(t)
+	path := filepath.Join(dir, "binding.yaml")
+	writeFile(t, path, strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n    toolApprovals: true\n", 1))
+	var logs bytes.Buffer
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	mustReload(t, r, true)
+	if got := logs.String(); !strings.Contains(got, "tool approvals are enabled without approver groups; any non-bot channel member may decide") || !strings.Contains(got, "binding=sre/sre-alerts") {
+		t.Errorf("warning log = %q; want a warning naming the Binding", got)
+	}
+}
+
+func TestReloaderWarnsApprovalsOnlyForInitialOrChangedConfig(t *testing.T) {
+	dir := specDir(t)
+	path := filepath.Join(dir, "binding.yaml")
+	const warning = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
+	var logs bytes.Buffer
+	r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+
+	mustReload(t, r, true)
+	beforeRecheck := logs.String()
+	mustReload(t, r, true)
+	if got := strings.TrimPrefix(logs.String(), beforeRecheck); strings.Contains(got, warning) {
+		t.Errorf("unchanged forced recheck logged a policy warning: %q", got)
+	}
+
+	writeFile(t, path, strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n    toolApprovals: true\n", 1))
+	beforeChange := logs.String()
+	mustReload(t, r, false)
+	if got := strings.TrimPrefix(logs.String(), beforeChange); !strings.Contains(got, warning) {
+		t.Errorf("changed policy load logged %q; want the policy warning", got)
+	}
+
+	beforeRecheck = logs.String()
+	mustReload(t, r, true)
+	if got := strings.TrimPrefix(logs.String(), beforeRecheck); strings.Contains(got, warning) {
+		t.Errorf("unchanged forced policy recheck logged a policy warning: %q", got)
+	}
+}
+
 func TestReloaderStartFailsOnBadConfig(t *testing.T) {
 	dir := specDir(t)
 	writeFile(t, filepath.Join(dir, "binding.yaml"), "kind: [")

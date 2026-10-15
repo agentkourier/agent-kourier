@@ -450,6 +450,7 @@ func specs() []spec {
 			map[string]call{
 				"no Binding":      upsertSession(func(s *store.Session) { s.Binding = "" }),
 				"no LastActivity": upsertSession(func(s *store.Session) { s.LastActivity = time.Time{} }),
+				"invalid origin":  upsertSession(func(s *store.Session) { s.Origin = store.Origin{Subject: "build"} }),
 			})},
 		{"GetSession", getSession(key, time.Hour, t0), with(
 			withKeys(func(k store.ConversationKey) call { return getSession(k, time.Hour, t0) }),

@@ -12,6 +12,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -127,6 +128,50 @@ func TestSlackActsAsUsersAndReadsTheirAcks(t *testing.T) {
 	thread, err := f.sl.Thread(ctx, "C1", root)
 	if err != nil || len(thread) != 3 || thread[0].TS != root || thread[2].Text != "more" {
 		t.Fatalf("Thread = %+v, %v; want the root, the question and the reply", thread, err)
+	}
+}
+
+func TestSlackPressApprovalUsesThePromptValueAndNeutralAction(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	f.connect(t, true)
+	ts := f.post(t, slack.MsgOptionBlocks(slack.NewActionBlock("decide",
+		slack.NewButtonBlockElement(chat.ActionApproveAll.String(), "prompt-1", slack.NewTextBlockObject("plain_text", "Approve", false, false)),
+		slack.NewButtonBlockElement(chat.ActionDenyAll.String(), "prompt-1", slack.NewTextBlockObject("plain_text", "Deny", false, false)))))
+	th, err := f.sl.Thread(ctx, "C1", ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(th) != 1 {
+		t.Fatalf("Thread = %+v; want the approval prompt", th)
+	}
+	id, err := f.sl.PressApproval(ctx, "U1", th[0], chat.ActionApproveAll)
+	if err != nil || id == "" {
+		t.Fatalf("PressApproval = %q, %v; want an interaction envelope", id, err)
+	}
+	if _, err := f.sl.AckWait(ctx, 5*time.Second, id); err != nil {
+		t.Fatalf("approval press was not acked: %v", err)
+	}
+}
+
+func TestSlackPressStaleApprovalUsesThePromptSnapshot(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	f.connect(t, true)
+	ts := f.post(t, slack.MsgOptionBlocks(slack.NewActionBlock("decide",
+		slack.NewButtonBlockElement(chat.ActionApproveAll.String(), "prompt-1", slack.NewTextBlockObject("plain_text", "Approve", false, false)),
+		slack.NewButtonBlockElement(chat.ActionDenyAll.String(), "prompt-1", slack.NewTextBlockObject("plain_text", "Deny", false, false)))))
+	thread, err := f.sl.Thread(ctx, "C1", ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := f.bot.UpdateMessage("C1", ts, slack.MsgOptionText("answered", false), slack.MsgOptionBlocks()); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.sl.PressStaleApproval(ctx, "U2", thread[0], chat.ActionDenyAll)
+	if err != nil || id == "" {
+		t.Fatalf("PressStaleApproval = %q, %v; want an interaction envelope", id, err)
+	}
+	if _, err := f.sl.AckWait(ctx, 5*time.Second, id); err != nil {
+		t.Fatalf("stale approval press was not acked: %v", err)
 	}
 }
 

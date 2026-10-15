@@ -10,8 +10,8 @@ import (
 func (g *Guarded) UpsertSession(ctx context.Context, sess Session) error {
 	return g.run(ctx, "agentkourier.store.UpsertSession", func(ctx context.Context) error {
 		stamp(ctx, &sess.TraceParent, &sess.TraceState)
-		if !validKey(sess.Key) || sess.Binding == "" || sess.LastActivity.IsZero() {
-			return fmt.Errorf("upsert session %+v: key, Binding and LastActivity are required: %w", sess.Key, ErrInvalid)
+		if !validKey(sess.Key) || sess.Binding == "" || sess.LastActivity.IsZero() || !sess.Origin.Valid() {
+			return fmt.Errorf("upsert session %+v: key, Binding, LastActivity and a valid Origin are required: %w", sess.Key, ErrInvalid)
 		}
 		return g.a.UpsertSession(ctx, sess)
 	})

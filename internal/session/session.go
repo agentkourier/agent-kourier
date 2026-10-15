@@ -124,6 +124,9 @@ type TurnRef struct {
 	// thread, so the renderer updates what it posted before, or posts the whole. The output of an
 	// answer to a pause is not that: its MessageID is the answer's own, a new message.
 	Recovered bool
+	// Restarted says the task was found again after a process restart. It is separate from Recovered because a lost-stream
+	// follow continues the same output message but must keep the original pause retry window.
+	Restarted bool
 	// Feedback says which feedback buttons the final message of the output carries (spec 8.7): none for the
 	// zero value, those of an investigation for a turn that nobody wrote (an alert's first prompt: its user is
 	// SystemUser), and those of an answer for a person's turn on a Binding with feedback.enabled.
@@ -243,6 +246,19 @@ func NoTextReply(context.Context, Key, store.Reply, a2a.Task) (TextReplyOutcome,
 	return TextReplyNotAnswer, nil
 }
 
+// AnswerWatcher is told when a paused task is waiting again because the answer sent to it was not delivered. The caller of
+// Manager.Answer learns only that the runner has the answer; the send happens after, and a send that fails reopens the pause
+// without the sink hearing of it again. A watcher is how the caller that sent the answer learns that it did not arrive.
+type AnswerWatcher interface {
+	// AnswerReopened is called by the runner, on its goroutine, once the pause of taskID is parked again (so that a
+	// Cancel or an Answer for it is accepted from the moment the call is made), for each answer that was not delivered:
+	// answerID is the ID of the message that was sent. It is not called for an answer the agent took, one that ended the
+	// task, or one that was rejected (the task is cancelled then). It must not block for long. told says that the watcher
+	// will tell the thread itself, so that the manager does not post its notice that the answer could not be delivered,
+	// which is worded for the person who gave it.
+	AnswerReopened(ctx context.Context, key Key, taskID a2a.TaskID, answerID string) (told bool)
+}
+
 // Config configures a Manager. Store, Bindings, Audit, Users, Sink, Questions, TextReply, ThreadContext and OnTurnEnd are required:
 // New refuses a Config without them and names the field, so that a wiring that leaves one out fails at start-up and
 // not by doing nothing. Where nothing is a choice, there is a value that says so (NoThreadContext, NoTextReply).
@@ -290,6 +306,9 @@ type Config struct {
 	// OnTurnEnd is called once for each turn that ends, with the Binding's name and how it ended, for a
 	// metric. It must not block.
 	OnTurnEnd func(binding string, outcome TurnOutcome)
+	// AnswerWatcher, if set, is told of each answer that was not delivered (see AnswerWatcher). Nil tells no one, and the
+	// manager's notice is the only word of it.
+	AnswerWatcher AnswerWatcher
 }
 
 // attempt is a head turn that was sent and not yet taken and recorded. unknown says an earlier

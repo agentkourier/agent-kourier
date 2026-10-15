@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	chatslack "github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -44,6 +46,43 @@ func TestHasActionFindsElementsAtAnyDepth(t *testing.T) {
 	}
 	if HasAction(nil, "a0") || HasAction(json.RawMessage(`not json`), "a0") || HasButton(nil, "submit") {
 		t.Error("blocks that are absent or unreadable have no element")
+	}
+}
+
+func TestHasBlockTextDecodesSlackEscapedMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		blocks json.RawMessage
+		want   bool
+	}{
+		{name: "plain mention", blocks: json.RawMessage(`[{"type":"section","text":{"type":"mrkdwn","text":"Approved <@US19>"}}]`), want: true},
+		{name: "HTML escaped mention", blocks: json.RawMessage(`[{"type":"section","text":{"type":"mrkdwn","text":"Approved \u003c@US19\u003e"}}]`), want: true},
+		{name: "absent actor", blocks: json.RawMessage(`[{"type":"section","text":{"type":"mrkdwn","text":"Approved"}}]`), want: false},
+		{name: "wrong actor", blocks: json.RawMessage(`[{"type":"section","text":{"type":"mrkdwn","text":"Approved <@US20>"}}]`), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasBlockText(tc.blocks, "<@US19>"); got != tc.want {
+				t.Errorf("HasBlockText = %v; want %v", got, tc.want)
+			}
+		})
+	}
+	if HasBlockText(json.RawMessage(`not json`), "<@US19>") || HasBlockText(nil, "<@US19>") {
+		t.Error("HasBlockText found text in absent or unreadable blocks")
+	}
+}
+
+func TestApprovalPromptFindsOnlyApprovalButtons(t *testing.T) {
+	approval := fakeslack.MessageView{Message: fakeslack.Message{BotID: "B1", TS: "1.000001", Blocks: json.RawMessage(`[
+		{"type":"actions","elements":[
+			{"type":"button","action_id":"approve_all","value":"ix-1"},
+			{"type":"button","action_id":"deny_all","value":"ix-1"}]}]`)}}
+	question := fakeslack.MessageView{Message: fakeslack.Message{BotID: "B1", TS: "1.000000", Blocks: json.RawMessage(`[
+		{"type":"actions","elements":[{"type":"button","action_id":"submit","value":"ix-2"}]}]`)}}
+	if got, ok := ApprovalPrompt([]fakeslack.MessageView{question, approval}); !ok || got.TS != approval.TS {
+		t.Errorf("ApprovalPrompt = %+v, %v; want the approval message", got, ok)
+	}
+	if got, ok := ApprovalPrompt([]fakeslack.MessageView{question}); ok || got.TS != "" {
+		t.Errorf("ApprovalPrompt on a question = %+v, %v; want no approval", got, ok)
 	}
 }
 
@@ -169,6 +208,57 @@ func TestQuestionControlReadsWhereAQuestionIsAnswered(t *testing.T) {
 	}
 	if _, _, _, ok := QuestionControl(json.RawMessage(`not json`), 0); ok {
 		t.Error("QuestionControl read blocks that are not JSON")
+	}
+}
+
+func TestApprovalControlsUseNeutralActionsAndToolVerdicts(t *testing.T) {
+	blocks := json.RawMessage(`[{"type":"rich_text"},
+		{"type":"input","block_id":"q0","element":{"type":"radio_buttons","action_id":"r0"}},
+		{"type":"input","block_id":"q1","element":{"type":"radio_buttons","action_id":"r1"}},
+		{"type":"actions","block_id":"submit","elements":[
+			{"type":"button","action_id":"submit","value":"ix-1"},
+			{"type":"button","action_id":"approve_all","value":"ix-1"},
+			{"type":"button","action_id":"deny_all","value":"ix-1"}]}]`)
+	for _, tc := range []struct {
+		action chat.Action
+		id     string
+	}{
+		{chat.ActionApproveAll, "approve_all"},
+		{chat.ActionDenyAll, "deny_all"},
+		{chat.ActionSubmit, "submit"},
+	} {
+		id, value, ok := approvalButton(blocks, tc.action)
+		if !ok || id != tc.id || value != "ix-1" {
+			t.Errorf("approvalButton(%s) = %q, %q, %v; want %q, ix-1, true", tc.action, id, value, ok, tc.id)
+		}
+	}
+	values, err := approvalValues(blocks, []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fakeslack.StateValues{
+		"q0": {"r0": {"type": "radio_buttons", "selected_option": map[string]string{"value": chat.ToolApproveValue}}},
+		"q1": {"r1": {"type": "radio_buttons", "selected_option": map[string]string{"value": chat.ToolDenyValue}}},
+	}
+	if !reflect.DeepEqual(values, want) {
+		t.Errorf("approvalValues = %v; want %v", values, want)
+	}
+}
+
+func TestApprovalControlsRefuseMissingOrInvalidInputs(t *testing.T) {
+	blocks := json.RawMessage(`[{"type":"actions","block_id":"submit","elements":[{"type":"button","action_id":"submit","value":"ix-1"}]}]`)
+	if _, _, ok := approvalButton(blocks, chat.Action(99)); ok {
+		t.Error("approvalButton with an unknown action succeeded")
+	}
+	if _, err := approvalValues(blocks, []chat.ToolVerdict{chat.ToolApproved}); err == nil {
+		t.Error("approvalValues without a radio control succeeded")
+	}
+	if _, err := approvalValues(json.RawMessage(`not json`), []chat.ToolVerdict{chat.ToolApproved}); err == nil {
+		t.Error("approvalValues with unreadable blocks succeeded")
+	}
+	radio := json.RawMessage(`[{"type":"input","block_id":"q0","element":{"type":"radio_buttons","action_id":"r0"}}]`)
+	if _, err := approvalValues(radio, []chat.ToolVerdict{"unknown"}); err == nil {
+		t.Error("approvalValues with an unknown verdict succeeded")
 	}
 }
 

@@ -527,7 +527,8 @@ func TestAPressOnADecidedApprovalIsToldInTheWordsOfAnApproval(t *testing.T) {
 }
 
 // TestAPressOnAnApprovalWhoseBindingNoLongerAllowsThemDecidesNothing: the flag was turned off after the prompt was posted. A
-// press must not approve a tool call the Binding now forbids; the pause that comes again is denied by the intake.
+// press must not approve a tool call the Binding now forbids; until the intake records the policy denial, the press only says
+// the request is unavailable.
 func TestAPressOnAnApprovalWhoseBindingNoLongerAllowsThemDecidesNothing(t *testing.T) {
 	r := newPressRigFor(t, interact.Binding{Dialect: kagentv1.New(time.Second), ToolApprovals: false, AskUser: true, Timeout: time.Minute})
 	openApproval(t, r, store.InteractionToolApproval, approvalRequest(t))
@@ -536,7 +537,46 @@ func TestAPressOnAnApprovalWhoseBindingNoLongerAllowsThemDecidesNothing(t *testi
 	}
 	if got := r.eph.list(); !slices.Equal(got, []string{"UALICE1: This request is no longer available."}) || r.row(t).State != store.InteractionPending ||
 		len(r.sess.answers()) != 0 || len(r.aud.got) != 0 || len(r.counted()) != 0 || r.waiting(t) != 0 {
-		t.Errorf("told %q, state %s, %d sends, %d audit rows; want it told gone and nothing decided", got, r.row(t).State, len(r.sess.answers()), len(r.aud.got))
+		t.Errorf("told %q, state %s, %d sends, %d audit rows; want it told unavailable and nothing decided", got, r.row(t).State, len(r.sess.answers()), len(r.aud.got))
+	}
+}
+
+// TestAPressByTheWinnerResendsAnUndeliveredApprovalWhenBindingIsDisabled: a human verdict already recorded while approvals
+// were enabled remains the winner. The same person's retry goes through the decider and resends that verdict, even though the
+// reloaded Binding now denies new approvals.
+func TestAPressByTheWinnerResendsAnUndeliveredApprovalWhenBindingIsDisabled(t *testing.T) {
+	r := newPressRigFor(t, interact.Binding{Dialect: kagentv1.New(time.Second), ToolApprovals: false, AskUser: true, Timeout: time.Minute})
+	openApproval(t, r, store.InteractionToolApproval, approvalRequest(t))
+	answer, err := json.Marshal(dialect.Answer{Decisions: []dialect.Decision{{ToolID: "t1", Approved: false, Reason: denied}, {ToolID: "t2", Approved: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.SubmitInteraction(t.Context(), "ix-1", answer, "UALICE1", r.now); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := r.process(t, tap("UALICE1", chat.ActionApproveAll)); err != nil || res != interact.Done {
+		t.Fatalf("Process = %v, %v; want the winner's retry finished", res, err)
+	}
+	sent := r.sess.answers()
+	if len(sent) != 1 || len(r.eph.list()) != 0 || len(r.aud.got) != 0 || len(r.counted()) != 0 || r.waiting(t) != 0 {
+		t.Fatalf("%d sends, told %q, %d audit rows, counted %q, %d waiting; want the recorded verdict resent without a false denial", len(sent), r.eph.list(), len(r.aud.got), r.counted(), r.waiting(t))
+	}
+	if got, actor := approvalsSent(t, sent[0]); !slices.Equal(got, []wireApproval{{"t1", false, denied}, {"t2", true, ""}}) || actor != "UALICE1" {
+		t.Errorf("resent %+v as %q; want the recorded human verdict as UALICE1", got, actor)
+	}
+}
+
+func TestAPressLosingToPolicyDenialIsToldThePolicyDecision(t *testing.T) {
+	r := newPressRigFor(t, interact.Binding{Dialect: kagentv1.New(time.Second), ToolApprovals: false, AskUser: true, Timeout: time.Minute})
+	openApproval(t, r, store.InteractionToolApproval, approvalRequest(t))
+	if err := r.st.SubmitInteraction(t.Context(), "ix-1", []byte(`{"decisions":[{"tool_id":"t1","approved":false},{"tool_id":"t2","approved":false}]}`), "agent-kourier", r.now); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := r.process(t, tap("UALICE1", chat.ActionApproveAll)); err != nil || res != interact.Done {
+		t.Fatalf("Process = %v, %v; want the losing press finished", res, err)
+	}
+	if got := r.eph.list(); !slices.Equal(got, []string{"UALICE1: This request was denied because this Binding does not allow approvals."}) {
+		t.Errorf("told %q; want the policy decision text", got)
 	}
 }
 

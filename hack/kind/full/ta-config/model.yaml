@@ -1,0 +1,16 @@
+# Disposable full-tier model endpoint for the prompt probe. The capture service
+# records the model request, including its complete system message, and returns
+# a deterministic OpenAI-compatible response.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: ta-config-model
+  namespace: kagent
+spec:
+  provider: OpenAI
+  model: ta-config-model
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  openAI:
+    baseUrl: http://ta-config-model.kagent.svc.cluster.local:8080/v1
+  defaultHeaders: {X-TA-Config-Capture: "true"}

@@ -88,7 +88,7 @@ func check(t *testing.T, path string, env ...string) (code int, stdout, stderr s
 // noLeak fails the test if any fake secret, which no output may hold, is in out.
 func noLeak(t *testing.T, what, out string) {
 	t.Helper()
-	for _, secret := range []string{fakeBot, fakeApp, fakeKey, fakeOpenAIKey, fakeBedrockKey, "LEAKCHECK"} {
+	for _, secret := range []string{fakeBot, fakeApp, fakeKey, fakeOpenAIKey, fakeBedrockKey, fakeOpenRouterKey, "LEAKCHECK"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("%s holds %q; a value must never be printed", what, secret)
 		}
@@ -263,11 +263,12 @@ func TestEnvCheckNeverRunsTheFile(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "pwned")
 	for name, lines := range map[string][]string{
-		"a command substitution as a value": withLine(goodEnv(), "MODEL_NAME", "MODEL_NAME=$(touch "+marker+")"),
-		"a backtick as a value":             withLine(goodEnv(), "MODEL_NAME", "MODEL_NAME=`touch "+marker+"`"),
-		"a second command after a ;":        withLine(goodEnv(), "SLACK_CHANNEL_ID", "SLACK_CHANNEL_ID=C0FAKELEAK1; touch "+marker),
-		"a command line":                    append([]string{"touch " + marker}, goodEnv()...),
-		"an expansion in a value":           withLine(goodEnv(), "MODEL_API_KEY", "MODEL_API_KEY=${HOME}-leakcheck-0003-padding"),
+		"a command substitution as a value":     withLine(goodEnv(), "MODEL_NAME", "MODEL_NAME=$(touch "+marker+")"),
+		"a command substitution as an endpoint": append(openRouterEnv(), "MODEL_BASE_URL=$(touch "+marker+")"),
+		"a backtick as a value":                 withLine(goodEnv(), "MODEL_NAME", "MODEL_NAME=`touch "+marker+"`"),
+		"a second command after a ;":            withLine(goodEnv(), "SLACK_CHANNEL_ID", "SLACK_CHANNEL_ID=C0FAKELEAK1; touch "+marker),
+		"a command line":                        append([]string{"touch " + marker}, goodEnv()...),
+		"an expansion in a value":               withLine(goodEnv(), "MODEL_API_KEY", "MODEL_API_KEY=${HOME}-leakcheck-0003-padding"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, _, stderr := check(t, envFile(t, 0o600, lines...))

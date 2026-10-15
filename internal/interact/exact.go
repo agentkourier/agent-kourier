@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/redact"
 	"github.com/agentkourier/agent-kourier/internal/render"
@@ -19,6 +20,9 @@ var (
 	errToolCut     = fmt.Errorf("%w: a tool's name or arguments are longer than can be shown whole", dialect.ErrUnusablePause)
 	errToolControl = fmt.Errorf("%w: a tool's name or arguments hold a control character or invalid UTF-8", dialect.ErrUnusablePause)
 	errToolKey     = fmt.Errorf("%w: a tool's argument key would be changed by cleaning", dialect.ErrUnusablePause)
+	errToolName    = fmt.Errorf("%w: a tool's name would be changed by cleaning", dialect.ErrUnusablePause)
+	errToolNameLog = fmt.Errorf("%w: a tool's name cannot be written whole in the audit log", dialect.ErrUnusablePause)
+	errToolNameLen = fmt.Errorf("%w: a tool's name is longer than the audit log writes whole", dialect.ErrUnusablePause)
 	errToolNumber  = fmt.Errorf("%w: a tool's arguments hold a number that cannot be shown exactly", dialect.ErrUnusablePause)
 	errToolKind    = fmt.Errorf("%w: a tool's arguments hold a value that cannot be shown exactly", dialect.ErrUnusablePause)
 )
@@ -44,6 +48,16 @@ var (
 //     (cut at the ends, runs and line breaks written as one space), a secret in it. A key is an identifier and not
 //     prose. This also refuses two keys that come to the same text, which the redaction would keep one of, in the
 //     order of a Go map.
+//   - a tool name that cleaning changes in any way (errToolName): the redaction of a stored name (storable) rewrites a
+//     credential-shaped word whole, so that "BearerTokenValidator" would be shown, stored and audited as "[redacted]" and
+//     two such tools would read alike, and it deletes invisible format characters and writes every line end as LF. A name is
+//     an identifier and not prose; one that cleaning leaves as it is may be in any script.
+//   - a tool name that the audit row of its decision would not write as it is (errToolNameLog, errToolNameLen): the row
+//     is the only record of what was approved once the stored request is cleared, so every tool an approver can decide is
+//     named whole in it (audit.ToolNameFit). It cuts a name past 302 bytes quoted, so the longest allowed name is 300 ASCII
+//     characters, or 150 of two bytes, 100 of three (CJK), 75 emoji, 150 backslashes or quotes, or 50 unassigned characters;
+//     and it rewrites a name that ends as a credential does ("Bearer:", "id_token=") or that cleaning as an identifier
+//     changes (white space other than single spaces inside it).
 //   - a number that a float64 cannot be trusted to hold as written (errToolNumber): an integer-valued one of magnitude
 //     2^53 or more (arguments arrive as float64, so 2^53+1 reaches the prompt as 2^53, while the agent's tool acts
 //     on its own copy), and NaN and the infinities. A decimal is the nearest float64 to what was sent, and 1.2e-7 is
@@ -55,12 +69,30 @@ var (
 // show them cut, as the stored request keeps them. An ending shows what the stored request holds, so it is never more.
 func exactTools(tools []dialect.Tool) error {
 	for _, t := range tools {
-		if err := exactText(t.Name); err != nil {
+		if err := exactName(t.Name); err != nil {
 			return err
 		}
 		if err := exactValue(t.Args); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// exactName checks a tool name: it is exact text, it is what storable keeps of it (so that the prompt, the stored request and
+// the audit row name the tool as the agent did), and the audit row of a decision writes it whole.
+func exactName(name string) error {
+	if err := exactText(name); err != nil {
+		return err
+	}
+	if redact.FreeText(name) != name {
+		return errToolName
+	}
+	switch audit.ToolNameFit(name) {
+	case audit.NameTooLong:
+		return errToolNameLen
+	case audit.NameRewritten:
+		return errToolNameLog
 	}
 	return nil
 }

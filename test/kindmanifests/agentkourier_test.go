@@ -76,8 +76,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 20 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of twelve scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 22 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -138,8 +138,8 @@ func load(t *testing.T, file, kind string, into any) {
 }
 
 // TestScenarioBindings: each scenario has a channel of its own, bound to the stub agent it drives, with
-// the interactions it needs: askUser for S3 (the agent asks), and neither for S11, whose tool approval
-// Agent Kourier must deny (Phase 1 has no write-capable agent). test/e2e names the channels.
+// the interactions it needs: askUser for S3 (the agent asks), toolApprovals for S19 and S20, and neither
+// for S11, whose tool approval Agent Kourier must deny. test/e2e names the channels.
 func TestScenarioBindings(t *testing.T) {
 	set, err := config.Load(t.Context(), fastConfig(t))
 	if err != nil {
@@ -152,29 +152,31 @@ func TestScenarioBindings(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tc := range []struct {
 		scenario, channel, agent string
-		askUser                  bool
+		askUser, toolApprovals   bool
 		output                   v1alpha1.OutputMode // S5's is final: a reply to a person is streamed, and only a post goes through the outbox where the crash hook is
 	}{
-		{"smoke", e2e.ChannelSmoke, "test-agent", false, v1alpha1.OutputLive},
-		{"S1", e2e.ChannelS1, "scenario-gated", false, v1alpha1.OutputLive},
-		{"S2", e2e.ChannelS2, "scenario-memory", false, v1alpha1.OutputLive},
-		{"S3", e2e.ChannelS3, "scenario-ask", true, v1alpha1.OutputLive},
-		{"S4", e2e.ChannelS4, "scenario-gated", false, v1alpha1.OutputLive},
-		{"S5", e2e.ChannelS5, "test-agent", false, v1alpha1.OutputFinal},
-		{"S11", e2e.ChannelS11, "spike-approve", false, v1alpha1.OutputLive},
-		{"S12", e2e.ChannelS12, "scenario-fails", false, v1alpha1.OutputLive},
-		{"S13", e2e.ChannelS13, "scenario-tools", false, v1alpha1.OutputLive},
-		{"S14", e2e.ChannelS14, "scenario-alert", false, v1alpha1.OutputLive},
-		{"S15", e2e.ChannelS15, "scenario-alert", false, v1alpha1.OutputLive},
-		{"S17", e2e.ChannelS17, "scenario-alert", false, v1alpha1.OutputLive},
-		{"S18", e2e.ChannelS18, "scenario-context", false, v1alpha1.OutputLive},
-		{"S16", e2e.ChannelS16, "scenario-gated", false, v1alpha1.OutputLive},
-		{"S16b", e2e.ChannelS16B, "test-agent", false, v1alpha1.OutputFinal},
-		{"S16c", e2e.ChannelS16C, "scenario-gated", false, v1alpha1.OutputLive},
-		{"S1 over a2a", e2e.ChannelA2AS1, "scenario-gated", false, v1alpha1.OutputLive},
-		{"context over a2a", e2e.ChannelA2AMemory, "scenario-memory", false, v1alpha1.OutputLive},
-		{"S4 over a2a", e2e.ChannelA2AS4, "scenario-gated", false, v1alpha1.OutputLive},
-		{"S5 over a2a", e2e.ChannelA2AS5, "test-agent", false, v1alpha1.OutputFinal},
+		{"smoke", e2e.ChannelSmoke, "test-agent", false, false, v1alpha1.OutputLive},
+		{"S1", e2e.ChannelS1, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"S2", e2e.ChannelS2, "scenario-memory", false, false, v1alpha1.OutputLive},
+		{"S3", e2e.ChannelS3, "scenario-ask", true, false, v1alpha1.OutputLive},
+		{"S4", e2e.ChannelS4, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"S5", e2e.ChannelS5, "test-agent", false, false, v1alpha1.OutputFinal},
+		{"S11", e2e.ChannelS11, "spike-approve", false, false, v1alpha1.OutputLive},
+		{"S19", e2e.ChannelS19, "spike-approve", false, true, v1alpha1.OutputLive},
+		{"S20", e2e.ChannelS20, "spike-approve", false, true, v1alpha1.OutputLive},
+		{"S12", e2e.ChannelS12, "scenario-fails", false, false, v1alpha1.OutputLive},
+		{"S13", e2e.ChannelS13, "scenario-tools", false, false, v1alpha1.OutputLive},
+		{"S14", e2e.ChannelS14, "scenario-alert", false, false, v1alpha1.OutputLive},
+		{"S15", e2e.ChannelS15, "scenario-alert", false, false, v1alpha1.OutputLive},
+		{"S17", e2e.ChannelS17, "scenario-alert", false, false, v1alpha1.OutputLive},
+		{"S18", e2e.ChannelS18, "scenario-context", false, false, v1alpha1.OutputLive},
+		{"S16", e2e.ChannelS16, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"S16b", e2e.ChannelS16B, "test-agent", false, false, v1alpha1.OutputFinal},
+		{"S16c", e2e.ChannelS16C, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"S1 over a2a", e2e.ChannelA2AS1, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"context over a2a", e2e.ChannelA2AMemory, "scenario-memory", false, false, v1alpha1.OutputLive},
+		{"S4 over a2a", e2e.ChannelA2AS4, "scenario-gated", false, false, v1alpha1.OutputLive},
+		{"S5 over a2a", e2e.ChannelA2AS5, "test-agent", false, false, v1alpha1.OutputFinal},
 	} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", tc.channel)
 		if !ok {
@@ -182,9 +184,9 @@ func TestScenarioBindings(t *testing.T) {
 			continue
 		}
 		spec := rb.Binding.Spec
-		if spec.Agent.Name != tc.agent || spec.Agent.Namespace != "kagent" || spec.Interactions.AskUser != tc.askUser {
-			t.Errorf("%s: channel %s is bound to %s/%s with askUser %t; want %s and askUser %t", tc.scenario, tc.channel,
-				spec.Agent.Namespace, spec.Agent.Name, spec.Interactions.AskUser, tc.agent, tc.askUser)
+		if spec.Agent.Name != tc.agent || spec.Agent.Namespace != "kagent" || spec.Interactions.AskUser != tc.askUser || spec.Interactions.ToolApprovals != tc.toolApprovals {
+			t.Errorf("%s: channel %s is bound to %s/%s with askUser %t and toolApprovals %t; want %s, askUser %t and toolApprovals %t", tc.scenario, tc.channel,
+				spec.Agent.Namespace, spec.Agent.Name, spec.Interactions.AskUser, spec.Interactions.ToolApprovals, tc.agent, tc.askUser, tc.toolApprovals)
 		}
 		if spec.Chat.Output != tc.output {
 			t.Errorf("%s: channel %s has output %q; want %q", tc.scenario, tc.channel, spec.Chat.Output, tc.output)
@@ -240,8 +242,8 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 
 // TestTheA2AFilesAreForTheFastTierOnly: the AgentBackends and Bindings that reach the stub agent through the a2a dialect are in a2aDir,
 // beside the fast tier's config and not in it. up-fast.sh gives that directory to deploy_agentkourier, which copies it in; up-full.sh does not,
-// so the full tier, where the stub is not, is left with its one AgentBackend, the front door (TestFullTierConfig, whose file selection is
-// the script's: agentKourierDir/config/*.yaml).
+// so the full tier, where the stub is not, is left with its one AgentBackend, the front door. The full tier adds its approval Bindings
+// from full/agent-kourier/config (TestFullTierConfig uses the same file selection as up-full.sh).
 func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
 	read := func(file string) string {
 		raw, err := os.ReadFile("../../hack/kind/" + file)
@@ -254,8 +256,8 @@ func TestTheA2AFilesAreForTheFastTierOnly(t *testing.T) {
 		t.Error("up-fast.sh does not give fast/agent-kourier/a2a to deploy_agentkourier as its extra config")
 	}
 	full := read("up-full.sh")
-	if !strings.Contains(full, "\ndeploy_agentkourier \"${FULL}/agent-kourier/agentbackend.yaml\"\n") || strings.Contains(full, "agent-kourier/a2a") {
-		t.Error("up-full.sh's deploy_agentkourier call is not the front door's AgentBackend alone, or it names the a2a directory")
+	if !strings.Contains(full, "\ndeploy_agentkourier \"${FULL}/agent-kourier/agentbackend.yaml\" \"${FULL}/agent-kourier/config\"\n") || strings.Contains(full, "agent-kourier/a2a") {
+		t.Error("up-full.sh's deploy_agentkourier call is not the front door's AgentBackend plus full-tier config, or it names the a2a directory")
 	}
 	lib := read("lib.sh")
 	if !strings.Contains(lib, `cp "${HERE}"/fast/agent-kourier/config/*.yaml "${config}"`) || !strings.Contains(lib, "if [ -n \"${2:-}\" ]; then\n    cp \"$2\"/*.yaml \"${config}\"") {
@@ -451,17 +453,23 @@ func TestRunnerJobGetsItsTier(t *testing.T) {
 	}
 }
 
-// TestFullTierConfig: the full tier's Agent Kourier config is the fast tier's, with the AgentBackend of kagent's front
-// door in place of the stub's (lib.sh's deploy_agentkourier assembles it the same way). Agent Kourier reaches kagent only
-// through the door, on 4180, and never the controller, which does not verify tokens (spec D32, R4); and the
-// Bindings, which are the fast tier's, find the backend by the name they share.
+// TestFullTierConfig: the full tier's Agent Kourier config is the fast tier's plus its approval Bindings, with the
+// AgentBackend of kagent's front door in place of the stub's (lib.sh's deploy_agentkourier assembles it the same way).
+// Agent Kourier reaches kagent only through the door, on 4180, and never the controller, which does not verify tokens
+// (spec D32, R4); every Binding finds the backend by the name they share.
 func TestFullTierConfig(t *testing.T) {
 	dir := t.TempDir()
 	files, err := filepath.Glob(agentKourierDir + "config/*.yaml")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no fast-tier config: %v", err)
 	}
-	for _, f := range append(files, "../../hack/kind/full/agent-kourier/agentbackend.yaml") { // the last wins, as in deploy_agentkourier
+	approvalFiles, err := filepath.Glob("../../hack/kind/full/agent-kourier/config/*.yaml")
+	if err != nil || len(approvalFiles) == 0 {
+		t.Fatalf("no full-tier approval config: %v", err)
+	}
+	files = append(files, approvalFiles...)
+	files = append(files, "../../hack/kind/full/agent-kourier/agentbackend.yaml")
+	for _, f := range files { // the last AgentBackend wins, as in deploy_agentkourier
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -482,7 +490,7 @@ func TestFullTierConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, channel := range []string{e2e.ChannelSmoke, e2e.ChannelS1, e2e.ChannelS2, e2e.ChannelS3, e2e.ChannelS4, e2e.ChannelS5, e2e.ChannelS11, e2e.ChannelS13} {
+	for _, channel := range []string{e2e.ChannelSmoke, e2e.ChannelS1, e2e.ChannelS2, e2e.ChannelS3, e2e.ChannelS4, e2e.ChannelS5, e2e.ChannelS11, e2e.ChannelS13, e2e.ChannelS19, e2e.ChannelS20, "CS21", "CS22", "CS23", "CS24"} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", channel)
 		if !ok {
 			t.Errorf("channel %s resolves to no Binding in the full tier", channel)

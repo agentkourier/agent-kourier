@@ -1,7 +1,7 @@
 package e2e
 
 // The channels the Phase 1 scenarios drive: each is bound, in the fast tier's Agent Kourier config
-// (hack/kind/fast/agent-kourier/config/binding-s*.yaml), to the stub agent its scenario needs, so that
+// (hack/kind/fast/agent-kourier/config/binding-*.yaml), to the stub agent its scenario needs, so that
 // scenarios never share a thread. test/kindmanifests pins the pairing, so a change on either side fails
 // `make test`. The full tier's config is the same, with the AgentBackend of its front door.
 const (
@@ -19,6 +19,18 @@ const (
 	ChannelS5 = "CS5"
 	// ChannelS11 is S11's: spike-approve, whose tool approval Agent Kourier denies.
 	ChannelS11 = "CS11"
+	// ChannelS19 is S19's: spike-approve, with tool approvals enabled, so its tool result reaches the thread.
+	ChannelS19 = "CS19"
+	// ChannelS20 is S20's: spike-approve, with tool approvals enabled, so its rejection continuation reaches the thread.
+	ChannelS20 = "CS20"
+	// ChannelS21 is S21's: an approval that times out before anyone decides it.
+	ChannelS21 = "CS21"
+	// ChannelS22 is S22's: membership and approver-group refusals before an authorized approval.
+	ChannelS22 = "CS22"
+	// ChannelS23 is S23's: a multi-tool approval with independent verdicts.
+	ChannelS23 = "CS23"
+	// ChannelS24 is S24's: two presses on one approval, where the first press wins.
+	ChannelS24 = "CS24"
 	// ChannelS12 is S12's: scenario-fails, whose task fails or completes with no output. The fast tier only:
 	// the full tier's kagent has no such agent.
 	ChannelS12 = "CS12"

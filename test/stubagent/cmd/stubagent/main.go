@@ -81,6 +81,9 @@ const releasePath = "/_control/release/"
 // Service that reaches it must stay ClusterIP (hack/kind/fast/verify.sh checks that).
 func withControl(stub *stubagent.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if stub.ServeSendControl(w, r) {
+			return
+		}
 		gate, ok := strings.CutPrefix(r.URL.Path, releasePath)
 		if !ok || r.Method != http.MethodPost {
 			stub.ServeHTTP(w, r)

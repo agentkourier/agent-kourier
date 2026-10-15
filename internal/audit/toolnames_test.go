@@ -528,3 +528,73 @@ func TestCheckDecisionRowFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// ToolNameFit is the answer to "does the row write this name whole", by the rule that writes it. Ordinary names in several
+// scripts are whole; a name the row would cut for length is NameTooLong at the first byte past the limit of its kind (the
+// same limits the row's own test pins); a name the redaction of an identifier or of the whole row would change is
+// NameRewritten.
+func TestToolNameFitSaysWhatARowWritesWhole(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want NameFit
+	}{
+		{"empty", "", NameWhole},
+		{"ascii", "delete_pod", NameWhole},
+		{"with a space", "run command", NameWhole},
+		{"with a dot, a dash and a slash", "k8s.io/get-pods", NameWhole},
+		{"latin with accents", "créer_dépôt", NameWhole},
+		{"cyrillic", "удалить_под", NameWhole},
+		{"cjk", "删除容器", NameWhole},
+		{"arabic", "مرحبا", NameWhole},
+		{"an emoji", "deploy_\U0001F680", NameWhole},
+		{"a word that holds a credential word", "BearerTokenValidator", NameRewritten},
+		{"a trailing credential scheme", "check_Bearer:", NameRewritten},
+		{"a trailing assignment", "check_id_token=", NameRewritten},
+		{"a token shape", "xoxb-1234-abcd", NameRewritten},
+		{"a zero-width character", "del\u200bete", NameRewritten},
+		{"a variation selector", "ok\ufe0f", NameRewritten},
+		{"a line break", "a\nb", NameRewritten},
+		{"a tab", "a\tb", NameRewritten},
+		{"white space at the end", "delete ", NameRewritten},
+		{"two spaces", "a  b", NameRewritten},
+		{"300 ascii bytes", strings.Repeat("n", 300), NameWhole},
+		{"301 ascii bytes", strings.Repeat("n", 301), NameTooLong},
+		{"150 two-byte characters", strings.Repeat("é", 150), NameWhole},
+		{"151 two-byte characters", strings.Repeat("é", 151), NameTooLong},
+		{"100 cjk characters", strings.Repeat("あ", 100), NameWhole},
+		{"101 cjk characters", strings.Repeat("あ", 101), NameTooLong},
+		{"75 emoji", strings.Repeat("\U0001F600", 75), NameWhole},
+		{"76 emoji", strings.Repeat("\U0001F600", 76), NameTooLong},
+		{"too long and rewritten", strings.Repeat("n", 301) + "Bearer:", NameTooLong},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ToolNameFit(tc.in); got != tc.want {
+				t.Errorf("ToolNameFit(%.40q) = %d; want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// ToolNameFit and the row cannot drift: for names of every fit, NameWhole is exactly the names the row writes as they are
+// (quoted), and a name of any other fit is written as something else.
+func TestToolNameFitAgreesWithTheRowThatIsWritten(t *testing.T) {
+	names := []string{"", "delete_pod", "BearerTokenValidator", "x Bearer:", "id_token=", "xoxb-1234-abcd", "a\u200bb", "a\nb", " a", "a  b",
+		strings.Repeat("n", 300), strings.Repeat("n", 301), strings.Repeat("あ", 100), strings.Repeat("あ", 101), "͸", strings.Repeat("͸", 51)}
+	rng := rand.New(rand.NewSource(7))
+	alphabet := []rune("aZ_-=: \tBearer\u200b\n字é\U0001F600\\\"")
+	for range 300 {
+		b := make([]rune, rng.Intn(40))
+		for i := range b {
+			b[i] = alphabet[rng.Intn(len(alphabet))]
+		}
+		names = append(names, string(b))
+	}
+	for _, name := range names {
+		written := toolName(name)
+		whole := written == strconv.Quote(name)
+		if got := ToolNameFit(name); (got == NameWhole) != whole {
+			t.Errorf("ToolNameFit(%.40q) = %d, and the row writes %.60q", name, got, written)
+		}
+	}
+}

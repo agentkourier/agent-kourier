@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
@@ -20,6 +21,25 @@ import (
 
 // allowApprovals is a Binding that allows tool approvals, and not questions: neither flag gates the other.
 func allowApprovals(b *interact.Binding) { b.ToolApprovals, b.AskUser = true, false }
+
+type reloadLookup struct{ b interact.Binding }
+
+func (l *reloadLookup) Binding(string) (interact.Binding, error) { return l.b, nil }
+
+func newReloadRig(t *testing.T, b interact.Binding) (*rig, *reloadLookup) {
+	t.Helper()
+	r := newRig(t, nil)
+	l := &reloadLookup{b: b}
+	var err error
+	r.in, err = interact.New(intakeCfg(interact.Config{
+		Store: r.st, AuditReader: r.st, Lookup: l, Platform: fitter{r}, Outbox: r.outbox, Session: r.sess, Audit: r.audit,
+		OnApprovalOutcome: func(_ string, o interact.Outcome) { r.hook = append(r.hook, o) }, Now: func() time.Time { return t0.Add(time.Hour) },
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, l
+}
 
 // TestAnAllowedApprovalIsPostedOnceAndLeftPending: the pause is recorded and its prompt posted through the path a
 // question takes. However often the pause comes again the thread has one prompt; nothing is denied, audited,
@@ -54,6 +74,23 @@ func TestAnAllowedApprovalIsPostedOnceAndLeftPending(t *testing.T) {
 	}
 }
 
+func TestTransientApprovalPromptFailureRemainsRetryable(t *testing.T) {
+	r, task := newRig(t, allowApprovals), approval()
+	r.slack.fault = "before"
+	if err := r.paused(t, task); err == nil || len(r.sess.cancels) != 0 {
+		t.Fatalf("first Paused = %v with %d cancels; want the transient post error and a pending task", err, len(r.sess.cancels))
+	}
+	if row := r.row(t, task); row.State != store.InteractionPending || row.MessageRef != "" {
+		t.Fatalf("interaction after transient failure = %+v; want pending without a message ref", row)
+	}
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	if row := r.row(t, task); row.State != store.InteractionPending || row.MessageRef == "" || len(r.slack.posted) != 1 || len(r.sess.cancels) != 0 {
+		t.Errorf("interaction after retry = %+v, %d posts, %d cancels; want one prompt and no refusal", row, len(r.slack.posted), len(r.sess.cancels))
+	}
+}
+
 // TestAnApprovalOnABindingThatDoesNotAllowThemIsStillDenied: the flag is what decides, whatever askUser says.
 func TestAnApprovalOnABindingThatDoesNotAllowThemIsStillDenied(t *testing.T) {
 	r := newRig(t, func(b *interact.Binding) { b.ToolApprovals, b.AskUser = false, true })
@@ -73,6 +110,66 @@ func TestToolApprovalsDoNotAllowQuestions(t *testing.T) {
 	}
 	if len(r.asked) != 0 || len(r.sess.cancels) != 1 || len(r.hook) != 1 || r.hook[0] != interact.OutcomeAskUserCancelled {
 		t.Errorf("%d prompts, %d cancels, hook %v; want the question cancelled and counted", len(r.asked), len(r.sess.cancels), r.hook)
+	}
+}
+
+func TestReloadDisablingApprovalsDeniesAPendingPrompt(t *testing.T) {
+	r, l := newReloadRig(t, interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout})
+	task := approval()
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	l.b.ToolApprovals = false
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	row := r.row(t, task)
+	if row.State != store.InteractionAnswered || row.Decider != "agent-kourier" || len(r.sess.answers) != 1 || len(r.notices(t)) != 1 || len(r.hook) != 1 || r.hook[0] != interact.OutcomeAutoDenied {
+		t.Errorf("interaction %+v, %d answers, %d notices, hook %v; want the persisted policy denial and prompt notice", row, len(r.sess.answers), len(r.notices(t)), r.hook)
+	}
+}
+
+func TestReloadDisablingApprovalsResendsARecordedHumanVerdict(t *testing.T) {
+	r, l := newReloadRig(t, interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout})
+	task := approval()
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	row := r.row(t, task)
+	answer, err := json.Marshal(dialect.Answer{Decisions: []dialect.Decision{{ToolID: "t1", Approved: true}, {ToolID: "t2", Approved: false, Reason: "denied"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.SubmitInteraction(t.Context(), row.ID, answer, "UALICE1", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	l.b.ToolApprovals = false
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.row(t, task); got.State != store.InteractionAnswered || got.Decider != "UALICE1" || len(r.sess.answers) != 1 || len(r.notices(t)) != 0 || len(r.hook) != 0 {
+		t.Errorf("interaction %+v, %d answers, %d notices, hook %v; want the recorded human verdict resent with no policy denial", got, len(r.sess.answers), len(r.notices(t)), r.hook)
+	}
+}
+
+func TestReloadReenablingApprovalsLeavesFailedAutoDenialPending(t *testing.T) {
+	r, l := newReloadRig(t, interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: false, Timeout: timeout})
+	task := approval()
+	r.audit.fail = true
+	if err := r.paused(t, task); err == nil || len(r.sess.answers) != 0 {
+		t.Fatalf("Paused = %v, %d answers; want the failed audit and no denial", err, len(r.sess.answers))
+	}
+	if row := r.row(t, task); row.State != store.InteractionPending {
+		t.Fatalf("interaction = %+v; want pending after the failed audit", row)
+	}
+	r.audit.fail = false
+	l.b.ToolApprovals = true
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	row := r.row(t, task)
+	if row.State != store.InteractionPending || row.MessageRef == "" || len(r.sess.answers) != 0 || len(r.hook) != 0 || len(r.notices(t)) != 0 {
+		t.Errorf("interaction %+v, %d answers, hook %v, %d notices; want the reenabled approval prompt pending", row, len(r.sess.answers), r.hook, len(r.notices(t)))
 	}
 }
 
@@ -103,11 +200,12 @@ func TestNoSecretOfAnAllowedApprovalIsShown(t *testing.T) {
 	}
 }
 
-// TestASecretInAToolNameAndAHintIsNotShown: a name and a hint are redacted as the stored request redacts them.
-func TestASecretInAToolNameAndAHintIsNotShown(t *testing.T) {
+// TestASecretInAHintIsNotShown: a hint is redacted as the stored request redacts it. (A secret in a tool's name is not
+// redacted: the pause is refused, see TestAToolNameThatCleaningChangesIsRefusedAsUnusable.)
+func TestASecretInAHintIsNotShown(t *testing.T) {
 	r := newRig(t, allowApprovals)
 	task := pausedOn(map[string]any{"type": "tool_approval_request", "hint": "token=" + plantedHint, "tools": []map[string]any{
-		{"id": "t1", "name": "run password=" + plantedPassword, "args": map[string]any{}}}})
+		{"id": "t1", "name": "run", "args": map[string]any{}}}})
 	if err := r.paused(t, task); err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +278,9 @@ const (
 	reasonCut     = "a tool's name or arguments are longer than can be shown whole"
 	reasonControl = "a tool's name or arguments hold a control character or invalid UTF-8"
 	reasonKey     = "a tool's argument key would be changed by cleaning"
+	reasonName    = "a tool's name would be changed by cleaning"
+	reasonNameLog = "a tool's name cannot be written whole in the audit log"
+	reasonNameLen = "a tool's name is longer than the audit log writes whole"
 	reasonNumber  = "a tool's arguments hold a number that cannot be shown exactly"
 	reasonTooBig  = "the prompt does not fit in one message"
 )

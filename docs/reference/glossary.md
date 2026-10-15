@@ -52,7 +52,8 @@ Front door
     Required in front of kagent.
 
 Interaction
-:   A pause in which the agent waits for a person: a question (ask-user), or a tool approval, which is not built yet.
+:   A pause in which the agent waits for a person: a question (ask-user), or a kagent-v1 tool approval when the Binding
+    enables `interactions.toolApprovals`. A generic A2A structured pause is unusable.
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.

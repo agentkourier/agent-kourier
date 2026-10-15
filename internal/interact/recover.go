@@ -58,7 +58,7 @@ func AnswerMessage(d dialect.Dialect, id string, in dialect.Interaction, answer 
 	if err != nil {
 		return a2a.Message{}, err
 	}
-	msg.ID = id + "/answer"
+	msg.ID = id + answerSuffix
 	d.Attribute(&msg, dialect.User{ID: decider})
 	return msg, nil
 }

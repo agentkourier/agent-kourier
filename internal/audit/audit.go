@@ -316,7 +316,7 @@ func (w *Writer) StaleTaskEnded(ctx context.Context, a Actor, t StaleTask) error
 		cancel += " " + strings.Join(errorTags(t.CancelErr), ",")
 	}
 	outcome := "stale_task_ended: cancel=" + cancel + " interactions=" + strconv.Itoa(t.Interactions)
-	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), subject(t.TaskID, t.ContextID, ""), outcome)
+	return w.append(ctx, store.AuditEvent, a, w.opts.Now(), Subject(t.TaskID, t.ContextID, ""), outcome)
 }
 
 // AgentCall records a send, answer, cancel or FindTask and its typed outcome.
@@ -333,7 +333,7 @@ func (w *Writer) AgentCall(ctx context.Context, a Actor, c Call) error {
 	default:
 		return fail(store.ErrInvalid, "audit agent call: unknown op %q", c.Op)
 	}
-	subj := subject(c.TaskID, c.ContextID, c.MessageID)
+	subj := Subject(c.TaskID, c.ContextID, c.MessageID)
 	if subj == "" {
 		return fail(store.ErrInvalid, "audit %s: a task, context or message ID is required", c.Op)
 	}
@@ -455,7 +455,7 @@ func toolLists(used int, names []string, decisions []dialect.Decision) string {
 // name from the agent can check it against the row by hashing its cleaned text.
 func toolName(name string) string {
 	cleaned := redact.IdentifierText(name)
-	if q := strconv.Quote(cleaned); len(q) <= maxToolName && stableName(q) {
+	if q := strconv.Quote(cleaned); nameFit(q) == NameWhole {
 		return q
 	}
 	sum := sha256.Sum256([]byte(cleaned))
@@ -478,6 +478,48 @@ func toolName(name string) string {
 		}
 	}
 	return strconv.Quote(mark)
+}
+
+// NameFit says whether a decision row writes a tool name whole, and if not why not.
+type NameFit int
+
+const (
+	// NameWhole means the row holds the name exactly as it is given.
+	NameWhole NameFit = iota
+	// NameTooLong means the name is longer than a row writes whole (its quoted form is over 302 bytes: 300 ASCII bytes are whole,
+	// and so are 150 two-byte characters, 100 CJK ones or 75 emoji), so the row would cut it and mark it with a hash.
+	NameTooLong
+	// NameRewritten means the row would write something else, although not for length: the redaction of an identifier changes the
+	// name (an invisible character, white space other than single spaces, a token shape in it), or the redaction of the whole
+	// row would change it where the row puts it (it ends in "Bearer:", say), so that the row cuts it and marks it.
+	NameRewritten
+)
+
+// ToolNameFit says whether the row of an answered approval writes name whole (see toolName), by the rule that writes it: the
+// same code decides, so a caller that refuses a name for this cannot drift from what a row does. name is a tool's name as the
+// store keeps it (the request's, with its secrets already taken out). A name that is too long is NameTooLong whatever else
+// is the matter with it.
+func ToolNameFit(name string) NameFit {
+	cleaned := redact.IdentifierText(name)
+	if fit := nameFit(strconv.Quote(cleaned)); fit != NameWhole {
+		return fit
+	}
+	if cleaned != name {
+		return NameRewritten
+	}
+	return NameWhole
+}
+
+// nameFit is the length rule and the stability rule of toolName for the quoted name q: NameTooLong if it is over
+// maxToolName bytes, else NameRewritten if the redaction of a whole row would change it, else NameWhole.
+func nameFit(q string) NameFit {
+	switch {
+	case len(q) > maxToolName:
+		return NameTooLong
+	case !stableName(q):
+		return NameRewritten
+	}
+	return NameWhole
 }
 
 // stableName reports whether the redaction of a whole row leaves the quoted name q as it is in the two places a row puts it:
@@ -558,7 +600,7 @@ func (w *Writer) UnusablePauseCancel(ctx context.Context, a Actor, taskID a2a.Ta
 }
 
 func (w *Writer) pause(ctx context.Context, a Actor, taskID a2a.TaskID, contextID, outcome string) error {
-	subj := subject(taskID, contextID, "")
+	subj := Subject(taskID, contextID, "")
 	if subj == "" {
 		return fail(store.ErrInvalid, "audit unusable pause: a task or context ID is required")
 	}
@@ -629,8 +671,10 @@ func errorTags(err error) []string {
 	return tags
 }
 
-// subject joins the identifiers present, or returns "" when there are none.
-func subject(task a2a.TaskID, contextID, messageID string) string {
+// Subject returns the canonical audit subject for an agent task, context and message.
+// It applies the same identifier cleaning and cap as the audit writer, so recovery
+// lookups can compare a stored subject without reconstructing it differently.
+func Subject(task a2a.TaskID, contextID, messageID string) string {
 	var parts []string
 	for _, p := range [][2]string{{"task", string(task)}, {"context", contextID}, {"message", messageID}} {
 		if p[1] != "" {
@@ -638,6 +682,13 @@ func subject(task a2a.TaskID, contextID, messageID string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// MatchesActor reports whether an audit entry has the same Binding service actor as a.
+// The user is unavailable during recovery, so it compares the Binding and service identity
+// after applying the exact cleaning and cap used when the writer stored them.
+func MatchesActor(e store.AuditEntry, a Actor) bool {
+	return e.Binding == clean(a.Binding, maxField) && e.Identity == clean(a.Identity, maxField)
 }
 
 func orElse[T ~string](have, fallback T) T {

@@ -1,0 +1,21 @@
+# Disposable full-tier Agent used to observe kagent's ConfigMap-backed system
+# prompt. It has no tools and therefore cannot change cluster state.
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: ta-config
+  namespace: kagent
+spec:
+  template:
+    modelConfig: {name: ta-config-model}
+    description: A read-only prompt configuration probe with no tools
+    systemPromptFrom:
+      name: ta-config-prompt
+      key: systemPrompt
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef: {name: kagent-default}
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"}

@@ -431,9 +431,9 @@ deploy_scenario_agents() {
   "${K[@]}" apply -f "${dir}/servers.yaml" >/dev/null
   "${K[@]}" -n kagent rollout restart deploy/scenariollm deploy/scenariomcp >/dev/null
   "${K[@]}" -n kagent rollout status deploy/scenariollm deploy/scenariomcp --timeout=180s
-  "${K[@]}" -n kagent wait --for=condition=Accepted remotemcpserver/scenariomcp --timeout=180s
+  "${K[@]}" -n kagent wait --for=condition=Accepted remotemcpserver/scenariomcp remotemcpserver/scenariomcp-approval remotemcpserver/scenariomcp-approval-multi --timeout=180s
   "${K[@]}" apply -f "${dir}/scenarios.yaml" >/dev/null
-  "${K[@]}" -n kagent wait --for=condition=Ready agent/scenario-gated agent/scenario-memory agent/scenario-ask agent/spike-approve agent/scenario-tools --timeout=300s
+  "${K[@]}" -n kagent wait --for=condition=Ready agent/scenario-gated agent/scenario-memory agent/scenario-ask agent/spike-approve agent/scenario-tools agent/scenario-approval agent/scenario-approval-multi --timeout=300s
 }
 
 # probe_frontdoor: whether a pod labelled as agent-kourier reaches kagent's front door by its Service name, which is the

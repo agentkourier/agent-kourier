@@ -1,0 +1,12 @@
+# Disposable full-tier prompt probe. It has no tools and is separate from the
+# sandbox agent, so it can verify ConfigMap prompt revisions without granting
+# the fixture any Kubernetes access.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ta-config-prompt
+  namespace: kagent
+data:
+  systemPrompt: |
+    You are the Agent Kourier prompt configuration probe.
+    This agent is read-only and has no tools. Reply with the word captured.

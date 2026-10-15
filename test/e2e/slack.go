@@ -73,6 +73,12 @@ func (s *Slack) Click(ctx context.Context, user, messageTS, actionID, value stri
 	return s.interact(ctx, "click", map[string]any{"user": user, "message_ts": messageTS, "action_id": actionID, "value": value})
 }
 
+// ClickStale presses a button using the message snapshot a person saw before
+// the message was edited. It returns the envelope of the interaction, for AckWait.
+func (s *Slack) ClickStale(ctx context.Context, user string, message fakeslack.Message, actionID, value string) (string, error) {
+	return s.interact(ctx, "click-stale", map[string]any{"user": user, "message": message, "action_id": actionID, "value": value})
+}
+
 // Submit presses the submit button actionID on the message at messageTS as user, with the answers
 // they entered (block_id, then action_id, then the element's state). It returns the envelope.
 func (s *Slack) Submit(ctx context.Context, user, messageTS, actionID string, values fakeslack.StateValues) (string, error) {
@@ -111,6 +117,11 @@ func (s *Slack) Know(ctx context.Context, user string) error {
 // SetMembers registers channel and replaces its membership, for conversations.members.
 func (s *Slack) SetMembers(ctx context.Context, channel string, users ...string) error {
 	return s.c.do(ctx, http.MethodPost, "/_control/members", map[string]any{"channel": channel, "users": users}, nil)
+}
+
+// SetUserGroup registers a Slack user group and replaces its membership.
+func (s *Slack) SetUserGroup(ctx context.Context, group string, users ...string) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/usergroups", map[string]any{"usergroup": group, "users": users}, nil)
 }
 
 // Connections returns how many Socket Mode clients are connected.

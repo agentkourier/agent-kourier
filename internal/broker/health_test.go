@@ -269,7 +269,7 @@ func TestNilReadinessIsStarting(t *testing.T) {
 // receiver (alerts reach a Binding through a botMessage trigger), so a request for a webhook path is a 404.
 func TestHandlerHasNoReceiver(t *testing.T) {
 	h := NewHandler(mustMetrics(t, nil), &Readiness{})
-	for _, path := range []string{"/hooks/alertmanager/sre/sre-alerts", "/hooks/", "/hooks", "/", "/api/v2/alerts"} {
+	for _, path := range []string{"/hooks/alertmanager/sre/sre-alerts", "/hooks/", "/hooks", "/", "/api/v2/alerts", "/__testhooks/audit"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader("{}")))

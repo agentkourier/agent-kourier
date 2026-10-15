@@ -50,8 +50,23 @@ func TestSpecExamplesDecode(t *testing.T) {
 		t.Errorf("Binding acknowledgment defaults = %+v, want enabled %q", b.Spec.Chat.Acknowledgment, DefaultAcknowledgmentEmoji)
 	}
 	if b.Spec.Identity.UserID != "agent-kourier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
-		!b.Spec.Interactions.AskUser || !b.Spec.Feedback.Enabled {
+		!b.Spec.Interactions.AskUser || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 || !b.Spec.Feedback.Enabled {
 		t.Errorf("Binding did not decode as in the spec: %+v", b)
+	}
+}
+
+func TestToolApprovalFieldsDecode(t *testing.T) {
+	var b Binding
+	if err := yaml.UnmarshalStrict([]byte(`spec:
+  interactions:
+    toolApprovals: true
+    approverGroups: [S0123456789, S9876543210]
+`), &b); err != nil {
+		t.Fatal(err)
+	}
+	b.Default()
+	if !b.Spec.Interactions.ToolApprovals || !slices.Equal(b.Spec.Interactions.ApproverGroups, []string{"S0123456789", "S9876543210"}) {
+		t.Errorf("tool approval interactions = %+v; want enabled approvals and the two groups", b.Spec.Interactions)
 	}
 }
 
@@ -104,7 +119,7 @@ func boolPtr(v bool) *bool { return &v }
 
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
-	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute ||
+	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 ||
 		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Feedback.Enabled {
 		t.Errorf("defaults not applied: %+v", b.Spec)
 	}
@@ -159,16 +174,13 @@ func TestBindingRefusesTheRemovedWebhookFields(t *testing.T) {
 }
 
 // A field stays in the API only if it works (DA-3). The fields of features that are not built are refused by the strict
-// decoder, and return with the feature: the Binding's status, interactions.toolApprovals and interactions.approverGroups,
-// and the ChatConnection's mode and directMessages.
+// decoder, and return with the feature: the Binding's status and the ChatConnection's mode and directMessages.
 func TestTheFieldsOfUnbuiltFeaturesAreRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name, in, field string
 		into            any
 	}{
 		{"status", "status: { conditions: [] }", "status", &Binding{}},
-		{"interactions.toolApprovals", "spec: { interactions: { toolApprovals: false } }", "toolApprovals", &Binding{}},
-		{"interactions.approverGroups", "spec: { interactions: { approverGroups: [sre] } }", "approverGroups", &Binding{}},
 		{"mode", "spec: { mode: socket }", "mode", &ChatConnection{}},
 		{"directMessages", "spec: { directMessages: { defaultBindingRef: { name: b } } }", "directMessages", &ChatConnection{}},
 	} {

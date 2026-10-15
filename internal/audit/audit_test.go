@@ -436,6 +436,21 @@ func TestUnusablePause(t *testing.T) {
 	}
 }
 
+func TestMatchesActorUsesStoredServiceFields(t *testing.T) {
+	w, s := newWriter(t)
+	a := Actor{Binding: strings.Repeat("b", 300), Identity: "sa/investigator\nprimary"}
+	if err := w.UnusablePause(context.Background(), a, "t1", "c1", errors.New("too large")); err != nil {
+		t.Fatal(err)
+	}
+	entry := only(t, s)
+	if !MatchesActor(entry, a) {
+		t.Fatalf("MatchesActor(%+v, %+v) = false; want the writer's normalized fields to match", entry, a)
+	}
+	if MatchesActor(entry, Actor{Binding: a.Binding, Identity: "sa/other"}) {
+		t.Fatalf("MatchesActor(%+v, different identity) = true; want a mismatch", entry)
+	}
+}
+
 // bearerVariants hide a token behind a separator that a naive strip would glue shut or
 // that Go's ASCII-only \s would not match.
 var bearerVariants = []string{

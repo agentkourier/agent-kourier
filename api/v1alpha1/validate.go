@@ -37,7 +37,12 @@ const (
 	maxTriggerRegexLen = 512
 	minThreadCooldown  = time.Minute
 	maxThreadCooldown  = 7 * 24 * time.Hour
+	// maxApproverGroups keeps each approval press within a bounded number of uncached group lookups.
+	maxApproverGroups = 10
 )
+
+// approverGroupID matches Slack user group IDs. Its literal is also documented by Interactions.ApproverGroups.
+var approverGroupID = regexp.MustCompile(`^S[A-Z0-9]+$`)
 
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
 // so an AgentBackend must not set it. Dialects refuse it too. The kagent alpha5 headers
@@ -208,9 +213,33 @@ func (b *Binding) Validate() error {
 		}
 	}
 	p.triggers("spec.chat.triggers", s.Chat.Triggers)
+	p.interactions("spec.interactions", s.Interactions)
 	p.duration("spec.interactions.timeout", s.Interactions.Timeout)
 	p.duration("spec.session.threadTTL", s.Session.ThreadTTL)
 	return errors.Join(p...)
+}
+
+func (p *problems) interactions(path string, in Interactions) {
+	if len(in.ApproverGroups) > 0 && !in.ToolApprovals {
+		p.add(path+".approverGroups", "requires spec.interactions.toolApprovals: true")
+	}
+	if len(in.ApproverGroups) > maxApproverGroups {
+		p.add(path+".approverGroups", "has %d items, maximum is %d", len(in.ApproverGroups), maxApproverGroups)
+	}
+	seen := make(map[string]int, len(in.ApproverGroups))
+	for idx, group := range in.ApproverGroups {
+		at := fmt.Sprintf("%s.approverGroups[%d]", path, idx)
+		if group == "" {
+			p.add(at, "must not be empty")
+		} else if !approverGroupID.MatchString(group) {
+			p.add(at, "invalid group ID %q: must be a Slack user group ID such as S0123456789", group)
+		}
+		if previous, ok := seen[group]; ok {
+			p.add(at, "duplicate of index %d", previous)
+		} else {
+			seen[group] = idx
+		}
+	}
 }
 
 // regex checks that expr is a non-empty RE2 expression within the length cap, and returns it

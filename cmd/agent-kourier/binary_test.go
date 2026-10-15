@@ -10,12 +10,13 @@ import (
 )
 
 // hookTraces are what only a testhooks build of Agent Kourier may contain besides the crash function (which
-// is checked as a symbol): the names of the environment variables that arm it and move the Slack URL,
-// and the warning that says the binary is a test one. A default build that holds one can be told to
-// crash itself, or to send tokens elsewhere, in production.
+// is checked as a symbol): the names of the environment variables that arm it and move the Slack URL, the
+// test-only audit route, and the warning that says the binary is a test one. A default build that holds one
+// could be told to crash itself, send tokens elsewhere, or expose persisted audit rows in production.
 var hookTraces = []string{
 	"AGENTKOURIER_FAULT",
 	"AGENTKOURIER_SLACK_API_URL",
+	"/__testhooks/audit",
 	"testhooks build: this binary",
 }
 

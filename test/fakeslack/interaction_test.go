@@ -64,6 +64,29 @@ func TestClickDeliversBlockActions(t *testing.T) {
 	waitAcked(t, fake, id)
 }
 
+func TestClickStaleUsesTheSnapshotAfterTheMessageIsEdited(t *testing.T) {
+	fake, smc := connected(t)
+	bot := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))
+	_, ask := postAsk(t, fake)
+	snapshot := fake.Messages("C1")[1]
+	if _, _, _, err := bot.UpdateMessage("C1", ask, text("answered"), slack.MsgOptionBlocks()); err != nil {
+		t.Fatalf("UpdateMessage: %v", err)
+	}
+
+	id, err := fake.ClickStale("U2", snapshot, "approve", "yes")
+	if err != nil || id == "" {
+		t.Fatalf("ClickStale = %q, %v; want an interaction envelope", id, err)
+	}
+	gotID, cb := nextInteraction(t, smc)
+	if gotID != id || cb.User.ID != "U2" || cb.Container.MessageTs != ask || cb.ActionCallback.BlockActions[0].ActionID != "approve" {
+		t.Fatalf("envelope %q, payload %+v; want the stale approve press on %s", gotID, cb, ask)
+	}
+	if len(cb.Message.Blocks.BlockSet) != 3 {
+		t.Fatalf("payload message blocks = %d; want the snapshot's interactive blocks", len(cb.Message.Blocks.BlockSet))
+	}
+	waitAcked(t, fake, id)
+}
+
 func TestSubmitSendsEveryInputWithTheAnswersOverlaid(t *testing.T) {
 	fake, smc := connected(t)
 	_, ask := postAsk(t, fake)

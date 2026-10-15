@@ -60,18 +60,18 @@ type Auditor interface {
 }
 
 // refuseUnusable turns away a pause the dialect cannot use: the thread is told, the task is
-// cancelled, and both are audited. cause wraps dialect.ErrUnusablePause.
+// cancelled, and both are audited. cause wraps dialect.ErrUnusablePause. A permanently abandoned
+// approval prompt uses this same path, because the outbox cannot deliver its controls.
 //
-// Once only: the cancel is what ends the pause, so the call that cancels is the call that audits, and a
-// pause that comes again finds the task no longer paused (session.ErrNotPaused) and does nothing. A
-// failed cancel is audited as such and returned, to be tried again; a crash between a successful cancel
-// and its audit rows loses the rows, which is accepted over writing them twice. The notice has a fixed
-// outbox ID, so it is one post however often it is enqueued.
+// For a pause without an interaction row, the cancellation still owns the audit: a failure is recorded and
+// retried, and a task that is already no longer paused is handled without claiming that this call successfully
+// cancelled it. Row-backed refusals record their cause before closing the interaction, so recovery cannot lose
+// the reason. The notice has a fixed outbox ID, so it is one post however often it is enqueued.
 func (i *Intake) refuseUnusable(ctx context.Context, p Pause, b Binding, cause error) error {
 	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
 	handled, err := i.cancel(ctx, p, "unusable pause", noticeUnusable, "ux-"+short("unusable", string(p.Task.ID)))
 	switch {
-	case handled:
+	case handled: // ErrNotPaused: the task's ending is not attributable to this call.
 		return nil
 	case err != nil:
 		_ = i.cfg.Audit.UnusablePauseCancel(ctx, a, p.Task.ID, p.Task.ContextID, err) // never stands in the retry's way
@@ -101,14 +101,94 @@ func (i *Intake) refuseCleared(ctx context.Context, p Pause, b Binding, row stor
 // is refused as unusable, and the interaction, which has no prompt and never will, is closed with the
 // task, so that the sweep has no prompt to replace. cause wraps chat.ErrTooLarge.
 func (i *Intake) refuseTooLarge(ctx context.Context, p Pause, b Binding, row store.Interaction, cause error) error {
-	if err := i.refuseUnusable(ctx, p, b, fmt.Errorf("%w: %w", dialect.ErrUnusablePause, cause)); err != nil {
+	cause = fmt.Errorf("%w: %w", dialect.ErrUnusablePause, cause)
+	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
+	if err := i.ensureUnusablePause(ctx, a, p.Task.ID, p.Task.ContextID, row.CreatedAt, cause); err != nil {
 		return err
 	}
-	err := i.cfg.Store.ResolveInteraction(ctx, row.ID, store.InteractionCancelled, i.cfg.Now())
-	if err != nil && !errors.Is(err, store.ErrConflict) { // a conflict is a close that was made before
-		return fmt.Errorf("interact: close %s, which has no prompt: %w", row.ID, err)
+	if closed, err := i.closeUnusable(ctx, p, row); err != nil || !closed {
+		return err
 	}
-	return nil
+	return i.cancelClosedUnusable(ctx, p, a, row)
+}
+
+// refuseAbandoned turns away an approval whose prompt the outbox permanently abandoned. No retry can
+// make the controls available, so the audited unusable-pause refusal closes the interaction as well.
+func (i *Intake) refuseAbandoned(ctx context.Context, p Pause, b Binding, row store.Interaction, cause error) error {
+	cause = fmt.Errorf("%w: the approval prompt was permanently abandoned: %w", dialect.ErrUnusablePause, cause)
+	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
+	if err := i.ensureUnusablePause(ctx, a, p.Task.ID, p.Task.ContextID, row.CreatedAt, cause); err != nil {
+		return err
+	}
+	if closed, err := i.closeUnusable(ctx, p, row); err != nil || !closed {
+		return err
+	}
+	return i.cancelClosedUnusable(ctx, p, a, row)
+}
+
+// cancelClosedUnusable cancels a refusal whose notice and interaction close are already durable. It
+// does not enqueue the notice again. ErrNotPaused is handled without fabricating a successful cancel
+// audit because another actor, or an earlier process, may have ended the task.
+func (i *Intake) cancelClosedUnusable(ctx context.Context, p Pause, a audit.Actor, row store.Interaction) error {
+	err := i.cfg.Session.Cancel(ctx, p.Key, a2a.TaskID(row.TaskID), "unusable pause")
+	if errors.Is(err, session.ErrNotPaused) {
+		return nil
+	}
+	if err != nil {
+		return errors.Join(
+			fmt.Errorf("interact: cancel the unusable pause of task %s: %w", row.TaskID, err),
+			i.recordUnusablePauseCancel(ctx, a, a2a.TaskID(row.TaskID), p.Task.ContextID, row.CreatedAt, err),
+		)
+	}
+	return i.recordUnusablePauseCancel(ctx, a, a2a.TaskID(row.TaskID), p.Task.ContextID, row.CreatedAt, nil)
+}
+
+// endUnusable retries a cancellation after a closed interaction comes back during recovery. It
+// handles only rows with a matching durable refusal audit, so ordinary cancellations keep their
+// existing generic path.
+func (i *Intake) endUnusable(ctx context.Context, p Pause, b Binding, row store.Interaction) (bool, error) {
+	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
+	i.auditMu.Lock()
+	state, err := i.unusablePauseAudit(ctx, a, a2a.TaskID(row.TaskID), p.Task.ContextID, row.CreatedAt)
+	i.auditMu.Unlock()
+	if err != nil {
+		return true, fmt.Errorf("interact: check the unusable pause audit of %s: %w", row.ID, err)
+	}
+	if !state.refused {
+		return false, nil
+	}
+	err = i.cfg.Session.Cancel(ctx, p.Key, a2a.TaskID(row.TaskID), "the interaction was cancelled")
+	if errors.Is(err, session.ErrNotPaused) {
+		return true, nil
+	}
+	if err != nil {
+		return true, errors.Join(
+			fmt.Errorf("interact: cancel the unusable pause of task %s again: %w", row.TaskID, err),
+			i.recordUnusablePauseCancel(ctx, a, a2a.TaskID(row.TaskID), p.Task.ContextID, row.CreatedAt, err),
+		)
+	}
+	if state.cancelOK {
+		return true, nil
+	}
+	return true, i.recordUnusablePauseCancel(ctx, a, a2a.TaskID(row.TaskID), p.Task.ContextID, row.CreatedAt, nil)
+}
+
+// closeUnusable queues the fixed intent notice, then records the close before cancellation can take effect.
+// A failed notice enqueue remains retryable, and a crash after the close cannot lose the notice. If the cancel fails or the
+// process stops, a re-emitted pause finds a closed row and endAgain retries the cancel; the timeout sweep
+// cannot mistake it for a new unanswered request. An existing resolution is left unchanged.
+func (i *Intake) closeUnusable(ctx context.Context, p Pause, row store.Interaction) (bool, error) {
+	if err := i.enqueueNotice(ctx, p, noticeUnusable, "ux-"+short("unusable", string(p.Task.ID))); err != nil {
+		return false, err
+	}
+	err := i.cfg.Store.ResolveInteraction(ctx, row.ID, store.InteractionCancelled, i.cfg.Now())
+	if errors.Is(err, store.ErrConflict) {
+		return false, nil // the winning resolution owns its ending
+	}
+	if err != nil {
+		return false, fmt.Errorf("interact: close unusable interaction %s: %w", row.ID, err)
+	}
+	return true, nil
 }
 
 // refuseAskUser turns away a question on a Binding that does not allow them: the thread is told, the
@@ -130,12 +210,19 @@ func (i *Intake) refuseAskUser(ctx context.Context, p Pause, b Binding, in diale
 // cancel enqueues the notice, whose outbox ID comes from id, and cancels the task. handled is true
 // when the task was already not paused: the refusal was made before, and there is nothing more to do.
 func (i *Intake) cancel(ctx context.Context, p Pause, reason, notice, id string) (handled bool, err error) {
-	post := outbox.Post{Source: id, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
-	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
-		return false, fmt.Errorf("enqueue the notice: %w", err)
+	if err := i.enqueueNotice(ctx, p, notice, id); err != nil {
+		return false, err
 	}
 	err = i.cfg.Session.Cancel(ctx, p.Key, p.Task.ID, reason)
 	return errors.Is(err, session.ErrNotPaused), err
+}
+
+func (i *Intake) enqueueNotice(ctx context.Context, p Pause, notice, id string) error {
+	post := outbox.Post{Source: id, Role: store.OutboxNotice, Channel: p.Key.Channel, Thread: p.Key.Thread, Out: chat.Say(render.Notice(notice, ""))}
+	if _, err := i.cfg.Outbox.Enqueue(ctx, post); err != nil {
+		return fmt.Errorf("enqueue the notice: %w", err)
+	}
+	return nil
 }
 
 // short hashes fields into a short ID that holds no agent text.
@@ -167,7 +254,8 @@ func denyAll(in dialect.Interaction, reason string) dialect.Answer {
 // with a fixed message ID that is dropped once the task is no longer paused). So a pause that comes
 // again after a failed or interrupted send finishes the send and does not audit or count it again; the
 // one window is a crash between the audit write and the answer's record, which audits twice rather
-// than risk a denial that is not on record.
+// than risk a denial that is not on record. If the row was answered by a person before the policy was
+// switched off, the recorded verdict is resent without the policy-denial notice.
 //
 // A pause that comes again after the interaction was closed without an answer (the sweep timed it out, on a Binding that
 // then did not allow approvals) has its task cancelled again (endAgain), as it would on a question.
@@ -201,6 +289,11 @@ func (i *Intake) autoDeny(ctx context.Context, p Pause, b Binding, in dialect.In
 	}
 	switch row.State {
 	case store.InteractionAnswered:
+		if row.Decider != autoDecider {
+			// A human verdict was recorded while approvals were enabled. The reload changes policy for
+			// future pauses, but it does not rewrite that verdict or announce a false policy denial.
+			return i.resend(ctx, p, b, row)
+		}
 	case store.InteractionTimedOut, store.InteractionCancelled: // closed without an answer, and the pause has come again
 		return i.endAgain(ctx, p, b, row) // under a Binding that does not allow approvals: the cancel
 	default:

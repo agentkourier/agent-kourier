@@ -173,7 +173,8 @@ func TestAnApprovalThatTimesOutIsDeniedAndNotCancelled(t *testing.T) {
 	}
 }
 
-// TestTheStepsOfAnApprovalRunInOrder: the denial first, as the cancel is first for a question; the timeout recorded last.
+// TestTheStepsOfAnApprovalRunInOrder: the denial follows its timeout audit (the audit fake is not in the call log); the
+// timeout is recorded last.
 func TestTheStepsOfAnApprovalRunInOrder(t *testing.T) {
 	r := onlyApproval(t)
 	if err := r.sweeper(t, nil).Sweep(t.Context()); err != nil {
@@ -182,11 +183,15 @@ func TestTheStepsOfAnApprovalRunInOrder(t *testing.T) {
 	if got, want := r.calls.list(), []string{"deny", "edit", "notice", "resolve"}; !slices.Equal(got, want) {
 		t.Errorf("calls %q; want %q", got, want)
 	}
+	if len(r.aud.got) != 1 {
+		t.Errorf("audits %d; want one timeout audit before the denial", len(r.aud.got))
+	}
 }
 
 // TestASweepThatFailsAtAnyStepOfAnApprovalIsFinishedByTheNext: each step in turn fails once. Until the timeout is recorded
-// nothing is audited or counted; the next sweep finishes the steps, and the timeout is audited and counted once, however many
-// sweeps it took. A denial the session took is sent once: the later sweeps that finish the other steps do not send it again.
+// the timeout audit is written but nothing is counted; the next sweep finishes the steps, and the timeout is counted once,
+// however many sweeps it took. A denial the session took is sent once: the later sweeps that finish the other steps do not
+// send it again.
 func TestASweepThatFailsAtAnyStepOfAnApprovalIsFinishedByTheNext(t *testing.T) {
 	for name, tc := range map[string]struct {
 		breakIt func(*sweepRig)
@@ -210,8 +215,8 @@ func TestASweepThatFailsAtAnyStepOfAnApprovalIsFinishedByTheNext(t *testing.T) {
 			if got := r.calls.list(); !slices.Equal(got, tc.calls) {
 				t.Errorf("calls of the failing sweep %q; want %q", got, tc.calls)
 			}
-			if r.state(t, "ix-1") != store.InteractionPending || len(r.aud.got) != 0 || len(r.outcomes()) != 0 || len(r.hooked()) != 0 {
-				t.Fatal("a timeout that was not recorded was recorded, audited or counted")
+			if r.state(t, "ix-1") != store.InteractionPending || len(r.aud.got) != 1 || len(r.outcomes()) != 0 || len(r.hooked()) != 0 {
+				t.Fatal("a timeout that was not recorded was counted, or its audit was not written before the failed step")
 			}
 			tc.fix(r)
 			for range 2 {
@@ -241,10 +246,10 @@ func TestASweepThatFailsAtAnyStepOfAnApprovalIsFinishedByTheNext(t *testing.T) {
 	}
 }
 
-// TestADenialThatFailsOtherwiseIsNeverGivenUpOn: the session answers nil, ErrNotPaused or ErrInvalid; any other error (the
-// broker's session before the manager is bound, which answers errSessionNotReady) says nothing of the task, which may still
-// be paused, and only this sweep would end the pause, so the denial, like the cancel, is retried however many sweeps fail;
-// the edit and the notice are given up on.
+// TestADenialThatFailsOtherwiseIsNeverGivenUpOn: the session answers nil, ErrNotPaused or ErrInvalid; any other error says
+// nothing of the task, which may still be paused, and only this sweep would end the pause, so the denial, like the cancel, is
+// retried however many sweeps fail; the edit and the notice are given up on. The manager the sweeper is given answers none of
+// those today, so this pins a branch that is defensive: it fails only for a session that answers an error of its own.
 func TestADenialThatFailsOtherwiseIsNeverGivenUpOn(t *testing.T) {
 	r := onlyApproval(t)
 	r.sess.answerAlways = errBoom
@@ -253,8 +258,8 @@ func TestADenialThatFailsOtherwiseIsNeverGivenUpOn(t *testing.T) {
 		if err := sw.Sweep(t.Context()); err == nil {
 			t.Fatalf("sweep %d with a failing denial reported success", i)
 		}
-		if r.state(t, "ix-1") != store.InteractionPending || len(r.upd.list()) != 0 || len(r.notices(t)) != 0 || len(r.aud.got) != 0 || len(r.outcomes()) != 0 {
-			t.Fatalf("after sweep %d the approval was timed out, edited, noticed, audited or counted with its task still paused", i)
+		if r.state(t, "ix-1") != store.InteractionPending || len(r.upd.list()) != 0 || len(r.notices(t)) != 0 || len(r.aud.got) != 1 || len(r.outcomes()) != 0 {
+			t.Fatalf("after sweep %d the approval was timed out, edited, noticed or counted with its task still paused", i)
 		}
 	}
 	r.sess.mu.Lock()
@@ -517,15 +522,20 @@ func timedOutApprovalOn(t *testing.T, task a2a.Task, mod func(*interact.Binding)
 	if err := r.paused(t, task); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.st.ResolveInteraction(t.Context(), r.row(t, task).ID, store.InteractionTimedOut, t0.Add(timeout)); err != nil {
+	row := r.row(t, task)
+	if err := r.audit.Decision(t.Context(), audit.Actor{Binding: "ns/b"}, audit.Decision{InteractionID: row.ID, TaskID: a2a.TaskID(row.TaskID), Result: audit.DecisionTimedOut, At: t0.Add(timeout)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.ResolveInteraction(t.Context(), row.ID, store.InteractionTimedOut, t0.Add(timeout)); err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
 
 // TestAPauseThatComesAgainAfterAnApprovalTimedOutIsDeniedAgain: the denial is the sweep's, rebuilt from the stored request: every
-// tool, the same reason and message ID, from Agent Kourier. The task is not cancelled, and nothing is audited, counted or told:
-// the timeout was.
+// tool, the same reason and message ID, from Agent Kourier. The task is not cancelled, and nothing is counted or told: the
+// timeout was. Each re-emission retries the denial without another audit: the timed-out row already has its durable timeout
+// decision, and a process restart does not change that.
 func TestAPauseThatComesAgainAfterAnApprovalTimedOutIsDeniedAgain(t *testing.T) {
 	r, task := timedOutApproval(t, approval()), approval()
 	_ = task
@@ -545,10 +555,78 @@ func TestAPauseThatComesAgainAfterAnApprovalTimedOutIsDeniedAgain(t *testing.T) 
 			t.Errorf("answer %+v by %q with ID %q; want every tool denied with the fixed reason, by agent-kourier", approvals, actor, m.ID)
 		}
 	}
-	if rows := r.auditRows(t); len(rows) != 0 || len(r.hook) != 0 || len(r.notices(t)) != notices {
-		t.Errorf("audit rows %q, hook %v, %d notices (was %d); want none of them", rows, r.hook, len(r.notices(t)), notices)
+	if rows := r.auditRows(t); len(rows) != 1 || rows[0] != "timed_out" || len(r.hook) != 0 || len(r.notices(t)) != notices {
+		t.Errorf("audit rows %q, hook %v, %d notices (was %d); want one durable timeout audit and no other effects", rows, r.hook, len(r.notices(t)), notices)
 	}
 }
+
+// TestARecoveredTimeoutDenialDoesNotReauditBeforeSending: a timed-out approval that is re-emitted after a restart already has
+// its durable timeout audit. An unavailable audit writer does not hold up retrying the denial or cause a duplicate row.
+func TestARecoveredTimeoutDenialDoesNotReauditBeforeSending(t *testing.T) {
+	r := timedOutApproval(t, approval())
+	r.audit.fail = true
+	if err := r.paused(t, approval()); err != nil || len(r.sess.answers) != 1 || len(r.sess.cancels) != 0 {
+		t.Fatalf("Paused = %v with %d answers and %d cancels; want one denial without another audit", err, len(r.sess.answers), len(r.sess.cancels))
+	}
+	if rows := r.auditRows(t); len(rows) != 1 || rows[0] != "timed_out" {
+		t.Errorf("audit rows %q; want one timeout audit", rows)
+	}
+}
+
+// TestARecoveredTimeoutDenialRepairsAnUnauditedTimedOutRow: a fallback timeout can resolve its row before the post-timeout
+// audit and leave no decision row when that audit fails. Recovery restores the audit-before-denial guarantee before sending.
+func TestARecoveredTimeoutDenialRepairsAnUnauditedTimedOutRow(t *testing.T) {
+	r := newRig(t, allowApprovals)
+	if err := r.paused(t, approval()); err != nil {
+		t.Fatal(err)
+	}
+	row := r.row(t, approval())
+	if err := r.st.ResolveInteraction(t.Context(), row.ID, store.InteractionTimedOut, t0.Add(timeout)); err != nil {
+		t.Fatal(err)
+	}
+	r.audit.fail = true
+	if err := r.paused(t, approval()); err == nil || len(r.sess.answers) != 0 || len(r.sess.cancels) != 0 {
+		t.Fatalf("Paused = %v with %d answers and %d cancels; want the missing audit to block the denial", err, len(r.sess.answers), len(r.sess.cancels))
+	}
+	r.audit.fail = false
+	if err := r.paused(t, approval()); err != nil || len(r.sess.answers) != 1 || len(r.sess.cancels) != 0 {
+		t.Fatalf("Paused after audit recovery = %v with %d answers and %d cancels; want one denial", err, len(r.sess.answers), len(r.sess.cancels))
+	}
+	if rows := r.auditRows(t); len(rows) != 1 || rows[0] != "timed_out" {
+		t.Errorf("audit rows %q; want one repaired timeout audit", rows)
+	}
+}
+
+// TestARecoveredTimeoutDenialUsesAnExplicitAuditReader: an interactions-only store wrapper can recover a timed-out
+// row when the durable audit reader is wired separately.
+func TestARecoveredTimeoutDenialUsesAnExplicitAuditReader(t *testing.T) {
+	r := newRig(t, allowApprovals)
+	task := approval()
+	if err := r.paused(t, task); err != nil {
+		t.Fatal(err)
+	}
+	row := r.row(t, task)
+	if err := r.st.ResolveInteraction(t.Context(), row.ID, store.InteractionTimedOut, t0.Add(timeout)); err != nil {
+		t.Fatal(err)
+	}
+	b := interact.Binding{Dialect: kagentv1.New(30 * time.Second), ToolApprovals: true, Timeout: timeout}
+	in, err := interact.New(intakeCfg(interact.Config{
+		Store: interactionsOnlyStore{Interactions: r.st}, AuditReader: r.st, Lookup: lookup{b}, Platform: fitter{r}, Outbox: r.outbox,
+		Session: r.sess, Audit: r.audit, Now: func() time.Time { return t0.Add(time.Hour) },
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = in.Paused(t.Context(), interact.Pause{Key: key, Binding: "ns/b", Task: task})
+	if err != nil || len(r.sess.answers) != 1 || len(r.sess.cancels) != 0 {
+		t.Fatalf("Paused = %v with %d answers, %d cancels; want one denial and no cancellation", err, len(r.sess.answers), len(r.sess.cancels))
+	}
+	if rows := r.auditRows(t); len(rows) != 1 || rows[0] != "timed_out" {
+		t.Fatalf("audit rows %q; want one repaired timeout audit", rows)
+	}
+}
+
+type interactionsOnlyStore struct{ store.Interactions }
 
 // TestADenialThatComesAgainToAFinishedTaskOrAFailingSession: a task that has moved on is fine, and a failed send is returned, for
 // the pause to be tried again.

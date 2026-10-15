@@ -41,6 +41,7 @@ type orderedStore struct {
 	log          *callLog
 	all          *callLog // every step of the decision, for its order
 	beforeSubmit func()   // runs between the decider's read and its write, as another process or the sweep would
+	afterDelete  func()   // runs after a press is deleted, for a test waiting on the worker's completion
 }
 
 func (s *orderedStore) SubmitInteraction(ctx context.Context, id string, answer []byte, decider string, now time.Time) error {
@@ -50,6 +51,14 @@ func (s *orderedStore) SubmitInteraction(ctx context.Context, id string, answer 
 		s.beforeSubmit()
 	}
 	return s.Store.SubmitInteraction(ctx, id, answer, decider, now)
+}
+
+func (s *orderedStore) DeletePress(ctx context.Context, seq int64) error {
+	err := s.Store.DeletePress(ctx, seq)
+	if err == nil && s.afterDelete != nil {
+		s.afterDelete()
+	}
+	return err
 }
 
 // orderedAudit logs each decision written, with its result.

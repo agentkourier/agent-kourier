@@ -48,6 +48,7 @@ func traces(t *testing.T, bin string) map[string]bool {
 		t.Fatal(err)
 	}
 	return map[string]bool{
+		"the send-gate function (symbol)":     strings.Contains(string(nm), "testhooks.holdBeforeSend"),
 		"the crash function (symbol)":         strings.Contains(string(nm), "testhooks.crashSelf"),
 		"the AGENTKOURIER_FAULT name":         bytes.Contains(raw, []byte("AGENTKOURIER_FAULT")),
 		"the AGENTKOURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("AGENTKOURIER_SLACK_API_URL")),

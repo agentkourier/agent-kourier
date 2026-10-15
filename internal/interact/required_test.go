@@ -16,6 +16,7 @@ import (
 
 type (
 	inertStore      struct{ store.Interactions }
+	inertAuditLog   struct{ store.Audit }
 	inertAuditor    struct{ interact.Auditor }
 	inertSession    struct{ interact.Session }
 	inertReader     struct{ interact.SessionReader }
@@ -34,7 +35,11 @@ func TestConstructorsRefuseAnUnwiredHookAndNameIt(t *testing.T) {
 		build      func() error
 	}{
 		{"the intake", "OnApprovalOutcome", func() error {
-			_, err := interact.New(interact.Config{Store: inertStore{}, Lookup: inertLookup{}, Platform: inertFitter{}, Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}})
+			_, err := interact.New(interact.Config{Store: inertStore{}, AuditReader: inertAuditLog{}, Lookup: inertLookup{}, Platform: inertFitter{}, Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}})
+			return err
+		}},
+		{"the intake's AuditReader", "AuditReader", func() error {
+			_, err := interact.New(interact.Config{Store: inertStore{}, Lookup: inertLookup{}, Platform: inertFitter{}, Outbox: inertSender{}, Session: inertSession{}, Audit: inertAuditor{}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the decider's Replacer", "Replacer", func() error {
@@ -59,6 +64,10 @@ func TestConstructorsRefuseAnUnwiredHookAndNameIt(t *testing.T) {
 		}},
 		{"the sweeper's OnApprovalOutcome", "OnApprovalOutcome", func() error {
 			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}})
+			return err
+		}},
+		{"the sweeper's Reopened", "Reopened", func() error {
+			_, err := interact.NewSweeper(interact.SweepConfig{Store: inertStore{}, Sessions: inertReader{}, Lookup: inertLookup{}, Session: inertSession{}, Updater: inertUpdater{}, Outbox: inertEnqueuer{}, Auditor: inertAuditor{}, Presses: inertPresses{}, OnTimeout: func(string) {}, OnApprovalOutcome: func(string, interact.Outcome) {}})
 			return err
 		}},
 		{"the sweeper's Lookup", "Lookup", func() error {

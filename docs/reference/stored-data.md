@@ -22,13 +22,13 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 | `outbox.payload` | The message to post. | Cleared once posted or abandoned. A row still unposted after 7 days is abandoned (reason `expired`) and its payload emptied; the row stays until its session is deleted. |
 | `sessions`, `reply_queue` (delivered), `interactions`, `interaction_presses`, `outbox` | IDs, keys, refs and times of a thread: no message text is left in them. | Until the session has been expired for 90 days, then all deleted together (below). |
 | `feedback` | A person's verdict on a message of an investigation or an answer: the session and turn, the voter's platform ID, the Binding, the agent, the alert name and the verdict, and when. No free text. | For good: kept so that a review of the votes can read them. No retention loop deletes a row, and the deletion of a session 90 days after it expired (below) leaves its feedback rows. |
-| `sessions.alert_name`, `sessions.agent_name` | The alert name a trigger started the thread for, in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) or empty, and the agent of the Binding when the session was made. A vote is stored and counted under them, whatever the Binding says later. | As long as the session row, which is deleted with its thread (below). |
-| `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
+| `sessions.origin_source`, `sessions.origin_subject`, `sessions.agent_name` | The bounded source and subject that caused the thread, each in the name shape (ASCII letters, digits and `_.-:`, at most 128 bytes), and the agent of the Binding when the session was made. Both origin values are empty for an ordinary conversation; a source may have no subject. Follow-up turns keep the origin and agent captured when the session was created. | As long as the session row, which is deleted with its thread (below). |
+| `audit` | IDs, codes, outcomes and lengths, never message text; the platform user ID of a voter or presser; an `email` column that nothing writes today; and, for an unusable pause, one redacted reason of at most 120 bytes. For oversized or abandoned prompts with a stored interaction, the refusal reason is audited before the interaction closes; recovery records a cancellation only when its result is known, so `ErrNotPaused` and a crash after cancellation before the audit do not produce an invented success row. An answered tool approval also stores approved and denied counts and up to 20 cleaned tool names in request order, when they fit within the audit row limit; it stores no arguments or rejection reasons. | For ever, unless `AGENTKOURIER_AUDIT_RETENTION` is set (below). |
 | `events.payload` | Nothing writes it. | n/a |
 
 ### Feedback
 
-The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores:
+The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps `alertmanager` and custom `botMessage` origins with validated `alertname` subjects, and migrated `legacy` origins, to alert-name attribution:
 
 | Column | Holds |
 |---|---|
@@ -40,11 +40,15 @@ The useful and not-useful buttons store one row for each person and message, in 
 | `verdict` | `useful` or `not_useful`. A later press of the other button replaces it. |
 | `first_at`, `voted_at` | The first vote, and the latest. |
 
-No free text is stored: Agent Kourier asks for none, and the alert name is kept only in the name shape (an alert's title is
-untrusted text; a value outside the shape is stored as empty). A vote counts only from a member of the bound channel and
+No free text is stored: Agent Kourier asks for none, origin source and subject are kept only in the name shape, and the alert name is kept only in that shape (an alert's title is
+untrusted text; a value outside the shape is stored as empty). A generic origin subject is not an alert name and is counted as `unknown` for an investigation or `none` for an answer. A vote counts only from a member of the bound channel and
 never from a bot. **Retention: rows are kept.** A review of how useful the investigations were is computed from them; no retention loop touches the table, the deletion of expired sessions included. A vote on a message whose session
 has been deleted is told that the message can no longer be rated. The voter's ID is the only personal datum in a row: remove the
 rows of a person with `DELETE FROM feedback WHERE user_id = ...` on the operator's own request.
+
+Migration 0026 replaces the old `sessions.alert_name` column with the generic origin columns and keeps nonempty legacy
+values under source `legacy`. The session schema change is not readable by an older binary after the migration; upgrade all
+writers before opening the database and do not roll back the binary against it.
 
 Each vote is also an audit entry of kind `event` whose subject names the turn, channel and thread and whose outcome is the verdict
 (`feedback: verdict=useful changed=false`), and it is counted in `agentkourier_investigation_feedback_total`
@@ -188,8 +192,9 @@ reaches the agent escaped as well: French quotation marks (« bonjour ») arrive
 partner.
 
 Accepted limitation: a pause is told to be the same one as a stored pause by comparing both after redaction, so two pauses
-under one interaction ID that differ only in a redacted value count as the same. A keyed digest of the unredacted pause
-(HMAC, key from a Secret) is planned before tool approvals are rendered.
+under one interaction ID that differ only in a redacted value count as the same. Tool approvals use the stored, redacted
+request for their prompt and ending; the tool IDs remain available to build the response, while arguments and rejection
+reasons are not written to the audit row.
 
 Two things are stored as given, because the agent gets them back as they are: a question's **choices** (an answer picks
 one by its index, and the agent receives the stored choice), and the **answer**, until the interaction is cleared.

@@ -167,6 +167,11 @@ func (a *Agent) send(ctx context.Context, o *rw, params json.RawMessage) {
 		o.fail(invalidParams("message is required"))
 		return
 	}
+	if id, ok := p.Message["messageId"].(string); ok {
+		a.s.mu.Lock()
+		a.s.sendCounts[id]++
+		a.s.mu.Unlock()
+	}
 	st, err := a.admit(p.Message, o.owner, o.ext) //nolint:contextcheck // the turn outlives the request; the server's context bounds it
 	if err != nil {
 		o.fail(err)

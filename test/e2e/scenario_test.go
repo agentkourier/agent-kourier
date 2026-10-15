@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
@@ -194,6 +195,23 @@ func (s *scenario) leaderCounter(ctx context.Context, name string, labels map[st
 		return 0, err
 	}
 	return s.reps.Counter(ctx, leader, name, labels)
+}
+
+// leaderAuditEntries reads persisted audit rows from the process doing the work. With Postgres, the standby can answer
+// the health endpoint too, but the leader is the process whose store receives the decision first.
+func (s *scenario) leaderAuditEntries(ctx context.Context) ([]store.AuditEntry, error) {
+	many, err := s.replicated(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !many {
+		return s.agentKourier.AuditEntries(ctx)
+	}
+	leader, err := s.reps.WaitLeader(ctx, 2*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	return s.reps.AuditEntries(ctx, leader)
 }
 
 // counter reads one of the leader's counters (see leaderCounter), which is 0 until it has been incremented: it is not

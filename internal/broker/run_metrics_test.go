@@ -125,7 +125,7 @@ var (
 // The results of a decision are a closed set, so no text from a dialect or a person can grow the series.
 func TestInteractionDecisionCountsByResultAndFoldsTheRest(t *testing.T) {
 	m := mustMetrics(t, nil)
-	for _, r := range []string{"answered", "answered", "superseded", "late", "invalid", "a result nobody defined", ""} {
+	for _, r := range []string{"answered", "answered", "superseded", "late", "invalid", "unrecorded", "a result nobody defined", ""} {
 		m.InteractionDecision(r)
 	}
 
@@ -135,6 +135,7 @@ func TestInteractionDecisionCountsByResultAndFoldsTheRest(t *testing.T) {
 		`agentkourier_interaction_decisions_total{result=superseded} 1`,
 		`agentkourier_interaction_decisions_total{result=late} 1`,
 		`agentkourier_interaction_decisions_total{result=invalid} 1`,
+		`agentkourier_interaction_decisions_total{result=unrecorded} 1`,
 		`agentkourier_interaction_decisions_total{result=other} 2`,
 	} {
 		if !strings.Contains(got, want) {

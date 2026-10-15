@@ -32,10 +32,10 @@ type Session struct {
 	// output of this one belongs to it.
 	TurnTask string
 	Binding  string
-	// Alert is the name of the alert the thread was started for (a trigger's `alertname` entry), or empty for a
-	// thread no alert started. It is untrusted text out of a bot's message, kept as the feedback of an investigation's
-	// message needs it, and written by UpsertSession alone.
-	Alert string
+	// Origin identifies the bounded source and subject that caused the session.
+	// The session manager writes it only when creating the session; follow-up turns
+	// carry no replacement origin.
+	Origin Origin
 	// Agent is the agent of the Binding when the session was made, namespace/name on its backend, kept so that a vote on a message
 	// of the thread names the agent that wrote it, whatever the Binding says later. Empty for a session of a build from before
 	// the column. Written by UpsertSession alone.
@@ -56,8 +56,8 @@ type TaskTurn struct {
 }
 
 // Sessions persists the thread-to-session mapping. Key (all three parts),
-// Binding and LastActivity are required; ContextID and TaskID are optional.
-// A missing required value returns ErrInvalid.
+// Binding, a valid Origin and LastActivity are required; ContextID and TaskID
+// are optional. A missing or invalid required value returns ErrInvalid.
 type Sessions interface {
 	// UpsertSession inserts s or replaces the row with the same key, every column of it, an empty
 	// ContextID or TaskID included. Only the trace context stays when s and the call's context have

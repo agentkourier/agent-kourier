@@ -154,8 +154,8 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 	if in.UserID != "" {
 		t.Errorf("UserID = %q; want none: nobody wrote this turn, and a user named here would be forged", in.UserID)
 	}
-	if in.Alert != "KubePodCrashLooping" {
-		t.Errorf("Alert = %q; want the alert's name, which the session keeps for the votes on its messages (spec 8.7)", in.Alert)
+	if want := (store.Origin{Source: "alertmanager", Subject: "KubePodCrashLooping"}); in.Origin != want {
+		t.Errorf("Origin = %+v; want %+v, the trigger source and bounded subject kept for feedback attribution", in.Origin, want)
 	}
 	if want := "An alert is FIRING in channel C0123456789: KubePodCrashLooping."; !strings.HasPrefix(in.Text, want) {
 		t.Errorf("the turn's text starts %q; want the template's output %q", firstLine(in.Text), want)
@@ -168,7 +168,24 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 	}
 }
 
-// The alert's name is text from the alert, which the session keeps and a metric label shows, so only a value of the name
+func TestOnStartKeepsAValidatedCustomBotMessageSubjectForFeedback(t *testing.T) {
+	s := newStarter(t)
+	m := firing(t)
+	m.Preset = ""
+	m.PromptTemplate = "An alert."
+	m.Fields = map[string]string{"alertname": "CustomAlert"}
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatalf("OnStart = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want 1", len(s.sub.got))
+	}
+	if want := (store.Origin{Source: "botMessage", Subject: "CustomAlert"}); s.sub.got[0].Origin != want {
+		t.Errorf("Origin = %+v; want %+v for a custom trigger's validated alertname", s.sub.got[0].Origin, want)
+	}
+}
+
+// The alert subject is text from the trigger, which the feedback adapter maps to a metric label, so only a value of the name
 // shape is kept (a template that never reads it has not checked it): a sentence, or no name at all, is kept as none.
 func TestOnStartKeepsTheAlertNameOnlyIfItIsNameShaped(t *testing.T) {
 	for _, tc := range []struct {
@@ -188,8 +205,8 @@ func TestOnStartKeepsTheAlertNameOnlyIfItIsNameShaped(t *testing.T) {
 			if err := s.OnStart(s.tel.Ctx, m); err != nil {
 				t.Fatalf("OnStart = %v", err)
 			}
-			if len(s.sub.got) != 1 || s.sub.got[0].Alert != "" {
-				t.Errorf("submitted %+v; want one turn that names no alert", s.sub.got)
+			if len(s.sub.got) != 1 || s.sub.got[0].Origin != (store.Origin{Source: "alertmanager"}) {
+				t.Errorf("submitted %+v; want one turn with the trigger source and no subject", s.sub.got)
 			}
 		})
 	}

@@ -1,14 +1,34 @@
-"""A three-tool MCP server for the full tier's scenario agents. Streamable HTTP, stateless, JSON answers. Test only.
+"""A three-tool MCP server for the full tier's scenario agents. Streamable HTTP, JSON answers, and test counters.
 
   add_numbers(a, b)        S11's agent lists it with requireApproval, so kagent pauses the task for approval before
                            the tool runs, and Agent Kourier, on a Binding that does not allow approvals, denies it.
   check_status(service)    S13's agent calls it: it works ("<service> is up").
   restart_service(service) S13's agent calls it: it fails, as an MCP tool reports a failure, with isError true and the
                            reason as its text ("restart refused: <service> is locked").
+
+The X-Scenario request header keys the in-memory execution counters. GET /_control/counters exposes a snapshot for
+the full-tier tests, so a call from one approval scenario cannot be mistaken for a call from another one.
 """
 import json
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+counters = {}
+counters_lock = threading.Lock()
+
+
+def record_call(scenario, name):
+    """Count an executed tools/call under its model scenario header."""
+    with counters_lock:
+        scenario_counts = counters.setdefault(scenario or "default", {})
+        scenario_counts[name] = scenario_counts.get(name, 0) + 1
+
+
+def counter_snapshot():
+    """Return a copy safe to serialize while another request records a call."""
+    with counters_lock:
+        return {scenario: dict(values) for scenario, values in counters.items()}
 
 
 def call(name, args):
@@ -34,6 +54,11 @@ class MCP(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def do_GET(self):
+        if self.path == "/_control/counters":
+            return self.send_json(counter_snapshot())
+        return self.send_json({"error": "not found"}, 404)
+
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         method, rid = req.get("method"), req.get("id")
@@ -51,8 +76,12 @@ class MCP(BaseHTTPRequestHandler):
                     "type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}, "required": ["a", "b"]}},
                 {"name": "check_status", "description": "Check that a service is up", "inputSchema": service},
                 {"name": "restart_service", "description": "Restart a service", "inputSchema": service}]}
+        elif method == "tools/call":
+            name, args = req["params"]["name"], req["params"]["arguments"]
+            record_call(self.headers.get("X-Scenario", ""), name)
+            result = call(name, args)
         else:
-            result = call(req["params"]["name"], req["params"]["arguments"])
+            return self.send_json({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}}, 404)
         self.send_json({"jsonrpc": "2.0", "id": rid, "result": result})
 
 

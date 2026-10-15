@@ -2,6 +2,7 @@ package kindmanifests_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -25,8 +26,8 @@ import (
 // Agent Kourier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go.
 
 // manifestFiles are the Kubernetes manifests of the sandbox, which must parse; some carry a placeholder that up.sh fills in.
-var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent.yaml",
-	"agent-kourier/config/chatconnection.yaml", "agent-kourier/config/binding.yaml", "agent-kourier/alert-trial/alert-binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-bedrock.yaml"}
+var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent-prompt.yaml", "agent.yaml",
+	"agent-kourier/config/chatconnection.yaml", "agent-kourier/config/binding.yaml", "agent-kourier/alert-trial/alert-binding.yaml", "modelconfig-anthropic.yaml", "modelconfig-openai.yaml", "modelconfig-openrouter.yaml", "modelconfig-bedrock.yaml"}
 
 // sandboxObjects returns every object of the given kind in the sandbox's file, as a map of its name.
 func sandboxObjects[T any](t *testing.T, file, kind string) map[string]T {
@@ -59,7 +60,7 @@ func rendered(t *testing.T, file string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.NewReplacer("__MODEL_NAME__", "claude-fake-model", "__MODEL_REGION__", "us-east-1", "__SLACK_CHANNEL_ID__", "C0SANDBOX01", "__ALERT_CHANNEL_ID__", trialChannel).Replace(string(raw))
+	return strings.NewReplacer("__MODEL_NAME__", "claude-fake-model", "__MODEL_BASE_URL__", "https://router.example.test/v1", "__MODEL_REGION__", "us-east-1", "__SLACK_CHANNEL_ID__", "C0SANDBOX01", "__ALERT_CHANNEL_ID__", trialChannel).Replace(string(raw))
 }
 
 func TestSandboxManifestsParse(t *testing.T) {
@@ -75,7 +76,7 @@ func TestSandboxManifestsParse(t *testing.T) {
 		}
 	}
 	// The placeholders are each in exactly the files that up.sh renders, and the rendered files hold none.
-	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"agent-kourier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}, {"agent-kourier/alert-trial/alert-binding.yaml", "__ALERT_CHANNEL_ID__"}} {
+	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-openrouter.yaml", "__MODEL_NAME__"}, {"modelconfig-openrouter.yaml", "__MODEL_BASE_URL__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"agent-kourier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}, {"agent-kourier/alert-trial/alert-binding.yaml", "__ALERT_CHANNEL_ID__"}} {
 		raw, err := os.ReadFile(sandboxDir + tc.file)
 		if err != nil {
 			t.Fatal(err)
@@ -236,9 +237,13 @@ var writeWord = regexp.MustCompile(`apply|create|delete|patch|scale|rollout|anno
 type sandboxAgent struct {
 	Spec struct {
 		Template struct {
-			ModelConfig  struct{ Name string } `json:"modelConfig"`
-			SystemPrompt string                `json:"systemPrompt"`
-			Tools        []struct {
+			ModelConfig      struct{ Name string } `json:"modelConfig"`
+			SystemPrompt     string                `json:"systemPrompt"`
+			SystemPromptFrom struct {
+				Name string `json:"name"`
+				Key  string `json:"key"`
+			} `json:"systemPromptFrom"`
+			Tools []struct {
 				MCP struct {
 					Server struct{ Kind, Name string } `json:"server"`
 					Tools  []string                    `json:"tools"`
@@ -250,6 +255,49 @@ type sandboxAgent struct {
 			Workload struct{ Image string } `json:"workload"`
 		} `json:"harness"`
 	} `json:"spec"`
+}
+
+const sandboxSystemPrompt = `You are an SRE assistant for a small Kubernetes cluster, answering in a Slack thread. The apps people ask about
+are in the namespace "shop" (checkout, catalog, recommender, inventory, search and frontend), and some of them
+are broken. You investigate and you explain. You never change anything.
+
+You are read-only. Your tools only read: you cannot create, edit, scale, restart, delete or exec into anything,
+and you must not try. If someone asks you to change something, say that you cannot, and say what a person
+with access would run to do it. You cannot read Secrets, and you must not ask for them.
+
+How to work:
+- Look before you answer. Start from the pods in the namespace, then their events, their logs (the previous
+  container's too, when one restarted), and the Services and their endpoints. Describe the resource that is
+  wrong. Do not guess from the name of an app.
+- Say what you checked. Close every answer with a short "Checked:" list, each item one thing you looked at
+  and what it showed (the pod, the event, the log line). Say plainly what you could not check.
+- Lead with the cause, then the evidence, then a suggested fix for a person to make. Keep it short: this is chat.
+- Quote a log line or an event exactly when it is the evidence. If asked to repeat or quote some text
+  verbatim, do.
+- If a question is ambiguous, or you need a choice made, ask the user with the ask_user tool.
+- If nothing is wrong with what you were asked about, say so and say how you know.
+`
+
+func resolveSandboxPrompt(agent sandboxAgent, configMaps map[string]corev1.ConfigMap) (string, error) {
+	if agent.Spec.Template.SystemPrompt != "" {
+		return "", fmt.Errorf("agent has an inline systemPrompt alongside systemPromptFrom")
+	}
+	ref := agent.Spec.Template.SystemPromptFrom
+	if ref.Name == "" || ref.Key == "" {
+		return "", fmt.Errorf("agent has an incomplete systemPromptFrom reference")
+	}
+	cm, ok := configMaps[ref.Name]
+	if !ok {
+		return "", fmt.Errorf("ConfigMap %q is missing", ref.Name)
+	}
+	prompt, ok := cm.Data[ref.Key]
+	if !ok {
+		return "", fmt.Errorf("ConfigMap %q key %q is missing", ref.Name, ref.Key)
+	}
+	if prompt == "" {
+		return "", fmt.Errorf("ConfigMap %q key %q is empty", ref.Name, ref.Key)
+	}
+	return prompt, nil
 }
 
 func TestSandboxAgentListsOnlyReadTools(t *testing.T) {
@@ -291,7 +339,19 @@ func TestSandboxAgent(t *testing.T) {
 	if !regexp.MustCompile(`@sha256:[0-9a-f]{64}$`).MatchString(a.Spec.Harness.Workload.Image) {
 		t.Errorf("harness image %q; want it pinned by digest", a.Spec.Harness.Workload.Image)
 	}
-	prompt := strings.ToLower(a.Spec.Template.SystemPrompt)
+	configs := sandboxObjects[corev1.ConfigMap](t, "agent-prompt.yaml", "ConfigMap")
+	cm := configs["sandbox-sre-prompt"]
+	if cm.Namespace != "kagent" || len(cm.Data) != 1 || cm.Data["systemPrompt"] == "" {
+		t.Fatalf("prompt ConfigMap = namespace %q, data keys %v; want kagent and one non-empty systemPrompt key", cm.Namespace, maps.Keys(cm.Data))
+	}
+	prompt, err := resolveSandboxPrompt(a, configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt != sandboxSystemPrompt {
+		t.Fatalf("system prompt changed; want the current sandbox instructions verbatim")
+	}
+	prompt = strings.ToLower(prompt)
 	for _, want := range []string{"never change anything", "read-only", "what you checked", "checked:", "ask_user", "shop"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the system prompt does not say %q", want)
@@ -325,6 +385,72 @@ func TestSandboxAgent(t *testing.T) {
 		if raw, _ := yaml.Marshal(spec); strings.Contains(string(raw), "mockllm") {
 			t.Errorf("%s names the mock model", file)
 		}
+	}
+}
+
+func TestSandboxPromptReference(t *testing.T) {
+	a := sandboxObjects[sandboxAgent](t, "agent.yaml", "Agent")["sandbox-sre"]
+	configs := sandboxObjects[corev1.ConfigMap](t, "agent-prompt.yaml", "ConfigMap")
+	ref := a.Spec.Template.SystemPromptFrom
+	if ref.Name != "sandbox-sre-prompt" || ref.Key != "systemPrompt" {
+		t.Fatalf("systemPromptFrom = %+v; want sandbox-sre-prompt/systemPrompt", ref)
+	}
+	for _, tc := range []struct {
+		name       string
+		configMaps map[string]corev1.ConfigMap
+		want       string
+	}{
+		{name: "valid", configMaps: configs, want: sandboxSystemPrompt},
+		{name: "updated content", configMaps: map[string]corev1.ConfigMap{
+			ref.Name: {Data: map[string]string{ref.Key: "A replacement read-only instruction."}},
+		}, want: "A replacement read-only instruction."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveSandboxPrompt(a, tc.configMaps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("resolved prompt %q; want %q", got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name       string
+		configMaps map[string]corev1.ConfigMap
+		want       string
+	}{
+		{name: "missing ConfigMap", configMaps: map[string]corev1.ConfigMap{}, want: `ConfigMap "sandbox-sre-prompt" is missing`},
+		{name: "missing key", configMaps: map[string]corev1.ConfigMap{
+			ref.Name: {Data: map[string]string{"other": "not the prompt"}},
+		}, want: `ConfigMap "sandbox-sre-prompt" key "systemPrompt" is missing`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := resolveSandboxPrompt(a, tc.configMaps); err == nil || err.Error() != tc.want {
+				t.Errorf("resolve error = %v; want %q", err, tc.want)
+			}
+		})
+	}
+	inline := a
+	inline.Spec.Template.SystemPrompt = "inline instruction"
+	if _, err := resolveSandboxPrompt(inline, configs); err == nil || !strings.Contains(err.Error(), "inline systemPrompt") {
+		t.Errorf("inline prompt alongside reference: error = %v", err)
+	}
+}
+
+func TestSandboxUpAppliesPromptBeforeAgent(t *testing.T) {
+	up, err := os.ReadFile(sandboxDir + "up.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(up)
+	prompt := `"${K[@]}" apply -f "${SBX}/agent-prompt.yaml" >/dev/null`
+	agent := `"${K[@]}" apply -f "${SBX}/agent.yaml" >/dev/null`
+	if strings.Count(s, prompt) != 1 {
+		t.Fatalf("up.sh applies the prompt manifest %d times; want once", strings.Count(s, prompt))
+	}
+	if strings.Index(s, prompt) > strings.Index(s, agent) {
+		t.Error("up.sh applies the Agent before its system prompt ConfigMap")
 	}
 }
 

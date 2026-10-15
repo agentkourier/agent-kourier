@@ -2,7 +2,14 @@
 
 package testhooks
 
-import "os"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+)
 
 // armed is read once, at startup, and never changed.
 var armed = os.Getenv(FaultEnv) == CrashAfterPost
@@ -28,3 +35,36 @@ func crashSelf() { os.Exit(137) }
 
 // SlackAPIURL returns AGENTKOURIER_SLACK_API_URL, to point Agent Kourier at the fake Slack.
 func SlackAPIURL() string { return os.Getenv(SlackAPIURLEnv) }
+
+// BeforeSend parks a test runner at the private stub control gate when the before-send fault is armed.
+func BeforeSend(ctx context.Context, messageID string) error {
+	if os.Getenv(FaultEnv) != "hold-before-send" {
+		return nil
+	}
+	return holdBeforeSend(ctx, messageID)
+}
+
+//go:noinline
+func holdBeforeSend(ctx context.Context, messageID string) error {
+	sender, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("testhooks: hostname: %w", err)
+	}
+	body, err := json.Marshal(map[string]string{"message_id": messageID, "sender": sender})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://stubagent.e2e.svc.cluster.local:8080/_control/before-send", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("testhooks: before-send gate: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("testhooks: before-send gate status %d", resp.StatusCode)
+	}
+	return nil
+}

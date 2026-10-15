@@ -43,7 +43,7 @@ const (
 	Unmentioned Disposition = "unmentioned"
 )
 
-// Inbound is one turn from a person or an alert.
+// Inbound is one turn from a person or an external trigger.
 type Inbound struct {
 	Key Key
 	// Binding is used only to create a session: an existing one keeps the Binding it was
@@ -57,17 +57,16 @@ type Inbound struct {
 	// the adapter decides. A Binding whose threadReplies is mention takes a reply in a thread it owns
 	// only if this is set (or Create is).
 	Mentioned bool
-	// Create lets the turn make the session if there is none: an @mention, a DM, an alert's
+	// Create lets the turn make the session if there is none: an @mention, a DM, or a trigger's
 	// first prompt. A plain thread reply leaves it false.
 	Create bool
 	// ChannelThreadReplies is the chat.threadReplies of the Binding that owns the channel now, empty when none does
 	// (the default mode, all). It is read only when the session's own Binding has left the config, and then it
 	// decides whether a reply that does not mention Agent Kourier is answered with the Binding-gone notice (spec 8.2).
 	ChannelThreadReplies v1alpha1.ThreadReplies
-	// Alert is the name of the alert the thread is started for, which the session keeps for the feedback on its
-	// messages (spec 8.7). Like Binding it is used only to create a session. The caller has bounded it: it is
-	// text out of an alert.
-	Alert string
+	// Origin identifies the bounded source and subject the thread is started for. Like Binding it is used only to
+	// create a session; a follow-up never replaces the session's origin.
+	Origin store.Origin
 }
 
 // Result is the outcome of a Submit. Queued means the turn has to wait for a task that is
@@ -259,7 +258,7 @@ func (m *Manager) carryOut(ctx context.Context, in Inbound, owned bool, binding 
 		}
 		// Before the turn is queued or anything is sent (spec 8.2); the agent's first
 		// response fills in the contextId.
-		if err := m.cfg.Store.UpsertSession(ctx, store.Session{Key: in.Key, Binding: in.Binding, Alert: in.Alert, Agent: backend.AgentName, LastActivity: now}); err != nil {
+		if err := m.cfg.Store.UpsertSession(ctx, store.Session{Key: in.Key, Binding: in.Binding, Origin: in.Origin, Agent: backend.AgentName, LastActivity: now}); err != nil {
 			return Result{}, "", fmt.Errorf("create session %+v: %w", in.Key, err)
 		}
 		res.AcknowledgmentConfigured = backend.AcknowledgmentConfigured

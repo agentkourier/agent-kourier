@@ -142,7 +142,8 @@ whose outcome was unknown because the stream dropped before the first event, the
 a second time and post a second answer. For a read-only agent that wastes a model call and
 nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
 Kourier does not see a tool call, so the agent's own tool list and the role behind its tools
-are the only fence on a write, and tool approvals from Slack (planned) will come through kagent's extension, which only the `kagent-v1` dialect speaks.
+are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
+`interactions.toolApprovals: true`; the generic `a2a` dialect accepts no structured approval pause.
 
 ## `Multi-Attach error for volume` while the pod rolls
 

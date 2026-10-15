@@ -43,8 +43,19 @@ Binding's turns reach one of its agents.
     same token owner. A Binding with `tokenSecretRef` must target an OIDC-mode kagent: in insecure mode kagent ignores
     the token and takes the user from `?user_id=` or `X-User-Id`; with neither, it runs every turn as `admin@kagent.dev`.
 
-    **5. Turn on questions** with `interactions.askUser: true` in the Binding, if the agent should ask people things.
-    A tool approval request is denied, the agent receives the denial and the thread is told that this Binding does not allow approvals (approvals from Slack are not built yet).
+    **5. Configure interactions.** Set `interactions.askUser: true` when the agent should ask people questions. Set
+    `interactions.toolApprovals: true` when a write-capable agent should pause for a Slack decision. Approvals are
+    disabled by default. Optionally set `interactions.approverGroups` to Slack user group IDs; without groups, every
+    non-bot channel member may decide and the config loader warns. With groups, the decider must belong to one of them,
+    belong to the channel, and not be a bot. The Slack app needs the `usergroups:read` bot scope when groups are used;
+    reinstall the app after adding that scope. See [Let the agent ask questions](agent-questions.md) for the controls,
+    timeout and audit behavior.
+
+    `toolApprovals` and `askUser` are independent. A tool approval on a Binding where `toolApprovals` is false is denied
+    through kagent with a fixed reason and a notice in the thread. A prompt that cannot be shown exactly or cannot fit in
+    one message is refused and the task is cancelled. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers`
+    and denied `check_status` in one two-tool pause; only `add_numbers` executed. The broker's end-to-end suite verifies this
+    with fake Slack and pinned kagent 1.0.0-alpha5.
 
 === "kagent 0.9.x"
 

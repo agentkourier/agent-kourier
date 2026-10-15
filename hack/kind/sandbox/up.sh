@@ -124,6 +124,7 @@ else
   apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
 fi
 render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml" | "${K[@]}" apply -f - >/dev/null
+"${K[@]}" apply -f "${SBX}/agent-prompt.yaml" >/dev/null
 "${K[@]}" apply -f "${SBX}/agent.yaml" >/dev/null
 # The agent only after kagent has discovered the tool server's tools (the full tier's scenario agents wait the same way).
 "${K[@]}" -n kagent wait --for=condition=Accepted remotemcpserver/sandbox-tools modelconfig/sandbox-model --timeout=180s

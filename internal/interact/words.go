@@ -13,7 +13,7 @@ import (
 // request to run tools is decided. None holds anything the agent wrote. They are picked by the kind of the decoded request
 // (wordsOf), never by the row's kind, which says "nested" for an approval that a sub-agent raised.
 type words struct {
-	gone, notReady, notMember, late, invalid, timedOut, closed, gaveUp string
+	gone, policyDenied, notReady, notMember, late, invalid, timedOut, closed, gaveUp string
 	// notApprover is told to a member who is in none of the Binding's approver groups. Only an approval has it: a question
 	// is not gated by groups. It names no group.
 	notApprover string
@@ -22,6 +22,9 @@ type words struct {
 	// of the one told, member of a group or not: their decision could not be checked, so it was not taken. It names no group
 	// and holds nothing from the platform's error.
 	groupsBroken string
+	// unrecorded is told to a person whose decision the audit cannot write (the row cannot be built, which no retry mends), so it
+	// was not taken. It holds nothing from the error, and the press is not tried again.
+	unrecorded string
 	// firstNone is told when someone else decided first and is not named; firstWords follows the mention of the one who did.
 	firstNone, firstWords string
 }
@@ -31,10 +34,12 @@ func wordsOf(k dialect.Kind) words {
 	if k == dialect.ToolApproval {
 		return words{
 			gone:         "This request is no longer available.",
+			policyDenied: "This request was denied because this Binding does not allow approvals.",
 			notReady:     "This request is not ready yet. Please press again in a moment.",
 			notMember:    "Only members of this channel can decide this request.",
 			notApprover:  "Only approvers of this Binding can decide this request.",
 			groupsBroken: "Your decision could not be checked, because this Binding's approver groups cannot be read, so it was not taken. An operator must fix this.",
+			unrecorded:   "Your decision could not be recorded, so it was not taken. An operator must fix this.",
 			late:         "This request has timed out, so your decision was not taken.",
 			invalid:      "That decision could not be used. Please check it and press again.",
 			timedOut:     "This request has timed out.",
@@ -46,7 +51,7 @@ func wordsOf(k dialect.Kind) words {
 	}
 	return words{
 		gone: textGone, notReady: textNotReady, notMember: textNotMember, late: textLate, invalid: textInvalid,
-		timedOut: textTimedOut, closed: textClosed, gaveUp: textGaveUp, firstNone: textFirstNone, firstWords: textFirstWords,
+		timedOut: textTimedOut, closed: textClosed, gaveUp: textGaveUp, unrecorded: textUnrecorded, firstNone: textFirstNone, firstWords: textFirstWords,
 	}
 }
 

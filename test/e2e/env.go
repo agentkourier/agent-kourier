@@ -11,6 +11,10 @@ type Env struct {
 	SinkURL         string // the sink receiver
 	StubURL         string // the stub agent: /agents/ and /_control/release/
 	AlertmanagerURL string // Alertmanager's API
+	// ScenarioMCPURL is the full tier's scripted MCP server control surface. It is
+	// kept in Env so a scenario can read execution counters without coupling the
+	// test to a cluster-local hostname.
+	ScenarioMCPURL string
 	// AgentKourierURL is Agent Kourier's health and metrics port: the fast tier's Service of that port alone
 	// (the chart's Service, with charts/agent-kourier/ci/fast-values.yaml).
 	AgentKourierURL string
@@ -37,6 +41,7 @@ func NewEnv(getenv func(string) string) Env {
 		SinkURL:         get("E2E_SINK_URL", "http://sink.e2e.svc.cluster.local:8080"),
 		StubURL:         get("E2E_STUB_URL", "http://stubagent.e2e.svc.cluster.local:8080"),
 		AlertmanagerURL: get("E2E_ALERTMANAGER_URL", "http://alertmanager.monitoring.svc.cluster.local:9093"),
+		ScenarioMCPURL:  get("E2E_SCENARIO_MCP_URL", "http://scenariomcp.kagent.svc.cluster.local:8082"),
 		AgentKourierURL: get("E2E_AGENTKOURIER_URL", "http://agent-kourier.agent-kourier.svc.cluster.local:8080"),
 		SignalerURL:     get("E2E_SIGNALER_URL", "http://signaler.e2e.svc.cluster.local:8080"),
 		Tier:            getenv("E2E_TIER"),

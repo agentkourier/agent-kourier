@@ -51,3 +51,20 @@ func (s *Stub) Release(ctx context.Context, gate string) error {
 	}
 	return s.c.do(ctx, http.MethodPost, "/_control/release/"+gate, nil, nil)
 }
+
+// ArmSendGate holds the first runner reaching the stub's private before-send hook.
+func (s *Stub) ArmSendGate(ctx context.Context) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/send-gate/arm", nil, nil)
+}
+
+// ReleaseSendGate lets the held runner continue to its agent's send fence.
+func (s *Stub) ReleaseSendGate(ctx context.Context) error {
+	return s.c.do(ctx, http.MethodPost, "/_control/send-gate/release", nil, nil)
+}
+
+// SendGate reads the held message and the counts of actual A2A send attempts.
+func (s *Stub) SendGate(ctx context.Context) (stubagent.SendGateState, error) {
+	var state stubagent.SendGateState
+	err := s.c.do(ctx, http.MethodGet, "/_control/send-gate", nil, &state)
+	return state, err
+}

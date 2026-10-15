@@ -139,7 +139,7 @@ step "agent-kourier: image, the Binding's Dex token, config, chart"
 # chart has a hand-made Deployment, which deploy_agentkourier replaces, keeping the volume.
 load_agentkourier_image
 refresh_dex_token
-deploy_agentkourier "${FULL}/agent-kourier/agentbackend.yaml"
+deploy_agentkourier "${FULL}/agent-kourier/agentbackend.yaml" "${FULL}/agent-kourier/config"
 
 step "settle: the kagent controller is ready and the front door answers by its Service name"
 settle_full_tier

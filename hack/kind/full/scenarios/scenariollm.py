@@ -14,6 +14,8 @@ scenario agent in scenarios.yaml; everything else comes from the conversation ka
           "Answers: ..." with what it was given, an empty one as (none) (S3).
   approve calls the MCP tool add_numbers(3, 5), which needs approval; "I have added 3 and 5. The result is 8."
           if it ran, and "Resumed after the tool result." if the call was rejected (S11).
+  approval calls the same tool for the approval-enabled full-tier scenarios (S19-S22 and S24), then says it
+            received the result. approval-multi emits add_numbers and check_status in one response with distinct IDs (S23).
   tools   says "Checking the service.", calls the MCP tool check_status(service="api"), says "It is up, so I will
           restart it.", calls restart_service(service="api"), which fails, and says "The restart was refused." Which
           of the three model calls this is comes from the tool results since the last user message (S13). This is the
@@ -81,11 +83,15 @@ def answers_of(tool_text):
 
 
 class Script:
-    """What the model does with one request: some text, held on a gate after its first part, and then, if there is
-    one, a tool call."""
+    """What the model does with one request: text, an optional gate, and zero or more tool calls."""
 
-    def __init__(self, parts=(), hold=None, tool=None):
-        self.parts, self.hold, self.tool = list(parts), hold, tool
+    def __init__(self, parts=(), hold=None, tool=None, tools=None):
+        if tool is not None and tools is not None:
+            raise ValueError("Script accepts tool or tools, not both")
+        self.parts, self.hold = list(parts), hold
+        self.tools = list(tools if tools is not None else (() if tool is None else (tool,)))
+        # Keep the old attribute for callers that inspect a one-tool Script.
+        self.tool = self.tools[0] if len(self.tools) == 1 else None
 
 
 def tool_results_since_user(messages):
@@ -121,6 +127,14 @@ def play(scenario, messages):
         if last.get("role") == "tool":
             return Script(["Resumed after the tool result." if "reject" in last_text.lower() else "I have added 3 and 5. The result is 8."])
         return Script(tool=("add_numbers", {"a": 3, "b": 5}))
+    if scenario == "approval":
+        if last.get("role") == "tool":
+            return Script(["Approval result received."])
+        return Script(tools=[("add_numbers", {"a": 3, "b": 5})])
+    if scenario == "approval-multi":
+        if last.get("role") == "tool":
+            return Script(["Approval results received."])
+        return Script(tools=[("add_numbers", {"a": 3, "b": 5}), ("check_status", {"service": "api"})])
     if scenario == "tools":
         done = tool_results_since_user(messages)
         if done == 0:
@@ -182,10 +196,12 @@ class Handler(BaseHTTPRequestHandler):
             send({"role": "assistant", "content": part})
             if script.hold and i == 0:
                 gate(script.hold).wait(timeout=GATE_TIMEOUT)
-        if script.tool:
-            name, args = script.tool
-            send({"role": "assistant", "content": None, "tool_calls": [{"index": 0, "id": call_id(name), "type": "function",
-                                                                          "function": {"name": name, "arguments": json.dumps(args)}}]})
+        if script.tools:
+            calls = []
+            for index, (name, args) in enumerate(script.tools):
+                calls.append({"index": index, "id": call_id(name) if len(script.tools) == 1 else call_id(name, index),
+                              "type": "function", "function": {"name": name, "arguments": json.dumps(args)}})
+            send({"role": "assistant", "content": None, "tool_calls": calls})
             send({}, "tool_calls")
         else:
             send({}, "stop")
@@ -194,16 +210,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-def call_id(name):
+def call_id(name, index=None):
     """A tool call's ID, its own for each tool: a turn that calls two tools must not give both one ID."""
-    return "call_scenario_" + name
+    return "call_scenario_" + name if index is None else "call_scenario_%s_%d" % (name, index)
 
 
 def completion(script):
-    if script.tool:
-        name, args = script.tool
-        message = {"role": "assistant", "content": "".join(script.parts) or None, "tool_calls": [{
-            "id": call_id(name), "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+    if script.tools:
+        calls = []
+        for index, (name, args) in enumerate(script.tools):
+            calls.append({"id": call_id(name) if len(script.tools) == 1 else call_id(name, index), "type": "function",
+                          "function": {"name": name, "arguments": json.dumps(args)}})
+        message = {"role": "assistant", "content": "".join(script.parts) or None, "tool_calls": calls}
         finish = "tool_calls"
     else:
         message, finish = {"role": "assistant", "content": "".join(script.parts)}, "stop"

@@ -226,6 +226,61 @@ func TestAPauseIsGivenUpAtItsOwnDeadline(t *testing.T) {
 	}
 }
 
+// TestARecoveredPauseRetriesAfterItsOriginalDeadline: recovery gets a fresh retry window when the task's
+// own pause deadline has already elapsed. A transient audit failure during recovery therefore gets another
+// attempt without requiring another process restart.
+func TestARecoveredPauseRetriesAfterItsOriginalDeadline(t *testing.T) {
+	r := newTap(t, func(c *interact.TapConfig) {
+		c.Backoff, c.MaxBackoff = time.Millisecond, time.Millisecond
+		c.Now = func() time.Time { return d0.Add(4 * time.Minute) } // the original deadline was d0 + 3m
+	})
+	r.pauses.handle = func(context.Context, int, interact.Pause) error {
+		if r.pauses.calls() == 1 {
+			return errBoom
+		}
+		return nil
+	}
+	task := pausedTask("task-1", "msg-1", d0)
+	recovered := tapRef
+	recovered.Recovered, recovered.Restarted = true, true
+	r.tap.Turn(t.Context(), recovered)(agent.FinalEvent{Task: &task})
+	waitFor(t, "the recovered retry", func() bool { return r.pauses.calls() == 2 })
+}
+
+// TestAFollowedPauseKeepsItsOriginalRetryWindow: a lost stream continues the output of the turn, but it is not a
+// process restart and a failed pause hand-off must still give up at the original Binding deadline.
+func TestAFollowedPauseKeepsItsOriginalRetryWindow(t *testing.T) {
+	for name, restarted := range map[string]bool{"follow": false, "restart": true} {
+		t.Run(name, func(t *testing.T) {
+			r := newTap(t, func(c *interact.TapConfig) {
+				c.Backoff, c.MaxBackoff = time.Millisecond, time.Millisecond
+				c.Now = func() time.Time { return d0.Add(4 * time.Minute) } // the original deadline was d0 + 3m
+			})
+			r.pauses.handle = func(_ context.Context, n int, p interact.Pause) error {
+				if p.Recovered != restarted {
+					t.Errorf("pause Recovered = %v; want %v", p.Recovered, restarted)
+				}
+				if n == 1 {
+					return errBoom
+				}
+				return nil
+			}
+			task := pausedTask("task-1", "msg-1", d0)
+			ref := tapRef
+			ref.Recovered, ref.Restarted = true, restarted
+			r.tap.Turn(t.Context(), ref)(agent.FinalEvent{Task: &task})
+			if restarted {
+				waitFor(t, "the restarted retry", func() bool { return r.pauses.calls() == 2 })
+				return
+			}
+			waitFor(t, "the original deadline to give up", func() bool { return strings.Contains(r.logs.String(), "level=ERROR") })
+			if got := r.pauses.calls(); got != 1 {
+				t.Errorf("%d pause hand-offs; want one before the original deadline ends the follow", got)
+			}
+		})
+	}
+}
+
 // TestAPauseSeenAgainIsHandedOffAgain: nothing is remembered once a hand-off is over, because the intake is
 // what knows what is done, and a pause that comes again after a restart is how an answered one is sent again
 // (28h). A pause whose hand-off is still running is not started twice, and another pause of the same task is.
@@ -237,7 +292,7 @@ func TestAPauseSeenAgainIsHandedOffAgain(t *testing.T) {
 	// A restart: a new tap, and the turn that finds the task again, marked recovered.
 	again := newTap(t, nil)
 	recovered := tapRef
-	recovered.Recovered = true
+	recovered.Recovered, recovered.Restarted = true, true
 	again.tap.Turn(t.Context(), recovered)(agent.FinalEvent{Task: &task})
 	waitFor(t, "the hand-off after the restart", func() bool { return again.pauses.calls() == 1 })
 	// And on the same tap, after the first is over.

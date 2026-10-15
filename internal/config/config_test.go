@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,8 +59,43 @@ func TestLoadSpecExamples(t *testing.T) {
 	// Files load in lexical order: binding-minimal.yaml before binding.yaml.
 	minimal := set.Bindings[0]
 	if minimal.Name != "chat-only" || minimal.Spec.Chat.Output != v1alpha1.OutputLive ||
-		minimal.Spec.Interactions.Timeout.Duration != 30*time.Minute {
+		minimal.Spec.Interactions.Timeout.Duration != 30*time.Minute || minimal.Spec.Interactions.ToolApprovals || len(minimal.Spec.Interactions.ApproverGroups) != 0 {
 		t.Errorf("defaults not applied to %s: %+v", minimal.Name, minimal.Spec)
+	}
+}
+
+func TestLoadToolApprovals(t *testing.T) {
+	valid := bindingDoc + `  interactions:
+    toolApprovals: true
+    approverGroups: [S0123456789, S9876543210]
+`
+	set, err := Load(context.Background(), write(t, map[string]string{"b.yaml": valid}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Bindings[0].Spec.Interactions; !got.ToolApprovals || !slices.Equal(got.ApproverGroups, []string{"S0123456789", "S9876543210"}) {
+		t.Errorf("interactions = %+v; want enabled approvals and the configured groups", got)
+	}
+
+	withoutGroups := bindingDoc + "  interactions: { toolApprovals: true }\n"
+	if set, err := Load(context.Background(), write(t, map[string]string{"b.yaml": withoutGroups})); err != nil || set == nil {
+		t.Errorf("tool approvals without groups: Load = %+v, %v; want success", set, err)
+	}
+
+	withoutFlag := bindingDoc + "  interactions: { approverGroups: [S0123456789] }\n"
+	if _, err := Load(context.Background(), write(t, map[string]string{"b.yaml": withoutFlag})); err == nil || !strings.Contains(err.Error(), "requires spec.interactions.toolApprovals: true") {
+		t.Errorf("approver groups without tool approvals: Load error = %v; want the policy error", err)
+	}
+	emptyWithoutFlag := bindingDoc + "  interactions: { approverGroups: [] }\n"
+	set, err = Load(context.Background(), write(t, map[string]string{"b.yaml": emptyWithoutFlag}))
+	if err != nil {
+		t.Fatalf("empty approver groups without tool approvals: Load error = %v; want success", err)
+	}
+	if len(set.Bindings) != 1 {
+		t.Fatalf("loaded %d bindings; want one", len(set.Bindings))
+	}
+	if got := set.Bindings[0].Spec.Interactions; got.ToolApprovals || len(got.ApproverGroups) != 0 {
+		t.Errorf("interactions = %+v; want approvals disabled and no approver groups", got)
 	}
 }
 
@@ -241,17 +277,6 @@ func TestLoadRejects(t *testing.T) {
 			name:  "removed status field",
 			files: map[string]string{"b.yaml": bindingDoc + "status:\n  conditions: []\n"},
 			want:  []string{`b.yaml#1 Binding sre/sre-alerts: status: unknown field`},
-		},
-		{
-			// Fields of features that are not built are not in the API: they return with the feature.
-			name:  "removed interactions.approverGroups field",
-			files: map[string]string{"b.yaml": bindingDoc + "  interactions: { approverGroups: [sre-oncall] }\n"},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: spec.interactions.approverGroups: unknown field`},
-		},
-		{
-			name:  "removed interactions.toolApprovals field",
-			files: map[string]string{"b.yaml": bindingDoc + "  interactions: { toolApprovals: false }\n"},
-			want:  []string{`b.yaml#1 Binding sre/sre-alerts: spec.interactions.toolApprovals: unknown field`},
 		},
 		{
 			name: "removed directMessages field",

@@ -181,6 +181,18 @@ func (a *audits) Decision(_ context.Context, actor audit.Actor, d audit.Decision
 	return a.err
 }
 
+func (a *audits) setError(err error) {
+	a.mu.Lock()
+	a.err = err
+	a.mu.Unlock()
+}
+
+func (a *audits) decisionCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.got)
+}
+
 // presses answers the sweep's question whether a press is waiting to be decided.
 type presses struct {
 	mu      sync.Mutex
@@ -201,7 +213,10 @@ type flakyResolve struct {
 	*sqlite.Store
 	fail     bool
 	conflict bool // the interaction was answered after the sweep listed it
-	log      *callLog
+	// win records a person's answer before ResolveInteraction reports the race, so tests can
+	// assert that the timeout does not overwrite the first-complete decision.
+	win func(context.Context, string)
+	log *callLog
 	// sessionErr fails the reads of a session, as a store that is down does.
 	sessionErr error
 }
@@ -216,6 +231,9 @@ func (s *flakyResolve) GetSession(ctx context.Context, key store.ConversationKey
 func (s *flakyResolve) ResolveInteraction(ctx context.Context, id string, state store.InteractionState, now time.Time) error {
 	s.log.add("resolve")
 	if s.conflict {
+		if s.win != nil {
+			s.win(ctx, id)
+		}
 		return store.ErrConflict
 	}
 	if s.fail {
@@ -256,6 +274,8 @@ type sweepRig struct {
 	logs  *logBuf
 	look  *sweepLookup
 	outs  []string // "binding outcome", for each call of OnApprovalOutcome
+	// reopened is what the session tells of the denials it took and did not deliver; a test plays the session with it.
+	reopened *interact.Reopened
 }
 
 // sweepLookup is the Lookup of the sweep: the Binding of a name, or err for a name it does not have.
@@ -273,7 +293,7 @@ func (l *sweepLookup) Binding(name string) (interact.Binding, error) {
 func (r *sweepRig) sweeper(t *testing.T, mod func(*interact.SweepConfig)) *interact.Sweeper {
 	t.Helper()
 	cfg := interact.SweepConfig{
-		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press,
+		Store: r.st, Sessions: r.st, Lookup: r.look, Session: r.sess, Updater: r.upd, Outbox: r.enq, Auditor: r.aud, Presses: r.press, Reopened: r.reopened,
 		Now:       func() time.Time { return *r.clock },
 		Logger:    slog.New(slog.NewTextHandler(r.logs, nil)),
 		OnTimeout: func(id string) { r.mu.Lock(); r.hooks = append(r.hooks, id); r.mu.Unlock() },
@@ -316,6 +336,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	now := t0.Add(timeout + time.Minute) // a minute past the deadline of a pause made at t0
 	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}},
 		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}}}}
+	r.reopened = interact.NewReopened(st)
 	r.ob = newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	r.enq = &flakyEnqueue{Outbox: r.ob}

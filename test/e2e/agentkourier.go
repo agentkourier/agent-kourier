@@ -1,17 +1,25 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 // maxMetrics is the most of a /metrics body that Counter reads.
 const maxMetrics = 4 << 20
+
+type auditPageResponse struct {
+	Entries []store.AuditEntry `json:"entries"`
+}
 
 // ErrNoSample is wrapped by the error Counter returns when no sample has the name and labels. A
 // counter that has not been incremented may not be exposed at all, so a caller that expects zero
@@ -65,6 +73,51 @@ func (c *AgentKourier) Counter(ctx context.Context, name string, labels map[stri
 		return found[0], nil
 	}
 	return 0, fmt.Errorf("e2e: %d samples of %s match %v; add labels to say which", len(found), name, labels)
+}
+
+// AuditEntries reads the persisted audit rows exposed by the testhooks image.
+func (c *AgentKourier) AuditEntries(ctx context.Context) ([]store.AuditEntry, error) {
+	var all []store.AuditEntry
+	var afterSeq int64
+	for {
+		page, err := c.auditPage(ctx, afterSeq)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			return all, nil
+		}
+		for i, entry := range page {
+			if entry.Sequence <= afterSeq || (i > 0 && entry.Sequence <= page[i-1].Sequence) {
+				return nil, fmt.Errorf("e2e: audit page cursor did not advance past %d", afterSeq)
+			}
+		}
+		all = append(all, page...)
+		afterSeq = page[len(page)-1].Sequence
+	}
+}
+
+func (c *AgentKourier) auditPage(ctx context.Context, afterSeq int64) ([]store.AuditEntry, error) {
+	path := "/__testhooks/audit"
+	if afterSeq > 0 {
+		path += "?after_seq=" + strconv.FormatInt(afterSeq, 10)
+	}
+	var raw json.RawMessage
+	if err := c.c.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+		return nil, err
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil, errors.New("e2e: audit response must be an object")
+	}
+	var response auditPageResponse
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, fmt.Errorf("e2e: decode audit page: %w", err)
+	}
+	if response.Entries == nil {
+		return nil, errors.New("e2e: audit page has no entries")
+	}
+	return response.Entries, nil
 }
 
 // getText returns the body of a 2xx answer to GET path, up to limit bytes (more is an error).

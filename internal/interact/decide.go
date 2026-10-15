@@ -31,6 +31,8 @@ const (
 	textTimedOut  = "This question has timed out."
 	textClosed    = "This question is closed."
 	textFirstNone = "Someone else answered this question first."
+	// textUnrecorded is told when the audit cannot write the answer, which is then not taken.
+	textUnrecorded = "Your answer could not be recorded, so it was not taken. An operator must fix this."
 	// textFirstWords follows the mention of the one who did, in the message that tells the loser.
 	textFirstWords = "answered this question first."
 )
@@ -84,7 +86,7 @@ type DecideConfig struct {
 	Logger   *slog.Logger     // slog.Default() if nil
 	// OnDecision is called once for each press decided, with its result: "answered" (it
 	// won), "superseded" (another decision came first), "late" (made at or after the deadline) or
-	// "invalid" (the dialect refused the answer). It is for a metric. Required.
+	// "invalid" (the dialect refused the answer), or "unrecorded" (the audit row cannot be written). It is for a metric. Required.
 	OnDecision func(result string)
 	// OnApprovalOutcome is called once for each tool approval a press decides, with the Binding's name and how it was
 	// decided: OutcomeApproved (every tool), OutcomeDenied (every tool) or OutcomePartiallyApproved. It is for the
@@ -128,11 +130,12 @@ func NewDecider(cfg DecideConfig) (*Decider, error) {
 type verdict int
 
 const (
-	won   verdict = iota // it is the answer
-	again                // the same person already won: this is the press decided again after a crash
-	late                 // made at or after the deadline
-	lost                 // another decision was first, or the question is closed
-	gone                 // there is no such interaction
+	won        verdict = iota // it is the answer
+	again                     // the same person already won: this is the press decided again after a crash
+	late                      // made at or after the deadline
+	lost                      // another decision was first, or the question is closed
+	gone                      // there is no such interaction
+	unrecorded                // the audit cannot write the decision as built, and no retry will: the press is over, nothing is taken
 )
 
 // Decide takes the decision, in this order: build the message that answers, audit the decision, record
@@ -140,7 +143,9 @@ const (
 // dialect refuses is told to the person, and nothing is recorded, so no interaction is left answered
 // with an answer that can never be sent. The audit comes before the decision takes effect, and a failed
 // audit write stops it (spec 8.6 step 7): the error is returned, and the press, which stays recorded, is
-// decided again. It returns nil when the press is decided for good, whichever way it came out. A send
+// decided again. The one exception is a row that cannot be built (the error wraps store.ErrInvalid), which fails the same on
+// every try: nothing is recorded or sent, the person is told, and Decide returns nil so that the press is finished and does not
+// hold the presses behind it. It returns nil when the press is decided for good, whichever way it came out. A send
 // that fails is an error too: the answer is recorded, so the press, decided again, is the same person's
 // retry, which sends the recorded answer again (recorded) without a second decision, whatever the retry itself holds.
 //
@@ -168,7 +173,16 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 	d.mu.Lock()
 	v, cur, err := d.take(ctx, pd)
 	d.mu.Unlock()
-	if err != nil {
+	if v == unrecorded {
+		// The audit row of this decision cannot be written as built, and it is the same on every try. The decision is neither
+		// recorded nor sent and the interaction stays pending, so a decision that takes effect is still always an audited one. The
+		// press is finished and not retried: a retry would hold the later presses of the interaction, and the sweep, until the
+		// worker's cap. The person is told in fixed words, and the operator by one Error line naming the Binding and the interaction.
+		d.cfg.Logger.ErrorContext(ctx, "interact: the audit row of a decision cannot be written as built; the press is ended and nothing is decided", "binding", pd.BindingName, "interaction", row.ID, "err", err)
+		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.unrecorded})
+		d.count("unrecorded")
+		return nil
+	} else if err != nil {
 		return err
 	}
 	switch v {
@@ -231,7 +245,9 @@ func (d *Decider) replacePrompt(ctx context.Context, id string) {
 	}
 }
 
-// take reads the interaction and records the decision if the press can win. The caller holds d.mu.
+// take reads the interaction and records the decision if the press can win. The caller holds d.mu. A decision whose audit
+// row cannot be written (the audit's error wraps store.ErrInvalid, so every try fails alike) is verdict unrecorded, with the
+// error; any other audit failure is an error alone, for the press to be tried again.
 func (d *Decider) take(ctx context.Context, pd PressDecision) (verdict, store.Interaction, error) {
 	cur, err := d.cfg.Store.GetInteraction(ctx, pd.Interaction.ID)
 	switch {
@@ -248,7 +264,9 @@ func (d *Decider) take(ctx context.Context, pd PressDecision) (verdict, store.In
 	}
 	actor := audit.Actor{User: pd.User, Binding: pd.BindingName, Identity: pd.Binding.Identity}
 	decision := audit.Decision{InteractionID: cur.ID, TaskID: a2a.TaskID(cur.TaskID), Result: audit.DecisionAnswered, At: pd.PressedAt, Answer: &pd.Answer, ToolNames: toolNames(pd.In, pd.Answer)}
-	if err := d.cfg.Auditor.Decision(ctx, actor, decision); err != nil {
+	if err := d.cfg.Auditor.Decision(ctx, actor, decision); errors.Is(err, store.ErrInvalid) {
+		return unrecorded, cur, fmt.Errorf("interact: audit the decision on %s: %w", cur.ID, err) // no retry mends a row that cannot be built
+	} else if err != nil {
 		return 0, cur, fmt.Errorf("interact: audit the decision on %s: %w", cur.ID, err)
 	}
 	answer, err := json.Marshal(pd.Answer)
@@ -352,6 +370,8 @@ func lostMessage(w words, cur store.Interaction) chat.Message {
 		return chat.Message{Fallback: w.timedOut}
 	case cur.State != store.InteractionAnswered:
 		return chat.Message{Fallback: w.closed}
+	case cur.Decider == autoDecider && w.policyDenied != "":
+		return chat.Message{Fallback: w.policyDenied}
 	}
 	return chat.Message{Fallback: w.firstNone, Parts: []chat.Part{chat.Mention{User: cur.Decider, Text: w.firstWords}}}
 }

@@ -65,7 +65,7 @@ Default: `""`
 
 ## auditRetention
 
-How long audit entries are kept (AGENTKOURIER_AUDIT_RETENTION): empty or "keep" is for ever, which is what runs until you set one; a duration of at least 24h (8760h is a year) purges the entries older than it, hourly, in batches. The audit holds IDs and outcomes, never message text. The purge is the only way an entry leaves the table.
+How long audit entries are kept (AGENTKOURIER_AUDIT_RETENTION): empty or "keep" is for ever, which is what runs until you set one; a duration of at least 24h (8760h is a year) purges the entries older than it, hourly, in batches. The audit holds IDs, outcomes, and up to 20 cleaned tool names for approval decisions, never message text, tool arguments or rejection reasons. The purge is the only way an entry leaves the table.
 
 Default: `""`
 

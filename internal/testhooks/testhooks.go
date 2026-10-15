@@ -1,9 +1,9 @@
 // Package testhooks holds the hooks that only a test image of Agent Kourier carries: a crash between a
 // Slack post and its record (spec 8.6, S5), armed through AGENTKOURIER_FAULT, and an override of the Slack
-// API URL so Agent Kourier can talk to the fake Slack.
+// API URL so Agent Kourier can talk to the fake Slack, and a before-send gate for failover tests.
 //
-// Both exist only when the binary is built with the testhooks tag. In the default build, which is the
-// production build, AfterPost does nothing and SlackAPIURL returns "", and the binary contains
+// All exist only when the binary is built with the testhooks tag. In the default build, which is the
+// production build, AfterPost and BeforeSend do nothing and SlackAPIURL returns "", and the binary contains
 // neither the crash nor the names of the environment variables (buildcheck_test.go proves it). The
 // override moves where the API calls go, never which token they carry.
 package testhooks

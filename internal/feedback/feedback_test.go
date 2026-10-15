@@ -126,7 +126,7 @@ func newRig(t *testing.T) *rig {
 	t.Cleanup(func() { _ = st.Close() })
 	r := &rig{st: st, az: &authz{members: map[string]bool{"UALICE1": true, "UBOB22": true}, bots: map[string]bool{"UBOT111": true}}, eph: &ephemerals{}, aud: &audits{}, tel: telemetrytest.New(t), now: t0}
 	r.members("UBOT111") // a bot is in the channel: membership does not keep it out
-	if err := st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingID, Alert: "KubePodCrashLooping", Agent: agentID, LastActivity: t0}); err != nil {
+	if err := st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingID, Origin: store.Origin{Source: "alertmanager", Subject: "KubePodCrashLooping"}, Agent: agentID, LastActivity: t0}); err != nil {
 		t.Fatal(err)
 	}
 	r.message(t, key, turn, "100.9")
@@ -213,7 +213,7 @@ func (r *rig) countFor(t *testing.T, binding, alert string, verdict store.Verdic
 func (r *rig) thread(t *testing.T, binding, thread, alert string, kind store.FeedbackKind) chat.Interaction {
 	t.Helper()
 	k := store.ConversationKey{Connection: key.Connection, Channel: key.Channel, Thread: thread}
-	if err := r.st.UpsertSession(t.Context(), store.Session{Key: k, Binding: binding, Alert: alert, Agent: agentID, LastActivity: t0}); err != nil {
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: k, Binding: binding, Origin: store.Origin{Source: "alertmanager", Subject: alert}, Agent: agentID, LastActivity: t0}); err != nil {
 		t.Fatal(err)
 	}
 	own := turn + "@" + thread // a turn of its own, so that the row of its message is its own
@@ -384,7 +384,7 @@ func TestAMemberVotesAndTheVoteIsStoredAuditedCountedAndToldToThemAlone(t *testi
 	want := store.FeedbackVote{Key: key, Turn: turn, User: "UALICE1", Binding: bindingID, Agent: agentID, Alert: "KubePodCrashLooping",
 		Kind: store.FeedbackInvestigation, Verdict: store.VerdictUseful, At: t0, First: t0}
 	if len(got) != 1 || got[0] != want {
-		t.Fatalf("votes = %+v; want %+v: the Binding, the agent and the alert are the session's", got, want)
+		t.Fatalf("votes = %+v; want %+v: the Binding, the agent and alert origin are the session's", got, want)
 	}
 	if n := r.count(t, "KubePodCrashLooping", store.VerdictUseful); n != 1 {
 		t.Errorf("%s{useful} = %v; want 1", counter, n)
@@ -400,6 +400,37 @@ func TestAMemberVotesAndTheVoteIsStoredAuditedCountedAndToldToThemAlone(t *testi
 	}
 	if r.waiting(t) != 0 {
 		t.Error("the press is still recorded after it was processed")
+	}
+}
+
+func TestAGenericOriginSubjectIsNotTreatedAsAnAlertName(t *testing.T) {
+	r := newRig(t)
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingID, Origin: store.Origin{Source: "ci", Subject: "build"}, Agent: agentID, LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := r.vote(t, press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)); err != nil || res != interact.Done {
+		t.Fatalf("Process = %v, %v; want Done", res, err)
+	}
+	got := r.votes(t)
+	if len(got) != 1 || got[0].Alert != "" {
+		t.Fatalf("votes = %+v; want no alert attribution for a generic origin", got)
+	}
+	if n := r.count(t, "unknown", store.VerdictUseful); n != 1 || r.count(t, "build", store.VerdictUseful) != 0 {
+		t.Errorf("generic-origin feedback series: unknown=%v, build=%v; want 1 and 0", n, r.count(t, "build", store.VerdictUseful))
+	}
+}
+
+func TestABotMessageOriginSubjectKeepsAlertFeedbackAttribution(t *testing.T) {
+	r := newRig(t)
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingID, Origin: store.Origin{Source: "botMessage", Subject: "CustomAlert"}, Agent: agentID, LastActivity: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := r.vote(t, press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)); err != nil || res != interact.Done {
+		t.Fatalf("Process = %v, %v; want Done", res, err)
+	}
+	got := r.votes(t)
+	if len(got) != 1 || got[0].Alert != "CustomAlert" {
+		t.Fatalf("votes = %+v; want the validated botMessage subject as alert attribution", got)
 	}
 }
 
@@ -524,7 +555,7 @@ func TestAPressOnAThreadThatIsGoneIsToldSoAndRecordsNothing(t *testing.T) {
 // config, or has another agent now, neither blocks nor relabels a vote on an earlier investigation.
 func TestAVoteOnAThreadWhoseBindingIsGoneIsRecordedUnderWhatTheSessionHolds(t *testing.T) {
 	r := newRig(t)
-	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "agent-kourier/removed", Alert: "KubePodCrashLooping", Agent: "kagent/old-agent", LastActivity: t0}); err != nil {
+	if err := r.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: "agent-kourier/removed", Origin: store.Origin{Source: "alertmanager", Subject: "KubePodCrashLooping"}, Agent: "kagent/old-agent", LastActivity: t0}); err != nil {
 		t.Fatal(err)
 	}
 	if res, err := r.vote(t, press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)); err != nil || res != interact.Done {

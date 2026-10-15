@@ -273,6 +273,16 @@ type Interactions struct {
 	// AskUser lets the agent ask questions in the thread. Defaults to false.
 	// +kubebuilder:default=false
 	AskUser bool `json:"askUser,omitempty"`
+	// ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false.
+	// +kubebuilder:default=false
+	// +optional
+	ToolApprovals bool `json:"toolApprovals,omitempty"`
+	// ApproverGroups names the Slack user groups whose members may decide a tool approval. An empty list allows any
+	// non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits;
+	// duplicates and empty entries are refused.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	ApproverGroups []string `json:"approverGroups,omitempty"`
 	// Timeout is how long a pause waits for an answer. Defaults to 30m.
 	// +kubebuilder:default="30m"
 	// +optional

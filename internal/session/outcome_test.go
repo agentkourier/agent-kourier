@@ -407,13 +407,17 @@ func TestLostStreamIsFollowedUntilTheTaskEnds(t *testing.T) {
 	waitFinal(t, sink) // turn 1 ends after two follows
 	waitFinal(t, sink) // then turn 2
 	sink.mu.Lock()
-	var recovered []bool
+	var recovered, restarted []bool
 	for _, ref := range sink.refs {
 		recovered = append(recovered, ref.Recovered)
+		restarted = append(restarted, ref.Restarted)
 	}
 	sink.mu.Unlock()
 	if want := []bool{false, true, true, false}; !slices.Equal(recovered, want) { // send, two follows, then turn 2's send
 		t.Errorf("Recovered of the turns' sinks = %v; want %v: a followed task continues its message", recovered, want)
+	}
+	if want := []bool{false, false, false, false}; !slices.Equal(restarted, want) {
+		t.Errorf("Restarted of the turns' sinks = %v; want %v: a lost stream is not a process restart", restarted, want)
 	}
 	if sends, _, fo := f.agent.counts(); sends != 2 || fo != 2 {
 		t.Errorf("%d sends, %d follows; want turn 1 once and turn 2 once, and turn 1's task followed twice", sends, fo)

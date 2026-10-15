@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/postgres"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // Run starts the broker and runs until ctx ends or something fails. It returns nil after a clean stop
@@ -111,9 +112,13 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	runCtx = telemetry.WithObserver(runCtx, obs)
 	ready := &Readiness{}
+	auditEndpoint := testhooks.NewAuditEndpoint()
 	served, servedDone := make(chan error, 1), make(chan struct{})
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
-	go func() { served <- Serve(serveCtx, cfg.Listener, NewHandler(metrics, ready)); close(servedDone) }()
+	go func() {
+		served <- Serve(serveCtx, cfg.Listener, newHandler(metrics, ready, auditEndpoint))
+		close(servedDone)
+	}()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
 
 	var extraNamespaces []string // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names its namespace
@@ -147,6 +152,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	if cfg.wrapStore != nil {
 		st = cfg.wrapStore(st)
 	}
+	auditEndpoint.Set(st)
 	log.InfoContext(ctx, "opened the store", "store", cfg.Store.kind()) // the kind only: a DSN is never logged
 	if err := st.RegisterMetrics(metrics.reg); err != nil {
 		_ = st.Close()

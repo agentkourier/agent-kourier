@@ -50,3 +50,25 @@ spec:
   description: One-tool MCP server for the S11 agent
   protocol: STREAMABLE_HTTP
   url: http://scenariomcp.kagent.svc.cluster.local:8082/mcp
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: scenariomcp-approval, namespace: kagent}
+spec:
+  description: One-tool MCP server for the single-tool approval scenarios
+  protocol: STREAMABLE_HTTP
+  url: http://scenariomcp.kagent.svc.cluster.local:8082/mcp
+  headersFrom:
+    - name: X-Scenario
+      value: approval
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: scenariomcp-approval-multi, namespace: kagent}
+spec:
+  description: One-tool MCP server for the multi-tool approval scenario
+  protocol: STREAMABLE_HTTP
+  url: http://scenariomcp.kagent.svc.cluster.local:8082/mcp
+  headersFrom:
+    - name: X-Scenario
+      value: approval-multi

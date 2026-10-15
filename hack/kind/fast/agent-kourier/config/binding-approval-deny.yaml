@@ -1,0 +1,18 @@
+# S20: the stub approval agent's rejection continuation after a denial. This has its own channel so the
+# denial interaction and its audit row cannot be confused with S19's approval or S11's refusal.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-s20, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: spike-approve
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS20
+    output: live
+  interactions: {toolApprovals: true}

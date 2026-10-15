@@ -1,0 +1,19 @@
+# S21: let the single approval-gated tool call time out.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: full-s21, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-approval
+  identity:
+    userId: agent-kourier-full
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS21
+    output: live
+  interactions:
+    toolApprovals: true
+    timeout: 10s

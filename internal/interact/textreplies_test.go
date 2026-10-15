@@ -86,7 +86,7 @@ func TestTextRepliesPostMissingPromptThenDecideOnce(t *testing.T) {
 	platform := &poster{posted: map[string]string{}}
 	ob := newOutbox(t, outbox.Config{Store: r.st, Platform: platform, Now: func() time.Time { return r.now }})
 	pauses, err := interact.New(intakeCfg(interact.Config{
-		Store: r.st, Lookup: lookup{interact.Binding{Dialect: generic.New(time.Second), AskUser: true, Timeout: 10 * time.Minute}},
+		Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: generic.New(time.Second), AskUser: true, Timeout: 10 * time.Minute}},
 		Platform: platform, Outbox: ob, Session: r.sess, Audit: newWriter(t, r.st, audit.Options{}), Now: func() time.Time { return r.now },
 	}))
 	if err != nil {
@@ -126,7 +126,7 @@ func TestTextRepliesRefuseUnusablePauseBeforeLeavingTheReplyQueued(t *testing.T)
 	ob := newOutbox(t, outbox.Config{Store: r.st, Platform: platform, Now: func() time.Time { return r.now }})
 	cancelled := &sess{}
 	pauses, err := interact.New(intakeCfg(interact.Config{
-		Store: r.st, Lookup: lookup{interact.Binding{Dialect: generic.New(time.Second), AskUser: true, Timeout: 10 * time.Minute}},
+		Store: r.st, AuditReader: r.st, Lookup: lookup{interact.Binding{Dialect: generic.New(time.Second), AskUser: true, Timeout: 10 * time.Minute}},
 		Platform: platform, Outbox: ob, Session: cancelled, Audit: newWriter(t, r.st, audit.Options{}), Now: func() time.Time { return r.now },
 	}))
 	if err != nil {

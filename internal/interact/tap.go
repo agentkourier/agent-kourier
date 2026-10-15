@@ -42,7 +42,9 @@ type TapConfig struct {
 // as the pause can still be answered, which is until its own deadline: every path of Paused is idempotent,
 // so a try that failed part way is finished by the next. A pause that comes again, as 28h's recovery
 // re-emits a task it finds paused after a restart, is handed off again, since that is how an answer
-// recorded and not sent is sent. It is safe for concurrent use; Close stops it.
+// recorded and not sent is sent. A recovered hand-off gets a fresh Binding-time retry window, so an
+// original deadline that elapsed while the process was down cannot strand it. It is safe for concurrent
+// use; Close stops it.
 type Tap struct {
 	cfg TapConfig
 	ctx context.Context
@@ -131,21 +133,22 @@ func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task) {
 	}
 	t.flying[id] = struct{}{}
 	t.wg.Add(1)
-	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task})
+	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task, Recovered: ref.Restarted})
 }
 
 // deadline is when the pause can no longer be answered: as the interaction's own, the task's time plus
 // the Binding's timeout. A Binding that cannot be read still gets the hand-off, which then says why it fails,
 // and the default timeout. It reads the Binding, so run calls it, and the stream goroutine that handed the
 // pause off, which holds t.mu, does not.
-func (t *Tap) deadline(binding string, task a2a.Task) time.Time {
+func (t *Tap) deadline(binding string, task a2a.Task) (time.Time, time.Duration) {
 	timeout := v1alpha1.DefaultInteractionTimeout
 	if b, err := t.cfg.Lookup.Binding(binding); err != nil || b.Timeout <= 0 {
 		t.cfg.Logger.Warn("interact: the Binding of a pause cannot be read; its hand-off is bounded by the default timeout", "binding", binding, "err", err)
 	} else {
 		timeout = b.Timeout
 	}
-	return pausedAt(task, t.cfg.Now()).Add(timeout)
+	now := t.cfg.Now()
+	return pausedAt(task, now).Add(timeout), timeout
 }
 
 func (t *Tap) run(caller context.Context, id string, p Pause) {
@@ -155,7 +158,13 @@ func (t *Tap) run(caller context.Context, id string, p Pause) {
 
 	defer t.wg.Done()
 	defer func() { t.mu.Lock(); delete(t.flying, id); t.mu.Unlock() }()
-	deadline := t.deadline(p.Binding, p.Task)
+	deadline, timeout := t.deadline(p.Binding, p.Task)
+	if p.Recovered {
+		// A recovered task may have been paused before the process went down. Its original deadline is
+		// still the interaction's deadline for the sweep, but it must not prevent recovery from finishing
+		// an idempotent hand-off that was interrupted by the restart.
+		deadline = t.cfg.Now().Add(timeout)
+	}
 	for tries := 1; ; tries++ {
 		attemptCtx, op := telemetry.Start(ctx, "agentkourier.interaction.pause")
 		err := t.cfg.Handler.Paused(attemptCtx, p)

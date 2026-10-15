@@ -40,22 +40,22 @@ func TestTurnRefSaysWhichFeedbackTheFinalMessageCarries(t *testing.T) {
 	}
 }
 
-// The alert, and the agent of the Binding, are written when the session is made and by nothing after: a reply in the thread, which names none, neither
-// clears it nor replaces it, and a message that creates no session writes none.
-func TestSubmitKeepsTheAlertOfTheSession(t *testing.T) {
+// The origin, and the agent of the Binding, are written when the session is made and by nothing after: a reply in the thread,
+// which names none, neither clears it nor replaces it, and a message that creates no session writes none.
+func TestSubmitKeepsTheOriginOfTheSession(t *testing.T) {
 	f := newFixture(t)
 	first := inbound("1")
-	first.UserID, first.Alert = "", "KubePodCrashLooping"
+	first.UserID, first.Origin = "", store.Origin{Source: "ci", Subject: "build"}
 	if _, err := f.submit(first); err != nil {
 		t.Fatal(err)
 	}
 	reply := inbound("2")
-	reply.Create, reply.Alert = false, "SomethingElse"
+	reply.Create, reply.Origin = false, store.Origin{Source: "other", Subject: "replace-me"}
 	if _, err := f.submit(reply); err != nil {
 		t.Fatal(err)
 	}
-	if sess, err := f.session(); err != nil || sess.Alert != "KubePodCrashLooping" || sess.Agent != "kagent/agent-1" {
-		t.Errorf("session = %+v, %v; want the alert of the message that made it, and the agent of its Binding", sess, err)
+	if sess, err := f.session(); err != nil || sess.Origin != first.Origin || sess.Agent != "kagent/agent-1" {
+		t.Errorf("session = %+v, %v; want the origin of the message that made it, and the agent of its Binding", sess, err)
 	}
 }
 

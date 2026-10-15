@@ -15,6 +15,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/k8ssecrets"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // Check is one readiness condition: Fn returns nil when it holds, and says why when it does not.
@@ -93,6 +94,10 @@ func (r *Readiness) current() []Check {
 // pod recovers from by itself; and Socket Mode runs on the leader alone (spec 11), so a replica that is not the leader
 // could never be ready. The connection's state is agentkourier_chat_connected, and the log lines of the Slack adapter.
 func NewHandler(m *Metrics, r *Readiness) http.Handler {
+	return newHandler(m, r, nil)
+}
+
+func newHandler(m *Metrics, r *Readiness, audit *testhooks.AuditEndpoint) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, req *http.Request) {
@@ -114,6 +119,7 @@ func NewHandler(m *Metrics, r *Readiness) http.Handler {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.Handle("GET /metrics", m.Handler())
+	testhooks.RegisterAuditRoute(mux, audit)
 	return mux
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
+
+const observedApprovalTotal = 3600
+
+const observedApprovalBlocks = 16000
 
 // The layout of a tool approval (spec 8.4): one tool gets an Approve and a Deny button; several get one
 // Approve/Deny radio each, a Submit button, and Approve all and Deny all.
@@ -328,7 +333,7 @@ func TestAToolThatDoesNotFitIsRefusedAndNeverCut(t *testing.T) {
 	w := newWorld(t)
 	limit := w.p.Capabilities().Limit(chat.WhereToolArgs)
 	nameLimit := w.p.Capabilities().Limit(chat.WhereToolName)
-	if limit <= 0 || limit > 12000 {
+	if limit <= 0 || limit > observedApprovalTotal {
 		t.Fatalf("the limit of the arguments is %d", limit)
 	}
 	for _, tc := range []struct {
@@ -360,23 +365,36 @@ func TestAToolThatDoesNotFitIsRefusedAndNeverCut(t *testing.T) {
 	}
 }
 
-// Text exactly at the limit fits and is shown whole, whatever it is made of.
+// Text exactly at the per-tool limit is shown whole when the complete serialized prompt fits. JSON string escapes
+// for quotes and backslashes count toward the serialized budget; HTML escapes do not, because Slack parses them back
+// to the same displayed text.
 func TestTextAtTheLimitIsShownWhole(t *testing.T) {
 	w := newWorld(t)
 	limit := w.p.Capabilities().Limit(chat.WhereToolArgs)
 	nameLimit := w.p.Capabilities().Limit(chat.WhereToolName)
-	for name, args := range map[string]string{
-		"plain":               strings.Repeat("a", limit),
-		"tokens":              strings.Repeat("<!", limit/2),
-		"fence lines":         strings.Repeat("```\n", limit/4),
-		"two-unit characters": strings.Repeat("\U0001F389", limit/2),
-		"entities":            strings.Repeat("&", limit),
+	for _, tc := range []struct {
+		name string
+		args string
+		fits bool
+	}{
+		{name: "plain", args: strings.Repeat("a", limit), fits: true},
+		{name: "tokens", args: strings.Repeat("<!", limit/2), fits: true},
+		{name: "fence lines", args: strings.Repeat("```\n", limit/4), fits: true},
+		{name: "two-unit characters", args: strings.Repeat("\U0001F389", limit/2), fits: true},
+		{name: "entities", args: strings.Repeat("&", limit), fits: true},
 	} {
+		name, args := tc.name, tc.args
 		if chat.Units(args) > limit {
 			t.Fatalf("%s: the test text is %d units, over the limit of %d", name, chat.Units(args), limit)
 		}
 		// The name is numbered, and its number counts: "1. " and the name are the 300 units of a name.
 		p := approvalOf(chat.Tool{Name: strings.Repeat("&", nameLimit-3), Args: args}, chat.Tool{Name: "other", Args: "{}"})
+		if !tc.fits {
+			if err := w.p.Fits(p); !errors.Is(err, chat.ErrTooLarge) {
+				t.Errorf("%s: Fits = %v, want ErrTooLarge from the serialized block budget", name, err)
+			}
+			continue
+		}
 		blocks := w.post(t, chat.Ask(p))
 		if got := argsOf(t, blocks[1]); got != chat.Clean(args, false) {
 			t.Errorf("%s: the arguments are cut or changed: %d units shown of %d", name, chat.Units(got), chat.Units(args))
@@ -393,6 +411,7 @@ func TestTheLimitsAreMeasuredOnTheTextAsShown(t *testing.T) {
 	w := newWorld(t)
 	limit := w.p.Capabilities().Limit(chat.WhereToolArgs)
 	nameLimit := w.p.Capabilities().Limit(chat.WhereToolName)
+	each := observedApprovalTotal / 4
 	hidden := func(n int) string { return strings.Repeat("a\u200b", n) } // n units that clean to n, in 2n raw
 	fits := func(p chat.Prompt) bool {
 		err := w.p.Fits(p)
@@ -415,24 +434,24 @@ func TestTheLimitsAreMeasuredOnTheTextAsShown(t *testing.T) {
 		{"a name of the first of two that, with its number, is one over", approvalOf(chat.Tool{Name: hidden(nameLimit - 2)}, chat.Tool{Name: "u"}), false},
 		{"a name of the 12th of 12 that, with its number, is the limit", approvalOf(pad(11, chat.Tool{Name: hidden(nameLimit - 4)})...), true},
 		{"a name of the 12th of 12 that, with its number, is one over", approvalOf(pad(11, chat.Tool{Name: hidden(nameLimit - 3)})...), false},
-		{"four tools of the limit's worth of arguments, which are 12000", approvalOf(
-			chat.Tool{Name: "a", Args: hidden(limit)}, chat.Tool{Name: "b", Args: hidden(limit)}, chat.Tool{Name: "c", Args: hidden(limit)}, chat.Tool{Name: "d", Args: hidden(limit)}), true},
-		{"the same and one unit more, which are 12001", approvalOf(
-			chat.Tool{Name: "a", Args: hidden(limit)}, chat.Tool{Name: "b", Args: hidden(limit)}, chat.Tool{Name: "c", Args: hidden(limit)}, chat.Tool{Name: "d", Args: hidden(limit)}, chat.Tool{Name: "e", Args: "x"}), false},
+		{fmt.Sprintf("four tools of %d units each, which are %d", each, observedApprovalTotal), approvalOf(
+			chat.Tool{Name: "a", Args: hidden(each)}, chat.Tool{Name: "b", Args: hidden(each)}, chat.Tool{Name: "c", Args: hidden(each)}, chat.Tool{Name: "d", Args: hidden(each)}), true},
+		{fmt.Sprintf("the same and one unit more, which are %d", observedApprovalTotal+1), approvalOf(
+			chat.Tool{Name: "a", Args: hidden(each)}, chat.Tool{Name: "b", Args: hidden(each)}, chat.Tool{Name: "c", Args: hidden(each)}, chat.Tool{Name: "d", Args: hidden(each)}, chat.Tool{Name: "e", Args: "x"}), false},
 	} {
 		if got := fits(tc.p); got != tc.want {
 			t.Errorf("%s: Fits = %t, want %t", tc.name, got, tc.want)
 		}
 	}
-	if limit*4 != 12000 {
-		t.Errorf("the limit is %d: the test of the total assumes four tools of it make 12000", limit)
+	if each*4 != observedApprovalTotal {
+		t.Errorf("the test of the total assumes four tools of %d make %d", each, observedApprovalTotal)
 	}
 }
 
 // A message shows the arguments of all its tools up to a total. Tools that together need more are too large, and none is cut.
 func TestToolsThatTogetherExceedWhatAMessageHoldsAreTooLarge(t *testing.T) {
 	w := newWorld(t)
-	each := w.p.Capabilities().Limit(chat.WhereToolArgs) - 1
+	each := observedApprovalTotal/4 - 1
 	big := func(n int) []chat.Tool {
 		out := make([]chat.Tool, n)
 		for i := range out {
@@ -460,11 +479,123 @@ func TestToolsThatTogetherExceedWhatAMessageHoldsAreTooLarge(t *testing.T) {
 			total += chat.Units(argsOf(t, b))
 		}
 	}
-	if total != fits*each || total > 12000 {
-		t.Errorf("%d units of arguments in a message of %d tools of %d, want all of them and at most 12000", total, fits, each)
+	if total != fits*each || total > observedApprovalTotal {
+		t.Errorf("%d units of arguments in a message of %d tools of %d, want all of them and at most %d", total, fits, each, observedApprovalTotal)
 	}
 	if _, err := w.p.Post(t.Context(), w.target, chat.Ask(approvalOf(big(fits+1)...)), "tag-over"); !errors.Is(err, chat.ErrTooLarge) {
 		t.Errorf("Post of %d tools = %v, want ErrTooLarge", fits+1, err)
+	}
+}
+
+// The aggregate argument budget is not enough to keep the Block Kit request below the observed boundary: names
+// appear in both the rich-text block and its input label, and the label escapes characters such as ampersands.
+func TestApprovalRefusesSerializedBlocksOverObservedBudget(t *testing.T) {
+	w := newWorld(t)
+	nameLimit := w.p.Capabilities().Limit(chat.WhereToolName)
+	tools := make([]chat.Tool, 24)
+	for i := range tools {
+		tools[i] = chat.Tool{Name: strings.Repeat("n", nameLimit-4), Args: strings.Repeat("x", 100)}
+	}
+	p := approvalOf(tools...)
+	for _, tc := range []struct {
+		name     string
+		toolName string
+	}{
+		{"maximum plain names", strings.Repeat("n", nameLimit-4)},
+		{"maximum escaped names", strings.Repeat("&", nameLimit-4)},
+	} {
+		tools := make([]chat.Tool, 24)
+		for i := range tools {
+			tools[i] = chat.Tool{Name: tc.toolName, Args: strings.Repeat("x", 100)}
+		}
+		if err := w.p.Fits(approvalOf(tools...)); !errors.Is(err, chat.ErrTooLarge) {
+			t.Errorf("%s: Fits = %v, want ErrTooLarge for serialized blocks over %d UTF-16 units", tc.name, err, observedApprovalBlocks)
+		}
+	}
+	if _, err := w.p.Post(t.Context(), w.target, chat.Ask(p), "serialized-post"); !errors.Is(err, chat.ErrTooLarge) {
+		t.Errorf("Post = %v, want ErrTooLarge for serialized blocks over %d UTF-16 units", err, observedApprovalBlocks)
+	}
+	seed, err := w.p.Post(t.Context(), w.target, chat.Say(chat.Message{Fallback: "seed"}), "serialized-seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.p.Update(t.Context(), seed, chat.Ask(p)); !errors.Is(err, chat.ErrTooLarge) {
+		t.Errorf("Update = %v, want ErrTooLarge for serialized blocks over %d UTF-16 units", err, observedApprovalBlocks)
+	}
+}
+
+func hostileApprovalTools(perTool int) []chat.Tool {
+	const unit = `probe <&> "quoted" 2>&1 && echo "x" `
+	tools := make([]chat.Tool, 24)
+	for i := range tools {
+		var args strings.Builder
+		for args.Len()+len(unit) <= perTool {
+			args.WriteString(unit)
+		}
+		if args.Len() < perTool {
+			args.WriteString(unit[:perTool-args.Len()])
+		}
+		tools[i] = chat.Tool{Name: fmt.Sprintf("tool_%02d", i), Args: args.String()}
+	}
+	return tools
+}
+
+// The local budget follows Slack's parsed Block Kit JSON, while the production slack-go form sender still escapes
+// HTML characters on the wire. Fits and Post must make the same decision, and a fitting hostile prompt must retain
+// those escaped characters in the actual form sent by the client.
+func TestApprovalBudgetMatchesSlackGoFormSerialization(t *testing.T) {
+	fake := newFake(t)
+	w := &wire{next: handlerTransport{fake}}
+	cfg := clientConfig(fake)
+	cfg.HTTPClient = &http.Client{Transport: w}
+	c := slack.New(cfg)
+	root, err := c.Post(t.Context(), "C1", "", slack.Content{Text: "root"}, "approval-wire-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.take()
+	p := slack.NewPlatform(c, "agent-kourier-system/slack-main")
+	target := chat.Target{Conn: "agent-kourier-system/slack-main", Channel: "C1", Thread: root}
+
+	for _, tc := range []struct {
+		name    string
+		perTool int
+		fits    bool
+	}{
+		{name: "hostile-fits", perTool: 120, fits: true},
+		{name: "hostile-over-budget", perTool: 150, fits: false},
+	} {
+		prompt := approvalOf(hostileApprovalTools(tc.perTool)...)
+		fitsErr := p.Fits(prompt)
+		if (fitsErr == nil) != tc.fits {
+			t.Errorf("%s: Fits = %v, want fits=%t", tc.name, fitsErr, tc.fits)
+		}
+		_, postErr := p.Post(t.Context(), target, chat.Ask(prompt), "approval-wire-"+tc.name)
+		if (postErr == nil) != tc.fits || errors.Is(fitsErr, chat.ErrTooLarge) != errors.Is(postErr, chat.ErrTooLarge) {
+			t.Errorf("%s: Fits = %v, Post = %v; want the same size decision", tc.name, fitsErr, postErr)
+		}
+		var post sentRequest
+		found := false
+		for _, req := range w.take() {
+			if req.method == "chat.postMessage" {
+				post, found = req, true
+			}
+		}
+		if !tc.fits {
+			if found {
+				t.Errorf("%s: oversized approval reached chat.postMessage", tc.name)
+			}
+			continue
+		}
+		if !found {
+			t.Fatalf("%s: fitting approval did not reach chat.postMessage", tc.name)
+		}
+		wireBlocks := post.form.Get("blocks")
+		for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`, `\"`} {
+			if !strings.Contains(wireBlocks, escape) {
+				t.Errorf("%s: form blocks omit the SDK escape %q", tc.name, escape)
+			}
+		}
 	}
 }
 
@@ -567,19 +698,19 @@ func TestTheEndingOfAnApprovalIsCutAndNeverRefused(t *testing.T) {
 			shown := argsOf(t, b)
 			total += chat.Units(shown)
 			if !strings.Contains(shown, chat.Truncated) {
-				t.Errorf("an argument of %d units is shown whole beside 19 others in 12,000", limit)
+				t.Errorf("an argument of %d units is shown whole beside 19 others in %d", limit, observedApprovalTotal)
 			}
 		}
 	}
-	if total > 12000 || len(blocks) != 41 {
-		t.Errorf("%d units of arguments in %d blocks, want at most 12000 in 41", total, len(blocks))
+	if total > observedApprovalTotal || len(blocks) != 41 {
+		t.Errorf("%d units of arguments in %d blocks, want at most %d in 41", total, len(blocks), observedApprovalTotal)
 	}
 }
 
 // A prompt that fits is shown whole in its ending, the large tool as much as the small one.
 func TestTheEndingOfAnApprovalThatFitsShowsAllOfIt(t *testing.T) {
 	w := newWorld(t)
-	p := approvalOf(chat.Tool{Name: "big", Args: strings.Repeat("x", 3000)}, chat.Tool{Name: "big2", Args: strings.Repeat("y", 3000)}, chat.Tool{Name: "small", Args: "{}"})
+	p := approvalOf(chat.Tool{Name: "big", Args: strings.Repeat("x", 1700)}, chat.Tool{Name: "big2", Args: strings.Repeat("y", 1700)}, chat.Tool{Name: "small", Args: "{}"})
 	if err := w.p.Fits(p); err != nil {
 		t.Fatal(err)
 	}

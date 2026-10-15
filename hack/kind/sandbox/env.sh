@@ -6,10 +6,12 @@
 # or writable by the group or others, or when a key is missing, set twice, malformed or still a
 # placeholder. What it holds goes into shell variables of the same names (SANDBOX_ENV_KEYS) and nowhere
 # else: no caller of this file prints them, writes them to a file or puts them on a command line.
-# MODEL_REGION is the one key that is not always there: it is required for MODEL_PROVIDER=bedrock and refused for the others.
+# MODEL_REGION and MODEL_BASE_URL are optional keys: MODEL_REGION is required for MODEL_PROVIDER=bedrock, while MODEL_BASE_URL is
+# accepted only for MODEL_PROVIDER=openrouter and defaults to the public OpenRouter endpoint when omitted.
 # Works on bash 3.2 (macOS) and GNU stat or BSD stat.
 
-SANDBOX_ENV_KEYS="SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_CHANNEL_ID MODEL_PROVIDER MODEL_NAME MODEL_API_KEY MODEL_REGION"
+SANDBOX_ENV_KEYS="SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_CHANNEL_ID MODEL_PROVIDER MODEL_NAME MODEL_BASE_URL MODEL_API_KEY MODEL_REGION"
+SANDBOX_OPENROUTER_DEFAULT_BASE_URL=https://openrouter.ai/api/v1
 SANDBOX_ENV_FOUND="" # the keys the last sandbox_env_load found, for a message
 
 # sandbox_env_fail MESSAGE: print "error: <file>: MESSAGE" and exit. Callers pass key names and line numbers,
@@ -26,12 +28,58 @@ sandbox_env_pattern() {
     SLACK_BOT_TOKEN) SANDBOX_ENV_RE='^xoxb-[A-Za-z0-9-]{8,}$' SANDBOX_ENV_WANT='a bot token, xoxb- and then letters, digits and dashes' ;;
     SLACK_APP_TOKEN) SANDBOX_ENV_RE='^xapp-[A-Za-z0-9-]{8,}$' SANDBOX_ENV_WANT='an app-level token, xapp- and then letters, digits and dashes' ;;
     SLACK_CHANNEL_ID) SANDBOX_ENV_RE='^[CG][A-Z0-9]+$' SANDBOX_ENV_WANT='a channel ID such as C0123ABCDEF (C or G, then capitals and digits), not a name' ;;
-    MODEL_PROVIDER) SANDBOX_ENV_RE='^(anthropic|openai|bedrock)$' SANDBOX_ENV_WANT='anthropic, openai or bedrock' ;;
-    MODEL_NAME) SANDBOX_ENV_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$' SANDBOX_ENV_WANT='a model name: letters, digits and . _ : -' ;;
+    MODEL_PROVIDER) SANDBOX_ENV_RE='^(openrouter|anthropic|openai|bedrock)$' SANDBOX_ENV_WANT='openrouter, anthropic, openai or bedrock' ;;
+    MODEL_NAME)
+      if [ "${MODEL_PROVIDER}" = openrouter ]; then
+        SANDBOX_ENV_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$'
+        SANDBOX_ENV_WANT='an OpenRouter model slug: vendor/model, with letters, digits and . _ : - in the model'
+      else
+        SANDBOX_ENV_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$'
+        SANDBOX_ENV_WANT='a model name: letters, digits and . _ : -'
+      fi ;;
+    MODEL_BASE_URL) SANDBOX_ENV_RE='^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?(/[A-Za-z0-9._~%:/-]*)?$' SANDBOX_ENV_WANT='an HTTPS endpoint without credentials, a query or a fragment' ;;
     MODEL_API_KEY) SANDBOX_ENV_RE='^[A-Za-z0-9_.~+/=-]{16,}$' SANDBOX_ENV_WANT='an API key: at least 16 letters, digits and _ . ~ + / = -' ;;
     MODEL_REGION) SANDBOX_ENV_RE='^[a-z]{2}(-gov)?-[a-z]+-[0-9]$' SANDBOX_ENV_WANT='an AWS region such as us-east-1 or us-gov-west-1' ;;
     *) return 1 ;;
   esac
+}
+
+# sandbox_env_base_url_port_valid URL: reject a syntactically shaped but out-of-range TCP port. The URL pattern above has already
+# refused credentials, a query, a fragment and characters that could add YAML syntax; this check only handles the numeric range.
+sandbox_env_base_url_port_valid() {
+  local authority port
+  authority=${1#https://}
+  authority=${authority%%/*}
+  case "${authority}" in
+    *:*)
+      port=${authority##*:}
+      case "${port}" in '' | *[!0-9]*) return 1 ;; esac
+      ((10#${port} >= 1 && 10#${port} <= 65535)) || return 1
+      ;;
+  esac
+}
+
+# sandbox_env_base_url_host_valid URL: reject empty, overlong or hyphen-ended DNS labels and an overlong DNS hostname. The URL
+# pattern above has already limited the host to ASCII letters, digits, dots and hyphens; this check applies the DNS label and
+# hostname bounds without printing the value.
+sandbox_env_base_url_host_valid() {
+  local authority host label labels
+  authority=${1#https://}
+  authority=${authority%%/*}
+  host=${authority%%:*}
+  [ -n "${host}" ] || return 1
+  [ "${#host}" -le 253 ] || return 1
+  case "${host}" in
+    *.) return 1 ;;
+  esac
+  IFS=. read -r -a labels <<<"${host}"
+  for label in "${labels[@]}"; do
+    [ -n "${label}" ] || return 1
+    [ "${#label}" -le 63 ] || return 1
+    case "${label}" in
+      -* | *- | *[!A-Za-z0-9-]*) return 1 ;;
+    esac
+  done
 }
 
 # sandbox_env_owner_and_mode FILE: "<uid> <octal mode>" of FILE itself (a symbolic link is refused before this), by GNU stat or BSD stat.
@@ -82,10 +130,21 @@ sandbox_env_load() {
 
   SANDBOX_ENV_FOUND=""
   for key in ${SANDBOX_ENV_KEYS}; do
-    # MODEL_PROVIDER was checked above (it is listed first): the region is the Bedrock provider's alone.
+    # MODEL_PROVIDER was checked above (it is listed first): the region is the Bedrock provider's alone, and the endpoint is
+    # implemented only for OpenRouter. Both optional keys are rejected when supplied to another provider.
     if [ "${key}" = MODEL_REGION ] && [ "${MODEL_PROVIDER}" != bedrock ]; then
       case "${seen}" in *" MODEL_REGION "*) sandbox_env_fail "MODEL_REGION is only for MODEL_PROVIDER=bedrock; remove it" ;; esac
       continue
+    fi
+    if [ "${key}" = MODEL_BASE_URL ]; then
+      if [ "${MODEL_PROVIDER}" != openrouter ]; then
+        case "${seen}" in *" MODEL_BASE_URL "*) sandbox_env_fail "MODEL_BASE_URL is only for MODEL_PROVIDER=openrouter; remove it" ;; esac
+        continue
+      fi
+      case "${seen}" in
+        *" MODEL_BASE_URL "*) ;;
+        *) MODEL_BASE_URL=${SANDBOX_OPENROUTER_DEFAULT_BASE_URL}; continue ;;
+      esac
     fi
     case "${seen}" in *" ${key} "*) ;; *) sandbox_env_fail "${key} is missing" ;; esac
     value=${!key}
@@ -96,17 +155,26 @@ sandbox_env_load() {
     esac
     sandbox_env_pattern "${key}"
     [[ ${value} =~ ${SANDBOX_ENV_RE} ]] || sandbox_env_fail "${key} is malformed; want ${SANDBOX_ENV_WANT}"
+    if [ "${key}" = MODEL_BASE_URL ] && ! sandbox_env_base_url_host_valid "${value}"; then
+      sandbox_env_fail "${key} is malformed; want ${SANDBOX_ENV_WANT}"
+    fi
+    if [ "${key}" = MODEL_BASE_URL ] && ! sandbox_env_base_url_port_valid "${value}"; then
+      sandbox_env_fail "${key} is malformed; want ${SANDBOX_ENV_WANT}"
+    fi
     # The key is a key for the provider: a key sent to the wrong provider's host is sent for nothing, and is seen by that host.
     # The provider was checked above (it is listed before the key). Only the prefix is named, never the value.
     if [ "${key}" = MODEL_API_KEY ]; then
       # A key that is plainly another provider's gets a message that says whose it looks like, so that the fix is clear.
       case "${MODEL_PROVIDER}:${value}" in
-        anthropic:ABSK* | anthropic:bedrock-api-key-* | openai:ABSK* | openai:bedrock-api-key-*)
+        anthropic:sk-or-* | openai:sk-or-* | bedrock:sk-or-*)
+          sandbox_env_fail "${key} looks like an OpenRouter API key; MODEL_PROVIDER=${MODEL_PROVIDER} cannot use it; set MODEL_PROVIDER=openrouter" ;;
+        anthropic:ABSK* | anthropic:bedrock-api-key-* | openai:ABSK* | openai:bedrock-api-key-* | openrouter:ABSK* | openrouter:bedrock-api-key-*)
           sandbox_env_fail "${key} looks like a Bedrock API key; MODEL_PROVIDER=${MODEL_PROVIDER} cannot use it; set MODEL_PROVIDER=bedrock and MODEL_REGION" ;;
         bedrock:sk-ant-*) sandbox_env_fail "${key} looks like an Anthropic API key; MODEL_PROVIDER=bedrock cannot use it; set MODEL_PROVIDER=anthropic" ;;
         bedrock:sk-*) sandbox_env_fail "${key} looks like an OpenAI API key; MODEL_PROVIDER=bedrock cannot use it; set MODEL_PROVIDER=openai" ;;
       esac
       case "${MODEL_PROVIDER}" in
+        openrouter) [[ ${value} == sk-or-v1-* ]] || sandbox_env_fail "${key} is not an OpenRouter API key, which MODEL_PROVIDER=openrouter needs (it starts sk-or-v1-)" ;;
         anthropic) [[ ${value} == sk-ant-* ]] || sandbox_env_fail "${key} is not an Anthropic API key, which MODEL_PROVIDER=anthropic needs (it starts sk-ant-)" ;;
         openai) { [[ ${value} == sk-* ]] && [[ ${value} != sk-ant-* ]]; } || sandbox_env_fail "${key} is not an OpenAI API key, which MODEL_PROVIDER=openai needs (it starts sk-, and not sk-ant-, which is Anthropic's)" ;;
         bedrock) [[ ${value} == ABSK* || ${value} == bedrock-api-key-* ]] || sandbox_env_fail "${key} is not a Bedrock API key, which MODEL_PROVIDER=bedrock needs (a long-term key starts ABSK, a short-term one bedrock-api-key-)" ;;
@@ -133,12 +201,13 @@ apply_secret() {
   } | "${K[@]}" apply --server-side --force-conflicts --field-manager=agent-kourier-sandbox -f - >/dev/null
 }
 
-# render FILE: FILE with its __MODEL_NAME__, __MODEL_REGION__, __SLACK_CHANNEL_ID__ and __ALERT_CHANNEL_ID__ filled in, on stdout. By parameter
+# render FILE: FILE with its __MODEL_NAME__, __MODEL_BASE_URL__, __MODEL_REGION__, __SLACK_CHANNEL_ID__ and __ALERT_CHANNEL_ID__ filled in, on stdout. By parameter
 # expansion, so that no value is on an argument list. ALERT_CHANNEL_ID is the constant of webhook.sh, which the caller sources to render the alert trial.
 render() {
   local content
   content=$(<"$1")
   content=${content//__MODEL_NAME__/${MODEL_NAME}}
+  content=${content//__MODEL_BASE_URL__/${MODEL_BASE_URL:-}}
   content=${content//__MODEL_REGION__/${MODEL_REGION:-}}
   content=${content//__ALERT_CHANNEL_ID__/${ALERT_CHANNEL_ID:-}}
   printf '%s\n' "${content//__SLACK_CHANNEL_ID__/${SLACK_CHANNEL_ID}}"

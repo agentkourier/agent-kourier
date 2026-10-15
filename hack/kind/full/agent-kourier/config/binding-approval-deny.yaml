@@ -1,0 +1,18 @@
+# S20: deny the single approval-gated tool call.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: full-s20, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-approval
+  identity:
+    userId: agent-kourier-full
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS20
+    output: live
+  interactions:
+    toolApprovals: true

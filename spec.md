@@ -170,7 +170,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D10 | Alert noise | Dedup by group key plus per-binding rate limits and daily cap. Since D39 the dedup is a trigger's thread key and cooldown (8.2), and the limits are a trigger's `limits` |
 | D11 | On resolve | Post a note; the session stays open for the thread's lifetime (see D28) |
 | D12 | Authorization | Channel-scoped bindings |
-| D13 | Approvals | Slack buttons, any channel member may approve, narrowed to the members of the Binding's `approverGroups` when it names any (R1). Deferred to Phase 5 (see D25). |
+| D13 | Approvals | Slack buttons, any non-bot channel member may approve when the Binding names no groups, narrowed to members of the Binding's `approverGroups` when it names any (R1, option 2 reconfirmed 2026-10-13). The Phase 5 implementation is covered by direct pinned-kagent evidence and the broker full-tier suite with fake Slack, including audited approve/deny, timeout, group authorization, mixed decisions and stale presses (2026-10-14). |
 | D14 | Identity | One service identity per Binding for every turn; the Slack user is carried as attribution (revised in v0.2, was per-user email) |
 | D15 | State | Pluggable store, SQLite default, Postgres for HA |
 | D16 | Slack transport | Socket Mode and Events API over HTTP, both supported. Only Socket Mode is served today (D40); HTTP mode arrives in Phase 4 |
@@ -182,7 +182,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D22 | Alert path | Agent Kourier is an additional Alertmanager receiver (`continue: true`). Existing notifications are unchanged. Investigation threads go to a dedicated channel and link back to the alert. (v0.3) **Superseded by D39:** Agent Kourier is no longer an Alertmanager receiver, and the thread is under the alert's own message. What holds is that existing notifications are unchanged and Agent Kourier is never in the paging path. |
 | D23 | First agent | Read-only investigation agent: queries metrics, logs, and Kubernetes state; recommends, never changes. (v0.3) |
 | D24 | Pilot environment | Production runs kagent 0.10.x. The pilot uses a separate kagent 1.0 alpha install with a read-only agent holding production read credentials, fed by production Alertmanager. Agent Kourier moves to production kagent at 1.0 GA. (v0.3) |
-| D25 | Interactions scope | Ask-user (including nested ask-user) ships in the MVP, because an unanswered pause stalls a thread. Tool approvals move to Phase 5, with the first write-capable agent. (v0.3) Since D40 `toolApprovals` and `approverGroups` land then too (R1); until then every tool-approval pause is denied (8.4). |
+| D25 | Interactions scope | Ask-user (including nested ask-user) ships in the MVP, because an unanswered pause stalls a thread. Tool approvals move to Phase 5, with the first write-capable agent. (v0.3) Phase 5 now carries `toolApprovals` and `approverGroups`; approvals remain denied by policy unless `toolApprovals` is true. |
 | D26 | Rate-limited alerts | One digest line per window in the investigation channel plus a metric; no per-alert message. (v0.3) |
 | D27 | Value signal | Useful and not-useful buttons on each investigation, stored per alert name and agent. (v0.3) |
 | D28 | Session lifetime | Agent Kourier keeps the thread-to-session mapping for 90 days and resumes the same `contextId`; kagent handles suspend and resume. No Agent Kourier idle timeout. (v0.3) |
@@ -197,7 +197,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: owner, 2026-10-05, H4-5b.) |
 | D38 | Thread replies | A Binding's `chat.threadReplies` is `all` (default) or `mention`. In `mention`, only a reply that mentions Agent Kourier is a turn, and it carries the unmentioned replies since the last turn as untrusted data; a typed answer to a question that takes text replies needs no mention. (Owner, 2026-10-05; mention-only thread replies, TM-8.) |
 | D39 | Direct webhook dropped | Agent Kourier has no Alertmanager webhook endpoint and is not an Alertmanager receiver. The Binding has no `alerts` field and no `status.webhookPath`. Alerts reach a Binding only through `chat.triggers`: a `botMessage` trigger reads the message Alertmanager already posts to Slack (8.2, D36), and alert-specific behaviour lives in a preset and a prompt template, not in the API. Dropped for good, not deferred. Supersedes D22 and D29, and the webhook parts of D8, D9, D10 and D31. A Binding with an `alerts:` block no longer loads (the decoder is strict), so a deployed config drops the block first. (Owner, 2026-10-10; DA-1, DA-2.) |
-| D40 | Fields that work | The API carries only fields that work. A planned feature's fields land with the feature, so five fields are not in the types until their phase: `Binding.spec.interactions.toolApprovals` (Phase 5; a tool-approval pause is always denied) and `approverGroups` (Phase 5, decided in R1; until then no tool approval is rendered, so there is none to gate), `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). Phases 4 and 5 and their designs stay (7 says which field comes back with which). A config that sets any of the five no longer loads (the decoder is strict), so a deployed config drops them first. (Owner, 2026-10-10; DA-3, DA-4.) |
+| D40 | Fields that work | The API carries only fields that work. Phase 5 added `Binding.spec.interactions.toolApprovals` and `approverGroups`; `toolApprovals` defaults to false, and `approverGroups` is validated and used when approvals are enabled. Three feature areas remain out of the types until their phase: `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). A config that sets one of those three still fails strict decoding. |
 
 ## 6. Architecture
 
@@ -266,6 +266,7 @@ type ChatPlatform interface {  // Slack; the Go name is chat.Platform
     Ephemeral(ctx context.Context, t Target, user string, m Message) error
     React(ctx context.Context, r Ref, name string) error
     IsMember(ctx context.Context, channel, user string) (bool, error) // fails closed
+    IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error) // fails closed; reads in order, no cache
     IsBot(ctx context.Context, user string) (bool, error)             // fails closed
     ResolveUser(ctx context.Context, id string) (User, error)
     RefAt(channel, thread, id string) Ref  // a Ref from the parts a caller recorded
@@ -440,6 +441,8 @@ spec:
         limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
   interactions:
     askUser: true
+    toolApprovals: false             # true enables kagent-v1 approval prompts
+    # approverGroups: [S0123456789]  # optional Slack user groups for approvals
     timeout: 30m
   feedback:
     enabled: true
@@ -448,14 +451,14 @@ spec:
 ```
 
 The three documents above (`AgentBackend` `kagent-pilot`, `ChatConnection` `slack-main`, `Binding`
-`sre-alerts`) load as one config with the file loader, and carry only fields that work
-(D40). These fields are designed and not in the API yet; each arrives with its phase, and a config
-that sets one is refused as an unknown field (the decoder is strict):
+`sre-alerts`) load as one config with the file loader. The interaction approval fields are part of the
+API and are resolved into the intake policy. The remaining fields in this table are designed for later phases and
+are refused as unknown fields by the strict decoder:
 
 | Field | Arrives with | What it will do | Today |
 |---|---|---|---|
-| `Binding.spec.interactions.toolApprovals` | Phase 5 | Allows a tool-approval pause to be rendered as Approve and Deny buttons (8.4) | Every tool-approval pause is denied, with a notice in the thread and a metric (8.4) |
-| `Binding.spec.interactions.approverGroups` | Phase 5 | Names the user groups whose members may approve a tool call; empty means any member of the Binding's channel (R1). It gates tool approvals only, not ask-user answers, and an approver must also be a channel member and not a bot. A Binding with `toolApprovals: true` and no group loads, with a logged warning | Every tool-approval pause is denied, so there is no approval to gate; any member of the Binding's channel may answer a question (8.4) |
+| `Binding.spec.interactions.toolApprovals` | Phase 5 | Allows a kagent-v1 tool-approval pause to be rendered and decided from Slack (8.4) | Defaults to false: every tool-approval pause is denied through the dialect, with a notice in the thread and an `auto_denied` outcome |
+| `Binding.spec.interactions.approverGroups` | Phase 5 | Names the Slack user groups whose members may approve a tool call; omitted or empty means any non-bot member of the Binding's channel (R1). It gates tool approvals only, not ask-user answers, and an approver must also be a channel member and not a bot. A Binding with `toolApprovals: true` and no group loads with a warning | A nonempty list requires `toolApprovals: true`; a configured list is checked at press time and a member outside every group receives `denied_not_approver` |
 | `ChatConnection.spec.directMessages.defaultBindingRef` | Phase 4 | Routes a DM to the named Binding, which may be in any namespace and must use the same connection, because the platform team owns connections; DM access is gated on membership in that Binding's channel (8.2, R8) | A DM is not routed: the Slack adapter drops it, and the intake finds a Binding by channel only |
 | `ChatConnection.spec.mode` (`socket` or `http`) and the Secret key `signingSecret` | Phase 4 | HTTP mode, with signing-secret verification (10) | Only Socket Mode is served, so `credentialsSecretRef` needs the keys `botToken` and `appToken` |
 | `Binding.status.conditions` (`Ready`, `BackendReachable`, `ChannelJoined`) | Phase 4, with the controller (D30) | The controller reports each Binding's state | Nothing sets a status; a problem with the config is a load error (below) |
@@ -874,14 +877,22 @@ making the prefix optional breaks multi-turn context.
 
 ### 8.4 Interactions
 
-Ask-user and nested ask-user ship in the MVP. Tool approvals ship in Phase 5 (D25), with
-the Binding's `toolApprovals` and `approverGroups` fields (D40, R1), which are not in the types yet. Until then, if an agent
-pauses for a tool approval, Agent Kourier denies it, says so in the thread, and raises a
-metric, because the Binding is expected to point at a read-only agent.
+Ask-user and nested ask-user ship in the MVP. The Phase 5 implementation provides tool approvals for the
+`kagent-v1` dialect. `Binding.spec.interactions.toolApprovals` defaults to false, so
+an approval on a Binding that does not enable it is denied through the dialect, the
+thread receives a fixed notice, and the approval outcome metric is raised. The
+generic `a2a` dialect accepts only text-only questions; a structured pause on it is
+unusable and cancels the task.
 
 1. The task enters `input-required`. The dialect parses it into an `Interaction`. A pause
    the dialect can't use (for `kagent-v1`: a missing or malformed payload) is reported in
    the thread with its reason, audited, and the task is cancelled (6.3).
+   For a stored interaction whose prompt is too large or permanently abandoned, the
+   `unusable_pause` audit is written before the fixed notice is queued and the interaction
+   is closed. Recovery retries the cancellation of that closed row and records only a
+   result it knows: `ErrNotPaused` does not create a successful cancellation row. A crash
+   after a successful cancellation but before its audit can therefore leave that success
+   row absent; recovery does not invent it.
 2. Agent Kourier stores it as pending and renders it in the thread:
    - **Ask user:** each question with its choices as a select (multi-select where
      allowed), or a free-text input when there are no choices, and a Submit button.
@@ -889,9 +900,14 @@ metric, because the Binding is expected to point at a read-only agent.
      prompt says so. While the session's task waits on it and its prompt is posted, the first reply after the question is
      its answer, checked and audited as a Submit is (steps 3 to 5), and never sent as a turn; in a Binding with
      `chat.threadReplies: mention` it needs no mention (D38).
-   - **Tool approval (Phase 5):** tool name and full arguments, Approve and Deny
-     buttons. Several tool calls in one pause get one control each, plus approve-all
-     and deny-all.
+   - **Tool approval (`kagent-v1` only):** each tool name and its redacted,
+     normalized JSON arguments are shown as literal rich text. One tool gets
+     **Approve** and **Deny** buttons. Several tool calls get one radio choice per
+     tool, plus **Submit**, **Approve all** and **Deny all**. The adapter refuses a
+     name or argument that cleaning would change, that contains an unsupported
+     value or control, or that does not fit in the message; it never truncates the
+     approval evidence. `[redacted]` means the approver has not seen that original
+     value.
    - **Nested:** rendered as its inner kind, labelled with the sub-agent that raised it.
    - All agent-originated text is untrusted (R2): escaped (`&`, `<`, `>`), stripped of
      control and format characters, rendered as `plain_text` where Slack allows, and
@@ -900,9 +916,10 @@ metric, because the Binding is expected to point at a read-only agent.
      fences and code spans that Agent Kourier itself writes carry their text raw, except `<`
      before `!`, `@` or `#`, which is still written `&lt;`; every other backtick, and every
      run of three or more `~`, is escaped, so Slack opens no code of its own. A stream that
-     Agent Kourier resumes after a restart escapes everything, code included. Tool arguments go in an escaped code block, with
-     secret-looking values redacted (by key name and by token shape) before display. A choice
-     list over Slack's select limit falls back visibly; no choice is ever dropped.
+     Agent Kourier resumes after a restart escapes everything, code included. Tool approval
+     arguments use a rich-text preformatted element rather than markdown, so agent text stays
+     literal; secrets are redacted by key name and token shape before the request is stored.
+     A choice list over Slack's select limit falls back visibly; no choice is ever dropped.
    - Every Agent Kourier post, update and stream is sent with `parse` unset (or `none`), no
      `link_names`, and `unfurl_links=false` and `unfurl_media=false`. Escaping alone does not
      stop `@here` under `link_names`, and an unfurl makes Slack fetch an agent-written URL
@@ -911,25 +928,54 @@ metric, because the Binding is expected to point at a read-only agent.
 3. On submit, Agent Kourier verifies the request came from Slack, confirms the user is a
    channel member and not a bot, and checks the answer is complete. An incomplete
    answer is rejected in Slack; nothing is sent to the backend. For a tool approval
-   (Phase 5) on a Binding that names `approverGroups`, the user must also be in one of
-   them (R1); the groups do not gate an ask-user answer.
+   on a Binding that names `approverGroups`, the user must also be in one of
+   them (R1); the groups do not gate an ask-user answer. Membership is read in the
+   configured order without caching, and the first group-read error ends the check.
+   A channel member outside all groups is audited as `denied_not_approver`. A
+   permanent group-read failure ends that press with a fixed message and an operator
+   error naming the Binding, makes no decision or audit row, and leaves the interaction
+   pending; a transient read failure keeps the press for retry.
 4. Agent Kourier records the decision and sends it through the dialect under the Binding's
-   identity, with the Slack user as attribution.
+   identity, with the Slack user as attribution. A denial carries the dialect's fixed
+   rejection reason, not free text from Slack.
 5. First complete submission wins. The message is updated to show who decided and
-   when, and the controls are removed.
-6. On timeout, tool approvals are denied, questions are cancelled with `CancelTask`, and
-   the thread is told.
+   when, and the controls are removed. A failed update leaves the controls for the
+   repair loop; it does not resend the already recorded decision. A person whose
+   press loses is told who decided first; a late press is told it was not taken.
+6. On timeout, an enabled tool approval is audited as `timed_out` before Agent
+   Kourier denies every tool through the dialect. The prompt is replaced with a
+   timed-out ending and a fixed notice is queued. If the agent does not take that
+   denial, a later sweep cancels the task. Questions are cancelled with `CancelTask`
+   and use their question notice. The first-complete store decision wins a
+   person/sweep race; the thread notice or ending can reflect the sweep's work even
+   when the person's row wins, while the task receives one accepted answer. When a
+   person's answer wins after the timeout audit, the sweep appends a `superseded`
+   audit for its timeout, logging a failed compensation write. Recovery reuses a
+   durable timeout audit, repairing a missing audit before it retries denial.
 
-**Measured on kagent (WP-36h, Phase 1 full tier).**
+The audit row for an answered approval names the Binding, person and time, counts
+approved and denied tools, and lists cleaned tool names in request order, capped by
+the audit row limit. It never stores arguments or rejection reasons. The metric
+`agentkourier_approval_outcomes_total{binding,outcome}` records `approved`,
+`denied`, `partially_approved` and `timed_out`; policy refusals use `auto_denied`
+and `ask_user_cancelled`.
+
+**Measured in a direct run against pinned kagent 1.0.0-alpha5.**
 - kagent always calls the model with `stream=true` and always offers `ask_user` as a tool.
 - An `ask_user` answer reaches the model as a tool message holding a JSON list, one entry
   per question in order: `[{"answer":["PostgreSQL","MySQL"],"question":"..."}, ...]`.
 - A denied tool approval reaches the model as an empty assistant message followed by a
   tool message `{"error":"error tool \"<name>\" call is rejected"}`, so the model can
   continue knowing the call was refused.
+- A multi-tool approval pause emitted one input-required request with two distinct
+  tool call IDs and approval IDs. Sending one response that approved `add_numbers`
+  and denied `check_status` completed the task; only `add_numbers` executed.
 - A paused task's final event posts no message of its own (D8, measured on kagent and the
   stub): the prompt is the only message carrying the question.
-- Not measured: a non-streaming model call, and a nested sub-agent's ask.
+- Not measured: a non-streaming model call, and a nested sub-agent's ask. The
+  multi-tool evidence covers the pinned kagent 1.0.0-alpha5 fixture. The broker full-tier
+  suite with fake Slack also passed on 2026-10-14, including approval/denial audit
+  and outcome metrics, timeout, group authorization, mixed decisions and a stale press.
 
 ### 8.5 Identity
 
@@ -1012,8 +1058,10 @@ this with an outbox:
   earlier investigations. Votes are audited by IDs and verdict only, and counted in
   `agentkourier_investigation_feedback_total{binding, agent, alertname, verdict}`: a counter of votes cast (a change is one
   more vote under its new verdict). The alert name is the trigger's `alertname`, kept only in the name shape; the
-  label is `none` for an answer in a thread no alert started and `unknown` for an investigation with no name, and a
-  Binding has at most 100 names in a process, then `other`.
+  session origin records the bounded source and subject that caused the thread, while the feedback adapter maps the
+  `alertmanager` or custom `botMessage` source (and `legacy` values migrated from the older schema) to alert attribution.
+  A subject from another source is generic metadata, so the label is `none` for an answer or `unknown` for an investigation. A Binding has at most
+  100 names in a process, then `other`.
 - The pilot exit decision (D33) is computed from the rows, not the metric (owner, 2026-10-05): each investigation
   counts once, useful when most of its investigation votes say Useful (a tie is not useful); "rated" means at least
   one vote. The query is in `docs/reference/stored-data.md`.
@@ -1024,7 +1072,7 @@ this with an outbox:
 |---|---|---|
 | `events` | event ID | Durable inbound queue with processing status. Built for the webhook; since D39 nothing writes to it |
 | `outbox` | outbox ID | Intended Slack posts and their resulting message refs (8.6) |
-| `sessions` | conversation key | `contextId`, current task ID, binding, agent and alert name at creation, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
+| `sessions` | conversation key | `contextId`, current task ID, binding, generic origin source and subject, agent at creation, last activity (expires at `threadTTL`; deleted 90 days later, with its replies, interactions, presses and outbox rows) |
 | `trigger_threads` | binding, key hash | The thread of each key of a Binding's chat triggers (8.2): its thread, when it opened, was last seen and closed, and when its cooldown ends. The key is stored only as a hash. Swept hourly |
 | `trigger_runs` | connection, channel, alert ts | The starts of a Binding's chat triggers (8.2): one row for each alert message that started an investigation or that a limit stopped, with the window of the digest it belongs to. Kept 24 hours |
 | `interactions` | interaction ID | Kind, request, state, answer, decider, timestamps. The request is stored normalized (invisible characters deleted) and with the agent's secrets redacted (hint, question text, tool arguments), except a question's choices; request and answer are cleared 25 hours after the decision (7 days for an answer not yet delivered to the session). The row stays until its session is deleted (below). |
@@ -1110,7 +1158,7 @@ a root post (a role the store accepts and nothing in production has ever posted)
 | 2. Alerts | `botMessage` triggers (8.2) that read the message Alertmanager already posts to Slack: the `alertmanager` preset, a thread under each alert with a cooldown per key and notes for repeats and resolves, rate limit, daily cap, digest line, the prompt template with the alert in the untrusted block, feedback buttons. Built as CT-1 to CT-7b; the webhook receiver was dropped (D39) | A firing alert produces one thread; repeats add a note to it; replies continue the session. A 50-alert burst yields capped investigations and one digest line, not 50 messages. Votes are recorded. |
 | 3. Pilot | Four weeks, one team plus the platform Binding. Feedback dashboard. Weekly review of not-useful investigations. | Go or no-go recorded against D33 (section 13) |
 | 4. Hardening (if go) | CRDs and controller, Postgres, HA, HTTP mode, DMs, Helm chart. These add back the fields that wait for them (D40): `ChatConnection.spec.mode` and `signingSecret`, `ChatConnection.spec.directMessages`, and `Binding.status`. Move the backend to production kagent at 1.0 GA and retire the pilot install. | Two replicas pass a failover test with no lost or duplicated events |
-| 5. Tool approvals | Bind the first write-capable agent. R1 is decided (2026-10-11): `approverGroups` is added. Approval buttons, timeout, audit. Adds back `toolApprovals` and `approverGroups` (D40). | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
+| 5. Tool approvals | Bind the first write-capable agent. R1 is decided (2026-10-11, option 2 reconfirmed 2026-10-13): `approverGroups` is implemented. Approval buttons, timeout, audit, and the `toolApprovals` and `approverGroups` API fields are live. | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
 | 6. OSS readiness | Docs, generic `a2a` dialect conformance tests, ax example (reference agent and AX kind tier shipped) | A non-kagent A2A agent works with no code changes |
 
 ### 12.1 Testing strategy
@@ -1185,7 +1233,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 
 | # | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High, deferred | Not live until Phase 5: the MVP agent is read-only (D23). **Decided 2026-10-11 (owner), optional approver groups:** Phase 5 adds `Binding.spec.interactions.approverGroups` with `toolApprovals`, and adding an optional field breaks no config. Empty means any member of the Binding's channel may approve. A Binding with `toolApprovals: true` and no group loads, with a logged warning. The groups gate tool approvals only, not ask-user answers, and an approver must be in a group, a channel member and not a bot. The backend still sees only the Binding identity (D14); the audit row is the accountable record. **Residual risk:** a Binding with no group still lets any channel member approve a write action, and the backend cannot tell who. Neither field is in the schema today (D40), so every tool-approval pause is denied until Phase 5 lands them. |
+| R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High | The Phase 5 implementation supports optional approver groups. Empty means any member of the Binding's channel may approve. A Binding with `toolApprovals: true` and no group loads, with a logged warning. The groups gate tool approvals only, not ask-user answers, and an approver must be in a group, a channel member and not a bot. The backend still sees only the Binding identity (D14); the audit row is the accountable record. **Residual risk:** a Binding with no group still lets any channel member approve a write action, and the backend cannot tell who. Direct pinned-kagent evidence and the broker full-tier suite with fake Slack cover a two-tool approval with one approved and one denied call; only the approved tool executes (2026-10-14). |
 | R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, the bot-ID check (D36), rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. The message's fields have their secrets taken out before they reach the agent. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
 | R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode, and in OIDC mode `X-Agent-Name` plus `X-User-Id` or `?user_id=`, which selects the acting user even with a valid token (WP-03: oauth2-proxy forwards them). | High | Agent Kourier talks only to a verifying front door (oauth2-proxy or agentgateway) that strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`; NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. Proven for the header path (WP-01d): through the door, B's valid token with `X-Agent-Name` plus `X-User-Id` or `?user_id=`, in any case, gets `-31403` on send, stream, `GetTask`, `SubscribeToTask` and `CancelTask`, and a bogus `X-Share-Token` is dropped, while the same spoof works at 8083 (canary) and the Binding's own send, SSE and `GetTask` still work. The `X-User-Id` and runtime-identity strips are defence in depth (config and source; no observable while `X-Agent-Name` is stripped). The pilot door must use the same config (WP-05). The risk stays High: the controller is unchanged, only mitigated. |
@@ -1356,3 +1404,22 @@ decision, not a change in behaviour. What changed in this document:
 | R1 | The decision, its date and the residual risk |
 
 The rows of the tables above are not edited.
+
+### Tool approval implementation recorded (2026-10-13)
+
+The Phase 5 implementation is present for the `kagent-v1` dialect. `Binding.spec.interactions.toolApprovals` and
+`approverGroups` are API fields with validation and loader wiring: approvals default to a dialect denial, while an
+enabled approval is shown in Slack and checked against channel membership, bot status and any configured groups.
+The prompt uses redacted literal arguments, the decision is audited before it is sent under the Binding identity, and
+timeouts deny through kagent. A pinned kagent 1.0.0-alpha5 run emitted one two-tool pause; approving `add_numbers` and
+denying `check_status` completed the task and only `add_numbers` executed. The broker full-tier suite with fake Slack
+passed on 2026-10-14, covering audited approve/deny, timeout, authorization, mixed decisions and stale presses.
+The complete fast suite also passed; R1 option 2 remains recorded.
+
+What changed in this document:
+
+| Earlier text | Now |
+|---|---|
+| D13, D25, D40, the section 7 approval rows and R1 | They describe the fields and policy as implemented, including the no-group warning, group gate, `denied_not_approver` result and the residual risk when no group is configured |
+| Section 6.2 and section 8.4 | The platform contract includes `IsInAnyGroup`; the approval prompt, fixed denial, audit, timeout and first-complete behavior are specified against the current code |
+| Phase 5 exit row | The pinned kagent two-tool observation and passing broker full-tier suite with fake Slack are recorded; the original audited Slack approve/deny exit criterion is preserved |

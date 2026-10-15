@@ -64,9 +64,13 @@ type Server struct {
 	seq         atomic.Int64
 	idTag       string // in every id the stub makes, if not empty
 
-	mu     sync.Mutex
-	agents map[string]*Agent        // by "ns/name", guarded by mu
-	gates  map[string]chan struct{} // closed once released, guarded by mu
+	mu                         sync.Mutex
+	agents                     map[string]*Agent        // by "ns/name", guarded by mu
+	gates                      map[string]chan struct{} // closed once released, guarded by mu
+	sendGate                   chan struct{}
+	sendGateArmed              bool
+	sendGateID, sendGateSender string
+	sendCounts                 map[string]int
 }
 
 // Option configures a Server.
@@ -89,7 +93,7 @@ func WithIDTag(tag string) Option { return func(s *Server) { s.idTag = tag } }
 // NewHandler returns a Server for use as an http.Handler, with no listener of its own. Call
 // Close when done.
 func NewHandler(opts ...Option) *Server {
-	s := &Server{now: time.Now, agents: map[string]*Agent{}, gates: map[string]chan struct{}{}}
+	s := &Server{now: time.Now, agents: map[string]*Agent{}, gates: map[string]chan struct{}{}, sendCounts: map[string]int{}}
 	s.ctx, s.stop = context.WithCancel(context.Background())
 	for _, o := range opts {
 		o(s)

@@ -118,7 +118,7 @@ func (m *Metrics) ApprovalOutcome(binding string, outcome interact.Outcome) {
 // the closed set that DecideConfig documents; any other is one series, "other".
 func (m *Metrics) InteractionDecision(result string) {
 	switch result {
-	case "answered", "superseded", "late", "invalid":
+	case "answered", "superseded", "late", "invalid", "unrecorded":
 	default:
 		result = otherLabel
 	}

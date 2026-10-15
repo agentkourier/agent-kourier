@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -91,8 +92,8 @@ func permalinks(p chat.Platform) func(chat.Ref) (string, bool) {
 // it. A person's reply in the thread continues the session without a mention, as a reply in any thread Agent Kourier
 // owns does.
 //
-// The session keeps the alert's name (the match's "alertname" entry, if it has the shape of a name: feedback.AlertName),
-// so that a vote on any message of the thread, cast long after the start, is stored and counted under it (spec 8.7).
+// The session keeps the trigger source and its bounded alertname subject, so that a vote on any message of the thread,
+// cast long after the start, can be attributed at the feedback boundary (spec 8.7).
 //
 // A prompt that cannot be rendered, whether a value failed its check (render.RefusedError) or the template failed
 // to run, starts no turn. The thread gets a fixed note, the audit log an entry, and the counter a count (refuse),
@@ -122,7 +123,8 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 	res, err := s.submit.Submit(ctx, session.Inbound{
 		Key:       session.Key{Connection: s.conn, Channel: at.Channel, Thread: at.ID},
 		Binding:   m.Binding,
-		MessageID: id, MessageRef: at.ID, Text: text, Create: true, Alert: feedback.AlertName(m.Fields["alertname"]),
+		MessageID: id, MessageRef: at.ID, Text: text, Create: true,
+		Origin: store.Origin{Source: cmp.Or(m.Preset, "botMessage"), Subject: feedback.AlertName(m.Fields["alertname"])},
 	})
 	switch {
 	case err != nil:

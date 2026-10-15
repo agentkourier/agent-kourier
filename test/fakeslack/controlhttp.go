@@ -43,6 +43,12 @@ type (
 		ActionID  string `json:"action_id"`
 		Value     string `json:"value"`
 	}
+	staleClickReq struct {
+		User     string  `json:"user"`
+		Message  Message `json:"message"`
+		ActionID string  `json:"action_id"`
+		Value    string  `json:"value"`
+	}
 	submitReq struct {
 		User      string      `json:"user"`
 		MessageTS string      `json:"message_ts"`
@@ -114,6 +120,9 @@ func (s *Server) newControlRoutes() controlRoutes {
 	mux.HandleFunc("POST /_control/webhook", post(func(q WebhookPost) (any, error) { return s.Webhook(q) }))
 	mux.HandleFunc("POST /_control/click", post(func(q clickReq) (any, error) {
 		return envelopeID(s.Click(q.User, q.MessageTS, q.ActionID, q.Value))
+	}))
+	mux.HandleFunc("POST /_control/click-stale", post(func(q staleClickReq) (any, error) {
+		return envelopeID(s.ClickStale(q.User, q.Message, q.ActionID, q.Value))
 	}))
 	mux.HandleFunc("POST /_control/submit", post(func(q submitReq) (any, error) {
 		return envelopeID(s.Submit(q.User, q.MessageTS, q.ActionID, q.Values))

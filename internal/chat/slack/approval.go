@@ -1,7 +1,9 @@
 package slack
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -23,9 +25,9 @@ import (
 // line, the deadline's and the buttons 44. A single tool is not numbered, which would read badly; the number
 // counts toward the name's limit, since a place's limit is the whole of what is shown.
 //
-// UNCONFIRMED(WP-04), what the several-tool layout rests on, none of which the probe of 2026-10-04 sent: radio_buttons in
-// an input block of a message, up to 24 of them in one message; and a rich_text block of a rich_text_section followed by
-// a rich_text_preformatted (the pairing of a name with its arguments).
+// The live probe of 2026-10-13 posted and updated this layout in Slack with 20 tools (42 blocks) and 24 tools (50 blocks),
+// including the radio_buttons and the rich_text pairing of a name with its arguments. A raw block_actions capture records
+// the control payload separately without logging user or message data.
 //
 // The name is agent text. In the input's label and in a section it is a plain_text object, escaped as every plain_text
 // object is; in a rich_text block it is the characters of a text element, which is literal, so it is cleaned and not
@@ -38,8 +40,6 @@ import (
 // of tasks/plans/slack-code-rendering.md), so the "&lt;" that keeps "<!" out of code would be shown as "&lt;", and
 // the person would be asked to approve arguments that are not the arguments: "&lt;!x" and "<!x" would look alike.
 // And a line of them that looks like a fence would end the block there, so that the rest was shown as prose.
-// UNCONFIRMED(WP-04): that Slack posts the block and shows a text element as the characters it holds; the probe
-// of 2026-10-04 sent markdown blocks and did not send a rich_text one.
 const (
 	approvalHeader   = "The agent needs your approval"
 	approvalFallback = "The agent needs your approval."
@@ -47,15 +47,20 @@ const (
 
 	approveWord, denyWord = "Approve", "Deny"
 
-	// maxApprovalArgs is the most units of arguments a tool of a prompt may have, cleaned, as
-	// Caps.Limit(chat.WhereToolArgs). Slack documents no limit for a rich_text block. It is the largest text
-	// that any other block is documented to hold (a section's), so that a block of it is not likelier to be refused
-	// than one of those. UNCONFIRMED(WP-04): what a rich_text block holds.
+	// maxApprovalArgs is the conservative per-tool budget in cleaned UTF-16 units. Slack accepted 3001 ASCII units and
+	// 3002 UTF-16 units of astral text in the 2026-10-13 probe; keep the documented 3000-character budget for a block.
 	maxApprovalArgs = maxSection
-	// maxApprovalTotal is the most units of arguments in one message, all its tools together: the 12,000 that a
-	// message's markdown blocks may hold, which is the only documented limit on the total of long text in a message. Tools
-	// that need more are too large, and none is cut. UNCONFIRMED(WP-04): what a message of rich_text blocks holds.
-	maxApprovalTotal = maxMarkdown
+	// maxApprovalTotal is the conservative aggregate budget in cleaned UTF-16 units for the generated approval layout.
+	// Slack accepted 3,600 ASCII units in the 24-tool, 50-block fixture and refused 4,992 with msg_blocks_too_long;
+	// the 20-tool fixture accepted 5,200 and refused 5,360. This is a layout-specific budget, not Slack's absolute limit:
+	// tool names and other blocks consume message space too, so the local cap stays below the observed rejection boundary.
+	maxApprovalTotal = 3600
+	// maxApprovalBlocks is a conservative budget for the complete canonical Block Kit JSON in UTF-16 units. The
+	// approval renderer leaves optional HTML escaping to Slack's JSON client, so this measures the JSON syntax and the
+	// required JSON string escapes without charging agent text for that second encoding step.
+	// The 24-tool fixture was accepted at 16,291 Unicode characters and refused at 17,683; 16,000 leaves room for
+	// variation in names, labels and notices without treating the observed boundary as universal.
+	maxApprovalBlocks = 16000
 )
 
 // The action IDs of the buttons that decide a tool approval, and the block that holds the buttons of one tool.
@@ -118,6 +123,19 @@ func toolBlock(name, args string) map[string]any {
 	return richText(richSection(name), argsElements(args))
 }
 
+// approvalContent encodes the canonical approval JSON used for the local budget. HTML escaping is unnecessary inside
+// a JSON string and makes the local budget charge six UTF-16 units for one agent character such as '<'; the Slack
+// client performs that optional escaping when it serializes the Web API form.
+func approvalContent(fallback string, blocks []map[string]any) (Content, error) {
+	var raw bytes.Buffer
+	encoder := json.NewEncoder(&raw)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(blocks); err != nil {
+		return Content{}, fmt.Errorf("slack: encode the approval blocks: %w", err)
+	}
+	return Content{Text: fallback, Blocks: bytes.TrimSuffix(raw.Bytes(), []byte{'\n'})}, nil
+}
+
 // renderToolPrompt is a prompt of tools as a Slack message (see the top of this file). A tool whose name or
 // arguments, cleaned, are over the limit of their place is chat.ErrTooLarge and is never shown cut, because a person cannot
 // approve what they cannot read; and so are tools whose arguments together are more than a message shows (maxApprovalTotal),
@@ -163,7 +181,14 @@ func renderToolPrompt(p chat.Prompt) (Content, error) {
 		return Content{}, fmt.Errorf("%w: %d blocks", chat.ErrTooLarge, len(blocks))
 	}
 	blocks, fallback := withNotices(blocks, p, approvalFallback)
-	return content(fallback, blocks)
+	out, err := approvalContent(fallback, blocks)
+	if err != nil {
+		return Content{}, err
+	}
+	if n := chat.Units(string(out.Blocks)); n > maxApprovalBlocks {
+		return Content{}, fmt.Errorf("%w: approval blocks are %d UTF-16 units, at most %d", chat.ErrTooLarge, n, maxApprovalBlocks)
+	}
+	return out, nil
 }
 
 // toolEndingBlocks are the tools of an ended prompt: for each a section of its name (numbered, as in the prompt, if

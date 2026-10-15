@@ -151,8 +151,9 @@ func taskShown(s string) chattest.Shown {
 // text: a mention, a broadcast, a channel and a link in rich_text are elements of their own type. Every element or
 // sub-element of the block that is not a text element with no other field (a user, a broadcast, a channel, a link,
 // a styled or any other text, an element of another type) is reported as the construct it is, on every Shown of the block,
-// so that the adapter cannot put one anywhere in it by accident. UNCONFIRMED(WP-04): that Slack posts the block and shows
-// a text element as the characters it holds; the probe of 2026-10-04 sent markdown blocks and did not send a rich_text one.
+// so that the adapter cannot put one anywhere in it by accident. The 2026-10-13 live approval probe returned the
+// generated hostile fields as text leaves; this reader remains structural so the unit suite still rejects any future
+// renderer change that introduces an active rich_text element.
 func richTextShown(block map[string]any) []chattest.Shown {
 	var found []chattest.Active
 	report := func(kind chattest.Kind, el map[string]any) {

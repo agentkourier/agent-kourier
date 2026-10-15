@@ -1,5 +1,5 @@
 # S4 over the a2a dialect: a reply sent while a task runs is queued, then answered in order, by the stub agent reached as a plain
-# pod (see agentbackend-a2a.yaml). The same scenario as binding-s4.yaml, on a channel of its own; the identity token is the same
+# pod (see agentbackend-a2a.yaml). The same scenario as binding-queued-replies.yaml, on a channel of its own; the identity token is the same
 # Secret as fast-chat's. The channel and the agent are pinned by test/kindmanifests and test/e2e/scenarios.go.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding

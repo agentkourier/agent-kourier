@@ -1,0 +1,18 @@
+# S23: the multi-tool approval pause needs both tool IDs to remain distinguishable.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: full-s23, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: agents}
+    namespace: kagent
+    name: scenario-approval-multi
+  identity:
+    userId: agent-kourier-full
+    tokenSecretRef: {name: agent-kourier-agent-token}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CS23
+    output: live
+  interactions:
+    toolApprovals: true

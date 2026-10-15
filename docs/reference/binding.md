@@ -157,6 +157,8 @@ Interactions configures agent pauses that wait on a person.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. |
+| `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
+| `approverGroups` | []string | No | None | ApproverGroups names the Slack user groups whose members may decide a tool approval. An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits; duplicates and empty entries are refused. |
 | `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. |
 
 ## Feedback

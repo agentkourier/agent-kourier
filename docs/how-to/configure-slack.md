@@ -88,10 +88,16 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `reactions.add`, `reactions.remove` | `reactions:write` |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
+| `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
-The manifest enables no direct messages: it has no `im:` scopes or events.
+The manifest enables no direct messages: it has no `im:` scopes or events. Add `usergroups:read` to the bot token's
+scopes and reinstall the app before using `interactions.approverGroups`; a missing scope is a permanent group-read
+failure, so the affected press ends with a fixed message, makes no decision or audit row, and leaves the approval pending.
+The error log names the Binding and interaction. Transient Slack failures such as a timeout, server error or rate limit
+keep the press for retry. Group IDs are read in the configured order without caching; the first error ends the check even
+if a later group contains the person, while a member found in an earlier group may decide.
 
 ## Related
 

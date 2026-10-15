@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 )
 
@@ -62,6 +63,17 @@ func (r *Replicas) Counter(ctx context.Context, rep kube.Replica, name string, l
 	ctx, cancel := context.WithTimeout(ctx, r.ask)
 	defer cancel()
 	return NewAgentKourier(base).Counter(ctx, name, labels)
+}
+
+// AuditEntries reads the persisted audit rows of one replica.
+func (r *Replicas) AuditEntries(ctx context.Context, rep kube.Replica) ([]store.AuditEntry, error) {
+	base := r.base(rep)
+	if base == "" {
+		return nil, fmt.Errorf("e2e: no address for replica %s", rep.ID())
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.ask)
+	defer cancel()
+	return NewAgentKourier(base).AuditEntries(ctx)
 }
 
 // Leaders returns the replicas that say they lead (agentkourier_leader is 1). A replica that does not answer in time is no

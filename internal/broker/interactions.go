@@ -112,6 +112,9 @@ type interactionRuntime struct {
 	votes    *feedback.Handler
 	replacer *interact.Replacer
 	worker   *interact.Worker
+	// reopened is told by the session manager of the denials it took and did not deliver (session.Config.AnswerWatcher) and is
+	// read by the sweeper, which cancels their tasks: the one value, so build makes it and the manager and the sweeper get it.
+	reopened *interact.Reopened
 	ready    chan struct{}
 }
 
@@ -122,7 +125,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	}
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
-		Store: d.st, Lookup: d.bindings, Platform: d.platform, Outbox: d.ob, Session: late, Audit: d.auditor,
+		Store: d.st, AuditReader: d.st, Lookup: d.bindings, Platform: d.platform, Outbox: d.ob, Session: late, Audit: d.auditor,
 		OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
@@ -167,7 +170,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	if err != nil {
 		return nil, fmt.Errorf("interactions: text replies: %w", err)
 	}
-	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, ready: ready}, nil
+	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, reopened: interact.NewReopened(d.st), ready: ready}, nil
 }
 
 // start recovers presses and starts the interaction loops after session recovery. Only then
@@ -176,7 +179,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *int
 	tap, pipeline, votes, replacer, worker := r.tap, r.pipeline, r.votes, r.replacer, r.worker
 	sweeper, err := interact.NewSweeper(interact.SweepConfig{
 		Store: d.st, Sessions: d.st, Lookup: d.bindings, Session: mgr, Updater: d.platform, Outbox: d.ob, Auditor: d.auditor,
-		Presses: d.st, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
+		Presses: d.st, Reopened: r.reopened, OnTimeout: d.metrics.InteractionTimeout, OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the sweeper: %w", err)

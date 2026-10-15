@@ -133,8 +133,14 @@ Structured questions and approvals depend on the backend's interaction contract.
 The generic A2A dialect supports text continuation: a plain-text `input-required`
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
-paused task. The kagent dialect additionally understands structured questions and
-tool step cards. A tool approval request is denied, and the thread is told.
+paused task. A structured pause on that dialect is unusable and cancels the task.
+The kagent dialect additionally understands structured questions and tool step
+cards. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
+optional `approverGroups` narrow the eligible Slack users, while ask-user answers
+remain independent. A disabled approval is denied through the dialect with a
+thread notice. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers`
+and denied `check_status` in one two-tool pause; only `add_numbers` executed. The
+broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-alpha5.
 
 Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with
 no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects

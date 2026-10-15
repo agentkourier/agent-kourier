@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ta-config-capture
+  namespace: kagent
+data:
+  capture.py: |
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    requests = []
+    requests_lock = threading.Lock()
+
+    def text_of(content):
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        return ""
+
+    def system_prompt(messages):
+        for message in messages:
+            if message.get("role") == "system":
+                return text_of(message.get("content"))
+        return ""
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_):
+            pass
+
+        def reply(self, code, body, content_type="application/json"):
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def completion(self, stream):
+            if stream:
+                chunks = [
+                    {"id": "chatcmpl-ta-config", "object": "chat.completion.chunk", "created": 1,
+                     "model": "ta-config-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "captured"}, "finish_reason": None}]},
+                    {"id": "chatcmpl-ta-config", "object": "chat.completion.chunk", "created": 1,
+                     "model": "ta-config-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                ]
+                payload = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+                return payload.encode()
+            return json.dumps({
+                "id": "chatcmpl-ta-config", "object": "chat.completion", "created": 1,
+                "model": "ta-config-model", "choices": [{"index": 0, "message": {"role": "assistant", "content": "captured"}, "finish_reason": "stop"}],
+            }).encode()
+
+        def do_GET(self):
+            if self.path != "/_control/requests":
+                return self.reply(404, b"not found", "text/plain")
+            with requests_lock:
+                body = json.dumps(requests, ensure_ascii=False).encode()
+            return self.reply(200, body)
+
+        def do_POST(self):
+            if self.path != "/v1/chat/completions":
+                return self.reply(404, b"not found", "text/plain")
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                return self.reply(400, b'{"error":"invalid request"}')
+            messages = request.get("messages", [])
+            record = {
+                "model": request.get("model", ""),
+                "system_prompt": system_prompt(messages),
+                "message_count": len(messages),
+                "authorization_present": bool(self.headers.get("Authorization")),
+                "endpoint": self.path,
+            }
+            with requests_lock:
+                requests.append(record)
+            print(json.dumps(record, ensure_ascii=False), flush=True)
+            body = self.completion(bool(request.get("stream")))
+            content_type = "text/event-stream" if request.get("stream") else "application/json"
+            return self.reply(200, body, content_type)
+
+    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ta-config-model
+  namespace: kagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ta-config-model}
+  template:
+    metadata:
+      labels: {app: ta-config-model}
+    spec:
+      containers:
+        - name: capture
+          image: python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f
+          command: [python, /app/capture.py]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: ta-config-capture}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ta-config-model
+  namespace: kagent
+spec:
+  selector: {app: ta-config-model}
+  ports: [{port: 8080, targetPort: 8080}]

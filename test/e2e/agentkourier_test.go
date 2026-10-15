@@ -2,14 +2,18 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
 const exposition = `# HELP agentkourier_approval_outcomes_total Tool approvals decided, by outcome.
@@ -155,6 +159,122 @@ func TestWaitReadyTimesOutOnAnAgentKourierThatIsNeverReady(t *testing.T) {
 	cancel()
 	if err := NewAgentKourier(srv.URL).WaitReady(ctx, time.Minute); !errors.Is(err, context.Canceled) || errors.Is(err, ErrTimeout) {
 		t.Fatalf("WaitReady with a cancelled context = %v; want the context's error", err)
+	}
+}
+
+func TestAuditEntriesReadsPersistedRows(t *testing.T) {
+	want := []store.AuditEntry{{Sequence: 9, Kind: store.AuditInteractionDecision, User: "US19", Binding: "agent-kourier/fast-s19", Subject: "interaction=i task=t", Outcome: "answered approved=1 denied=0"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/__testhooks/audit" {
+			http.NotFound(w, r)
+			return
+		}
+		entries := want
+		if r.URL.Query().Get("after_seq") != "" {
+			entries = nil
+		}
+		if entries == nil {
+			entries = []store.AuditEntry{}
+		}
+		_ = json.NewEncoder(w).Encode(auditPageResponse{Entries: entries})
+	}))
+	defer srv.Close()
+
+	got, err := NewAgentKourier(srv.URL).AuditEntries(t.Context())
+	if err != nil || len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("AuditEntries = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestAuditEntriesRejectsMalformedPageEnvelope(t *testing.T) {
+	for name, body := range map[string]string{
+		"legacy array":    "[]",
+		"missing entries": "{}",
+		"null entries":    `{"entries":null}`,
+		"wrong entries":   `{"entries":"bad"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/__testhooks/audit" {
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			if _, err := NewAgentKourier(srv.URL).AuditEntries(t.Context()); err == nil {
+				t.Fatalf("AuditEntries over %s succeeded; want an envelope error", name)
+			}
+		})
+	}
+}
+
+func TestAuditEntriesPagesUntilEmptyWithVaryingPageSizes(t *testing.T) {
+	rows := make([]store.AuditEntry, 1201)
+	for i := range rows {
+		rows[i] = store.AuditEntry{Sequence: int64(i + 1), Kind: store.AuditEvent, Subject: "old", Outcome: "done"}
+	}
+	rows[len(rows)-1] = store.AuditEntry{Sequence: 1201, Kind: store.AuditInteractionDecision, User: "US19", Binding: "agent-kourier/fast-s19", Subject: "interaction=new task=t", Outcome: "answered"}
+	pageSizes := []int{37, 11, 5, 23}
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/__testhooks/audit" {
+			http.NotFound(w, r)
+			return
+		}
+		call := int(calls.Add(1)) - 1
+		after := int64(0)
+		if raw := r.URL.Query().Get("after_seq"); raw != "" {
+			var err error
+			after, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil || after < 0 {
+				http.Error(w, "bad cursor", http.StatusBadRequest)
+				return
+			}
+		}
+		start := int(after)
+		if start > len(rows) {
+			start = len(rows)
+		}
+		end := min(start+pageSizes[call%len(pageSizes)], len(rows))
+		_ = json.NewEncoder(w).Encode(auditPageResponse{Entries: rows[start:end]})
+	}))
+	defer srv.Close()
+
+	got, err := NewAgentKourier(srv.URL).AuditEntries(t.Context())
+	if err != nil {
+		t.Fatalf("AuditEntries = %v; want all varying-size pages", err)
+	}
+	if len(got) != len(rows) || got[len(got)-1] != rows[len(rows)-1] {
+		t.Fatalf("AuditEntries returned %d rows ending %+v; want %d rows ending %+v", len(got), got[len(got)-1], len(rows), rows[len(rows)-1])
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("AuditEntries made %d request(s); want it to continue until an empty page", calls.Load())
+	}
+}
+
+func TestAuditEntriesRejectsNonAdvancingShortPage(t *testing.T) {
+	full := make([]store.AuditEntry, 3)
+	for i := range full {
+		full[i] = store.AuditEntry{Sequence: int64(i + 1), Kind: store.AuditEvent, Subject: "event", Outcome: "done"}
+	}
+	short := []store.AuditEntry{full[len(full)-1]}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/__testhooks/audit" {
+			http.NotFound(w, r)
+			return
+		}
+		entries := full
+		if r.URL.Query().Get("after_seq") != "" {
+			entries = short
+		}
+		_ = json.NewEncoder(w).Encode(auditPageResponse{Entries: entries})
+	}))
+	defer srv.Close()
+
+	if _, err := NewAgentKourier(srv.URL).AuditEntries(t.Context()); err == nil || !strings.Contains(err.Error(), "cursor") {
+		t.Fatalf("AuditEntries error = %v; want a non-advancing cursor error", err)
 	}
 }
 

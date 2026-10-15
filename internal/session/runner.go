@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // convo is a conversation that has a runner, which drains its queue one turn at a time (D21).
@@ -515,7 +516,11 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
 	send := func(ctx context.Context, h agent.Handler) error {
 		// Only a send carries the thread's context: the turn that is followed was sent before, with its own.
-		return backend.Agent.Send(ctx, m.message(m.withThreadContext(ctx, c, r, sess.Binding, backend), sess, backend), h)
+		msg := m.message(m.withThreadContext(ctx, c, r, sess.Binding, backend), sess, backend)
+		if err := testhooks.BeforeSend(ctx, msg.ID); err != nil {
+			return err
+		}
+		return backend.Agent.Send(ctx, msg, h)
 	}
 	sends := true // false once the turn is found on the agent, to be followed and not sent
 	hold := m.held(key, r.ID, sess)
@@ -789,7 +794,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	// the output of the turn that paused. A task found again after a restart, or followed again
 	// after a lost stream, continues the message it had.
 	shown := t.outputTurn()
-	ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Recovered: t.recovered || t.follow, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
+	ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Recovered: t.recovered || t.follow, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
 	if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
 		h = sh
 	}
@@ -991,8 +996,7 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		m.rejected(t, err)
 	}
-	m.notice(t, NoticeFailed, "the answer could not be delivered")
-	return m.repark(t), nil
+	return m.repark(t, "the answer could not be delivered"), nil
 }
 
 // Details of the notice an answer that the agent refused gets, by what it said (see readAnswered). Agent Kourier does
@@ -1017,8 +1021,7 @@ func (m *Manager) readAnswered(t *tstate, refused error) (outcome, error) {
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
 	case err != nil:
-		m.notice(t, NoticeFailed, "the answer could not be delivered")
-		return m.repark(t), nil
+		return m.repark(t, "the answer could not be delivered"), nil
 	case task.Status.State.Terminal():
 		m.notice(t, NoticeAnswerDropped, "")
 		m.finish(t, stateOutcome(task.Status.State))
@@ -1033,22 +1036,20 @@ func (m *Manager) readAnswered(t *tstate, refused error) (outcome, error) {
 		t.c.follow, t.follow = t, true
 		return m.resume(t.c)
 	}
-	if busy {
-		m.notice(t, NoticeFailed, detail)
+	if !busy {
+		detail = "" // an outcome that was unknown, and the task still waits: nothing is said
 	}
-	return m.repark(t), nil
+	return m.repark(t, detail), nil
 }
 
-// repark reopens the pause of the task an answer was not delivered to.
-func (m *Manager) repark(t *tstate) outcome {
+// repark reopens the pause before notifying the answer watcher, so its cancel can be accepted.
+// It also settles the failed answer's acknowledgment and restores the paused task's metadata.
+func (m *Manager) repark(t *tstate, detail string) outcome {
 	if t.answer && t.ackReply.Acknowledgment != "" {
-		// The answer was accepted by intake but the agent did not take it. Its reaction belongs to this
-		// attempt, so settle it before the paused question can accept another answer. Persist the paused
-		// question again as well; otherwise a crash between the repark and the next answer would recover
-		// the failed answer's source and leave its reaction behind.
 		m.unacknowledgeReply(t.key, t.ackReply, t.ackReply.ID)
 		t.ackReply = store.Reply{}
 	}
+
 	m.mu.Lock()
 	t.c.parked, t.c.released = t.taskID, false
 	pt := *t
@@ -1060,6 +1061,11 @@ func (m *Manager) repark(t *tstate) outcome {
 			m.cfg.Logger.WarnContext(m.ctx, "session: could not restore paused acknowledgment metadata", "message", t.r.ID, "error", err)
 		}
 	}
+	told := m.cfg.AnswerWatcher != nil && t.nid != "" && m.cfg.AnswerWatcher.AnswerReopened(m.ctx, t.key, t.taskID, t.nid)
+	if detail != "" && !told {
+		m.notice(t, NoticeFailed, detail)
+	}
+
 	return paused
 }
 

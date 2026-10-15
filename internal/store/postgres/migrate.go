@@ -86,8 +86,8 @@ func migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, log *slog.Logg
 }
 
 // warnIfNewer reports, at WARN, a schema that records a migration this binary does not have: a rollback
-// to an older release, or a replica that has not been upgraded yet. It does not refuse: migrations are
-// additive across one release (see tasks/plans/hardening-before-pilot.md), so the older binary still works.
+// to an older release, or a replica that has not been upgraded yet. It does not refuse; migration-specific
+// compatibility notes govern whether an older binary can continue to use the schema.
 func warnIfNewer(ctx context.Context, pool *pgxpool.Pool, known []migration, log *slog.Logger) error {
 	var highest int
 	if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&highest); err != nil {

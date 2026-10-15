@@ -1,7 +1,8 @@
 // Package feedback is the useful and not-useful buttons of an investigation's final message (spec 8.7): the buttons, as
 // parts of the chat-neutral model, and the processing of a press of one. A person who is a member of the channel, and is
 // no bot, has one vote on each message, which the latest press replaces; the vote is stored with the Binding, the agent and
-// the alert, audited by identifiers and verdict, counted, and acknowledged to the voter alone.
+// the alert subject when the origin came from an alert trigger, audited by identifiers and verdict, counted, and acknowledged
+// to the voter alone.
 //
 // The press takes the path of a prompt's: it is recorded before Slack is acknowledged (store.Presses, which survive a
 // restart), and a worker (interact.Worker) processes it off the acknowledgement path, where the checks of who pressed, which
@@ -42,7 +43,7 @@ const (
 	// Binding whose trigger allowlists its alerts are few; this is the bound for one that does not.
 	MaxAlertLabels = 100
 
-	// maxAlertName bounds a name kept as the alert of a session, as a prompt's value is (render.checkName).
+	// maxAlertName bounds a name kept as the alert subject of a trigger session, as a prompt's value is (render.checkName).
 	maxAlertName = 128
 )
 
@@ -111,10 +112,11 @@ func Parts(kind store.FeedbackKind, thread, turn string) []chat.Part {
 	}
 }
 
-// AlertName is the alert name that a session keeps for the votes on its messages: raw if it has the shape of a name,
-// ASCII letters and digits and "_", ".", "-" and ":", at most 128 bytes (the shape a prompt's values must have, spec R2), and
-// otherwise empty. It is text out of an alert, so a sentence, a line break or a byte that Postgres text cannot hold is never
-// stored, and the label of the metric is a name or nothing.
+// AlertName returns raw when it has the shape of an alert name, ASCII letters
+// and digits and "_", ".", "-" and ":", at most 128 bytes (the shape a
+// prompt's values must have, spec R2), and otherwise returns empty. It is text
+// out of a trigger, so a sentence, a line break or a byte that Postgres text
+// cannot hold is never used as feedback attribution.
 func AlertName(raw string) string {
 	if len(raw) > maxAlertName {
 		return ""
@@ -286,8 +288,9 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 		return h.finish(ctx, press, to, "")
 	}
 
+	alert := alertName(sess.Origin)
 	previous, err := h.cfg.Store.RecordVote(ctx, store.FeedbackVote{
-		Key: key, Turn: v.Turn, User: press.User, Binding: sess.Binding, Agent: agent, Alert: sess.Alert,
+		Key: key, Turn: v.Turn, User: press.User, Binding: sess.Binding, Agent: agent, Alert: alert,
 		Kind: v.Kind, Verdict: v.Verdict, At: press.PressedAt,
 	})
 	if err != nil {
@@ -301,8 +304,18 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 	if err := h.cfg.Auditor.FeedbackVote(ctx, actor, audit.FeedbackVote{Turn: v.Turn, Channel: press.Channel, Thread: v.Thread, Verdict: v.Verdict, Changed: previous != ""}); err != nil {
 		h.cfg.Logger.WarnContext(ctx, "feedback: a vote was not audited", "binding", sess.Binding, "err", err)
 	}
-	telemetry.Count(ctx, "agentkourier_investigation_feedback_total", sess.Binding, agent, h.label(sess.Binding, v.Kind, sess.Alert), string(v.Verdict))
+	telemetry.Count(ctx, "agentkourier_investigation_feedback_total", sess.Binding, agent, h.label(sess.Binding, v.Kind, alert), string(v.Verdict))
 	return h.finish(ctx, press, to, "Thanks, your vote is recorded as "+words(v.Verdict)+". To change it, press the other button.")
+}
+
+// alertName maps the generic session origin to the feedback package's legacy alert attribution. The
+// alertmanager and botMessage sources carry validated alertname subjects from the trigger adapter,
+// and legacy is the migration's historical source; a subject on another source remains generic metadata.
+func alertName(origin store.Origin) string {
+	if origin.Source != "alertmanager" && origin.Source != "botMessage" && origin.Source != "legacy" {
+		return ""
+	}
+	return AlertName(origin.Subject)
 }
 
 // onMessage says whether the message that press was made on is the output of v's turn in v's thread, in the channel of the press:

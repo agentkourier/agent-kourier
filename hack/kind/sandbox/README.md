@@ -16,7 +16,7 @@ Slack sandbox workspace  <-- wss/https -->  agent-kourier-sandbox (agent-kourier
                                                   v
                               kagent-frontdoor:4180 (verifies the token; the full tier's own)
                                                   v
-                  kagent  ->  sandbox-sre (Substrate actor, gVisor)  -- egress gateway -->  api.anthropic.com | api.openai.com | bedrock-runtime.<region>.amazonaws.com
+                  kagent  ->  sandbox-sre (Substrate actor, gVisor)  -- egress gateway -->  openrouter.ai | api.anthropic.com | api.openai.com | bedrock-runtime.<region>.amazonaws.com
                                                   |  MCP
                                                   v
                   sandbox-tools (kagent's tool server, --read-only, ServiceAccount bound to `view`)  ->  namespace shop (and the cluster, read-only)
@@ -54,7 +54,7 @@ use `deploy/agent-kourier-sandbox`.
    mkdir -p ~/.config/agent-kourier
    cp hack/kind/sandbox/sandbox.env.example ~/.config/agent-kourier/sandbox.env
    chmod 600 ~/.config/agent-kourier/sandbox.env
-   $EDITOR ~/.config/agent-kourier/sandbox.env      # all six keys; MODEL_PROVIDER is anthropic, openai or bedrock (plus MODEL_REGION)
+   $EDITOR ~/.config/agent-kourier/sandbox.env      # six required keys; MODEL_BASE_URL is optional for openrouter, MODEL_REGION for bedrock
    hack/kind/sandbox/check-env.sh                   # says "ok" and names the keys, never a value
    ```
 6. `make sandbox-up`, then wait for `ok: Agent Kourier is connected to Slack`. That is Agent Kourier's own word for it, the log line
@@ -67,14 +67,30 @@ is kept): on no command line, in no file, in no output.
 
 ### The model: `MODEL_PROVIDER`
 
+These settings configure the `sandbox-sre` demo agent. Agent Kourier connects to the agent through A2A;
+the agent calls the chosen model provider. The example file starts with OpenRouter and `anthropic/claude-haiku-4.5`.
+
 | Provider | `MODEL_NAME` | `MODEL_API_KEY` | Also |
 |---|---|---|---|
+| `openrouter` | an OpenRouter `vendor/model` slug, for example `anthropic/claude-haiku-4.5` | an OpenRouter API key, `sk-or-v1-...` | Uses `https://openrouter.ai/api/v1` through kagent's OpenAI-compatible provider. |
 | `anthropic` | an Anthropic model name | an Anthropic API key, `sk-ant-...` | |
 | `openai` | an OpenAI model name | an OpenAI API key, `sk-...` (not `sk-ant-`, which is Anthropic's) | |
 | `bedrock` | a Bedrock model ID or **inference profile ID**, for example `us.anthropic.claude-haiku-4-5-20251001-v1:0` (also `global.anthropic.…` or a bare `anthropic.claude-…-v1:0`), not an ARN | a **Bedrock API key** (used as a bearer token), not AWS access keys: `ABSK...` for a long-term key, `bedrock-api-key-...` for a short-term one (12 hours at most, so it will go stale in a long session) | `MODEL_REGION`, required for bedrock and refused for the others: `^[a-z]{2}(-gov)?-[a-z]+-[0-9]$`, for example `us-east-1` |
 
-The check refuses a key that is not the provider's kind, naming the key and the provider and never the value: `anthropic` needs `sk-ant-...`, `openai`
-needs `sk-...` and not `sk-ant-`, and `bedrock` needs `ABSK...` or `bedrock-api-key-...`. A key goes to its provider's host through the egress gateway, so
+`MODEL_NAME` is rendered into the selected `ModelConfig.spec.model`: OpenRouter requires one `vendor/model` slug, while
+the other providers use their provider model-name shape. `MODEL_BASE_URL` is optional and is implemented only for
+`MODEL_PROVIDER=openrouter`; when omitted, `env.sh` supplies `https://openrouter.ai/api/v1`. When present, it must be
+an HTTPS endpoint without credentials, a query or a fragment, and its port must be in range. Supplying it for another
+provider is refused before the cluster is touched. The OpenRouter manifest renders it as `spec.openAI.baseUrl`.
+
+The check refuses a key that is not the provider's kind, naming the key and the provider and never the value: `openrouter` needs `sk-or-v1-...`,
+`anthropic` needs `sk-ant-...`, `openai` needs `sk-...` and not `sk-ant-` or `sk-or-`, and `bedrock` needs `ABSK...` or `bedrock-api-key-...`.
+OpenRouter keys paired with any other provider are refused before the cluster is touched.
+An OpenRouter model slug must have one slash separating the vendor and model; the other providers keep their existing model-name checks.
+The endpoint and model-slug example follow [OpenRouter's SDK documentation](https://openrouter.ai/docs/guides/community/openai-sdk)
+and [Haiku model page](https://openrouter.ai/anthropic/claude-haiku-4.5); the key prefix follows its
+[create-key response example](https://openrouter.ai/docs/api/api-reference/api-keys/create-keys).
+A key goes to its provider's host through the egress gateway, so
 a Bedrock key under `anthropic` would be sent to `api.anthropic.com`, for nothing, where it is seen. A key that is plainly another provider's says whose it
 looks like: a Bedrock key under `anthropic` or `openai` ("looks like a Bedrock API key; MODEL_PROVIDER=anthropic cannot use it; set MODEL_PROVIDER=bedrock and
 MODEL_REGION"), or an Anthropic or OpenAI key under `bedrock`.
@@ -114,6 +130,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
 | `reactions.add`, `reactions.remove` | `reactions:write` |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
+| `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
@@ -126,6 +143,12 @@ nothing here enables them); that `chat.startStream` accepts the channel form Age
 metadata Agent Kourier sends (its page lists `blocks` and `metadata`). If `chat.startStream` fails with `missing_scope` or a feature
 error, that is the finding: note the error code in the checklist's streaming row and add the scope or feature to the
 manifest. Direct messages are not enabled (no `im:` scopes or events), so the app has no DM trigger.
+
+The manifest includes `usergroups:read` for a Binding that uses `interactions.approverGroups`. If you use a different Slack
+app, add that bot scope and reinstall it before configuring groups. A missing scope is a permanent group-read failure:
+the affected press ends with a fixed message, makes no decision or audit row, and leaves the approval pending. A timeout,
+server error or rate limit keeps the press for retry; group IDs are read in order, so a member found in an earlier group
+may decide before a later bad group is reached.
 
 ## What `make sandbox-up` makes
 
@@ -151,12 +174,46 @@ included, so do not point the agent at a cluster that has anything secret in its
 
 **Egress, nothing to open.** Agent Kourier's pod has no egress policy in this tier (the only NetworkPolicies are the three that fence kagent's
 ingress, and Substrate's own), so it already reaches `slack.com` and `wss-primary.slack.com` over https and wss. The agent's
-pod leaves through Substrate's egress gateway, whose per-actor policy kagent infers from the ModelConfig: for `sandbox-sre`
-it is exactly `api.anthropic.com` (or `api.openai.com`), `kagent-controller.kagent` and `sandbox-tools.kagent.svc.cluster.local`
-(read from the Substrate API's `GetActorEgressPolicy` response). The gateway also **injects the API key** into the
-request from the Secret `sandbox-model`, so the key never enters the agent's sandbox. Nothing was added to any policy.
-For `bedrock` the host is `bedrock-runtime.<MODEL_REGION>.amazonaws.com`, but kagent does not infer it: the ModelConfig carries a header that
-puts it in the allowlist (see "The model", above). That was read from kagent's source, and the Bedrock turn of a live sandbox run confirmed the host it reaches.
+model request leaves through Substrate's egress gateway. The selected ModelConfig supplies its target: the OpenRouter
+template renders `spec.openAI.baseUrl` from `MODEL_BASE_URL`, defaulting to `https://openrouter.ai/api/v1`, while the
+other provider templates use their provider-specific targets. The pinned kagent 1.0.0-alpha5 source discovers model
+destinations by walking the serialized model configuration, including URL values. That is an upstream, release-specific
+source finding, not a promise that every custom URL is allowed or reachable; check the cluster's egress policy and
+gateway logs when testing an endpoint. Nothing was added to any policy here.
+For `bedrock` the configured target is `bedrock-runtime.<MODEL_REGION>.amazonaws.com`; kagent does not infer it from
+the provider, so the ModelConfig carries a header that puts it in the allowlist (see "The model", above). The header
+workaround and the host reached by the live Bedrock turn were checked against the pinned release; other kagent versions
+may differ.
+
+`make sandbox-up` parses the file and creates or updates `kagent/sandbox-model` with the model credential by server-side
+apply from standard input. The provider-specific `ModelConfig` names that Secret; this repository does not put the
+credential in a ConfigMap or the Agent manifest. The tool server's ServiceAccount is separately denied Secret reads,
+as the checks above show. Re-run `make sandbox-up` after changing `MODEL_NAME` or `MODEL_BASE_URL` so the rendered
+model configuration and Secret are updated.
+
+### The model prompt and reapply steps
+
+The demo agent's system instructions are the `systemPrompt` key in
+[`agent-prompt.yaml`](agent-prompt.yaml), the `kagent/sandbox-sre-prompt` ConfigMap. `agent.yaml` selects that
+ConfigMap key with `spec.template.systemPromptFrom`. This prompt describes a read-only agent; it does not grant
+Kubernetes access. Keep the read-only tools and instructions when editing it.
+
+After changing `data.systemPrompt`, apply the ConfigMap and then the Agent so kagent compiles the new prompt revision:
+
+```
+kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent-prompt.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent.yaml
+```
+
+`make sandbox-up` applies both files as part of its normal setup and is safe to re-run; the two commands above are the
+focused prompt update while the sandbox is already running. In a runtime probe against the pinned kagent 1.0.0-alpha5
+sandbox release, the ConfigMap update changed the prompt revision: a fresh A2A context used the new prompt while a
+reused A2A context kept its original prompt. The probe sent A2A requests directly; it did not measure Slack threads.
+Agent Kourier's chat intake uses the channel and root message as the session key and creates a session for a new
+mentioned root message, so the Slack consequence is an inference from that mapping: start a new root message in the
+configured channel to exercise a fresh context, and reply in the earlier thread to reuse its context. Keep the earlier
+thread open when comparing the two, and treat the prompt result as measured behavior of the pinned release rather than
+a promise that an existing session hot-reloads its prompt.
 
 **The Binding's token.** The Binding identity's Dex ID token (the Secret `agent-kourier-agent-token`) lasts 24 hours and Agent Kourier reads
 it on every request. A CronJob in `agent-kourier` (hourly, `0 * * * *`) mints one and patches it in, from inside the cluster, with a ServiceAccount whose

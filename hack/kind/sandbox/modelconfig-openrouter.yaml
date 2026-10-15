@@ -1,0 +1,12 @@
+# OpenRouter uses kagent's OpenAI-compatible provider.
+# env.sh renders the checked vendor/model slug and HTTPS endpoint and stores the API key in sandbox-model.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: sandbox-model, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: __MODEL_NAME__
+  apiKeySecret: sandbox-model
+  apiKeySecretKey: apiKey
+  openAI:
+    baseUrl: __MODEL_BASE_URL__

@@ -142,3 +142,59 @@ spec:
     substrate:
       workerPoolRef: {name: kagent-default}
       snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see agent.yaml
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: scenario-approval, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: gpt-4.1-mini
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  openAI: {baseUrl: "http://scenariollm.kagent.svc.cluster.local:8080/v1"}
+  defaultHeaders: {X-Scenario: approval}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: scenario-approval, namespace: kagent}
+spec:
+  template:
+    modelConfig: {name: scenario-approval}
+    description: "S19-S22 and S24: calls one tool that needs approval"
+    systemPrompt: Use the approval tool.
+    tools: [{mcp: {server: {kind: RemoteMCPServer, name: scenariomcp-approval}, requireApproval: true}}]
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef: {name: kagent-default}
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see agent.yaml
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: scenario-approval-multi, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: gpt-4.1-mini
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  openAI: {baseUrl: "http://scenariollm.kagent.svc.cluster.local:8080/v1"}
+  defaultHeaders: {X-Scenario: approval-multi}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: scenario-approval-multi, namespace: kagent}
+spec:
+  template:
+    modelConfig: {name: scenario-approval-multi}
+    description: "S23: calls two tools in one approval pause"
+    systemPrompt: Use the approval tools.
+    tools: [{mcp: {server: {kind: RemoteMCPServer, name: scenariomcp-approval-multi}, requireApproval: true}}]
+  harness:
+    kagent: {}
+    workload:
+      image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
+    substrate:
+      workerPoolRef: {name: kagent-default}
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see agent.yaml
