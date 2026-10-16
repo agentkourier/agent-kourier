@@ -1,0 +1,10 @@
+# A quality scenario of sre-triage, as data. The shape is provisional: nothing runs it yet, and a runner will fix it.
+# The Deployment `recommender` of ../../agent/faults.yaml is the case; a person reads the agent's answer against `cause` and `evidence`.
+name: recommender is OOM killed
+app: recommender
+alert: KubeContainerOOMKilled
+cause: 'recommender allocates memory without end and the kernel kills it at its 48Mi memory limit, so it restarts in a loop.'
+evidence:
+  - 'the last terminated state of the container has the reason OOMKilled'
+  - 'the memory limit of 48Mi on the container'
+  - 'the log line recommender 0.9.0: loading the model into memory, and nothing after it'

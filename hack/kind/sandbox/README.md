@@ -154,11 +154,18 @@ may decide before a later bad group is reached.
 
 | Piece | What |
 |---|---|
-| Faults | Namespace `shop`: six small Deployments (below). |
-| Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
-| Agent | `sandbox-sre` (`agent.yaml`), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
+| Faults | Namespace `shop`: six small Deployments (below), from the recipe's [`faults.yaml`](../../../examples/recipes/sre-triage/agent/faults.yaml). |
+| Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest; the recipe's [`tools-values.yaml`](../../../examples/recipes/sre-triage/agent/tools-values.yaml) and [`tools-rbac.yaml`](../../../examples/recipes/sre-triage/agent/tools-rbac.yaml)), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
+| Agent | `sandbox-sre` ([`agent.yaml`](../../../examples/recipes/sre-triage/agent/agent.yaml), in the `sre-triage` recipe), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
 | Agent Kourier | `agent-kourier-sandbox` in namespace `agent-kourier`, a Helm release of the chart (`charts/agent-kourier` with `ci/sandbox-values.yaml`, as release `agent-kourier-sandbox`: its Deployment, ServiceAccount, Role and volume), the production image `agent-kourier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on (and, only with the alert webhook file, a second one on the alert channel; see "Run the alert trial"), through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=agent-kourier` label the front door's NetworkPolicy trusts, and `app.kubernetes.io/instance=agent-kourier-sandbox`, which the full tier's Agent Kourier (release `agent-kourier`) does not. Its own SQLite volume. Its config is a ConfigMap `up.sh` makes (`agent-kourier-sandbox-config`, with your channel IDs); its Slack tokens and the Dex client's credentials are Secrets in `agent-kourier`. The full tier's `agent-kourier` goes to zero replicas meanwhile. |
 | Token refresh | A CronJob, `agent-kourier-sandbox-token-refresh` (the chart's `tokenRefresh`), every hour (below). |
+
+The agent half of this tier (`sandbox-sre`, its prompt, its tool server and the seeded faults) is the one the
+[`sre-triage` recipe](../../../examples/recipes/sre-triage/README.md) owns, in `examples/recipes/sre-triage/agent/`;
+`up.sh` and `down.sh` apply and remove it from there, so there is one copy. What stays in this directory is the tier's
+own plumbing: the model configurations, the secrets file, the Slack app, the Agent Kourier config in `agent-kourier/`
+(a mention-triggered Binding on your sandbox channel, a Dex token and the full tier's front door) and the alert source.
+The recipe's own `kourier/` directory is a different config, for an alert channel, and this tier does not apply it.
 
 **The seeded faults**, in `shop`: `checkout` crash-loops after logging `FATAL: cannot resolve payments-db...`; `catalog` has a
 bad image tag (ImagePullBackOff); `recommender` is OOM killed at its 48Mi limit; `inventory`'s Service selects pods that
@@ -194,15 +201,15 @@ model configuration and Secret are updated.
 ### The model prompt and reapply steps
 
 The demo agent's system instructions are the `systemPrompt` key in
-[`agent-prompt.yaml`](agent-prompt.yaml), the `kagent/sandbox-sre-prompt` ConfigMap. `agent.yaml` selects that
+[`agent-prompt.yaml`](../../../examples/recipes/sre-triage/agent/agent-prompt.yaml), the `kagent/sandbox-sre-prompt` ConfigMap. `agent.yaml` selects that
 ConfigMap key with `spec.template.systemPromptFrom`. This prompt describes a read-only agent; it does not grant
 Kubernetes access. Keep the read-only tools and instructions when editing it.
 
 After changing `data.systemPrompt`, apply the ConfigMap and then the Agent so kagent compiles the new prompt revision:
 
 ```
-kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent-prompt.yaml
-kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f examples/recipes/sre-triage/agent/agent-prompt.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f examples/recipes/sre-triage/agent/agent.yaml
 ```
 
 `make sandbox-up` applies both files as part of its normal setup and is safe to re-run; the two commands above are the

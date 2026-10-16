@@ -142,3 +142,20 @@ func TestSecretNamespaces(t *testing.T) {
 		t.Errorf("SecretNamespaces = %v, want %v", got, want)
 	}
 }
+
+// PresentSecrets answers for every Secret the set refers to, with every key it needs of it: a connection's
+// two tokens, a Binding's token key and a header Secret's key, whatever they are called.
+func TestPresentSecrets(t *testing.T) {
+	set := specSet(t)
+	set.AgentBackends[0].Spec.Headers = []v1alpha1.Header{{Name: "X-Team", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "team", Key: "value"}}}
+	set.Bindings[0].Spec.Identity.TokenSecretRef = &v1alpha1.SecretKeyRef{Name: "tok", Key: "oidc"}
+	if _, err := Resolve(context.Background(), set, PresentSecrets(set)); err != nil {
+		t.Errorf("Resolve with PresentSecrets: %v", err)
+	}
+	// It is not a stub that reports everything: a reference between objects that does not resolve still fails.
+	set = specSet(t)
+	set.Bindings[0].Spec.Agent.BackendRef.Name = "missing"
+	if _, err := Resolve(context.Background(), set, PresentSecrets(set)); err == nil || !strings.Contains(err.Error(), "AgentBackend") {
+		t.Errorf("Resolve with PresentSecrets = %v, want the unresolved backend", err)
+	}
+}

@@ -1,0 +1,10 @@
+# A quality scenario of sre-triage, as data. The shape is provisional: nothing runs it yet, and a runner will fix it.
+# The Deployment `inventory` of ../../agent/faults.yaml is the case; a person reads the agent's answer against `cause` and `evidence`.
+name: inventory has no endpoints
+app: inventory
+alert: TargetDown
+cause: 'The Service inventory selects pods labelled app=inventory-api, but the inventory pods are labelled app=inventory, so the Service has no endpoints even though the pods are healthy.'
+evidence:
+  - 'the inventory pod is Running and Ready'
+  - 'the Service inventory has the selector app=inventory-api and no endpoints'
+  - 'the pod carries the label app=inventory'

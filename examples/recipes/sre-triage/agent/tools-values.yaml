@@ -1,7 +1,7 @@
-# The sandbox's tool server: kagent's own tool chart (oci://ghcr.io/kagent-dev/tools/helm/kagent-tools, 0.3.0, the
+# The tool server of the sre-triage recipe: kagent's own tool chart (oci://ghcr.io/kagent-dev/tools/helm/kagent-tools, 0.3.0, the
 # version kagent 1.0.0-alpha5 depends on), installed as its own Helm release, sandbox-tools, in namespace kagent. The
 # full tier's kagent release keeps `kagent-tools: enabled: false` (hack/kind/full/kagent-values.yaml) and is never
-# touched; down.sh uninstalls this release.
+# touched; hack/kind/sandbox/down.sh uninstalls this release.
 #
 # Read-only by three separate things, so that no one of them is the only guard:
 #   1. the ServiceAccount is bound to the built-in `view` ClusterRole (tools-rbac.yaml): no Secrets, no writes, and

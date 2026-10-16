@@ -1,0 +1,7 @@
+name: a pod crash loops
+app: checkout
+alert: KubePodCrashLooping
+cause: the container cannot resolve its dependency and exits 1, so it restarts in a loop
+evidence:
+  - the pod waits in CrashLoopBackOff
+  - the log line names the host that does not resolve

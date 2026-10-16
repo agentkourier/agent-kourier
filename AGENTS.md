@@ -60,10 +60,10 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   binary lacks the test hooks. All three need Docker.
 - `make docs-ref` regenerates `docs/reference/` from the API types and the chart values; `make docs-build` builds the site (strict) and runs `docs-check`.
 - `make docs-check` fails on a misspelt product name (`hack/docs/namecheck`) and, in the public sources (`README.md`, the chart
-  README, all of `charts/agent-kourier/values.yaml`, every text file under `docs/` except `brand` and `spikes`, and the theme
-  overrides), on internal plan, decision and risk IDs and `tasks/` paths, removed field and page names, API fields the types do
+  README, all of `charts/agent-kourier/values.yaml`, every text file under `docs/` except `brand` and `spikes`, the theme
+  overrides, and every `README.md` and YAML file under `examples/recipes`), on internal plan, decision and risk IDs and `tasks/` paths, removed field and page names, API fields the types do
   not have yet (a field stops being flagged once `api/v1alpha1` has it), owner or workspace identifiers, and relative links or
-  anchors in the two READMEs that do not resolve (`hack/docs/contentcheck`; a deliberate exception goes in its `allowlist.txt`
+  anchors in the two READMEs and the recipe READMEs that do not resolve (`hack/docs/contentcheck`; a deliberate exception goes in its `allowlist.txt`
   with a reason, and a stale entry fails too).
 - `make release-image VERSION=vX.Y.Z` builds the release image and chart locally; see `RELEASING.md`.
 - Add tools with `go get -tool <module>/cmd/<tool>@<version>`.

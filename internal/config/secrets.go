@@ -74,6 +74,29 @@ func (s *Set) SecretNamespaces() []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
+// presentSecrets is a SecretResolver for which every Secret exists and has the keys given.
+type presentSecrets []string
+
+// Keys returns the keys every Secret has.
+func (p presentSecrets) Keys(context.Context, string, string) ([]string, error) { return p, nil }
+
+// PresentSecrets returns a SecretResolver for which every Secret that set refers to exists and has every key that set
+// needs of any Secret: the two tokens of a ChatConnection's credentials, and the key of each Binding token and header
+// Secret. It is for checking the references between a set's objects alone, as Resolve does, where the Secrets are
+// created by whoever applies the set and no cluster is at hand. Never give it to Resolve for a config the broker
+// runs: it hides a missing Secret or key that the broker must report.
+func PresentSecrets(set *Set) SecretResolver {
+	var keys presentSecrets
+	for _, ref := range set.secretRefs() {
+		for _, k := range ref.keys {
+			if !slices.Contains(keys, k) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys
+}
+
 // checkSecrets checks every Secret that an object of set refers to.
 func (r *resolver) checkSecrets(ctx context.Context, set *Set) {
 	for _, ref := range set.secretRefs() {

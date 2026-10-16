@@ -96,6 +96,12 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
+  # Includes a recipe's files into a page (--8<-- "sre-triage/agent/agent.yaml"), so the page cannot drift from the
+  # files. Only files under examples/recipes can be included; a missing file fails the build.
+  - pymdownx.snippets:
+      base_path: [examples/recipes]
+      restrict_base_path: true
+      check_paths: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -133,6 +139,7 @@ nav:
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
       - Start investigations from any bot's messages: how-to/any-bot-trigger.md
       - Tune triggers with a dry run: how-to/tune-triggers.md
+      - Start from a recipe: how-to/recipes.md
       - Connect a kagent agent: how-to/connect-kagent.md
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md
       - Connect an agent on Google AX: how-to/connect-ax.md

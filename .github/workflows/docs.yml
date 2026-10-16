@@ -14,12 +14,15 @@
 name: docs
 
 # The two READMEs are in the pull request paths only: the content check reads them, but the site does not publish
-# them, so a README-only push to main must not redeploy it (ci.yml runs the check on main).
+# them, so a README-only push to main must not redeploy it (ci.yml runs the check on main). examples/recipes is in
+# both: the site includes the recipes' files in docs/how-to/recipes.md (pymdownx.snippets in mkdocs.yml), so an edit
+# to one changes a page and must run the strict build and redeploy.
 on:
   pull_request:
     paths:
       - docs/**
       - mkdocs.yml
+      - examples/recipes/**
       - README.md
       - hack/docs/**
       - api/v1alpha1/**
@@ -31,6 +34,7 @@ on:
     paths:
       - docs/**
       - mkdocs.yml
+      - examples/recipes/**
       - hack/docs/**
       - api/v1alpha1/**
       - charts/agent-kourier/values.yaml

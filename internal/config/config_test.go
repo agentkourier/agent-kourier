@@ -390,3 +390,43 @@ func TestLoadCanceled(t *testing.T) {
 		t.Errorf("Load error = %v, want context.Canceled", err)
 	}
 }
+
+func TestDecodeStrict(t *testing.T) {
+	type inner struct {
+		Count int `json:"count"`
+	}
+	type doc struct {
+		Name  string `json:"name"`
+		Inner inner  `json:"inner"`
+	}
+	tests := []struct {
+		name, in string
+		want     []string // substrings of the error, one per problem; none means it decodes
+	}{
+		{"valid", "name: a\ninner: {count: 1}\n", nil},
+		{"an unknown field names its path", "name: a\ninner: {more: 1}\n", []string{"inner.more: unknown field"}},
+		{"every unknown field is reported", "x: 1\ninner: {more: 1}\n", []string{"x: unknown field", "inner.more: unknown field"}},
+		{"a duplicate key", "name: a\nname: b\n", []string{"already set"}},
+		{"a type error", "name: [1]\n", []string{"name"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d doc
+			err := DecodeStrict([]byte(tt.in), &d)
+			if len(tt.want) == 0 {
+				if err != nil || d.Inner.Count != 1 {
+					t.Fatalf("DecodeStrict = %v, %+v; want it decoded", err, d)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("DecodeStrict passed, want %q", tt.want)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error %q lacks %q", err, w)
+				}
+			}
+		})
+	}
+}

@@ -1,0 +1,7 @@
+name: both starts
+app: checkout
+alert: KubePodCrashLooping
+question: why does checkout restart?
+cause: a cause
+evidence:
+  - an item

@@ -1,4 +1,4 @@
-# The seeded faults of the sandbox tier: five things wrong in namespace shop for the sandbox-sre agent to find,
+# The seeded faults of the sre-triage recipe: five things wrong in namespace shop for the sandbox-sre agent to find,
 # and one app that is fine, for contrast. Each is a Deployment of a pinned busybox (or the python image the full tier already
 # has), small enough that all six together ask the kind node for less than 300 MiB. The labels say nothing about
 # which fault is which: the agent has to read the pod states, the events and the logs, which is what it is for.
@@ -10,7 +10,8 @@
 #   search       failing readiness probe: running, never Ready
 #   frontend     healthy
 #
-# test/kindmanifests pins this list. Applied by up.sh, removed by down.sh (which deletes the namespace).
+# test/kindmanifests pins this list. Applied by hack/kind/sandbox/up.sh, removed by its down.sh (which deletes the
+# namespace); or apply it yourself.
 apiVersion: v1
 kind: Namespace
 metadata:

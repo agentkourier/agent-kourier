@@ -23,7 +23,23 @@ import (
 )
 
 // These tests pin the sandbox tier's manifests (hack/kind/sandbox): what it applies to the full tier's cluster to dogfood
-// Agent Kourier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go.
+// Agent Kourier on a real Slack workspace and a real model. sandboxDir is in sandboxenv_test.go. The agent's own
+// manifests (sandbox-sre, its prompt, its tool server and the seeded faults) are the sre-triage recipe's, and the tier
+// applies them from there.
+
+// agentDir is where the sre-triage recipe keeps the agent's manifests.
+const agentDir = "../../examples/recipes/sre-triage/agent/"
+
+// agentFiles are the manifests that live in agentDir and not in sandboxDir.
+var agentFiles = []string{"faults.yaml", "tools-rbac.yaml", "tools-values.yaml", "agent-prompt.yaml", "agent.yaml"}
+
+// sandboxPath is the path of a sandbox file named relative to sandboxDir: in agentDir for one of agentFiles.
+func sandboxPath(file string) string {
+	if slices.Contains(agentFiles, file) {
+		return agentDir + file
+	}
+	return sandboxDir + file
+}
 
 // manifestFiles are the Kubernetes manifests of the sandbox, which must parse; some carry a placeholder that up.sh fills in.
 var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent-prompt.yaml", "agent.yaml",
@@ -33,7 +49,7 @@ var manifestFiles = []string{"faults.yaml", "tools-rbac.yaml", "agent-prompt.yam
 func sandboxObjects[T any](t *testing.T, file, kind string) map[string]T {
 	t.Helper()
 	out := map[string]T{}
-	for _, doc := range objects(t, sandboxDir+file) {
+	for _, doc := range objects(t, sandboxPath(file)) {
 		if doc["kind"] != kind {
 			continue
 		}
@@ -56,7 +72,7 @@ func sandboxObjects[T any](t *testing.T, file, kind string) map[string]T {
 // rendered is a manifest of the sandbox with its placeholders filled in as up.sh does.
 func rendered(t *testing.T, file string) string {
 	t.Helper()
-	raw, err := os.ReadFile(sandboxDir + file)
+	raw, err := os.ReadFile(sandboxPath(file))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +81,7 @@ func rendered(t *testing.T, file string) string {
 
 func TestSandboxManifestsParse(t *testing.T) {
 	for _, file := range manifestFiles {
-		docs := objects(t, sandboxDir+file)
+		docs := objects(t, sandboxPath(file))
 		if len(docs) == 0 {
 			t.Errorf("%s holds no object", file)
 		}
@@ -77,7 +93,7 @@ func TestSandboxManifestsParse(t *testing.T) {
 	}
 	// The placeholders are each in exactly the files that up.sh renders, and the rendered files hold none.
 	for _, tc := range []struct{ file, placeholder string }{{"modelconfig-anthropic.yaml", "__MODEL_NAME__"}, {"modelconfig-openai.yaml", "__MODEL_NAME__"}, {"modelconfig-openrouter.yaml", "__MODEL_NAME__"}, {"modelconfig-openrouter.yaml", "__MODEL_BASE_URL__"}, {"modelconfig-bedrock.yaml", "__MODEL_NAME__"}, {"modelconfig-bedrock.yaml", "__MODEL_REGION__"}, {"agent-kourier/config/binding.yaml", "__SLACK_CHANNEL_ID__"}, {"agent-kourier/alert-trial/alert-binding.yaml", "__ALERT_CHANNEL_ID__"}} {
-		raw, err := os.ReadFile(sandboxDir + tc.file)
+		raw, err := os.ReadFile(sandboxPath(tc.file))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +115,16 @@ func TestSandboxHoldsNoSecret(t *testing.T) {
 	more, _ := filepath.Glob(sandboxDir + "agent-kourier/*.yaml")
 	more2, _ := filepath.Glob(sandboxDir + "agent-kourier/config/*.yaml")
 	more3, _ := filepath.Glob(sandboxDir + "agent-kourier/alert-trial/*.yaml")
-	for _, file := range slices.Concat(entries, more, more2, more3) {
+	recipe, _ := filepath.Glob(agentDir + "*.yaml")
+	var names []string
+	for _, file := range recipe {
+		names = append(names, filepath.Base(file))
+	}
+	slices.Sort(names)
+	if want := slices.Sorted(slices.Values(agentFiles)); !slices.Equal(names, want) {
+		t.Fatalf("%s holds %v; want exactly %v", agentDir, names, want)
+	}
+	for _, file := range slices.Concat(entries, more, more2, more3, recipe) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -183,12 +208,12 @@ func TestSandboxToolsAreBoundToView(t *testing.T) {
 		crb.Subjects[0].Kind != "ServiceAccount" || crb.Subjects[0].Name != "sandbox-tools" || crb.Subjects[0].Namespace != "kagent" {
 		t.Errorf("binding %+v; want the ServiceAccount kagent/sandbox-tools bound to the view ClusterRole alone", crb)
 	}
-	for _, doc := range objects(t, sandboxDir+"tools-rbac.yaml") {
+	for _, doc := range objects(t, agentDir+"tools-rbac.yaml") {
 		if k := doc["kind"]; k != "ClusterRoleBinding" {
 			t.Errorf("tools-rbac.yaml holds a %v; want only the binding to view", k)
 		}
 	}
-	raw, err := os.ReadFile(sandboxDir + "tools-values.yaml")
+	raw, err := os.ReadFile(agentDir + "tools-values.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,8 +469,8 @@ func TestSandboxUpAppliesPromptBeforeAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(up)
-	prompt := `"${K[@]}" apply -f "${SBX}/agent-prompt.yaml" >/dev/null`
-	agent := `"${K[@]}" apply -f "${SBX}/agent.yaml" >/dev/null`
+	prompt := `"${K[@]}" apply -f "${AGENT}/agent-prompt.yaml" >/dev/null`
+	agent := `"${K[@]}" apply -f "${AGENT}/agent.yaml" >/dev/null`
 	if strings.Count(s, prompt) != 1 {
 		t.Fatalf("up.sh applies the prompt manifest %d times; want once", strings.Count(s, prompt))
 	}
@@ -552,7 +577,7 @@ func TestSandboxImagesArePinned(t *testing.T) {
 	exempt := map[string]string{"busybox:1.37.99": "catalog's bad tag, which is its fault", "agent-kourier:dev": "the image built by make image and loaded into the cluster"}
 	seen := 0
 	for _, file := range append(slices.Clone(manifestFiles), "tools-values.yaml") {
-		raw, err := os.ReadFile(sandboxDir + file)
+		raw, err := os.ReadFile(sandboxPath(file))
 		if err != nil {
 			t.Fatal(err)
 		}

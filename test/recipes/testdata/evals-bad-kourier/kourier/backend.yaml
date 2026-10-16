@@ -1,0 +1,6 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: agents, namespace: recipe }
+spec:
+  dialect: a2a
+  url: http://agent.recipe:8080

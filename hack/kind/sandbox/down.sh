@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Take the sandbox tier away and give the full tier its own Agent Kourier back (the testhooks image on the fake Slack), so that
 # `make e2e-full` works again: the sandbox Agent Kourier (its Helm release), its volume, config and Slack Secret; the token refresh; the agent, its
-# model Secret and its tool server; the seeded faults (namespace shop). The full tier's cluster, and its Binding token
+# prompt, model Secret and its tool server; the seeded faults (namespace shop). The full tier's cluster, and its Binding token
 # Secret, stay, and so does the full tier's Alertmanager, which is taken back off the alert source (alertmanager/): its overlay and the
 # two Secrets go. Needs no secrets file. Safe to re-run, and to run when the sandbox was never up.
 # Every call names --context kind-agent-kourier-full.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) # hack/kind
-SBX=${HERE}/sandbox
+ROOT=$(cd "${HERE}/../.." && pwd) # the repository root
+AGENT=${ROOT}/examples/recipes/sre-triage/agent # the sre-triage recipe's agent: sandbox-sre, its tool server and the seeded faults
 # shellcheck source-path=SCRIPTDIR source=../lib.sh
 . "${HERE}/lib.sh"
 CTX=kind-${CLUSTER}
@@ -61,12 +62,13 @@ fi
 "${K[@]}" -n monitoring delete secret alertmanager-slack-secret alertmanager-kind-config --ignore-not-found >/dev/null
 
 step "the agent, its model and Secret, and the tool server"
-"${K[@]}" delete -f "${SBX}/agent.yaml" --ignore-not-found >/dev/null
+"${K[@]}" delete -f "${AGENT}/agent.yaml" --ignore-not-found >/dev/null
+"${K[@]}" delete -f "${AGENT}/agent-prompt.yaml" --ignore-not-found >/dev/null # after the agent, which selects it
 "${K[@]}" -n kagent delete modelconfig.api.kagent.dev/sandbox-model secret/sandbox-model --ignore-not-found >/dev/null
 if [ -n "$("${H[@]}" list --namespace kagent --filter '^sandbox-tools$' --short)" ]; then
   "${H[@]}" uninstall sandbox-tools --namespace kagent --wait >/dev/null
 fi
-"${K[@]}" delete -f "${SBX}/tools-rbac.yaml" --ignore-not-found >/dev/null
+"${K[@]}" delete -f "${AGENT}/tools-rbac.yaml" --ignore-not-found >/dev/null
 
 step "the seeded faults (namespace shop)"
 "${K[@]}" delete namespace shop --ignore-not-found --wait >/dev/null

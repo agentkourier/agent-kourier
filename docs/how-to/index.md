@@ -25,6 +25,12 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
   bot.
 - [Tune triggers with a dry run](tune-triggers.md): replay a channel's history before going live.
 
+## Recipes
+
+- [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for one of
+  them, its agent. Two recipes: `sre-triage`, Alertmanager alerts to a read-only kagent agent, and
+  `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, with a hand-written trigger.
+
 ## Security
 
 - [Put a verifying front door before kagent](front-door.md): verify the Binding's token and strip identity headers.

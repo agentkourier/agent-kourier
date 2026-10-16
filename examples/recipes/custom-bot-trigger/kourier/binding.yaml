@@ -1,0 +1,47 @@
+# A CI bot's failure posts start an investigation in the channel, one thread per pipeline and branch.
+# The trigger is written by hand: there is no preset for this bot. The regexes read a made-up message shape;
+# replace them with ones written against your own bot's messages (see the README).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: ci-failures, namespace: agent-kourier }
+spec:
+  agent:
+    backendRef: { name: ci-agents }
+    name: ci-triage            # on the a2a dialect the backend URL alone selects the agent and these are labels;
+    namespace: agents          # on kagent-v1 they select it. The Binding needs them either way
+  identity: { userId: agent-kourier-ci }
+  chat:
+    connectionRef: { name: slack-ci }
+    channel: CREPLACEME        # the channel the CI bot posts to; replace it with your channel's ID
+    triggers:
+      - type: botMessage
+        from:
+          botId: B0REPLACEME   # the CI bot's bot_id; replace it with your bot's ID
+        match:                 # every entry must match. The title entry is there for the dry run: extract.state
+                               # rejects the same titles, but a miss in match is the one the dry run names first
+          title: '^Pipeline (?:FAILED|PASSED) - '
+          fallback: '^\[(?:FAILED|PASSED)\] '
+        exclude:               # no entry may match: a failure that will be retried, or that is known flaky
+          attachmentText: '(?i)\bretry \d+ of \d+ scheduled\b|\bknown flaky\b'
+        extract:               # each regex has a named group with the entry's name
+          state:
+            field: title
+            regex: '^Pipeline (?P<state>FAILED|PASSED) - '
+          pipeline:
+            field: title
+            regex: ' - (?P<pipeline>[A-Za-z0-9_.-]+)$'
+          key:
+            field: fallback
+            regex: '^\[[A-Z]+\] (?P<key>[A-Za-z0-9_.-]+ on [^\s(|]+)'
+        thread:
+          by: key              # messages with the same key share one thread
+          cooldown: 2h         # no second investigation for a key within 2h of the first starting
+          maxIdle: 12h         # a thread with no message of its key for 12h counts as abandoned
+          closeWhen: { state: PASSED }
+        limits:                # without limits a trigger is unlimited
+          rateLimit: { maxRuns: 3, per: 15m, maxConcurrent: 1 }
+          maxRunsPerDay: 20
+        promptTemplate: |
+          A pipeline run is {{ .Fields.state }} in channel {{ .Channel }}: {{ .Fields.pipeline }}.
+          Find out why it failed with the tools you have. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -310,7 +311,8 @@ func TestAlertSourceHoldsNoWebhookURL(t *testing.T) {
 		t.Fatalf("files %v, %v", files, err)
 	}
 	more, _ := filepath.Glob(sandboxDir + "*.yaml")
-	for _, file := range append(files, more...) {
+	recipe, _ := filepath.Glob(agentDir + "*.yaml")
+	for _, file := range slices.Concat(files, more, recipe) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -729,7 +731,7 @@ func TestAlertPresets(t *testing.T) {
 	if len(presets) != len(want) {
 		t.Errorf("%d presets; want %d", len(presets), len(want))
 	}
-	faults, err := os.ReadFile(sandboxDir + "faults.yaml")
+	faults, err := os.ReadFile(agentDir + "faults.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

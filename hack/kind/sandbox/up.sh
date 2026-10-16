@@ -22,6 +22,7 @@ set -eEuo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) # hack/kind, which lib.sh's functions expect
 ROOT=$(cd "${HERE}/../.." && pwd) # build_agentkourier_image (lib.sh) builds from it
 SBX=${HERE}/sandbox
+AGENT=${ROOT}/examples/recipes/sre-triage/agent # the sre-triage recipe's agent: sandbox-sre, its tool server and the seeded faults
 # shellcheck source-path=SCRIPTDIR source=../lib.sh
 . "${HERE}/lib.sh"
 # shellcheck source-path=SCRIPTDIR source=env.sh
@@ -108,12 +109,12 @@ build_agentkourier_image
 kind load docker-image "${AGENTKOURIER_IMAGE}" --name "${CLUSTER}"
 
 step "seeded faults in namespace shop"
-"${K[@]}" apply -f "${SBX}/faults.yaml" >/dev/null
+"${K[@]}" apply -f "${AGENT}/faults.yaml" >/dev/null
 
 step "read-only tool server (kagent-tools ${TOOLS_VERSION}, release sandbox-tools): the view ClusterRole, --read-only, the k8s tools"
-"${K[@]}" apply -f "${SBX}/tools-rbac.yaml" >/dev/null
+"${K[@]}" apply -f "${AGENT}/tools-rbac.yaml" >/dev/null
 "${H[@]}" upgrade --install sandbox-tools "${TOOLS_OCI}" --version "${TOOLS_VERSION}" --namespace kagent \
-  -f "${SBX}/tools-values.yaml" --wait --timeout 4m >/dev/null
+  -f "${AGENT}/tools-values.yaml" --wait --timeout 4m >/dev/null
 
 step "sandbox-sre: the model's API key, ModelConfig (${MODEL_PROVIDER}), tool server, agent"
 if [ "${MODEL_PROVIDER}" = bedrock ]; then
@@ -124,8 +125,8 @@ else
   apply_secret kagent sandbox-model apiKey=MODEL_API_KEY
 fi
 render "${SBX}/modelconfig-${MODEL_PROVIDER}.yaml" | "${K[@]}" apply -f - >/dev/null
-"${K[@]}" apply -f "${SBX}/agent-prompt.yaml" >/dev/null
-"${K[@]}" apply -f "${SBX}/agent.yaml" >/dev/null
+"${K[@]}" apply -f "${AGENT}/agent-prompt.yaml" >/dev/null
+"${K[@]}" apply -f "${AGENT}/agent.yaml" >/dev/null
 # The agent only after kagent has discovered the tool server's tools (the full tier's scenario agents wait the same way).
 "${K[@]}" -n kagent wait --for=condition=Accepted remotemcpserver/sandbox-tools modelconfig/sandbox-model --timeout=180s
 "${K[@]}" -n kagent wait --for=condition=Ready agent/sandbox-sre --timeout=300s

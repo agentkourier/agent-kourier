@@ -25,7 +25,9 @@ The example below is for a made-up message format, one line in `text`:
 [RESOLVED] DiskAlmostFull on node-7: /var is 61% full
 ```
 
-Replace the regexes with ones that fit your bot's messages.
+Replace the regexes with ones that fit your bot's messages. The
+[`custom-bot-trigger` recipe](recipes.md#start-investigations-from-a-ci-bots-failure-posts) is a complete Binding of
+this kind, with its AgentBackend, ChatConnection and checks.
 
 ```yaml
   chat:

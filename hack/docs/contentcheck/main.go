@@ -4,7 +4,8 @@
 //
 // It reads the public sources: README.md, charts/agent-kourier/README.md, charts/agent-kourier/values.yaml (all of it,
 // not only its comments: the comments feed docs/reference/helm-values.md and the values are the defaults the page
-// shows), every text file under docs/ except the directories that mkdocs.yml's exclude_docs names (the brand kit and the
+// shows), every README.md and every YAML file under examples/recipes (the recipes' pages and their resources and evals,
+// at any depth; their code is not scanned yet), every text file under docs/ except the directories that mkdocs.yml's exclude_docs names (the brand kit and the
 // spike notes), and the site theme overrides under hack/docs/overrides. Text files are Markdown, HTML, CSS, JavaScript,
 // YAML, JSON, SVG, WebVTT, the web manifest, plain text and the Cloudflare _headers file; images and video are skipped.
 // Two kinds of check run:
@@ -12,7 +13,7 @@
 //   - Content rules (the table in this file): internal work-package, decision and risk IDs and tasks/ paths, names that
 //     were removed from the product or the docs, fields the API types do not have yet, and identifiers of the owner's
 //     workspace. They apply to every line, code fences and inline code included: a leak in an example is still a leak.
-//   - Link hygiene, for the two READMEs only (mkdocs --strict already checks docs/): a relative link must name a file
+//   - Link hygiene, for the two READMEs and the recipes' READMEs only (mkdocs --strict already checks docs/): a relative link must name a file
 //     or directory that exists in the repository, and an anchor into a Markdown page must name one of its headings as
 //     GitHub slugs it, because GitHub renders the READMEs.
 //
@@ -33,6 +34,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -178,6 +180,35 @@ const allowlistPath = "hack/docs/contentcheck/allowlist.txt"
 // linkChecked are the files whose links are checked here; mkdocs --strict checks the pages under docs/.
 var linkChecked = []string{"README.md", "charts/agent-kourier/README.md"}
 
+// recipesDir holds the recipes. Its README.md files are public pages, and GitHub renders them; its YAML files (the
+// resources of a recipe, and its evals, which an author fills with messages copied from a real channel) are public too.
+const recipesDir = "examples/recipes"
+
+// isLinkChecked reports whether the links of the public source p (a slash-separated path from the root) are checked.
+func isLinkChecked(p string) bool {
+	return slices.Contains(linkChecked, p) || isRecipeREADME(p)
+}
+
+// isRecipeREADME reports whether p is a README.md at any depth under recipesDir.
+func isRecipeREADME(p string) bool {
+	return strings.HasPrefix(p, recipesDir+"/") && path.Base(p) == "README.md"
+}
+
+// isRecipeYAML reports whether p is a YAML file at any depth under recipesDir.
+func isRecipeYAML(p string) bool {
+	return strings.HasPrefix(p, recipesDir+"/") && (path.Ext(p) == ".yaml" || path.Ext(p) == ".yml")
+}
+
+// recipeFiles returns the public files under recipesDir in root, the READMEs and the YAML files, as slash-separated
+// paths relative to it. The directory may be absent.
+func recipeFiles(root string) ([]string, error) {
+	all, err := textFiles(root, recipesDir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(all, func(p string) bool { return !isRecipeREADME(p) && !isRecipeYAML(p) }), nil
+}
+
 // finding is one place where a public page breaks a rule.
 type finding struct {
 	path string
@@ -309,7 +340,11 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(append(files, docs...), overrides...), nil
+	recipes, err := recipeFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(files, recipes, docs, overrides), nil
 }
 
 // allowEntry is one deliberate exception: a line of path that matches rule and holds text.
@@ -433,7 +468,7 @@ func check(root string) ([]finding, error) {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
 		out = append(out, scanText(active, p, string(b))...)
-		if slices.Contains(linkChecked, p) {
+		if isLinkChecked(p) {
 			out = append(out, links.check(p, string(b))...)
 		}
 	}

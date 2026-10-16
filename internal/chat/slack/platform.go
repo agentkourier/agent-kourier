@@ -101,12 +101,13 @@ type inbound struct {
 }
 
 func (in inbound) Message(ctx context.Context, m Message) error {
-	return in.sink.Message(ctx, inboundOf(in.p.conn, m))
+	return in.sink.Message(ctx, InboundOf(in.p.conn, m))
 }
 
-// inboundOf is m as the neutral model has it, on the connection conn ("namespace/name"). The live path and the
-// history (Client.History) both make an Inbound this way.
-func inboundOf(conn string, m Message) chat.Inbound {
+// InboundOf is m as the neutral model has it, on the connection conn ("namespace/name"). The live path and the
+// history (Client.History) both make an Inbound this way, and it is exported so that a test of a trigger can make
+// the Inbound the intake would have been given for a message, without copying the conversion.
+func InboundOf(conn string, m Message) chat.Inbound {
 	msg := chat.Inbound{
 		At:   chat.Ref{Platform: PlatformName, Conn: conn, Channel: m.Channel, Thread: m.ThreadTS, ID: m.TS},
 		User: m.User, Text: m.Text, Mentioned: m.Mentioned, Direct: m.ChannelType == "im",

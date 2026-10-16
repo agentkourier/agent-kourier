@@ -1,0 +1,7 @@
+name: " "
+app: "\t"
+alert: KubePodCrashLooping
+cause: a cause
+evidence:
+  - an item
+  - "   "

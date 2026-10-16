@@ -1,0 +1,10 @@
+# A quality scenario of sre-triage, as data. The shape is provisional: nothing runs it yet, and a runner will fix it.
+# The Deployment `catalog` of ../../agent/faults.yaml is the case; a person reads the agent's answer against `cause` and `evidence`.
+name: catalog cannot pull its image
+app: catalog
+alert: KubeContainerWaiting
+cause: 'catalog is configured with the image tag busybox:1.37.99, which does not exist, so the pod cannot pull it and never starts.'
+evidence:
+  - 'the pod waits in ErrImagePull or ImagePullBackOff'
+  - 'the image reference busybox:1.37.99, in the pod or in an event about pulling it'
+  - 'the container has no log, since it never ran'

@@ -1,0 +1,134 @@
+# Each case is one message, judged alone: cooldown, thread keys across messages, limits and closeWhen are not evaluated.
+# The messages are made up for a generic CI bot; write yours from your own bot's JSON (see the README).
+# --8<-- [start:matched]
+cases:
+  - name: a failed pipeline
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web-build'
+      titleLink: 'https://ci.example.com/pipelines/web-build/runs/1423'
+      fallback: '[FAILED] web-build on main (#1423) | https://ci.example.com/pipelines/web-build/runs/1423'
+      attachmentText: 'Stage test failed after 4m12s. 3 tests failed.'
+      footer: 'ci-bot'
+    expect:
+      outcome: matched
+      trigger: 0
+      fields: { state: FAILED, pipeline: web-build, key: web-build on main }
+# --8<-- [end:matched]
+
+  - name: a failure on a branch name with a slash
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[FAILED] web-build on feature/login (#1424) | https://ci.example.com/pipelines/web-build/runs/1424'
+      attachmentText: 'Stage lint failed after 0m41s.'
+    expect:
+      outcome: matched
+      fields: { state: FAILED, pipeline: web-build, key: web-build on feature/login }
+
+  # match.fallback alone: the title, the state and the key all extract, and only the fallback's "[FAILED] " or
+  # "[PASSED] " prefix is missing. match.title cannot be isolated: extract.state accepts the same titles.
+  - name: a post whose fallback is not a failure or success line
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[RUNNING] web-build on main (#1426) | https://ci.example.com/pipelines/web-build/runs/1426'
+    expect: { outcome: unmatched }
+
+  - name: a post whose title is not a pipeline result
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Deploy finished - web-build'
+      fallback: '[FAILED] web-build on main (#1426) | https://ci.example.com/pipelines/web-build/runs/1426'
+    expect: { outcome: unmatched }
+
+  # --8<-- [start:quiet-miss]
+  # The pipeline and key regexes take only name-shaped characters. A pipeline name outside them passes match and
+  # state and then fails those two extracts, so the message matches nothing: no turn, no note in Slack.
+  - name: a pipeline name with a slash is unmatched
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - team/web-build'
+      fallback: '[FAILED] team/web-build on main (#1431) | https://ci.example.com/pipelines/team/web-build/runs/1431'
+    expect: { outcome: unmatched }
+  # --8<-- [end:quiet-miss]
+
+  - name: a pipeline name with a space is unmatched
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web build'
+      fallback: '[FAILED] web build on main (#1432) | https://ci.example.com/pipelines/web-build/runs/1432'
+    expect: { outcome: unmatched }
+
+  - name: a post with text only
+    binding: agent-kourier/ci-failures
+    message: { bot: B0REPLACEME, text: 'ci-bot is back online' }
+    expect: { outcome: unmatched }
+
+  - name: a failure with a retry scheduled is excluded
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[FAILED] web-build on main (#1427) | https://ci.example.com/pipelines/web-build/runs/1427'
+      attachmentText: 'Stage test failed after 4m12s. Retry 1 of 3 scheduled.'
+    expect: { outcome: excluded }
+
+  - name: a failure marked known flaky is excluded
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[FAILED] web-build on main (#1428) | https://ci.example.com/pipelines/web-build/runs/1428'
+      attachmentText: 'Stage test failed. Known flaky: TestCheckoutTimeout.'
+    expect: { outcome: excluded }
+
+  - name: a failure whose fallback names no branch finds no key
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[FAILED] web-build (#1429) | https://ci.example.com/pipelines/web-build/runs/1429'
+      attachmentText: 'Stage test failed after 4m12s.'
+    expect: { outcome: unmatched }
+
+  # closeWhen is not evaluated here: the message that closes a thread is a match, with the state it closes on.
+  - name: a success is a match carrying the closing state
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      title: 'Pipeline PASSED - web-build'
+      fallback: '[PASSED] web-build on main (#1430) | https://ci.example.com/pipelines/web-build/runs/1430'
+      attachmentText: 'All 212 tests passed.'
+    expect:
+      outcome: matched
+      trigger: 0
+      fields: { state: PASSED, pipeline: web-build, key: web-build on main }
+
+  - name: another bot's failure post
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0SOMEOTHER
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[FAILED] web-build on main (#1423) | https://ci.example.com/pipelines/web-build/runs/1423'
+    expect: { outcome: other_bot }
+
+  - name: a person's message
+    binding: agent-kourier/ci-failures
+    message: { user: U0PERSON, text: 'is the web-build pipeline red again?' }
+    expect: { outcome: person }
+
+  - name: a reply inside a failure thread
+    binding: agent-kourier/ci-failures
+    message:
+      bot: B0REPLACEME
+      inThread: true
+      title: 'Pipeline FAILED - web-build'
+      fallback: '[FAILED] web-build on main (#1423) | https://ci.example.com/pipelines/web-build/runs/1423'
+    expect: { outcome: ignored }
