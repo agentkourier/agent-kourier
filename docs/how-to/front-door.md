@@ -78,7 +78,8 @@ networkPolicy:
 ## Check it
 
 - A turn of a Binding with a valid token succeeds.
-- A turn whose token the door refuses fails with HTTP 401 or 403, and the thread says the agent's front door refused
-  the Binding's credentials; `agentkourier_credential_rejections_total` counts it.
+- A turn whose token the door refuses fails with HTTP 401, and the thread says the agent's front door refused
+  the Binding's credentials; `agentkourier_credential_rejections_total` counts it. Answer a token the door refuses
+  with 401, not 403: a 403 at the card fetch reads as an agent that does not exist or does not permit the identity.
 - A pod labelled `app.kubernetes.io/name: agent-kourier` cannot reach the controller on 8083 directly. The kind tier's
   `make sandbox-heal` uses exactly that probe.

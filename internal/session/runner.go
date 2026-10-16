@@ -1163,6 +1163,9 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 		m.notice(t, NoticeFailed, "the agent's front door refused the Binding's credentials")
 		m.finish(t, TurnCredentialsRejected)
 		return ended, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
+	case errors.Is(err, agent.ErrAgentForbidden):
+		// A card 403 on the reconnect: the agent is gone, or no longer permits the identity. Checked before a lost
+		// stream, which it comes as, so it is not followed in a loop; it is refused like any other answer below.
 	case errors.As(err, &sl):
 		if t.c.since.IsZero() {
 			t.c.since = m.cfg.Now()
@@ -1240,7 +1243,7 @@ func (m *Manager) resume(c *convo) (out outcome, err error) {
 	}
 	task, err := t.b.Agent.GetTask(m.ctx, t.taskID)
 	switch {
-	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, a2a.ErrTaskNotFound):
+	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrAgentForbidden), errors.Is(err, a2a.ErrTaskNotFound):
 		return m.lost(t, err)
 	case err == nil && m.wedgedByAge(c, task), err != nil && m.cfg.Now().Sub(c.since) > m.cfg.MaxWorkingAge:
 		return m.wedged(t)
@@ -1359,6 +1362,9 @@ func (m *Manager) unsent(t *tstate, err error) (outcome, error) {
 	case errors.Is(err, agent.ErrForbidden):
 		m.audit(t, t.call(err))
 		return m.fail(t, TurnForbidden, "the agent refused the Binding's identity for this session", err)
+	case errors.Is(err, agent.ErrAgentForbidden): // before ErrNotSent, which it comes with: the same credentials get the same 403
+		m.audit(t, t.call(err))
+		return m.fail(t, TurnForbidden, "the agent was not found, or does not permit the Binding's identity", err)
 	case errors.Is(err, agent.ErrBusy): // some task of the session runs, or it is not ready: try again later, never give up
 		if errors.Is(err, agent.ErrNotReady) {
 			// A session that is starting or in a lifecycle operation holds no turn ahead of this one, so the

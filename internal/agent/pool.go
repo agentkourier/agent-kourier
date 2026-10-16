@@ -142,8 +142,8 @@ func (p *Pool) conn(ctx context.Context, t Target) (Conn, error) {
 	defer cancel()
 	defer context.AfterFunc(p.bg, cancel)() //nolint:contextcheck // p.bg is the pool's own lifetime, joined to the caller's on purpose
 	client, err := p.dialect.Connect(ctx, t.Backend, t.Agent, creds)
-	if err != nil {
-		return nil, fmt.Errorf("binding %s: %w", t.Binding, err)
+	if err != nil { // the card fetch is the request Connect makes, so an HTTP status here is the card's
+		return nil, fmt.Errorf("binding %s: %w", t.Binding, cardError(err))
 	}
 	// WP-01d measured kagent 1.0.0-alpha5's card: capabilities.streaming is true
 	// (test/fixtures/kagent/card/test-agent.card.json).

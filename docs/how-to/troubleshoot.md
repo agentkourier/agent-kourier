@@ -188,12 +188,21 @@ Agent Kourier follows no redirects, because a redirect could carry the Binding's
 somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` dialect sends to the
 URL exactly as written.
 
-### `HTTP 401` or `HTTP 403` at the card fetch
+### `HTTP 401` at the card fetch
 
 The front door refused the Binding's token. The turn is not retried: the thread gets "This request failed, and I won't
 try it again" with the detail that the agent's front door refused the Binding's credentials, the log's
 `session turn failed` line carries the reason, and `agentkourier_credential_rejections_total` counts it. Check the Secret named by `identity.tokenSecretRef`
-and the front door's own configuration.
+and the front door's own configuration. An HTTP 403 on an A2A call, after the card was fetched, is handled the same way.
+
+### `HTTP 403` at the card fetch
+
+The agent does not exist, or does not permit the Binding's identity. kagent 1.0.0-alpha5 answers both with 403, so a
+misspelt `agent.name` or `agent.namespace` in the Binding gets this status; kagent 0.9.x answers an unknown agent with 404.
+The turn is not retried: the thread gets "This request failed, and I won't try it again" with the detail that the agent
+was not found, or does not permit the Binding's identity, and the log's `session turn failed` line carries the reason.
+It is not counted as a rejected credential. Check the Binding's `agent.name` and
+`agent.namespace`, then the rules that let the Binding's identity use the agent, in kagent and in the front door.
 
 ### The host does not resolve, or the connection times out
 

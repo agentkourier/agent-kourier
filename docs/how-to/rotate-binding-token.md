@@ -72,7 +72,7 @@ the same on every mint: `email` when `userIdClaim: email`, otherwise the claim c
 
 ## When a token expires anyway
 
-The call fails with HTTP 401 or 403 at the front door. Agent Kourier fails the turn, re-reads the Secret, writes an
+The call fails with HTTP 401 at the front door, or with 403 on an A2A call after the card fetch. Agent Kourier fails the turn, re-reads the Secret, writes an
 audit entry, and counts `agentkourier_credential_rejections_total{binding}`. The thread says the agent's front door
 refused the Binding's credentials. It never falls back to `userId`.
 

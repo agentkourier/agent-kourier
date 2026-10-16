@@ -228,26 +228,38 @@ func TestCredentialsRejectedFailsTheTurn(t *testing.T) {
 }
 
 // A refused identity (-31403) also fails the turn without a retry, and is audited: nothing
-// else records it.
+// else records it. So does a card the agent's backend answered with 403 (ErrAgentForbidden):
+// kagent 1.0 says that of an agent that does not exist as of one this identity may not use, so
+// it is no refused credential, and the identity Source is not told (it would re-mint the token,
+// and count and audit a rejection).
 func TestForbiddenFailsTheTurnAndIsAudited(t *testing.T) {
-	f := newFixture(t)
-	sink := f.live()
-	waits := f.countWaits()
-	f.agent.script = func(context.Context, int, agent.Handler) error {
-		return fmt.Errorf("send message: %w", agent.ErrForbidden)
-	}
-	if _, err := f.submit(inbound("1")); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
-	f.retired(t)
-	if sends, _, _ := f.agent.counts(); sends != 1 || waits.Load() != 0 {
-		t.Errorf("%d sends, %d retry waits; want one send and no retry", sends, waits.Load())
-	}
-	f.amu.Lock()
-	defer f.amu.Unlock()
-	if len(f.audits) != 1 || f.audits[0].Op != audit.OpSend || !errors.Is(f.audits[0].Err, agent.ErrForbidden) || len(f.rejected) != 0 {
-		t.Errorf("audits %+v, Rejected %+v; want one send audited, and no Rejected", f.audits, f.rejected)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"the agent refuses the identity", fmt.Errorf("send message: %w", agent.ErrForbidden), agent.ErrForbidden},
+		{"the card is answered 403", fmt.Errorf("%w: connect to agent: %w", agent.ErrNotSent, agent.ErrAgentForbidden), agent.ErrAgentForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			waits := f.countWaits()
+			f.agent.script = func(context.Context, int, agent.Handler) error { return tc.err }
+			if _, err := f.submit(inbound("1")); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "the failure notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
+			f.retired(t)
+			if sends, _, _ := f.agent.counts(); sends != 1 || waits.Load() != 0 {
+				t.Errorf("%d sends, %d retry waits; want one send and no retry", sends, waits.Load())
+			}
+			f.amu.Lock()
+			defer f.amu.Unlock()
+			if len(f.audits) != 1 || f.audits[0].Op != audit.OpSend || !errors.Is(f.audits[0].Err, tc.want) || len(f.rejected) != 0 {
+				t.Errorf("audits %+v, Rejected %+v; want one send audited, and no Rejected", f.audits, f.rejected)
+			}
+		})
 	}
 }
 
@@ -776,6 +788,7 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 	}{
 		{"the credentials are refused", fmt.Errorf("%w: rejected", agent.ErrCredentialsRejected), true},
 		{"the identity is refused", fmt.Errorf("send message: %w", agent.ErrForbidden), false},
+		{"the card is answered 403", fmt.Errorf("connect to agent: %w", agent.ErrAgentForbidden), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink := wedgedFixture(t, func(f *fixture) { f.agent.cancelErr = func(int) error { return tc.cause } }, "1")
@@ -789,6 +802,9 @@ func TestFailedCancelOfAWedgedTaskIsClassified(t *testing.T) {
 			}
 			if cancels := f.agent.cancels; len(cancels) != 1 || rows != 1 {
 				t.Errorf("%d cancels, %d audit rows; want one of each", len(cancels), rows)
+			}
+			if !tc.source && len(f.rejected) != 0 {
+				t.Errorf("Rejected calls = %+v; want none: the credentials were not refused", f.rejected)
 			}
 		})
 	}
