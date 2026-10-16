@@ -62,7 +62,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           # The version test/chart passes with; release.yml pins the same one.
-          version: v4.3.0
+          version: v4.3.1
       - run: make test-race
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
