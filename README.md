@@ -70,22 +70,9 @@ a note there.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    Slack["Slack channel<br/>People and alert messages"]
-    AgentKourier["agent-kourier<br/>Bindings, sessions, delivery"]
-    Agents["A2A agents<br/>kagent, Google AX, any streaming A2A agent"]
-
-    Slack <-->|Messages, answers| AgentKourier
-    AgentKourier <-->|A2A| Agents
-
-    classDef human fill:#f8fafc,stroke:#64748b,color:#0f172a
-    classDef broker fill:#0f766e,stroke:#115e59,color:#ffffff
-    classDef runtime fill:#ecfdf5,stroke:#059669,color:#064e3b
-    class Slack human
-    class AgentKourier broker
-    class Agents runtime
-```
+<p align="center">
+  <img src="docs/assets/diagrams/how-it-works.svg" width="100%" alt="Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.">
+</p>
 
 Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
 The runtime's own manifests or operator deploy and run the agent. Agent Kourier supplies

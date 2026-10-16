@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 452" width="1300" height="452" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">How Agent Kourier works</title>
+  <desc id="d">Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.</desc>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8EA0C8"/></marker>
+    <marker id="tail" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8EA0C8"/></marker>
+    <marker id="headBrand" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5B8DEF"/></marker>
+    <marker id="headAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#F59E0B"/></marker>
+    <clipPath id="card"><rect width="1300" height="452" rx="20"/></clipPath>
+    <radialGradient id="vignette" cx="50%" cy="45%" r="75%"><stop offset="0%" stop-color="#0F2150"/><stop offset="60%" stop-color="#0A1530"/><stop offset="100%" stop-color="#060D20"/></radialGradient>
+    <pattern id="lattice" width="51.96" height="90" patternUnits="userSpaceOnUse"><polygon points="25.98,2.40 49.88,16.20 49.88,43.80 25.98,57.60 2.08,43.80 2.08,16.20" fill="none" stroke="#16306E" stroke-width="1.2"/><polygon points="0.00,47.40 23.90,61.20 23.90,88.80 0.00,102.60 -23.90,88.80 -23.90,61.20" fill="none" stroke="#16306E" stroke-width="1.2"/><polygon points="51.96,47.40 75.86,61.20 75.86,88.80 51.96,102.60 28.06,88.80 28.06,61.20" fill="none" stroke="#16306E" stroke-width="1.2"/></pattern>
+  </defs>
+  <g clip-path="url(#card)">
+  <rect width="1300" height="452" fill="#0A1530"/>
+  <rect width="1300" height="452" fill="url(#lattice)" opacity="0.6"/>
+  <rect width="1300" height="452" fill="url(#vignette)" opacity="0.85"/>
+  <rect x="24" y="92" width="200" height="82" rx="14" fill="#101F45" stroke="#24396B" stroke-width="1.5"/>
+  <rect x="24" y="92" width="6" height="82" rx="3" fill="#F59E0B"/>
+  <text x="48" y="126" font-size="16" font-weight="600" fill="#E6EDF3" text-anchor="start">Alertmanager</text>
+  <text x="48" y="150" font-size="13" font-weight="400" fill="#A9B8D8" text-anchor="start">posts alerts as usual</text>
+  <rect x="24" y="282" width="200" height="82" rx="14" fill="#101F45" stroke="#24396B" stroke-width="1.5"/>
+  <rect x="24" y="282" width="6" height="82" rx="3" fill="#5B8DEF"/>
+  <text x="48" y="316" font-size="16" font-weight="600" fill="#E6EDF3" text-anchor="start">People</text>
+  <text x="48" y="340" font-size="13" font-weight="400" fill="#A9B8D8" text-anchor="start">reply in the thread</text>
+  <rect x="290" y="48" width="290" height="356" rx="14" fill="#101F45" stroke="#24396B" stroke-width="1.5"/>
+  <text x="310" y="82" font-size="15" font-weight="600" fill="#E6EDF3" text-anchor="start"># payments-alerts</text>
+  <text x="560" y="82" font-size="12" font-weight="400" fill="#6F82AE" text-anchor="end">Slack</text>
+  <line x1="290" y1="98" x2="580" y2="98" stroke="#24396B" stroke-width="1.5"/>
+  <rect x="304" y="112" width="262" height="56" rx="8" fill="#3A2A0A"/>
+  <circle cx="321" cy="138" r="11" fill="#F59E0B"/>
+  <text x="340" y="134" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="start">Alertmanager</text>
+  <text x="340" y="152" font-size="12.5" font-weight="400" fill="#A9B8D8" text-anchor="start">FIRING · PaymentsApiErrorRate</text>
+  <path d="M321 176 L321 366" stroke="#24396B" stroke-width="2"/>
+  <circle cx="343" cy="212" r="11" fill="#5B8DEF"/>
+  <text x="362" y="208" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="start">Agent Kourier</text>
+  <text x="362" y="226" font-size="12.5" font-weight="400" fill="#A9B8D8" text-anchor="start">5xx rose 2 min after the rollout</text>
+  <circle cx="343" cy="274" r="11" fill="#6F82AE"/>
+  <text x="362" y="270" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="start">Engineer</text>
+  <text x="362" y="288" font-size="12.5" font-weight="400" fill="#A9B8D8" text-anchor="start">what changed in that rollout?</text>
+  <circle cx="343" cy="336" r="11" fill="#5B8DEF"/>
+  <text x="362" y="332" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="start">Agent Kourier</text>
+  <text x="362" y="350" font-size="12.5" font-weight="400" fill="#A9B8D8" text-anchor="start">DB_POOL_SIZE went from 20 to 2</text>
+  <rect x="710" y="110" width="220" height="160" rx="14" fill="#326CE5" stroke="#7FA6F3" stroke-width="2"/>
+  <text x="820" y="152" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">Agent Kourier</text>
+  <text x="820" y="188" font-size="13" font-weight="400" fill="#E3EBFD" text-anchor="middle">Triggers and Bindings</text>
+  <text x="820" y="212" font-size="13" font-weight="400" fill="#E3EBFD" text-anchor="middle">Sessions per thread</text>
+  <text x="820" y="236" font-size="13" font-weight="400" fill="#E3EBFD" text-anchor="middle">Durable outbox</text>
+  <path d="M740 336 L740 392 A80 12 0 0 0 900 392 L900 336 Z" fill="#101F45" stroke="#24396B" stroke-width="1.5"/>
+  <ellipse cx="820" cy="336" rx="80" ry="12" fill="#0C1838" stroke="#24396B" stroke-width="1.5"/>
+  <text x="820" y="368" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">SQLite or Postgres</text>
+  <text x="820" y="386" font-size="11.5" font-weight="400" fill="#A9B8D8" text-anchor="middle">state survives a restart</text>
+  <path d="M820 274 L820 318" stroke="#8EA0C8" stroke-width="2" fill="none" marker-start="url(#tail)" marker-end="url(#head)"/>
+  <rect x="1080" y="48" width="196" height="356" rx="14" fill="#101F45" stroke="#24396B" stroke-width="1.5"/>
+  <text x="1100" y="82" font-size="15" font-weight="600" fill="#E6EDF3" text-anchor="start">A2A agents</text>
+  <line x1="1080" y1="98" x2="1276" y2="98" stroke="#24396B" stroke-width="1.5"/>
+  <rect x="1096" y="120" width="164" height="72" rx="10" fill="#16295A" stroke="#2E4A86" stroke-width="1.2"/>
+  <text x="1112" y="150" font-size="14" font-weight="600" fill="#E6EDF3" text-anchor="start">kagent</text>
+  <text x="1112" y="170" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="start">kagent-v1 or a2a dialect</text>
+  <rect x="1096" y="212" width="164" height="72" rx="10" fill="#16295A" stroke="#2E4A86" stroke-width="1.2"/>
+  <text x="1112" y="242" font-size="14" font-weight="600" fill="#E6EDF3" text-anchor="start">Google AX</text>
+  <text x="1112" y="262" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="start">a2a dialect</text>
+  <rect x="1096" y="304" width="164" height="72" rx="10" fill="#16295A" stroke="#2E4A86" stroke-width="1.2"/>
+  <text x="1112" y="334" font-size="14" font-weight="600" fill="#E6EDF3" text-anchor="start">Any A2A agent</text>
+  <text x="1112" y="354" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="start">1.0 or 0.3, streaming</text>
+  <path d="M226 133 L284 133" stroke="#F59E0B" stroke-width="2" fill="none" marker-end="url(#headAmber)"/>
+  <path d="M226 323 L284 323" stroke="#8EA0C8" stroke-width="2" fill="none" marker-end="url(#head)"/>
+  <path d="M584 160 L702 160" stroke="#8EA0C8" stroke-width="2" fill="none" marker-end="url(#head)"/>
+  <text x="645" y="140" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">events</text>
+  <text x="645" y="156" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">Socket Mode</text>
+  <path d="M706 222 L588 222" stroke="#8EA0C8" stroke-width="2" fill="none" marker-end="url(#head)"/>
+  <text x="645" y="244" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">answers</text>
+  <text x="645" y="260" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">in the thread</text>
+  <path d="M934 160 L1072 160" stroke="#5B8DEF" stroke-width="2" fill="none" marker-end="url(#headBrand)"/>
+  <text x="1005" y="140" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">A2A message</text>
+  <text x="1005" y="156" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">one context per thread</text>
+  <path d="M1076 222 L938 222" stroke="#5B8DEF" stroke-width="2" fill="none" marker-end="url(#headBrand)"/>
+  <text x="1005" y="244" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">streamed reply</text>
+  <text x="1005" y="260" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">text, steps, questions</text>
+  </g>
+</svg>
