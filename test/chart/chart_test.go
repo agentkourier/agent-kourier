@@ -1105,8 +1105,12 @@ func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 			slices.SortFunc(want.Bindings, func(a, b v1alpha1.Binding) int { return byName(&a, &b) })
 			slices.SortFunc(got.AgentBackends, func(a, b v1alpha1.AgentBackend) int { return byName(&a, &b) })
 			slices.SortFunc(want.AgentBackends, func(a, b v1alpha1.AgentBackend) int { return byName(&a, &b) })
-			if !equality.Semantic.DeepEqual(got, want) {
-				t.Errorf("the rendered config loads differently from %s:\n%s", src, diff(t, want, got))
+			// Only the objects are compared: a loaded Set also remembers the file each came from, which differs.
+			objects := func(s *config.Set) *config.Set {
+				return &config.Set{AgentBackends: s.AgentBackends, ChatConnections: s.ChatConnections, Bindings: s.Bindings}
+			}
+			if !equality.Semantic.DeepEqual(objects(got), objects(want)) {
+				t.Errorf("the rendered config loads differently from %s:\n%s", src, diff(t, objects(want), objects(got)))
 			}
 		})
 	}

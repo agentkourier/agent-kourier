@@ -1,12 +1,12 @@
-# The tool server of the sre-triage recipe: kagent's own tool chart (oci://ghcr.io/kagent-dev/tools/helm/kagent-tools, 0.3.0, the
-# version kagent 1.0.0-alpha5 depends on), installed as its own Helm release, sandbox-tools, in namespace kagent. The
-# full tier's kagent release keeps `kagent-tools: enabled: false` (hack/kind/full/kagent-values.yaml) and is never
-# touched; hack/kind/sandbox/down.sh uninstalls this release.
+# The tool server of the sre-triage recipe: kagent's own tool chart (oci://ghcr.io/kagent-dev/tools/helm/kagent-tools,
+# 0.3.0, the version kagent 1.0.0-alpha5 depends on), installed as its own Helm release, sandbox-tools, in namespace
+# kagent. It is a release of its own so that your kagent release is left as it is. To remove it:
+# helm uninstall sandbox-tools --namespace kagent.
 #
 # Read-only by three separate things, so that no one of them is the only guard:
 #   1. the ServiceAccount is bound to the built-in `view` ClusterRole (tools-rbac.yaml): no Secrets, no writes, and
 #      this chart's own cluster-admin ClusterRole is not made (rbac.create: false);
-#   2. the server runs with --read-only, which does not register its write tools (it leaves nine, none of which writes);
+#   2. the server runs with --read-only, which does not register its write tools;
 #   3. the sandbox-sre agent lists the read tools it uses by name (agent.yaml).
 # Only the k8s tools are on: no helm, istio, argo, cilium, prometheus or utils ones.
 fullnameOverride: sandbox-tools # the Service, the Deployment and the ServiceAccount are all named sandbox-tools

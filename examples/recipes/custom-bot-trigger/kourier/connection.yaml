@@ -1,8 +1,0 @@
-# The Slack workspace connection. Create the Secret slack-ci with the keys botToken and appToken yourself
-# (see the README); no token is in this file.
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata: { name: slack-ci, namespace: agent-kourier }
-spec:
-  platform: slack
-  credentialsSecretRef: { name: slack-ci }

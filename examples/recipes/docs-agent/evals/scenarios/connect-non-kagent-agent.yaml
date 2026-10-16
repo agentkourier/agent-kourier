@@ -1,0 +1,6 @@
+name: connect an agent that does not run on kagent
+app: agent-kourier-docs
+question: How do I connect an agent that does not run on kagent?
+cause: 'Declare an AgentBackend with dialect a2a and the exact JSON-RPC endpoint URL, used as written. The agent must serve a card with streaming capability and a JSON-RPC interface, and answer with task events.'
+evidence:
+  - how-to/connect-a2a-agent.md

@@ -1,0 +1,11 @@
+# The Service the AgentBackend names: http://docs-agent.docs-agent.svc.cluster.local:8080/a2a
+apiVersion: v1
+kind: Service
+metadata:
+  name: docs-agent
+  namespace: docs-agent
+  labels: {app.kubernetes.io/name: docs-agent}
+spec:
+  selector: {app.kubernetes.io/name: docs-agent}
+  ports:
+    - {name: a2a, port: 8080, targetPort: a2a}

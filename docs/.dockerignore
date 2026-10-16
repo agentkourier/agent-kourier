@@ -1,0 +1,5 @@
+# Read by the docs agent's image build (examples/recipes/docs-agent/agent/Dockerfile), which takes this directory as a
+# named context. These directories are not published, so the agent must not answer from them, and the brand kit is
+# large: keep them from being sent to the builder at all.
+/brand
+/spikes

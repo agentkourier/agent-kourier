@@ -1,13 +1,14 @@
-# sandbox-sre: a read-only SRE agent on a real model, the agent half of the sre-triage recipe. Its tools are the read
-# tools of the tool server (tools-values.yaml, tools-rbac.yaml). Its model is the ModelConfig sandbox-model, which you
-# supply: the sandbox tier (hack/kind/sandbox) renders one from hack/kind/sandbox/modelconfig-<provider>.yaml, chosen by
-# MODEL_PROVIDER, with the API key from the Secret sandbox-model that its up.sh makes from the secrets file. The harness
-# is the one of the full tier's agents (hack/kind/full/agent.yaml): the digest-pinned Go ADK runtime that ships with
-# kagent 1.0.0-alpha5, in a Substrate worker pool, its model calls leaving through Substrate's egress gateway.
+# sandbox-sre: the read-only SRE agent of the sre-triage recipe. It is a kagent 1.0 Agent that runs on an Agent Substrate
+# worker pool, and it uses the tool server declared below (its values are in tools-values.yaml, its RBAC in
+# tools-rbac.yaml).
 #
-# The tool list is by name, and only reads. The tool server runs --read-only, so even a name added here that writes
-# would not be served; test/kindmanifests pins the list to the nine tools that mode leaves, and the three left out are
-# no use here (k8s_generate_resource, k8s_get_cluster_configuration, k8s_wait).
+# Read-only, three ways: the agent lists its six read tools by name, the tool server runs --read-only, and the server's
+# ServiceAccount is bound to the built-in view ClusterRole. A write tool added to the list below would not be served.
+#
+# You supply the model: a kagent ModelConfig named sandbox-model in namespace kagent, and the Secret it names. No key is
+# in this file. The worker pool (kagent-default) and the snapshot location under harness.substrate are the kind full
+# tier's; change both for another Substrate install. The harness is the digest-pinned Go ADK runtime that ships with
+# kagent 1.0.0-alpha5.
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
 metadata: {name: sandbox-tools, namespace: kagent}
@@ -42,4 +43,4 @@ spec:
       image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
     substrate:
       workerPoolRef: {name: kagent-default}
-      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see hack/kind/full/agent.yaml
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # the kind full tier's snapshot location

@@ -1,0 +1,7 @@
+name: turn on the feedback buttons
+app: agent-kourier-docs
+question: How do I put useful and not-useful buttons on the answers?
+cause: 'Set feedback.enabled: true on the Binding. An investigation that a trigger started always carries the buttons.'
+evidence:
+  - reference/binding.md
+  - how-to/write-a-binding.md

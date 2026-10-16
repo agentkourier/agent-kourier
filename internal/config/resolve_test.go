@@ -27,6 +27,15 @@ func sreAlerts(s *Set) *v1alpha1.Binding {
 	return &s.Bindings[slices.IndexFunc(s.Bindings, func(b v1alpha1.Binding) bool { return b.Name == "sre-alerts" })]
 }
 
+// The location Load gives each object of spec 7's examples, which Resolve puts before a problem with it. An object a
+// test adds or renames after loading has no location, and its problems have none.
+const (
+	atSREAlerts = "binding.yaml#1 "
+	atChatOnly  = "binding-minimal.yaml#1 "
+	atBackend   = "agentbackend.yaml#1 "
+	atConn      = "chatconnection.yaml#1 "
+)
+
 // fakeSecrets maps "namespace/name" to the key names of a Secret.
 type fakeSecrets map[string][]string
 
@@ -100,7 +109,7 @@ func TestResolveRejectsABindingOnAnUnbuiltDialect(t *testing.T) {
 	set := specSet(t)
 	set.AgentBackends[0].Spec.Dialect = "unknown"
 	const why = `: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot uses the "unknown" dialect, supported dialects are "kagent-v1" and "a2a"`
-	wantProblems(t, set, specSecrets(), "Binding sre/chat-only"+why, "Binding sre/sre-alerts"+why)
+	wantProblems(t, set, specSecrets(), atChatOnly+"Binding sre/chat-only"+why, atSREAlerts+"Binding sre/sre-alerts"+why)
 
 	set = specSet(t) // the dialect that is built still resolves
 	if _, err := Resolve(context.Background(), set, specSecrets()); err != nil {
@@ -128,7 +137,7 @@ func TestResolveEmptyNamespaceMeansReferrers(t *testing.T) {
 }
 
 func TestResolveRejects(t *testing.T) {
-	const from = "Binding sre/sre-alerts: "
+	const from = atSREAlerts + "Binding sre/sre-alerts: "
 	tests := []struct {
 		name   string
 		mutate func(*Set)
@@ -139,11 +148,11 @@ func TestResolveRejects(t *testing.T) {
 		{"missing connection", func(s *Set) { sreAlerts(s).Spec.Chat.ConnectionRef.Name = "nope" },
 			[]string{from + "spec.chat.connectionRef: ChatConnection agent-kourier-system/nope not found"}},
 		{"backend does not allow namespace", func(s *Set) { s.AgentBackends[0].Spec.AllowedNamespaces = []string{"payments"} }, []string{
-			"Binding sre/chat-only: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot does not allow namespace sre",
+			atChatOnly + "Binding sre/chat-only: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot does not allow namespace sre",
 			from + "spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot does not allow namespace sre",
 		}},
 		{"connection does not allow namespace", func(s *Set) { s.ChatConnections[0].Spec.AllowedNamespaces = nil }, []string{
-			"Binding sre/chat-only: spec.chat.connectionRef: ChatConnection agent-kourier-system/slack-main does not allow namespace sre",
+			atChatOnly + "Binding sre/chat-only: spec.chat.connectionRef: ChatConnection agent-kourier-system/slack-main does not allow namespace sre",
 			from + "spec.chat.connectionRef: ChatConnection agent-kourier-system/slack-main does not allow namespace sre",
 		}},
 		{"second Binding for a channel", func(s *Set) {
@@ -254,4 +263,32 @@ func TestSnapshotBindings(t *testing.T) {
 	if want := []string{"sre/chat-only", "sre/sre-alerts"}; !slices.Equal(got, want) {
 		t.Errorf("Bindings = %v; want %v", got, want)
 	}
+}
+
+// TestResolveProblemsNameTheirSource: a problem with any kind of object starts with the file and document that Load read
+// the object from, as Load's own problems do, so an operator knows which file to open. The ChatConnection and the
+// AgentBackend here share a file; the Binding is in another.
+func TestResolveProblemsNameTheirSource(t *testing.T) {
+	const backend = `apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: kagent-pilot, namespace: agent-kourier-system }
+spec:
+  dialect: kagent-v1
+  url: "http://kagent.example:8083"
+  headers: [{ name: X-Team, valueSecretRef: { name: team } }]
+  allowedNamespaces: [sre]
+`
+	dir := write(t, map[string]string{
+		"infra.yaml":    backend + "---\n" + connectionDoc,
+		"bindings.yaml": "# no objects here\n---\n" + strings.NewReplacer("backendRef: { name:", "backendRef: { namespace: agent-kourier-system, name:", "connectionRef: { name: slack-main }", "connectionRef: { name: nope }").Replace(bindingDoc),
+	})
+	set, err := Load(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProblems(t, set, fakeSecrets{},
+		"infra.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: spec.headers[0].valueSecretRef: Secret agent-kourier-system/team not found",
+		"bindings.yaml#1 Binding sre/sre-alerts: spec.chat.connectionRef: ChatConnection sre/nope not found",
+		"infra.yaml#2 ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: Secret agent-kourier-system/slack-main not found",
+	)
 }

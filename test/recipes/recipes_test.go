@@ -4,22 +4,15 @@
 package recipes_test
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
-	"sigs.k8s.io/yaml"
 
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
@@ -90,9 +83,9 @@ func TestCheckRecipe(t *testing.T) {
 	}
 }
 
-// TestCheckRecipeNamesEachObjectsOwnFile pins the mapping from a reference problem to a file: a file of
-// several documents, and a Binding of the same name in another namespace in another file, each with a
-// broken reference of its own.
+// TestCheckRecipeNamesEachObjectsOwnFile pins that a reference problem names the file and document of its own
+// object: a file of several documents, and a Binding of the same name in another namespace in another file,
+// each with a broken reference of its own.
 func TestCheckRecipeNamesEachObjectsOwnFile(t *testing.T) {
 	_, err := checkRecipe(t.Context(), filepath.Join("testdata", "two-files"))
 	if err == nil {
@@ -103,9 +96,9 @@ func TestCheckRecipeNamesEachObjectsOwnFile(t *testing.T) {
 		var file, other string
 		switch {
 		case strings.Contains(line, "Binding recipe/helper:"):
-			file, other = "kourier/bindings.yaml: Binding recipe/helper", "other.yaml"
+			file, other = "kourier/bindings.yaml#2 Binding recipe/helper", "other.yaml"
 		case strings.Contains(line, "Binding other/helper:"):
-			file, other = "kourier/other.yaml: Binding other/helper", "bindings.yaml"
+			file, other = "kourier/other.yaml#1 Binding other/helper", "bindings.yaml"
 		default:
 			t.Errorf("unexpected line %q", line)
 			continue
@@ -120,21 +113,6 @@ func TestCheckRecipeNamesEachObjectsOwnFile(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "Binding recipe/first") {
 		t.Errorf("the valid Binding is reported: %v", err)
-	}
-}
-
-// TestLocateDoesNotInventAPath requires a problem about an object whose file is not known to say so and
-// to name no file.
-func TestLocateDoesNotInventAPath(t *testing.T) {
-	problems := errors.Join(
-		errors.New("Binding recipe/known: spec.agent.backendRef: not found"),
-		errors.New("ChatConnection recipe/slack: spec.credentialsSecretRef: Secret recipe/slack not found"),
-	)
-	got := locate("r/kourier", problems, map[string]string{"Binding recipe/known": "binding.yaml"}).Error()
-	want := "r/kourier/binding.yaml: Binding recipe/known: spec.agent.backendRef: not found\n" +
-		"r/kourier: ChatConnection recipe/slack: spec.credentialsSecretRef: Secret recipe/slack not found (file not found for this object)"
-	if filepath.ToSlash(got) != want {
-		t.Errorf("locate =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -261,17 +239,14 @@ func checkRecipe(ctx context.Context, dir string) (ran bool, err error) {
 		}
 		return false, err
 	}
-	files, err := bindingFiles(kourier)
-	if err != nil {
-		return false, err
-	}
 	// The evals only read the Bindings, and run first because Resolve takes ownership of set. Load does not
 	// accept a Secret, so a recipe cannot ship one: the operator creates them, and the resolver reports each
-	// as present, which leaves Resolve only the references between the recipe's own objects to find.
+	// as present, which leaves Resolve only the references between the recipe's own objects to find. Resolve
+	// starts each problem with the file and document Load read the object from, as Load does.
 	ran, evalErr := checkTriggerEvals(dir, set)
 	var resolveErr error
 	if _, err := config.Resolve(ctx, set, config.PresentSecrets(set)); err != nil {
-		resolveErr = locate(kourier, err, files)
+		resolveErr = underDir(kourier, err)
 	}
 	return ran, errors.Join(resolveErr, evalErr)
 }
@@ -296,41 +271,7 @@ func loadKourier(ctx context.Context, dir string) (*config.Set, error) {
 	return set, nil
 }
 
-// bindingFiles maps "Binding namespace/name" to the file that defines it, so a reference problem,
-// which Resolve reports by object, can say which file to open.
-func bindingFiles(dir string) (map[string]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read recipe directory: %w", err)
-	}
-	files := map[string]string{}
-	for _, e := range entries {
-		if ext := filepath.Ext(e.Name()); e.IsDir() || strings.HasPrefix(e.Name(), ".") || (ext != ".yaml" && ext != ".yml") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("read recipe file: %w", err)
-		}
-		r := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
-		for {
-			doc, err := r.Read()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", e.Name(), err)
-			}
-			var m metav1.PartialObjectMetadata
-			if err := yaml.Unmarshal(doc, &m); err == nil && m.Kind == "Binding" {
-				files[fmt.Sprintf("Binding %s/%s", m.Namespace, m.Name)] = e.Name()
-			}
-		}
-	}
-	return files, nil
-}
-
-// underDir reports each problem of err, which config.Load returned for the directory dir. Load starts a
+// underDir reports each problem of err, which config.Load or config.Resolve returned for the directory dir. Both start a
 // problem with the file it is about ("<file>#<n> ..." or "<file>: ..."): those get the directory put before the
 // file name, so the path printed is one a reader can open. Any other problem, such as a directory that cannot
 // be read or a cancelled context, is not about a file and gets only "<dir>: ", not an invented path.
@@ -348,20 +289,6 @@ func underDir(dir string, err error) error {
 			}
 		}
 		return fmt.Errorf("%s: %w", dir, e)
-	})
-}
-
-// locate prefixes each problem of err, which Resolve reports as "<kind> <namespace>/<name>: ...", with the
-// file in dir that defines the object, taken from files. A problem it cannot place is not given a path: it
-// is marked instead.
-func locate(dir string, err error, files map[string]string) error {
-	return mapEach(err, func(e error) error {
-		for object, file := range files {
-			if strings.HasPrefix(e.Error(), object+":") {
-				return fmt.Errorf("%s: %w", filepath.Join(dir, file), e)
-			}
-		}
-		return fmt.Errorf("%s: %w (file not found for this object)", dir, e)
 	})
 }
 

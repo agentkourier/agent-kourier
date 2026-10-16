@@ -16,6 +16,18 @@ and needs no cluster.
   not a link, that the group and others cannot read (`chmod 600`). The bot must be a member of the channel and have
   `channels:history` (`groups:history` for a private channel).
 
+## Make the token file
+
+To write the bot token to a file from `$SLACK_BOT_TOKEN`, without printing it and with the mode the dry run requires:
+
+```sh
+mkdir -p ~/.config/agent-kourier
+( umask 077; printf '%s\n' "$SLACK_BOT_TOKEN" > ~/.config/agent-kourier/slack-bot-token )
+chmod 600 ~/.config/agent-kourier/slack-bot-token
+```
+
+Or export `SLACK_BOT_TOKEN` and leave `--token-file` out.
+
 ## Run it
 
 From the repository root:

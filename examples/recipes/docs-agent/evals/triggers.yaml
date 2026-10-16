@@ -1,0 +1,12 @@
+# The trigger evals judge one message at a time, and only what a botMessage trigger does with it. This Binding has no
+# botMessage trigger: it starts a session from a mention, and the harness does not evaluate a mention (a person's
+# message is always `person`). So the one thing worth pinning here is the negative: another bot's post in the help
+# channel, such as a CI notice or a second assistant's reply, is not taken: it starts no turn.
+cases:
+  - name: another bot's post in the help channel starts nothing
+    binding: agent-kourier/docs-help
+    message:
+      bot: B0REPLACEME
+      text: 'Build #42 failed on main'
+    expect:
+      outcome: other_bot

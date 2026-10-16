@@ -1,0 +1,6 @@
+name: what thread.cooldown does
+app: agent-kourier-docs
+question: What does thread.cooldown do?
+cause: 'It sets a window, 1 minute to 168 hours, in which a key starts no new turn. The window runs from the message that started the turn. thread.by requires it.'
+evidence:
+  - reference/chat-triggers.md

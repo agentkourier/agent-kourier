@@ -1,0 +1,8 @@
+# Not answerable from the documentation. "absent:" names a term that no page of the corpus holds; the module's tests check it.
+name: Microsoft Teams (not in the documentation)
+app: agent-kourier-docs
+question: Can Agent Kourier post to Microsoft Teams?
+cause: 'The documentation does not cover Microsoft Teams. A good answer says so plainly, and does not claim support or lack of support. It may say that the documentation describes Slack.'
+evidence:
+  - 'absent: Microsoft Teams'
+  - 'The answer says the documentation does not cover it and cites no page for the claim.'

@@ -11,6 +11,10 @@ Actor
     `email` when the chat platform knows them) and the prefix at the start of the text. It is information for the agent,
     never authorization ([Agent contract](agent-contract.md)).
 
+Agent Substrate
+:   The runtime kagent 1.0 runs every agent session on. It needs the Kubernetes pod-certificate APIs, which most clusters
+    do not serve ([Connect a kagent agent](../how-to/connect-kagent.md)).
+
 AgentBackend
 :   The resource that names an A2A endpoint and the dialect to speak to it. Owned by the platform team.
 
@@ -62,6 +66,10 @@ Interaction
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.
+
+Kind full tier
+:   The local kind cluster that `make e2e-full-up` builds from a checkout of the repository, with kagent 1.0, Agent
+    Substrate, a front door and an OIDC issuer (Dex) in it. The `sre-triage` recipe's agent runs on it.
 
 Lease
 :   The Kubernetes Lease, `<fullname>-leader`, that the replicas on Postgres hold to elect the leader. The leader renews

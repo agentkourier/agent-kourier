@@ -1,0 +1,54 @@
+# The docs agent: one pod that serves A2A on 8080 and answers from the documentation baked into its image.
+#
+# Create the Secret docs-agent-model yourself (README); it holds the model provider's key under the key apiKey. No
+# credential is in this file. Replace the image, and MODEL_NAME and MODEL_PROVIDER to suit your provider.
+#
+# One replica on purpose: a conversation's history lives in the pod's memory, and the Service does not pin a thread to a
+# pod. With two, a follow-up in a thread can reach the pod that does not know it. That pod opens an empty session under
+# the thread's context ID and answers without the history, and nothing tells the thread so. A restart does the same.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs-agent
+  namespace: docs-agent
+  labels: {app.kubernetes.io/name: docs-agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: docs-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: docs-agent}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: docs-agent
+          image: agent-kourier-docs-agent:dev # build it with make docs-agent-image, and load or push it where your nodes pull from
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: a2a, containerPort: 8080}
+          env:
+            - {name: MODEL_PROVIDER, value: openrouter} # openrouter or openai
+            - {name: MODEL_NAME, value: REPLACEME}      # the provider's model name, such as vendor/model on OpenRouter
+            - name: MODEL_API_KEY
+              valueFrom:
+                secretKeyRef: {name: docs-agent-model, key: apiKey}
+            - {name: SITE_URL, value: "https://agentkourier.dev"} # where the pages are published; the agent cites by it
+            - {name: PUBLIC_URL, value: "http://docs-agent.docs-agent.svc.cluster.local:8080/a2a"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: a2a}
+          livenessProbe:
+            httpGet: {path: /healthz, port: a2a}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}

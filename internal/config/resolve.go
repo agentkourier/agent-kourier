@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
@@ -78,12 +79,15 @@ func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 // requires every referenced Secret to exist with the keys it needs, without reading values.
 //
 // Resolve takes ownership of set: the caller must not use or change it afterwards. On any problem it
-// returns every one, joined and grouped by object, and a nil Snapshot. If ctx ends first, the
+// returns every one, joined and grouped by object, and a nil Snapshot. A problem with an object of a Set from Load
+// starts with the object's location, "<file>#<n> <kind> <namespace>/<name>:", as Load's problems do; an object added or renamed after Load has the location Load gave its new identity, if any, and
+// otherwise the problem starts with "<kind> <namespace>/<name>:". If ctx ends first, the
 // error also wraps ctx's, once, ahead of the reference problems found so far; Secret
 // problems are then incomplete.
 func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, error) {
 	r := &resolver{
 		secrets:  secrets,
+		sources:  set.sources,
 		backends: index("AgentBackend", set.AgentBackends),
 		conns:    index("ChatConnection", set.ChatConnections),
 		snap: &Snapshot{
@@ -121,17 +125,21 @@ type problem struct {
 
 type resolver struct {
 	secrets  SecretResolver
+	sources  map[identity]string
 	backends map[identity]*v1alpha1.AgentBackend
 	conns    map[identity]*v1alpha1.ChatConnection
 	snap     *Snapshot
 	problems []problem
 }
 
-// fail records err, if any, as a problem with the field at path of the object from.
+// fail records err, if any, as a problem with the field at path of the object from, starting with where Load found
+// the object when it is known.
 func (r *resolver) fail(from identity, path string, err error) {
-	if err != nil {
-		r.problems = append(r.problems, problem{from, fmt.Errorf("%s: %s: %w", from, path, err)})
+	if err == nil {
+		return
 	}
+	loc := strings.TrimSpace(r.sources[from] + " " + from.String())
+	r.problems = append(r.problems, problem{from, fmt.Errorf("%s: %s: %w", loc, path, err)})
 }
 
 func (r *resolver) binding(b *v1alpha1.Binding) {

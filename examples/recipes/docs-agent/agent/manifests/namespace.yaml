@@ -1,0 +1,5 @@
+# The docs agent's own namespace. The AgentBackend in ../../kourier reaches the Service in it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: docs-agent

@@ -80,3 +80,22 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: make test-testhooks
+
+  # The docs-agent recipe is a separate Go module (examples/recipes/docs-agent/agent), so the jobs above do not build
+  # or test it. Its tests include the refusals that keep its corpus reader inside the corpus.
+  docs-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            examples/recipes/docs-agent/agent/go.sum
+      - run: make docs-agent-test
+      - run: make docs-agent-lint

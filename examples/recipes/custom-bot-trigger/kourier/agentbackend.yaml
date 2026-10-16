@@ -1,0 +1,9 @@
+# The A2A server that hosts the agent. The url is a placeholder (REPLACE-ME): put your agent's here. For the a2a
+# dialect it is the exact JSON-RPC endpoint, used as written, and the agent card is served at that url plus
+# /.well-known/agent-card.json.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: ci-agents, namespace: agent-kourier }
+spec:
+  dialect: a2a
+  url: http://REPLACE-ME.agents.svc.cluster.local:8080

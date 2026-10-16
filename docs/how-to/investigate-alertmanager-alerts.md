@@ -111,7 +111,8 @@ Change a value in place, for example `cooldown: 2h` or `maxRunsPerDay: 20`. The 
 ## Check it
 
 Before going live, replay the channel's history through the trigger with a [dry run](tune-triggers.md), from the
-repository root, with the Binding saved in `./my-bindings`:
+repository root, with the Binding saved in `./my-bindings`. The command reads the bot token from a file;
+[Make the token file](tune-triggers.md#make-the-token-file) shows how to write it:
 
 ```sh
 go run ./cmd/agent-kourier dry-run --config ./my-bindings --binding <namespace>/<name> \

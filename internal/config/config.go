@@ -28,11 +28,17 @@ import (
 const maxFileSize = 1 << 20
 
 // Set holds every object found in a config directory, defaulted and validated, in file then
-// document order. References between objects are not resolved.
+// document order. References between objects are not resolved. A Set from Load also remembers
+// the file and document each object came from, which Resolve names in its problems.
 type Set struct {
 	AgentBackends   []v1alpha1.AgentBackend
 	ChatConnections []v1alpha1.ChatConnection
 	Bindings        []v1alpha1.Binding
+
+	// sources maps each object to its location, "<file>#<n>" as in Load's problems. It is keyed by
+	// identity, so an object added or renamed after Load has the location Load gave its new identity, if any. A Set not
+	// made by Load has none.
+	sources map[identity]string
 }
 
 // Load reads every *.yaml and *.yml file directly inside dir, in lexical order. Each file may
@@ -42,6 +48,7 @@ type Set struct {
 //
 // Load reports every problem it finds, joined, each prefixed with "<file>#<n> <kind>
 // <namespace>/<name>:" (n is the 1-based document number in the file) and returns a nil Set.
+// Resolve uses the same prefix for its problems with the objects of the Set Load returns.
 // A missing directory gives an error wrapping fs.ErrNotExist.
 func Load(ctx context.Context, dir string) (*Set, error) {
 	entries, err := os.ReadDir(dir)
@@ -61,6 +68,7 @@ func Load(ctx context.Context, dir string) (*Set, error) {
 	if len(l.errs) > 0 {
 		return nil, errors.Join(l.errs...)
 	}
+	l.set.sources = l.seen
 	return l.set, nil
 }
 

@@ -1,0 +1,6 @@
+name: rotate a Binding's token without a restart
+app: agent-kourier-docs
+question: How do I rotate a Binding's token without restarting Agent Kourier?
+cause: 'Write the new token into the Secret that identity.tokenSecretRef names. Agent Kourier reads the token on every call, from a watch of the Secret, so the update is used with no restart.'
+evidence:
+  - how-to/rotate-binding-token.md

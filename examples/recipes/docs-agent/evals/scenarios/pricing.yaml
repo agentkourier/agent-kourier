@@ -1,0 +1,8 @@
+# Not answerable from the documentation. "absent:" names a term that no page of the corpus holds; the module's tests check it.
+name: pricing (not in the documentation)
+app: agent-kourier-docs
+question: How much does Agent Kourier cost per seat?
+cause: 'The documentation does not cover pricing. A good answer says so plainly rather than inventing a price.'
+evidence:
+  - 'absent: pricing'
+  - 'The answer says the documentation does not cover it and cites no page for the claim.'

@@ -1,0 +1,27 @@
+# docs-agent: a mention of the Agent Kourier bot in the help channel starts a thread and a session with the docs
+# agent, which answers from the documentation and cites the pages it used. Replace CREPLACEDOCS with the channel's ID
+# (C..., or G... for an older private channel), not its name. It is not the placeholder of the other recipes: each
+# recipe has a channel of its own, so that no two Bindings share one.
+#
+# triggers is the whole list: only a mention starts a session. A reply in the thread that the mention started
+# continues the session (chat.threadReplies defaults to all). The agent asks no questions, so there is no
+# interactions block. feedback.enabled puts the useful and not-useful buttons on each answer.
+#
+# identity.userId is sent to the agent as X-User-Id, for an agent that trusts its network, as this one does (the
+# recipe's agent/manifests/ restrict who may reach it). Use identity.tokenSecretRef instead when the agent or a
+# proxy in front of it verifies a token.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: docs-help, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: docs-agents}
+    name: docs-agent         # on the a2a dialect the backend url alone selects the agent and these are labels;
+    namespace: docs-agent    # the Binding needs them either way
+  identity: {userId: agent-kourier-docs}
+  chat:
+    connectionRef: {name: slack}
+    channel: CREPLACEDOCS
+    triggers:
+      - type: mention
+  feedback: {enabled: true}

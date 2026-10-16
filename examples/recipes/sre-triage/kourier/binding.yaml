@@ -1,5 +1,5 @@
 # sre-triage: an alert that Alertmanager posts to a Slack channel starts an investigation by the read-only agent
-# sandbox-sre, in that alert's thread. Replace CREPLACEME with the channel's ID (C..., or G... for a private one) and
+# sandbox-sre, in that alert's thread. Replace CREPLACESRE with the channel's ID (C..., or G... for a private one) and
 # B0REPLACEME with the bot ID of the Slack integration that posts the alerts; the bot ID is the message's bot_id, not the
 # app ID (A...) and not a display name.
 #
@@ -26,7 +26,7 @@ spec:
     tokenSecretRef: {name: sre-triage-token} # key token: an OIDC token the front door accepts; you make it
   chat:
     connectionRef: {name: slack}
-    channel: CREPLACEME
+    channel: CREPLACESRE
     output: live
     triggers:
       - type: botMessage

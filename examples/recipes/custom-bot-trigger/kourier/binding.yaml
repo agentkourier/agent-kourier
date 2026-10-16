@@ -11,8 +11,8 @@ spec:
     namespace: agents          # on kagent-v1 they select it. The Binding needs them either way
   identity: { userId: agent-kourier-ci }
   chat:
-    connectionRef: { name: slack-ci }
-    channel: CREPLACEME        # the channel the CI bot posts to; replace it with your channel's ID
+    connectionRef: { name: slack }
+    channel: CREPLACECI        # the channel the CI bot posts to; replace it with your channel's ID
     triggers:
       - type: botMessage
         from:

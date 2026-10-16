@@ -1,0 +1,30 @@
+# The agent trusts its network: it checks no token, and every request spends model quota. These policies let only
+# Agent Kourier's namespace reach it, and let it reach DNS and HTTPS (the model provider) and nothing else. They take
+# effect only if the cluster's network plugin enforces NetworkPolicy; without that, anything in the cluster can call it.
+# If Agent Kourier runs in another namespace, change the namespace name below and in ../../kourier.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docs-agent
+  namespace: docs-agent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: docs-agent}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: agent-kourier}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {protocol: TCP, port: 443}

@@ -119,6 +119,9 @@ func TestAppendAndReplacePerArtifact(t *testing.T) {
 		{"lastChunk carries the full text", []a2a.Event{chunk("a", "one ", false), chunk("a", "two", true), &a2a.TaskArtifactUpdateEvent{LastChunk: true, Artifact: &a2a.Artifact{ID: "a", Parts: a2a.ContentParts{a2a.NewTextPart("one two")}}}}, []string{"one ", "one two"}},
 		{"artifacts are independent", []a2a.Event{chunk("a", "A", false), chunk("b", "B", false), chunk("a", "2", true)}, []string{"A", "B", "A2"}},
 		{"a live replace may shorten the text", []a2a.Event{chunk("a", "abc", false), chunk("a", "a", false)}, []string{"abc", "a"}},
+		{"a live replace may empty the text", []a2a.Event{chunk("a", "abc", false), chunk("a", "", false)}, []string{"abc", ""}},
+		{"an update with no text part leaves the text as it was", []a2a.Event{chunk("a", "abc", false),
+			&a2a.TaskArtifactUpdateEvent{Artifact: &a2a.Artifact{ID: "a", Parts: a2a.ContentParts{a2a.NewDataPart(map[string]any{"k": "v"})}}}}, []string{"abc"}},
 		{"an empty append changes nothing", []a2a.Event{chunk("a", "A", false), chunk("a", "", true)}, []string{"A"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

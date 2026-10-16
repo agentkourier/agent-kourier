@@ -2,13 +2,20 @@
 
 For a team that wants an agent in a Slack channel and would rather start from a working example than from a blank file:
 at the end, you have applied a recipe's Agent Kourier resources, and its agent if the recipe has one, and know which
-checks come with it. There are two recipes: one for Alertmanager alerts, with an agent, and one for another bot's
-posts, which holds the Agent Kourier resources only.
+checks come with it. There are three recipes: one for Alertmanager alerts, with an agent, one for another bot's
+posts, which holds the Agent Kourier resources only, and one that answers questions from documentation, with an agent that
+runs on any cluster. A team that is new to Agent Kourier should start with the last one.
 
 A recipe is a directory under
 [`examples/recipes`](https://github.com/agentkourier/agent-kourier/tree/main/examples/recipes) with the resources that
 connect a channel to an agent, the agent they talk to, and checks. The files on this page are included from the
 repository, so what you read here is what the repository holds.
+
+!!! warning "The recipes' Slack Secret is called `slack`"
+
+    The recipes' ChatConnection names a Secret `slack`. [Configure Slack](configure-slack.md) and
+    [Install with Helm](install-with-helm.md) create `agent-kourier-slack`. Create the Secret under the name the
+    recipe's ChatConnection uses, or change the ChatConnection to match.
 
 ## Triage Alertmanager alerts with a read-only agent
 
@@ -32,16 +39,14 @@ cooldown or the thread's 24-hour idle limit adds a note, a resolve closes the th
 - An Alertmanager Slack receiver whose title reads `FIRING (<n>) - <alertname>` or `RESOLVED - <alertname>`, and whose
   fallback is Alertmanager's default.
 - The kind full tier with kagent 1.0.0-alpha5, a verifying front door ([Put a verifying front door before
-  kagent](front-door.md)), a kagent `ModelConfig` named `sandbox-model`, and a token for the Binding's identity
-  ([Create the Binding identity](create-binding-identity.md)).
+  kagent](front-door.md)), a kagent `ModelConfig` named `sandbox-model`, and a token for the Binding's identity from an OIDC issuer
+  that the front door accepts ([Create the Binding identity](create-binding-identity.md)). Without an OIDC issuer, the
+  agent half is not usable as written.
 
 ### Agent Kourier's resources
 
 Three files, in the namespace `agent-kourier`. The Binding is the recipe: a `botMessage` trigger on the alert bot,
-narrowed to one receiver, and `askUser` on. Replace `CREPLACEME` and `B0REPLACEME`.
-
-<!-- name-check: off -->
-<!-- The recipe's directory is called kourier, which the product-name check would flag; the titles and includes below name it. -->
+narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACEME`.
 
 ```yaml title="kourier/binding.yaml"
 --8<-- "sre-triage/kourier/binding.yaml"
@@ -54,8 +59,6 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACEME` and `B0REPLACEM
 ```yaml title="kourier/chatconnection.yaml"
 --8<-- "sre-triage/kourier/chatconnection.yaml"
 ```
-
-<!-- name-check: on -->
 
 Put the directory in a ConfigMap and point the chart at it with `config.existingConfigMap`; the chart needs
 `rbac.secretNamespaces` to find the Secrets `slack` and `sre-triage-token`. The recipe's README has the commands.
@@ -120,19 +123,24 @@ state is `PASSED`, `limits` bounds how many investigations start, and `promptTem
   the `bot_id` of the CI bot's posts.
 - An A2A agent, and its URL for the AgentBackend. For kagent, set `dialect: kagent-v1` as in
   [Connect a kagent agent](connect-kagent.md).
+- An agent that trusts the `X-User-Id` header: the Binding's `identity.userId` is sent as that header and proves nothing.
+  If your agent or its front door verifies tokens, use `identity.tokenSecretRef` instead ([Create the Binding
+  identity](create-binding-identity.md)).
 
 ### Agent Kourier's resources
 
 The recipe has three files, in the namespace `agent-kourier`: the Binding below, an AgentBackend, and a
-ChatConnection that names the Secret `slack-ci`. Replace `CREPLACEME` and `B0REPLACEME`.
-
-<!-- name-check: off -->
+ChatConnection that names the Secret `slack`, the same ChatConnection as the alert recipe's, so the two recipes share one
+Slack app. Replace three placeholders: `CREPLACECI` (the channel's ID) and `B0REPLACEME` (the CI bot's `bot_id`) in the
+Binding, and the host `REPLACE-ME` in the AgentBackend's `url`.
 
 ```yaml title="kourier/binding.yaml"
 --8<-- "custom-bot-trigger/kourier/binding.yaml"
 ```
 
-<!-- name-check: on -->
+```yaml title="kourier/agentbackend.yaml"
+--8<-- "custom-bot-trigger/kourier/agentbackend.yaml"
+```
 
 A `botMessage` trigger does not load without `limits`, and the limits are what bound a storm of failing pipelines,
 which would otherwise start as many investigations. The recipe's README has the commands to create the Secret, load the
@@ -157,3 +165,78 @@ pins it:
 ```
 
 The cases do not evaluate the cooldown, thread keys across messages, `limits` or `closeWhen`.
+
+## Answer questions from your documentation
+
+The `docs-agent` recipe turns a mention in a help channel into an answer drawn from a body of Markdown documentation.
+The agent searches the pages, reads the best ones, answers in the thread and lists the pages it used; when the pages do
+not cover the question, it is told to say so. Here the documentation is Agent Kourier's own, and the recipe's README
+says what to change for yours. The agent is an Agent Development Kit (ADK) program in a Go module of its own, served
+over A2A and reached through the generic `a2a` dialect, so it needs neither kagent nor Agent Substrate. It runs as a
+plain Deployment on any cluster that can reach a model provider. Its search is by keywords, served as an MCP tool, and
+the tool is written so that a search by embeddings can replace it.
+
+### Before you start
+
+- A Slack app with the bot invited to the help channel: [Configure Slack](configure-slack.md). You need the channel's ID.
+- A model provider's key, for OpenRouter or any OpenAI-compatible HTTPS endpoint, and a model that supports tool calls.
+- Docker, to build the agent's image: the documentation goes into the image at build time.
+
+### Agent Kourier's resources
+
+Three files, in the namespace `agent-kourier`. The Binding is the recipe: a `mention` trigger, nothing else, and
+`feedback.enabled` for the useful and not-useful buttons. Replace `CREPLACEDOCS`.
+
+```yaml title="kourier/binding.yaml"
+--8<-- "docs-agent/kourier/binding.yaml"
+```
+
+```yaml title="kourier/agentbackend.yaml"
+--8<-- "docs-agent/kourier/agentbackend.yaml"
+```
+
+```yaml title="kourier/chatconnection.yaml"
+--8<-- "docs-agent/kourier/chatconnection.yaml"
+```
+
+A mention trigger takes no limits, so anyone who can mention the bot in the channel can spend model quota. Bound the key
+at the provider.
+
+### The agent
+
+The agent runs as one pod. The key comes from a Secret that you create; no credential is in the file.
+
+```yaml title="agent/manifests/deployment.yaml"
+--8<-- "docs-agent/agent/manifests/deployment.yaml"
+```
+
+The recipe's [README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/docs-agent/README.md) has
+the steps in order: build the image, make the Secrets, apply the manifests (which include a NetworkPolicy that lets only
+pods in the namespace `agent-kourier` reach the agent, where the network plugin enforces NetworkPolicy) and load the Agent Kourier resources into the chart.
+
+### Check it
+
+The module has its own tests and a smoke test that needs no credentials: `make docs-agent-test` and
+`make docs-agent-smoke`. The smoke test starts the real agent on loopback with a scripted stand-in for the language model
+and asks it fixed questions over A2A. The model's part is the stand-in's, so the run checks the wiring and the retrieval,
+not the quality of any model's answer. A run against a real model, `make docs-agent-smoke-live`, needs your credentials.
+
+`go test ./test/recipes` loads the three resources with Agent Kourier's loader. The trigger evals judge a `botMessage`
+trigger one message at a time and do not evaluate a mention, so the recipe's file holds one case, that another bot's post
+is not taken:
+
+```yaml title="evals/triggers.yaml"
+--8<-- "docs-agent/evals/triggers.yaml"
+```
+
+The recipe also holds quality scenarios: questions the documentation answers, each with the page that answers it, and
+questions it does not answer, for which the answer must say so. The module's tests check that the page exists and that
+the search finds it, and that the missing topic is on no page. Whether a model then answers well is for a person to read
+against the scenario. One of them:
+
+```yaml title="evals/scenarios/connect-non-kagent-agent.yaml"
+--8<-- "docs-agent/evals/scenarios/connect-non-kagent-agent.yaml"
+```
+
+The search ranks pages by shared words and knows no synonyms. The agent keeps its conversations in memory and runs one
+replica, and it checks no token, so it relies on the NetworkPolicy. The README lists the rest.

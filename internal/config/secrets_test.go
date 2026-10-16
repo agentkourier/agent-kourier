@@ -14,8 +14,8 @@ import (
 )
 
 func TestResolveSecrets(t *testing.T) {
-	const oidc = "Binding sre/sre-alerts: spec.identity.tokenSecretRef: "
-	const creds = "ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: "
+	const oidc = atSREAlerts + "Binding sre/sre-alerts: spec.identity.tokenSecretRef: "
+	const creds = atConn + "ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: "
 	tests := []struct {
 		name   string
 		mutate func(*Set, fakeSecrets)
@@ -38,7 +38,7 @@ func TestResolveSecrets(t *testing.T) {
 		{"header Secret is read in the backend's namespace", func(s *Set, f fakeSecrets) {
 			s.AgentBackends[0].Spec.Headers = []v1alpha1.Header{{Name: "X-Team", ValueSecretRef: &v1alpha1.SecretKeyRef{Name: "team", Key: "value"}}}
 			f["agent-kourier-system/team"] = []string{"token"}
-		}, []string{`AgentBackend agent-kourier-system/kagent-pilot: spec.headers[0].valueSecretRef: Secret agent-kourier-system/team has no key "value"`}},
+		}, []string{atBackend + `AgentBackend agent-kourier-system/kagent-pilot: spec.headers[0].valueSecretRef: Secret agent-kourier-system/team has no key "value"`}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,8 +69,8 @@ func (failingSecrets) Keys(context.Context, string, string) ([]string, error) {
 func TestResolveSecretReadErrors(t *testing.T) {
 	wantProblems(t, specSet(t), failingSecrets{},
 		// Grouped by object, in the order the checks ran within each.
-		"Binding sre/sre-alerts: spec.identity.tokenSecretRef: read Secret sre/agent-kourier-sre-alerts-oidc: connection refused",
-		"ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: read Secret agent-kourier-system/slack-main: connection refused",
+		atSREAlerts+"Binding sre/sre-alerts: spec.identity.tokenSecretRef: read Secret sre/agent-kourier-sre-alerts-oidc: connection refused",
+		atConn+"ChatConnection agent-kourier-system/slack-main: spec.credentialsSecretRef: read Secret agent-kourier-system/slack-main: connection refused",
 	)
 }
 

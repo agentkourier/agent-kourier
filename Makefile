@@ -31,9 +31,10 @@ test-scripts: ## Run kind, security policy and release gate tests (no cluster)
 
 security: security-govulncheck security-gitleaks ## Run source vulnerability and secret scans (the image scan needs IMAGE_REF)
 
-security-govulncheck: ## Run govulncheck against the root and AX modules
+security-govulncheck: ## Run govulncheck against the root, AX and docs-agent modules
 	hack/security/govulncheck.sh .
 	hack/security/govulncheck.sh examples/ax
+	hack/security/govulncheck.sh examples/recipes/docs-agent/agent
 
 security-gitleaks: ## Scan repository history for leaked credentials (GITLEAKS_BIN may select a pinned binary)
 	hack/security/scan-secrets.sh .
@@ -111,6 +112,23 @@ ax-image: ## Build the AX reference agent and runner image
 
 ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentials file
 	bash examples/ax/smoke.sh
+
+.PHONY: docs-agent-test docs-agent-lint docs-agent-image docs-agent-smoke docs-agent-smoke-live
+docs-agent-test: ## Test the docs-agent recipe's separate module with the race detector
+	cd examples/recipes/docs-agent/agent && go test -race -timeout 20m ./...
+	cd examples/recipes/docs-agent/agent && go vet ./...
+
+docs-agent-lint: ## Lint the docs-agent recipe's separate module with the repository's golangci-lint and config
+	cd examples/recipes/docs-agent/agent && "$$(go tool -C ../../../.. -n golangci-lint)" run --config ../../../../.golangci.yml ./...
+
+docs-agent-image: ## Build the docs agent image, agent-kourier-docs-agent:dev, with this repository's docs as its corpus (Docker with BuildKit)
+	docker build --build-context docs=docs -t agent-kourier-docs-agent:dev examples/recipes/docs-agent/agent
+
+docs-agent-smoke: ## Ask the docs agent fixed questions over A2A on loopback, with a scripted model and this repository's docs: no network, no credentials
+	cd examples/recipes/docs-agent/agent && go run ./cmd/smoke
+
+docs-agent-smoke-live: ## Owner-run: the same questions with the real model named in the sandbox credentials file (SANDBOX_ENV overrides its path); incurs model usage
+	bash examples/recipes/docs-agent/agent/smoke-live.sh
 
 .PHONY: e2e-ax-up e2e-ax e2e-ax-down
 e2e-ax-up: ## Bring up AX/Substrate with deterministic ADK scenarios and fake Slack

@@ -1,0 +1,6 @@
+name: an agent that answers 401
+app: agent-kourier-docs
+question: What does Agent Kourier do when my agent answers HTTP 401?
+cause: 'The credentials are rejected: the turn fails without a retry, and agentkourier_credential_rejections_total counts it.'
+evidence:
+  - reference/agent-contract.md

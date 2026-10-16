@@ -71,6 +71,10 @@ extension when the card lists it.
 | Treat a repeated `messageId` as the same turn | A thread's first turn has no context to look in, so after an unknown outcome it is sent again with the same `messageId`, and an agent that does not drop it runs it twice |
 
 An artifact update with `append: true` adds to that artifact's text; any other replaces it. `lastChunk` is not read.
+An update with no text part leaves the artifact's text as it was, so to take text back, replace it with an empty text part.
+An artifact whose text is empty is left out of the message.
+A task snapshot (from `GetTask`, `SubscribeToTask` or a replayed send) whose text for an artifact is a prefix of the text already
+received is taken as older and skipped, so a take-back that is missed when the stream drops is not applied.
 File parts are never shown. Data parts are not shown either, except on `kagent-v1`, which shows kagent's tool call
 and tool result parts as step cards.
 

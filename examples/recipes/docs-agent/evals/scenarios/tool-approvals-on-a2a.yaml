@@ -1,0 +1,6 @@
+name: tool approvals on a generic A2A agent
+app: agent-kourier-docs
+question: Can I use tool approvals with a generic A2A agent?
+cause: 'No. Tool approvals come from kagent''s extension, which only the kagent-v1 dialect speaks, so no Binding setting enables them on the a2a dialect.'
+evidence:
+  - how-to/connect-a2a-agent.md

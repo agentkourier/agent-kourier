@@ -105,6 +105,9 @@ var markdownCases = []struct {
 		"run `kubectl patch deployment search -n shop --type='json' -p='[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/httpGet/path\",\"value\":\"/\"}]'` now",
 		"run `kubectl patch deployment search -n shop --type='json' -p='[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/httpGet/path\",\"value\":\"/\"}]'` now"},
 	{"trial: model = []", "```\nmodel = []\n```", "```\nmodel = []\n```"},
+	{"live test of the docs agent: a yaml fence after a blank line, with prose on the line after the closer",
+		"*Declare the backend* in your configuration:\n\n```yaml\nconfig:\n  agentBackends:\n    my-agent:\n      spec:\n        dialect: a2a\n        allowedNamespaces: [payments]\n```\n*Choose how the Binding identifies itself* via:\n",
+		"*Declare the backend* in your configuration:\n\n```\nconfig:\n  agentBackends:\n    my-agent:\n      spec:\n        dialect: a2a\n        allowedNamespaces: [payments]\n```\n*Choose how the Binding identifies itself* via:\n"},
 	{"trial: kubectl logs in a span", "Check `kubectl logs <pod> -n shop` and add `2>&1`.", "Check `kubectl logs <pod> -n shop` and add `2>&1`."},
 }
 

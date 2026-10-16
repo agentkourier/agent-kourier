@@ -1,0 +1,6 @@
+name: run two replicas
+app: agent-kourier-docs
+question: How do I run two replicas of Agent Kourier?
+cause: 'It needs Postgres: SQLite is one replica, and the chart refuses replicaCount above 1 with it. Set the store to Postgres and replicaCount to 2, on at least two schedulable nodes.'
+evidence:
+  - how-to/high-availability.md
