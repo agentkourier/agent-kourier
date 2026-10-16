@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -28,7 +29,7 @@ func (everyKey) Keys(context.Context, string, string) ([]string, error) {
 }
 
 // alertWorld is a real Intake over a real store and the starter, with a clock the test moves, for the paths where the
-// thread rules and the start meet. The Binding sre/sre-alerts owns C0123456789 with the alertmanager preset.
+// thread rules and the start meet. The Binding sre/sre-alerts owns C0123456789 with the Alertmanager trigger written in full.
 type alertWorld struct {
 	in    *chat.Intake
 	sub   *startSubmitter
@@ -61,7 +62,7 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
 		Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
 		Chat: v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: "C0123456789",
-			Triggers: []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0123456789"}, Preset: v1alpha1.PresetAlertmanager}}}}}
+			Triggers: []v1alpha1.Trigger{chattest.AlertmanagerTrigger("B0123456789")}}}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatal(err)
@@ -93,7 +94,7 @@ func newAlertWorldWith(t *testing.T, tune func(*chat.IntakeConfig, *starter, *sq
 	return w, s
 }
 
-// alert is a message of the preset's shape in the alert channel, at ts, with the alertname in its title and the
+// alert is a message of the Alertmanager trigger's shape in the alert channel, at ts, with the alertname in its title and the
 // group's key in its fallback, which is the same for every alert of the group.
 func alert(ts, state, name string) chat.Inbound {
 	return alertOf(ts, state, name, "KubePodCrashLooping shop")

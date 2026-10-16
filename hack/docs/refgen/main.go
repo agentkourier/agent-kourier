@@ -63,7 +63,7 @@ func generate(rootDir string) (map[string][]byte, error) {
 // The references a maintainer keeps in a comment and a reader of the site has no use for: a parenthetical whose
 // every item, separated by commas or semicolons, is a spec section or decision ("spec 8.2", "spec section 7", "spec D15"), a decision
 // ("D14"), a risk ("R1"), a work package ("WP-21", "WP-20c review"), a phase ("Phase 5") or "see <identifier>"; and a
-// "; see <identifier>" clause. An identifier has a capital letter, as Go names of any length do ("applyPreset",
+// "; see <identifier>" clause. An identifier has a capital letter, as Go names of any length do ("ParsePromptTemplate",
 // "TriggerThread.EffectiveMaxIdle"), so "(see below)" stays.
 var (
 	parenthetical = regexp.MustCompile(`\s*\(([^()]*)\)`)

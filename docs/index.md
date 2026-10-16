@@ -106,7 +106,7 @@ Agent Kourier carries them.</p>
 
 A repeat of the same alert attaches to its thread, and its resolve posts a note there. Agent Kourier reads the alert
 your alerting tool already posts to Slack, so your alerts arrive as before, whether or not Agent Kourier is running.
-Alertmanager has a ready-made preset;
+The docs have a worked trigger for Alertmanager;
 another tool's bot needs a trigger of its own.
 
 <div class="ak-strip">
@@ -122,7 +122,7 @@ another tool's bot needs a trigger of its own.
 </div>
 <div class="ak-strip__group">
 <p class="ak-strip__label">Alerts</p>
-<span class="ak-strip__name">Alertmanager preset</span>
+<span class="ak-strip__name">Alertmanager</span>
 <span class="ak-strip__name">any bot's message</span>
 </div>
 </div>

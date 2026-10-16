@@ -50,16 +50,41 @@ func evaluate(tr Trigger, m message) (map[string]string, bool) {
 	return got, true
 }
 
-// alertmanagerTrigger returns the alertmanager preset applied to a bare trigger.
+// alertmanagerTrigger returns a botMessage trigger for Alertmanager's Slack receiver, written in full: the one
+// the Alertmanager how-to documents. It is built fresh on each call, so a test may change its maps.
 func alertmanagerTrigger() Trigger {
-	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager}
-	tr.applyPreset()
-	return tr
+	const (
+		tag   = `(?:\[[^\]]{1,32}\] )?` // an optional title prefix, at most 32 bytes
+		alert = `(?:FIRING \(\d+\)|RESOLVED)`
+	)
+	return Trigger{
+		Type: TriggerBotMessage,
+		From: &BotSource{BotID: "B0123456789"},
+		Match: map[MessageField]string{
+			FieldTitle:    `^` + tag + alert + ` - `,
+			FieldFallback: `^\[(?:FIRING(?::\d+)?|RESOLVED)\] `,
+		},
+		Extract: map[string]Extract{
+			"state":     {Field: FieldTitle, Regex: `^` + tag + `(?P<state>FIRING|RESOLVED)`},
+			"key":       {Field: FieldFallback, Regex: `^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])`},
+			"alertname": {Field: FieldTitle, Regex: `^` + tag + alert + ` - (?P<alertname>.+)$`},
+		},
+		Thread: TriggerThread{
+			By:        ThreadByKey,
+			Cooldown:  metav1.Duration{Duration: 4 * time.Hour},
+			CloseWhen: map[string]string{"state": "RESOLVED"},
+		},
+		Limits: TriggerLimits{
+			RateLimit:     &RateLimit{MaxRuns: 5, Per: metav1.Duration{Duration: 10 * time.Minute}, MaxConcurrent: 2},
+			MaxRunsPerDay: i32(40),
+		},
+		PromptTemplate: "An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.\nInvestigate it.\n",
+	}
 }
 
 const slackCriticalLink = "https://alertmanager.example.com/#/alerts?receiver=slack-critical"
 
-func TestAlertmanagerPreset(t *testing.T) {
+func TestAlertmanagerTrigger(t *testing.T) {
 	tests := []struct {
 		name  string
 		msg   message
@@ -191,7 +216,7 @@ func TestAlertmanagerPreset(t *testing.T) {
 			// The match entries alone must already turn away what is not an alert, so the
 			// extracts are a second layer, not the only one.
 			if !tc.match && passesFilters(tr, tc.msg) {
-				t.Error("the preset's match and exclude entries accept this message")
+				t.Error("the trigger's match and exclude entries accept this message")
 			}
 			got, ok := evaluate(tr, tc.msg)
 			if ok != tc.match {
@@ -234,110 +259,12 @@ func TestAnchoredReceiverSeparatesKindFromProduction(t *testing.T) {
 	}
 }
 
-func TestAlertmanagerPresetIsValid(t *testing.T) {
+func TestAlertmanagerTriggerIsValid(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
-	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager}}
+	b.Spec.Chat.Triggers = []Trigger{alertmanagerTrigger()}
 	b.Default()
 	if err := b.Validate(); err != nil {
-		t.Fatalf("a bare alertmanager trigger is invalid: %v", err)
-	}
-	tr := b.Spec.Chat.Triggers[0]
-	if tr.Thread.By != ThreadByKey || tr.Thread.Cooldown.Duration != 4*time.Hour || tr.Thread.CloseWhen["state"] != "RESOLVED" {
-		t.Errorf("preset thread = %+v, want by key, 4h, closeWhen state RESOLVED", tr.Thread)
-	}
-}
-
-func TestPresetOverridesFieldByField(t *testing.T) {
-	preset := alertmanagerTrigger()
-	tr := Trigger{
-		Type:    TriggerBotMessage,
-		From:    &BotSource{BotID: "B0123456789"},
-		Preset:  PresetAlertmanager,
-		Match:   map[MessageField]string{FieldTitleLink: "receiver=slack-critical-kind", FieldTitle: "^custom$"},
-		Exclude: map[MessageField]string{FieldTitle: "^Prometheus heartbeat$"},
-		Extract: map[string]Extract{"key": {Field: FieldFooter, Regex: `agent-kourier-key: (?P<key>\S+)`}},
-		Thread: TriggerThread{
-			Cooldown:  metav1.Duration{Duration: time.Hour},
-			CloseWhen: map[string]string{"state": "ENDED"},
-		},
-		PromptTemplate: "Look at {{ .Key }}.",
-	}
-	tr.applyPreset()
-
-	// What the Binding set wins.
-	if tr.Match[FieldTitleLink] != "receiver=slack-critical-kind" || tr.Match[FieldTitle] != "^custom$" {
-		t.Errorf("match = %v, want the Binding's titleLink and title", tr.Match)
-	}
-	if tr.Exclude[FieldTitle] != "^Prometheus heartbeat$" {
-		t.Errorf("exclude = %v", tr.Exclude)
-	}
-	if got := tr.Extract["key"]; got.Field != FieldFooter || got.Regex != `agent-kourier-key: (?P<key>\S+)` {
-		t.Errorf("extract key = %+v, want the Binding's", got)
-	}
-	if tr.Thread.Cooldown.Duration != time.Hour || tr.Thread.CloseWhen["state"] != "ENDED" {
-		t.Errorf("thread = %+v, want the Binding's cooldown and closeWhen", tr.Thread)
-	}
-	if tr.PromptTemplate != "Look at {{ .Key }}." {
-		t.Errorf("promptTemplate = %q, want the Binding's", tr.PromptTemplate)
-	}
-
-	// What it left out comes from the preset.
-	if tr.Match[FieldFallback] != preset.Match[FieldFallback] {
-		t.Errorf("match fallback = %q, want the preset's", tr.Match[FieldFallback])
-	}
-	if tr.Extract["state"] != preset.Extract["state"] || tr.Extract["alertname"] != preset.Extract["alertname"] {
-		t.Errorf("extract = %v, want the preset's state and alertname", tr.Extract)
-	}
-	if tr.Thread.By != ThreadByKey {
-		t.Errorf("thread.by = %q, want the preset's key", tr.Thread.By)
-	}
-}
-
-// TestPresetCloseWhenIsReplacedWhole pins that a Binding's closeWhen replaces the preset's,
-// entry and all: it does not merge by key like match and extract do.
-func TestPresetCloseWhenIsReplacedWhole(t *testing.T) {
-	tr := Trigger{
-		Type:   TriggerBotMessage,
-		From:   &BotSource{BotID: "B0123456789"},
-		Preset: PresetAlertmanager,
-		Extract: map[string]Extract{
-			"severity": {Field: FieldText, Regex: `(?P<severity>critical|info)`},
-		},
-		Thread: TriggerThread{CloseWhen: map[string]string{"severity": "info"}},
-	}
-	tr.applyPreset()
-	if want := map[string]string{"severity": "info"}; !maps.Equal(tr.Thread.CloseWhen, want) {
-		t.Errorf("closeWhen = %v, want %v: the preset's state entry must not be merged in", tr.Thread.CloseWhen, want)
-	}
-}
-
-func TestPresetApplicationIsIdempotentAndFresh(t *testing.T) {
-	once := alertmanagerTrigger()
-	twice := alertmanagerTrigger()
-	twice.applyPreset()
-	if !reflect.DeepEqual(once, twice) {
-		t.Errorf("applying the preset twice changed the trigger:\n%+v\n%+v", once, twice)
-	}
-
-	// Mutating one trigger must not leak into the next one's preset.
-	once.Match[FieldTitle] = "changed"
-	once.Thread.CloseWhen["state"] = "changed"
-	if next := alertmanagerTrigger(); next.Match[FieldTitle] == "changed" || next.Thread.CloseWhen["state"] == "changed" {
-		t.Errorf("the preset shares maps between triggers: %+v", next)
-	}
-}
-
-func TestPresetOnlyAppliesToBotMessage(t *testing.T) {
-	for _, tr := range []Trigger{
-		{Type: TriggerMention, Preset: PresetAlertmanager},
-		{Type: TriggerBotMessage, Preset: "grafana"},
-		{Type: TriggerBotMessage},
-	} {
-		before := tr
-		tr.applyPreset()
-		if !reflect.DeepEqual(before, tr) {
-			t.Errorf("applyPreset changed %+v to %+v", before, tr)
-		}
+		t.Fatalf("the alertmanager trigger is invalid: %v", err)
 	}
 }
 
@@ -393,8 +320,6 @@ func TestTriggersValidate(t *testing.T) {
 		{"no triggers at all", func(o *Binding) { o.Spec.Chat.Triggers = nil }, ""},
 		{"unknown kind", func(o *Binding) { bot(o).Type = "message" },
 			at + `.type: unsupported value "message", must be one of mention, botMessage`},
-		{"mention with a preset", func(o *Binding) { o.Spec.Chat.Triggers[0].Preset = PresetAlertmanager },
-			"spec.chat.triggers[0].preset: not allowed with type: mention"},
 		{"mention with a source", func(o *Binding) { o.Spec.Chat.Triggers[0].From = &BotSource{BotID: "B0123456789"} },
 			"spec.chat.triggers[0].from: not allowed with type: mention"},
 		{"mention with a prompt", func(o *Binding) { o.Spec.Chat.Triggers[0].PromptTemplate = "x" },
@@ -409,9 +334,6 @@ func TestTriggersValidate(t *testing.T) {
 			at + `.from.botId: invalid bot ID "alertmanager": must be a Slack bot ID such as B0123456789, not a name`},
 		{"user ID instead of bot ID", func(o *Binding) { bot(o).From.BotID = "U0123456789" },
 			at + `.from.botId: invalid bot ID "U0123456789": must be a Slack bot ID such as B0123456789, not a name`},
-		{"unknown preset", func(o *Binding) { bot(o).Preset = "grafana" },
-			at + `.preset: unsupported value "grafana", must be one of alertmanager`},
-		{"no preset and everything set by hand is fine", func(o *Binding) { bot(o).Preset = "" }, ""},
 
 		// Regexes: they compile, within the cap, on known fields.
 		{"match regex that does not compile", func(o *Binding) { bot(o).Match[FieldTitle] = "(" },
@@ -606,7 +528,7 @@ func TestEffectiveMaxIdle(t *testing.T) {
 		th   TriggerThread
 		want time.Duration
 	}{
-		{"the preset's cooldown", TriggerThread{Cooldown: hr(4 * time.Hour)}, 24 * time.Hour},
+		{"a cooldown of 4h", TriggerThread{Cooldown: hr(4 * time.Hour)}, 24 * time.Hour},
 		{"a cooldown of exactly half the default", TriggerThread{Cooldown: hr(12 * time.Hour)}, 24 * time.Hour},
 		{"a cooldown over half the default", TriggerThread{Cooldown: hr(168 * time.Hour)}, 336 * time.Hour},
 		{"set", TriggerThread{Cooldown: hr(4 * time.Hour), MaxIdle: hr(10 * time.Hour)}, 10 * time.Hour},

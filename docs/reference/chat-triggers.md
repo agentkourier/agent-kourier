@@ -1,7 +1,7 @@
 # Chat triggers
 
-This page lists what a message in a bound channel does, the fields of a `botMessage` trigger, the `alertmanager`
-preset, and the decisions, notes and limits of a trigger's threads. The fields' types are in the
+This page lists what a message in a bound channel does, the fields of a `botMessage` trigger, and the decisions, notes
+and limits of a trigger's threads. The fields' types are in the
 [Binding reference](binding.md#trigger).
 
 ## What a message does
@@ -31,8 +31,9 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 
 ## `botMessage` fields
 
-A `botMessage` trigger works for any bot, named by its bot ID. The `alertmanager` preset is the only preset that ships:
-for another bot, write `match`, `extract`, `thread`, `limits` and `promptTemplate` yourself.
+A `botMessage` trigger works for any bot, named by its bot ID, and is written in full: `match`, `extract`, `thread`,
+`limits` and `promptTemplate` are all in the Binding. A worked trigger for Alertmanager's Slack receiver, with a comment
+on each regex, is in [Investigate Alertmanager alerts](../how-to/investigate-alertmanager-alerts.md).
 
 | Field | Meaning |
 |---|---|
@@ -45,11 +46,11 @@ for another bot, write `match`, `extract`, `thread`, `limits` and `promptTemplat
 | `thread.closeWhen` | Extracted field to value, for example `{state: RESOLVED}`. A matching message posts a note and starts no turn. |
 | `thread.maxIdle` | At least twice the cooldown, at most 720h; unset, the larger of 24h and twice the cooldown. An open thread with no message of its key for this long is abandoned, and the next fire starts a new investigation. It must be longer than the sender's repeat interval. |
 | `promptTemplate` | A Go template over the trigger's view of the message (below). Parsed and run once at load against a placeholder view, so a mistyped field rejects the Binding. |
-| `limits.rateLimit` | `maxRuns` starts in any `per` (10s to 24h), and `maxConcurrent` investigations at once. |
-| `limits.maxRunsPerDay` | Starts in any 24 hours. An explicit `0` is no cap. |
-| `preset` | `alertmanager` fills in `match`, `extract`, `thread`, `limits` and `promptTemplate` (below). |
+| `limits.rateLimit` | Required. `maxRuns` starts in any `per` (10s to 24h), and `maxConcurrent` investigations at once; all three are set. |
+| `limits.maxRunsPerDay` | Required. Starts in any 24 hours. An explicit `0` is no cap. |
 
-A trigger with neither a preset nor `limits` is unlimited.
+A `botMessage` trigger without `limits.rateLimit` or without `limits.maxRunsPerDay` does not load: the Binding is
+rejected with a message that names the missing field. Leaving `maxRunsPerDay` out is not the same as `0`.
 
 **Message fields** a regex can read: `text`, `title`, `titleLink`, `fallback`, `footer` and `attachmentText`. The Slack
 adapter flattens the message's first legacy attachment into the last five; `text` is the message's own text. All are
@@ -57,26 +58,6 @@ raw, as delivered. Later attachments are not read.
 
 **Regexes** are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups and the template. A
 Binding that fails any of them is rejected.
-
-## The `alertmanager` preset
-
-For Alertmanager's Slack receiver. A Binding's own entries override the preset's: a `match`, `exclude` or `extract`
-entry replaces the preset's entry of that name; `thread.by`, `thread.cooldown`, `thread.closeWhen` and
-`promptTemplate` replace the preset's; each `limits` field the Binding sets replaces the preset's, and the others stay.
-An empty `thread` or `limits` field means unset. An empty `match`, `exclude` or `extract` entry replaces the
-preset's and is rejected as required. So a Binding cannot switch a preset entry off; to drop a `match` entry, override
-it with `'.*'`.
-
-| Part | Preset value |
-|---|---|
-| `match.title` | `FIRING (<n>) - ` or `RESOLVED - ` at the start, optionally behind a bracketed tag of up to 32 characters such as `[kind] ` |
-| `match.fallback` | `[FIRING]`, `[FIRING:<n>]` or `[RESOLVED]` at the start: Alertmanager's default fallback |
-| `extract.state` | `FIRING` or `RESOLVED`, from the title |
-| `extract.alertname` | The rest of the title after ` - ` |
-| `extract.key` | The group label values from the fallback, without the count |
-| `thread` | `by: key`, `cooldown: 4h`, `closeWhen: {state: RESOLVED}` |
-| `limits` | 5 starts in any 10 minutes, 2 at once, 40 a day |
-| `promptTemplate` | Asks the agent to investigate the alert with its read-only tools and report the likely cause, the evidence it checked, and the next steps a person should take |
 
 ## What a matched message does to its thread
 
@@ -106,7 +87,7 @@ concurrency.
 
 Once for each window and trigger, one line at the top level of the channel counts the starts a limit stopped, for
 example "7 alert messages not investigated in the last 10m (rate limit)." A window opens with the first stopped start
-and lasts the trigger's `rateLimit.per` (an hour for a trigger with only a daily cap). The line holds a count, a length
+and lasts the trigger's `rateLimit.per`. The line holds a count, a length
 and a limit, never any text of an alert.
 
 ## The first turn's prompt
@@ -120,13 +101,13 @@ The template sees:
 | `.Key` | The extracted `key`. |
 | `.Fields` | Every extracted value, by name. |
 | `.Link` | The Slack permalink of the triggering message, built by Agent Kourier, never a field of the message. |
-| `.Source` | The preset's source name. |
+| `.Source` | `botMessage`. |
 
 `.Fields`, `.State` and `.Key` come out of the sender's message, so each value the template reads is checked before it
 reaches the instruction part: the alert-name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) for fields,
 state, channel and source; the same plus `/` for the key; and a plain `http` or `https` URL of at most 256 bytes for
-the link. A value that fails refuses the turn (`not_started`). The preset's key holds spaces, so a template should
-read `.Fields` entries, not `.Key`.
+the link. A value that fails refuses the turn (`not_started`). A key that holds spaces, such as the
+Alertmanager example's, fails this check, so a template should read `.Fields` entries, not `.Key`.
 
 After the rendered template, the whole message follows, normalized and with its secrets redacted, inside a block
 labelled as untrusted data.

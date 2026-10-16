@@ -49,7 +49,7 @@ type dryRunRow struct {
 	Outcome string `json:"outcome"`
 	// Trigger is the index in the Binding's triggers of the one that matched; set only for a match.
 	Trigger *int `json:"trigger,omitempty"`
-	// Fields are what the matching trigger extracted: the state, the alertname and the key, for the preset's.
+	// Fields are what the matching trigger extracted: the state, the alertname and the key, for the Alertmanager trigger.
 	Fields map[string]string `json:"fields,omitempty"`
 	// Title is the message's title, whole: the attachment's title, else its fallback, else the text.
 	Title string `json:"title,omitempty"`

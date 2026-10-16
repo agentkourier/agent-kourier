@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	slackgo "github.com/slack-go/slack"
@@ -389,7 +390,11 @@ func loose() v1alpha1.Trigger {
 	return v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: webhookBot}, PromptTemplate: "An alert.",
 		Match:   map[v1alpha1.MessageField]string{v1alpha1.FieldFallback: `^\[(?:FIRING|RESOLVED)`},
 		Exclude: map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`},
-		Extract: map[string]v1alpha1.Extract{"state": {Field: v1alpha1.FieldFallback, Regex: `^\[(?P<state>FIRING|RESOLVED)`}}}
+		Extract: map[string]v1alpha1.Extract{"state": {Field: v1alpha1.FieldFallback, Regex: `^\[(?P<state>FIRING|RESOLVED)`}},
+		Limits: v1alpha1.TriggerLimits{
+			RateLimit:     &v1alpha1.RateLimit{MaxRuns: 1000, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1000},
+			MaxRunsPerDay: new(int32(0)),
+		}}
 }
 
 // An allowlisted bot's alert goes through the adapter and the trigger table: the trigger matches, with what it

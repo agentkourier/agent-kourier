@@ -35,11 +35,37 @@ data:
           name: slack-main
         output: live
         triggers:
-        - from:
+        - extract:
+            alertname:
+              field: title
+              regex: ^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$
+            key:
+              field: fallback
+              regex: ^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])
+            state:
+              field: title
+              regex: ^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)
+          from:
             botId: B0123456789
+          limits:
+            maxRunsPerDay: 40
+            rateLimit:
+              maxConcurrent: 2
+              maxRuns: 5
+              per: 10m
           match:
+            fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
+            title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
             titleLink: receiver=slack-critical$
-          preset: alertmanager
+          promptTemplate: |
+            An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+            Investigate it with your read-only tools. Report the likely cause, the evidence you
+            checked, and the next steps a person should take.
+          thread:
+            by: key
+            closeWhen:
+              state: RESOLVED
+            cooldown: 4h
           type: botMessage
       identity:
         tokenSecretRef:
@@ -190,7 +216,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 8ddf403b74d1318a863609dd2f7228837ad0d4e237e8ed50080b78114d3e1ae0
+        checksum/config: 7ab6f61c0c4db83623652ebcce0fbf007d427a6bcb34ba0e445152413deeac31
         example.test/scrape: "false"
       labels:
         app.kubernetes.io/instance: agent-kourier

@@ -4,9 +4,9 @@
 #
 # There is no Prometheus in the tier, so the alert is posted straight to Alertmanager's v2 API, from a probe pod in the cluster,
 # with the labels and annotations a kube-prometheus rule would give it for one of the faults seeded in namespace shop
-# (alertmanager/alerts.json, the presets). With the sandbox up, Alertmanager sends it to your REAL alert channel,
+# (alertmanager/alerts.json, the sample alerts). With the sandbox up, Alertmanager sends it to your REAL alert channel,
 # tagged [kind], through the receiver slack-critical-kind (alertmanager/config.yaml); hack/kind/sandbox/README.md, Alert trial.
-# ALERT must be a preset: nothing else is ever posted. Every alert it posts carries the label agentkourier_trial="true", which the receiver's
+# ALERT must be a sample alert: nothing else is ever posted. Every alert it posts carries the label agentkourier_trial="true", which the receiver's
 # route requires (alertmanager/config.yaml), so nothing else in the cluster can reach the production channel through it.
 #
 # A firing alert carries an end an hour away, so that one that is forgotten resolves itself; resolved posts the same alert,
@@ -21,7 +21,7 @@ SBX=${HERE}/sandbox
 . "${HERE}/lib.sh"
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
-PRESETS=${SBX}/alertmanager/alerts.json
+SAMPLES=${SBX}/alertmanager/alerts.json
 CONFIG_SECRET=alertmanager-kind-config # the Alertmanager's configSecret when sandbox-up has made it the alert source
 ALERTMANAGER_API=http://alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts
 FIRING_FOR=3600 # seconds a fired alert stays firing without a resolve
@@ -29,8 +29,8 @@ FIRING_FOR=3600 # seconds a fired alert stays firing without a resolve
 command -v jq >/dev/null || die "jq is required"
 alert=${1:-}
 state=${2:-firing}
-[ -n "${alert}" ] || die "usage: make sandbox-alert ALERT=<name> [STATE=firing|resolved]; ALERT is one of: $(jq -r 'keys | join(" ")' "${PRESETS}")"
-jq -e --arg a "${alert}" 'has($a)' "${PRESETS}" >/dev/null || die "'${alert}' is not a preset; ALERT is one of: $(jq -r 'keys | join(" ")' "${PRESETS}")"
+[ -n "${alert}" ] || die "usage: make sandbox-alert ALERT=<name> [STATE=firing|resolved]; ALERT is one of: $(jq -r 'keys | join(" ")' "${SAMPLES}")"
+jq -e --arg a "${alert}" 'has($a)' "${SAMPLES}" >/dev/null || die "'${alert}' is not a sample alert; ALERT is one of: $(jq -r 'keys | join(" ")' "${SAMPLES}")"
 case "${state}" in firing | resolved) ;; *) die "STATE must be firing or resolved" ;; esac
 
 for tool in kubectl kind; do
@@ -40,9 +40,9 @@ assert_context full
 [ "$("${K[@]}" -n monitoring get alertmanager agent-kourier -o 'jsonpath={.spec.configSecret}' 2>/dev/null || true)" = "${CONFIG_SECRET}" ] ||
   die "the alert source is not configured: the full tier's Alertmanager is not the sandbox's (its configSecret is not ${CONFIG_SECRET}). Put the webhook URL in ~/.config/agent-kourier/alertmanager-webhook-url and run: make sandbox-up (README, Alert trial)"
 
-# The pod the alert is about, for the presets that name one: the live pod of the fault's app, which the agent can then look at.
+# The pod the alert is about, for the sample alerts that name one: the live pod of the fault's app, which the agent can then look at.
 pod=
-app=$(jq -r --arg a "${alert}" '.[$a].app // empty' "${PRESETS}")
+app=$(jq -r --arg a "${alert}" '.[$a].app // empty' "${SAMPLES}")
 if [ -n "${app}" ]; then
   # The live pod: not one that is terminating. (kubectl's JSONPath has no null to filter on, so jq does it.)
   pods=$("${K[@]}" -n shop get pods -l "app=${app}" -o json) || die "could not list the ${app} pods in namespace shop"
@@ -56,7 +56,7 @@ body=$(jq -c --arg a "${alert}" --arg pod "${pod}" --arg state "${state}" --argj
   | (now | floor) as $now
   | [{labels: ($p.labels + {agentkourier_trial: "true"}), annotations: $p.annotations,
       startsAt: (if $state == "resolved" then $now - 120 else $now end | todate),
-      endsAt: (if $state == "resolved" then $now - 1 else $now + $ttl end | todate)}]' "${PRESETS}")
+      endsAt: (if $state == "resolved" then $now - 1 else $now + $ttl end | todate)}]' "${SAMPLES}")
 
 # From a pod in the cluster, where Alertmanager is. The body goes on the pod's stdin; the answer is the HTTP status. The post is
 # idempotent (the same labels are the same alert), so a try that came to nothing is made again.

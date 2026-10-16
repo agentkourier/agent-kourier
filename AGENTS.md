@@ -21,7 +21,7 @@ internal/agent          A2A client: streaming, reconnect, typed outcomes, client
 internal/dialect        agent-dialect adapters (kagent, generic a2a)
 internal/identity       Binding token source and credentials for the agent pool
 internal/secret         redacting Secret value type
-internal/chat           chat-neutral model, chat.Platform, triggers and their limits (chattest: conformance suite, fake platform)
+internal/chat           chat-neutral model, chat.Platform, triggers and their limits (chattest: conformance suite, fake platform, the Alertmanager trigger the tests share)
 internal/chat/slack     Slack adapter (Block Kit, Socket Mode); the only code, with the broker, that may import Slack or slack-go
 internal/store          SQLite and Postgres persistence, leader fencing
 internal/outbox         durable outbound posting (the versioned neutral message)

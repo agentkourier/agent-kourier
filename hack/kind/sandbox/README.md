@@ -346,7 +346,7 @@ kubectl --context $CTX -n monitoring exec alertmanager-agent-kourier-0 -c alertm
 kubectl --context $CTX -n monitoring logs alertmanager-agent-kourier-0 -c alertmanager | grep -i -e notify -e slack   # a failed post says why; Alertmanager takes the URL out of its errors
 ```
 
-A routed alert lists the receivers `monitoring/sink/sink` and `slack-critical-kind`. If nothing reaches Slack: the alert is not `severity=critical` (only the presets are fired, and they all are), the
+A routed alert lists the receivers `monitoring/sink/sink` and `slack-critical-kind`. If nothing reaches Slack: the alert is not `severity=critical` (only the sample alerts are fired, and they all are), the
 webhook was revoked (Slack answers an error, the log says so; put a new URL in the file and re-run `make sandbox-up`, which rewrites the Secret, and the next post uses it), or the pod has
 not come back after a `make sandbox-up` (`kubectl --context $CTX -n monitoring get pods`).
 
@@ -356,7 +356,7 @@ not come back after a `make sandbox-up` (`kubectl --context $CTX -n monitoring g
 outcome the intake would give it, the trigger, and what the trigger extracted. Use it to tune `match`, `exclude` and `extract` against real history
 before going live. It **only reads** Slack (`conversations.history`): it posts nothing, starts no session, writes nothing, and needs no cluster.
 
-**What it runs.** It loads the config directory with the same loader as the broker, so the defaults, the `alertmanager` preset and the validation apply as
+**What it runs.** It loads the config directory with the same loader as the broker, so the defaults and the validation apply as
 in production. It reads the channel with the bot token, decodes each message with the code that decodes a live event (the first attachment is flattened into
 `title`, `titleLink`, `fallback`, `footer` and `attachmentText`), and runs the intake's own matcher over it. The two Bindings below are in
 `hack/kind/sandbox/dryrun/`; they set the channel to your alert channel and the bot to the webhook's (`B0123456789`), and differ in one line.
@@ -365,7 +365,7 @@ in production. It reads the channel with the bot token, decodes each message wit
 among other lines, so the sandbox's own secrets file works as it is. It is refused unless it is a regular file, not a link, that the group and others cannot read (`chmod 600`).
 The bot needs `channels:history` (`groups:history` for a private channel) and must be a member of the channel; the manifest has both scopes.
 
-**Run it, twice**, from the repo root, against the real channel. First with the trial overrides, which match only the kind receiver:
+**Run it, twice**, from the repo root, against the real channel. First with the trial Binding, which matches only the kind receiver:
 
 ```
 go run ./cmd/agent-kourier dry-run --config hack/kind/sandbox/dryrun --binding agent-kourier/trial \
@@ -380,7 +380,7 @@ go run ./cmd/agent-kourier dry-run --config hack/kind/sandbox/dryrun --binding a
 ```
 
 The two Bindings differ only in `match: {titleLink: ...}`: `receiver=slack-critical-kind$` in `trial.yaml` and `receiver=slack-critical$` in `production.yaml`. Copy one and edit its
-`match`, `exclude` and `extract` to try a change; the preset's entries stay unless the file sets the same field. Options: `--channel C...` reads another channel, `--since 72h` only the newer
+`match`, `exclude` and `extract` to try a change. Options: `--channel C...` reads another channel, `--since 72h` only the newer
 messages, `--limit 50` only the newest 50 of what was read (reading is not cut short, so use `--since` to read less), and `--json` prints one JSON report for `jq`.
 
 **A line per message, oldest first:**
@@ -429,10 +429,10 @@ A second Binding, `agent-kourier/alert-trial` (`agent-kourier/alert-trial/alert-
 
 | | |
 |---|---|
-| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the `alertmanager` preset, and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
+| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the Alertmanager trigger written in full (title, fallback, extracts, thread rules, prompt), and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
 | What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
 | Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
-| Limits | The `alertmanager` preset's: 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
+| Limits | 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
 | The channel | The constant `ALERT_CHANNEL_ID` in `webhook.sh`, checked by `make sandbox-up` before it touches anything (a channel ID, and not `SLACK_CHANNEL_ID`: two Bindings cannot share a channel). A test keeps it equal to the dry run's channel. |
 
 Agent Kourier receives every message of the channel over Socket Mode, because it is a member, and acts on none but the matching ones. A person's reply in a thread Agent Kourier started continues that thread's
@@ -485,7 +485,7 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
 4. **Resolve.** `make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved`. The resolve is posted within about 30 seconds (`[kind] RESOLVED - KubePodCrashLooping`), and the thread gets a **"Resolved at" note**: no turn. Resolve
    before checkout's pod is replaced, as the "Alert trial" section says. An alert you forget ends by itself an hour after it fired, which posts the same resolve.
 
-5. **Fire the other presets**, one at a time: `KubePodNotReady`, `KubeContainerWaiting`, `KubeContainerOOMKilled`, `TargetDown`. Each has its own alert name, so its own key and **a separate thread** and investigation, which finds
+5. **Fire the other sample alerts**, one at a time: `KubePodNotReady`, `KubeContainerWaiting`, `KubeContainerOOMKilled`, `TargetDown`. Each has its own alert name, so its own key and **a separate thread** and investigation, which finds
    its own fault (`search`'s probe, `catalog`'s image, `recommender`'s OOM kill, `inventory`'s Service with no endpoints). Resolve each when you are done.
 
 **Where to look**

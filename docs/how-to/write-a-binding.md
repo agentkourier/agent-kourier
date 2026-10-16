@@ -87,7 +87,7 @@ already holds the channel.
 - **Let the agent ask questions in the thread:** set `interactions.askUser: true`. See
   [Let the agent ask questions](agent-questions.md).
 - **Investigate the alerts a bot posts to the channel:** add a `botMessage` trigger. See
-  [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md) for the preset, or
+  [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md) for a worked trigger, or
   [Start investigations from any bot's messages](any-bot-trigger.md) for another tool's bot.
 - **Keep threads around for less than 90 days:** set `session.threadTTL`, for example `720h`.
 - **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them.

@@ -20,7 +20,7 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 ## Alerts
 
 - [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md): an investigation in each alert's thread,
-  with the `alertmanager` preset.
+  with a trigger written in full.
 - [Start investigations from any bot's messages](any-bot-trigger.md): a trigger written in full for another tool's
   bot.
 - [Tune triggers with a dry run](tune-triggers.md): replay a channel's history before going live.

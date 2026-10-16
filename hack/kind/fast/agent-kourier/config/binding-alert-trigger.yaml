@@ -1,9 +1,9 @@
 # S14: an Alertmanager alert posted to the channel through an incoming webhook starts one investigation in its own
-# thread (the first turn is the preset's prompt and the hashed untrusted block), a repeat is a note, and the resolve is
+# thread (the first turn is the trigger's prompt and the hashed untrusted block), a repeat is a note, and the resolve is
 # a note. The bot is named by its ID (D36); the kind receiver is the trial's, narrowed with the anchored $ so that the
 # production receiver of the same prefix stays out. A channel of its own on the fake Slack, so scenarios never share a
 # thread; the identity token is the same Secret as fast-chat's. The channel, the bot and the agent are pinned by
-# test/kindmanifests and test/e2e/scenarios.go.
+# test/kindmanifests and test/e2e/scenarios.go. The trigger is written in full, with limits of 5 starts in 10 minutes, 2 at once and 40 a day.
 # The full tier loads this Binding too, but its kagent has no scenario-alert agent, so S14 runs in the fast tier only.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -23,5 +23,22 @@ spec:
     triggers:
       - type: botMessage
         from: {botId: B0S14ALERT1}
-        preset: alertmanager
-        match: {titleLink: 'receiver=slack-critical-kind$'}
+        match:
+          titleLink: 'receiver=slack-critical-kind$'
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
+        extract:
+          state: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)'}
+          key: {field: fallback, regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])'}
+          alertname: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          maxRunsPerDay: 40
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.

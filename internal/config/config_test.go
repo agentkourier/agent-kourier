@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -106,20 +107,41 @@ func withTriggers(triggers string) string {
 		"  chat:\n    connectionRef: { name: slack-main }\n    channel: C0123456789\n    triggers:\n"+triggers, 1)
 }
 
-// TestLoadAlertmanagerPresetWithTrialOverrides loads the owner's trial Binding: the
-// alertmanager preset for the channel's webhook bot, narrowed to the kind receiver, with the
-// heartbeat excluded. The preset supplies the rest, and a Binding without triggers loads as
-// before, with the mention trigger. Receiver regexes end in $ because
-// receiver=slack-critical is a prefix of receiver=slack-critical-kind, so unanchored it would
-// match both; the preset itself names no receiver.
-func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
-	trial := withTriggers(`      - type: mention
-      - type: botMessage
+// alertmanagerTriggerYAML is the botMessage trigger for Alertmanager's Slack receiver, written in full, as a list item
+// at six spaces. %s stands for the extra match entries (a line each, at ten spaces) and %s for the limits block; the
+// limits are what a botMessage trigger must set.
+const alertmanagerTriggerYAML = `      - type: botMessage
         from: { botId: B0123456789 }
-        preset: alertmanager
-        match: { titleLink: 'receiver=slack-critical-kind$' }
+        match:
+%s          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
         exclude: { title: '^Prometheus heartbeat$' }
-`)
+        extract:
+          state: { field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)' }
+          key: { field: fallback, regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])' }
+          alertname: { field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$' }
+        thread: { by: key, cooldown: 4h, closeWhen: { state: RESOLVED } }
+%s        promptTemplate: "An alert is {{ .State }} in {{ .Channel }}: {{ .Fields.alertname }}."
+`
+
+// alertmanagerLimitsYAML is the limits block of the documented example.
+const alertmanagerLimitsYAML = `        limits:
+          rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }
+          maxRunsPerDay: 40
+`
+
+// alertmanagerTrigger fills alertmanagerTriggerYAML in: extraMatch is a line of the match block (or empty) and limits
+// the limits block.
+func alertmanagerTrigger(extraMatch, limits string) string {
+	return fmt.Sprintf(alertmanagerTriggerYAML, extraMatch, limits)
+}
+
+// TestLoadAlertmanagerTriggerWithTrialNarrowing loads the owner's trial Binding: the Alertmanager trigger, written in
+// full, for the channel's webhook bot, narrowed to the kind receiver. A Binding without triggers loads as before, with
+// the mention trigger. Receiver regexes end in $ because receiver=slack-critical is a prefix of
+// receiver=slack-critical-kind, so unanchored it would match both.
+func TestLoadAlertmanagerTriggerWithTrialNarrowing(t *testing.T) {
+	trial := withTriggers("      - type: mention\n" + alertmanagerTrigger("          titleLink: 'receiver=slack-critical-kind$'\n", alertmanagerLimitsYAML))
 	set, err := Load(context.Background(), write(t, map[string]string{
 		"plain.yaml": strings.Replace(bindingDoc, "sre-alerts", "plain", 1), "trial.yaml": trial}))
 	if err != nil {
@@ -145,53 +167,59 @@ func TestLoadAlertmanagerPresetWithTrialOverrides(t *testing.T) {
 	if got := tr.Match[v1alpha1.FieldTitleLink]; got != "receiver=slack-critical-kind$" {
 		t.Errorf("match.titleLink = %q, want the Binding's receiver", got)
 	}
-	for _, f := range []v1alpha1.MessageField{v1alpha1.FieldTitle, v1alpha1.FieldFallback} {
-		if tr.Match[f] == "" {
-			t.Errorf("match.%s is empty, want the preset's", f)
-		}
-	}
 	if got := tr.Exclude[v1alpha1.FieldTitle]; got != "^Prometheus heartbeat$" {
 		t.Errorf("exclude.title = %q, want the heartbeat", got)
 	}
 	if len(tr.Extract) != 3 || tr.Thread.By != v1alpha1.ThreadByKey || tr.Thread.Cooldown.Duration != 4*time.Hour ||
 		tr.Thread.CloseWhen["state"] != "RESOLVED" || tr.PromptTemplate == "" {
-		t.Errorf("preset not applied: %+v", tr)
+		t.Errorf("trigger not loaded as written: %+v", tr)
+	}
+	if l := tr.Limits; l.RateLimit == nil || l.RateLimit.MaxRuns != 5 || l.RateLimit.Per.Duration != 10*time.Minute ||
+		l.RateLimit.MaxConcurrent != 2 || l.MaxRunsPerDay == nil || *l.MaxRunsPerDay != 40 {
+		t.Errorf("limits = %+v, want the ones written", l)
 	}
 }
 
-// TestLoadPresetYieldsToTheBinding checks, through the loader, that what a Binding sets beats
-// the preset's value for the same field.
-func TestLoadPresetYieldsToTheBinding(t *testing.T) {
-	doc := withTriggers(`      - type: botMessage
-        from: { botId: B0123456789 }
-        preset: alertmanager
-        match: { title: '^MyAlert' }
-        thread: { cooldown: 30m }
-        promptTemplate: "Look at {{ .Key }}."
-`)
-	set, err := Load(context.Background(), write(t, map[string]string{"b.yaml": doc}))
+// TestLoadKeepsAnExplicitNoDailyCap checks, through the loader, that maxRunsPerDay: 0 is a written choice and loads: it
+// means no cap.
+func TestLoadKeepsAnExplicitNoDailyCap(t *testing.T) {
+	limits := strings.Replace(alertmanagerLimitsYAML, "maxRunsPerDay: 40", "maxRunsPerDay: 0", 1)
+	set, err := Load(context.Background(), write(t, map[string]string{"b.yaml": withTriggers(alertmanagerTrigger("", limits))}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := set.Bindings[0].Spec.Chat.Triggers[0]
-	if tr.Match[v1alpha1.FieldTitle] != "^MyAlert" || tr.Thread.Cooldown.Duration != 30*time.Minute ||
-		tr.PromptTemplate != "Look at {{ .Key }}." {
-		t.Errorf("the preset overrode the Binding: match.title %q, cooldown %v, prompt %q",
-			tr.Match[v1alpha1.FieldTitle], tr.Thread.Cooldown.Duration, tr.PromptTemplate)
+	if n := set.Bindings[0].Spec.Chat.Triggers[0].Limits.MaxRunsPerDay; n == nil || *n != 0 {
+		t.Errorf("maxRunsPerDay = %v, want an explicit 0", n)
 	}
 }
 
 func TestLoadRejectsBadTriggers(t *testing.T) {
+	const who = "b.yaml#1 Binding sre/sre-alerts: "
+	const hint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
 	tests := []struct{ name, triggers, want string }{
 		{
 			name:     "bare on, which YAML reads as true",
 			triggers: "      - on: mention\n",
-			want:     "b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].true: unknown field\nb.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage",
+			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage",
 		},
 		{
 			name:     "regex that does not compile",
-			triggers: "      - { type: botMessage, from: { botId: B0123456789 }, preset: alertmanager, match: { title: '(' } }\n",
-			want:     "b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].match.title: invalid regular expression: error parsing regexp: missing closing ): `(`",
+			triggers: alertmanagerTrigger("          text: '('\n", alertmanagerLimitsYAML),
+			want:     who + "spec.chat.triggers[0].match.text: invalid regular expression: error parsing regexp: missing closing ): `(`",
+		},
+		{
+			name:     "a preset, which is not a field",
+			triggers: "      - { type: botMessage, from: { botId: B0123456789 }, preset: alertmanager }\n",
+			want: who + "spec.chat.triggers[0].preset: unknown field\n" +
+				who + "spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + hint + "\n" +
+				who + "spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint + "\n" +
+				who + "spec.chat.triggers[0].promptTemplate: required",
+		},
+		{
+			name:     "no limits",
+			triggers: alertmanagerTrigger("", ""),
+			want: who + "spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + hint + "\n" +
+				who + "spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint,
 		},
 	}
 	for _, tc := range tests {

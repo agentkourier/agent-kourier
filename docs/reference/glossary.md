@@ -76,9 +76,6 @@ Platform
 Post
 :   A message Agent Kourier writes into a channel or thread.
 
-Preset
-:   A named set of `botMessage` trigger defaults for a known sender. v1 has one, `alertmanager`.
-
 Redaction
 :   Taking secrets out of text before it is shown, stored, logged or sent to an agent.
 

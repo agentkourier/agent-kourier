@@ -28,7 +28,7 @@ Agent text that streams to a thread is never stored. Spans, metric labels and th
 
 ### Feedback
 
-The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps `alertmanager` and custom `botMessage` origins with validated `alertname` subjects, and migrated `legacy` origins, to alert-name attribution:
+The useful and not-useful buttons store one row for each person and message, in table `feedback` of both stores. The feedback adapter maps the origins `botMessage` (what every trigger start records) and `legacy` (migrated from the older session schema), with validated `alertname` subjects, to alert-name attribution. It also maps `alertmanager`, which Agent Kourier no longer writes: only sessions created before that origin was retired keep it, and their votes still count under their alert's name:
 
 | Column | Holds |
 |---|---|

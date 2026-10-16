@@ -255,7 +255,7 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 		return "trigger_unmatched", nil
 	}
-	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, Preset: trigger.preset, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m}
+	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m}
 	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
 	out, err := in.decide(ctx, match)
 	if out.decision != "" {

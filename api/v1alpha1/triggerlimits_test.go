@@ -15,83 +15,28 @@ func rate(maxRuns int32, per time.Duration, maxConcurrent int32) *RateLimit {
 	return &RateLimit{MaxRuns: maxRuns, Per: metav1.Duration{Duration: per}, MaxConcurrent: maxConcurrent}
 }
 
-// The alertmanager preset limits a trigger to five starts in 10 minutes, two at a time, and 40 a day, and a Binding
-// that sets nothing gets them.
-func TestAlertmanagerPresetHasLimits(t *testing.T) {
-	want := TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(40)}
-	if got := alertmanagerTrigger().Limits; !reflect.DeepEqual(got, want) {
-		t.Errorf("preset limits = %+v, want %+v", got, want)
-	}
-	b := load[Binding](t, "binding-minimal.yaml")
-	b.Spec.Chat.Triggers = []Trigger{{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager}}
-	b.Default()
-	if err := b.Validate(); err != nil {
-		t.Fatalf("a bare alertmanager trigger is invalid: %v", err)
-	}
-	if got := b.Spec.Chat.Triggers[0].Limits; !reflect.DeepEqual(got, want) {
-		t.Errorf("limits after Default = %+v, want the preset's %+v", got, want)
-	}
-}
+// A botMessage trigger has no default limits: it loads only with a rate limit (all three fields) and a daily cap,
+// and the message names the field that is missing and where the example is.
+func TestABotMessageTriggerMustSetItsLimits(t *testing.T) {
+	const at = "spec.chat.triggers[1].limits"
+	const hint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
+	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
+		{"both set", func(*Binding) {}, ""},
+		{"no rate limit", func(o *Binding) { bot(o).Limits.RateLimit = nil },
+			at + ".rateLimit: required: set maxRuns, per and maxConcurrent; " + hint},
+		{"no daily cap", func(o *Binding) { bot(o).Limits.MaxRunsPerDay = nil },
+			at + ".maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint},
+		{"an explicit daily cap of 0 is the written choice of no cap", func(o *Binding) { bot(o).Limits.MaxRunsPerDay = i32(0) }, ""},
+	})
 
-func TestPresetLimitsMergeFieldByField(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		set  TriggerLimits
-		want TriggerLimits
-	}{
-		{"nothing set", TriggerLimits{}, TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(40)}},
-		{"maxRuns only", TriggerLimits{RateLimit: rate(3, 0, 0)}, TriggerLimits{RateLimit: rate(3, 10*time.Minute, 2), MaxRunsPerDay: i32(40)}},
-		{"per only", TriggerLimits{RateLimit: rate(0, time.Hour, 0)}, TriggerLimits{RateLimit: rate(5, time.Hour, 2), MaxRunsPerDay: i32(40)}},
-		{"maxConcurrent only", TriggerLimits{RateLimit: rate(0, 0, 1)}, TriggerLimits{RateLimit: rate(5, 10*time.Minute, 1), MaxRunsPerDay: i32(40)}},
-		{"all of rateLimit", TriggerLimits{RateLimit: rate(9, time.Minute, 4)}, TriggerLimits{RateLimit: rate(9, time.Minute, 4), MaxRunsPerDay: i32(40)}},
-		{"the daily cap only", TriggerLimits{MaxRunsPerDay: i32(7)}, TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(7)}},
-		{"a daily cap of 0 is no cap, not unset", TriggerLimits{MaxRunsPerDay: i32(0)}, TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(0)}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager, Limits: tt.set}
-			tr.applyPreset()
-			if !reflect.DeepEqual(tr.Limits, tt.want) {
-				t.Errorf("limits = %+v (rate %+v), want %+v (rate %+v)", tr.Limits, tr.Limits.RateLimit, tt.want, tt.want.RateLimit)
-			}
-			once := tr
-			tr.applyPreset()
-			if !reflect.DeepEqual(once.Limits, tr.Limits) {
-				t.Errorf("applying the preset twice changed the limits: %+v then %+v", once.Limits, tr.Limits)
-			}
-		})
+	b := load[Binding](t, "binding.yaml")
+	bot(b).Limits = TriggerLimits{}
+	want := []string{
+		at + ".rateLimit: required: set maxRuns, per and maxConcurrent; " + hint,
+		at + ".maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint,
 	}
-}
-
-// A trigger shares nothing with the preset or with the trigger the Binding wrote, so changing one trigger's
-// limits at runtime (a test, a reload) cannot change another's.
-func TestPresetLimitsAreCopies(t *testing.T) {
-	a, b := alertmanagerTrigger(), alertmanagerTrigger()
-	a.Limits.RateLimit.MaxRuns = 99
-	*a.Limits.MaxRunsPerDay = 99
-	if got := b.Limits; got.RateLimit.MaxRuns != 5 || *got.MaxRunsPerDay != 40 {
-		t.Errorf("two triggers share their limits: %+v", got)
-	}
-
-	set := TriggerLimits{RateLimit: rate(3, 0, 0), MaxRunsPerDay: i32(7)}
-	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}, Preset: PresetAlertmanager, Limits: set}
-	tr.applyPreset()
-	tr.Limits.RateLimit.MaxRuns, *tr.Limits.MaxRunsPerDay = 99, 99
-	if set.RateLimit.MaxRuns != 3 || *set.MaxRunsPerDay != 7 {
-		t.Errorf("the defaulted trigger shares its limits with what the Binding wrote: %+v", set)
-	}
-}
-
-// A trigger with no preset takes no default: it is unlimited unless the Binding limits it.
-func TestNoPresetNoLimits(t *testing.T) {
-	tr := Trigger{Type: TriggerBotMessage, From: &BotSource{BotID: "B0123456789"}}
-	tr.applyPreset()
-	if !tr.Limits.IsZero() {
-		t.Errorf("a trigger with no preset got limits %+v", tr.Limits)
-	}
-	tr.Limits = TriggerLimits{MaxRunsPerDay: i32(3)}
-	tr.applyPreset()
-	if tr.Limits.RateLimit != nil || *tr.Limits.MaxRunsPerDay != 3 {
-		t.Errorf("limits = %+v; want only the daily cap the Binding set", tr.Limits)
+	if got := problemsOf(b.Validate()); !reflect.DeepEqual(got, want) {
+		t.Errorf("a trigger with no limits: problems = %q, want %q", got, want)
 	}
 }
 
@@ -130,8 +75,9 @@ func TestTriggerLimitsValidate(t *testing.T) {
 	const at = "spec.chat.triggers[1].limits"
 	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
 		{"the fixture's limits are valid", func(*Binding) {}, ""},
-		{"a Binding that overrides one limit", func(o *Binding) { bot(o).Limits = TriggerLimits{MaxRunsPerDay: i32(3)} }, ""},
-		{"no limits at all, without a preset", func(o *Binding) { bot(o).Preset, bot(o).Limits = "", TriggerLimits{} }, ""},
+		{"a different cap and rate", func(o *Binding) {
+			bot(o).Limits = TriggerLimits{RateLimit: rate(1, time.Hour, 1), MaxRunsPerDay: i32(3)}
+		}, ""},
 		{"maxRuns zero", func(o *Binding) { bot(o).Limits.RateLimit.MaxRuns = 0 }, at + ".rateLimit.maxRuns: must be positive"},
 		{"maxRuns negative", func(o *Binding) { bot(o).Limits.RateLimit.MaxRuns = -1 }, at + ".rateLimit.maxRuns: must be positive"},
 		{"maxConcurrent zero", func(o *Binding) { bot(o).Limits.RateLimit.MaxConcurrent = 0 }, at + ".rateLimit.maxConcurrent: must be positive"},
@@ -151,10 +97,10 @@ func TestTriggerLimitsValidate(t *testing.T) {
 	})
 }
 
-// Without a preset nothing fills in what a rate limit leaves out, so it is reported field by field.
-func TestRateLimitSetInPartWithoutAPresetIsReportedPerField(t *testing.T) {
+// A rate limit set in part is reported field by field: nothing fills in what it leaves out.
+func TestRateLimitSetInPartIsReportedPerField(t *testing.T) {
 	b := load[Binding](t, "binding.yaml")
-	bot(b).Preset, bot(b).Limits = "", TriggerLimits{RateLimit: rate(3, 0, 0)}
+	bot(b).Limits.RateLimit = rate(3, 0, 0)
 	want := []string{
 		"spec.chat.triggers[1].limits.rateLimit.maxConcurrent: must be positive",
 		"spec.chat.triggers[1].limits.rateLimit.per: 0s is out of range, must be between 10s and 24h0m0s",
@@ -164,8 +110,8 @@ func TestRateLimitSetInPartWithoutAPresetIsReportedPerField(t *testing.T) {
 	}
 }
 
-// The spec 7 example overrides the daily cap and nothing else: the rate limit it gets is the preset's.
-func TestTheSpecExampleOverridesOnlyTheDailyCap(t *testing.T) {
+// The spec 7 example's limits are the ones it writes: nothing is merged into them.
+func TestTheSpecExampleKeepsItsOwnLimits(t *testing.T) {
 	b := load[Binding](t, "binding.yaml")
 	want := TriggerLimits{RateLimit: rate(5, 10*time.Minute, 2), MaxRunsPerDay: i32(20)}
 	if got := bot(b).Limits; !reflect.DeepEqual(got, want) {

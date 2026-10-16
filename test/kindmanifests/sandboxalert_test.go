@@ -237,7 +237,7 @@ func routeMatches(t *testing.T, matchers []string, labels map[string]string) boo
 	return true
 }
 
-// TestAlertRouting: every synthetic alert (severity critical, which every preset has) reaches slack-critical-kind, through
+// TestAlertRouting: every synthetic alert (severity critical, which every sample alert has) reaches slack-critical-kind, through
 // a route in the base configuration, which the operator adds no namespace matcher to; the route continues, so that the
 // sink, whose route the operator puts first, and any route after it see the alert too; the group and the repeat interval are
 // the owner's; and title_link is not overridden, so Alertmanager's own default, which carries `receiver=<name>`, stands.
@@ -696,31 +696,31 @@ ALERTMANAGER_WEBHOOK_URL=$4
 	}
 }
 
-// preset is one entry of alertmanager/alerts.json.
-type preset struct {
+// sampleAlert is one entry of alertmanager/alerts.json.
+type sampleAlert struct {
 	App         string            `json:"app"`
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
 }
 
-func loadPresets(t *testing.T) map[string]preset {
+func loadSamples(t *testing.T) map[string]sampleAlert {
 	t.Helper()
 	raw, err := os.ReadFile(alertDir + "alerts.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var presets map[string]preset
-	if err := json.Unmarshal(raw, &presets); err != nil {
+	var samples map[string]sampleAlert
+	if err := json.Unmarshal(raw, &samples); err != nil {
 		t.Fatal(err)
 	}
-	return presets
+	return samples
 }
 
-// TestAlertPresets: there is a preset for each seeded fault that has a pod or a Service of its own to name, and every one
+// TestSampleAlerts: there is a sample alert for each seeded fault that has a pod or a Service of its own to name, and every one
 // carries the labels and annotations a kube-prometheus rule would, and the ones the route and the template read.
-func TestAlertPresets(t *testing.T) {
-	presets := loadPresets(t)
-	// The faults of faults.yaml: each preset names the app (or Service) its fault is seeded in.
+func TestSampleAlerts(t *testing.T) {
+	samples := loadSamples(t)
+	// The faults of faults.yaml: each sample alert names the app (or Service) its fault is seeded in.
 	want := map[string]string{
 		"KubePodCrashLooping":    "checkout",
 		"KubePodNotReady":        "search",
@@ -728,24 +728,24 @@ func TestAlertPresets(t *testing.T) {
 		"KubeContainerOOMKilled": "recommender",
 		"TargetDown":             "inventory",
 	}
-	if len(presets) != len(want) {
-		t.Errorf("%d presets; want %d", len(presets), len(want))
+	if len(samples) != len(want) {
+		t.Errorf("%d sample alerts; want %d", len(samples), len(want))
 	}
 	faults, err := os.ReadFile(agentDir + "faults.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, app := range want {
-		p, ok := presets[name]
+		p, ok := samples[name]
 		if !ok {
-			t.Errorf("no preset %s", name)
+			t.Errorf("no sample alert %s", name)
 			continue
 		}
 		if p.Labels["alertname"] != name || p.Labels["severity"] != "critical" || p.Labels["namespace"] != "shop" {
 			t.Errorf("%s: labels %v; want its alertname, severity=critical and namespace=shop (the route matches on the severity)", name, p.Labels)
 		}
 		if _, ok := p.Labels["agentkourier_trial"]; ok {
-			t.Errorf("%s sets agentkourier_trial: alert.sh adds it, so that no preset can leave it out or set it otherwise", name)
+			t.Errorf("%s sets agentkourier_trial: alert.sh adds it, so that no sample alert can leave it out or set it otherwise", name)
 		}
 		if p.Annotations["summary"] == "" || p.Annotations["description"] == "" {
 			t.Errorf("%s: annotations %v; want a summary and a description, which the receiver's text prints", name, p.Annotations)
@@ -850,13 +850,13 @@ type postedAlert struct {
 	EndsAt      time.Time         `json:"endsAt"`
 }
 
-// TestAlertShFiresEachPreset: each preset is posted to Alertmanager's v2 API from a probe pod in the cluster, as one alert
+// TestAlertShFiresEachSample: each sample alert is posted to Alertmanager's v2 API from a probe pod in the cluster, as one alert
 // with its labels, the live pod's name in place of the placeholder, a start that is not in the future and an end an hour on,
 // and the script prints the alertname and the state, and nothing else.
-func TestAlertShFiresEachPreset(t *testing.T) {
+func TestAlertShFiresEachSample(t *testing.T) {
 	pods := map[string]string{"KubePodCrashLooping": "checkout-7d9f8c6b5-abcde", "KubePodNotReady": "search-5f6b9d-xyz12",
 		"KubeContainerWaiting": "catalog-6c7d8e-qwert", "KubeContainerOOMKilled": "recommender-8b9c-mnbvc", "TargetDown": ""}
-	presets := loadPresets(t)
+	samples := loadSamples(t)
 	for name, pod := range pods {
 		for _, args := range [][]string{{name}, {name, "firing"}} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -871,9 +871,9 @@ func TestAlertShFiresEachPreset(t *testing.T) {
 					t.Fatalf("the probe pod was given %q: %d alerts, %v; want one", readLog(t, logs, "kubectl.stdin"), len(posted), err)
 				}
 				a := posted[0]
-				// The preset's labels with the live pod's name in, and the one label alert.sh adds, which the route requires.
+				// The sample alert's labels with the live pod's name in, and the one label alert.sh adds, which the route requires.
 				wantLabels := map[string]string{"agentkourier_trial": "true"}
-				for k, v := range presets[name].Labels {
+				for k, v := range samples[name].Labels {
 					wantLabels[k] = strings.ReplaceAll(v, "__POD__", pod)
 				}
 				if !reflect.DeepEqual(a.Labels, wantLabels) {
@@ -953,7 +953,7 @@ func TestAlertShNamesTheContextAndTheProbe(t *testing.T) {
 	}
 }
 
-// TestAlertShRefuses: what is not a preset, not a state, or not the sandbox's Alertmanager posts nothing and says why.
+// TestAlertShRefuses: what is not a sample alert, not a state, or not the sandbox's Alertmanager posts nothing and says why.
 func TestAlertShRefuses(t *testing.T) {
 	for name, tc := range map[string]struct {
 		args         []string
@@ -964,8 +964,8 @@ func TestAlertShRefuses(t *testing.T) {
 		"no alert":              {nil, "alertmanager-kind-config", "usage: make sandbox-alert ALERT=", false},
 		"an empty alert":        {[]string{""}, "alertmanager-kind-config", "usage: make sandbox-alert ALERT=", false},
 		"an unknown alert":      {[]string{"NodeFilesystemAlmostOutOfSpace"}, "alertmanager-kind-config", "KubePodCrashLooping", false},
-		"a near miss":           {[]string{"kubepodcrashlooping"}, "alertmanager-kind-config", "not a preset", false},
-		"a JSON key's cousin":   {[]string{`KubePodCrashLooping" or true or "`}, "alertmanager-kind-config", "not a preset", false},
+		"a near miss":           {[]string{"kubepodcrashlooping"}, "alertmanager-kind-config", "not a sample alert", false},
+		"a JSON key's cousin":   {[]string{`KubePodCrashLooping" or true or "`}, "alertmanager-kind-config", "not a sample alert", false},
 		"an unknown state":      {[]string{"TargetDown", "pending"}, "alertmanager-kind-config", "STATE must be firing or resolved", false},
 		"not the sandbox's one": {[]string{"TargetDown"}, "", "the alert source is not configured", true},
 		"the tier's own one":    {[]string{"TargetDown"}, "alertmanager-agent-kourier", "the alert source is not configured", true},
@@ -987,7 +987,7 @@ func TestAlertShRefuses(t *testing.T) {
 }
 
 // TestAlertShFindsOnlyALivePod: a pod that is terminating is not the pod the alert is about, and with none that is live the script says
-// so and posts nothing. (The live pod being the one posted, with a terminating one listed first, is TestAlertShFiresEachPreset's.)
+// so and posts nothing. (The live pod being the one posted, with a terminating one listed first, is TestAlertShFiresEachSample's.)
 func TestAlertShFindsOnlyALivePod(t *testing.T) {
 	for name, pods := range map[string]string{"the list is empty": "none", "every pod is terminating": "terminating"} {
 		t.Run(name, func(t *testing.T) {
@@ -1211,9 +1211,9 @@ func TestSandboxAlertTarget(t *testing.T) {
 			t.Errorf("the Alert trial section does not mention %q", want)
 		}
 	}
-	for name := range loadPresets(t) {
+	for name := range loadSamples(t) {
 		if !strings.Contains(section, name) {
-			t.Errorf("the Alert trial section does not list the preset %s", name)
+			t.Errorf("the Alert trial section does not list the sample alert %s", name)
 		}
 	}
 }

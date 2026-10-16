@@ -22,7 +22,8 @@ func runLimits(l v1alpha1.TriggerLimits) store.TriggerRunLimits {
 	return out
 }
 
-// checks says whether any limit is set to check: a cap of 0 is none, and a trigger with none is not counted.
+// checks says whether any limit is set to check: a cap of 0 is none, and limits with none are not counted. A loaded
+// botMessage trigger always has a rate limit, so this is false only for limits built in code.
 func checks(l store.TriggerRunLimits) bool {
 	return (l.MaxRuns > 0 && l.Per > 0) || l.MaxConcurrent > 0 || l.MaxPerDay > 0
 }
@@ -30,8 +31,9 @@ func checks(l store.TriggerRunLimits) bool {
 // admit asks the trigger's limits whether the match may start a turn, and records the start if it may, in one atomic
 // step in the store (so the count survives a restart). It returns the limit that stops it, or "" if it may start. It
 // is a local read and write, as the acknowledgement path allows. Asking again for the same message, as a redelivery
-// does, is the same start: it is counted once. Without IntakeConfig.TriggerRuns, or a trigger with no limits, nothing
-// stops a start.
+// does, is the same start: it is counted once. Without IntakeConfig.TriggerRuns, or with limits that check nothing,
+// nothing stops a start; a loaded botMessage trigger always has a rate limit, so the second case arises only for a
+// match built in code.
 func (in *Intake) admit(ctx context.Context, m TriggerMatch) (store.TriggerLimit, error) {
 	limits := runLimits(m.Limits)
 	if in.cfg.TriggerRuns == nil || !checks(limits) {

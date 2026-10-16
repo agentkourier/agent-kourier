@@ -93,6 +93,8 @@ var rules = []rule{
 		"names the removed Alertmanager webhook; alerts enter only through chat.triggers"),
 	r("spec-alerts", `\bspec\.alerts\b`,
 		"names the removed Binding alerts block, which the strict decoder rejects; alerts enter only through chat.triggers"),
+	r("removed-preset", "(?i)\\b[\"'`]?preset[\"'`]?:\\s*[\"'`]?alertmanager\\b|\\balertmanager\\b[\"'`]?\\s+[\"'`]?preset\\b|\\bpreset\\b[\"'`]?\\s+[\"'`]?alertmanager\\b",
+		"names the removed trigger preset; a botMessage trigger is written in full, as the Alertmanager how-to shows"),
 	fieldRule("unbuilt-field",
 		"names a field that api/v1alpha1 does not have yet; it stops being flagged when a type carries it as a json tag",
 		"approverGroups", "toolApprovals", "directMessages"),
