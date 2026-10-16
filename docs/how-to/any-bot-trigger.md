@@ -13,8 +13,9 @@ you give it. Only Alertmanager is exercised in the sandbox and the end-to-end te
 - A [Binding](write-a-binding.md) for the channel, and the Agent Kourier bot invited to it.
 - The bot ID of the integration that posts the alerts (`B...`). A [dry run](tune-triggers.md) of the channel prints
   each message's sender.
-- A few of its real messages, to write the regexes against. Note which field holds what: `text` is the message's own
-  text; `title`, `titleLink`, `fallback`, `footer` and `attachmentText` come from its first legacy attachment.
+- A few of its real messages, to write the regexes against. Note which field holds what: `text` is the message's
+  top-level text; `title`, `link`, `body`, `footer` and `fallback` come from its first legacy attachment (its
+  `title`, `title_link`, `text`, `footer` and `fallback`).
 
 ## Write the trigger
 
@@ -37,7 +38,7 @@ this kind, with its AgentBackend, ChatConnection and checks.
       - type: mention # (1)!
       - type: botMessage
         from:
-          botId: B0123456789 # (2)!
+          id: B0123456789 # (2)!
         match:
           text: '^\[(FIRING|RESOLVED)\] ' # (3)!
         exclude:
@@ -67,7 +68,7 @@ this kind, with its AgentBackend, ChatConnection and checks.
 ```
 
 1. Keep this if people should also be able to mention the bot. A list that names triggers is the whole list.
-2. The alert messages' `bot_id`, never a display name.
+2. The sender's ID: on Slack, the alert messages' `bot_id`, never a display name. `from.kind` is `bot`, its default and only value; leave it out.
 3. Every `match` entry must match, and no `exclude` entry may. Regexes are RE2, at most 512 bytes.
 4. Each entry's regex has a named group with the entry's name, which supplies the value. A message in which an
    extract does not match does not match the trigger.

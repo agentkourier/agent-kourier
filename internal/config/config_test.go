@@ -111,7 +111,7 @@ func withTriggers(triggers string) string {
 // at six spaces. %s stands for the extra match entries (a line each, at ten spaces) and %s for the limits block; the
 // limits are what a botMessage trigger must set.
 const alertmanagerTriggerYAML = `      - type: botMessage
-        from: { botId: B0123456789 }
+        from: { id: B0123456789 }
         match:
 %s          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
           fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
@@ -141,7 +141,7 @@ func alertmanagerTrigger(extraMatch, limits string) string {
 // the mention trigger. Receiver regexes end in $ because receiver=slack-critical is a prefix of
 // receiver=slack-critical-kind, so unanchored it would match both.
 func TestLoadAlertmanagerTriggerWithTrialNarrowing(t *testing.T) {
-	trial := withTriggers("      - type: mention\n" + alertmanagerTrigger("          titleLink: 'receiver=slack-critical-kind$'\n", alertmanagerLimitsYAML))
+	trial := withTriggers("      - type: mention\n" + alertmanagerTrigger("          link: 'receiver=slack-critical-kind$'\n", alertmanagerLimitsYAML))
 	set, err := Load(context.Background(), write(t, map[string]string{
 		"plain.yaml": strings.Replace(bindingDoc, "sre-alerts", "plain", 1), "trial.yaml": trial}))
 	if err != nil {
@@ -161,11 +161,11 @@ func TestLoadAlertmanagerTriggerWithTrialNarrowing(t *testing.T) {
 		t.Fatalf("loaded %d triggers, want 2: %+v", len(ts), ts)
 	}
 	tr := ts[1]
-	if tr.From.BotID != "B0123456789" {
-		t.Errorf("botId = %q", tr.From.BotID)
+	if tr.From.ID != "B0123456789" {
+		t.Errorf("id = %q", tr.From.ID)
 	}
-	if got := tr.Match[v1alpha1.FieldTitleLink]; got != "receiver=slack-critical-kind$" {
-		t.Errorf("match.titleLink = %q, want the Binding's receiver", got)
+	if got := tr.Match[v1alpha1.FieldLink]; got != "receiver=slack-critical-kind$" {
+		t.Errorf("match.link = %q, want the Binding's receiver", got)
 	}
 	if got := tr.Exclude[v1alpha1.FieldTitle]; got != "^Prometheus heartbeat$" {
 		t.Errorf("exclude.title = %q, want the heartbeat", got)
@@ -209,11 +209,26 @@ func TestLoadRejectsBadTriggers(t *testing.T) {
 		},
 		{
 			name:     "a preset, which is not a field",
-			triggers: "      - { type: botMessage, from: { botId: B0123456789 }, preset: alertmanager }\n",
+			triggers: "      - { type: botMessage, from: { id: B0123456789 }, preset: alertmanager }\n",
 			want: who + "spec.chat.triggers[0].preset: unknown field\n" +
 				who + "spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + hint + "\n" +
 				who + "spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint + "\n" +
 				who + "spec.chat.triggers[0].promptTemplate: required",
+		},
+		{
+			name:     "from.botId, which is now from.id",
+			triggers: "      - { type: botMessage, from: { botId: B0123456789 } }\n",
+			want: who + "spec.chat.triggers[0].from.botId: unknown field\n" +
+				who + "spec.chat.triggers[0].from.id: required\n" +
+				who + "spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + hint + "\n" +
+				who + "spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint + "\n" +
+				who + "spec.chat.triggers[0].promptTemplate: required",
+		},
+		{
+			name:     "match on titleLink and attachmentText, which are now link and body",
+			triggers: alertmanagerTrigger("          titleLink: 'receiver=a'\n          attachmentText: x\n", alertmanagerLimitsYAML),
+			want: who + `spec.chat.triggers[0].match.attachmentText: unsupported message field "attachmentText", must be one of text, title, link, fallback, footer, body` + "\n" +
+				who + `spec.chat.triggers[0].match.titleLink: unsupported message field "titleLink", must be one of text, title, link, fallback, footer, body`,
 		},
 		{
 			name:     "no limits",

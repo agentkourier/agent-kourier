@@ -387,7 +387,7 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 // loose matches any alert-shaped fallback, and excludes the Watchdog heartbeat by its title: the heartbeat's fallback
 // passes the match, so that it is the exclude alone that turns it away.
 func loose() v1alpha1.Trigger {
-	return v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: webhookBot}, PromptTemplate: "An alert.",
+	return v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{ID: webhookBot}, PromptTemplate: "An alert.",
 		Match:   map[v1alpha1.MessageField]string{v1alpha1.FieldFallback: `^\[(?:FIRING|RESOLVED)`},
 		Exclude: map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`},
 		Extract: map[string]v1alpha1.Extract{"state": {Field: v1alpha1.FieldFallback, Regex: `^\[(?P<state>FIRING|RESOLVED)`}},
@@ -436,7 +436,7 @@ func TestFromTheWebhookToAMatchedTrigger(t *testing.T) {
 	m := matches[0]
 	a := alert().Attachments[0]
 	if m.Binding != "sre/sre-alerts" || m.Index != 0 || m.Fields["state"] != "FIRING" || m.Message.At.ID != alertPost.TS || m.Message.Bot == nil ||
-		*m.Message.Bot != (chat.BotMessage{BotID: webhookBot, Title: a.Title, TitleLink: a.TitleLink, Fallback: a.Fallback, Footer: a.Footer, AttachmentText: a.Text}) {
+		*m.Message.Bot != (chat.BotMessage{ID: webhookBot, Kind: v1alpha1.SenderKindBot, Title: a.Title, Link: a.TitleLink, Fallback: a.Fallback, Footer: a.Footer, Body: a.Text}) {
 		t.Fatalf("match = %+v; want the alert of the webhook bot, flattened", m)
 	}
 	// The heartbeat reached the table, where the exclude counted it as unmatched; the other two were stopped at
@@ -466,7 +466,7 @@ func TestAnEditAndAThreadReplyOfTheWebhookBotMatchNothing(t *testing.T) {
 // A trigger that names Agent Kourier's own bot ID matches nothing, and warns once.
 func TestATriggerNamingAgentKouriersOwnBotMatchesNothing(t *testing.T) {
 	mistake := loose()
-	mistake.From = &v1alpha1.BotSource{BotID: "BFAKEBOT"}
+	mistake.From = &v1alpha1.BotSource{ID: "BFAKEBOT"}
 	bi := startBotIntake(t, mistake)
 	own := alert()
 	own.BotID = "BFAKEBOT"

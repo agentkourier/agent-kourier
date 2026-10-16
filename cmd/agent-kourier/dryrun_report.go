@@ -157,7 +157,7 @@ func senderOf(h chat.HistoryMessage) dryRunSender {
 	case h.Ignored:
 		return dryRunSender{Kind: "unknown"}
 	case m.Bot != nil:
-		return dryRunSender{Kind: "bot", ID: m.Bot.BotID}
+		return dryRunSender{Kind: "bot", ID: m.Bot.ID}
 	}
 	return dryRunSender{Kind: "person", ID: m.User}
 }
@@ -165,7 +165,7 @@ func senderOf(h chat.HistoryMessage) dryRunSender {
 // titleOf is the message's title: the attachment's title, else its fallback or text, else the message's own text.
 func titleOf(m chat.Inbound) string {
 	if m.Bot != nil {
-		return cmp.Or(m.Bot.Title, m.Bot.Fallback, m.Bot.AttachmentText, m.Text)
+		return cmp.Or(m.Bot.Title, m.Bot.Fallback, m.Bot.Body, m.Text)
 	}
 	return m.Text
 }

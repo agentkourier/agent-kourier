@@ -62,12 +62,6 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{OnRejected: metrics.CredentialRejected, fence: h.leaseFence})
-	if err != nil {
-		return nil, err
-	}
-	sd.add(stepPool, func(context.Context) { bindings.Close() })
-
 	// The chat platform, built for the connection's ChatConnection.platform: it posts for the outbox, and a token revoked
 	// mid-run, which only a post sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure).
 	// agentkourier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
@@ -76,6 +70,16 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, conn Connection) (<-chan
 	if err != nil {
 		return nil, err
 	}
+
+	// The Bindings take the platform's own acknowledgment reaction, so the platform is built first.
+	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{
+		OnRejected: metrics.CredentialRejected, AckReaction: platform.Capabilities().AckReaction, fence: h.leaseFence})
+	if err != nil {
+		platform.closeIdle()
+		return nil, err
+	}
+	sd.add(stepPool, func(context.Context) { bindings.Close() })
+
 	chatCtx, report, stopChat := WithAuthFailure(runCtx)
 	ob, err := outbox.New(outbox.Config{
 		Store: st, Platform: WatchAuth(platform, report), Logger: log, OnAbandon: metrics.OutboxAbandoned,

@@ -17,6 +17,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
@@ -104,7 +105,10 @@ func (in inbound) Message(ctx context.Context, m Message) error {
 	return in.sink.Message(ctx, InboundOf(in.p.conn, m))
 }
 
-// InboundOf is m as the neutral model has it, on the connection conn ("namespace/name"). The live path and the
+// InboundOf is m as the neutral model has it, on the connection conn ("namespace/name"). A bot's message is flattened
+// from its first legacy attachment into the neutral fields: the attachment's title is the Title, its title_link the
+// Link, its text the Body, its footer the Footer and its fallback the Fallback; the message's top-level text stays Text. The sender is the message's bot_id, of
+// the kind bot. The live path and the
 // history (Client.History) both make an Inbound this way, and it is exported so that a test of a trigger can make
 // the Inbound the intake would have been given for a message, without copying the conversion.
 func InboundOf(conn string, m Message) chat.Inbound {
@@ -113,8 +117,8 @@ func InboundOf(conn string, m Message) chat.Inbound {
 		User: m.User, Text: m.Text, Mentioned: m.Mentioned, Direct: m.ChannelType == "im",
 	}
 	if m.Bot.ID != "" {
-		msg.Bot = &chat.BotMessage{BotID: m.Bot.ID, Title: m.Bot.Title, TitleLink: m.Bot.TitleLink, Fallback: m.Bot.Fallback,
-			Footer: m.Bot.Footer, AttachmentText: m.Bot.Text}
+		msg.Bot = &chat.BotMessage{ID: m.Bot.ID, Kind: v1alpha1.SenderKindBot, Title: m.Bot.Title, Link: m.Bot.TitleLink,
+			Fallback: m.Bot.Fallback, Footer: m.Bot.Footer, Body: m.Bot.Text}
 	}
 	return msg
 }

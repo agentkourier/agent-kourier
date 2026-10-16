@@ -19,9 +19,9 @@ spec:
     triggers:
       - type: mention
       - type: botMessage
-        from: {botId: B0123456789} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
+        from: {id: B0123456789} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
         match:
-          titleLink: 'receiver=slack-critical$'
+          link: 'receiver=slack-critical$'
           title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
           fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
         exclude: {title: '^Prometheus heartbeat$'}

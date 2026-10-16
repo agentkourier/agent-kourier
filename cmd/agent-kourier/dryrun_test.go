@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -178,8 +179,8 @@ func TestDryRunReplaysTheOwnersChannelThroughTheTrialAndProduction(t *testing.T)
 			{bot, "matched", intp(1), kind("FIRING"), ""}, {bot, "matched", intp(1), kind("RESOLVED"), ""},
 			{bot, "matched", intp(1), kind("FIRING"), ""}, {bot, "matched", intp(1), kind("RESOLVED"), ""},
 			{bot, "matched", intp(1), kind("FIRING"), ""}, {bot, "matched", intp(1), kind("RESOLVED"), ""},
-			{bot, "unmatched", nil, nil, "trigger 1: match titleLink"}, {bot, "unmatched", nil, nil, "trigger 1: match titleLink"},
-			{bot, "unmatched", nil, nil, "trigger 1: match title"}, {bot, "unmatched", nil, nil, "trigger 1: match fallback"},
+			{bot, "unmatched", nil, nil, "trigger 1: match link"}, {bot, "unmatched", nil, nil, "trigger 1: match link"},
+			{bot, "unmatched", nil, nil, "trigger 1: match link"}, {bot, "unmatched", nil, nil, "trigger 1: match fallback"},
 			{dryRunSender{Kind: "person", ID: "U1"}, "person", nil, nil, ""},
 			{dryRunSender{Kind: "agent-kourier"}, "own", nil, nil, ""},
 			{dryRunSender{Kind: "bot", ID: "B0OTHERBOT1"}, "other_bot", nil, nil, ""},
@@ -189,11 +190,11 @@ func TestDryRunReplaysTheOwnersChannelThroughTheTrialAndProduction(t *testing.T)
 			Keys:     []dryRunKey{{"KubePodCrashLooping shop", 6}},
 			Flapping: []dryRunFlap{{Key: "KubePodCrashLooping shop", Cycles: 3, States: map[string]int{"FIRING": 3, "RESOLVED": 3}}}}},
 		{"production", []row{
-			{bot, "unmatched", nil, nil, "trigger 1: match titleLink"}, {bot, "unmatched", nil, nil, "trigger 1: match titleLink"},
-			{bot, "unmatched", nil, nil, "trigger 1: match titleLink"}, {bot, "unmatched", nil, nil, "trigger 1: match titleLink"},
-			{bot, "unmatched", nil, nil, "trigger 1: match titleLink"}, {bot, "unmatched", nil, nil, "trigger 1: match titleLink"},
+			{bot, "unmatched", nil, nil, "trigger 1: match link"}, {bot, "unmatched", nil, nil, "trigger 1: match link"},
+			{bot, "unmatched", nil, nil, "trigger 1: match link"}, {bot, "unmatched", nil, nil, "trigger 1: match link"},
+			{bot, "unmatched", nil, nil, "trigger 1: match link"}, {bot, "unmatched", nil, nil, "trigger 1: match link"},
 			{bot, "matched", intp(1), prod("FIRING"), ""}, {bot, "matched", intp(1), prod("RESOLVED"), ""},
-			{bot, "unmatched", nil, nil, "trigger 1: match title"}, {bot, "unmatched", nil, nil, "trigger 1: match fallback"},
+			{bot, "unmatched", nil, nil, "trigger 1: match link"}, {bot, "unmatched", nil, nil, "trigger 1: match fallback"},
 			{dryRunSender{Kind: "person", ID: "U1"}, "person", nil, nil, ""},
 			{dryRunSender{Kind: "agent-kourier"}, "own", nil, nil, ""},
 			{dryRunSender{Kind: "bot", ID: "B0OTHERBOT1"}, "other_bot", nil, nil, ""},
@@ -301,8 +302,8 @@ func TestDryRunTextReport(t *testing.T) {
 	for i, want := range map[int][]string{
 		0:  {webhookBot, "matched", "FIRING", "KubePodCrashLooping", "KubePodCrashLooping shop", "[kind] FIRING (1) - KubePodCrashLooping"},
 		1:  {webhookBot, "matched", "RESOLVED", "KubePodCrashLooping", "[kind] RESOLVED - KubePodCrashLooping"},
-		6:  {webhookBot, "unmatched", "FIRING (1) - KubeAPIErrorBudgetBurn", "trigger 1: match titleLink"},
-		8:  {"unmatched", "Prometheus heartbeat", "trigger 1: match title"},
+		6:  {webhookBot, "unmatched", "FIRING (1) - KubeAPIErrorBudgetBurn", "trigger 1: match link"},
+		8:  {"unmatched", "Prometheus heartbeat", "trigger 1: match link"},
 		10: {"person:U1", "person", "is this real?"},
 		11: {"agent-kourier", "own"},
 		12: {"B0OTHERBOT1", "other_bot"},
@@ -571,7 +572,7 @@ func flapReport(t *testing.T, states string) dryRunReport {
 		}
 		history = append(history, chat.HistoryMessage{Message: chat.Inbound{
 			At:  chat.Ref{Platform: "slack", Channel: alertChannel, ID: strconv.Itoa(1000+i) + ".000000"},
-			Bot: &chat.BotMessage{BotID: webhookBot, Title: a.Title, TitleLink: a.TitleLink, Fallback: a.Fallback, AttachmentText: a.Text}}})
+			Bot: &chat.BotMessage{ID: webhookBot, Title: a.Title, Kind: v1alpha1.SenderKindBot, Link: a.TitleLink, Fallback: a.Fallback, Body: a.Text}}})
 	}
 	return buildReport("agent-kourier/trial", alertChannel, history, replay, closingStates(b))
 }

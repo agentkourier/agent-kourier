@@ -21,7 +21,7 @@ func TestAConfigReloadChangesWhichBotsAreAcceptedAndMatched(t *testing.T) {
 		})
 	}
 	post := func(bot, id string) chat.Inbound {
-		return botInbound("C1", id, chat.BotMessage{BotID: bot, Title: "FIRING (1) - Disk"})
+		return botInbound("C1", id, chat.BotMessage{ID: bot, Title: "FIRING (1) - Disk"})
 	}
 	h := newTriggered(t, forBot(oldBot, `^FIRING`))
 	matched := func() int { return len(h.got()) }
@@ -48,7 +48,7 @@ func TestAConfigReloadChangesWhichBotsAreAcceptedAndMatched(t *testing.T) {
 	say(post(newBot, "2.1"))
 	say(post(oldBot, "2.2"))
 	got := h.got()
-	if len(got) != 2 || got[1].Message.Bot.BotID != newBot || got[1].Message.At.ID != "2.1" {
+	if len(got) != 2 || got[1].Message.Bot.ID != newBot || got[1].Message.At.ID != "2.1" {
 		t.Fatalf("after the reload: matches %+v; want the new bot's message and not the old bot's", got)
 	}
 	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 2 {

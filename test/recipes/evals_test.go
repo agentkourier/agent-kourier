@@ -45,12 +45,12 @@ type evalMessage struct {
 	User string `json:"user,omitempty"`
 	// Text is the message's own text. The other fields are those of a bot's first attachment, as the adapter
 	// flattens it (v1alpha1.MessageField).
-	Text           string `json:"text,omitempty"`
-	Title          string `json:"title,omitempty"`
-	TitleLink      string `json:"titleLink,omitempty"`
-	Fallback       string `json:"fallback,omitempty"`
-	Footer         string `json:"footer,omitempty"`
-	AttachmentText string `json:"attachmentText,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Link     string `json:"link,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
+	Footer   string `json:"footer,omitempty"`
+	Body     string `json:"body,omitempty"`
 	// InThread says the message is a reply inside a thread, not a top-level post.
 	InThread bool `json:"inThread,omitempty"`
 }
@@ -108,10 +108,10 @@ func (c triggerCase) problems() []string {
 		out = append(out, fmt.Sprintf("binding %q must be namespace/name", c.Binding))
 	}
 	m := c.Message
-	if m.Bot == "" && (m.Title != "" || m.TitleLink != "" || m.Fallback != "" || m.Footer != "" || m.AttachmentText != "") {
-		out = append(out, "a person's message (no bot) has only user and text; title, titleLink, fallback, footer and attachmentText belong to a bot's")
+	if m.Bot == "" && (m.Title != "" || m.Link != "" || m.Fallback != "" || m.Footer != "" || m.Body != "") {
+		out = append(out, "a person's message (no bot) has only user and text; title, link, fallback, footer and body belong to a bot's")
 	}
-	if m.Bot != "" && m.Text == "" && m.Title == "" && m.TitleLink == "" && m.Fallback == "" && m.Footer == "" && m.AttachmentText == "" {
+	if m.Bot != "" && m.Text == "" && m.Title == "" && m.Link == "" && m.Fallback == "" && m.Footer == "" && m.Body == "" {
 		out = append(out, "a bot's message needs text or an attachment field; one with neither is dropped before any trigger sees it")
 	}
 	if m.Bot == "" && (m.User == "" || m.Text == "") {
@@ -137,8 +137,8 @@ func (m evalMessage) history(b *v1alpha1.Binding) chat.HistoryMessage {
 		msg.ThreadTS = "1.0"
 	}
 	if m.Bot != "" {
-		msg.Bot = slack.BotPost{ID: m.Bot, Title: m.Title, TitleLink: m.TitleLink, Fallback: m.Fallback,
-			Footer: m.Footer, Text: m.AttachmentText}
+		msg.Bot = slack.BotPost{ID: m.Bot, Title: m.Title, TitleLink: m.Link, Fallback: m.Fallback,
+			Footer: m.Footer, Text: m.Body}
 	}
 	return chat.HistoryMessage{Message: slack.InboundOf(conn, msg)}
 }
@@ -225,7 +225,7 @@ func TestTriggerEvals(t *testing.T) {
 		{name: "evals-pass", wantRan: true},
 		{name: "evals-wrong-regex", wantRan: true, want: []string{
 			"evals-wrong-regex/evals/triggers.yaml", `case "firing alert" (Binding recipe/alerts)`,
-			"outcome: want matched, got unmatched", "why: trigger 1: match titleLink",
+			"outcome: want matched, got unmatched", "why: trigger 1: match link",
 		}},
 		{name: "evals-unknown-key", wantRan: true, want: []string{"evals-unknown-key/evals/triggers.yaml", "cases[0].expect.triger: unknown field"}},
 		{name: "valid"}, // a recipe without evals/triggers.yaml

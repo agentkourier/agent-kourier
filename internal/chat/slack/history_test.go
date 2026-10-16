@@ -79,8 +79,8 @@ func TestHistoryPagesThroughTheChannelOldestFirst(t *testing.T) {
 		}
 	}
 	a := alert().Attachments[0]
-	if b := got[0].Message.Bot; b == nil || b.BotID != webhookBot || b.Title != "[kind] FIRING (1) - A" || b.TitleLink != a.TitleLink || b.Fallback != a.Fallback ||
-		b.Footer != a.Footer || b.AttachmentText != a.Text || got[0].Own || got[0].Ignored {
+	if b := got[0].Message.Bot; b == nil || b.ID != webhookBot || b.Title != "[kind] FIRING (1) - A" || b.Link != a.TitleLink || b.Fallback != a.Fallback ||
+		b.Footer != a.Footer || b.Body != a.Text || got[0].Own || got[0].Ignored {
 		t.Errorf("the first message = %+v; want the webhook's alert, flattened, neither own nor ignored", got[0])
 	}
 	if m := got[2].Message; m.Bot != nil || m.User != "U1" || m.Text != botMark+" what is this?" || !m.Mentioned {

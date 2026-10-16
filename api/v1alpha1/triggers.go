@@ -15,9 +15,15 @@ import (
 type (
 	// TriggerType selects what kind of chat event a Trigger reacts to.
 	TriggerType string
-	// MessageField names one field of a chat message that a trigger's regexes read. The Slack
-	// adapter flattens a legacy attachment into these neutral fields.
+	// MessageField names one field of a chat message that a trigger's regexes read. Each is defined by what it
+	// holds, and each platform adapter documents how it flattens its native message into them. text is the
+	// message's top-level text, outside any attachment or card. title, link, body, footer and fallback are the
+	// heading, the heading's URL, the main text, the small print and the plain-text summary of the message's
+	// structured part (Slack: its first legacy attachment). A field the message lacks is empty.
 	MessageField string
+	// SenderKind says what kind of sender a trigger's from.id names. Only bot exists today; a platform whose
+	// senders are of other kinds adds a value for each.
+	SenderKind string
 	// ThreadBy selects what ties messages to one thread.
 	ThreadBy string
 )
@@ -27,12 +33,15 @@ const (
 	TriggerMention    TriggerType = "mention"
 	TriggerBotMessage TriggerType = "botMessage"
 
-	FieldText           MessageField = "text"
-	FieldTitle          MessageField = "title"
-	FieldTitleLink      MessageField = "titleLink"
-	FieldFallback       MessageField = "fallback"
-	FieldFooter         MessageField = "footer"
-	FieldAttachmentText MessageField = "attachmentText"
+	FieldText     MessageField = "text"
+	FieldTitle    MessageField = "title"
+	FieldLink     MessageField = "link"
+	FieldFallback MessageField = "fallback"
+	FieldFooter   MessageField = "footer"
+	FieldBody     MessageField = "body"
+
+	// SenderKindBot is a bot: a sender that is an application and not a person. It is the default kind.
+	SenderKindBot SenderKind = "bot"
 
 	// ThreadByKey groups messages by the extracted field named "key".
 	ThreadByKey ThreadBy = "key"
@@ -47,7 +56,7 @@ const (
 
 // messageFields lists the MessageField values, in the order error messages show them.
 func messageFields() []MessageField {
-	return []MessageField{FieldText, FieldTitle, FieldTitleLink, FieldFallback, FieldFooter, FieldAttachmentText}
+	return []MessageField{FieldText, FieldTitle, FieldLink, FieldFallback, FieldFooter, FieldBody}
 }
 
 // Trigger is one way an event in the bound channel starts or continues a turn (spec 8.2).
@@ -58,7 +67,7 @@ type Trigger struct {
 	// on as the boolean true, and the loader's decoder follows it.
 	// +kubebuilder:validation:Enum=mention;botMessage
 	Type TriggerType `json:"type"`
-	// From names the bot a botMessage trigger accepts. Required for botMessage.
+	// From names the sender a botMessage trigger accepts. Required for botMessage.
 	From *BotSource `json:"from,omitempty"`
 	// Match maps a message field to a regex it must match. Every entry must match.
 	Match map[MessageField]string `json:"match,omitempty"`
@@ -79,19 +88,25 @@ type Trigger struct {
 	Limits TriggerLimits `json:"limits,omitzero"`
 }
 
-// BotSource identifies the bot whose messages a trigger accepts.
+// BotSource identifies the sender whose messages a trigger accepts: a message matches only when its sender's ID
+// and kind both equal ID and Kind.
 type BotSource struct {
-	// BotID is the Slack bot ID, never a display name. Agent Kourier's own bot ID is refused at
-	// runtime: the load cannot know it.
+	// ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). Agent Kourier's own
+	// ID is refused at runtime: the load cannot know it.
 	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
-	BotID string `json:"botId"`
+	ID string `json:"id"`
+	// Kind is what kind of sender ID names. Only bot exists today, and it is the default.
+	// +kubebuilder:validation:Enum=bot
+	// +kubebuilder:default=bot
+	// +optional
+	Kind SenderKind `json:"kind,omitempty"`
 }
 
 // Extract pulls one named value out of a message field. The entry's name in Trigger.Extract
 // must also be the name of a named group in Regex, which supplies the value.
 type Extract struct {
 	// Field is the message field the regex runs on.
-	// +kubebuilder:validation:Enum=text;title;titleLink;fallback;footer;attachmentText
+	// +kubebuilder:validation:Enum=text;title;link;fallback;footer;body
 	Field MessageField `json:"field"`
 	// Regex is a Go (RE2) regular expression of at most 512 bytes.
 	Regex string `json:"regex"`
@@ -143,10 +158,15 @@ func (t TriggerThread) EffectiveMaxIdle() time.Duration {
 }
 
 // defaultTriggers makes an empty trigger list the mention trigger, which is how a Binding
-// behaved before triggers existed.
+// behaved before triggers existed, and gives a trigger's sender the default kind.
 func (c *ChatBinding) defaultTriggers() {
 	if len(c.Triggers) == 0 {
 		c.Triggers = []Trigger{{Type: TriggerMention}}
+	}
+	for i := range c.Triggers {
+		if from := c.Triggers[i].From; from != nil && from.Kind == "" {
+			from.Kind = SenderKindBot
+		}
 	}
 }
 
@@ -157,8 +177,8 @@ func (c *ChatBinding) defaultTriggers() {
 //
 // Fields, State and Key come out of an attacker's message (spec R2). Channel, Source and Link
 // are Agent Kourier's own: the channel from the Binding, the source from the trigger type, and the link the
-// Slack permalink that Agent Kourier builds from the channel and the ts of the triggering message. Link
-// is never a field of the message such as titleLink, which the sender wrote. The renderer checks
+// platform's permalink that Agent Kourier builds from the channel and the ID of the triggering message. Link
+// is never the message's own link field, which the sender wrote. The renderer checks
 // all of them anyway, as defence in depth. It writes a value into the instruction part only if
 // the template reads it and it passes its rule; a value that fails refuses the render with a
 // *render.RefusedError and nothing reaches the agent. A value the template does not read is not
@@ -181,8 +201,8 @@ type PromptView struct {
 	State string
 	// Key is the extracted "key" value, empty if the trigger extracts none.
 	Key string
-	// Link is the Slack permalink of the triggering message, built by Agent Kourier from the channel
-	// and the message's ts. It is not taken from the message: never a field such as titleLink.
+	// Link is the platform's permalink of the triggering message, built by Agent Kourier from the channel
+	// and the message's ID. It is not taken from the message: never the message's own link field.
 	Link string
 	// Source names what sent the message: "botMessage" for a trigger of that type.
 	Source string

@@ -334,7 +334,7 @@ text       *KubePodCrashLooping* - critical  Pod is crash looping.  Pod shop/che
 ```
 
 (Read off Alertmanager v0.34.0, run locally on this configuration against a stand-in webhook, never the real one.) The receiver's name is in the title link, and so in the fallback, which ends with that
-link, and in no other field a trigger can read: match `titleLink` on `receiver=slack-critical-kind`.
+link, and in no other field a trigger can read: match `link` on `receiver=slack-critical-kind`.
 
 **Check Alertmanager's own status:**
 
@@ -358,7 +358,7 @@ before going live. It **only reads** Slack (`conversations.history`): it posts n
 
 **What it runs.** It loads the config directory with the same loader as the broker, so the defaults and the validation apply as
 in production. It reads the channel with the bot token, decodes each message with the code that decodes a live event (the first attachment is flattened into
-`title`, `titleLink`, `fallback`, `footer` and `attachmentText`), and runs the intake's own matcher over it. The two Bindings below are in
+`title`, `link`, `fallback`, `footer` and `body`, and the message's top-level text is `text`), and runs the intake's own matcher over it. The two Bindings below are in
 `hack/kind/sandbox/dryrun/`; they set the channel to your alert channel and the bot to the webhook's (`B0123456789`), and differ in one line.
 
 **The token** is read from `--token-file`, else from `SLACK_BOT_TOKEN`; it is never an argument and never printed. The file holds the token alone or `SLACK_BOT_TOKEN=...`
@@ -379,7 +379,7 @@ go run ./cmd/agent-kourier dry-run --config hack/kind/sandbox/dryrun --binding a
   --token-file ~/.config/agent-kourier/sandbox.env
 ```
 
-The two Bindings differ only in `match: {titleLink: ...}`: `receiver=slack-critical-kind$` in `trial.yaml` and `receiver=slack-critical$` in `production.yaml`. Copy one and edit its
+The two Bindings differ only in `match: {link: ...}`: `receiver=slack-critical-kind$` in `trial.yaml` and `receiver=slack-critical$` in `production.yaml`. Copy one and edit its
 `match`, `exclude` and `extract` to try a change. Options: `--channel C...` reads another channel, `--since 72h` only the newer
 messages, `--limit 50` only the newest 50 of what was read (reading is not cut short, so use `--since` to read less), and `--json` prints one JSON report for `jq`.
 
@@ -388,14 +388,14 @@ messages, `--limit 50` only the newest 50 of what was read (reading is not cut s
 ```
 TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME            KEY                       TITLE
 1791104398.621498  B0123456789  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
-1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
+1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match link
 1791104398.621854  person:U1    person     -        -         -                    -                         <@UFAKEBOT> is this real?
 ```
 
 - **SENDER** is the bot ID, `person:<user ID>`, or `agent-kourier` for Agent Kourier's own post. **TRIGGER** is the index in the Binding's `chat.triggers` (the `mention` trigger is 0, so the first `botMessage` one is 1).
 - **OUTCOME**, and what to do about it:
   - `matched`: the trigger took it. STATE, ALERTNAME and KEY are what it extracted; the key is shortened with a hash when it is long, and `--json` has it whole.
-  - `unmatched`: the bot is named by a trigger, and no trigger took the message. The last column says where each trigger of the bot turned it away, at the first regex that failed (`match titleLink`, `extract key`). This is what Agent Kourier counts as `agentkourier_trigger_unmatched_total`.
+  - `unmatched`: the bot is named by a trigger, and no trigger took the message. The last column says where each trigger of the bot turned it away, at the first regex that failed (`match link`, `extract key`). This is what Agent Kourier counts as `agentkourier_trigger_unmatched_total`.
   - `excluded`: every `match` regex matched and an `exclude` regex turned it away. A message that fails a `match` first is `unmatched`, not `excluded`.
   - `other_bot`: a bot that no `botMessage` trigger names. The adapter drops it before any trigger.
   - `own`: Agent Kourier's own post, which is never read. `person`: a person's message, which only a mention or a reply in a thread Agent Kourier owns turns into a turn. `ignored`: something the intake leaves alone whoever sent it, such as a bot's reply in a thread, or an event the adapter drops.
@@ -429,7 +429,7 @@ A second Binding, `agent-kourier/alert-trial` (`agent-kourier/alert-trial/alert-
 
 | | |
 |---|---|
-| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the Alertmanager trigger written in full (title, fallback, extracts, thread rules, prompt), and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
+| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the Alertmanager trigger written in full (title, fallback, extracts, thread rules, prompt), and `match: {link: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
 | What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
 | Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
 | Limits | 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |

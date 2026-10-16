@@ -95,6 +95,8 @@ var rules = []rule{
 		"names the removed Binding alerts block, which the strict decoder rejects; alerts enter only through chat.triggers"),
 	r("removed-preset", "(?i)\\b[\"'`]?preset[\"'`]?:\\s*[\"'`]?alertmanager\\b|\\balertmanager\\b[\"'`]?\\s+[\"'`]?preset\\b|\\bpreset\\b[\"'`]?\\s+[\"'`]?alertmanager\\b",
 		"names the removed trigger preset; a botMessage trigger is written in full, as the Alertmanager how-to shows"),
+	r("removed-trigger-field", `\b(?:botId|attachmentText|titleLink)\b`,
+		"is a trigger field name that was renamed: from.botId is from.id, attachmentText is body, titleLink is link"),
 	fieldRule("unbuilt-field",
 		"names a field that api/v1alpha1 does not have yet; it stops being flagged when a type carries it as a json tag",
 		"approverGroups", "toolApprovals", "directMessages"),

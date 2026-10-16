@@ -42,7 +42,9 @@ func TestReplayClassifiesTheOwnersChannel(t *testing.T) {
 	infoInhibitor := kindFiring
 	infoInhibitor.Title = "[kind] FIRING (1) - InfoInhibitor"
 	otherBot := kindFiring
-	otherBot.BotID = "B0OTHERBOT1"
+	otherBot.ID = "B0OTHERBOT1"
+	otherKind := kindFiring
+	otherKind.Kind = "webhook"
 	exclude := func(tr v1alpha1.Trigger) v1alpha1.Trigger {
 		tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$|- InfoInhibitor$`}
 		return tr
@@ -62,11 +64,11 @@ func TestReplayClassifiesTheOwnersChannel(t *testing.T) {
 		{"kind firing, trial", exclude(trialTrigger()), history("1.1", &kindFiring), chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 0, Fields: kindFields}},
 		{"kind resolved, trial", exclude(trialTrigger()), history("1.2", &kindResolved), chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 0,
 			Fields: map[string]string{"state": "RESOLVED", "alertname": "KubePodCrashLooping", "key": "KubePodCrashLooping shop"}}},
-		{"production firing, trial: the receiver differs", exclude(trialTrigger()), history("1.3", &prodFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match titleLink"}},
+		{"production firing, trial: the receiver differs", exclude(trialTrigger()), history("1.3", &prodFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match link"}},
 		{"production firing, production", exclude(productionTrigger()), history("1.4", &prodFiring), chat.ReplayVerdict{Outcome: chat.ReplayMatched, Trigger: 0,
 			Fields: map[string]string{"state": "FIRING", "alertname": "KubeAPIErrorBudgetBurn", "key": "KubeAPIErrorBudgetBurn kube-system"}}},
-		{"kind firing, production", exclude(productionTrigger()), history("1.5", &kindFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match titleLink"}},
-		{"heartbeat", exclude(productionTrigger()), history("1.6", &heartbeat), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match title"}},
+		{"kind firing, production", exclude(productionTrigger()), history("1.5", &kindFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match link"}},
+		{"heartbeat", exclude(productionTrigger()), history("1.6", &heartbeat), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match link"}},
 		{"Grafana", exclude(productionTrigger()), history("1.7", &grafanaFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: match fallback"}},
 		{"an alert the exclude names", exclude(trialTrigger()), history("1.8", &infoInhibitor), chat.ReplayVerdict{Outcome: chat.ReplayExcluded, Why: "trigger 0: exclude title"}},
 		{"the heartbeat, when only the exclude turns it away", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
@@ -76,6 +78,7 @@ func TestReplayClassifiesTheOwnersChannel(t *testing.T) {
 		{"an extract that misses", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 			tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^agent-kourier-key: (?P<key>\S+)$`}}
 		}), history("1.10", &kindFiring), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: extract key"}},
+		{"the trigger's ID with another kind", exclude(trialTrigger()), history("2.0", &otherKind), chat.ReplayVerdict{Outcome: chat.ReplayUnmatched, Why: "trigger 0: sender kind"}},
 		{"another bot", exclude(trialTrigger()), history("2.1", &otherBot), chat.ReplayVerdict{Outcome: chat.ReplayOtherBot}},
 		{"a person", exclude(trialTrigger()), person("2.2"), chat.ReplayVerdict{Outcome: chat.ReplayPerson}},
 		{"agent-kourier's own post", exclude(trialTrigger()), own, chat.ReplayVerdict{Outcome: chat.ReplayOwn}},
@@ -148,7 +151,7 @@ func TestReplayAgreesWithTheIntake(t *testing.T) {
 // a Binding that did not come through the loader.
 func TestNewReplayRefusesATriggerThatDoesNotCompile(t *testing.T) {
 	b := &v1alpha1.Binding{}
-	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: webhookBot},
+	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{ID: webhookBot},
 		Match: map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `(`}}}
 	if _, err := chat.NewReplay(b); err == nil {
 		t.Fatal("NewReplay accepted a regex that does not compile")

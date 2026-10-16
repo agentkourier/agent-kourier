@@ -6,4 +6,7 @@
 # text must appear on the offending line. The reason is required and says why the page may name it. An entry that
 # matches nothing is itself a finding, so delete it when the line goes.
 #
-# The list starts empty: fix the page first.
+# The list starts nearly empty: fix the page first.
+docs/how-to/upgrade.md | removed-trigger-field | botId | the upgrade page names the renamed sender field so that a reader can find it in an old Binding
+docs/how-to/upgrade.md | removed-trigger-field | titleLink | the upgrade page names the renamed link field so that a reader can find it in an old Binding
+docs/how-to/upgrade.md | removed-trigger-field | attachmentText | the upgrade page names the renamed body field so that a reader can find it in an old Binding

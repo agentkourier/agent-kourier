@@ -7,9 +7,9 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'Pipeline FAILED - web-build'
-      titleLink: 'https://ci.example.com/pipelines/web-build/runs/1423'
+      link: 'https://ci.example.com/pipelines/web-build/runs/1423'
       fallback: '[FAILED] web-build on main (#1423) | https://ci.example.com/pipelines/web-build/runs/1423'
-      attachmentText: 'Stage test failed after 4m12s. 3 tests failed.'
+      body: 'Stage test failed after 4m12s. 3 tests failed.'
       footer: 'ci-bot'
     expect:
       outcome: matched
@@ -23,7 +23,7 @@ cases:
       bot: B0REPLACEME
       title: 'Pipeline FAILED - web-build'
       fallback: '[FAILED] web-build on feature/login (#1424) | https://ci.example.com/pipelines/web-build/runs/1424'
-      attachmentText: 'Stage lint failed after 0m41s.'
+      body: 'Stage lint failed after 0m41s.'
     expect:
       outcome: matched
       fields: { state: FAILED, pipeline: web-build, key: web-build on feature/login }
@@ -77,7 +77,7 @@ cases:
       bot: B0REPLACEME
       title: 'Pipeline FAILED - web-build'
       fallback: '[FAILED] web-build on main (#1427) | https://ci.example.com/pipelines/web-build/runs/1427'
-      attachmentText: 'Stage test failed after 4m12s. Retry 1 of 3 scheduled.'
+      body: 'Stage test failed after 4m12s. Retry 1 of 3 scheduled.'
     expect: { outcome: excluded }
 
   - name: a failure marked known flaky is excluded
@@ -86,7 +86,7 @@ cases:
       bot: B0REPLACEME
       title: 'Pipeline FAILED - web-build'
       fallback: '[FAILED] web-build on main (#1428) | https://ci.example.com/pipelines/web-build/runs/1428'
-      attachmentText: 'Stage test failed. Known flaky: TestCheckoutTimeout.'
+      body: 'Stage test failed. Known flaky: TestCheckoutTimeout.'
     expect: { outcome: excluded }
 
   - name: a failure whose fallback names no branch finds no key
@@ -95,7 +95,7 @@ cases:
       bot: B0REPLACEME
       title: 'Pipeline FAILED - web-build'
       fallback: '[FAILED] web-build (#1429) | https://ci.example.com/pipelines/web-build/runs/1429'
-      attachmentText: 'Stage test failed after 4m12s.'
+      body: 'Stage test failed after 4m12s.'
     expect: { outcome: unmatched }
 
   # closeWhen is not evaluated here: the message that closes a thread is a match, with the state it closes on.
@@ -105,7 +105,7 @@ cases:
       bot: B0REPLACEME
       title: 'Pipeline PASSED - web-build'
       fallback: '[PASSED] web-build on main (#1430) | https://ci.example.com/pipelines/web-build/runs/1430'
-      attachmentText: 'All 212 tests passed.'
+      body: 'All 212 tests passed.'
     expect:
       outcome: matched
       trigger: 0

@@ -117,6 +117,10 @@ type Caps struct {
 	Ephemeral bool // Ephemeral shows a message to one person alone
 	Edits     bool // Update works
 	Inputs    bool // a Prompt's questions are answered inline; otherwise by a reply
+	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
+	// Binding's acknowledgment names none. The API names no reaction, so each platform says which one is its own (Slack:
+	// hourglass_flowing_sand). Empty means the platform has none, and an acknowledgment that names none shows nothing.
+	AckReaction string
 	// MaxText is the most text, in UTF-16 units, that one place shows, and Limits is the same for the
 	// places that differ. A place cut to its limit ends in Truncated, which counts.
 	MaxText int

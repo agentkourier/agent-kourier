@@ -189,6 +189,7 @@ func TestBindingValidate(t *testing.T) {
 			`spec.chat.acknowledgment.emoji: invalid reaction name ":eyes:": use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed`},
 		{"acknowledgment emoji with uppercase", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "Eyes" },
 			`spec.chat.acknowledgment.emoji: invalid reaction name "Eyes": use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed`},
+		{"acknowledgment without an emoji is valid: the platform supplies one", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "" }, ""},
 		{"acknowledgment custom emoji ok", func(o *Binding) { o.Spec.Chat.Acknowledgment.Emoji = "eyes+1" }, ""},
 		{"tool approvals with valid groups", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true

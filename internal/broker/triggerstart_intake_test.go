@@ -109,8 +109,8 @@ func alertOf(ts, state, name, group string) chat.Inbound {
 	}
 	return chat.Inbound{
 		At: chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: ts},
-		Bot: &chat.BotMessage{BotID: "B0123456789", Title: title, TitleLink: link,
-			Fallback: tag + " " + group + " (checkout critical) | " + link, AttachmentText: "*Alert* - critical\n"},
+		Bot: &chat.BotMessage{ID: "B0123456789", Title: title, Link: link,
+			Fallback: tag + " " + group + " (checkout critical) | " + link, Body: "*Alert* - critical\n"},
 	}
 }
 

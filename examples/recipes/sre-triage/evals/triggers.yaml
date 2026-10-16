@@ -12,7 +12,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING (1) - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect:
       outcome: matched
@@ -24,7 +24,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: '[prod] FIRING (1) - KubeContainerOOMKilled'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] KubeContainerOOMKilled shop (recommender-5c6d7f8b9-q7w2e critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect:
       outcome: matched
@@ -38,7 +38,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'RESOLVED - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[RESOLVED] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect:
       outcome: matched
@@ -50,7 +50,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING (3) - KubePodNotReady'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:3] KubePodNotReady shop (critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect:
       outcome: matched
@@ -62,7 +62,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING (1) - Watchdog'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] Watchdog  (none prometheus) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect: { outcome: excluded }
 
@@ -71,7 +71,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING (1) - KubeAPIErrorBudgetBurn'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat'
       fallback: '[FIRING:1] KubeAPIErrorBudgetBurn kube-system (critical) | https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat'
     expect: { outcome: unmatched }
 
@@ -80,7 +80,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING (1) - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical-eu'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical-eu'
       fallback: '[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical-eu'
     expect: { outcome: unmatched }
 
@@ -89,7 +89,7 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING: HighRequestLatency (payments)'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: 'FIRING: HighRequestLatency (payments)'
     expect: { outcome: unmatched }
 
@@ -98,7 +98,7 @@ cases:
     message:
       bot: B0SOMEOTHER
       title: 'FIRING (1) - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect: { outcome: other_bot }
 
@@ -113,6 +113,6 @@ cases:
       bot: B0REPLACEME
       inThread: true
       title: 'FIRING (1) - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect: { outcome: ignored }

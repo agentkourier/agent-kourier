@@ -46,7 +46,7 @@ data:
               field: title
               regex: ^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)
           from:
-            botId: B0123456789
+            id: B0123456789
           limits:
             maxRunsPerDay: 40
             rateLimit:
@@ -55,8 +55,8 @@ data:
               per: 10m
           match:
             fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
+            link: receiver=slack-critical$
             title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
-            titleLink: receiver=slack-critical$
           promptTemplate: |
             An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
             Investigate it with your read-only tools. Report the likely cause, the evidence you
@@ -216,7 +216,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 7ab6f61c0c4db83623652ebcce0fbf007d427a6bcb34ba0e445152413deeac31
+        checksum/config: 18ef9e37459fdd1e1b791412dcd2185e2dea17b5427f2dde56e8c4cfeb2ff937
         example.test/scrape: "false"
       labels:
         app.kubernetes.io/instance: agent-kourier

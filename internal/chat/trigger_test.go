@@ -38,24 +38,24 @@ const (
 )
 
 var (
-	kindFiring = chat.BotMessage{BotID: webhookBot, Title: "[kind] FIRING (1) - KubePodCrashLooping", TitleLink: kindLink,
-		Fallback:       "[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | " + kindLink,
-		AttachmentText: "*KubePodCrashLooping* - critical\nPod is crash looping.\nPod shop/checkout-7d9f8b6c5-x2x4k (checkout) is in waiting state (reason: \"CrashLoopBackOff\").\n"}
-	kindResolved = chat.BotMessage{BotID: webhookBot, Title: "[kind] RESOLVED - KubePodCrashLooping", TitleLink: kindLink,
-		Fallback:       "[RESOLVED] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | " + kindLink,
-		AttachmentText: "*KubePodCrashLooping* - critical\n"}
-	kindGroup = chat.BotMessage{BotID: webhookBot, Title: "[kind] FIRING (3) - KubePodNotReady", TitleLink: kindLink,
+	kindFiring = chat.BotMessage{ID: webhookBot, Title: "[kind] FIRING (1) - KubePodCrashLooping", Link: kindLink,
+		Fallback: "[FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | " + kindLink,
+		Body:     "*KubePodCrashLooping* - critical\nPod is crash looping.\nPod shop/checkout-7d9f8b6c5-x2x4k (checkout) is in waiting state (reason: \"CrashLoopBackOff\").\n"}
+	kindResolved = chat.BotMessage{ID: webhookBot, Title: "[kind] RESOLVED - KubePodCrashLooping", Link: kindLink,
+		Fallback: "[RESOLVED] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical) | " + kindLink,
+		Body:     "*KubePodCrashLooping* - critical\n"}
+	kindGroup = chat.BotMessage{ID: webhookBot, Title: "[kind] FIRING (3) - KubePodNotReady", Link: kindLink,
 		Fallback: "[FIRING:3] KubePodNotReady shop (critical) | " + kindLink}
-	prodFiring = chat.BotMessage{BotID: webhookBot, Title: "FIRING (1) - KubeAPIErrorBudgetBurn", TitleLink: prodLink,
-		Fallback:       "[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | " + prodLink,
-		AttachmentText: "*KubeAPIErrorBudgetBurn* - critical\nThe API server is burning too much error budget.\n"}
-	prodResolved = chat.BotMessage{BotID: webhookBot, Title: "RESOLVED - KubeAPIErrorBudgetBurn", TitleLink: prodLink,
+	prodFiring = chat.BotMessage{ID: webhookBot, Title: "FIRING (1) - KubeAPIErrorBudgetBurn", Link: prodLink,
+		Fallback: "[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | " + prodLink,
+		Body:     "*KubeAPIErrorBudgetBurn* - critical\nThe API server is burning too much error budget.\n"}
+	prodResolved = chat.BotMessage{ID: webhookBot, Title: "RESOLVED - KubeAPIErrorBudgetBurn", Link: prodLink,
 		Fallback: "[RESOLVED] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | " + prodLink}
-	grafanaFiring = chat.BotMessage{BotID: webhookBot, Title: "FIRING: HighRequestLatency (payments)", TitleLink: "https://grafana.example.com/alerting/list",
-		Fallback: "FIRING: HighRequestLatency (payments)", AttachmentText: "**Firing**\n\nValue: A=0.92\nLabels:\n - alertname = HighRequestLatency\n"}
-	heartbeat = chat.BotMessage{BotID: webhookBot, Title: "Prometheus heartbeat", TitleLink: beatLink,
-		Fallback:       "[FIRING:1] Watchdog  (none prometheus) | " + beatLink,
-		AttachmentText: "Watchdog firing — Prometheus + Alertmanager are alive."}
+	grafanaFiring = chat.BotMessage{ID: webhookBot, Title: "FIRING: HighRequestLatency (payments)", Link: "https://grafana.example.com/alerting/list",
+		Fallback: "FIRING: HighRequestLatency (payments)", Body: "**Firing**\n\nValue: A=0.92\nLabels:\n - alertname = HighRequestLatency\n"}
+	heartbeat = chat.BotMessage{ID: webhookBot, Title: "Prometheus heartbeat", Link: beatLink,
+		Fallback: "[FIRING:1] Watchdog  (none prometheus) | " + beatLink,
+		Body:     "Watchdog firing — Prometheus + Alertmanager are alive."}
 )
 
 // botInbound is a top-level bot message in channel at id (a ts), with no text of its own and the flattened
@@ -67,7 +67,7 @@ func botInbound(channel, id string, b chat.BotMessage) chat.Inbound {
 // botTrigger is a botMessage trigger on bot, as the Binding loader would hand it on after defaulting. Its limits are
 // the ones every botMessage trigger must set, wide enough that no test reaches them and no daily cap.
 func botTrigger(bot string, mutate func(*v1alpha1.Trigger)) v1alpha1.Trigger {
-	t := v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: bot},
+	t := v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{ID: bot},
 		PromptTemplate: "An alert.",
 		Match:          map[v1alpha1.MessageField]string{},
 		Limits: v1alpha1.TriggerLimits{
@@ -86,7 +86,7 @@ func botTrigger(bot string, mutate func(*v1alpha1.Trigger)) v1alpha1.Trigger {
 // excluded.
 func trialTrigger() v1alpha1.Trigger {
 	tr := chattest.AlertmanagerTrigger(webhookBot)
-	tr.Match[v1alpha1.FieldTitleLink] = `receiver=slack-critical-kind$`
+	tr.Match[v1alpha1.FieldLink] = `receiver=slack-critical-kind$`
 	tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`}
 	return tr
 }
@@ -96,7 +96,7 @@ func trialTrigger() v1alpha1.Trigger {
 // what the Alertmanager trigger says.
 func kindOnly() v1alpha1.Trigger {
 	return botTrigger(webhookBot, func(t *v1alpha1.Trigger) {
-		t.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: `receiver=slack-critical-kind$`}
+		t.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldLink: `receiver=slack-critical-kind$`}
 		t.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`}
 	})
 }
@@ -104,7 +104,7 @@ func kindOnly() v1alpha1.Trigger {
 // productionTrigger is what the production Binding would say: the receiver anchored at its end.
 func productionTrigger() v1alpha1.Trigger {
 	tr := trialTrigger()
-	tr.Match[v1alpha1.FieldTitleLink] = `receiver=slack-critical$`
+	tr.Match[v1alpha1.FieldLink] = `receiver=slack-critical$`
 	return tr
 }
 
@@ -295,7 +295,7 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 		title = v1alpha1.FieldTitle
 	)
 	msg := func(mutate func(*chat.BotMessage)) chat.BotMessage {
-		b := chat.BotMessage{BotID: webhookBot, Title: "FIRING (1) - Disk", TitleLink: "http://am/#/alerts?receiver=a", Fallback: "[FIRING:1] Disk full | http://am", Footer: "key: disk/ns1", AttachmentText: "disk is at 97%"}
+		b := chat.BotMessage{ID: webhookBot, Title: "FIRING (1) - Disk", Link: "http://am/#/alerts?receiver=a", Fallback: "[FIRING:1] Disk full | http://am", Footer: "key: disk/ns1", Body: "disk is at 97%"}
 		if mutate != nil {
 			mutate(&b)
 		}
@@ -309,12 +309,14 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 		fields  map[string]string
 	}{
 		{"a trigger with no regexes takes every message of its bot", botTrigger(webhookBot, nil), msg(nil), true, map[string]string{}},
-		{"another bot's message is not taken, whatever it says", botTrigger(webhookBot, nil), msg(func(b *chat.BotMessage) { b.BotID = other }), false, nil},
+		{"another bot's message is not taken, whatever it says", botTrigger(webhookBot, nil), msg(func(b *chat.BotMessage) { b.ID = other }), false, nil},
+		{"the right ID with the wrong kind is not the sender", botTrigger(webhookBot, nil), msg(func(b *chat.BotMessage) { b.Kind = "webhook" }), false, nil},
+		{"a message with no kind is from a bot", botTrigger(webhookBot, func(tr *v1alpha1.Trigger) { tr.From.Kind = v1alpha1.SenderKindBot }), msg(nil), true, map[string]string{}},
 		{"match on every named field",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 				tr.Match = map[v1alpha1.MessageField]string{
-					v1alpha1.FieldTitle: `^FIRING`, v1alpha1.FieldTitleLink: `receiver=a$`, v1alpha1.FieldFallback: `Disk full`,
-					v1alpha1.FieldFooter: `^key: `, v1alpha1.FieldAttachmentText: `\d+%`}
+					v1alpha1.FieldTitle: `^FIRING`, v1alpha1.FieldLink: `receiver=a$`, v1alpha1.FieldFallback: `Disk full`,
+					v1alpha1.FieldFooter: `^key: `, v1alpha1.FieldBody: `\d+%`}
 			}), msg(nil), true, map[string]string{}},
 		{"every match entry must match: one that does not is no match",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
@@ -336,7 +338,7 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 			}), msg(func(b *chat.BotMessage) { b.Title = "Prometheus heartbeat" }), false, nil},
 		{"any one exclude entry is enough",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-				tr.Exclude = map[v1alpha1.MessageField]string{title: `^nope$`, v1alpha1.FieldAttachmentText: `97%`}
+				tr.Exclude = map[v1alpha1.MessageField]string{title: `^nope$`, v1alpha1.FieldBody: `97%`}
 			}), msg(nil), false, nil},
 		{"a message no exclude entry matches is kept",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
@@ -351,7 +353,7 @@ func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 			}), msg(nil), true, map[string]string{"state": "FIRING", "key": "disk/ns1"}},
 		{"extract takes the group of its own name when the regex has several",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-				tr.Extract = map[string]v1alpha1.Extract{"pct": {Field: v1alpha1.FieldAttachmentText, Regex: `(?P<what>\w+) is at (?P<pct>\d+)%`}}
+				tr.Extract = map[string]v1alpha1.Extract{"pct": {Field: v1alpha1.FieldBody, Regex: `(?P<what>\w+) is at (?P<pct>\d+)%`}}
 			}), msg(nil), true, map[string]string{"pct": "97"}},
 		{"a group that took part and matched empty text is a match, with an empty value",
 			botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
@@ -421,18 +423,18 @@ func TestTheFirstTriggerThatMatchesTakesTheMessage(t *testing.T) {
 		tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `agent-kourier-key: (?P<key>\S+)`}}
 	})
 	optionalKey := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldAttachmentText: "^"}
+		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldBody: "^"}
 		tr.Extract = map[string]v1alpha1.Extract{"key": {Field: v1alpha1.FieldFooter, Regex: `^(?:no (?P<key>key)|no key here)$`}}
 	})
 	hasState := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: "^"}
+		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldLink: "^"}
 		tr.Extract = map[string]v1alpha1.Extract{"state": {Field: v1alpha1.FieldTitle, Regex: `^(?P<state>FIRING|RESOLVED)`}}
 	})
 	excluded := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
 		tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `FIRING`}
 	})
 	otherBot := botTrigger("B0OTHERBOT1", nil)
-	msg := chat.BotMessage{BotID: webhookBot, Title: "FIRING (1) - Disk", Footer: "no key here"}
+	msg := chat.BotMessage{ID: webhookBot, Title: "FIRING (1) - Disk", Footer: "no key here"}
 	tests := []struct {
 		name     string
 		triggers []v1alpha1.Trigger
@@ -558,12 +560,12 @@ func TestTheProductionTriggerTakesProductionAlertsNotKindOnes(t *testing.T) {
 func TestAnUnanchoredReceiverMatchWronglyTakesKindAlerts(t *testing.T) {
 	bare := func(receiver string) v1alpha1.Trigger {
 		return botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-			tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: receiver}
+			tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldLink: receiver}
 		})
 	}
 	withAlertmanager := func(receiver string) v1alpha1.Trigger {
 		tr := productionTrigger()
-		tr.Match[v1alpha1.FieldTitleLink] = receiver
+		tr.Match[v1alpha1.FieldLink] = receiver
 		return tr
 	}
 	for name, mk := range map[string]func(string) v1alpha1.Trigger{"on the link alone": bare, "with the Alertmanager trigger": withAlertmanager} {
@@ -593,7 +595,7 @@ func TestAnUnanchoredReceiverMatchWronglyTakesKindAlerts(t *testing.T) {
 func TestAnUnmatchedBotMessageIsCountedAndLoggedWithoutItsText(t *testing.T) {
 	const canary = "SECRET-CANARY-TEXT"
 	h := newTriggered(t, kindOnly())
-	leaky := chat.BotMessage{BotID: webhookBot, Title: canary, TitleLink: canary, Fallback: canary, Footer: canary, AttachmentText: canary}
+	leaky := chat.BotMessage{ID: webhookBot, Title: canary, Link: canary, Fallback: canary, Footer: canary, Body: canary}
 	m := botInbound("C1", "9.9", leaky)
 	m.Text = canary
 	if err := h.in.Message(h.ctx, m); err != nil {
@@ -619,6 +621,26 @@ func TestAnUnmatchedBotMessageIsCountedAndLoggedWithoutItsText(t *testing.T) {
 	}
 	if len(h.got()) != 0 || len(h.sub.submitted()) != 0 {
 		t.Error("an unmatched message was handed on")
+	}
+}
+
+// A sender with the ID a trigger names and another kind is not that trigger's sender: live it is unmatched and counted, as
+// the dry run reports it (TestReplayClassifiesTheOwnersChannel), and not an "other bot" the adapter would have dropped.
+func TestAMessageOfTheRightIDAndTheWrongKindIsUnmatched(t *testing.T) {
+	h := newTriggered(t, kindOnly())
+	wrong := kindFiring
+	wrong.Kind = "webhook"
+	if !h.in.AcceptsBot("C1", webhookBot) {
+		t.Fatal("the adapter would drop a bot the trigger names by ID: AcceptsBot looks at the ID alone")
+	}
+	if err := h.in.Message(h.ctx, botInbound("C1", "9.9", wrong)); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", "sre/sre-alerts"); n != 1 || len(h.got()) != 0 {
+		t.Errorf("unmatched = %v, matches %+v; want one unmatched message", n, h.got())
+	}
+	if n := h.counter(t, "agentkourier_trigger_matched_total", "sre/sre-alerts"); n != 0 {
+		t.Errorf("matched = %v for a sender of the wrong kind", n)
 	}
 }
 

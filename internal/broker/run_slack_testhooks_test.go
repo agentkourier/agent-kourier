@@ -402,6 +402,42 @@ func TestRunTakesAMentionFromSlackThroughTheSessionToTheAgent(t *testing.T) {
 	goleak.VerifyNone(t, before)
 }
 
+// A Binding that names no acknowledgment emoji gets the chat platform's own: Run hands the Slack adapter's
+// Capabilities().AckReaction to the Bindings, and the outbox puts that reaction on the mention while its turn runs. The
+// agent holds the turn, so the reaction can be read before it is taken off. The real renderer is used, because the
+// reaction is raised by the session's notices, which the recording sink of the other worlds swallows.
+func TestRunReactsToAMentionWithThePlatformsOwnReactionWhenTheBindingNamesNone(t *testing.T) {
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil
+	hold := make(chan struct{})
+	w.stub.Agent("kagent", "k8s-agent").Reply(func(string) []stubagent.Step {
+		<-hold
+		return []stubagent.Step{stubagent.Text("the answer")}
+	})
+	r := start(t, w.cfg)
+	r.until("/readyz", http.StatusOK)
+	waitConnected(t, w.fake)
+
+	m, err := w.fake.Mention("C0123456789", "U1", "<@UFAKEBOT> why is it down?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []fakeslack.Reaction
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if got = w.fake.Reactions("C0123456789", m.TS); len(got) > 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	close(hold)
+	if len(got) != 1 || got[0].Name != "hourglass_flowing_sand" {
+		t.Errorf("reactions on the mention while its turn runs = %+v, want hourglass_flowing_sand", got)
+	}
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Errorf("Run = %v after its context ended, want nil", err)
+	}
+}
+
 func waitConnected(t *testing.T, f *fakeslack.Server) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); f.Connections() == 0; time.Sleep(10 * time.Millisecond) {

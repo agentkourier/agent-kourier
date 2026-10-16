@@ -24,8 +24,8 @@ import (
 //	<text>...</text>
 //	</untrusted-data-0123456789ab>
 //
-// with the fields that the message has, in the order title, text, attachmentText, fallback,
-// titleLink and footer, named as the trigger's match and extract name them. It is built by the untrusted block module
+// with the fields that the message has, in the order title, text, body, fallback,
+// link and footer, named as the trigger's match and extract name them. It is built by the untrusted block module
 // (untrusted.go), which writes the sentence before it (that the block is data and not instructions, and where the tag is),
 // the tag, and the escaping. This file says only what the block holds: the message's fields, each read as follows. A
 // field is normalized and redacted (redact.FreeTextCut: the invisible characters deleted, the line breaks made "\n", the
@@ -54,12 +54,12 @@ const (
 // (v1alpha1.MessageField). Every one is untrusted, and all of them are put in the block, so the
 // agent sees the message whole whatever the template reads of it. An empty field is left out.
 type TriggerMessage struct {
-	Text           string
-	Title          string
-	TitleLink      string
-	Fallback       string
-	Footer         string
-	AttachmentText string
+	Text     string
+	Title    string
+	Link     string
+	Fallback string
+	Footer   string
+	Body     string
 }
 
 // MessageOf returns the untrusted block's message for m: its text and the fields of its bot's attachment, each read
@@ -68,8 +68,8 @@ type TriggerMessage struct {
 // the Inbound later cannot be left out of what the agent sees.
 func MessageOf(m chat.Inbound) TriggerMessage {
 	return TriggerMessage{
-		Text: m.Field(v1alpha1.FieldText), Title: m.Field(v1alpha1.FieldTitle), TitleLink: m.Field(v1alpha1.FieldTitleLink),
-		Fallback: m.Field(v1alpha1.FieldFallback), Footer: m.Field(v1alpha1.FieldFooter), AttachmentText: m.Field(v1alpha1.FieldAttachmentText),
+		Text: m.Field(v1alpha1.FieldText), Title: m.Field(v1alpha1.FieldTitle), Link: m.Field(v1alpha1.FieldLink),
+		Fallback: m.Field(v1alpha1.FieldFallback), Footer: m.Field(v1alpha1.FieldFooter), Body: m.Field(v1alpha1.FieldBody),
 	}
 }
 
@@ -184,7 +184,7 @@ func alertItem(name v1alpha1.MessageField, value string, kind fieldKind, line bo
 }
 
 // untrustedSection returns the sentence and the block for msg, in at most MaxUntrustedUnits: each field of the
-// message that has something in it, in the order title, text, attachmentText, fallback, titleLink and footer. A block
+// message that has something in it, in the order title, text, body, fallback, link and footer. A block
 // with no field is written empty. Fields that do not fit are left out, and a last line says so.
 func untrustedSection(msg TriggerMessage) string {
 	section, _ := untrustedBlock{
@@ -194,9 +194,9 @@ func untrustedSection(msg TriggerMessage) string {
 		Items: []untrustedItem{
 			alertItem(v1alpha1.FieldTitle, msg.Title, kindWindow, true),
 			alertItem(v1alpha1.FieldText, msg.Text, kindWindow, false),
-			alertItem(v1alpha1.FieldAttachmentText, msg.AttachmentText, kindWindow, false),
+			alertItem(v1alpha1.FieldBody, msg.Body, kindWindow, false),
 			alertItem(v1alpha1.FieldFallback, msg.Fallback, kindWindow, false),
-			alertItem(v1alpha1.FieldTitleLink, msg.TitleLink, kindWindow, true),
+			alertItem(v1alpha1.FieldLink, msg.Link, kindWindow, true),
 			alertItem(v1alpha1.FieldFooter, msg.Footer, kindIdentifier, false),
 		},
 	}.render()

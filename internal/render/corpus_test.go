@@ -29,14 +29,14 @@ func TestThreadRepliesTakeTheSplitSecretCorpus(t *testing.T) {
 func TestAlertBlockTakesTheSplitSecretCorpus(t *testing.T) {
 	for _, c := range redacttest.SplitSecretsSample() {
 		c.CheckKept(t, untrustedSection(TriggerMessage{Text: c.Text}))
-		c.Check(t, untrustedSection(TriggerMessage{Title: c.Text, TitleLink: c.Text, Fallback: c.Text, AttachmentText: c.Text}))
+		c.Check(t, untrustedSection(TriggerMessage{Title: c.Text, Link: c.Text, Fallback: c.Text, Body: c.Text}))
 	}
 	for _, c := range redacttest.Identifiers(redacttest.SplitSecretsSample()) {
 		c.Check(t, untrustedSection(TriggerMessage{Footer: c.Text}))
 	}
 	for _, b := range redacttest.LineBreaks {
 		c := redacttest.Breaks(b)
-		c.Check(t, untrustedSection(TriggerMessage{Text: c.Text, AttachmentText: c.Text, Fallback: c.Text, Title: c.Text}))
+		c.Check(t, untrustedSection(TriggerMessage{Text: c.Text, Body: c.Text, Fallback: c.Text, Title: c.Text}))
 	}
 }
 
@@ -75,11 +75,11 @@ func TestToolArgumentsTakeTheSplitSecretCorpus(t *testing.T) {
 func TestPromptTakesSecretsOutOfTheMessage(t *testing.T) {
 	const secret = "Zq9vK3mT7wRx"
 	msg := TriggerMessage{
-		Title:     "db is down password=" + secret,
-		Text:      "connect with postgres://admin:" + secret + "@db.example/app\nthen pass\x07word=" + secret,
-		TitleLink: "https://am.example/#/alerts?token=" + secret,
-		Fallback:  "Authorization: Bearer " + secret,
-		Footer:    "Bearer " + secret,
+		Title:    "db is down password=" + secret,
+		Text:     "connect with postgres://admin:" + secret + "@db.example/app\nthen pass\x07word=" + secret,
+		Link:     "https://am.example/#/alerts?token=" + secret,
+		Fallback: "Authorization: Bearer " + secret,
+		Footer:   "Bearer " + secret,
 	}
 	got, err := newPrompt(t, simpleTemplate).Render(simpleView(), msg)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestAlertFieldsWithoutWhiteSpaceKeepTheirStart(t *testing.T) {
 	})
 	t.Run("a longer Japanese body keeps its first 3000 units", func(t *testing.T) {
 		body := strings.Repeat("\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8", 5000)
-		if got, want := shown(t, untrustedSection(TriggerMessage{Text: body, AttachmentText: body}), "text"), capped(body); got != want {
+		if got, want := shown(t, untrustedSection(TriggerMessage{Text: body, Body: body}), "text"), capped(body); got != want {
 			t.Errorf("the body came back as %d units, want the first %d and the mark", chat.Units(got), MaxFieldUnits)
 		}
 	})
@@ -145,9 +145,9 @@ func TestAlertFieldsWithoutWhiteSpaceKeepTheirStart(t *testing.T) {
 		if len(link) < 5000 || strings.ContainsAny(link, " \n") {
 			t.Fatalf("the link is %d bytes or holds white space", len(link))
 		}
-		section := untrustedSection(TriggerMessage{TitleLink: link})
+		section := untrustedSection(TriggerMessage{Link: link})
 		want := escapeCut(host+params+"&token="+redacted, MaxFieldUnits)
-		if got := shown(t, section, "titleLink"); got != want || chat.Units(got) != MaxFieldUnits {
+		if got := shown(t, section, "link"); got != want || chat.Units(got) != MaxFieldUnits {
 			t.Errorf("the link came back as %d units: %.120q, want the first %d: %.120q", chat.Units(got), got, MaxFieldUnits, want)
 		}
 		if strings.Contains(section, secret) {
@@ -156,14 +156,14 @@ func TestAlertFieldsWithoutWhiteSpaceKeepTheirStart(t *testing.T) {
 	})
 	t.Run("a secret early in an unbroken link is redacted, and its value runs to the end of the link", func(t *testing.T) {
 		link := "https://grafana.example.com/d/xyz?token=" + secret + strings.Repeat("&var-host=node-0123456789", 200)
-		got := shown(t, untrustedSection(TriggerMessage{TitleLink: link}), "titleLink")
+		got := shown(t, untrustedSection(TriggerMessage{Link: link}), "link")
 		if want := "https://grafana.example.com/d/xyz?token=" + redacted; got != want {
 			t.Errorf("the link came back as %q, want %q", got, want)
 		}
 	})
 	t.Run("a secret that runs across the end of what is shown is not shown", func(t *testing.T) {
 		pad := strings.Repeat("a", MaxFieldUnits-chat.Units(chat.Truncated)-4)
-		got := shown(t, untrustedSection(TriggerMessage{TitleLink: "https://h/" + pad + "&token=" + secret + "&x=1"}), "titleLink")
+		got := shown(t, untrustedSection(TriggerMessage{Link: "https://h/" + pad + "&token=" + secret + "&x=1"}), "link")
 		if strings.Contains(got, secret[:4]) {
 			t.Errorf("the end of the field shows a start of the secret: %q", got[len(got)-40:])
 		}
@@ -185,7 +185,7 @@ func TestAlertFieldNeverShowsWhatTheCutWentThrough(t *testing.T) {
 		// The straddler begins 20 bytes before the end of the window (alertWindowBytes), and so is cut inside.
 		pad := strings.Repeat("x", alertWindowBytes-20-len(prefix)-1) + " "
 		for field, msg := range map[string]TriggerMessage{
-			"text": {Text: prefix + pad + straddler}, "attachmentText": {AttachmentText: prefix + pad + straddler},
+			"text": {Text: prefix + pad + straddler}, "body": {Body: prefix + pad + straddler},
 			"fallback": {Fallback: prefix + pad + straddler}, "title": {Title: prefix + pad + straddler},
 		} {
 			got := untrustedSection(msg)
@@ -207,7 +207,7 @@ func TestAlertFieldNeverShowsWhatTheCutWentThrough(t *testing.T) {
 func TestOneLineFieldsTakeWhatALineBreakHides(t *testing.T) {
 	for _, c := range redacttest.LineSplits() {
 		c.Check(t, untrustedSection(TriggerMessage{Title: c.Text}))
-		c.Check(t, untrustedSection(TriggerMessage{TitleLink: c.Text}))
+		c.Check(t, untrustedSection(TriggerMessage{Link: c.Text}))
 		c.Check(t, threadReplies([]ThreadReply{{UserID: "U1", Name: c.Text, Text: "ok"}}, 0))
 		c.Check(t, threadReplies([]ThreadReply{{UserID: c.Text, Name: "Ada", Text: "ok"}}, 0))
 		for _, kind := range []fieldKind{kindFreeText, kindWindow} {
@@ -224,13 +224,13 @@ func TestOneLineFieldsTakeWhatALineBreakHides(t *testing.T) {
 // The alert title that the review round found: a flag whose value is on the next line reaches the agent redacted. The
 // text field, which keeps its lines, is the contrast: its own line structure is what the agent sees of it.
 func TestAlertTitleWithAFlagAndItsValueOnTheNextLine(t *testing.T) {
-	got := untrustedSection(TriggerMessage{Title: "deploy --password\nhunter2", TitleLink: "https://user:pa\nss@host/x"})
+	got := untrustedSection(TriggerMessage{Title: "deploy --password\nhunter2", Link: "https://user:pa\nss@host/x"})
 	for _, leaked := range []string{"hunter2", "user:pa", "ss@host"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("the block shows %q:\n%s", leaked, got)
 		}
 	}
-	if !strings.Contains(got, "<title>deploy --password [redacted]</title>") || !strings.Contains(got, "<titleLink>https://[redacted]@host/x</titleLink>") {
+	if !strings.Contains(got, "<title>deploy --password [redacted]</title>") || !strings.Contains(got, "<link>https://[redacted]@host/x</link>") {
 		t.Errorf("the block does not show the one-line fields redacted:\n%s", got)
 	}
 }

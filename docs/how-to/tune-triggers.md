@@ -39,7 +39,7 @@ One line per message, oldest first:
 ```text
 TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME            KEY                       TITLE
 1791104398.621498  B0123456789  matched    1        FIRING    KubePodCrashLooping  KubePodCrashLooping shop  [kind] FIRING (1) - KubePodCrashLooping
-1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match titleLink
+1791104398.621757  B0123456789  unmatched  -        -         -                    -                         FIRING (1) - KubeAPIErrorBudgetBurn    trigger 1: match link
 ```
 
 - **SENDER** is the bot ID, `person:<user ID>`, `agent-kourier` for Agent Kourier's own post, or `unknown` for a message the adapter drops. **TRIGGER** is the
@@ -47,7 +47,7 @@ TS                 SENDER       OUTCOME    TRIGGER  STATE     ALERTNAME         
 - **OUTCOME**:
     - `matched`: the trigger took it; STATE, ALERTNAME and KEY are what it extracted.
     - `unmatched`: a trigger names the bot, and none took the message. The last column says where each trigger turned
-      it away, at the first regex that failed.
+      it away, at the first step that failed: a regex, or the sender's kind.
     - `excluded`: every `match` regex matched and an `exclude` regex turned it away.
     - `other_bot`: a bot that no trigger names.
     - `own`, `person`, `ignored`: Agent Kourier's own post, a person's message, and something the intake leaves alone.

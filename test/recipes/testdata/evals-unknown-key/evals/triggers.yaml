@@ -4,6 +4,6 @@ cases:
     message:
       bot: B0REPLACEME
       title: 'FIRING (1) - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] KubePodCrashLooping shop (critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect: { outcome: matched, triger: 1 }

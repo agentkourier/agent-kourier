@@ -52,6 +52,7 @@ type leaks struct {
 	cutToolArgs                                 bool // a tool too long for a prompt is cut and shown, not refused as too large
 	fitsLongTool                                bool // Fits says a tool too long for a prompt fits, while Post and Update refuse it
 	undeclaredTools                             bool // shows tool approvals, and does not say so (Subject.ToolApprovals false)
+	noAckReaction                               bool // says no reaction of its own, so a Binding that names none shows nothing
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
 	backslashAll      bool // a backslash before every ASCII punctuation: Slack honours none, and the "<" is a token
@@ -93,7 +94,7 @@ func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
 	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
 	f.SetCaps(chat.Caps{
-		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300,
+		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300, AckReaction: "hourglass",
 		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
 	})
 	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
@@ -356,10 +357,15 @@ func (m *markupPlatform) subject() Subject {
 		s.AllowAutolink = true // Slack makes a bare URL a link that shows itself, and no escape stops it
 	}
 	if m.leaks.noStreamError {
-		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, Edits: true})
+		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
 	}
 	if m.leaks.noStepError {
-		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true})
+		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
+	}
+	if m.leaks.noAckReaction {
+		c := m.Capabilities()
+		c.AckReaction = ""
+		m.SetCaps(c)
 	}
 	return s
 }
@@ -396,6 +402,7 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"no error from a platform with no streams", slackPlainText, leaks{noStreamError: true}, RuleContract, ""},
 		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
 		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
+		{"a platform that names no reaction of its own", slackPlainText, leaks{noAckReaction: true}, RuleContract, ""},
 		{"a step title dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepTitle}, RuleDropped, ""},
 		{"a step detail dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepDetail}, RuleDropped, ""},
 		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},

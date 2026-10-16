@@ -51,8 +51,8 @@ spec:
    which is sent as `X-User-Id`.
 4. `live` streams the answer as the agent writes it; `final` posts it once, when the turn ends.
 5. `all` makes every person's reply in a thread Agent Kourier owns a turn. `mention` takes only the replies that mention the bot.
-6. `acknowledgment` adds a temporary reaction to each accepted message while its turn is processing. It defaults to enabled with
-   `hourglass_flowing_sand`; set `enabled: false` to omit it, or set `emoji` to another bare Slack reaction name such as `eyes`.
+6. `acknowledgment` adds a temporary reaction to each accepted message while its turn is processing. It defaults to enabled, with the
+   platform's own reaction (Slack: `hourglass_flowing_sand`); set `enabled: false` to omit it, or set `emoji` to another bare Slack reaction name such as `eyes`.
 
 ## Load it
 

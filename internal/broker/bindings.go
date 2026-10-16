@@ -42,6 +42,9 @@ type Options struct {
 	// Binding's namespace/name. Turns run concurrently, so it may be called from several
 	// goroutines at once and must be safe for that. Required.
 	OnRejected func(binding string)
+	// AckReaction is the chat platform's own acknowledgment reaction (chat.Caps.AckReaction), which a Binding that names none
+	// gets. Empty means the platform has none.
+	AckReaction string
 	// fence, when set, refuses the calls that change what the agent holds (a send, an answer, a cancel) of a leader whose
 	// lease is past its renew deadline (fenceAgent). Nil with SQLite, which has no lease. Set only by the leader half, which is
 	// where the Bindings of a running broker are built.
@@ -139,15 +142,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	if err != nil {
 		return session.Backend{}, fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
-	ackEnabled, ackEmoji := true, v1alpha1.DefaultAcknowledgmentEmoji
-	if ack := rb.Binding.Spec.Chat.Acknowledgment; ack != nil {
-		if ack.Enabled != nil {
-			ackEnabled = *ack.Enabled
-		}
-		if ack.Emoji != "" {
-			ackEmoji = ack.Emoji
-		}
-	}
+	ackEnabled, ackEmoji := acknowledgment(rb.Binding.Spec.Chat.Acknowledgment, b.opts.AckReaction)
 	var ag session.AgentAPI = k.pool.Agent(src.Target())
 	if b.opts.fence != nil {
 		ag = fenceAgent(ag, b.opts.fence)
@@ -167,6 +162,23 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		AcknowledgmentEmoji:      ackEmoji,
 		AcknowledgmentConfigured: true,
 	}, nil
+}
+
+// acknowledgment is whether a Binding reacts to an accepted message, and with which reaction: the one the Binding names, else
+// platformDefault, which is the platform's own (chat.Caps.AckReaction). The API fills in neither, so an acknowledgment that
+// is not written is enabled, and a platform with no default of its own (an empty platformDefault) shows nothing until a
+// Binding names a reaction.
+func acknowledgment(ack *v1alpha1.ChatAcknowledgment, platformDefault string) (enabled bool, reaction string) {
+	enabled, reaction = true, platformDefault
+	if ack != nil {
+		if ack.Enabled != nil {
+			enabled = *ack.Enabled
+		}
+		if ack.Emoji != "" {
+			reaction = ack.Emoji
+		}
+	}
+	return enabled, reaction
 }
 
 // CancelTask asks the agent of the Binding named "namespace/name" to cancel the task, for the retention of a task that a

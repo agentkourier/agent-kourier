@@ -104,9 +104,9 @@ func checkShape(s string, limit int, extra string) Reason {
 // so a link holds no credentials.
 const linkExtra = "-._~:/?#=&"
 
-// checkLink is the rule of Link, which is Agent Kourier's own: the Slack permalink of the triggering
-// message, built from the channel and the message's ts. It is never a field of the message (not
-// titleLink, which the sender wrote), so the rule is a second line of defence, narrow enough
+// checkLink is the rule of Link, which is Agent Kourier's own: the platform's permalink of the triggering
+// message, built from the channel and the message's ID. It is never a field of the message (not
+// link, which the sender wrote), so the rule is a second line of defence, narrow enough
 // for a permalink and for little else. The link is at most 256 bytes of letters, digits and the
 // characters of linkExtra, with a scheme of http or https (in any case) and a host. An empty
 // link passes: the view may have none.

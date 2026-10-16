@@ -16,13 +16,13 @@ spec:
     triggers:
       - type: botMessage
         from:
-          botId: B0REPLACEME   # the CI bot's bot_id; replace it with your bot's ID
+          id: B0REPLACEME   # the CI bot's bot_id; replace it with your bot's ID
         match:                 # every entry must match. The title entry is there for the dry run: extract.state
                                # rejects the same titles, but a miss in match is the one the dry run names first
           title: '^Pipeline (?:FAILED|PASSED) - '
           fallback: '^\[(?:FAILED|PASSED)\] '
         exclude:               # no entry may match: a failure that will be retried, or that is known flaky
-          attachmentText: '(?i)\bretry \d+ of \d+ scheduled\b|\bknown flaky\b'
+          body: '(?i)\bretry \d+ of \d+ scheduled\b|\bknown flaky\b'
         extract:               # each regex has a named group with the entry's name
           state:
             field: title

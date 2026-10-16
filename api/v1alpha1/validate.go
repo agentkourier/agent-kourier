@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// channelID matches Slack channel IDs; its literal must equal ChatBinding.Channel's Pattern marker.
+// channelID matches Slack channel IDs, the only platform's; its literal must equal ChatBinding.Channel's Pattern marker.
 var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
 // reactionName matches Slack's bare reaction names. The platform adds and removes
@@ -23,7 +23,8 @@ var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 // platform adapter and prevents an invalid outbox row.
 var reactionName = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`)
 
-// botID matches Slack bot IDs; its literal must equal BotSource.BotID's Pattern marker.
+// botID matches Slack bot IDs, the only platform's; its literal must equal BotSource.ID's Pattern marker. A second
+// platform moves it to a per-platform check at resolution.
 var botID = regexp.MustCompile(`^B[A-Z0-9]+$`)
 
 // extractName is what a template can reach as .Fields.<name>: a Go identifier that starts
@@ -206,9 +207,7 @@ func (b *Binding) Validate() error {
 		if a.Enabled == nil {
 			p.add("spec.chat.acknowledgment.enabled", "required after defaulting")
 		}
-		if a.Emoji == "" {
-			p.add("spec.chat.acknowledgment.emoji", "required")
-		} else if !reactionName.MatchString(a.Emoji) {
+		if a.Emoji != "" && !reactionName.MatchString(a.Emoji) {
 			p.add("spec.chat.acknowledgment.emoji", "invalid reaction name %q: use lowercase letters, digits, '-', '_' or '+', with '+1' and '-1' allowed", a.Emoji)
 		}
 	}
@@ -294,7 +293,7 @@ func (p *problems) triggers(path string, ts []Trigger) {
 		// that does not match means the trigger does not match.
 		var bot string
 		if t.From != nil {
-			bot = t.From.BotID
+			bot = t.From.ID + "/" + string(t.From.Kind)
 		}
 		id := fmt.Sprintf("%q %q %q %q %q", t.Type, bot, t.Match, t.Exclude, t.Extract)
 		if first, dup := seen[id]; dup {
@@ -336,10 +335,17 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 
 func (p *problems) botMessageTrigger(path string, t *Trigger) {
 	switch {
-	case t.From == nil || t.From.BotID == "":
-		p.add(path+".from.botId", "required")
-	case !botID.MatchString(t.From.BotID):
-		p.add(path+".from.botId", "invalid bot ID %q: must be a Slack bot ID such as B0123456789, not a name", t.From.BotID)
+	case t.From == nil || t.From.ID == "":
+		p.add(path+".from.id", "required")
+	case !botID.MatchString(t.From.ID):
+		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789), not a name", t.From.ID)
+	}
+	if t.From != nil {
+		if t.From.Kind == "" {
+			p.add(path+".from.kind", "required after defaulting")
+		} else {
+			p.oneOf(path+".from.kind", string(t.From.Kind), string(SenderKindBot))
+		}
 	}
 	p.fieldRegexes(path+".match", t.Match)
 	p.fieldRegexes(path+".exclude", t.Exclude)

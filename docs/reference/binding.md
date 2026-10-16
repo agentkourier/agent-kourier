@@ -72,10 +72,10 @@ ChatBinding places the Binding in a channel.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `connectionRef` | [ObjectRef](#objectref) | Yes | None |  |
-| `channel` | string | Yes | None | Channel is the channel ID, not its name. Pattern `^[CG][A-Z0-9]+$`. |
+| `channel` | string | Yes | None | Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). Pattern `^[CG][A-Z0-9]+$`. |
 | `output` | string | No | `live` | Output defaults to live. One of `live`, `final`. |
 | `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
-| `acknowledgment` | [ChatAcknowledgment](#chatacknowledgment) | No | None | Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed. It defaults to enabled with the hourglass_flowing_sand reaction. |
+| `acknowledgment` | [ChatAcknowledgment](#chatacknowledgment) | No | None | Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed. It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand). |
 | `triggers` | [][Trigger](#trigger) | No | `[{type: mention}]` | Triggers decide which events in the channel start or continue a turn. Empty means [{type: mention}]: a mention starts a session. A list that names triggers is the whole list. |
 
 ## ChatAcknowledgment
@@ -85,7 +85,7 @@ ChatAcknowledgment configures the temporary reaction on an accepted message.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `enabled` | boolean | No | `true` | Enabled adds the reaction after the message is durably accepted and removes it when processing ends. It defaults to true. |
-| `emoji` | string | No | `hourglass_flowing_sand` | Emoji is the Slack reaction name without colons. It defaults to hourglass_flowing_sand. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`. |
+| `emoji` | string | No | None | Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's reaction. Pattern `^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`. |
 
 ## Trigger
 
@@ -94,9 +94,9 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `type` | string | Yes | None | Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare on as the boolean true, and the loader's decoder follows it. One of `mention`, `botMessage`. |
-| `from` | [BotSource](#botsource) | No | None | From names the bot a botMessage trigger accepts. Required for botMessage. |
-| `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
-| `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
+| `from` | [BotSource](#botsource) | No | None | From names the sender a botMessage trigger accepts. Required for botMessage. |
+| `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
+| `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `link`, `fallback`, `footer`, `body`. |
 | `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. |
 | `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. |
 | `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. |
@@ -104,11 +104,12 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 
 ## BotSource
 
-BotSource identifies the bot whose messages a trigger accepts.
+BotSource identifies the sender whose messages a trigger accepts: a message matches only when its sender's ID and kind both equal ID and Kind.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `botId` | string | Yes | None | BotID is the Slack bot ID, never a display name. Agent Kourier's own bot ID is refused at runtime: the load cannot know it. Pattern `^B[A-Z0-9]+$`. |
+| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). Agent Kourier's own ID is refused at runtime: the load cannot know it. Pattern `^B[A-Z0-9]+$`. |
+| `kind` | string | No | `bot` | Kind is what kind of sender ID names. Only bot exists today, and it is the default. One of `bot`. |
 
 ## Extract
 
@@ -116,7 +117,7 @@ Extract pulls one named value out of a message field. The entry's name in Trigge
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `field` | string | Yes | None | Field is the message field the regex runs on. One of `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
+| `field` | string | Yes | None | Field is the message field the regex runs on. One of `text`, `title`, `link`, `fallback`, `footer`, `body`. |
 | `regex` | string | Yes | None | Regex is a Go (RE2) regular expression of at most 512 bytes. |
 
 ## TriggerThread
@@ -157,7 +158,7 @@ Interactions configures agent pauses that wait on a person.
 |---|---|---|---|---|
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. |
 | `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
-| `approverGroups` | []string | No | None | ApproverGroups names the Slack user groups whose members may decide a tool approval. An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits; duplicates and empty entries are refused. |
+| `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits; duplicates and empty entries are refused. |
 | `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. |
 
 ## Feedback

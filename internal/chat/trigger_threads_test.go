@@ -227,10 +227,10 @@ func TestTwoKeysHaveTwoThreads(t *testing.T) {
 func TestTheSameKeyFromAnotherBotIsAnotherThread(t *testing.T) {
 	const other = "B0OTHERBOT1"
 	second := trialTrigger()
-	second.From = &v1alpha1.BotSource{BotID: other}
+	second.From = &v1alpha1.BotSource{ID: other}
 	h := newTriggered(t, trialTrigger(), second)
 	otherFiring := kindFiring
-	otherFiring.BotID = other
+	otherFiring.ID = other
 	if got := h.send(t, "100.1", kindFiring); got != "started" {
 		t.Fatalf("first bot: %q", got)
 	}
@@ -826,5 +826,37 @@ func TestNotesArePostedThroughTheOutboxExactlyOnce(t *testing.T) {
 	}
 	if rows, _ := h.st.ListUnposted(h.ctx); len(rows) != 0 {
 		t.Errorf("%d rows are still unposted", len(rows))
+	}
+}
+
+// A thread opened before the sender had a kind is found after it: the hash a thread is stored under is of the
+// connection, channel, sender ID and key, and the kind is not part of it. The row is written under a literal hash, the
+// SHA-256 of the four parts as the release before the kind hashed them, so that this fails if the input changes.
+func TestAThreadRowWrittenBeforeTheSenderHadAKindIsStillFound(t *testing.T) {
+	// conn, "C1", webhookBot and the key the trial trigger takes from kindFiring, each followed by a zero byte.
+	const before = "f714a7214049f017a742c0bc15f8a451345cc04405a86b3bc326c7c86118f8ea"
+	for _, kind := range []v1alpha1.SenderKind{"", v1alpha1.SenderKindBot} {
+		t.Run(fmt.Sprintf("kind %q", kind), func(t *testing.T) {
+			h := newTriggered(t, trialTrigger())
+			now := h.clk.Now()
+			if _, opened, err := h.st.OpenTriggerThread(h.ctx, store.TriggerThread{Binding: bindingName, KeyHash: before, Thread: "50.1", Opened: now}, store.TriggerStale{}); err != nil || !opened {
+				t.Fatalf("seed the thread of the earlier release: opened %t, %v", opened, err)
+			}
+			if err := h.st.MarkTriggerStarted(h.ctx, bindingName, before, "50.1", now.Add(4*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			h.clk.advance(time.Hour)
+			msg := kindFiring
+			msg.Kind = kind
+			if got := h.send(t, "51.1", msg); got != "repeat" {
+				t.Fatalf("a fire of the alert whose thread an earlier release opened was counted as %q; want repeat: the thread is found", got)
+			}
+			if got := h.started(); len(got) != 0 {
+				t.Errorf("turns started for %v; want none: the earlier thread has the alert", got)
+			}
+			if _, threads := h.noted(); len(threads) != 1 || threads[0] != "50.1" {
+				t.Errorf("notes in threads %v; want one, in the thread of the earlier release", threads)
+			}
+		})
 	}
 }

@@ -67,7 +67,7 @@ func TestTheAlertmanagerHowToExampleLoadsAndIsTheTriggerTheTestsUse(t *testing.T
 		t.Fatalf("triggers %+v; want a mention trigger and a botMessage trigger", ts)
 	}
 	want := chattest.AlertmanagerTrigger("B0123456789")
-	want.Match[v1alpha1.FieldTitleLink] = `receiver=slack-critical$`
+	want.Match[v1alpha1.FieldLink] = `receiver=slack-critical$`
 	if !reflect.DeepEqual(ts[1], want) {
 		t.Errorf("the example's botMessage trigger differs from chattest.AlertmanagerTrigger:\n got  %+v\n want %+v", ts[1], want)
 	}

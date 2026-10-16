@@ -25,7 +25,7 @@ import (
 // the Alertmanager trigger's messages whose link ends in receiver=slack-critical, with a cooldown of 2h.
 const (
 	alertChannel = "C0123456789"
-	alertBotID   = "B0123456789"
+	alertBot     = "B0123456789"
 	alertLinkURL = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical"
 )
 
@@ -39,7 +39,7 @@ func post(state, name string) fakeslack.WebhookPost {
 	if state == "RESOLVED" {
 		title, fallback = "RESOLVED - "+name, "[RESOLVED] "+name+" shop (checkout critical) | "+alertLinkURL
 	}
-	return fakeslack.WebhookPost{Channel: alertChannel, BotID: alertBotID, Attachments: []fakeslack.Attachment{{
+	return fakeslack.WebhookPost{Channel: alertChannel, BotID: alertBot, Attachments: []fakeslack.Attachment{{
 		Title: title, TitleLink: alertLinkURL, Fallback: fallback,
 		Text: "*" + name + "* - critical\nPod shop/checkout-7d9f8b6c5-x2x4k is in waiting state (reason: \"CrashLoopBackOff\").\n",
 	}}}
@@ -162,7 +162,7 @@ func TestRunInvestigatesAFiringAlertOnceInItsOwnThread(t *testing.T) {
 	if tag == "" || !strings.Contains(first, "</"+tag[1:]) {
 		t.Errorf("the first turn has no hashed untrusted block:\n%s", first)
 	}
-	for _, want := range []string{"<title>FIRING (1) - KubePodCrashLooping</title>", "<titleLink>" + alertLinkURL + "</titleLink>", "CrashLoopBackOff"} {
+	for _, want := range []string{"<title>FIRING (1) - KubePodCrashLooping</title>", "<link>" + alertLinkURL + "</link>", "CrashLoopBackOff"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("the first turn lacks %q of the alert:\n%s", want, first)
 		}
@@ -281,7 +281,7 @@ func TestRunBuildsThePermalinkFromTheWorkspaceURL(t *testing.T) {
 	if before != "Alert KubePodCrashLooping at "+want {
 		t.Errorf("the instruction part is %q; want the permalink %q", before, want)
 	}
-	if !strings.Contains(prompts[0], "<titleLink>"+alertLinkURL+"</titleLink>") { // the alert's own link is only text in the block
+	if !strings.Contains(prompts[0], "<link>"+alertLinkURL+"</link>") { // the alert's own link is only text in the block
 		t.Errorf("the alert's own link is not in the untrusted block:\n%s", prompts[0])
 	}
 }

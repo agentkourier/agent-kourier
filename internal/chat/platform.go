@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"time"
@@ -27,16 +28,26 @@ type Inbound struct {
 	Bot *BotMessage
 }
 
-// BotMessage is what a bot's message carries beyond a person's: the bot, by its ID and never its display name
-// (D36), and the content of its attachment flattened into the fields a botMessage trigger's regexes read
+// BotMessage is what a bot's message carries beyond a person's: the sender, by its ID and kind and never its display name
+// (D36), and the content of its message flattened into the fields a botMessage trigger's regexes read
 // (v1alpha1.MessageField). Every value is the raw text the platform delivered: untrusted (R2), and neither
 // rendered nor unescaped.
 type BotMessage struct {
-	// BotID is the bot that posted the message.
-	BotID string
-	// Title, TitleLink, Fallback, Footer and AttachmentText are the fields of the message's attachment. A
-	// message with several attachments is flattened from the first (see the adapter).
-	Title, TitleLink, Fallback, Footer, AttachmentText string
+	// ID is the sender's ID on the platform (Slack: the bot ID), and Kind what kind of sender that ID names. A trigger takes
+	// a message only when both equal its from.id and from.kind; an adapter sets the kind of every sender it forwards, and an
+	// empty one means a bot.
+	ID   string
+	Kind v1alpha1.SenderKind
+	// Title, Link, Body, Footer and Fallback are the heading, the heading's URL, the main text, the small print and the
+	// plain-text summary of the message's structured part (Slack: its first legacy attachment); the message's top-level text
+	// is Inbound.Text. The adapter documents how it flattens its native message into them.
+	Title, Link, Fallback, Footer, Body string
+}
+
+// IsSender says whether the message's sender is the one src names: the IDs are equal and so are the kinds, an unset kind
+// being a bot on either side.
+func (b BotMessage) IsSender(src v1alpha1.BotSource) bool {
+	return b.ID == src.ID && cmp.Or(b.Kind, v1alpha1.SenderKindBot) == cmp.Or(src.Kind, v1alpha1.SenderKindBot)
 }
 
 // Field returns the value of the named message field: Text from the message itself, and the others from the
@@ -51,14 +62,14 @@ func (m Inbound) Field(f v1alpha1.MessageField) string {
 	switch f {
 	case v1alpha1.FieldTitle:
 		return m.Bot.Title
-	case v1alpha1.FieldTitleLink:
-		return m.Bot.TitleLink
+	case v1alpha1.FieldLink:
+		return m.Bot.Link
 	case v1alpha1.FieldFallback:
 		return m.Bot.Fallback
 	case v1alpha1.FieldFooter:
 		return m.Bot.Footer
-	case v1alpha1.FieldAttachmentText:
-		return m.Bot.AttachmentText
+	case v1alpha1.FieldBody:
+		return m.Bot.Body
 	}
 	return ""
 }
@@ -105,7 +116,8 @@ type Sink interface {
 // Agent Kourier's own messages, whatever the answer. The answer is a routing question, so the adapter holds no copy
 // of the config.
 type BotFilter interface {
-	// AcceptsBot says whether a botMessage trigger of the Binding that owns channel names botID.
+	// AcceptsBot says whether a botMessage trigger of the Binding that owns channel names botID. It is a first cut by ID
+	// alone, so that a sender no trigger can match is dropped at the adapter: the trigger's own match also holds the kind.
 	AcceptsBot(channel, botID string) bool
 }
 

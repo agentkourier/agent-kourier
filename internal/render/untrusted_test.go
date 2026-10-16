@@ -43,18 +43,18 @@ type hostileTarget struct {
 func alertTarget() hostileTarget {
 	return hostileTarget{
 		name: "alert block", prefix: untrustedDataPrefix, maxUnits: MaxUntrustedUnits,
-		elements: []string{"title", "text", "attachmentText", "fallback", "titleLink", "footer"},
+		elements: []string{"title", "text", "body", "fallback", "link", "footer"},
 		places: []hostilePlace{
 			{"title", "title", kindWindow, MaxFieldUnits},
 			{"text", "text", kindWindow, MaxFieldUnits},
-			{"attachmentText", "attachmentText", kindWindow, MaxFieldUnits},
+			{"body", "body", kindWindow, MaxFieldUnits},
 			{"fallback", "fallback", kindWindow, MaxFieldUnits},
-			{"titleLink", "titleLink", kindWindow, MaxFieldUnits},
+			{"link", "link", kindWindow, MaxFieldUnits},
 			{"footer", "footer", kindIdentifier, MaxFieldUnits},
 		},
 		build: func(t *testing.T, x []string) string {
 			t.Helper()
-			msg := TriggerMessage{Title: x[0], Text: x[1], AttachmentText: x[2], Fallback: x[3], TitleLink: x[4], Footer: x[5]}
+			msg := TriggerMessage{Title: x[0], Text: x[1], Body: x[2], Fallback: x[3], Link: x[4], Footer: x[5]}
 			got, err := newPrompt(t, simpleTemplate).Render(simpleView(), msg)
 			if err != nil {
 				t.Fatal(err)
@@ -597,7 +597,7 @@ func TestUntrustedBlockNamesAreConstants(t *testing.T) {
 		got, _ := b.render()
 		checkSection(t, hostileTarget{name: "prefix", prefix: fallbackTagPrefix, plural: true, many: true, elements: []string{"good"}}, got)
 	}
-	if validName("") || !validName("good") || !validName("titleLink2") {
+	if validName("") || !validName("good") || !validName("link2") {
 		t.Error("validName is wrong for an empty name or a good one")
 	}
 	for _, prefix := range []string{"ab-", "untrusted-data-", "thread-replies-", "a-b-c-"} {
@@ -926,7 +926,7 @@ func TestUntrustedBlockCapsHoldTheLargestItem(t *testing.T) {
 	if n := chat.Units(got); n > MaxThreadBlockUnits || strings.Count(got, "<reply>") != 1 {
 		t.Errorf("one largest reply and the last line make %d units and %d replies", n, strings.Count(got, "<reply>"))
 	}
-	msg := TriggerMessage{Title: huge, Text: huge, AttachmentText: huge, Fallback: huge, TitleLink: huge, Footer: huge}
+	msg := TriggerMessage{Title: huge, Text: huge, Body: huge, Fallback: huge, Link: huge, Footer: huge}
 	section := untrustedSection(msg)
 	if n := chat.Units(section); n > MaxUntrustedUnits || !strings.Contains(section, "<title>") {
 		t.Errorf("the alert block of the largest message is %d units, or shows no title", n)

@@ -55,7 +55,7 @@ type ReplayVerdict struct {
 	Fields map[string]string
 	// Why says, for ReplayUnmatched and ReplayExcluded, where each trigger of the message's bot turned
 	// it away, at the first of its regexes that failed (match and exclude regexes are tried in the order of
-	// their field names): "trigger 0: match titleLink; trigger 2: extract key".
+	// their field names): "trigger 0: match link; trigger 2: extract key".
 	Why string
 }
 
@@ -99,7 +99,7 @@ func (r *Replay) Classify(h HistoryMessage) ReplayVerdict {
 		return ReplayVerdict{Outcome: ReplayOwn}
 	case m.Bot == nil:
 		return ReplayVerdict{Outcome: ReplayPerson}
-	case !r.names(m.Bot.BotID):
+	case !r.names(m.Bot.ID):
 		return ReplayVerdict{Outcome: ReplayOtherBot}
 	case m.At.Thread != "" && m.At.Thread != m.At.ID:
 		return ReplayVerdict{Outcome: ReplayIgnored}
@@ -111,23 +111,27 @@ func (r *Replay) Classify(h HistoryMessage) ReplayVerdict {
 	var why []string
 	for i := range r.table {
 		t := &r.table[i]
-		if t.botID != m.Bot.BotID {
+		if t.from.ID != m.Bot.ID {
 			continue
 		}
 		_, missed := t.check(m)
+		if missed.kind == missBot { // the ID is the trigger's and the kind is not
+			missed.detail = "kind"
+		}
 		if missed.kind == missExclude {
 			outcome = ReplayExcluded
 		}
-		step := map[missKind]string{missMatch: "match", missExclude: "exclude", missExtract: "extract"}[missed.kind]
+		step := map[missKind]string{missBot: "sender", missMatch: "match", missExclude: "exclude", missExtract: "extract"}[missed.kind]
 		why = append(why, fmt.Sprintf("trigger %d: %s %s", t.index, step, missed.detail))
 	}
 	return ReplayVerdict{Outcome: outcome, Why: strings.Join(why, "; ")}
 }
 
-// names says whether a trigger of the table names the bot, by ID (D36), as Intake.AcceptsBot does.
+// names says whether a trigger of the table names the bot, by ID (D36), as Intake.AcceptsBot does. A bot of the right ID
+// and the wrong kind is named, and then unmatched, with the kind as the reason, as it is live.
 func (r *Replay) names(botID string) bool {
 	for i := range r.table {
-		if r.table[i].botID == botID {
+		if r.table[i].from.ID == botID {
 			return true
 		}
 	}

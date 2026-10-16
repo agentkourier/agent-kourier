@@ -22,7 +22,7 @@ func AlertmanagerTrigger(botID string) v1alpha1.Trigger {
 	maxPerDay := int32(40)
 	return v1alpha1.Trigger{
 		Type: v1alpha1.TriggerBotMessage,
-		From: &v1alpha1.BotSource{BotID: botID},
+		From: &v1alpha1.BotSource{ID: botID, Kind: v1alpha1.SenderKindBot},
 		Match: map[v1alpha1.MessageField]string{
 			v1alpha1.FieldTitle:    `^` + tag + alert + ` - `,
 			v1alpha1.FieldFallback: `^\[(?:FIRING(?::\d+)?|RESOLVED)\] `,

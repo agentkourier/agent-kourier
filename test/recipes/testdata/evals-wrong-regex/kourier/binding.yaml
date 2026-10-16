@@ -13,12 +13,12 @@ spec:
     triggers:
       - type: mention
       - type: botMessage
-        from: { botId: B0REPLACEME } # the incoming webhook's bot
+        from: { id: B0REPLACEME } # the incoming webhook's bot
         match:
-          titleLink: 'receiver=slack-critcal$'
+          link: 'receiver=slack-critcal$'
           title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
           fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
-        exclude: {title: ' - Watchdog$'}
+        exclude: { title: ' - Watchdog$' }
         extract:
           state:
             field: title
@@ -32,11 +32,10 @@ spec:
         thread:
           by: key
           cooldown: 4h
-          closeWhen: {state: RESOLVED}
+          closeWhen: { state: RESOLVED }
         limits:
-          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }
           maxRunsPerDay: 40
         promptTemplate: |
           An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
-          Investigate it with your read-only tools. Report the likely cause, the evidence you
-          checked, and the next steps a person should take.
+          Investigate it with your read-only tools.

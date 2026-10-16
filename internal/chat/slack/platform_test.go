@@ -406,3 +406,10 @@ func TestTheReadingOfARichTextBlockFindsWhatIsNotPlainText(t *testing.T) {
 		t.Error("an element of another type than a section or preformatted text was not reported")
 	}
 }
+
+// The API names no acknowledgment reaction, so Slack says its own: the hourglass a Binding that names none gets.
+func TestSlackSuppliesTheDefaultAcknowledgmentReaction(t *testing.T) {
+	if got := slack.NewPlatform(nil, "ns/conn").Capabilities().AckReaction; got != "hourglass_flowing_sand" {
+		t.Errorf("AckReaction = %q, want hourglass_flowing_sand", got)
+	}
+}

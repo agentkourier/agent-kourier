@@ -289,9 +289,9 @@ func TestThreadContextLeavesOutWhatIsNotAPersonsReply(t *testing.T) {
 	ignored := msg(1, "U2", "an edit or a deletion")
 	ignored.Ignored = true
 	bot := msg(1, "UB1", "a bot's message with a user")
-	bot.Message.Bot = &chat.BotMessage{BotID: "B1", Fallback: "an alert"}
+	bot.Message.Bot = &chat.BotMessage{ID: "B1", Fallback: "an alert"}
 	hook := msg(1, "", "a webhook bot's message")
-	hook.Message.Bot = &chat.BotMessage{BotID: "B2"}
+	hook.Message.Bot = &chat.BotMessage{ID: "B2"}
 	userless := msg(1, "", "no user at all")
 	turn := msg(1, "U2", "this was a turn")
 	answer := msg(1, "U2", "a pinned answer")
@@ -355,7 +355,7 @@ func TestThreadContextAsksTheReplyQueueOnceForTheWholeWindow(t *testing.T) {
 		case 3: // Agent Kourier's own, a bot's and an ignored one never reach the queue
 			m.Own = true
 		case 4:
-			m.Message.Bot = &chat.BotMessage{BotID: "B1"}
+			m.Message.Bot = &chat.BotMessage{ID: "B1"}
 		case 5:
 			m.Ignored = true
 		default:
@@ -416,7 +416,7 @@ func TestThreadContextReadsPastTheNoiseOfBotsAndItsOwnPosts(t *testing.T) {
 		if i%2 == 0 {
 			noise.Own = true
 		} else {
-			noise.Message.Bot = &chat.BotMessage{BotID: "B1"}
+			noise.Message.Bot = &chat.BotMessage{ID: "B1"}
 		}
 		w.win.window = append(w.win.window, noise)
 	}
@@ -590,7 +590,7 @@ func TestThreadContextOverTheFakePlatform(t *testing.T) {
 	for _, m := range []chat.Inbound{
 		{At: at("100.000200"), User: "U1", Text: "first, from a person"},
 		turn,
-		{At: at("100.000400"), User: "UB1", Text: "a bot", Bot: &chat.BotMessage{BotID: "B1"}},
+		{At: at("100.000400"), User: "UB1", Text: "a bot", Bot: &chat.BotMessage{ID: "B1"}},
 		{At: at("100.000500"), User: "U3", Text: "last, from a person"},
 		{At: chat.Ref{Platform: "fake", Conn: tcConn, Channel: tcChannel, Thread: "9.9", ID: "100.000600"}, User: "U1", Text: "another thread"},
 		{At: chat.Ref{Platform: "fake", Conn: tcConn, Channel: "C2", Thread: tcThread, ID: "100.000600"}, User: "U1", Text: "another channel"},

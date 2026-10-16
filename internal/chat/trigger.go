@@ -59,8 +59,8 @@ type extractRegex struct {
 // botTrigger is a botMessage trigger with its regexes compiled, which load validated, so a failure to compile
 // here is a trigger that never matches rather than an error to return.
 type botTrigger struct {
-	index          int // in the Binding's trigger list
-	botID          string
+	index          int                // in the Binding's trigger list
+	from           v1alpha1.BotSource // the sender the trigger accepts
 	thread         v1alpha1.TriggerThread
 	limits         v1alpha1.TriggerLimits
 	prompt         string
@@ -71,7 +71,7 @@ type botTrigger struct {
 // compileTrigger compiles the regexes of a botMessage trigger, in the order of their field names, so that
 // what is tried first does not depend on the order of a map.
 func compileTrigger(index int, t *v1alpha1.Trigger) (botTrigger, error) {
-	c := botTrigger{index: index, botID: t.From.BotID, thread: t.Thread, limits: t.Limits, prompt: t.PromptTemplate}
+	c := botTrigger{index: index, from: *t.From, thread: t.Thread, limits: t.Limits, prompt: t.PromptTemplate}
 	compile := func(entries map[v1alpha1.MessageField]string) ([]fieldRegex, error) {
 		var out []fieldRegex
 		for _, f := range slices.Sorted(maps.Keys(entries)) {
@@ -120,7 +120,7 @@ type missKind int
 
 const (
 	missNone    missKind = iota // the trigger took the message
-	missBot                     // the message is not from the trigger's bot
+	missBot                     // the message is not from the trigger's sender
 	missMatch                   // a match regex does not match
 	missExclude                 // an exclude regex matches
 	missExtract                 // an extract finds no group
@@ -136,7 +136,7 @@ type miss struct {
 // check is evaluate with the reason for a miss, which the dry run shows (Replay). The steps run here and
 // nowhere else, so that what the dry run reports is what the intake does.
 func (t *botTrigger) check(m Inbound) (map[string]string, miss) {
-	if m.Bot == nil || m.Bot.BotID != t.botID {
+	if m.Bot == nil || !m.Bot.IsSender(t.from) {
 		return nil, miss{kind: missBot}
 	}
 	for _, f := range t.match {

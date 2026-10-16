@@ -371,7 +371,7 @@ func TestThreadBetweenAsksForExclusiveBoundsAndDecodesWhatComesBack(t *testing.T
 	if !got[1].Own || got[1].Ignored {
 		t.Errorf("agent-kourier's own post = %+v; want Own and not Ignored", got[1])
 	}
-	if h := got[2]; h.Own || h.Ignored || h.Message.Bot == nil || h.Message.Bot.BotID != "BOTHER" {
+	if h := got[2]; h.Own || h.Ignored || h.Message.Bot == nil || h.Message.Bot.ID != "BOTHER" {
 		t.Errorf("another bot's post = %+v; want it a bot's, neither Own nor Ignored", h)
 	}
 	if h := got[3]; h.Own || h.Ignored || h.Message.Bot != nil || h.Message.User != "U1" || h.Message.Text != "newest" || h.Message.At.Thread != "1.000001" {

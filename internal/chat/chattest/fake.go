@@ -82,7 +82,7 @@ func NewFake() *FakePlatform {
 	return &FakePlatform{
 		MaxQuestions: 20, MaxTools: 20, Now: time.Now,
 		caps: chat.Caps{
-			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000,
+			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000, AckReaction: "hourglass",
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
 		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, ready: make(chan struct{}),

@@ -111,9 +111,9 @@ func firing(t *testing.T) chat.TriggerMatch {
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
 		Message: chat.Inbound{
 			At: chat.Ref{Platform: "slack", Conn: startConn, Channel: "C0123456789", ID: alertTS},
-			Bot: &chat.BotMessage{BotID: "B0123456789", Title: "[kind] FIRING (1) - KubePodCrashLooping", TitleLink: link,
-				Fallback:       "[FIRING:1] KubePodCrashLooping shop (checkout critical) | " + link,
-				AttachmentText: "*KubePodCrashLooping* - critical\nPod shop/checkout-7d9f8b6c5-x2x4k is in waiting state (reason: \"CrashLoopBackOff\").\n"},
+			Bot: &chat.BotMessage{ID: "B0123456789", Title: "[kind] FIRING (1) - KubePodCrashLooping", Link: link,
+				Fallback: "[FIRING:1] KubePodCrashLooping shop (checkout critical) | " + link,
+				Body:     "*KubePodCrashLooping* - critical\nPod shop/checkout-7d9f8b6c5-x2x4k is in waiting state (reason: \"CrashLoopBackOff\").\n"},
 		},
 	}
 }
@@ -158,7 +158,7 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 		t.Errorf("the turn's text starts %q; want the template's output %q", firstLine(in.Text), want)
 	}
 	tag := untrustedTag(t, in.Text)
-	for _, want := range []string{"<" + tag + ">", "</" + tag + ">", "<title>[kind] FIRING (1) - KubePodCrashLooping</title>", "<attachmentText>*KubePodCrashLooping* - critical"} {
+	for _, want := range []string{"<" + tag + ">", "</" + tag + ">", "<title>[kind] FIRING (1) - KubePodCrashLooping</title>", "<body>*KubePodCrashLooping* - critical"} {
 		if !strings.Contains(in.Text, want) {
 			t.Errorf("the first turn lacks %q:\n%s", want, in.Text)
 		}
@@ -208,13 +208,13 @@ func TestOnStartKeepsTheAlertNameOnlyIfItIsNameShaped(t *testing.T) {
 	}
 }
 
-// .Link is the permalink Agent Kourier builds from the channel and ts, never a field of the message: a sender's titleLink
+// .Link is the permalink Agent Kourier builds from the channel and ts, never a field of the message: a sender's link
 // that says otherwise is only text in the block.
-func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheTitleLink(t *testing.T) {
+func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheMessagesOwnLink(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
 	m.PromptTemplate = "Alert {{ .Fields.alertname }}: {{ .Link }}"
-	m.Message.Bot.TitleLink = evilLink
+	m.Message.Bot.Link = evilLink
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
 		t.Fatalf("OnStart = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestOnStartLinkIsTheAgentKourierBuiltPermalinkNotTheTitleLink(t *testing.T)
 		t.Errorf("the instruction part is %q; want %q", got, want)
 	}
 	if strings.Contains(got, evilLink) {
-		t.Errorf("the instruction part holds the sender's titleLink: %q", got)
+		t.Errorf("the instruction part holds the sender's link: %q", got)
 	}
 }
 

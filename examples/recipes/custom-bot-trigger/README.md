@@ -13,9 +13,9 @@ The regexes in `kourier/binding.yaml` read a generic CI bot's post that this rec
 this shape. **Replace every regex with ones written against your own bot's messages.** Fetch a few real posts as
 JSON (`conversations.history` returns them) and read which field holds what:
 
-- `text` is the message's own `text`.
-- `title`, `titleLink`, `fallback`, `footer` and `attachmentText` are the `title`, `title_link`, `fallback`, `footer`
-  and `text` of the message's first legacy attachment. Later attachments are not read.
+- `text` is the message's top-level `text`, outside any attachment.
+- `title`, `link`, `body`, `footer` and `fallback` are the `title`, `title_link`, `text`, `footer` and `fallback` of the
+  message's first legacy attachment. Later attachments are not read.
 
 All six are the raw strings Slack delivers, not what the Slack client displays. The trigger's regexes read only
 these six fields. Block Kit blocks are never read. For a bot that posts only blocks, `text` (the fallback Slack uses
@@ -27,7 +27,7 @@ The made-up posts this recipe is written for:
 ```text
 title:          Pipeline FAILED - web-build
 fallback:       [FAILED] web-build on main (#1423) | https://ci.example.com/pipelines/web-build/runs/1423
-attachmentText: Stage test failed after 4m12s. 3 tests failed.
+body:           Stage test failed after 4m12s. 3 tests failed.
 ```
 
 A success reads `Pipeline PASSED - web-build` and `[PASSED] web-build on main (#1430) | ...`.
@@ -40,9 +40,9 @@ All of this is in the Binding's `triggers[0]`. The fields are described in
 
 | Field | In this recipe | Behaviour |
 |---|---|---|
-| `from.botId` | `B0REPLACEME` | The one bot whose messages this trigger accepts, by bot ID, never by display name. Another bot's post is not handed on. |
+| `from.id` | `B0REPLACEME` | The one bot whose messages this trigger accepts, by bot ID, never by display name. Another bot's post is not handed on. |
 | `match` | `title` starts `Pipeline FAILED - ` or `Pipeline PASSED - `; `fallback` starts `[FAILED] ` or `[PASSED] ` | Every entry must match. A regex is a search on the raw text of its field, so anchor it with `^` and `$` where you mean to. A field the message lacks is empty. |
-| `exclude` | `attachmentText` says a retry is scheduled, or `known flaky` | No entry may match. A failure that will be retried, or that is marked flaky, is turned away and starts nothing. |
+| `exclude` | `body` says a retry is scheduled, or `known flaky` | No entry may match. A failure that will be retried, or that is marked flaky, is turned away and starts nothing. |
 | `extract` | `state`, `pipeline` and `key` | Each regex has a named group with the entry's name, which supplies the value. A message in which one finds nothing does not match the trigger. |
 | `thread.by: key` | the key is `<pipeline> on <branch>` | Messages with the same `key` share one thread, anchored to the first. The key is kept per bot and channel. |
 | `thread.cooldown` | `2h` | After a thread closes, the key starts no new investigation until 2 hours after the message that started the thread; a failure inside that window adds a "Fired again" note to the closed thread and reopens it. The window is 1 minute to 168 hours. |
@@ -81,7 +81,7 @@ entries from `.Fields` instead.
 1. Replace the placeholders:
     - `channel: CREPLACEME` in `kourier/binding.yaml`, with your channel's ID (it starts with `C`; `G` for an older
       private channel), not its name.
-    - `botId: B0REPLACEME`, with the `bot_id` of the CI bot's messages. It is not the Slack app ID (which starts with
+    - `id: B0REPLACEME`, with the `bot_id` of the CI bot's messages. It is not the Slack app ID (which starts with
       `A`). A [dry run](../../../docs/how-to/tune-triggers.md) prints each message's sender.
     - The AgentBackend `url`, with your agent's. On the `a2a` dialect the URL alone selects the agent, and the
       Binding's `agent.name` and `agent.namespace` are labels there that the Binding still has to set. For kagent,

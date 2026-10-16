@@ -213,7 +213,7 @@ type Identity struct {
 // ChatBinding places the Binding in a channel.
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the channel ID, not its name.
+	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`).
 	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
 	Channel string `json:"channel"`
 	// Output defaults to live.
@@ -230,7 +230,7 @@ type ChatBinding struct {
 	// +optional
 	ThreadReplies ThreadReplies `json:"threadReplies"`
 	// Acknowledgment controls the temporary reaction Agent Kourier adds to an accepted message while it is being processed.
-	// It defaults to enabled with the hourglass_flowing_sand reaction.
+	// It defaults to enabled with the platform's own reaction (Slack: hourglass_flowing_sand).
 	// +optional
 	Acknowledgment *ChatAcknowledgment `json:"acknowledgment,omitempty"`
 	// Triggers decide which events in the channel start or continue a turn (spec 8.2). Empty means
@@ -248,8 +248,9 @@ type ChatAcknowledgment struct {
 	// +kubebuilder:default=true
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
-	// Emoji is the Slack reaction name without colons. It defaults to hourglass_flowing_sand.
-	// +kubebuilder:default=hourglass_flowing_sand
+	// Emoji is the reaction name without colons. Left empty, the platform's own acknowledgment reaction is used
+	// (Slack: hourglass_flowing_sand). The API fills in no default, so a stored Binding does not carry one platform's
+	// reaction.
 	// +kubebuilder:validation:Pattern=`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`
 	// +optional
 	Emoji string `json:"emoji,omitempty"`
@@ -274,9 +275,9 @@ type Interactions struct {
 	// +kubebuilder:default=false
 	// +optional
 	ToolApprovals bool `json:"toolApprovals,omitempty"`
-	// ApproverGroups names the Slack user groups whose members may decide a tool approval. An empty list allows any
-	// non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits;
-	// duplicates and empty entries are refused.
+	// ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
+	// An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
+	// uppercase letters and digits; duplicates and empty entries are refused.
 	// +kubebuilder:validation:MaxItems=10
 	// +optional
 	ApproverGroups []string `json:"approverGroups,omitempty"`
@@ -307,9 +308,8 @@ type Session struct {
 
 // Defaults for fields left empty by Default.
 const (
-	DefaultInteractionTimeout  = 30 * time.Minute
-	DefaultThreadTTL           = 90 * 24 * time.Hour
-	DefaultAcknowledgmentEmoji = "hourglass_flowing_sand"
+	DefaultInteractionTimeout = 30 * time.Minute
+	DefaultThreadTTL          = 90 * 24 * time.Hour
 )
 
 // Default fills the fields left empty. A ChatConnection has none to fill; the method keeps the shape that
@@ -330,9 +330,6 @@ func (b *Binding) Default() {
 	if b.Spec.Chat.Acknowledgment.Enabled == nil {
 		enabled := true
 		b.Spec.Chat.Acknowledgment.Enabled = &enabled
-	}
-	if b.Spec.Chat.Acknowledgment.Emoji == "" {
-		b.Spec.Chat.Acknowledgment.Emoji = DefaultAcknowledgmentEmoji
 	}
 	b.Spec.Chat.defaultTriggers()
 	if b.Spec.Interactions.Timeout.Duration == 0 {

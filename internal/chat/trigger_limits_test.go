@@ -24,12 +24,12 @@ const storm = "KubeSecretBurn"
 func alertN(n int, state string) chat.BotMessage {
 	name := fmt.Sprintf("%s%d", storm, n)
 	if state == "RESOLVED" {
-		return chat.BotMessage{BotID: webhookBot, Title: "[kind] RESOLVED - " + name, TitleLink: kindLink,
+		return chat.BotMessage{ID: webhookBot, Title: "[kind] RESOLVED - " + name, Link: kindLink,
 			Fallback: "[RESOLVED] " + name + " shop (critical) | " + kindLink}
 	}
-	return chat.BotMessage{BotID: webhookBot, Title: "[kind] FIRING (1) - " + name, TitleLink: kindLink,
-		Fallback:       "[FIRING:1] " + name + " shop (critical) | " + kindLink,
-		AttachmentText: "*" + name + "* - critical\nPod " + storm + "-pod is down.\n"}
+	return chat.BotMessage{ID: webhookBot, Title: "[kind] FIRING (1) - " + name, Link: kindLink,
+		Fallback: "[FIRING:1] " + name + " shop (critical) | " + kindLink,
+		Body:     "*" + name + "* - critical\nPod " + storm + "-pod is down.\n"}
 }
 
 // newLimited is an Intake over the test's database with its limits enforced, as the broker makes it.

@@ -42,12 +42,12 @@ In the Binding's `chat` block:
       - type: mention # (1)!
       - type: botMessage
         from:
-          botId: B0123456789 # (2)!
+          id: B0123456789 # (2)!
         match:
           # The receiver, by the name in the title's link. Optional: use it when several receivers share the bot
           # and the channel. The $ anchors it, so receiver=slack-critical does not also match
           # receiver=slack-critical-kind.
-          titleLink: 'receiver=slack-critical$'
+          link: 'receiver=slack-critical$'
           # Alertmanager's title: "FIRING (<n>) - <alertname>" or "RESOLVED - <alertname>", behind an optional
           # bracketed tag of up to 32 characters, such as "[kind] ". Grafana's "FIRING: <rule> (<namespace>)" and
           # the heartbeat do not fit it, so they start nothing.
@@ -84,7 +84,7 @@ In the Binding's `chat` block:
 
 1. Keep this if people should also be able to mention the bot in the channel. A list that names triggers is the whole
    list: without it, a mention starts nothing.
-2. The alert messages' `bot_id`.
+2. The alert messages' `bot_id`. `from.kind` defaults to `bot`, the only value, so it is left out.
 3. Each entry's regex has a named group with the entry's name, which supplies the value. A message in which an extract
    does not match does not match the trigger.
 4. Messages with the same `key` share a thread, anchored to the first.

@@ -68,10 +68,10 @@ Use your alert channel's ID for `--channel`. The line for `webhook test` has the
 
 ## 5. Name the bot in the alert Binding
 
-Open `hack/kind/sandbox/agent-kourier/alert-trial/alert-binding.yaml` and set `botId` to the ID from step 4:
+Open `hack/kind/sandbox/agent-kourier/alert-trial/alert-binding.yaml` and set `from.id` to the ID from step 4:
 
 ```yaml
-        from: {botId: B0123456789}
+        from: {id: B0123456789}
 ```
 
 ## 6. Start the alert source

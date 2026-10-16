@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
@@ -182,5 +183,30 @@ func TestAStepBeginsRunningAndEveryStateHasAName(t *testing.T) {
 		if got := s.String(); got != want {
 			t.Errorf("StepState(%d) = %q, want %q", int(s), got, want)
 		}
+	}
+}
+
+// A message is from the sender a trigger names only if the ID and the kind both equal; an unset kind is a bot on either
+// side.
+func TestIsSenderComparesTheIDAndTheKind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  chat.BotMessage
+		src  v1alpha1.BotSource
+		want bool
+	}{
+		{"same ID, kinds unset", chat.BotMessage{ID: "B1"}, v1alpha1.BotSource{ID: "B1"}, true},
+		{"same ID, both bots", chat.BotMessage{ID: "B1", Kind: v1alpha1.SenderKindBot}, v1alpha1.BotSource{ID: "B1", Kind: v1alpha1.SenderKindBot}, true},
+		{"same ID, one unset", chat.BotMessage{ID: "B1", Kind: v1alpha1.SenderKindBot}, v1alpha1.BotSource{ID: "B1"}, true},
+		{"other ID", chat.BotMessage{ID: "B2"}, v1alpha1.BotSource{ID: "B1"}, false},
+		{"same ID, message of another kind", chat.BotMessage{ID: "B1", Kind: "webhook"}, v1alpha1.BotSource{ID: "B1"}, false},
+		{"same ID, trigger of another kind", chat.BotMessage{ID: "B1"}, v1alpha1.BotSource{ID: "B1", Kind: "webhook"}, false},
+		{"same ID and the same other kind", chat.BotMessage{ID: "B1", Kind: "webhook"}, v1alpha1.BotSource{ID: "B1", Kind: "webhook"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.msg.IsSender(tc.src); got != tc.want {
+				t.Errorf("IsSender = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }

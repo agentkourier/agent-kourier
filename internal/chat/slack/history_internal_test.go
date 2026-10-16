@@ -5,6 +5,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
@@ -23,14 +24,14 @@ func TestHistoryMessageDecodesAsALiveEventDoes(t *testing.T) {
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.1"}, User: "U1", Text: "hi <@UME>", Mentioned: true}},
 		{"a webhook's alert, from its first attachment", slackgo.Message{Msg: slackgo.Msg{BotID: "B1", SubType: "bot_message", Timestamp: "1.2", Attachments: attach}}, false, false,
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.2"},
-				Bot: &chat.BotMessage{BotID: "B1", Title: "FIRING (1) - A", TitleLink: "http://am", Fallback: "[FIRING:1] A | http://am", Footer: "f", AttachmentText: "t"}}},
+				Bot: &chat.BotMessage{ID: "B1", Kind: v1alpha1.SenderKindBot, Title: "FIRING (1) - A", Link: "http://am", Fallback: "[FIRING:1] A | http://am", Footer: "f", Body: "t"}}},
 		{"a reply in a thread", slackgo.Message{Msg: slackgo.Msg{User: "U1", Text: "and now?", Timestamp: "1.4", ThreadTimestamp: "1.1"}}, false, false,
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", Thread: "1.1", ID: "1.4"}, User: "U1", Text: "and now?"}},
 		{"agent-kourier's own post, by bot ID", slackgo.Message{Msg: slackgo.Msg{BotID: "BME", SubType: "bot_message", Timestamp: "1.3", Attachments: attach[:1]}}, true, false,
 			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.3"},
-				Bot: &chat.BotMessage{BotID: "BME", Title: "FIRING (1) - A", TitleLink: "http://am", Fallback: "[FIRING:1] A | http://am", Footer: "f", AttachmentText: "t"}}},
+				Bot: &chat.BotMessage{ID: "BME", Kind: v1alpha1.SenderKindBot, Title: "FIRING (1) - A", Link: "http://am", Fallback: "[FIRING:1] A | http://am", Footer: "f", Body: "t"}}},
 		{"agent-kourier's own post, by user ID", slackgo.Message{Msg: slackgo.Msg{User: "UME", BotID: "BME", Text: "on it", Timestamp: "1.5"}}, true, false,
-			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.5"}, User: "UME", Text: "on it", Bot: &chat.BotMessage{BotID: "BME"}}},
+			chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "ns/c", Channel: "C1", ID: "1.5"}, User: "UME", Text: "on it", Bot: &chat.BotMessage{ID: "BME", Kind: v1alpha1.SenderKindBot}}},
 		{"a subtype that starts nothing", slackgo.Message{Msg: slackgo.Msg{User: "U1", SubType: "channel_join", Text: "joined", Timestamp: "1.6"}}, false, true, chat.Inbound{}},
 		{"a bot's message with no content", slackgo.Message{Msg: slackgo.Msg{BotID: "B1", SubType: "bot_message", Timestamp: "1.7"}}, false, true, chat.Inbound{}},
 	} {

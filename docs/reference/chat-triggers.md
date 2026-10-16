@@ -31,13 +31,14 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
 
 ## `botMessage` fields
 
-A `botMessage` trigger works for any bot, named by its bot ID, and is written in full: `match`, `extract`, `thread`,
+A `botMessage` trigger works for any bot, named by its sender ID, and is written in full: `match`, `extract`, `thread`,
 `limits` and `promptTemplate` are all in the Binding. A worked trigger for Alertmanager's Slack receiver, with a comment
 on each regex, is in [Investigate Alertmanager alerts](../how-to/investigate-alertmanager-alerts.md).
 
 | Field | Meaning |
 |---|---|
-| `from.botId` | The one bot whose messages the trigger accepts, by Slack bot ID (`B...`), never by display name. Agent Kourier's own messages are never handed on, even if a trigger names its bot ID; that mistake is logged once, at warn. |
+| `from.id` | The one sender whose messages the trigger accepts, by the platform's ID for it (Slack: the bot ID, `B...`), never by display name. Agent Kourier's own messages are never handed on, even if a trigger names its ID; that mistake is logged once, at warn. |
+| `from.kind` | What kind of sender `from.id` names. `bot` is the only value, and the default. A message matches only when its sender's ID and kind both equal `from.id` and `from.kind`; on Slack every bot sender is of kind `bot`. |
 | `match` | Message field to regex. Every entry must match. |
 | `exclude` | Message field to regex. No entry may match. |
 | `extract` | Named values taken from a field by a regex whose named group has the entry's name. A message in which an extract does not match does not match the trigger. |
@@ -52,9 +53,12 @@ on each regex, is in [Investigate Alertmanager alerts](../how-to/investigate-ale
 A `botMessage` trigger without `limits.rateLimit` or without `limits.maxRunsPerDay` does not load: the Binding is
 rejected with a message that names the missing field. Leaving `maxRunsPerDay` out is not the same as `0`.
 
-**Message fields** a regex can read: `text`, `title`, `titleLink`, `fallback`, `footer` and `attachmentText`. The Slack
-adapter flattens the message's first legacy attachment into the last five; `text` is the message's own text. All are
-raw, as delivered. Later attachments are not read.
+**Message fields** a regex can read: `text`, `title`, `link`, `fallback`, `footer` and `body`. `text` is the message's
+top-level text, outside any attachment or card. `title`, `link`, `body`, `footer` and `fallback` are the heading, the
+heading's URL, the main text, the small print and the plain-text summary of the message's structured part. Each platform
+adapter flattens its native message into them. The Slack adapter reads the message's first legacy attachment: its
+`title` is `title`, its `title_link` is `link`, its `text` is `body`, its `footer` is `footer` and its `fallback` is
+`fallback`. All are raw, as delivered. Later attachments are not read. A field the message lacks is empty.
 
 **Regexes** are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups and the template. A
 Binding that fails any of them is rejected.

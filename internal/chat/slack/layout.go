@@ -42,12 +42,15 @@ const (
 	noText           = "(empty message)"
 )
 
+// ackReaction is the reaction Agent Kourier puts on an accepted message while it works, when a Binding names none.
+const ackReaction = "hourglass_flowing_sand"
+
 // caps is what Slack shows. The limits are those of the place's carrier, which is the whole field: the tool
 // name and its arguments are shown in one status line, so both have its limit; a choice is shown on a
 // numbered line, and an answer on the line of its question. The name of a tool awaiting approval has the same
 // limit, and its arguments, which are shown as preformatted text, have maxApprovalArgs.
 var caps = chat.Caps{
-	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection,
+	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection, AckReaction: ackReaction,
 	Limits: map[chat.Where]int{
 		chat.WhereFallback: maxSection, chat.WhereHeader: maxHeader, chat.WhereBody: maxMarkdown, chat.WhereStream: maxMarkdown,
 		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300, chat.WhereToolArgs: maxApprovalArgs,

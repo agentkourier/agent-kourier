@@ -255,6 +255,9 @@ func (c *checker) contract() {
 	if c.caps.MaxText <= len(chat.Truncated) {
 		c.add(RuleContract, 0, "Capabilities", "limits", "MaxText is %d, which cannot hold even the truncation marker", c.caps.MaxText)
 	}
+	if c.caps.AckReaction == "" || strings.ContainsAny(c.caps.AckReaction, ": \t\n") {
+		c.add(RuleContract, 0, "Capabilities", "acknowledgment", "AckReaction is %q, want the platform's own reaction name, without colons: a Binding that names no reaction gets it, and React takes it", c.caps.AckReaction)
+	}
 	for w, n := range c.caps.Limits {
 		if n <= len(chat.Truncated) {
 			c.add(RuleContract, w, "Capabilities", "limits", "the limit is %d, which cannot hold even the truncation marker", n)

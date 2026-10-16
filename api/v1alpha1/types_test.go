@@ -46,8 +46,8 @@ func TestSpecExamplesDecode(t *testing.T) {
 	if b.Spec.Chat.ThreadReplies != ThreadRepliesAll {
 		t.Errorf("Binding threadReplies = %q, want %q", b.Spec.Chat.ThreadReplies, ThreadRepliesAll)
 	}
-	if b.Spec.Chat.Acknowledgment == nil || b.Spec.Chat.Acknowledgment.Enabled == nil || !*b.Spec.Chat.Acknowledgment.Enabled || b.Spec.Chat.Acknowledgment.Emoji != DefaultAcknowledgmentEmoji {
-		t.Errorf("Binding acknowledgment defaults = %+v, want enabled %q", b.Spec.Chat.Acknowledgment, DefaultAcknowledgmentEmoji)
+	if b.Spec.Chat.Acknowledgment == nil || b.Spec.Chat.Acknowledgment.Enabled == nil || !*b.Spec.Chat.Acknowledgment.Enabled || b.Spec.Chat.Acknowledgment.Emoji != "" {
+		t.Errorf("Binding acknowledgment defaults = %+v, want enabled with no emoji: the platform supplies its own", b.Spec.Chat.Acknowledgment)
 	}
 	if b.Spec.Identity.UserID != "agent-kourier-sre-alerts" || b.Spec.Chat.Channel != "C0123456789" ||
 		!b.Spec.Interactions.AskUser || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 || !b.Spec.Feedback.Enabled {
@@ -105,11 +105,16 @@ func TestDefaultAcknowledgment(t *testing.T) {
 			b := &Binding{Spec: BindingSpec{Chat: ChatBinding{Acknowledgment: tc.in}}}
 			b.Default()
 			got := b.Spec.Chat.Acknowledgment
-			if got == nil || got.Enabled == nil || *got.Enabled != tc.want || got.Emoji == "" {
-				t.Fatalf("acknowledgment after Default = %+v; want enabled=%t and an emoji", got, tc.want)
+			if got == nil || got.Enabled == nil || *got.Enabled != tc.want {
+				t.Fatalf("acknowledgment after Default = %+v; want enabled=%t", got, tc.want)
 			}
-			if tc.name != "custom emoji" && got.Emoji != DefaultAcknowledgmentEmoji {
-				t.Errorf("emoji after Default = %q, want %q", got.Emoji, DefaultAcknowledgmentEmoji)
+			// The API names no reaction: an emoji stays as written, and an empty one stays empty for the platform to fill.
+			wantEmoji := ""
+			if tc.in != nil {
+				wantEmoji = tc.in.Emoji
+			}
+			if got.Emoji != wantEmoji {
+				t.Errorf("emoji after Default = %q, want %q", got.Emoji, wantEmoji)
 			}
 		})
 	}

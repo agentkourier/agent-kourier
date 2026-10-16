@@ -119,8 +119,8 @@ func TestTrialBindingHasNoMentionTrigger(t *testing.T) {
 func TestTrialBindingMatchesOnlyTheKindReceiver(t *testing.T) {
 	b, _ := trialBinding(t)
 	tr := b.Spec.Chat.Triggers[0]
-	if got := tr.Match[v1alpha1.FieldTitleLink]; got != trialReceiver {
-		t.Errorf("match titleLink = %q; want exactly %q (anchored: without the $, receiver=slack-critical-kind is the only one, but a longer name would match too)", got, trialReceiver)
+	if got := tr.Match[v1alpha1.FieldLink]; got != trialReceiver {
+		t.Errorf("match link = %q; want exactly %q (anchored: without the $, receiver=slack-critical-kind is the only one, but a longer name would match too)", got, trialReceiver)
 	}
 	if !isAlertmanagerTrigger(tr, heartbeatExclude) {
 		t.Errorf("the trigger is not the Alertmanager trigger written in full, with only the heartbeat excluded: %+v", tr)
@@ -154,7 +154,7 @@ func TestDryRunBindingsAreTheAlertmanagerTriggerForTheirReceiver(t *testing.T) {
 			continue
 		}
 		tr := triggers[1]
-		if !isAlertmanagerTrigger(tr, heartbeatExclude) || tr.From.BotID != trialBot || tr.Match[v1alpha1.FieldTitleLink] != want ||
+		if !isAlertmanagerTrigger(tr, heartbeatExclude) || tr.From.ID != trialBot || tr.Match[v1alpha1.FieldLink] != want ||
 			!limitsAreTheExamples(tr.Limits) {
 			t.Errorf("%s: trigger %+v; want the Alertmanager trigger for %s with the receiver %q, the heartbeat excluded and the example's limits", b.Name, tr, trialBot, want)
 		}
@@ -164,7 +164,7 @@ func TestDryRunBindingsAreTheAlertmanagerTriggerForTheirReceiver(t *testing.T) {
 // TestTrialBindingNamesOnlyTheAlertBot: one bot ID in the trigger and in the whole file: the incoming webhook's.
 func TestTrialBindingNamesOnlyTheAlertBot(t *testing.T) {
 	b, _ := trialBinding(t)
-	if from := b.Spec.Chat.Triggers[0].From; from == nil || from.BotID != trialBot {
+	if from := b.Spec.Chat.Triggers[0].From; from == nil || from.ID != trialBot {
 		t.Errorf("from = %+v; want bot %s", from, trialBot)
 	}
 	raw, err := os.ReadFile(trialFile)
@@ -416,7 +416,7 @@ const (
 )
 
 func sample(bot, title, link, fallback string) chat.BotMessage {
-	return chat.BotMessage{BotID: bot, Title: title, TitleLink: link, Fallback: fallback, AttachmentText: "*" + title + "*"}
+	return chat.BotMessage{ID: bot, Title: title, Link: link, Fallback: fallback, Body: "*" + title + "*"}
 }
 
 // TestTrialTriggerOverTheChannelsMessages runs the intake's matcher (chat.Replay, the dry run's engine) over the sandbox's real config files, with the
@@ -432,10 +432,10 @@ func TestTrialTriggerOverTheChannelsMessages(t *testing.T) {
 	kindGroup := sample(trialBot, "[kind] FIRING (3) - KubePodNotReady", sampleKindLink, "[FIRING:3] KubePodNotReady shop (critical) | "+sampleKindLink)
 
 	otherBot := kindFiring
-	otherBot.BotID = "B0OTHERBOT1"
+	otherBot.ID = "B0OTHERBOT1"
 	// A longer receiver name that merely starts with the kind one: the $ keeps it out.
 	longer := kindFiring
-	longer.TitleLink = sampleKindLink + "-staging"
+	longer.Link = sampleKindLink + "-staging"
 	// A production alert that has the kind receiver's name somewhere other than the end of its link.
 	decoy := sample(trialBot, "FIRING (1) - KubeAPIErrorBudgetBurn", sampleProdLink+"&note=receiver=slack-critical-kind-x",
 		"[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | "+sampleProdLink)

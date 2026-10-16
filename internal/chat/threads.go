@@ -115,7 +115,7 @@ func (in *Intake) decide(ctx context.Context, m TriggerMatch) (decided, error) {
 	if in.cfg.TriggerThreads == nil {
 		return decided{}, errNoThreadStore
 	}
-	hash := keyHash(in.conn, m.Message.At.Channel, m.Message.Bot.BotID, key)
+	hash := keyHash(in.conn, m.Message.At.Channel, m.Message.Bot.ID, key)
 	out := decided{keyHash: hash[:8]}
 	if closing {
 		return in.closeThread(ctx, m, hash, out)
@@ -320,11 +320,14 @@ func closes(rule, fields map[string]string) bool {
 
 // keyHash is the hash that identifies a key in the store. The key is untrusted text out of a bot's message, so
 // it is hashed, and it is hashed with what scopes it: the connection and channel, since a thread is a message
-// of one channel, and the bot, since another bot's key of the same text is not the same alert. Fields are
-// separated by a byte no ID holds.
-func keyHash(conn, channel, botID, key string) string {
+// of one channel, and the sender's ID, since another sender's key of the same text is not the same alert. The sender's kind
+// is not in it: the hash is what a thread row of an earlier release is stored under, and a row must still be found
+// after the kind was added to the sender. The cost: two triggers of one channel that name the same ID with different kinds
+// share their key threads, so an adapter with more than one kind for an ID must revisit this hash. Fields are separated
+// by a byte no ID holds.
+func keyHash(conn, channel, senderID, key string) string {
 	h := sha256.New()
-	for _, part := range []string{conn, channel, botID, key} {
+	for _, part := range []string{conn, channel, senderID, key} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}

@@ -5,7 +5,7 @@
 #
 # The trigger is written in full, as in the Alertmanager how-to: its regexes read Alertmanager's Slack receiver message,
 # the thread is one per alert group with a 4h cooldown, a RESOLVED closes it, and the limits and the first prompt are set
-# here. The titleLink match names the receiver, and the $ anchors it so that receiver=slack-critical does not also take
+# here. The link match names the receiver, and the $ anchors it so that receiver=slack-critical does not also take
 # receiver=slack-critical-eu. The exclude turns away the Watchdog heartbeat if your Alertmanager routes it to the same
 # receiver.
 # triggers is the whole list and holds no mention trigger: a mention in the channel starts nothing. A reply in an alert's
@@ -30,9 +30,9 @@ spec:
     output: live
     triggers:
       - type: botMessage
-        from: {botId: B0REPLACEME}
+        from: {id: B0REPLACEME}
         match:
-          titleLink: 'receiver=slack-critical$'
+          link: 'receiver=slack-critical$'
           title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
           fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
         exclude: {title: ' - Watchdog$'}

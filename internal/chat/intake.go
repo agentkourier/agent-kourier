@@ -252,11 +252,11 @@ func (in *Intake) botMessage(ctx context.Context, m Inbound) (disposition string
 	trigger, fields, ok := in.tables.table(snap, rb.Binding, in.log).match(m)
 	if !ok {
 		telemetry.Count(ctx, "agentkourier_trigger_unmatched_total", name)
-		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
+		in.log.DebugContext(ctx, "chat: bot message matched no trigger", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.ID, "kind", m.Bot.Kind)
 		return "trigger_unmatched", nil
 	}
 	match := TriggerMatch{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m}
-	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.BotID)
+	in.log.InfoContext(ctx, "chat: bot message matched a trigger", "binding", name, "trigger", trigger.index, "channel", m.At.Channel, "message", m.At.ID, "bot", m.Bot.ID, "kind", m.Bot.Kind)
 	out, err := in.decide(ctx, match)
 	if out.decision != "" {
 		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
@@ -295,7 +295,8 @@ func (in *Intake) countDecision(ctx context.Context, channel string, d TriggerDe
 }
 
 // AcceptsBot implements BotFilter: it says whether a botMessage trigger of the Binding that owns channel
-// names botID, by ID and never by display name (D36). A channel with no Binding, and an empty ID, accept none.
+// names botID, by ID and never by display name (D36). It looks at the ID alone: whether the kind matches too is the
+// trigger's own match. A channel with no Binding, and an empty ID, accept none.
 func (in *Intake) AcceptsBot(channel, botID string) bool {
 	snap := in.cfg.Snapshot()
 	if snap == nil || botID == "" {
@@ -306,7 +307,7 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 		return false
 	}
 	return slices.ContainsFunc(rb.Binding.Spec.Chat.Triggers, func(t v1alpha1.Trigger) bool {
-		return t.Type == v1alpha1.TriggerBotMessage && t.From != nil && t.From.BotID == botID
+		return t.Type == v1alpha1.TriggerBotMessage && t.From != nil && t.From.ID == botID
 	})
 }
 

@@ -179,7 +179,7 @@ triggers in the Binding's `chat` block. A `botMessage` trigger is written in ful
 [Investigate Alertmanager alerts](docs/how-to/investigate-alertmanager-alerts.md) has a
 complete trigger for Alertmanager's Slack receiver, with a comment on each regex;
 [Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows how to write
-one for another bot. `botId` is the `bot_id` carried by the alert
+one for another bot. `from.id` is the `bot_id` carried by the alert
 messages themselves, which starts with `B`. It is not the Slack app ID, which starts
 with `A`, and Agent Kourier rejects a name. The dry run in the
 [sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is

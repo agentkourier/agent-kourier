@@ -71,7 +71,7 @@ cases:
     message:
       bot: B0REPLACEME              # the poster's bot ID; leave out for a person's message
       title: 'FIRING (1) - KubePodCrashLooping'
-      titleLink: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
+      link: 'https://alertmanager.example.com/#/alerts?receiver=slack-critical'
       fallback: '[FIRING:1] KubePodCrashLooping shop (critical) | https://alertmanager.example.com/#/alerts?receiver=slack-critical'
     expect:
       outcome: matched
@@ -79,13 +79,13 @@ cases:
       fields: { state: FIRING, alertname: KubePodCrashLooping, key: KubePodCrashLooping shop }
 ```
 
-- A bot's message can set `text`, `title`, `titleLink`, `fallback`, `footer` and `attachmentText`, the fields a trigger's
+- A bot's message can set `text`, `title`, `link`, `fallback`, `footer` and `body`, the fields a trigger's
   regexes read, and `inThread: true` for a reply inside a thread. It needs at least one of the six: the Slack adapter
   drops a bot's message with none before any trigger sees it. A person's message sets `user` and `text` and needs
   both, for the adapter drops a person's message that lacks either.
 - Each value is the raw string from the message's JSON as Slack delivers it, not what the Slack client displays: `text`
-  is the message's own `text`, and the other five are the `title`, `title_link`, `fallback`, `footer` and `text` of the
-  message's first legacy attachment (the others are not read). The adapter neither renders nor unescapes them. Copy the
+  is the message's top-level `text`, and the other five are the `title`, `title_link`, `fallback`, `footer` and `text`
+  (the `body`) of the message's first legacy attachment (the others are not read). The adapter neither renders nor unescapes them. Copy the
   values from a real message's JSON, for example a `conversations.history` response, rather than from the screen.
 - `outcome` is one of `matched` (a trigger takes the message), `unmatched` (a bot the Binding names, but no trigger
   takes the message), `excluded` (all the match regexes of a trigger matched and its exclude regex turned the message

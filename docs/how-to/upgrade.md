@@ -93,10 +93,10 @@ whole text.
 **Migrate each Binding that sets `preset:`.**
 
 1. Copy the trigger from [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger) in place
-   of the preset trigger. Apart from `match.titleLink`, it is the old preset written out: the same regexes, a 4 hour
+   of the preset trigger. Apart from `match.link`, it is the old preset written out: the same regexes, a 4 hour
    cooldown, 5 starts in 10 minutes with 2 at once, 40 a day, and the prompt.
-2. Handle `match.titleLink`. The example's is not part of the old preset: it limits the trigger to one receiver. Keep it,
-   set to your receiver, only if your preset trigger had a `match.titleLink`. Delete it otherwise, or the alerts of your
+2. Handle `match.link`. The example's is not part of the old preset: it limits the trigger to one receiver. Keep it,
+   set to your receiver, only if your preset trigger matched the title's link. Delete it otherwise, or the alerts of your
    other receivers start nothing.
 3. Re-apply the rest of what you overrode, in the same fields: `exclude`, `thread`, `limits` or `promptTemplate`.
 4. Replay the channel's history with `agent-kourier dry-run` from the release you are upgrading to, against the edited
@@ -108,3 +108,43 @@ whole text.
 prompt's `.Source`; a start from a preset trigger recorded `alertmanager`. A `promptTemplate` that tested `.Source`
 against `alertmanager` needs the new value. Sessions created before the upgrade keep `alertmanager`, and a vote on
 their messages still counts under the alert's name ([Stored data](../reference/stored-data.md#feedback)).
+
+## Upgrade to the release with platform-neutral trigger fields
+
+A trigger names its sender and the message fields it reads in terms that do not belong to one chat platform, and the
+API no longer fills in the acknowledgment reaction. A Binding written for the earlier release fails to load, so change
+your Bindings before you upgrade. If you also migrate off `preset:`, make both changes in one edit: the example in
+[Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger), which the preset section points to,
+already uses the new names.
+
+| Before | Now | Where |
+|---|---|---|
+| `botId` | `id` | `from` of a `botMessage` trigger |
+| `titleLink` | `link` | the keys of `match` and `exclude`, and `field` of an `extract` entry |
+| `attachmentText` | `body` | the keys of `match` and `exclude`, and `field` of an `extract` entry |
+
+- **The values do not change.** `from.id` is still the bot ID (`B...`) on Slack. `link` still holds the first legacy
+  attachment's `title_link` and `body` its `text`; `text`, `title`, `footer` and `fallback` keep their names.
+- **The old keys fail to load.** The loader names the file, the Binding and the field, for example
+  `b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].from.botId: unknown field`, then `from.id: required`. A
+  `match`, `exclude` or `extract` on `titleLink` or `attachmentText` fails with `unsupported message field`, and the
+  error lists the field names that exist.
+- **`from.kind` is new and optional.** It is `bot`, the default and the only value. A trigger takes a message only when
+  the sender's ID and kind both equal `from.id` and `from.kind`; every Slack bot is of kind `bot`.
+- **The first prompt names the fields differently.** The block of untrusted data that follows a trigger's prompt has an
+  element for each field the message has, named by the field: `<link>` and `<body>` where `<titleLink>` and
+  `<attachmentText>` were. An agent instruction that names those elements needs the new names. A prompt template reads
+  extracted values through `.Fields.<name>`, which are your own extract names, so a template is unaffected.
+- **The dry run names the new fields,** for example `trigger 1: match link`. Regexes are tried in the
+  order of the field names, so a message that fails two of them can now show a different field first.
+- **The acknowledgment reaction.** A Binding that left `chat.acknowledgment.emoji` out used to have
+  `hourglass_flowing_sand` written into it when it loaded. It now stays empty, and Slack supplies the same reaction, so
+  nothing changes on Slack. An `emoji` you set is used as before.
+- **Alerts that are firing keep their threads.** An alert thread opened before the upgrade is looked up by the same
+  connection, channel, bot ID and key as before, so a repeat of an alert whose thread is open finds that thread and
+  adds a "Fired again" note to it, as it did before the upgrade, instead of starting a second investigation.
+
+To migrate, rename the keys in the table, then replay the channel's history with `agent-kourier dry-run` from the
+release you are upgrading to, against the edited Bindings ([Tune triggers with a dry run](tune-triggers.md)). It loads
+them with the broker's own loader, so it prints the same errors the broker would, and each message you expect to start an
+investigation should come out `matched`. The older release does not accept the new keys, so its binary proves nothing.

@@ -59,7 +59,7 @@ func alertmanagerTrigger() Trigger {
 	)
 	return Trigger{
 		Type: TriggerBotMessage,
-		From: &BotSource{BotID: "B0123456789"},
+		From: &BotSource{ID: "B0123456789", Kind: SenderKindBot},
 		Match: map[MessageField]string{
 			FieldTitle:    `^` + tag + alert + ` - `,
 			FieldFallback: `^\[(?:FIRING(?::\d+)?|RESOLVED)\] `,
@@ -94,10 +94,10 @@ func TestAlertmanagerTrigger(t *testing.T) {
 		{
 			name: "firing, one alert, from the owner's channel",
 			msg: message{
-				FieldTitle:     "FIRING (1) - KubeAPIErrorBudgetBurn",
-				FieldTitleLink: slackCriticalLink,
-				FieldFallback:  "[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | " + slackCriticalLink,
-				FieldText:      "*KubeAPIErrorBudgetBurn* - critical\nThe API server is burning too much error budget.\n",
+				FieldTitle:    "FIRING (1) - KubeAPIErrorBudgetBurn",
+				FieldLink:     slackCriticalLink,
+				FieldFallback: "[FIRING:1] KubeAPIErrorBudgetBurn kube-system (long 1h critical apiserver) | " + slackCriticalLink,
+				FieldText:     "*KubeAPIErrorBudgetBurn* - critical\nThe API server is burning too much error budget.\n",
 			},
 			match: true,
 			want:  map[string]string{"state": "FIRING", "key": "KubeAPIErrorBudgetBurn kube-system", "alertname": "KubeAPIErrorBudgetBurn"},
@@ -123,9 +123,9 @@ func TestAlertmanagerTrigger(t *testing.T) {
 		{
 			name: "the trial's kind Alertmanager prefixes the title with [kind], firing",
 			msg: message{
-				FieldTitle:     "[kind] FIRING (1) - KubePodCrashLooping",
-				FieldTitleLink: slackCriticalLink + "-kind",
-				FieldFallback:  "[FIRING:1] KubePodCrashLooping default (critical kube-state-metrics) | " + slackCriticalLink + "-kind",
+				FieldTitle:    "[kind] FIRING (1) - KubePodCrashLooping",
+				FieldLink:     slackCriticalLink + "-kind",
+				FieldFallback: "[FIRING:1] KubePodCrashLooping default (critical kube-state-metrics) | " + slackCriticalLink + "-kind",
 			},
 			match: true,
 			want:  map[string]string{"state": "FIRING", "key": "KubePodCrashLooping default", "alertname": "KubePodCrashLooping"},
@@ -133,9 +133,9 @@ func TestAlertmanagerTrigger(t *testing.T) {
 		{
 			name: "the trial's kind Alertmanager prefixes the title with [kind], resolved",
 			msg: message{
-				FieldTitle:     "[kind] RESOLVED - KubePodCrashLooping",
-				FieldTitleLink: slackCriticalLink + "-kind",
-				FieldFallback:  "[RESOLVED] KubePodCrashLooping default (critical kube-state-metrics) | " + slackCriticalLink + "-kind",
+				FieldTitle:    "[kind] RESOLVED - KubePodCrashLooping",
+				FieldLink:     slackCriticalLink + "-kind",
+				FieldFallback: "[RESOLVED] KubePodCrashLooping default (critical kube-state-metrics) | " + slackCriticalLink + "-kind",
 			},
 			match: true,
 			want:  map[string]string{"state": "RESOLVED", "key": "KubePodCrashLooping default", "alertname": "KubePodCrashLooping"},
@@ -175,10 +175,10 @@ func TestAlertmanagerTrigger(t *testing.T) {
 		{
 			name: "the Watchdog heartbeat, whose fallback is Alertmanager's default",
 			msg: message{
-				FieldTitle:     "Prometheus heartbeat",
-				FieldTitleLink: "https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat",
-				FieldFallback:  "[FIRING:1] Watchdog  (none prometheus) | https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat",
-				FieldText:      "Watchdog firing — Prometheus + Alertmanager are alive.",
+				FieldTitle:    "Prometheus heartbeat",
+				FieldLink:     "https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat",
+				FieldFallback: "[FIRING:1] Watchdog  (none prometheus) | https://alertmanager.example.com/#/alerts?receiver=slack-heartbeat",
+				FieldText:     "Watchdog firing — Prometheus + Alertmanager are alive.",
 			},
 		},
 		{
@@ -234,14 +234,14 @@ func TestAlertmanagerTrigger(t *testing.T) {
 func TestAnchoredReceiverSeparatesKindFromProduction(t *testing.T) {
 	alert := func(link string) message {
 		return message{
-			FieldTitle:     "FIRING (1) - KubePodCrashLooping",
-			FieldTitleLink: link,
-			FieldFallback:  "[FIRING:1] KubePodCrashLooping default (critical) | " + link,
+			FieldTitle:    "FIRING (1) - KubePodCrashLooping",
+			FieldLink:     link,
+			FieldFallback: "[FIRING:1] KubePodCrashLooping default (critical) | " + link,
 		}
 	}
 	prod, kind := alertmanagerTrigger(), alertmanagerTrigger()
-	prod.Match[FieldTitleLink] = `receiver=slack-critical$`
-	kind.Match[FieldTitleLink] = `receiver=slack-critical-kind$`
+	prod.Match[FieldLink] = `receiver=slack-critical$`
+	kind.Match[FieldLink] = `receiver=slack-critical-kind$`
 	for _, tc := range []struct {
 		name    string
 		tr      Trigger
@@ -279,7 +279,7 @@ func TestDefaultTriggers(t *testing.T) {
 	b = load[Binding](t, "binding.yaml")
 	ts := b.Spec.Chat.Triggers
 	if len(ts) != 2 || ts[0].Type != TriggerMention || ts[1].Type != TriggerBotMessage ||
-		ts[1].From.BotID != "B0123456789" || ts[1].Thread.Cooldown.Duration != 2*time.Hour ||
+		ts[1].From.ID != "B0123456789" || ts[1].Thread.Cooldown.Duration != 2*time.Hour ||
 		ts[1].Exclude[FieldTitle] != "^Prometheus heartbeat$" {
 		t.Errorf("triggers of binding.yaml = %+v", ts)
 	}
@@ -313,14 +313,14 @@ func bot(o *Binding) *Trigger { return &o.Spec.Chat.Triggers[1] }
 
 func TestTriggersValidate(t *testing.T) {
 	const at = "spec.chat.triggers[1]"
-	fieldsList := "text, title, titleLink, fallback, footer, attachmentText"
+	fieldsList := "text, title, link, fallback, footer, body"
 	hr := func(h time.Duration) metav1.Duration { return metav1.Duration{Duration: h} }
 	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
 		{"the fixture is valid", func(*Binding) {}, ""},
 		{"no triggers at all", func(o *Binding) { o.Spec.Chat.Triggers = nil }, ""},
 		{"unknown kind", func(o *Binding) { bot(o).Type = "message" },
 			at + `.type: unsupported value "message", must be one of mention, botMessage`},
-		{"mention with a source", func(o *Binding) { o.Spec.Chat.Triggers[0].From = &BotSource{BotID: "B0123456789"} },
+		{"mention with a source", func(o *Binding) { o.Spec.Chat.Triggers[0].From = &BotSource{ID: "B0123456789"} },
 			"spec.chat.triggers[0].from: not allowed with type: mention"},
 		{"mention with a prompt", func(o *Binding) { o.Spec.Chat.Triggers[0].PromptTemplate = "x" },
 			"spec.chat.triggers[0].promptTemplate: not allowed with type: mention"},
@@ -328,12 +328,21 @@ func TestTriggersValidate(t *testing.T) {
 			"spec.chat.triggers[0].thread: not allowed with type: mention"},
 		{"mention with a maxIdle", func(o *Binding) { o.Spec.Chat.Triggers[0].Thread.MaxIdle = hr(48 * time.Hour) },
 			"spec.chat.triggers[0].thread: not allowed with type: mention"},
-		{"no source", func(o *Binding) { bot(o).From = nil }, at + ".from.botId: required"},
-		{"empty bot ID", func(o *Binding) { bot(o).From.BotID = "" }, at + ".from.botId: required"},
-		{"bot name instead of ID", func(o *Binding) { bot(o).From.BotID = "alertmanager" },
-			at + `.from.botId: invalid bot ID "alertmanager": must be a Slack bot ID such as B0123456789, not a name`},
-		{"user ID instead of bot ID", func(o *Binding) { bot(o).From.BotID = "U0123456789" },
-			at + `.from.botId: invalid bot ID "U0123456789": must be a Slack bot ID such as B0123456789, not a name`},
+		{"no source", func(o *Binding) { bot(o).From = nil }, at + ".from.id: required"},
+		{"empty bot ID", func(o *Binding) { bot(o).From.ID = "" }, at + ".from.id: required"},
+		{"bot name instead of ID", func(o *Binding) { bot(o).From.ID = "alertmanager" },
+			at + `.from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+		{"user ID instead of bot ID", func(o *Binding) { bot(o).From.ID = "U0123456789" },
+			at + `.from.id: invalid sender ID "U0123456789": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+		{"kind other than bot", func(o *Binding) { bot(o).From.Kind = "webhook" },
+			at + `.from.kind: unsupported value "webhook", must be one of bot`},
+		{"kind unset on a Binding that was not defaulted", func(o *Binding) { bot(o).From.Kind = "" },
+			at + ".from.kind: required after defaulting"},
+		{"kind bot written out", func(o *Binding) { bot(o).From.Kind = SenderKindBot }, ""},
+		{"the same ID is the same sender", func(o *Binding) {
+			dup := *bot(o)
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, dup)
+		}, "spec.chat.triggers[2]: duplicate of spec.chat.triggers[1]"},
 
 		// Regexes: they compile, within the cap, on known fields.
 		{"match regex that does not compile", func(o *Binding) { bot(o).Match[FieldTitle] = "(" },
@@ -348,6 +357,12 @@ func TestTriggersValidate(t *testing.T) {
 		{"match regex at the length cap", func(o *Binding) { bot(o).Match[FieldTitle] = strings.Repeat("a", 512) }, ""},
 		{"match on an unknown field", func(o *Binding) { bot(o).Match["subject"] = "x" },
 			at + `.match.subject: unsupported message field "subject", must be one of ` + fieldsList},
+		// The names before the rename are unknown fields; the error lists the names that replace them.
+		{"match on the removed name attachmentText", func(o *Binding) { bot(o).Match["attachmentText"] = "x" },
+			at + `.match.attachmentText: unsupported message field "attachmentText", must be one of ` + fieldsList},
+		{"exclude on the removed name titleLink", func(o *Binding) { bot(o).Exclude["titleLink"] = "x" },
+			at + `.exclude.titleLink: unsupported message field "titleLink", must be one of ` + fieldsList},
+		{"match on body and link", func(o *Binding) { bot(o).Match[FieldBody] = "x"; bot(o).Match[FieldLink] = "x" }, ""},
 		{"exclude on an unknown field", func(o *Binding) { bot(o).Exclude["subject"] = "x" },
 			at + `.exclude.subject: unsupported message field "subject", must be one of ` + fieldsList},
 
@@ -367,6 +382,15 @@ func TestTriggersValidate(t *testing.T) {
 		{"extract from an unknown field", func(o *Binding) {
 			bot(o).Extract["state"] = Extract{Field: "subject", Regex: `(?P<state>x)`}
 		}, at + `.extract.state.field: unsupported message field "subject", must be one of ` + fieldsList},
+		{"extract from the removed name attachmentText", func(o *Binding) {
+			bot(o).Extract["state"] = Extract{Field: "attachmentText", Regex: `(?P<state>x)`}
+		}, at + `.extract.state.field: unsupported message field "attachmentText", must be one of ` + fieldsList},
+		{"extract from the removed name titleLink", func(o *Binding) {
+			bot(o).Extract["state"] = Extract{Field: "titleLink", Regex: `(?P<state>x)`}
+		}, at + `.extract.state.field: unsupported message field "titleLink", must be one of ` + fieldsList},
+		{"extract from body", func(o *Binding) {
+			bot(o).Extract["state"] = Extract{Field: FieldBody, Regex: `(?P<state>x)`}
+		}, ""},
 		{"extract with no field", func(o *Binding) {
 			bot(o).Extract["state"] = Extract{Regex: `(?P<state>x)`}
 		}, at + `.extract.state.field: unsupported message field "", must be one of ` + fieldsList},
@@ -479,12 +503,12 @@ func TestTriggersValidate(t *testing.T) {
 		{"the same bot with a different match is not a duplicate", func(o *Binding) {
 			other := *bot(o)
 			other.Match = maps.Clone(other.Match)
-			other.Match[FieldTitleLink] = "receiver=slack-warning"
+			other.Match[FieldLink] = "receiver=slack-warning"
 			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
 		}, ""},
 		{"another bot with the same match is not a duplicate", func(o *Binding) {
 			other := *bot(o)
-			other.From = &BotSource{BotID: "B0000000001"}
+			other.From = &BotSource{ID: "B0000000001", Kind: SenderKindBot}
 			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, other)
 		}, ""},
 	})
@@ -492,11 +516,11 @@ func TestTriggersValidate(t *testing.T) {
 
 func TestTriggersValidateReportsEveryProblem(t *testing.T) {
 	b := load[Binding](t, "binding.yaml")
-	bot(b).From.BotID = "nope"
+	bot(b).From.ID = "nope"
 	bot(b).Match[FieldTitle] = "("
 	bot(b).Thread.Cooldown = metav1.Duration{}
 	want := []string{
-		`spec.chat.triggers[1].from.botId: invalid bot ID "nope": must be a Slack bot ID such as B0123456789, not a name`,
+		`spec.chat.triggers[1].from.id: invalid sender ID "nope": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`,
 		"spec.chat.triggers[1].match.title: invalid regular expression: error parsing regexp: missing closing ): `(`",
 		"spec.chat.triggers[1].thread.cooldown: required with thread.by",
 	}
@@ -536,5 +560,19 @@ func TestEffectiveMaxIdle(t *testing.T) {
 		if got := tt.th.EffectiveMaxIdle(); got != tt.want {
 			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+// TestSenderKindDefaultsToBot checks that a sender written without a kind is a bot after Default, and that Default
+// leaves a kind that is written alone.
+func TestSenderKindDefaultsToBot(t *testing.T) {
+	b := load[Binding](t, "binding.yaml")
+	if got := bot(b).From.Kind; got != SenderKindBot {
+		t.Fatalf("kind of a sender written without one = %q, want %q", got, SenderKindBot)
+	}
+	b.Spec.Chat.Triggers[1].From.Kind = "webhook"
+	b.Default()
+	if got := bot(b).From.Kind; got != "webhook" {
+		t.Errorf("Default changed a kind that was written: %q", got)
 	}
 }

@@ -17,10 +17,10 @@ spec:
     triggers:                        # empty means [{type: mention}]; see spec 8.2
       - type: mention
       - type: botMessage             # alerts Alertmanager itself posts to this channel
-        from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
+        from: { id: B0123456789 } # the poster's bot ID, never its display name (D36)
         match:
           # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
-          titleLink: 'receiver=slack-critical$'
+          link: 'receiver=slack-critical$'
           title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
           fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
         exclude: { title: '^Prometheus heartbeat$' }

@@ -55,9 +55,9 @@ config:
           output: live
           triggers:
             - type: botMessage
-              from: {botId: B0123456789}
+              from: {id: B0123456789}
               match:
-                titleLink: 'receiver=slack-critical$'
+                link: 'receiver=slack-critical$'
                 title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
                 fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
               extract:
