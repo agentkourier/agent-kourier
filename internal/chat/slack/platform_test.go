@@ -77,7 +77,7 @@ func (t handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // shownBy is what the person sees of the text of one request, and the constructs Slack acts on in it, read as
 // Slack reads each kind of text, each by the reader of its own dialect: the top-level text and a mrkdwn object as mrkdwn (ScanSlack, which has no
 // backslash escape), a markdown block and markdown_text as CommonMark with code shown literally (ScanCommonMarkLiteralCode:
-// what the probe of 2026-10-04 measured, rows 04, 19 and 20 of tasks/plans/slack-code-rendering.md; the code that is
+// what the probe of 2026-10-04 measured, rows 04, 19 and 20 of docs/spikes/slack-code-rendering.md; the code that is
 // there is only what Agent Kourier wrote; a "<!", "<@" or "<#" in it is still reported, as it is not in what Agent Kourier writes), and a plain_text object
 // as the characters it holds (ScanSlackPlain), in which style is not a construct but a token or a link would
 // still be one (a plain_text object is not known to parse them, UNCONFIRMED(WP-04), and the adapter does not rely

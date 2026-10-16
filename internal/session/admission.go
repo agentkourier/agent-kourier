@@ -9,7 +9,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// Reply admission (CONTEXT.md) is the decision what a person's reply in a thread is: a turn for the agent, an
+// Reply admission is the decision what a person's reply in a thread is: a turn for the agent, an
 // answer to the question the agent waits on, ignored, or answered with a notice (spec 8.2, 8.4, D38). It is one
 // pure function of the facts of the reply, so that the rule is read, tested and changed here and nowhere else:
 // Manager.admit gathers the facts from the store and carries out the decision, and the chat intake only

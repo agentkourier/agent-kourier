@@ -37,7 +37,7 @@ import (
 //
 // They are not a fenced block of a markdown block, as the code of an agent's answer is (escape.go), for two reasons
 // that the conformance suite holds every adapter to. Slack shows code in a markdown block literally (rows 01 and 03
-// of tasks/plans/slack-code-rendering.md), so the "&lt;" that keeps "<!" out of code would be shown as "&lt;", and
+// of docs/spikes/slack-code-rendering.md), so the "&lt;" that keeps "<!" out of code would be shown as "&lt;", and
 // the person would be asked to approve arguments that are not the arguments: "&lt;!x" and "<!x" would look alike.
 // And a line of them that looks like a fence would end the block there, so that the rest was shown as prose.
 const (

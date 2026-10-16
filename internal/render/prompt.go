@@ -10,7 +10,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
-// The first prompt of a chat trigger (spec 8.2, R2; design: tasks/plans/chat-triggers.md). It has
+// The first prompt of a chat trigger (spec 8.2, R2). It has
 // two parts. The instruction part is the output of the trigger's promptTemplate, which is written
 // by the operator but reads values taken out of an attacker's message; each value it reads must
 // pass a strict character check (promptcheck.go) or the render is refused. After it Agent Kourier

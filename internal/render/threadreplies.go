@@ -1,6 +1,6 @@
 package render
 
-// The thread context of a mentioned turn (spec 8.2, D38; design: tasks/plans/thread-reply-mentions.md). In a Binding
+// The thread context of a mentioned turn (spec 8.2, D38). In a Binding
 // with chat.threadReplies: mention, the replies that people wrote in a thread without mentioning Agent Kourier are not turns;
 // a mentioned turn carries the ones since the previous turn, after the person's text, as
 //

@@ -69,8 +69,10 @@ jobs:
           cache-dependency-path: hack/docs/requirements.txt
       # Generates the reference pages, fails on a misspelt product name or a content-check finding, and builds with
       # --strict, so a broken internal link or anchor, a page missing from the nav, or any other warning fails the
-      # build.
+      # build. The content check's workspace rule takes its pattern from a secret.
       - run: make docs-build
+        env:
+          CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - name: The committed reference pages are current
         run: git diff --exit-code -- docs/reference
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

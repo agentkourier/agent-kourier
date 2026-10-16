@@ -11,7 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
-// The rows are those of the table in tasks/plans/slack-code-rendering.md: Slack's behaviour as measured in the probe of
+// The rows are those of the table in docs/spikes/slack-code-rendering.md: Slack's behaviour as measured in the probe of
 // the sandbox workspace, 2026-10-04. Each case is what the agent wrote and the exact text Agent Kourier sends.
 //
 // Raw strings are used for the text of cases that hold backslashes.

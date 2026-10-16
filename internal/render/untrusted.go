@@ -12,7 +12,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
-// The untrusted block module (spec R2; design: tasks/plans/untrusted-block.md). Text from people or other bots that
+// The untrusted block module (spec R2). Text from people or other bots that
 // reaches an agent goes through one module, so the sanitising, the escaping, the cut, the tag, the safety sentence
 // and the budget are written, and tested, once. A caller describes a block and says what its content is; the module
 // writes the rules. The two blocks today are the alert fields of a chat trigger (prompt.go) and the replies of a thread

@@ -11,8 +11,8 @@
 // Two kinds of check run:
 //
 //   - Content rules (the table in this file): internal work-package, decision and risk IDs and tasks/ paths, names that
-//     were removed from the product or the docs, fields the API types do not have yet, and identifiers of the owner's
-//     workspace. They apply to every line, code fences and inline code included: a leak in an example is still a leak.
+//     were removed from the product or the docs, fields the API types do not have yet, and, when CONTENTCHECK_WORKSPACE is
+//     set, identifiers of the owner's workspace. They apply to every line, code fences and inline code included: a leak in an example is still a leak.
 //   - Link hygiene, for the two READMEs and the recipes' READMEs only (mkdocs --strict already checks docs/): a relative link must name a file
 //     or directory that exists in the repository, and an anchor into a Markdown page must name one of its headings as
 //     GitHub slugs it, because GitHub renders the READMEs.
@@ -105,12 +105,26 @@ var rules = []rule{
 	r("wrong-claim", `(?i)wakes it if needed`,
 		"is a phrase the 2026-10-11 validation found wrong; say what the code does"),
 
-	r("workspace-id", `C0EXAMPLE01|B0EXAMPLE01`,
-		"is a Slack ID from the owner's workspace; use an obviously fake ID such as C0123456789"),
-	r("workspace-name", `(?i)example|cluster-gitops|alerts|cluster-apps`,
-		"names the owner's organisation, cluster or alert setup, which a public page must not"),
 	r("home-path", `/Users/`,
 		"is a path on a developer's machine"),
+}
+
+// workspaceEnv names the environment variable that holds the workspace rule's pattern. The owner's workspace, organisation,
+// cluster and alert-setup identifiers are themselves private, so the repository does not name them: CI sets the
+// variable from a repository secret, and a maintainer sets it locally. Without it the rule does not run, and run says so.
+const workspaceEnv = "CONTENTCHECK_WORKSPACE"
+
+// workspaceRuleID names the workspace rule in a finding and in an allowlist entry.
+const workspaceRuleID = "workspace"
+
+// workspaceRule builds the rule that denies the owner's workspace identifiers from pattern, a Go RE2 pattern.
+func workspaceRule(pattern string) (rule, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return rule{}, fmt.Errorf("%s: %w", workspaceEnv, err)
+	}
+	return rule{id: workspaceRuleID, re: re,
+		why: "names the owner's workspace, organisation, cluster or alert setup; use an obviously fake value such as C0123456789"}, nil
 }
 
 // activeRules returns the table with the fields the API has taken out: a field rule keeps the names that are not in
@@ -370,6 +384,7 @@ func parseAllowlist(path, text string) ([]*allowEntry, []finding) {
 	for _, ru := range rules {
 		known[ru.id] = true
 	}
+	known[workspaceRuleID] = true
 	for _, id := range linkRules {
 		known[id] = true
 	}
@@ -452,8 +467,8 @@ func applyAllowlist(in []finding, entries []*allowEntry, listPath string) []find
 }
 
 // check runs every check over the public sources under root and returns the findings that no allowlist entry excuses,
-// ordered by file and line.
-func check(root string) ([]finding, error) {
+// ordered by file and line. A non-empty workspace is the workspace rule's pattern.
+func check(root, workspace string) ([]finding, error) {
 	files, err := publicFiles(root)
 	if err != nil {
 		return nil, err
@@ -463,6 +478,13 @@ func check(root string) ([]finding, error) {
 		return nil, err
 	}
 	active := activeRules(api)
+	if workspace != "" {
+		ru, err := workspaceRule(workspace)
+		if err != nil {
+			return nil, err
+		}
+		active = append(active, ru)
+	}
 	fsys := os.DirFS(root)
 	links := &linkChecker{fsys: fsys}
 	var out []finding
@@ -491,9 +513,13 @@ func check(root string) ([]finding, error) {
 	return out, nil
 }
 
-// run checks the tree under root, prints each finding to stderr, and returns the exit status.
-func run(root string, stderr io.Writer) int {
-	found, err := check(root)
+// run checks the tree under root, prints each finding to stderr, and returns the exit status. workspace is the workspace
+// rule's pattern; when it is empty, run says that the rule did not run.
+func run(root, workspace string, stderr io.Writer) int {
+	if workspace == "" {
+		_, _ = fmt.Fprintf(stderr, "contentcheck: %s is unset; the workspace rule did not run\n", workspaceEnv)
+	}
+	found, err := check(root, workspace)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "contentcheck:", err) // a failed write to stderr has nowhere to be reported
 		return 2
@@ -509,5 +535,5 @@ func run(root string, stderr io.Writer) int {
 }
 
 func main() {
-	os.Exit(run(".", os.Stderr))
+	os.Exit(run(".", os.Getenv(workspaceEnv), os.Stderr))
 }

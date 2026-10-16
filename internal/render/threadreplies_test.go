@@ -646,7 +646,7 @@ func TestThreadRepliesTag(t *testing.T) {
 	}
 }
 
-// The numbers of the design (tasks/plans/thread-reply-mentions.md, "Context window"; spec 8.2): the newest 50 replies, 1000
+// The numbers of the design (spec 8.2): the newest 50 replies, 1000
 // UTF-16 units each, 6000 for the block.
 func TestThreadRepliesCapValues(t *testing.T) {
 	if MaxThreadReplies != 50 || MaxThreadReplyUnits != 1000 || MaxThreadBlockUnits != 6000 {

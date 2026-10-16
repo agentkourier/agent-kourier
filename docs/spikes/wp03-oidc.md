@@ -1,5 +1,7 @@
 # WP-03 spike: identity through Agent Kourier's front door (Q3, Q9)
 
+The spike code (`spike/`) is no longer in the repository; this page is the record of what it measured.
+
 Run 2026-09-30 against the full tier (kagent 1.0.0-alpha5, Dex v2.45.1, oauth2-proxy v7.15.3 as
 the front door) with `spike/a2a/run-oidc.sh`, which runs `go run ./spike/a2a -suite oidc`. Every
 call goes **through `kagent-frontdoor`** with a real, signed Dex token, except the few marked

@@ -1,8 +1,8 @@
 # Agent Kourier brand assets
 
 Master: `svg/agent-kourier-mark.svg` (the a1 winged visor: Kubernetes-blue feathers, navy head,
-white visor, navy eyes). Everything else is derived from it; regenerate the PNGs with
-`node docs/brand/assets/export.mjs` after editing an SVG, then rebuild `favicon.ico`.
+white visor, navy eyes). Everything else is derived from it; regenerate the PNGs
+from the SVGs after editing one (the export script is not kept in the repository), then rebuild `favicon.ico`.
 
 Palette: Kubernetes blue `#326CE5`, navy `#1E3A8A`, white. Dark backgrounds use the dark
 variant (feathers `#5B8DEF`, head `#326CE5`) because navy on near-black is 1.6:1.

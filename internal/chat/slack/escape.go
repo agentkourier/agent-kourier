@@ -20,7 +20,7 @@ import (
 //
 // Markdown has one more place, code, where Slack shows the text literally: no entity is decoded, no backslash is an
 // escape (it drops one before "[" or "]" in a span), and no link, image or token is made (probe of the sandbox
-// workspace, 2026-10-04; the rows are in tasks/plans/slack-code-rendering.md). Escaping there only shows as
+// workspace, 2026-10-04; the rows are in docs/spikes/slack-code-rendering.md). Escaping there only shows as
 // "\[" and "&lt;" in a command that cannot be pasted. So the contract for markdown is that Slack sees only the code
 // that Agent Kourier writes (mdtext.go):
 //

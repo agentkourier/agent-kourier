@@ -97,9 +97,7 @@ signed by the same identity, and its default image is the image:
       --certificate-identity "$IDENTITY"
     helm show values oci://$CHART --version X.Y.Z | grep -A8 '^image:'   # repository and digest stamped
 
-The [v0.0.0-dev.4 release run](https://github.com/agentkourier/agent-kourier/actions/runs/38279793017) completed
-GHCR publishing, signing, both signature checks and GitHub Release creation. Its
-[release record](https://github.com/agentkourier/agent-kourier/releases/tag/v0.0.0-dev.4) names the verified digests.
+Each release's GitHub Release body names the verified image and chart digests.
 
 ## Roll back
 

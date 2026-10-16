@@ -125,7 +125,7 @@ sidebar, workspace name, URL bar and channel list are never in the output.
 
 The alert trial is wired to the owner's real alert channel. `ALERT_CHANNEL_ID` in `webhook.sh` and
 the webhook bot ID in `alert-binding.yaml` are constants that point at
-`#alerts-critical`, where production alerts also arrive. Recording there puts
+the owner's critical-alerts channel, where production alerts also arrive. Recording there puts
 production alerts in the raw footage.
 
 **Recommended:** make those two values overridable, add an incoming webhook in the sandbox workspace

@@ -11,7 +11,7 @@ import (
 
 // fenceMark is the line Agent Kourier writes to open and to close a block of code, alone at column 0, and nothing else
 // ever does (the contract in escape.go). The row numbers in this file are those of the table in
-// tasks/plans/slack-code-rendering.md: a probe of the sandbox workspace, 2026-10-04.
+// docs/spikes/slack-code-rendering.md: a probe of the sandbox workspace, 2026-10-04.
 const fenceMark = "```"
 
 // mdText turns the markdown of the agent into the markdown Agent Kourier sends, one document that may come in pieces: the

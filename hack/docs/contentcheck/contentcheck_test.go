@@ -106,16 +106,9 @@ func TestScanText(t *testing.T) {
 		{"toolApprovals is not toolApprovalsEnabled", "A hypothetical toolApprovalsEnabled.\n", nil},
 		{"a roadmap word is not the file", "Read the roadmap in the issue tracker.\n", nil},
 
-		// Owner and workspace identifiers.
-		{"the owner's channel ID", "channel C0EXAMPLE01\n", []string{"workspace-id"}},
-		{"the owner's bot ID", "bot B0EXAMPLE01\n", []string{"workspace-id"}},
-		{"the owner's organisation", "example-org.\n", []string{"workspace-name"}},
-		{"the owner's cluster repository", "git@github.com:x/cluster-gitops.git\n", []string{"workspace-name"}},
-		{"the owner's alert setup", "route alerts\n", []string{"workspace-name"}},
-		{"the owner's app of apps", "cluster-apps\n", []string{"workspace-name"}},
+		// A home directory.
 		{"a home directory", "cd /Users/someone/src\n", []string{"home-path"}},
 		{"a users URL path is not a home directory", "GET /api/users/42 and https://example.com/users/x\n", nil},
-		{"a fake channel ID", "channel C0123456789\n", nil},
 
 		// A code fence is not exempt: a leak in an example is a leak.
 		{"a rule applies inside a code fence", "```yaml\nwebhookPath: /x\n```\n", []string{"webhook-path"}},
@@ -513,7 +506,7 @@ func TestAllowlistExcusesTheMatchItNamesNotTheLine(t *testing.T) {
 	}
 	writeTree(t, root, files)
 	var out bytes.Buffer
-	if code := run(root, &out); code != 1 {
+	if code := run(root, testWorkspace, &out); code != 1 {
 		t.Fatalf("run = %d, want 1 for the real R1; output:\n%s", code, out.String())
 	}
 	if !strings.Contains(out.String(), `README.md:1: risk-id: "R1"`) {
@@ -527,7 +520,7 @@ func TestAllowlistExcusesTheMatchItNamesNotTheLine(t *testing.T) {
 	files[allowlistPath] += "README.md | risk-id | see also R1 | a cross reference the page means\n"
 	writeTree(t, root, files)
 	out.Reset()
-	if code := run(root, &out); code != 0 {
+	if code := run(root, testWorkspace, &out); code != 0 {
 		t.Errorf("run = %d, want 0 with both excused; output:\n%s", code, out.String())
 	}
 }
@@ -567,10 +560,10 @@ func TestRunExitsNonZeroAndListsEveryFinding(t *testing.T) {
 		"charts/agent-kourier/README.md":   "fine\n",
 		"charts/agent-kourier/values.yaml": "# webhookPath here\n",
 		"docs/index.md":                    "Reads (D33).\n",
-		"docs/brand/notes.md":              "WP-1 C0EXAMPLE01\n",
+		"docs/brand/notes.md":              "WP-1 C0WORKSPACE1\n",
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 1 {
+	if code := run(root, testWorkspace, &out); code != 1 {
 		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
 	}
 	for _, want := range []string{
@@ -599,7 +592,7 @@ func TestRunHonoursTheAllowlist(t *testing.T) {
 		allowlistPath:                      "docs/index.md | webhook-path | webhookPath | the upgrade note names the removed field\n",
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 0 {
+	if code := run(root, testWorkspace, &out); code != 0 {
 		t.Fatalf("run = %d, want 0; output:\n%s", code, out.String())
 	}
 }
@@ -615,7 +608,7 @@ func TestRunDoesNotFlagAFieldTheAPIHas(t *testing.T) {
 		"docs/index.md":                    "Set `toolApprovals` and `approverGroups`.\n",
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 1 {
+	if code := run(root, testWorkspace, &out); code != 1 {
 		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
 	}
 	if strings.Contains(out.String(), "toolApprovals") || !strings.Contains(out.String(), `"approverGroups"`) {
@@ -636,7 +629,7 @@ func TestRunScansPublishedFilesThatAreNotMarkdown(t *testing.T) {
 		"hack/docs/overrides/main.html":    "<p>/Users/someone</p>\n",
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 1 {
+	if code := run(root, testWorkspace, &out); code != 1 {
 		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
 	}
 	for _, want := range []string{"docs/assets/film/captions.vtt:4: wrong-claim", "hack/docs/overrides/main.html:1: home-path"} {
@@ -660,7 +653,7 @@ func TestRunChecksTheRecipeREADMEs(t *testing.T) {
 		"examples/recipes/a/notes.md":      "WP-1 [gone](gone.md)\n", // not a README: not a public page
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 1 {
+	if code := run(root, testWorkspace, &out); code != 1 {
 		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
 	}
 	for _, want := range []string{
@@ -677,7 +670,7 @@ func TestRunChecksTheRecipeREADMEs(t *testing.T) {
 	writeTree(t, root, map[string]string{"hack/docs/contentcheck/allowlist.txt": "examples/recipes/README.md | dead-link | ../../docs/gone.md | an example of a dead link\n" +
 		"examples/recipes/a/README.md | dead-link | nothing.md | stale\n"})
 	out.Reset()
-	run(root, &out)
+	run(root, testWorkspace, &out)
 	if strings.Contains(out.String(), "recipes/README.md:2") || !strings.Contains(out.String(), "matches nothing") {
 		t.Errorf("allowlist handling for a recipe README:\n%s", out.String())
 	}
@@ -699,7 +692,7 @@ func TestRunScansTheRecipeYAML(t *testing.T) {
 		"examples/recipes/a/agent/not-scanned.go": "package x // WP-1\n",
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 1 {
+	if code := run(root, testWorkspace, &out); code != 1 {
 		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
 	}
 	for _, want := range []string{"examples/recipes/a/evals/triggers.yaml:3: home-path", "examples/recipes/a/kourier/binding.yaml:1: planning-id"} {
@@ -725,7 +718,7 @@ func TestRunExitsZeroOnACleanTree(t *testing.T) {
 		"docs/index.md":                    "# Home\n",
 	})
 	var out bytes.Buffer
-	if code := run(root, &out); code != 0 {
+	if code := run(root, testWorkspace, &out); code != 0 {
 		t.Errorf("run = %d, want 0; output:\n%s", code, out.String())
 	}
 	if out.Len() != 0 {
@@ -735,18 +728,73 @@ func TestRunExitsZeroOnACleanTree(t *testing.T) {
 
 func TestRunReportsAnUnreadableTree(t *testing.T) {
 	var out bytes.Buffer
-	if code := run(t.TempDir(), &out); code != 2 {
+	if code := run(t.TempDir(), testWorkspace, &out); code != 2 {
 		t.Errorf("run on an empty directory = %d, want 2; output: %s", code, out.String())
 	}
 }
 
 // TestPublicDocsAreClean runs the check over the real repository, so `go test ./...` fails on a finding.
 func TestPublicDocsAreClean(t *testing.T) {
-	got, err := check("../../..")
+	got, err := check("../../..", os.Getenv(workspaceEnv))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range got {
 		t.Errorf("%s", f)
+	}
+}
+
+// testWorkspace stands in for the owner's pattern, which the repository does not name.
+const testWorkspace = `(?i)C0WORKSPACE1|acme-internal`
+
+func TestWorkspaceRule(t *testing.T) {
+	ru, err := workspaceRule(testWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, text string
+		want       []string
+	}{
+		{"a workspace channel ID", "channel C0WORKSPACE1\n", []string{workspaceRuleID}},
+		{"a workspace name in any case", "Run by ACME-Internal.\n", []string{workspaceRuleID}},
+		{"a fake channel ID", "channel C0123456789\n", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ruleIDs(scanText([]rule{ru}, "docs/x.md", tt.text))
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("scanText(%q) rules %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRuleRejectsABadPattern(t *testing.T) {
+	if _, err := workspaceRule("(unclosed"); err == nil || !strings.Contains(err.Error(), workspaceEnv) {
+		t.Errorf("workspaceRule error = %v, want one that names %s", err, workspaceEnv)
+	}
+}
+
+func TestRunSaysWhenTheWorkspaceRuleDidNotRun(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"mkdocs.yml":                       testMkdocs,
+		"api/v1alpha1/types.go":            apiTypes,
+		"README.md":                        "fine\n",
+		"charts/agent-kourier/README.md":   "fine\n",
+		"charts/agent-kourier/values.yaml": "image: {}\n",
+		"docs/index.md":                    "channel C0WORKSPACE1\n",
+	})
+	var out bytes.Buffer
+	if code := run(root, "", &out); code != 0 || !strings.Contains(out.String(), workspaceEnv+" is unset") {
+		t.Errorf("run with no pattern = %d, want 0 and a notice; output:\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run(root, testWorkspace, &out); code != 1 || !strings.Contains(out.String(), "docs/index.md:1: workspace") {
+		t.Errorf("run with the pattern = %d, want 1 and the finding; output:\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run(root, "(unclosed", &out); code != 2 {
+		t.Errorf("run with a bad pattern = %d, want 2; output:\n%s", code, out.String())
 	}
 }

@@ -331,9 +331,9 @@ func TestTrialChannelIsValidated(t *testing.T) {
 		want           string
 	}{
 		"the alert channel":       {trialChannel, "C0SANDBOX01", true, ""},
-		"a private channel's ID":  {"G0EXAMPLE01", "C0SANDBOX01", true, ""},
+		"a private channel's ID":  {"G0SANDBOX02", "C0SANDBOX01", true, ""},
 		"a name":                  {"alerts-critical", "C0SANDBOX01", false, "ALERT_CHANNEL_ID"},
-		"lower case":              {"C0EXAMPLE01", "C0SANDBOX01", false, "ALERT_CHANNEL_ID"},
+		"lower case":              {"c0sandbox02", "C0SANDBOX01", false, "ALERT_CHANNEL_ID"},
 		"empty":                   {"", "C0SANDBOX01", false, "ALERT_CHANNEL_ID"},
 		"the dogfood channel too": {trialChannel, trialChannel, false, "SLACK_CHANNEL_ID"},
 	} {

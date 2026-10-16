@@ -1,5 +1,7 @@
 # WP-02 spike: kagent 1.0.0-alpha5 over A2A
 
+The spike code (`spike/`) is no longer in the repository; this page is the record of what it measured.
+
 Run 2026-09-29 (round 1) and again after review (round 2) against the WP-01 full tier (kagent
 1.0.0-alpha5, Go ADK runtime, mockllm v0.1.0) with `spike/a2a/run.sh`. Raw JSON is in
 `test/fixtures/kagent/<case>/`, one `NN-step.{request.json,response.json|response.sse,meta.json}`

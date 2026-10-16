@@ -26,7 +26,7 @@ func ScanCommonMark(wire string) Shown { return scanCommonMark(wire, false) }
 // a code span or block makes no link or URL, whatever it holds. A broadcast, mention, channel or date token ("<!", "<@",
 // "<#") is still reported there, since an adapter that writes code raw must keep those out of it. The
 // Slack adapter relies on it, as measured in a probe of the sandbox workspace on 2026-10-04 (a link, a user, a masked
-// link, "&" and "<" in a fence and in a span all showed as written: tasks/plans/slack-code-rendering.md, rows 04, 19,
+// link, "&" and "<" in a fence and in a span all showed as written: docs/spikes/slack-code-rendering.md, rows 04, 19,
 // 20). A platform that has not been measured uses ScanCommonMark, which does not take code for inert.
 func ScanCommonMarkLiteralCode(wire string) Shown { return scanCommonMark(wire, true) }
 
