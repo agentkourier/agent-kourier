@@ -130,21 +130,21 @@ func TestDownRemovesThePromptAfterTheAgent(t *testing.T) {
 }
 
 // sreTriageScenario is the part of a scenario that the sandbox's faults decide: the Deployment it is about and the
-// alert preset that starts it. The shape of a scenario is checked by go test ./test/recipes.
+// sample alert that starts it. The shape of a scenario is checked by go test ./test/recipes.
 type sreTriageScenario struct {
 	App   string `json:"app"`
 	Alert string `json:"alert"`
 }
 
 // TestSreTriageScenariosCoverTheFaults: one scenario for each Deployment of faults.yaml, the healthy app included, and
-// no other; each alert is the preset that the sandbox fires for that app.
+// no other; each alert is the sample alert that the sandbox fires for that app.
 func TestSreTriageScenariosCoverTheFaults(t *testing.T) {
 	scenarios := filepath.Join(agentDir, "..", "evals", "scenarios")
 	files, err := filepath.Glob(filepath.Join(scenarios, "*.yaml"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("scenarios in %s: %v, %v; want one file for each fault", scenarios, files, err)
 	}
-	presets := loadPresets(t)
+	samples := loadSamples(t)
 	apps := map[string]string{} // app to the file of its scenario
 	for _, file := range files {
 		raw, err := os.ReadFile(file)
@@ -163,10 +163,10 @@ func TestSreTriageScenariosCoverTheFaults(t *testing.T) {
 		if sc.Alert == "" {
 			continue
 		}
-		p, ok := presets[sc.Alert]
+		p, ok := samples[sc.Alert]
 		switch {
 		case !ok:
-			t.Errorf("%s: alert %q is not a preset of the sandbox's alerts.json", file, sc.Alert)
+			t.Errorf("%s: alert %q is not a sample alert in the sandbox's alerts.json", file, sc.Alert)
 		case p.App != sc.App && p.Labels["service"] != sc.App:
 			t.Errorf("%s: alert %s is about app %q and Service %q, not %s", file, sc.Alert, p.App, p.Labels["service"], sc.App)
 		}
