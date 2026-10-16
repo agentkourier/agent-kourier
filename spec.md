@@ -193,12 +193,13 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 | D34 | Binding token source | For the pilot, a Binding's bearer token is read from `identity.tokenSecretRef` on every call (cached from a watch, never stored elsewhere), and rotated outside Agent Kourier before it expires (Dex: 24 h). A rejected credential (`ErrCredentialsRejected`, HTTP 401/403 at the front door) fails the turn, re-reads the Secret, is audited and raises a metric; Agent Kourier never falls back to `userId`. Minting with the client-credentials grant plugs in behind the same `TokenSource` interface once H-02 picks a provider that supports it (Q9). Secret values are held in a type whose every formatting path redacts. Secrets Agent Kourier reads are type `Opaque`; the watch keeps values for Opaque Secrets only (key names for every other type), in the namespaces Agent Kourier is granted. After the pilot, narrow to one watch per referenced Secret (a `metadata.name` field selector plus RBAC `resourceNames`). (Resolves Q10, after WP-03; narrowed by the WP-21e1 review.) |
 | D35 | Chat-neutral model | Slack sits behind one platform-neutral seam, `chat.Platform` (6.2), so a second chat platform is one adapter and no change to session, interact, render, outbox or store. The model carries literal text with no markup field; each adapter neutralises markup for its platform and passes a shared hostile-text conformance suite before it ships. The outbox stores the versioned neutral message and the adapter renders it at delivery; a payload of the earlier, Slack-shaped form is abandoned as invalid with a log line, not migrated. Abandon metrics use neutral reasons (channel_gone, too_long, invalid_content, other), with the platform's own code in the log. The Slack message ID string is unchanged (`slack:<connection>:<channel>:<ts>`), and the store's columns keep their names. (Owner-approved 2026-10-02; WP-37.) |
-| D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the bot by ID, never by display name. Agent Kourier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial, CT-1; accepted by the owner 2026-10-04.) |
+| D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the sender by ID and kind (`from.id`, `from.kind`; D42, which amends this row's "bot ID"), never by display name. Agent Kourier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial, CT-1; accepted by the owner 2026-10-04.) |
 | D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: owner, 2026-10-05, H4-5b.) |
 | D38 | Thread replies | A Binding's `chat.threadReplies` is `all` (default) or `mention`. In `mention`, only a reply that mentions Agent Kourier is a turn, and it carries the unmentioned replies since the last turn as untrusted data; a typed answer to a question that takes text replies needs no mention. (Owner, 2026-10-05; mention-only thread replies, TM-8.) |
 | D39 | Direct webhook dropped | Agent Kourier has no Alertmanager webhook endpoint and is not an Alertmanager receiver. The Binding has no `alerts` field and no `status.webhookPath`. Alerts reach a Binding only through `chat.triggers`: a `botMessage` trigger reads the message Alertmanager already posts to Slack (8.2, D36), and alert-specific behaviour lives in the trigger and its prompt template, not in the API (a preset held it until D41). Dropped for good, not deferred. Supersedes D22 and D29, and the webhook parts of D8, D9, D10 and D31. A Binding with an `alerts:` block no longer loads (the decoder is strict), so a deployed config drops the block first. (Owner, 2026-10-10; DA-1, DA-2.) |
 | D40 | Fields that work | The API carries only fields that work. Phase 5 added `Binding.spec.interactions.toolApprovals` and `approverGroups`; `toolApprovals` defaults to false, and `approverGroups` is validated and used when approvals are enabled. Three feature areas remain out of the types until their phase: `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). A config that sets one of those three still fails strict decoding. |
 | D41 | Presets removed | Trigger presets are removed. A preset hid the regexes, thread rules, limits and prompt of a known sender behind one word, and it does not carry to a second chat platform, where each platform would need its own regex set. Alert-specific behaviour is a `botMessage` trigger written in full, from an example the docs carry (Alertmanager's Slack receiver is the canonical one). A `botMessage` trigger must set `limits.rateLimit` (all three fields) and `limits.maxRunsPerDay`; the preset was what gave an alert trigger a spend cap (D31), so without it the cap is explicit. An explicit `maxRunsPerDay: 0` still means no cap and is allowed, because the choice is written in the config. A config that sets `preset:` fails strict decoding, as D39 and D40 did for their fields, so a deployed config drops the key and pastes the example. Every trigger start reports source `botMessage` (the prompt view's `.Source` and the session's origin source); votes on sessions created before this change keep the `alertmanager` source they were stored with. Supersedes the preset parts of D31 and D39. (Owner, 2026-10-15.) |
+| D42 | Second platform, additively | The API takes a second chat platform without breaking a Slack Binding. Renaming a field, changing its meaning, or changing a default that an apiserver would persist is breaking. Loosening validation, widening an enum, adding an optional field or a `spec.<platform>` block, and adding a metadata key are not. So four changes are made before release and the rest waits for the second adapter. (1) `from.botId` becomes `from.id` plus an optional `from.kind`. `kind` is an enum that holds only `bot` and defaults to `bot`; a later platform widens it (research: a Mattermost webhook post carries its owner's `user_id`, and Teams has application identity types, `tasks/plans/mattermost-adapter-research.md` and `teams-adapter-research.md`, upstream behaviour not measured by us). D36 still applies: an ID, never a display name. A trigger accepts a message only when the sender's ID and kind both equal `from.id` and `from.kind`. The Slack adapter gives every bot sender kind `bot`, so Slack behaviour is unchanged. The kind is not part of the thread key hash. A thread open at the upgrade is still found. The consequence of leaving the kind out of the hash is that two triggers in one channel that name the same ID with different kinds would share key threads, so a second adapter with more than one kind per ID (for example, a Mattermost bot that also owns a webhook) must revisit this. (2) The trigger message fields `attachmentText` and `titleLink` become `body` and `link`; `text`, `title`, `footer` and `fallback` keep their names. Each name is defined by what it holds, and each adapter documents how it flattens its native message into them (8.2). The names the untrusted block gives the fields follow. (3) The API has no Slack default for the acknowledgment reaction: `chat.acknowledgment.emoji` has no default marker and `Default()` does not fill it, and the platform supplies its own when it is unset (Slack: `hourglass_flowing_sand`), because once CRDs ship an apiserver default is written into every stored object. `enabled` still defaults to true. (4) The agent contract names the platform: the `agentkourier.dev/actor` metadata gains `platform`, the platform's ID (`slack`), and the text prefix is `[<Platform>: Name (id) <email>]` with the platform's display name, so it stays `[Slack: …]` on Slack (8.5). Two conventions go with them, with nothing built for them yet. A `ChatConnection` keeps credentials in `credentialsSecretRef`, with keys fixed per platform (Slack: `botToken` and `appToken`); non-secret settings go in a `spec.<platform>` block that is added along with the platform, and Slack has none. A doc comment that says "Slack channel ID", "Slack bot ID" or "Slack user group" says "the platform's ID (Slack: `C…`)" instead; the ID regexes in the types stay until a second adapter moves them to per-platform checks at resolution, and loosening them then breaks nothing. A config that sets `botId`, `attachmentText` or `titleLink` fails strict decoding, as D39, D40 and D41 did for their fields, so a deployed config renames them. Amends D36 (bot ID becomes sender ID and kind); the rows that name the old fields stay as history. (Owner, 2026-10-15.) |
 
 ## 6. Architecture
 
@@ -427,13 +428,13 @@ spec:
     tokenSecretRef: { name: agent-kourier-sre-alerts-oidc }  # OIDC mode (pilot default, D32)
   chat:
     connectionRef: { namespace: agent-kourier-system, name: slack-main }
-    channel: C0123456789             # investigation channel ID, not name
+    channel: C0123456789             # investigation channel ID, not name (Slack: C…)
     output: live                     # live | final
     threadReplies: all               # all | mention; see 8.2
     triggers:                        # empty means [{type: mention}]; see 8.2
       - type: mention
       - type: botMessage             # alerts Alertmanager itself posts to this channel
-        from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
+        from: { id: B0123456789 }    # the sender's ID, never its display name (D36); kind defaults to bot (D42)
         # The title keeps out Grafana's "FIRING: <rule>" and anything else not shaped "FIRING (n) - <alertname>"
         # or "RESOLVED - <alertname>", optionally behind a bracketed tag. Alertmanager's default fallback text
         # carries the group's label values. Every match entry must match and no exclude entry may.
@@ -441,7 +442,7 @@ spec:
           title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
           fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
           # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
-          titleLink: 'receiver=slack-critical$'
+          link: 'receiver=slack-critical$'
         exclude: { title: '^Prometheus heartbeat$' }
         extract:                     # the named group carries the entry's name
           state: { field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)' }
@@ -483,7 +484,7 @@ are refused as unknown fields by the strict decoder:
 Alertmanager needs no route to Agent Kourier: its Slack receiver posts to the Binding's
 channel as it does for people today. The trigger above follows the documented example
 (`docs/how-to/investigate-alertmanager-alerts.md`; 4h cooldown, 5 starts in 10m, 2 at once, 40 a day,
-and an optional receiver match, `match.titleLink`). It keeps the receiver match, overrides the cooldown (2h)
+and an optional receiver match, `match.link`). It keeps the receiver match, overrides the cooldown (2h)
 and the daily cap (20), and adds an `exclude` for the heartbeat. It needs the receiver's title in the shape `FIRING (n) - <alertname>` or `RESOLVED - <alertname>`
 (optionally behind a bracketed tag), with Alertmanager's default fallback text (8.2).
 Alertmanager's default Slack title begins `[FIRING:n]` and does not match, so a receiver that
@@ -494,7 +495,8 @@ Rules:
 
 - **Secret keys.** A single-value Secret reference (`identity.tokenSecretRef` and a header's
   `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
-  fixed keys: `botToken` and `appToken` (Socket Mode).
+  keys fixed per platform (D42); Slack's are `botToken` and `appToken` (Socket Mode). Non-secret settings of a platform go in a
+  `spec.<platform>` block that is added along with the platform (D42); Slack has none.
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
@@ -530,7 +532,7 @@ route and reads the message afterwards, so an Agent Kourier outage loses no noti
    Agent Kourier is running.
 2. Slack delivers the message to Agent Kourier like any other message in the channel. The
    Slack adapter hands on a bot's message only if a `botMessage` trigger of the channel's
-   Binding names the bot by ID (D36, 8.2). The intake acknowledges Slack once its local
+   Binding names the sender by ID and kind (D36, D42, 8.2). The intake acknowledges Slack once its local
    writes are done; an event it fails to take is not acknowledged, and Slack redelivers it.
 3. The trigger matches the message and extracts its `state` and `key`. For a trigger with
    `thread.by: key` (the documented example's key is the alert group's label values) the
@@ -576,7 +578,7 @@ them (below the table).
 | @mention inside a thread Agent Kourier doesn't own, in a bound channel | New session anchored to that thread; Agent Kourier owns it from then on |
 | Reply without an @mention in any other thread | Ignored |
 | Any message posted by Agent Kourier itself (including `message_changed` from its own edits) | Ignored, always: Agent Kourier would otherwise answer itself without end |
-| A message posted by any other bot or app | Ignored, unless a `botMessage` trigger names its bot ID (D36): two bots could otherwise reply to each other without end, and bot text is untrusted (R2) |
+| A message posted by any other bot or app | Ignored, unless a `botMessage` trigger names its sender (`from.id` and `from.kind`; D36, D42): two bots could otherwise reply to each other without end, and bot text is untrusted (R2) |
 | An edit or deletion of any message (`message_changed`, `message_deleted`), or another non-message subtype | Ignored. Plain messages, `thread_broadcast` and `file_share` (its text only) count as messages |
 | DM (Phase 4, D40) | Routed to the connection's `defaultBindingRef`. Allowed only if the user is a member of that Binding's channel. One session per DM thread. Today a DM is not routed: the Slack adapter drops it, and the intake finds a Binding by channel only |
 
@@ -587,11 +589,17 @@ a thread Agent Kourier owns is no trigger and holds whatever the triggers say; w
 `chat.threadReplies` (below). A Binding adds
 triggers; v1 has two types, `mention` (the @mention rows) and `botMessage`. Triggers are tried in
 order and the first that matches handles the message. A `botMessage` trigger accepts messages
-from one bot, named by `from.botId` and never by display name, and then:
+from one sender, named by `from.id` and never by display name, and then:
 
-- `match` and `exclude` map a message field to a regex. The fields are `text`, `title`,
-  `titleLink`, `fallback`, `footer` and `attachmentText`; the adapter flattens a legacy
-  attachment into them. Every `match` entry must match and no `exclude` entry may.
+- `from.kind` says what kind of sender `from.id` is (D42). It is an enum that holds only `bot`
+  and defaults to `bot`, so a Binding that leaves it out names a bot. A later platform widens the enum
+  with the kinds it has; that loosens validation and breaks no Binding. A trigger accepts a message only when the sender's ID and kind both equal `from.id` and `from.kind`. The Slack adapter gives every bot sender kind `bot`, so Slack behaviour is unchanged. The kind is not part of the thread key hash.
+- `match` and `exclude` map a message field to a regex. The fields are `text`, `title`, `link`,
+  `fallback`, `footer` and `body`. Each name is defined by what it holds (D42): `text` is the
+  message's top-level text, outside any attachment or card. `title`, `link`, `body`, `footer` and
+  `fallback` are the heading, the heading's URL, the main text, the small print and the plain-text
+  summary of the message's structured part (Slack: its first legacy attachment). Each adapter documents how it flattens its native message
+  into them (the Slack adapter does, below). Every `match` entry must match and no `exclude` entry may.
 - `extract` names values taken from a field by a regex, whose named group carries the entry's
   name. A message in which an extract does not match does not match the trigger.
 - `thread.by: key` gives messages with the same extracted `key` one thread, anchored as for an
@@ -624,8 +632,8 @@ How a bot message reaches the triggers:
 
 - The Slack adapter hands one on only if the intake says a `botMessage` trigger of that channel's
   Binding names the bot, so the bots no trigger names never reach it, and an intake that cannot
-  say gets none. It flattens the message's first legacy attachment into `title`, `titleLink`,
-  `fallback`, `footer` and `attachmentText`, and `text` is the message's own text: all raw, as
+  say gets none. It flattens the message's first legacy attachment into `title`, `link` (its
+  `title_link`), `fallback`, `footer` and `body` (its `text`), and `text` is the message's own text: all raw, as
   delivered, neither rendered nor unescaped (`mrkdwn_in` changes how Slack shows text, not the
   text). Later attachments are not read, so that a trigger matches the fields of one attachment.
   Both an incoming webhook's `bot_message` and an app's own post count as a bot's message.
@@ -636,7 +644,7 @@ How a bot message reaches the triggers:
   its own thread. A bot's message is never a mention, whatever its text says.
 
 What a matched bot message does to its thread, for a trigger with `thread.by: key`. The key is
-hashed (with the connection, channel and bot) and the store holds that hash, one row per key with
+hashed (with the connection, channel and the sender's ID, not its kind; D42) and the store holds that hash, one row per key with
 its thread, when it opened, was last seen and closed, and when its cooldown ends (unset until the
 turn has started); the logs name a
 key by the first eight characters of the hash. A *close* is a message whose extracted fields all
@@ -728,7 +736,7 @@ the trigger's view of the message (`.Channel`, `.State`, `.Key`, `.Fields`, `.Li
 and appends the whole message, normalized and with its secrets taken out (redaction), in the untrusted block (R2). `.Link` is the Slack
 permalink that Agent Kourier builds from the workspace address `auth.test` returned when it connected,
 the channel and the message's ts (`https://<workspace>.slack.com/archives/<channel>/p<ts without
-the dot>`); it is never a field of the message, so a sender's `titleLink` cannot reach the
+the dot>`); it is never a field of the message, so a sender's `link` cannot reach the
 instructions. The rendered prompt is submitted through the session manager's own intake, the path
 a mention takes (the session row, the queued turn and a wake, all local writes), with the alert
 message's ts as the thread and its ID as the turn's `messageId`, so a redelivery is the same
@@ -826,8 +834,8 @@ a generic explanation and operator next step. Both include a bounded `AK-` refer
 IDs. The same reference is recorded as `failure_ref` with `failure_category` on the turn-end log, where the full task ID
 is also available. Raw status text and arbitrary metadata are never included in chat or logs.
 
-**Message acknowledgment.** `chat.acknowledgment` defaults to `{enabled: true, emoji: hourglass_flowing_sand}`.
-The emoji is a bare Slack reaction name, without colons. Every accepted message gets the reaction while waiting or
+**Message acknowledgment.** `chat.acknowledgment` defaults to `{enabled: true}`. The API has no default emoji (D42): an unset `emoji`
+is the platform's own default reaction, which on Slack is `hourglass_flowing_sand`. The emoji is a reaction name in the form the platform takes; on Slack it is bare, without colons. Every accepted message gets the reaction while waiting or
 processing, including the first message in a session. The reaction is removed when its turn ends or the agent pauses
 to ask a question; an accepted typed answer gets its own reaction while the continuation runs. `enabled: false` suppresses
 the reaction for newly accepted messages, including queued replies. Ignored messages are not marked. The original emoji
@@ -860,7 +868,7 @@ its text and above the feedback question when there is one (8.7), the context li
 follow-up." (owner's decision 6b; added with TM-9).
 
 **Attribution is load-bearing (WP-36h, measured on kagent).** kagent keeps Agent Kourier's
-attribution at the start of the text a person wrote (`[Slack: <name> (<user id>)] ...`), and
+attribution at the start of the text a person wrote (`[Slack: <name> (<user id>)] ...`; `[<Platform>: ...]` with D42), and
 it replays the agent's own earlier replies to the model as role `user` messages. The
 attribution prefix is therefore the only thing that tells the model a person's message
 from its own earlier output. Agent Kourier must prefix every message a person wrote; removing or
@@ -1009,10 +1017,14 @@ Binding's single service identity (`spec.identity`).
   `X-Agent-Name` choose the acting user with `X-User-Id` or `?user_id=`, even alongside a
   valid token (WP-03). Isolation between Bindings holds only because the front door strips
   both headers (D32) and Agent Kourier never sends them.
-- **Attribution:** the Slack user who typed or clicked is resolved (`users.info`,
+- **Attribution:** the user who typed or clicked is resolved (on Slack, `users.info`,
   cached) and attached by the dialect as message metadata and a prefix the agent can
-  see. The prefix is informational; agents must not treat it as authorization, which is
-  always the Binding identity. Agent Kourier's audit log records the Slack user, email, and Binding identity together. For a chat
+  see. The metadata is under the key `agentkourier.dev/actor` and always carries the user's `id`, carries
+  `name` and `email` only when known and, with D42, carries the `platform`: the platform's ID (`slack`). The prefix is
+  `[<Platform>: Name (id) <email>]` with the platform's display name, so on Slack it is
+  `[Slack: Name (U123) <email>]` as before. Agents should read the actor from the metadata and not
+  parse the prefix. The prefix is informational; agents must not treat it as authorization, which is
+  always the Binding identity. Agent Kourier's audit log records the user, email, and Binding identity together. For a chat
   turn the prefix goes at the start of the first text part, never as a part of its own.
   For HITL answers, attribution is metadata only: kagent rebuilds an answer into tool
   confirmation parts and drops the message text and metadata (alpha5 source,
@@ -1121,7 +1133,7 @@ a root post (a role the store accepts and nothing in production has ever posted)
 
 | Concern | Control |
 |---|---|
-| Bot message authenticity | A bot's message counts only through a `botMessage` trigger that names the bot by the ID Slack reports, never by display name (D36). Several senders can share one bot ID (an incoming webhook that carries Alertmanager, Grafana and a heartbeat), so `match` and `exclude` narrow what counts, and anyone who can post as that bot can start investigations, held to the trigger's limits, when it has any. The message is untrusted text (R2). |
+| Bot message authenticity | A bot's message counts only through a `botMessage` trigger that names the sender by the ID and kind the platform reports (on Slack, the bot ID and kind `bot`), never by display name (D36, D42). Several senders can share one bot ID (an incoming webhook that carries Alertmanager, Grafana and a heartbeat), so `match` and `exclude` narrow what counts, and anyone who can post as that bot can start investigations, held to the trigger's limits, when it has any. The message is untrusted text (R2). |
 | Pilot environment | The kagent 1.0 alpha install holds production read credentials. Agent Kourier reaches it only through a verifying front door; NetworkPolicies restrict the controller port to that door and kagent's own components, and fence the kagent UI to its own verifying proxy (the UI's nginx relays `/mcp` and `/api` to the controller). The pilot cluster's CNI must enforce NetworkPolicy, or none of these fences exist; whose nginx forwards `/mcp` and `/api` with `Authorization` intact (D32). The agent's credentials are read-only. |
 | Paging path | Agent Kourier is not an Alertmanager receiver and is on no alert route. It only reads what Alertmanager already posted to Slack, so it cannot sit in the paging path and its outage loses no page (D39, which replaces D22's `continue: true`). |
 | Slack authenticity | Socket Mode, the only mode served today, uses the app token. HTTP mode (Phase 4, D40) will verify the signing secret with a timestamp check. |
@@ -1252,7 +1264,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
 | # | Risk | Severity | Mitigation |
 |---|---|---|---|
 | R1 | **Any channel member can approve write actions** (D13), and the backend sees only the Binding identity (D14). No named human is accountable at the backend before a change is made. | High | The Phase 5 implementation supports optional approver groups. Empty means any member of the Binding's channel may approve. A Binding with `toolApprovals: true` and no group loads, with a logged warning. The groups gate tool approvals only, not ask-user answers, and an approver must be in a group, a channel member and not a bot. The backend still sees only the Binding identity (D14); the audit row is the accountable record. **Residual risk:** a Binding with no group still lets any channel member approve a write action, and the backend cannot tell who. Direct pinned-kagent evidence and the broker full-tier suite with fake Slack cover a two-tool approval with one approved and one denied call; only the approved tool executes (2026-10-14). |
-| R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, the bot-ID check (D36), rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. The message's fields have their secrets taken out before they reach the agent. |
+| R2 | **Prompt injection through alerts.** Labels and annotations are attacker-influenced text that reaches an agent with tools. | High | Untrusted-data delimiting, the sender-ID check (D36), rate limits. During the pilot the agent is read-only, so the impact is limited to data disclosure in the investigation channel. The same holds for a bot message a `botMessage` trigger accepts (D36): the whole message always goes in the untrusted-data block after the instruction text, never where a template would put it, and a value extracted from it reaches the instruction part only after a character check; a value that fails it refuses the render. The message's fields have their secrets taken out before they reach the agent. |
 | R3 | **kagent 1.0 is alpha.** Five alphas shipped in nine days. Paths and HITL payloads may change. | High | All kagent specifics live in the dialect. Pin a tested alpha. Contract tests run against the pinned version. |
 | R4 | Anything that reaches kagent's controller port can claim any identity: `X-User-Id` in insecure mode, an unverified JWT in OIDC mode, and in OIDC mode `X-Agent-Name` plus `X-User-Id` or `?user_id=`, which selects the acting user even with a valid token (WP-03: oauth2-proxy forwards them). | High | Agent Kourier talks only to a verifying front door (oauth2-proxy or agentgateway) that strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity`; NetworkPolicies restrict port 8083 and fence the UI relay. Proven in the full tier (WP-01b, WP-01c): `verify.sh` shows tokens forged from a real token (payload altered; `alg: none`) and a foreign-audience token are rejected at the front door; A2A, HITL headers, and SSE work through it; path traversal (`..`, `%2F`) is refused; a canary shows the controller still accepts a forged token on `/mcp`; and pods spoofing the trusted labels from other namespaces are refused. Proven for the header path (WP-01d): through the door, B's valid token with `X-Agent-Name` plus `X-User-Id` or `?user_id=`, in any case, gets `-31403` on send, stream, `GetTask`, `SubscribeToTask` and `CancelTask`, and a bogus `X-Share-Token` is dropped, while the same spoof works at 8083 (canary) and the Binding's own send, SSE and `GetTask` still work. The `X-User-Id` and runtime-identity strips are defence in depth (config and source; no observable while `X-Agent-Name` is stripped). The pilot door must use the same config (WP-05). The risk stays High: the controller is unchanged, only mitigated. |
 | R5 | No stream replay in kagent. Text produced during a disconnect may be lost from the live view. | Medium | Reconcile from `GetTask` on reconnect and render the final task output. |
@@ -1462,3 +1474,27 @@ adapter keeps accepting `alertmanager` for sessions stored earlier. What changed
 | Section 12, Phase 2 row; section 13 extensibility; the origin-source sentence of 8.7 | No preset; a new alert source is a trigger written in full; the origin source is `botMessage` |
 
 The earlier entries of this appendix are not edited; where they name a preset (the 2026-10-10 entry does), this entry supersedes them.
+
+### Platform-neutral API before release (2026-10-15)
+
+The owner decided that the API should take a second chat platform without breaking a Slack Binding (D42), and that
+what would be breaking later is changed now, while nothing is released. Four changes: `from.botId` becomes `from.id`
+plus an optional `from.kind` (default `bot`); the trigger fields `attachmentText` and `titleLink` become `body` and
+`link`; the API no longer defaults the acknowledgment reaction (the platform does); and the agent contract names the
+platform (`platform` in `agentkourier.dev/actor`, and a `[<Platform>: …]` prefix that is still `[Slack: …]` on Slack).
+Two conventions are recorded with nothing built for them: a `ChatConnection` keeps credentials in
+`credentialsSecretRef` with keys fixed per platform and non-secret settings in a `spec.<platform>` block, and doc
+comments say "the platform's ID (Slack: `C…`)". A config that sets `botId`, `attachmentText` or `titleLink` fails strict
+decoding. What changed in this document:
+
+| Earlier text | Now |
+|---|---|
+| D36 | "Matches the bot by ID" is "matches the sender by ID and kind", with a pointer to D42; the rest of the row stands |
+| Section 7: the sample Binding's `from.botId` and `match.titleLink`, the receiver-match sentence, and the Secret keys rule | `from.id` and `match.link`; the keys of `credentialsSecretRef` are fixed per platform and a platform's own settings go in `spec.<platform>` |
+| 8.1 step 2, the trigger table row for other bots, and 8.2 `chat.triggers` | The trigger names a sender by `from.id` and `from.kind`, and both must match; the message fields are `text`, `title`, `link`, `fallback`, `footer` and `body`, each defined by what it holds, with the Slack flattening stated; the thread key hashes the sender's ID and not its kind |
+| The 8.2 prompt-view paragraph | The `.Link` remark names the field `link` |
+| The 8.2 acknowledgment paragraph | The default is `{enabled: true}`; an unset emoji is the platform's own default (Slack: `hourglass_flowing_sand`) |
+| 8.2 attribution paragraph and 8.5, Attribution | The actor metadata key `agentkourier.dev/actor` is named, with `platform`; the prefix is `[<Platform>: Name (id) <email>]`; agents read the metadata, not the prefix |
+| Section 10, bot message authenticity; R2 | The sender is named by the ID and kind the platform reports (on Slack, the bot ID and kind `bot`); both must match `from.id` and `from.kind` |
+
+The earlier entries of this appendix are not edited; where they name `botId`, `attachmentText` or `titleLink` they are the record of what was then specified, and this entry supersedes them.
