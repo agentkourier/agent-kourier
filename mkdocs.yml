@@ -1,5 +1,5 @@
 # The Agent Kourier documentation site: https://agentkourier.dev
-# Build with `make docs-build` (strict) and preview with `make docs`. The plan is tasks/plans/docs-site.md.
+# Build with `make docs-build` (strict) and preview with `make docs`.
 site_name: Agent Kourier
 site_url: https://agentkourier.dev/
 site_description: >-

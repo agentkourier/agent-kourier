@@ -10,7 +10,7 @@ You implement one work package (WP) for agent-kourier, a Go broker between Alert
 
 ## Before writing code
 
-1. Read the WP block in `tasks/plans/agent-courier-pilot.md`: scope, files owned, dependencies, acceptance criteria, size budget.
+1. Read the WP block in `tasks/plans/agent-courier-pilot.md` (untracked; in a worktree, the main checkout's copy): scope, files owned, dependencies, acceptance criteria, size budget.
 2. Read the spec sections the WP cites in `spec.md`. The spec is the source of truth; the decision table (section 5) explains why things are the way they are.
 3. Read the code the WP builds on. Match its package layout, naming, error handling, and comment density.
 4. If the WP is ambiguous, contradicts the spec, or mixes concerns, stop and report that instead of guessing.

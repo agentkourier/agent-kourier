@@ -15,7 +15,7 @@ You are read-only. Use Bash only for `git` inspection and for running `make` ver
 
 The orchestrator gives you a WP ID and a branch. Read:
 
-1. The WP block in `tasks/plans/agent-courier-pilot.md`: scope, files owned, dependencies, acceptance criteria, size budget.
+1. The WP block in `tasks/plans/agent-courier-pilot.md` (untracked; in a worktree, the main checkout's copy): scope, files owned, dependencies, acceptance criteria, size budget.
 2. The spec sections the WP cites in `spec.md`, and the decision table in section 5.
 3. The diff: `git diff main...<branch>` and `git diff --stat main...<branch>`.
 4. Enough surrounding code to judge whether the change fits it.

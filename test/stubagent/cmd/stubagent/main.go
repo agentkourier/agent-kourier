@@ -1,14 +1,10 @@
 // Command stubagent serves the stub A2A agents of package stubagent on a local port, scripted
-// as the WP-02 spike's mock models, so that the spike can run against it instead of a kagent
-// cluster:
+// as the mock models of the A2A probe in docs/spikes/wp02-a2a.md, so that an A2A client can run
+// against it instead of a kagent cluster:
 //
 //	go run ./test/stubagent/cmd/stubagent &
-//	go run ./spike/a2a -base http://127.0.0.1:18083 -token "$TOKEN" -out "$(mktemp -d)"
 //
-// TOKEN is an unsigned JWT with an email claim, which the identity case needs; -no-auth in
-// place of -token skips that case. Never point the spike's -out at test/fixtures/kagent.
-// `make stub-oracle` does all of this and checks the result. The server stops on SIGINT or
-// SIGTERM.
+// The server stops on SIGINT or SIGTERM.
 //
 // It also serves the agents of ScenarioAgents, for the E2E scenarios; the stubagent package doc
 // of ScenarioAgents maps each scenario to its agent.
@@ -37,9 +33,9 @@ import (
 const defaultTick = 300 * time.Millisecond
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:18083", "address to listen on; the spike's default -base is this")
-	tick := flag.Duration("tick", defaultTick, "pause between the text chunks of a turn; the spike's slow agent needs it long enough to act between chunks")
-	requireAuth := flag.Bool("require-auth", false, "answer 401 to a request with no bearer token, as kagent in OIDC mode does; the spike's -no-auth mode then fails")
+	addr := flag.String("addr", "127.0.0.1:18083", "address to listen on")
+	tick := flag.Duration("tick", defaultTick, "pause between the text chunks of a turn; the slow agent needs it long enough for a client to act between chunks")
+	requireAuth := flag.Bool("require-auth", false, "answer 401 to a request with no bearer token, as kagent in OIDC mode does")
 	uniqueIDs := flag.Bool("unique-ids", false, "put a tag of this start in every id, so that a restart never makes an id of an earlier run that a client stored; the ids then differ from run to run")
 	flag.Parse()
 	if err := run(*addr, *tick, *requireAuth, *uniqueIDs); err != nil {

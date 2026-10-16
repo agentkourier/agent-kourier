@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres security security-govulncheck security-gitleaks security-image-scan build tidy image image-testhooks image-check release-image stub-oracle e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres security security-govulncheck security-gitleaks security-image-scan build tidy image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -65,9 +65,6 @@ image-check: image image-testhooks ## Prove the production image's binary lacks 
 
 release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
-
-stub-oracle: ## Run the WP-02 spike against the stub agent, with a token and with -no-auth (about 2 minutes)
-	hack/stub-oracle.sh
 
 e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover)
 	hack/kind/up-fast.sh

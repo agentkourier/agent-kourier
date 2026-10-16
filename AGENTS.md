@@ -6,7 +6,9 @@ Agent Kourier is a Go broker between Slack and A2A agents (kagent 1.0 or any A2A
 turns Slack messages, including the alerts Alertmanager posts to Slack, into agent sessions and
 renders the agent's output back into Slack threads. It has no Alertmanager webhook: alerts enter
 only through `chat.triggers` (spec D39). `spec.md` is the source of truth (decisions in section 5,
-architecture in section 6); the build plan is `tasks/plans/agent-courier-pilot.md`.
+architecture in section 6); the build plan is `tasks/plans/agent-courier-pilot.md`. `tasks/` (plans, todo,
+lessons) and `spike/` are gitignored and live only in the maintainer's main checkout. A new worktree does
+not have them; link them in from the main checkout (`ln -s <main checkout>/tasks tasks`).
 
 ## Layout
 
@@ -40,7 +42,6 @@ docs/                   the documentation site (mkdocs; docs/brand is the brand 
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres}  doc generators, release scripts, Postgres test helpers
-spike/                  throwaway A2A and Slack experiments
 ```
 
 ## Make targets

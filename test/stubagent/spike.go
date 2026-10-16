@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// SpikeAgents registers the five agents the WP-02 spike (spike/a2a) drives, in the namespace
+// SpikeAgents registers the five agents the WP-02 spike (docs/spikes/wp02-a2a.md) drove, in the namespace
 // kagent, scripted as the spike's mock models answered. Running the spike against a stub that
 // has them is the acceptance check for this package; the exchanges they reproduce are in
 // test/fixtures/kagent/. The prompts that pick a script are the spike's.

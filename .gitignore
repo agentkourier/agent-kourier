@@ -15,3 +15,5 @@
 /.claude/worktrees/
 /.worktrees/
 /.claude/settings.local.json
+/tasks
+/spike
