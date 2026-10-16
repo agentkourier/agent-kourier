@@ -60,9 +60,9 @@ func historyMessage(me self, conn, channel string, m slackgo.Message) chat.Histo
 		Message: &m.Msg,
 	})
 	if v == dropped { // only where it was is kept, so that the dry run can list it
-		return chat.HistoryMessage{Message: inboundOf(conn, Message{Channel: channel, TS: m.Timestamp, ThreadTS: m.ThreadTimestamp}), Ignored: true}
+		return chat.HistoryMessage{Message: InboundOf(conn, Message{Channel: channel, TS: m.Timestamp, ThreadTS: m.ThreadTimestamp}), Ignored: true}
 	}
-	return chat.HistoryMessage{Message: inboundOf(conn, msg), Own: v == ownPost}
+	return chat.HistoryMessage{Message: InboundOf(conn, msg), Own: v == ownPost}
 }
 
 // compareTS orders two message timestamps, "seconds.microseconds", without parsing them: by the length of the

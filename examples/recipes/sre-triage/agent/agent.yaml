@@ -1,8 +1,9 @@
-# sandbox-sre: a read-only SRE agent on a real model, for the sandbox tier. Its tools are the read tools of the sandbox
-# tool server (tools-values.yaml, tools-rbac.yaml); its model is modelconfig-<provider>.yaml, chosen by
-# MODEL_PROVIDER, with the API key from the Secret sandbox-model that up.sh makes from the secrets file. The harness
-# is the one of the full tier's agents (full/agent.yaml): the digest-pinned Go ADK runtime that ships with kagent
-# 1.0.0-alpha5, in a Substrate worker pool, its model calls leaving through Substrate's egress gateway.
+# sandbox-sre: a read-only SRE agent on a real model, the agent half of the sre-triage recipe. Its tools are the read
+# tools of the tool server (tools-values.yaml, tools-rbac.yaml). Its model is the ModelConfig sandbox-model, which you
+# supply: the sandbox tier (hack/kind/sandbox) renders one from hack/kind/sandbox/modelconfig-<provider>.yaml, chosen by
+# MODEL_PROVIDER, with the API key from the Secret sandbox-model that its up.sh makes from the secrets file. The harness
+# is the one of the full tier's agents (hack/kind/full/agent.yaml): the digest-pinned Go ADK runtime that ships with
+# kagent 1.0.0-alpha5, in a Substrate worker pool, its model calls leaving through Substrate's egress gateway.
 #
 # The tool list is by name, and only reads. The tool server runs --read-only, so even a name added here that writes
 # would not be served; test/kindmanifests pins the list to the nine tools that mode leaves, and the three left out are
@@ -41,4 +42,4 @@ spec:
       image: ghcr.io/kagent-dev/kagent/golang-adk@sha256:ed668c38a5805723912497d4ea085e711cf585d440907abfff3dd27991d768cc
     substrate:
       workerPoolRef: {name: kagent-default}
-      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see full/agent.yaml
+      snapshotPolicy: {location: "gs://ate-snapshots/kagent/"} # see hack/kind/full/agent.yaml

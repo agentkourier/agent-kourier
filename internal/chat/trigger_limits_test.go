@@ -131,7 +131,7 @@ func (h *triggered) digests(t *testing.T) []store.TriggerDigest {
 	return ds
 }
 
-// A storm of distinct alerts with the preset's limits: five start in the window, the rest are limited, nothing is
+// A storm of distinct alerts with the Alertmanager trigger's limits: five start in the window, the rest are limited, nothing is
 // posted in any alert's thread, and what was not investigated is counted for one digest. Once the window has gone the
 // same alerts, firing again, start: a limited start held no key.
 func TestAStormOfDistinctAlertsStartsOnlyTheRateLimit(t *testing.T) {
@@ -340,7 +340,7 @@ func TestARefusedStartCountsAgainstTheLimits(t *testing.T) {
 	}
 	// A refusal is no running investigation: with only refusals, no concurrency place is used.
 	tr := trialTrigger()
-	tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 100, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}}
+	tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 100, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}, MaxRunsPerDay: new(int32(40))}
 	h = newLimited(t, tr)
 	h.hookErr = chat.ErrNotStarted
 	for n := range 3 {
@@ -373,7 +373,7 @@ func TestARetriedStartCountsOnce(t *testing.T) {
 // A trigger with no thread rules starts a turn for every match, and its limits hold all the same.
 func TestAnUnthreadedTriggerIsLimitedToo(t *testing.T) {
 	tr := botTrigger(webhookBot, func(tr *v1alpha1.Trigger) {
-		tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 2, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}}
+		tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 2, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 5}, MaxRunsPerDay: new(int32(0))}
 	})
 	h := newLimited(t, tr)
 	var decisions []string
@@ -388,12 +388,12 @@ func TestAnUnthreadedTriggerIsLimitedToo(t *testing.T) {
 	}
 }
 
-// A trigger with no limits, as one without a preset is, starts everything, and so does an Intake that was given no
-// store of starts.
-func TestWithoutLimitsEveryStartGoesAhead(t *testing.T) {
+// A trigger whose limits nothing reaches starts everything, and so does an Intake that was given no store of
+// starts.
+func TestLimitsNothingReachesLetEveryStartGoAhead(t *testing.T) {
 	for name, h := range map[string]*triggered{
-		"no limits on the trigger": newLimited(t, botTrigger(webhookBot, nil)),
-		"no store of starts":       newTriggered(t, trialTrigger()),
+		"limits nothing reaches": newLimited(t, botTrigger(webhookBot, nil)),
+		"no store of starts":     newTriggered(t, trialTrigger()),
 	} {
 		for n := range 8 {
 			if got := h.fire(t, n, fmt.Sprintf("%d.1", 100+n)); got != "started" {

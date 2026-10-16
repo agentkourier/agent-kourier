@@ -23,7 +23,7 @@ files, usually a mounted ConfigMap, rather than served as custom resources.
 
 - [Helm values](helm-values.md): every value of the chart, with its default.
 - [Command line and environment](cli.md): the binary's environment variables, flags, subcommand and exit codes.
-- [Chat triggers](chat-triggers.md): what starts a turn, and what the `botMessage` trigger and its preset do.
+- [Chat triggers](chat-triggers.md): what starts a turn, and what the `botMessage` trigger does.
 
 ## Operation
 

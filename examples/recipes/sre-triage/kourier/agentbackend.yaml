@@ -1,0 +1,9 @@
+# The agent's backend: kagent 1.0, reached through a verifying front door, never the controller's own port (8083), which
+# does not verify the Binding's token. The kagent-v1 dialect adds /agents/<namespace>/<name> itself, from the Binding.
+# Replace the URL with your front door's if it is not this one. See "Put a verifying front door before kagent" in the docs.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: agents, namespace: agent-kourier}
+spec:
+  dialect: kagent-v1
+  url: http://kagent-frontdoor.kagent.svc.cluster.local:4180

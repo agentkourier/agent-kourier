@@ -56,3 +56,55 @@ does not avoid that; stopping every old pod first does. Upgrade once with `repli
 until the old pods have terminated, then upgrade again with `replicaCount` restored. Agent Kourier is down in between;
 if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to zero (see the chart's
 values).
+
+## Upgrade to the release without trigger presets
+
+A `botMessage` trigger is no longer filled in from a preset, and it must set its limits. A Binding that loaded before the
+upgrade can fail to load after it, so change your Bindings before you upgrade.
+
+- **`preset:` is not a field.** A trigger that sets it fails to load. The loader names the file, the Binding and the
+  field, for example `b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].preset: unknown field`. Nothing reads or
+  translates the old value.
+- **Limits are required.** A `botMessage` trigger without `limits.rateLimit` (all of `maxRuns`, `per` and
+  `maxConcurrent`) or without `limits.maxRunsPerDay` fails to load, and the error names the missing field. Before, such a
+  trigger loaded and started with no limit. `maxRunsPerDay: 0` still means no daily cap, and now has to be written.
+
+A trigger that sets only a bot ID and a preset gives several errors at once: the unknown field, each missing limit and the missing prompt.
+
+**What the broker does with a Binding that does not load.** One Binding that fails fails the whole config, so none of
+them is served.
+
+- *At start-up*, the broker does not start. It prints the error to stderr and exits with a non-zero status, and the pod
+  never becomes Ready. With SQLite (the default) the Deployment's strategy is `Recreate`, so the old pod is already gone when the
+  new one fails: no broker runs, and no alert is investigated, until you fix the Binding or [roll back](#roll-back).
+  Alertmanager's own receivers still notify people. With Postgres the strategy is a rolling update with
+  `maxUnavailable: 0`, so the new pod that never becomes Ready does not take the old pod away, and the old pod keeps its
+  config.
+- *On a reload*, when a running broker finds the files changed, it keeps the last good config. It logs `config reload
+  failed; keeping the last good snapshot`, counts `agentkourier_config_reload_errors_total`, and sets
+  `agentkourier_config_stale` to 1; `/readyz` does not fail for it. With a ConfigMap the chart writes and
+  `config.rollOnChange` on (the default), a change to the Bindings rolls the pod, so a bad Binding shows as a failed
+  start. A reload happens with `config.existingConfigMap`, or when the mounted files change in a running pod.
+
+The broker's log line, at start-up and on a reload, cuts the error text after 300 bytes, so with several errors you may see
+only the first, or part of it. Run `agent-kourier dry-run` (step 4 below) to see every error: it prints the
+whole text.
+
+**Migrate each Binding that sets `preset:`.**
+
+1. Copy the trigger from [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger) in place
+   of the preset trigger. Apart from `match.titleLink`, it is the old preset written out: the same regexes, a 4 hour
+   cooldown, 5 starts in 10 minutes with 2 at once, 40 a day, and the prompt.
+2. Handle `match.titleLink`. The example's is not part of the old preset: it limits the trigger to one receiver. Keep it,
+   set to your receiver, only if your preset trigger had a `match.titleLink`. Delete it otherwise, or the alerts of your
+   other receivers start nothing.
+3. Re-apply the rest of what you overrode, in the same fields: `exclude`, `thread`, `limits` or `promptTemplate`.
+4. Replay the channel's history with `agent-kourier dry-run` from the release you are upgrading to, against the edited
+   Bindings ([Tune triggers with a dry run](tune-triggers.md)). It loads them with the broker's own loader, so it prints
+   the same errors the broker would, and each Alertmanager message should come out `matched`. The older release accepts
+   `preset:`, so its binary proves nothing.
+
+**The session source.** A trigger start now records the source `botMessage`, in `sessions.origin_source` and in the
+prompt's `.Source`; a start from a preset trigger recorded `alertmanager`. A `promptTemplate` that tested `.Source`
+against `alertmanager` needs the new value. Sessions created before the upgrade keep `alertmanager`, and a vote on
+their messages still counts under the alert's name ([Stored data](../reference/stored-data.md#feedback)).

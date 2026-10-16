@@ -188,7 +188,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D28 | Session lifetime | Agent Kourier keeps the thread-to-session mapping for 90 days and resumes the same `contextId`; kagent handles suspend and resume. No Agent Kourier idle timeout. (v0.3) |
 | D29 | Alert routing | Teams route alerts to their Binding through their own prometheus-operator `AlertmanagerConfig`. The webhook token is a Secret in the Binding's namespace. Cluster-level alerts go to a platform-team Binding through the central Alertmanager config. (v0.3) **Superseded by D39:** there is no webhook, no webhook token and no route to Agent Kourier. An alert reaches a Binding through the channel Alertmanager's Slack receiver posts it to. |
 | D30 | Config loading | Resources are Go types with kubebuilder markers from day one, loaded from YAML files in Phases 1 to 3. CRDs and the controller land in hardening. (v0.3) Since D40 `Binding.status` and its conditions land with the controller; the file loader reports a problem as a load error (7). |
-| D31 | Spend cap | `maxRunsPerDay` per Binding, in addition to the rate limit. (v0.3) Since D39 it is a trigger's `limits.maxRunsPerDay` (8.2). |
+| D31 | Spend cap | `maxRunsPerDay` per Binding, in addition to the rate limit. (v0.3) Since D39 it is a trigger's `limits.maxRunsPerDay` (8.2); since D41 every `botMessage` trigger must set it. |
 | D32 | Pilot security | kagent 1.0 alpha runs in OIDC mode with per-Binding service tokens. Agent Kourier calls kagent only through a token-verifying front door (oauth2-proxy or agentgateway), never the controller port directly, because kagent's OIDC mode decodes but does not verify JWTs (WP-01 finding). NetworkPolicies restrict the controller port to that front door and kagent's own components, and fence each relay to the controller (the kagent UI) to its own verifying proxy (the chart's oauth2-proxy), which must not accept the Binding's audience. The front door strips `X-Agent-Name`, `X-User-Id`, `X-Share-Token` and `X-Kagent-Insecure-Runtime-Identity` from every request, because kagent lets them select the acting user or session (WP-03, WP-01d; implemented and proven in the full tier by WP-01d). The cluster's CNI must enforce NetworkPolicy. (v0.3, corrected after WP-01, WP-01b, WP-03, WP-01d and their reviews) |
 | D33 | Pilot exit | Four weeks, one team. Continue if at least half of rated investigations are useful and engineers use threads unprompted. (v0.3) |
 | D34 | Binding token source | For the pilot, a Binding's bearer token is read from `identity.tokenSecretRef` on every call (cached from a watch, never stored elsewhere), and rotated outside Agent Kourier before it expires (Dex: 24 h). A rejected credential (`ErrCredentialsRejected`, HTTP 401/403 at the front door) fails the turn, re-reads the Secret, is audited and raises a metric; Agent Kourier never falls back to `userId`. Minting with the client-credentials grant plugs in behind the same `TokenSource` interface once H-02 picks a provider that supports it (Q9). Secret values are held in a type whose every formatting path redacts. Secrets Agent Kourier reads are type `Opaque`; the watch keeps values for Opaque Secrets only (key names for every other type), in the namespaces Agent Kourier is granted. After the pilot, narrow to one watch per referenced Secret (a `metadata.name` field selector plus RBAC `resourceNames`). (Resolves Q10, after WP-03; narrowed by the WP-21e1 review.) |
@@ -196,8 +196,9 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D36 | Bot messages | A bot's message counts only through an explicit `botMessage` trigger in the Binding's `chat.triggers` (8.2) that matches the bot by ID, never by display name. Agent Kourier's own messages, and those of every bot without a trigger, stay ignored, so bots cannot answer each other in a loop. The whole message is untrusted text (R2). (Proposed 2026-10-04 for the Slack-sourced alerts trial, CT-1; accepted by the owner 2026-10-04.) |
 | D37 | HA | Active/passive: a Kubernetes Lease picks the one replica that does work, and epoch fencing in Postgres refuses a deposed leader's writes; a leader that loses its lease or meets a stale epoch exits at once, and one whose lease is past its renew deadline refuses every write to the chat and exits. (Owner, 2026-10-04; H4-4. The refusal of chat writes: owner, 2026-10-05, H4-5b.) |
 | D38 | Thread replies | A Binding's `chat.threadReplies` is `all` (default) or `mention`. In `mention`, only a reply that mentions Agent Kourier is a turn, and it carries the unmentioned replies since the last turn as untrusted data; a typed answer to a question that takes text replies needs no mention. (Owner, 2026-10-05; mention-only thread replies, TM-8.) |
-| D39 | Direct webhook dropped | Agent Kourier has no Alertmanager webhook endpoint and is not an Alertmanager receiver. The Binding has no `alerts` field and no `status.webhookPath`. Alerts reach a Binding only through `chat.triggers`: a `botMessage` trigger reads the message Alertmanager already posts to Slack (8.2, D36), and alert-specific behaviour lives in a preset and a prompt template, not in the API. Dropped for good, not deferred. Supersedes D22 and D29, and the webhook parts of D8, D9, D10 and D31. A Binding with an `alerts:` block no longer loads (the decoder is strict), so a deployed config drops the block first. (Owner, 2026-10-10; DA-1, DA-2.) |
+| D39 | Direct webhook dropped | Agent Kourier has no Alertmanager webhook endpoint and is not an Alertmanager receiver. The Binding has no `alerts` field and no `status.webhookPath`. Alerts reach a Binding only through `chat.triggers`: a `botMessage` trigger reads the message Alertmanager already posts to Slack (8.2, D36), and alert-specific behaviour lives in the trigger and its prompt template, not in the API (a preset held it until D41). Dropped for good, not deferred. Supersedes D22 and D29, and the webhook parts of D8, D9, D10 and D31. A Binding with an `alerts:` block no longer loads (the decoder is strict), so a deployed config drops the block first. (Owner, 2026-10-10; DA-1, DA-2.) |
 | D40 | Fields that work | The API carries only fields that work. Phase 5 added `Binding.spec.interactions.toolApprovals` and `approverGroups`; `toolApprovals` defaults to false, and `approverGroups` is validated and used when approvals are enabled. Three feature areas remain out of the types until their phase: `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). A config that sets one of those three still fails strict decoding. |
+| D41 | Presets removed | Trigger presets are removed. A preset hid the regexes, thread rules, limits and prompt of a known sender behind one word, and it does not carry to a second chat platform, where each platform would need its own regex set. Alert-specific behaviour is a `botMessage` trigger written in full, from an example the docs carry (Alertmanager's Slack receiver is the canonical one). A `botMessage` trigger must set `limits.rateLimit` (all three fields) and `limits.maxRunsPerDay`; the preset was what gave an alert trigger a spend cap (D31), so without it the cap is explicit. An explicit `maxRunsPerDay: 0` still means no cap and is allowed, because the choice is written in the config. A config that sets `preset:` fails strict decoding, as D39 and D40 did for their fields, so a deployed config drops the key and pastes the example. Every trigger start reports source `botMessage` (the prompt view's `.Source` and the session's origin source); votes on sessions created before this change keep the `alertmanager` source they were stored with. Supersedes the preset parts of D31 and D39. (Owner, 2026-10-15.) |
 
 ## 6. Architecture
 
@@ -245,7 +246,7 @@ except Store.
 An alert source is not an interface. An alert is a bot's message in the Binding's channel, and
 a `botMessage` trigger (8.2) turns it into the trigger's view (`.Channel`, `.State`, `.Key`,
 `.Fields`, `.Link`, `.Source`), the only thing a prompt template sees. A second source is a
-preset, or a trigger written in full, not code behind an interface.
+trigger written in full (D41), not code behind an interface.
 
 ```go
 // chat.Platform is the one seam between Agent Kourier and a chat platform (Slack in v1; package
@@ -433,12 +434,28 @@ spec:
       - type: mention
       - type: botMessage             # alerts Alertmanager itself posts to this channel
         from: { botId: B0123456789 } # the poster's bot ID, never its display name (D36)
-        preset: alertmanager         # fills in match, extract, thread, limits and promptTemplate
-        # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
-        match: { titleLink: 'receiver=slack-critical$' }
+        # The title keeps out Grafana's "FIRING: <rule>" and anything else not shaped "FIRING (n) - <alertname>"
+        # or "RESOLVED - <alertname>", optionally behind a bracketed tag. Alertmanager's default fallback text
+        # carries the group's label values. Every match entry must match and no exclude entry may.
+        match:
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
+          # $ anchors the receiver: without it, receiver=slack-critical also matches ...-kind
+          titleLink: 'receiver=slack-critical$'
         exclude: { title: '^Prometheus heartbeat$' }
-        thread: { cooldown: 2h }     # overrides the preset's 4h
-        limits: { maxRunsPerDay: 20 } # overrides the preset's 40; its rateLimit (5 in 10m, 2 at once) stays
+        extract:                     # the named group carries the entry's name
+          state: { field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)' }
+          # the group's label values without the count, so repeats of an alert share a thread
+          key: { field: fallback, regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])' }
+          alertname: { field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$' }
+        thread: { by: key, cooldown: 2h, closeWhen: { state: RESOLVED } }
+        limits:                      # required on a botMessage trigger (D41)
+          rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }
+          maxRunsPerDay: 20          # 0 would mean no cap
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.
   interactions:
     askUser: true
     toolApprovals: false             # true enables kagent-v1 approval prompts
@@ -464,12 +481,14 @@ are refused as unknown fields by the strict decoder:
 | `Binding.status.conditions` (`Ready`, `BackendReachable`, `ChannelJoined`) | Phase 4, with the controller (D30) | The controller reports each Binding's state | Nothing sets a status; a problem with the config is a load error (below) |
 
 Alertmanager needs no route to Agent Kourier: its Slack receiver posts to the Binding's
-channel as it does for people today. The `alertmanager` preset does need the receiver's title
-in the shape `FIRING (n) - <alertname>` or `RESOLVED - <alertname>` (optionally behind a
-bracketed tag), with Alertmanager's default fallback text (8.2). Alertmanager's default Slack
-title begins `[FIRING:n]` and does not match, so a receiver that keeps it needs its title
-changed, or `match` and `extract` overrides in the trigger. `agent-kourier dry-run` checks
-either against the channel's history.
+channel as it does for people today. The trigger above follows the documented example
+(`docs/how-to/investigate-alertmanager-alerts.md`; 4h cooldown, 5 starts in 10m, 2 at once, 40 a day,
+and an optional receiver match, `match.titleLink`). It keeps the receiver match, overrides the cooldown (2h)
+and the daily cap (20), and adds an `exclude` for the heartbeat. It needs the receiver's title in the shape `FIRING (n) - <alertname>` or `RESOLVED - <alertname>`
+(optionally behind a bracketed tag), with Alertmanager's default fallback text (8.2).
+Alertmanager's default Slack title begins `[FIRING:n]` and does not match, so a receiver that
+keeps it needs its title changed, or the trigger's `match` and `extract` entries written for
+the title it has. `agent-kourier dry-run` checks either against the channel's history.
 
 Rules:
 
@@ -514,12 +533,12 @@ route and reads the message afterwards, so an Agent Kourier outage loses no noti
    Binding names the bot by ID (D36, 8.2). The intake acknowledges Slack once its local
    writes are done; an event it fails to take is not acknowledged, and Slack redelivers it.
 3. The trigger matches the message and extracts its `state` and `key`. For a trigger with
-   `thread.by: key` (the `alertmanager` preset's key is the alert group's label values) the
+   `thread.by: key` (the documented example's key is the alert group's label values) the
    decision table of 8.2 says what follows:
    - **No thread for the key (`started`):** the investigation runs in a thread under the
      alert's own message, which is the link back to the alert. The Slack permalink of that
-     message is available to the prompt template as `.Link`; the preset's template does not
-     use it.
+     message is available to the prompt template as `.Link`; the documented example's template does
+     not use it.
    - **The alert fires again while its thread is open or inside the cooldown (`repeat`):**
      a note "Fired again at `<time>`." in that thread. No turn.
    - **The alert resolves (`closed`):** a note "Resolved at `<time>`." in that thread, and
@@ -585,18 +604,16 @@ from one bot, named by `from.botId` and never by display name, and then:
 - `limits` bounds how many investigations the trigger starts (below): `rateLimit` (`maxRuns`
   starts in any `per`, and `maxConcurrent` investigations running at once; `maxRuns` and
   `maxConcurrent` are at least 1, and `per` is 10s to 24h) and `maxRunsPerDay` (at least 0;
-  0 is no cap). A trigger with neither a preset nor `limits` is unlimited.
-- `preset: alertmanager` fills in `match`, `extract`, `thread`, `limits` and `promptTemplate` for
-  Alertmanager's Slack receiver, whose title is `FIRING (n) - <alertname>` or
-  `RESOLVED - <alertname>` (Alertmanager's default title, `[FIRING:n] ...`, does not match, so
-  the receiver sets its title) and whose fallback is the default one with the group label values. Whatever the Binding sets overrides it per
-  entry: a `match`, `exclude` or `extract` entry replaces the preset's entry of that name, and
-  `thread.by`, `thread.cooldown`, `thread.closeWhen` and `promptTemplate` replace the preset's.
-  `limits` merges by field: each of `rateLimit.maxRuns`, `rateLimit.per`, `rateLimit.maxConcurrent`
-  and `maxRunsPerDay` that the Binding sets replaces the preset's, and the others stay (an
-  explicit `maxRunsPerDay: 0` is no cap, not unset). An empty value means unset, so in v1 a Binding cannot switch a preset entry off. To drop a
-  `match` entry, override it with a regex that always matches (`'.*'`); to change more than
-  that, leave `preset` out and write the trigger in full.
+  0 is no cap). A `botMessage` trigger must set `limits.rateLimit`, all three of its fields, and
+  `limits.maxRunsPerDay` (D41): a trigger that leaves either out does not load, and the error names the field.
+  An explicit `maxRunsPerDay: 0` loads and means no cap, because the choice is written in the config.
+  `limits` on a `mention` trigger is refused.
+- A known sender, such as Alertmanager's Slack receiver, is a trigger written in full, from the
+  example the docs carry for it; nothing is filled in from a name (D41). The
+  example matches Alertmanager's title `FIRING (n) - <alertname>` or `RESOLVED - <alertname>` and its
+  default fallback with the group label values (Alertmanager's default title, `[FIRING:n] ...`, does
+  not match, so the receiver sets its title). A fix to the example reaches a Binding only when
+  its author copies it, and `agent-kourier dry-run` is the check.
 
 Regexes are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups
 and the template: a Binding that fails any of them is rejected. A bot message that no trigger
@@ -646,9 +663,9 @@ retry window, or a resolve that arrived before its fire. `maxIdle` is at least t
 cooldown, at most 720h, and unset it is the larger of 24h and twice the cooldown. It must also
 be longer than the sender's repeat interval (Alertmanager's `repeat_interval`), or an alert
 that is still firing is counted abandoned between two of its repeats and gets a second
-investigation. Twice the cooldown covers that only because the preset's cooldown and
-Alertmanager's default `repeat_interval` are both 4h; a longer `repeat_interval` needs a
-`maxIdle` set above it. The cooldown begins when the turn has started and not
+investigation. With the documented example's 4h cooldown the default `maxIdle` is 24h,
+longer than Alertmanager's default 4h `repeat_interval`; a `repeat_interval` of 24h or more
+needs `maxIdle` set above it. The cooldown begins when the turn has started and not
 when the thread is reserved, so a turn that could not start holds no key. A session hook that
 fails for a reason that will pass (a store error) returns an ordinary error, and the redelivery
 asks again; one that will not start the turn (a refused prompt) returns `chat.ErrNotStarted`,
@@ -667,7 +684,7 @@ Every decision is counted as `agentkourier_trigger_decisions_total{binding,decis
 
 **Limits of a trigger (D26, D31).** `limits` holds a start to the trigger's `rateLimit.maxRuns` in
 any `rateLimit.per`, `rateLimit.maxConcurrent` investigations running at once and `maxRunsPerDay`
-in any 24 hours. The alertmanager preset's are 5 in 10m, 2 at once and 40
+in any 24 hours. The documented Alertmanager example's are 5 in 10m, 2 at once and 40
 a day (the cooldown folds an alert's repeats into its thread already, so they bound distinct
 alerts, a storm). `per` is 10s to 24h. Only a start is limited: a repeat, a close and a note are
 never. The check is the last step before the turn is asked for, and when it stops a start the
@@ -699,7 +716,7 @@ way.
 level of the Binding's channel through the outbox: "7 alert messages not investigated in the last 10m
 (rate limit)." (more than one limit in a window: "(rate limit: 5, daily cap: 2)"). A window
 opens with the first stopped start after the last digest and lasts the trigger's `rateLimit.per`
-(an hour for a trigger with only a daily cap); the line is posted when it has ended, within
+(a loaded trigger always has a rate limit); the line is posted when it has ended, within
 15 seconds, so that it can count. The row it asks the outbox for is named after the connection,
 Binding, trigger and the start of the window, so a crash or a failed write between queueing it
 and recording that it was queued posts it once. The line holds a count, a length and a limit and
@@ -719,7 +736,7 @@ turn. Nobody wrote the turn, so it names no user: it is filed under the manager'
 and carries no attribution prefix, which is for what a person wrote, and its audit rows name no
 person. A person's reply in that thread then continues the session as in any thread
 Agent Kourier owns (with `threadReplies: mention`, only one that mentions Agent Kourier). The text of a
-template reads `.Fields` entries, not `.Key`: the preset's key is the group's label values, which hold spaces, and a value in the instruction part must be
+template reads `.Fields` entries, not `.Key`: the documented example's key is the group's label values, which hold spaces, and a value in the instruction part must be
 name-shaped, so a template that reads `.Key` is refused.
 
 A prompt that fails its check (a value outside the name shape, too long, a `.Link` that is no
@@ -1060,8 +1077,8 @@ this with an outbox:
   earlier investigations. Votes are audited by IDs and verdict only, and counted in
   `agentkourier_investigation_feedback_total{binding, agent, alertname, verdict}`: a counter of votes cast (a change is one
   more vote under its new verdict). The alert name is the trigger's `alertname`, kept only in the name shape; the
-  session origin records the bounded source and subject that caused the thread, while the feedback adapter maps the
-  `alertmanager` or custom `botMessage` source (and `legacy` values migrated from the older schema) to alert attribution.
+  session origin records the bounded source and subject that caused the thread (a trigger start reports `botMessage`, D41), while the feedback adapter maps the
+  `botMessage` source, the `alertmanager` source of sessions created before D41, and `legacy` values migrated from the older schema to alert attribution.
   A subject from another source is generic metadata, so the label is `none` for an answer or `unknown` for an investigation. A Binding has at most
   100 names in a process, then `other`.
 - The pilot exit decision (D33) is computed from the rows, not the metric (owner, 2026-10-05): each investigation
@@ -1112,7 +1129,7 @@ a root post (a role the store accepts and nothing in production has ever posted)
 | Binding identity scope | Each Binding identity gets only the permissions every member of its channel is trusted with. Separate Bindings, not one shared identity, for channels with different trust levels. |
 | Secrets | Read from Kubernetes Secrets by reference. Never written to CRD status, logs, or the audit table. An agent's tool arguments, hint and question text are normalized and redacted before a request is stored; a question's choices and a person's answer are stored as given until the interaction is cleared. Text written to logs and to the audit table is normalized and redacted the same way. |
 | Tenancy | Namespaced Bindings with explicit `allowedNamespaces` on shared resources. |
-| Spend | Per-trigger rate limit, concurrency cap, and daily cap on the investigations a trigger starts, for a trigger that has limits (8.2); one with neither a preset nor `limits` is unlimited. |
+| Spend | Per-trigger rate limit, concurrency cap, and daily cap on the investigations a trigger starts, for every `botMessage` trigger, which must set limits (8.2, D41); an explicit `maxRunsPerDay: 0` lifts the daily cap only. |
 | Audit | Every event, agent call, and approval is recorded with identity. Subject to retention (`AGENTKOURIER_AUDIT_RETENTION`; kept for ever by default). |
 
 ## 11. Operations
@@ -1157,7 +1174,7 @@ a root post (a role the store accepts and nothing in production has ever posted)
 |---|---|---|
 | 0. Pilot environment and spike | Stand up a pinned kagent 1.0 alpha in OIDC mode behind a NetworkPolicy, with a read-only investigation agent holding production read credentials. A2A client spike: send, stream, reconnect, ask-user and nested HITL, service-token auth, busy-session rejection. Slack streaming limits. | The agent answers a question about production over A2A with a Binding service token. Q1 to Q3 answered. |
 | 1. Chat | Resource Go types with a file loader, Slack Socket Mode, @mention and thread replies, reply queue, live output, ask-user interactions, outbox, SQLite store | Two different users hold one multi-turn conversation that survives an Agent Kourier restart. An ask-user question is answered from Slack. A crash-during-post test produces no duplicate messages. |
-| 2. Alerts | `botMessage` triggers (8.2) that read the message Alertmanager already posts to Slack: the `alertmanager` preset, a thread under each alert with a cooldown per key and notes for repeats and resolves, rate limit, daily cap, digest line, the prompt template with the alert in the untrusted block, feedback buttons. Built as CT-1 to CT-7b; the webhook receiver was dropped (D39) | A firing alert produces one thread; repeats add a note to it; replies continue the session. A 50-alert burst yields capped investigations and one digest line, not 50 messages. Votes are recorded. |
+| 2. Alerts | `botMessage` triggers (8.2) that read the message Alertmanager already posts to Slack: a trigger written in full for Alertmanager's receiver (D41), a thread under each alert with a cooldown per key and notes for repeats and resolves, rate limit, daily cap, digest line, the prompt template with the alert in the untrusted block, feedback buttons. Built as CT-1 to CT-7b; the webhook receiver was dropped (D39) | A firing alert produces one thread; repeats add a note to it; replies continue the session. A 50-alert burst yields capped investigations and one digest line, not 50 messages. Votes are recorded. |
 | 3. Pilot | Four weeks, one team plus the platform Binding. Feedback dashboard. Weekly review of not-useful investigations. | Go or no-go recorded against D33 (section 13) |
 | 4. Hardening (if go) | CRDs and controller, Postgres, HA, HTTP mode, DMs, Helm chart. These add back the fields that wait for them (D40): `ChatConnection.spec.mode` and `signingSecret`, `ChatConnection.spec.directMessages`, and `Binding.status`. Move the backend to production kagent at 1.0 GA and retire the pilot install. | Two replicas pass a failover test with no lost or duplicated events |
 | 5. Tool approvals | Bind the first write-capable agent. R1 is decided (2026-10-11, option 2 reconfirmed 2026-10-13): `approverGroups` is implemented. Approval buttons, timeout, audit, and the `toolApprovals` and `approverGroups` API fields are live. | A gated tool call is approved and denied from Slack, both audited, and R1 has a recorded decision |
@@ -1227,8 +1244,7 @@ Otherwise stop, or re-scope using the not-useful ratings by alert name.
   passing `chattest.Conformance`, and adding it to the broker's platform factory. It
   changes no package except the adapter and the broker, whose factory names it: a lint rule
   denies every other package the Slack adapter and its client library. Adding an alert
-  source that posts to a chat channel is a `botMessage` trigger in the Binding (a preset only
-  supplies its defaults) and touches no router, session, or store code.
+  source that posts to a chat channel is a `botMessage` trigger in the Binding, written in full (D41), and touches no router, session, or store code.
 - Moving to a new kagent API revision changes the dialect package only.
 
 ## 14. Risks
@@ -1425,3 +1441,24 @@ What changed in this document:
 | D13, D25, D40, the section 7 approval rows and R1 | They describe the fields and policy as implemented, including the no-group warning, group gate, `denied_not_approver` result and the residual risk when no group is configured |
 | Section 6.2 and section 8.4 | The platform contract includes `IsInAnyGroup`; the approval prompt, fixed denial, audit, timeout and first-complete behavior are specified against the current code |
 | Phase 5 exit row | The pinned kagent two-tool observation and passing broker full-tier suite with fake Slack are recorded; the original audited Slack approve/deny exit criterion is preserved |
+
+### Trigger presets removed (2026-10-15)
+
+The owner decided that a trigger preset hides too much behind one word and does not carry to a second chat platform
+(D41). The `alertmanager` preset is gone: Alertmanager's Slack receiver is a `botMessage` trigger written in full, from
+the example the docs carry. Without the preset's defaults a `botMessage` trigger must set `limits.rateLimit` and
+`limits.maxRunsPerDay`, so a trigger is no longer unlimited by omission; an explicit `maxRunsPerDay: 0` is still no cap.
+A config that sets `preset:` fails strict decoding. Every trigger start now reports source `botMessage`; the feedback
+adapter keeps accepting `alertmanager` for sessions stored earlier. What changed in this document:
+
+| Earlier text | Now |
+|---|---|
+| D31 and D39 | Each gets a pointer to D41; the preset sentence of D39 says the behaviour lives in the trigger and its prompt template |
+| 6.2, last sentence of the alert-source paragraph | A second source is a trigger written in full |
+| Section 7: the sample Binding's `preset: alertmanager` with per-field overrides, and the paragraph on the preset's title shape | The sample trigger is written in full with explicit limits; the paragraph states the title-shape requirement for the documented example |
+| 8.1 step 3, the `.Link` remark, the `maxIdle` and limits paragraphs of 8.2 | They refer to the documented example's key, template, cooldown and limits |
+| 8.2 `limits` bullet and the preset bullet | Limits are required on a `botMessage` trigger; the bullet on presets and their field-by-field overrides is replaced by one on a trigger written in full |
+| Section 10, Spend | Every `botMessage` trigger has limits; "one with neither a preset nor `limits` is unlimited" is removed |
+| Section 12, Phase 2 row; section 13 extensibility; the origin-source sentence of 8.7 | No preset; a new alert source is a trigger written in full; the origin source is `botMessage` |
+
+The earlier entries of this appendix are not edited; where they name a preset (the 2026-10-10 entry does), this entry supersedes them.

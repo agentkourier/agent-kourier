@@ -282,7 +282,7 @@ func (p *problems) fieldRegexes(path string, m map[MessageField]string) {
 }
 
 // triggers validates the trigger list: each trigger on its own, then the list for triggers
-// that could never be reached. Defaulting has already filled the presets in.
+// that could never be reached.
 func (p *problems) triggers(path string, ts []Trigger) {
 	seen := map[string]int{}
 	for i := range ts {
@@ -322,7 +322,7 @@ func (p *problems) mentionTrigger(path string, t *Trigger) {
 		name string
 		set  bool
 	}{
-		{"from", t.From != nil}, {"preset", t.Preset != ""}, {"match", len(t.Match) > 0},
+		{"from", t.From != nil}, {"match", len(t.Match) > 0},
 		{"exclude", len(t.Exclude) > 0}, {"extract", len(t.Extract) > 0},
 		{"thread", t.Thread.By != "" || t.Thread.Cooldown.Duration != 0 || t.Thread.MaxIdle.Duration != 0 || len(t.Thread.CloseWhen) > 0},
 		{"promptTemplate", t.PromptTemplate != ""},
@@ -340,9 +340,6 @@ func (p *problems) botMessageTrigger(path string, t *Trigger) {
 		p.add(path+".from.botId", "required")
 	case !botID.MatchString(t.From.BotID):
 		p.add(path+".from.botId", "invalid bot ID %q: must be a Slack bot ID such as B0123456789, not a name", t.From.BotID)
-	}
-	if t.Preset != "" {
-		p.oneOf(path+".preset", t.Preset, PresetAlertmanager)
 	}
 	p.fieldRegexes(path+".match", t.Match)
 	p.fieldRegexes(path+".exclude", t.Exclude)
@@ -372,10 +369,19 @@ func (p *problems) extract(path, name string, e Extract) {
 	}
 }
 
-// limits checks a trigger's limits as they are after defaulting, so a rate limit that is set in part and has no
-// preset to fill it fails on each field it lacks. The window is bounded on both sides: see MinRateWindow and
-// MaxLimitWindow. A cap of 0 means none.
+// limitsHint points a botMessage trigger that lacks limits at the documented example, which sets both.
+const limitsHint = "see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)"
+
+// limits checks the limits of a botMessage trigger: it must set a rate limit and a daily cap, and a rate limit
+// set in part fails on each field it lacks. The window is bounded on both sides: see MinRateWindow and
+// MaxLimitWindow. A cap of 0 means none, and it must be written: leaving the cap out is refused.
 func (p *problems) limits(path string, l TriggerLimits) {
+	if l.RateLimit == nil {
+		p.add(path+".rateLimit", "required: set maxRuns, per and maxConcurrent; %s", limitsHint)
+	}
+	if l.MaxRunsPerDay == nil {
+		p.add(path+".maxRunsPerDay", "required: set the cap for a day, or 0 for no cap; %s", limitsHint)
+	}
 	if r := l.RateLimit; r != nil {
 		p.positive(path+".rateLimit.maxRuns", int64(r.MaxRuns))
 		p.positive(path+".rateLimit.maxConcurrent", int64(r.MaxConcurrent))

@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -23,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/test/e2e"
 )
@@ -290,10 +293,37 @@ func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
 	}
 }
 
-// TestS14TakesTheAlertBotByItsIDWithThePreset: S14's channel has a botMessage trigger for the bot ID the scenario posts
-// as, with the alertmanager preset, narrowed to the kind receiver as the trial's is, and no mention trigger: only an
+// heartbeatExclude is the exclude of the sandbox Bindings: the Watchdog heartbeat shares the alert bot and the channel.
+var heartbeatExclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`}
+
+// isAlertmanagerTrigger says whether tr is the Alertmanager trigger written in full, as chattest.AlertmanagerTrigger and the
+// how-to write it: the same match entries, extracts, thread rules and prompt. Its match is compared whole, apart from
+// titleLink, which is the receiver the Binding narrows to and which the caller checks; a stray entry fails it. Its exclude
+// is compared whole too, against wantExclude: nil for the Bindings that exclude nothing, heartbeatExclude for the sandbox
+// ones. The limits are the Binding's own, and the caller checks them (limitsAreTheExamples checks the limits of the
+// triggers that keep the example's).
+func isAlertmanagerTrigger(tr v1alpha1.Trigger, wantExclude map[v1alpha1.MessageField]string) bool {
+	if tr.From == nil {
+		return false
+	}
+	want := chattest.AlertmanagerTrigger(tr.From.BotID)
+	match := maps.Clone(tr.Match)
+	delete(match, v1alpha1.FieldTitleLink)
+	return tr.Type == want.Type && maps.Equal(match, want.Match) && maps.Equal(tr.Exclude, wantExclude) &&
+		reflect.DeepEqual(tr.Extract, want.Extract) && reflect.DeepEqual(tr.Thread, want.Thread) && tr.PromptTemplate == want.PromptTemplate
+}
+
+// limitsAreTheExamples says whether l is the limits of the Alertmanager example: 5 starts in 10 minutes, 2 at once and 40 a
+// day.
+func limitsAreTheExamples(l v1alpha1.TriggerLimits) bool {
+	r := l.RateLimit
+	return r != nil && r.MaxRuns == 5 && r.Per.Duration == 10*time.Minute && r.MaxConcurrent == 2 && l.MaxRunsPerDay != nil && *l.MaxRunsPerDay == 40
+}
+
+// TestS14TakesTheAlertBotByItsIDWithTheAlertmanagerTrigger: S14's channel has a botMessage trigger for the bot ID the scenario posts
+// as, written as the Alertmanager trigger, narrowed to the kind receiver as the trial's is, and no mention trigger: only an
 // alert starts a session there, and a person's reply in its thread continues it. The ID is the one test/e2e names.
-func TestS14TakesTheAlertBotByItsIDWithThePreset(t *testing.T) {
+func TestS14TakesTheAlertBotByItsIDWithTheAlertmanagerTrigger(t *testing.T) {
 	set, err := config.Load(t.Context(), agentKourierDir+"config")
 	if err != nil {
 		t.Fatal(err)
@@ -308,8 +338,10 @@ func TestS14TakesTheAlertBotByItsIDWithThePreset(t *testing.T) {
 	}
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS14 ||
-		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
-		t.Errorf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS14)
+		!isAlertmanagerTrigger(triggers[0], nil) || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Errorf("triggers %+v; want the one botMessage trigger for %s written as the Alertmanager trigger, narrowed to the kind receiver", triggers, e2e.BotS14)
+	} else if l := triggers[0].Limits; !limitsAreTheExamples(l) {
+		t.Errorf("limits %+v (rate %+v); want the example's: 5 in 10m, 2 at once, 40 a day", l, l.RateLimit)
 	}
 }
 
@@ -331,8 +363,10 @@ func TestS17TakesTheAlertBotByItsIDAndHasNoFeedbackSetting(t *testing.T) {
 	}
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS17 ||
-		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
-		t.Errorf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS17)
+		!isAlertmanagerTrigger(triggers[0], nil) || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Errorf("triggers %+v; want the one botMessage trigger for %s written as the Alertmanager trigger, narrowed to the kind receiver", triggers, e2e.BotS17)
+	} else if l := triggers[0].Limits; !limitsAreTheExamples(l) {
+		t.Errorf("limits %+v (rate %+v); want the example's: 5 in 10m, 2 at once, 40 a day", l, l.RateLimit)
 	}
 	if rb.Binding.Spec.Feedback.Enabled {
 		t.Error("the Binding has feedback.enabled; want it off, so that S17 shows the buttons of an investigation do not need it")
@@ -360,15 +394,17 @@ func TestS18TakesOnlyMentionsInItsThreadsAndStartsThemByMentionOrAlert(t *testin
 	}
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) != 2 || triggers[0].Type != v1alpha1.TriggerMention || triggers[1].Type != v1alpha1.TriggerBotMessage || triggers[1].From == nil ||
-		triggers[1].From.BotID != e2e.BotS18 || triggers[1].Preset != v1alpha1.PresetAlertmanager || triggers[1].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
-		t.Errorf("triggers %+v; want a mention trigger and a botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS18)
+		triggers[1].From.BotID != e2e.BotS18 || !isAlertmanagerTrigger(triggers[1], nil) || triggers[1].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Errorf("triggers %+v; want a mention trigger and a botMessage trigger for %s written as the Alertmanager trigger, narrowed to the kind receiver", triggers, e2e.BotS18)
+	} else if l := triggers[1].Limits; !limitsAreTheExamples(l) {
+		t.Errorf("limits %+v (rate %+v); want the example's: 5 in 10m, 2 at once, 40 a day", l, l.RateLimit)
 	}
 }
 
 // TestS15LimitsTheStormToThreeStartsInTenSeconds: S15's trigger is S14's, for the bot the scenario posts as, with limits
 // of its own: three starts in 10 seconds (the shortest window, so the digest comes within a minute), enough room to run
-// at once, and no daily cap, so that runs of the scenario never meet the preset's 40 a day. The preset's thread rules
-// stay. The numbers are the ones the scenario asserts.
+// at once, and no daily cap, so that runs of the scenario never meet a daily cap of 40. The thread rules are the Alertmanager
+// trigger's. The numbers are the ones the scenario asserts.
 func TestS15LimitsTheStormToThreeStartsInTenSeconds(t *testing.T) {
 	set, err := config.Load(t.Context(), agentKourierDir+"config")
 	if err != nil {
@@ -384,15 +420,15 @@ func TestS15LimitsTheStormToThreeStartsInTenSeconds(t *testing.T) {
 	}
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS15 ||
-		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
-		t.Fatalf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS15)
+		!isAlertmanagerTrigger(triggers[0], nil) || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Fatalf("triggers %+v; want the one botMessage trigger for %s written as the Alertmanager trigger, narrowed to the kind receiver", triggers, e2e.BotS15)
 	}
 	l := triggers[0].Limits
 	if l.RateLimit == nil || l.RateLimit.MaxRuns != 3 || l.RateLimit.Per.Duration != 10*time.Second || l.RateLimit.MaxConcurrent != 5 || l.MaxRunsPerDay == nil || *l.MaxRunsPerDay != 0 {
 		t.Errorf("limits %+v (rate %+v); want 3 in 10s, 5 at once and no daily cap", l, l.RateLimit)
 	}
 	if triggers[0].Thread.Cooldown.Duration != 4*time.Hour {
-		t.Errorf("thread %+v; want the preset's", triggers[0].Thread)
+		t.Errorf("thread %+v; want the Alertmanager trigger's", triggers[0].Thread)
 	}
 }
 
@@ -414,8 +450,8 @@ func TestS16StormHasS15sLimitsAndTheAlertBotOfItsOwn(t *testing.T) {
 	}
 	triggers := rb.Binding.Spec.Chat.Triggers
 	if len(triggers) != 1 || triggers[0].Type != v1alpha1.TriggerBotMessage || triggers[0].From == nil || triggers[0].From.BotID != e2e.BotS16 ||
-		triggers[0].Preset != v1alpha1.PresetAlertmanager || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
-		t.Fatalf("triggers %+v; want the one botMessage trigger for %s with the alertmanager preset, narrowed to the kind receiver", triggers, e2e.BotS16)
+		!isAlertmanagerTrigger(triggers[0], nil) || triggers[0].Match[v1alpha1.FieldTitleLink] != `receiver=slack-critical-kind$` {
+		t.Fatalf("triggers %+v; want the one botMessage trigger for %s written as the Alertmanager trigger, narrowed to the kind receiver", triggers, e2e.BotS16)
 	}
 	l := triggers[0].Limits
 	if l.RateLimit == nil || l.RateLimit.MaxRuns != 3 || l.RateLimit.Per.Duration != 10*time.Second || l.RateLimit.MaxConcurrent != 20 || l.MaxRunsPerDay == nil || *l.MaxRunsPerDay != 0 {

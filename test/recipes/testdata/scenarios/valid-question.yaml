@@ -1,0 +1,6 @@
+name: a person asks about a healthy app
+app: frontend
+question: is frontend healthy?
+cause: nothing is wrong; the pods are Ready and have not restarted
+evidence:
+  - every pod of frontend is Ready

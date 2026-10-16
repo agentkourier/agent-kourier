@@ -28,7 +28,7 @@ const dryRunUsage = `usage: agent-kourier dry-run --config <dir> --binding <name
 Replays the history of a Binding's channel through the Binding's chat triggers and prints what each message
 would become, oldest first, and then a summary. It only reads Slack; it posts nothing and changes nothing.
 
-  --config <dir>        the resource files, loaded as the broker loads them: defaults, presets and validation apply
+  --config <dir>        the resource files, loaded as the broker loads them: defaults and validation apply
                         (default: $AGENTKOURIER_CONFIG_DIR)
   --binding <ns/name>   the Binding whose triggers to run
   --channel <id>        the channel to read (default: the Binding's chat.channel)

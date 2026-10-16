@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 )
 
 const (
@@ -22,15 +23,9 @@ const (
 	leadPrefix = "The message that triggered this"
 )
 
-// presetTrigger returns the alertmanager preset as a Binding gets it at load.
-func presetTrigger(t *testing.T) v1alpha1.Trigger {
-	t.Helper()
-	var b v1alpha1.Binding
-	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{
-		Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0123456789"}, Preset: v1alpha1.PresetAlertmanager,
-	}}
-	b.Default()
-	return b.Spec.Chat.Triggers[0]
+// alertmanagerTrigger returns the Alertmanager trigger the how-to documents, written in full.
+func alertmanagerTrigger() v1alpha1.Trigger {
+	return chattest.AlertmanagerTrigger("B0123456789")
 }
 
 // sample is a message as the intake will hand it over: the fields by name.
@@ -58,7 +53,7 @@ func (s sample) view(t *testing.T, tr v1alpha1.Trigger) v1alpha1.PromptView {
 	}
 	return v1alpha1.PromptView{
 		Channel: testChannel, State: fields["state"], Key: fields["key"], Link: testLink,
-		Source: tr.Preset, Fields: fields,
+		Source: string(v1alpha1.TriggerBotMessage), Fields: fields,
 	}
 }
 
@@ -72,7 +67,7 @@ var (
 		v1alpha1.FieldText:      "*KubePodCrashLooping* - critical\nPod default/web-0 (nginx) is restarting 4.20 times / 10 minutes.\n",
 		v1alpha1.FieldFooter:    "agent-kourier-key: KubePodCrashLooping/default",
 	}
-	// kindHostile matches the preset like a real alert, and carries a message that tries to close
+	// kindHostile matches the Alertmanager trigger like a real alert, and carries a message that tries to close
 	// the block, in ASCII and in full-width brackets, and to give the agent orders.
 	kindHostile = sample{
 		v1alpha1.FieldTitle:     "[kind] FIRING (1) - KubePodCrashLooping",
@@ -98,7 +93,7 @@ func newPrompt(t *testing.T, text string) *Prompt {
 // simpleView is a view with a clean alertname, for tests of the message and the caps.
 func simpleView() v1alpha1.PromptView {
 	return v1alpha1.PromptView{
-		Channel: testChannel, State: "FIRING", Key: "KubePodCrashLooping", Link: testLink, Source: "alertmanager",
+		Channel: testChannel, State: "FIRING", Key: "KubePodCrashLooping", Link: testLink, Source: "botMessage",
 		Fields: map[string]string{"alertname": "KubePodCrashLooping", "state": "FIRING", "key": "KubePodCrashLooping default"},
 	}
 }
@@ -106,7 +101,7 @@ func simpleView() v1alpha1.PromptView {
 const simpleTemplate = "Investigate {{ .Fields.alertname }}."
 
 func TestPromptGolden(t *testing.T) {
-	tr := presetTrigger(t)
+	tr := alertmanagerTrigger()
 	p := newPrompt(t, tr.PromptTemplate)
 	for _, tt := range []struct {
 		name string
@@ -469,7 +464,7 @@ func TestPromptFieldCheck(t *testing.T) {
 		{name: "source with markup", text: "{{ .Source }}", set: func(v *v1alpha1.PromptView) { v.Source = "<b>" }, ref: "Source", want: "has characters outside the allowed set"},
 
 		// Key: the same, and "/" for a key such as alertname/namespace. The group label values of
-		// the alertmanager preset's key hold spaces, so a template reading .Key is refused for them.
+		// the Alertmanager trigger's key hold spaces, so a template reading .Key is refused for them.
 		{name: "key with a slash", text: "{{ .Key }}", set: func(v *v1alpha1.PromptView) { v.Key = "KubePodCrashLooping/default" }, shows: "KubePodCrashLooping/default"},
 		{name: "key of 128 bytes", text: "{{ .Key }}", set: func(v *v1alpha1.PromptView) { v.Key = strings.Repeat("k", 128) }, shows: strings.Repeat("k", 128)},
 		{name: "key with a space", text: "{{ .Key }}", set: func(v *v1alpha1.PromptView) { v.Key = "KubePodCrashLooping default" }, ref: "Key", want: "has characters outside the allowed set"},
@@ -805,9 +800,9 @@ func TestPromptParsesLikeTheLoadCheck(t *testing.T) {
 	if loadErr == nil || err == nil || !strings.Contains(err.Error(), loadErr.Error()) {
 		t.Errorf("NewPrompt error = %v, want it to hold the parser's error %v", err, loadErr)
 	}
-	tr := presetTrigger(t)
+	tr := alertmanagerTrigger()
 	if _, err := NewPrompt("promptTemplate", tr.PromptTemplate); err != nil {
-		t.Errorf("the preset's template does not parse: %v", err)
+		t.Errorf("the Alertmanager trigger's template does not parse: %v", err)
 	}
 }
 

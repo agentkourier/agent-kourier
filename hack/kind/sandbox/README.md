@@ -154,11 +154,18 @@ may decide before a later bad group is reached.
 
 | Piece | What |
 |---|---|
-| Faults | Namespace `shop`: six small Deployments (below). |
-| Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
-| Agent | `sandbox-sre` (`agent.yaml`), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
+| Faults | Namespace `shop`: six small Deployments (below), from the recipe's [`faults.yaml`](../../../examples/recipes/sre-triage/agent/faults.yaml). |
+| Tool server | A second Helm release, `sandbox-tools` (kagent-tools 0.3.0, pinned, image by digest; the recipe's [`tools-values.yaml`](../../../examples/recipes/sre-triage/agent/tools-values.yaml) and [`tools-rbac.yaml`](../../../examples/recipes/sre-triage/agent/tools-rbac.yaml)), in `kagent`. The full tier's own kagent release keeps `kagent-tools: enabled: false` and is not touched. |
+| Agent | `sandbox-sre` ([`agent.yaml`](../../../examples/recipes/sre-triage/agent/agent.yaml), in the `sre-triage` recipe), a `ModelConfig` for `MODEL_PROVIDER`, the API key in the Secret `sandbox-model`. |
 | Agent Kourier | `agent-kourier-sandbox` in namespace `agent-kourier`, a Helm release of the chart (`charts/agent-kourier` with `ci/sandbox-values.yaml`, as release `agent-kourier-sandbox`: its Deployment, ServiceAccount, Role and volume), the production image `agent-kourier:dev`, a ChatConnection on Socket Mode (Secret `sandbox-slack`), one Binding: `SLACK_CHANNEL_ID` to `sandbox-sre`, output live, `askUser` on (and, only with the alert webhook file, a second one on the alert channel; see "Run the alert trial"), through the full tier's AgentBackend (the verifying front door, port 4180). Its pod carries the `app.kubernetes.io/name=agent-kourier` label the front door's NetworkPolicy trusts, and `app.kubernetes.io/instance=agent-kourier-sandbox`, which the full tier's Agent Kourier (release `agent-kourier`) does not. Its own SQLite volume. Its config is a ConfigMap `up.sh` makes (`agent-kourier-sandbox-config`, with your channel IDs); its Slack tokens and the Dex client's credentials are Secrets in `agent-kourier`. The full tier's `agent-kourier` goes to zero replicas meanwhile. |
 | Token refresh | A CronJob, `agent-kourier-sandbox-token-refresh` (the chart's `tokenRefresh`), every hour (below). |
+
+The agent half of this tier (`sandbox-sre`, its prompt, its tool server and the seeded faults) is the one the
+[`sre-triage` recipe](../../../examples/recipes/sre-triage/README.md) owns, in `examples/recipes/sre-triage/agent/`;
+`up.sh` and `down.sh` apply and remove it from there, so there is one copy. What stays in this directory is the tier's
+own plumbing: the model configurations, the secrets file, the Slack app, the Agent Kourier config in `agent-kourier/`
+(a mention-triggered Binding on your sandbox channel, a Dex token and the full tier's front door) and the alert source.
+The recipe's own `kourier/` directory is a different config, for an alert channel, and this tier does not apply it.
 
 **The seeded faults**, in `shop`: `checkout` crash-loops after logging `FATAL: cannot resolve payments-db...`; `catalog` has a
 bad image tag (ImagePullBackOff); `recommender` is OOM killed at its 48Mi limit; `inventory`'s Service selects pods that
@@ -194,15 +201,15 @@ model configuration and Secret are updated.
 ### The model prompt and reapply steps
 
 The demo agent's system instructions are the `systemPrompt` key in
-[`agent-prompt.yaml`](agent-prompt.yaml), the `kagent/sandbox-sre-prompt` ConfigMap. `agent.yaml` selects that
+[`agent-prompt.yaml`](../../../examples/recipes/sre-triage/agent/agent-prompt.yaml), the `kagent/sandbox-sre-prompt` ConfigMap. `agent.yaml` selects that
 ConfigMap key with `spec.template.systemPromptFrom`. This prompt describes a read-only agent; it does not grant
 Kubernetes access. Keep the read-only tools and instructions when editing it.
 
 After changing `data.systemPrompt`, apply the ConfigMap and then the Agent so kagent compiles the new prompt revision:
 
 ```
-kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent-prompt.yaml
-kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f examples/recipes/sre-triage/agent/agent-prompt.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f examples/recipes/sre-triage/agent/agent.yaml
 ```
 
 `make sandbox-up` applies both files as part of its normal setup and is safe to re-run; the two commands above are the
@@ -339,7 +346,7 @@ kubectl --context $CTX -n monitoring exec alertmanager-agent-kourier-0 -c alertm
 kubectl --context $CTX -n monitoring logs alertmanager-agent-kourier-0 -c alertmanager | grep -i -e notify -e slack   # a failed post says why; Alertmanager takes the URL out of its errors
 ```
 
-A routed alert lists the receivers `monitoring/sink/sink` and `slack-critical-kind`. If nothing reaches Slack: the alert is not `severity=critical` (only the presets are fired, and they all are), the
+A routed alert lists the receivers `monitoring/sink/sink` and `slack-critical-kind`. If nothing reaches Slack: the alert is not `severity=critical` (only the sample alerts are fired, and they all are), the
 webhook was revoked (Slack answers an error, the log says so; put a new URL in the file and re-run `make sandbox-up`, which rewrites the Secret, and the next post uses it), or the pod has
 not come back after a `make sandbox-up` (`kubectl --context $CTX -n monitoring get pods`).
 
@@ -349,7 +356,7 @@ not come back after a `make sandbox-up` (`kubectl --context $CTX -n monitoring g
 outcome the intake would give it, the trigger, and what the trigger extracted. Use it to tune `match`, `exclude` and `extract` against real history
 before going live. It **only reads** Slack (`conversations.history`): it posts nothing, starts no session, writes nothing, and needs no cluster.
 
-**What it runs.** It loads the config directory with the same loader as the broker, so the defaults, the `alertmanager` preset and the validation apply as
+**What it runs.** It loads the config directory with the same loader as the broker, so the defaults and the validation apply as
 in production. It reads the channel with the bot token, decodes each message with the code that decodes a live event (the first attachment is flattened into
 `title`, `titleLink`, `fallback`, `footer` and `attachmentText`), and runs the intake's own matcher over it. The two Bindings below are in
 `hack/kind/sandbox/dryrun/`; they set the channel to your alert channel and the bot to the webhook's (`B0123456789`), and differ in one line.
@@ -358,7 +365,7 @@ in production. It reads the channel with the bot token, decodes each message wit
 among other lines, so the sandbox's own secrets file works as it is. It is refused unless it is a regular file, not a link, that the group and others cannot read (`chmod 600`).
 The bot needs `channels:history` (`groups:history` for a private channel) and must be a member of the channel; the manifest has both scopes.
 
-**Run it, twice**, from the repo root, against the real channel. First with the trial overrides, which match only the kind receiver:
+**Run it, twice**, from the repo root, against the real channel. First with the trial Binding, which matches only the kind receiver:
 
 ```
 go run ./cmd/agent-kourier dry-run --config hack/kind/sandbox/dryrun --binding agent-kourier/trial \
@@ -373,7 +380,7 @@ go run ./cmd/agent-kourier dry-run --config hack/kind/sandbox/dryrun --binding a
 ```
 
 The two Bindings differ only in `match: {titleLink: ...}`: `receiver=slack-critical-kind$` in `trial.yaml` and `receiver=slack-critical$` in `production.yaml`. Copy one and edit its
-`match`, `exclude` and `extract` to try a change; the preset's entries stay unless the file sets the same field. Options: `--channel C...` reads another channel, `--since 72h` only the newer
+`match`, `exclude` and `extract` to try a change. Options: `--channel C...` reads another channel, `--since 72h` only the newer
 messages, `--limit 50` only the newest 50 of what was read (reading is not cut short, so use `--since` to read less), and `--json` prints one JSON report for `jq`.
 
 **A line per message, oldest first:**
@@ -422,10 +429,10 @@ A second Binding, `agent-kourier/alert-trial` (`agent-kourier/alert-trial/alert-
 
 | | |
 |---|---|
-| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the `alertmanager` preset, and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
+| Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the Alertmanager trigger written in full (title, fallback, extracts, thread rules, prompt), and `match: {titleLink: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
 | What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
 | Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
-| Limits | The `alertmanager` preset's: 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
+| Limits | 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
 | The channel | The constant `ALERT_CHANNEL_ID` in `webhook.sh`, checked by `make sandbox-up` before it touches anything (a channel ID, and not `SLACK_CHANNEL_ID`: two Bindings cannot share a channel). A test keeps it equal to the dry run's channel. |
 
 Agent Kourier receives every message of the channel over Socket Mode, because it is a member, and acts on none but the matching ones. A person's reply in a thread Agent Kourier started continues that thread's
@@ -478,7 +485,7 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
 4. **Resolve.** `make sandbox-alert ALERT=KubePodCrashLooping STATE=resolved`. The resolve is posted within about 30 seconds (`[kind] RESOLVED - KubePodCrashLooping`), and the thread gets a **"Resolved at" note**: no turn. Resolve
    before checkout's pod is replaced, as the "Alert trial" section says. An alert you forget ends by itself an hour after it fired, which posts the same resolve.
 
-5. **Fire the other presets**, one at a time: `KubePodNotReady`, `KubeContainerWaiting`, `KubeContainerOOMKilled`, `TargetDown`. Each has its own alert name, so its own key and **a separate thread** and investigation, which finds
+5. **Fire the other sample alerts**, one at a time: `KubePodNotReady`, `KubeContainerWaiting`, `KubeContainerOOMKilled`, `TargetDown`. Each has its own alert name, so its own key and **a separate thread** and investigation, which finds
    its own fault (`search`'s probe, `catalog`'s image, `recommender`'s OOM kill, `inventory`'s Service with no endpoints). Resolve each when you are done.
 
 **Where to look**

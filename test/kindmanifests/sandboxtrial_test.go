@@ -114,24 +114,50 @@ func TestTrialBindingHasNoMentionTrigger(t *testing.T) {
 	}
 }
 
-// TestTrialBindingMatchesOnlyTheKindReceiver: the match on the title link is exactly the anchored kind receiver, and what the preset supplies is not
-// overridden away (the title and the fallback still have to look like Alertmanager's).
+// TestTrialBindingMatchesOnlyTheKindReceiver: the match on the title link is exactly the anchored kind receiver, and the title and the fallback still have to look like
+// Alertmanager's, as the Alertmanager trigger writes them.
 func TestTrialBindingMatchesOnlyTheKindReceiver(t *testing.T) {
 	b, _ := trialBinding(t)
 	tr := b.Spec.Chat.Triggers[0]
 	if got := tr.Match[v1alpha1.FieldTitleLink]; got != trialReceiver {
 		t.Errorf("match titleLink = %q; want exactly %q (anchored: without the $, receiver=slack-critical-kind is the only one, but a longer name would match too)", got, trialReceiver)
 	}
-	if tr.Preset != v1alpha1.PresetAlertmanager {
-		t.Errorf("preset %q; want %q", tr.Preset, v1alpha1.PresetAlertmanager)
+	if !isAlertmanagerTrigger(tr, heartbeatExclude) {
+		t.Errorf("the trigger is not the Alertmanager trigger written in full, with only the heartbeat excluded: %+v", tr)
 	}
-	for _, f := range []v1alpha1.MessageField{v1alpha1.FieldTitle, v1alpha1.FieldFallback} {
-		if tr.Match[f] == "" {
-			t.Errorf("match has no %s entry: the preset's must stay", f)
+	if l := tr.Limits; !limitsAreTheExamples(l) {
+		t.Errorf("limits %+v (rate %+v); want the example's: 5 in 10m, 2 at once, 40 a day", l, l.RateLimit)
+	}
+}
+
+// TestDryRunBindingsAreTheAlertmanagerTriggerForTheirReceiver: the two Bindings the sandbox README has the owner replay
+// a channel through differ only in the receiver they take, so each is the Alertmanager trigger in full, with the
+// example's limits and the heartbeat excluded.
+func TestDryRunBindingsAreTheAlertmanagerTriggerForTheirReceiver(t *testing.T) {
+	set, err := config.Load(t.Context(), sandboxDir+"dryrun")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receivers := map[string]string{"trial": trialReceiver, "production": `receiver=slack-critical$`}
+	if len(set.Bindings) != len(receivers) {
+		t.Fatalf("loaded %d Bindings; want %d", len(set.Bindings), len(receivers))
+	}
+	for _, b := range set.Bindings {
+		want, ok := receivers[b.Name]
+		if !ok {
+			t.Errorf("unexpected Binding %s", b.Name)
+			continue
 		}
-	}
-	if tr.Exclude[v1alpha1.FieldTitle] != `^Prometheus heartbeat$` {
-		t.Errorf("exclude title = %q; want the heartbeat's", tr.Exclude[v1alpha1.FieldTitle])
+		triggers := b.Spec.Chat.Triggers
+		if len(triggers) != 2 || triggers[0].Type != v1alpha1.TriggerMention || triggers[1].Type != v1alpha1.TriggerBotMessage {
+			t.Errorf("%s: triggers %+v; want a mention trigger and a botMessage trigger", b.Name, triggers)
+			continue
+		}
+		tr := triggers[1]
+		if !isAlertmanagerTrigger(tr, heartbeatExclude) || tr.From.BotID != trialBot || tr.Match[v1alpha1.FieldTitleLink] != want ||
+			!limitsAreTheExamples(tr.Limits) {
+			t.Errorf("%s: trigger %+v; want the Alertmanager trigger for %s with the receiver %q, the heartbeat excluded and the example's limits", b.Name, tr, trialBot, want)
+		}
 	}
 }
 

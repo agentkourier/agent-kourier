@@ -1,0 +1,26 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: first, namespace: recipe }
+spec:
+  agent:
+    backendRef: { name: agents }
+    name: first
+    namespace: recipe
+  identity: { userId: agent-kourier-first }
+  chat:
+    connectionRef: { name: slack }
+    channel: CREPLACEME
+---
+# The second document of the file: its backend does not exist.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: helper, namespace: recipe }
+spec:
+  agent:
+    backendRef: { name: agnts }
+    name: helper
+    namespace: recipe
+  identity: { userId: agent-kourier-helper }
+  chat:
+    connectionRef: { name: slack }
+    channel: CREPLACEMETOO

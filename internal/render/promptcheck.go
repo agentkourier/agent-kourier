@@ -80,7 +80,7 @@ func checkName(s string) Reason { return checkShape(s, maxNameBytes, "_.-:") }
 
 // checkKey is the rule of Key: the alert-name shape and "/", as in "alertname/namespace", at
 // most 128 bytes. It allows no space, so a key made of group label values ("KubePodCrashLooping
-// payments", as the alertmanager preset extracts) is refused if a template reads .Key: such a
+// payments", as the Alertmanager example extracts) is refused if a template reads .Key: such a
 // template should read the entries it needs from .Fields.
 func checkKey(s string) Reason { return checkShape(s, maxKeyBytes, "_.-:/") }
 

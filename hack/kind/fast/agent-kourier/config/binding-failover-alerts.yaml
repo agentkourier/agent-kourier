@@ -23,8 +23,22 @@ spec:
     triggers:
       - type: botMessage
         from: {botId: B0S16ALERT1}
-        preset: alertmanager
-        match: {titleLink: 'receiver=slack-critical-kind$'}
+        match:
+          titleLink: 'receiver=slack-critical-kind$'
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
+        extract:
+          state: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)'}
+          key: {field: fallback, regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])'}
+          alertname: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
         limits:
           rateLimit: {maxRuns: 3, per: 10s, maxConcurrent: 20}
           maxRunsPerDay: 0
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.

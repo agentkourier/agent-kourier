@@ -37,12 +37,12 @@ const (
 	// ChannelS13 is S13's: scenario-tools, whose reply has two tool calls, the second of them failing. Both tiers:
 	// the full tier's kagent has the agent, with a tool server of its own to call.
 	ChannelS13 = "CS13"
-	// ChannelS14 is S14's: scenario-alert, behind a botMessage trigger with the alertmanager preset for the bot BotS14.
+	// ChannelS14 is S14's: scenario-alert, behind a botMessage trigger written as the Alertmanager trigger for the bot BotS14.
 	// The fast tier only: the full tier's kagent has no such agent.
 	ChannelS14 = "CS14"
 	// BotS14 is the bot ID S14's alerts are posted as, which the Binding's trigger names (never a display name, D36).
 	BotS14 = "B0S14ALERT1"
-	// ChannelS15 is S15's: scenario-alert behind a botMessage trigger with the alertmanager preset for the bot BotS15, whose
+	// ChannelS15 is S15's: scenario-alert behind a botMessage trigger written as the Alertmanager trigger for the bot BotS15, whose
 	// limits are three starts in 10 seconds. The fast tier only, as S14's.
 	ChannelS15 = "CS15"
 	// BotS15 is the bot ID S15's alerts are posted as.
@@ -67,7 +67,7 @@ const (
 
 // S17's channel and bot: the feedback buttons on an investigation an alert started.
 const (
-	// ChannelS17 is S17's: scenario-alert behind a botMessage trigger with the alertmanager preset for the bot BotS17. The fast
+	// ChannelS17 is S17's: scenario-alert behind a botMessage trigger written as the Alertmanager trigger for the bot BotS17. The fast
 	// tier only, as S14's.
 	ChannelS17 = "CS17"
 	// BotS17 is the bot ID S17's alerts are posted as.
@@ -76,7 +76,7 @@ const (
 
 // S18's channel and bot: a thread whose replies need a mention (chat.threadReplies: mention).
 const (
-	// ChannelS18 is S18's: scenario-context behind a mention trigger and a botMessage trigger with the alertmanager preset for the
+	// ChannelS18 is S18's: scenario-context behind a mention trigger and a botMessage trigger written as the Alertmanager trigger for the
 	// bot BotS18, with threadReplies mention. The fast tier only: the full tier's kagent has no such agent.
 	ChannelS18 = "CS18"
 	// BotS18 is the bot ID S18's alerts are posted as.
@@ -90,7 +90,7 @@ const (
 	ChannelS16 = "CS16"
 	// ChannelS16B is S16's case 2: test-agent, final output, for the crash-after-post fault.
 	ChannelS16B = "CS16B"
-	// ChannelS16C is S16's case 3: scenario-gated behind a botMessage trigger with the alertmanager preset for the bot BotS16,
+	// ChannelS16C is S16's case 3: scenario-gated behind a botMessage trigger written as the Alertmanager trigger for the bot BotS16,
 	// whose limits are three starts in 10 seconds.
 	ChannelS16C = "CS16C"
 	// BotS16 is the bot ID S16's alerts are posted as.

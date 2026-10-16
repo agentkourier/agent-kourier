@@ -350,7 +350,7 @@ func s16KillMidPost(t *testing.T) {
 }
 
 // stormAlertGated is S15's alert for S16's channel and bot, naming a gate in its detail line, which the gated agent takes from the prompt
-// (the preset puts the whole alert in it) and holds on.
+// (the trigger's prompt puts the whole alert in it) and holds on.
 func stormAlertGated(name, group, gate string) fakeslack.WebhookPost {
 	p := alertPost("FIRING", name, group)
 	p.Channel, p.BotID = ChannelS16C, BotS16

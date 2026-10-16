@@ -4,9 +4,9 @@ For a team whose alerts reach a Slack channel through a bot that is not Alertman
 trigger written in full reads that bot's posts, and each alert starts an agent investigation in its own thread.
 
 Agent Kourier accepts the messages of one bot per trigger, named by its Slack bot ID, and reads them with the regexes
-you give it. Only Alertmanager has a preset, and only Alertmanager is exercised in the sandbox and the end-to-end tests. For
-another bot you write what the preset would fill in: `match`, `extract`, `thread`, `limits` and `promptTemplate`.
-For Alertmanager, use [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md) instead.
+you give it. Only Alertmanager is exercised in the sandbox and the end-to-end tests. For any bot you write `match`,
+`extract`, `thread`, `limits` and `promptTemplate`. For Alertmanager, start from the worked trigger in
+[Investigate Alertmanager alerts](investigate-alertmanager-alerts.md) instead.
 
 ## Before you start
 
@@ -25,7 +25,9 @@ The example below is for a made-up message format, one line in `text`:
 [RESOLVED] DiskAlmostFull on node-7: /var is 61% full
 ```
 
-Replace the regexes with ones that fit your bot's messages.
+Replace the regexes with ones that fit your bot's messages. The
+[`custom-bot-trigger` recipe](recipes.md#start-investigations-from-a-ci-bots-failure-posts) is a complete Binding of
+this kind, with its AgentBackend, ChatConnection and checks.
 
 ```yaml
   chat:
@@ -71,7 +73,9 @@ Replace the regexes with ones that fit your bot's messages.
    extract does not match does not match the trigger.
 5. Messages with the same `key` share one thread. A fire while the thread is open, or within the cooldown, adds a note and reopens a closed thread; a message whose `state`
    is `RESOLVED` closes the thread with a note. Neither starts a turn.
-6. Without a preset, a trigger with no `limits` is unlimited. These are the values the Alertmanager preset uses.
+6. Required: a `botMessage` trigger without `limits.rateLimit` (all of `maxRuns`, `per` and `maxConcurrent`) or without
+   `limits.maxRunsPerDay` does not load. These are the values of the Alertmanager example; `maxRunsPerDay: 0` is no
+   daily cap, and has to be written to be chosen.
 7. The first turn's prompt. Read extracted values through `.Fields`: a value the template reads must be name-shaped
    (letters, digits, `_.-:`), and the key here holds spaces, so a template that reads `.Key` loads, but every alert's prompt is refused when it renders: a "Not investigated" note, and no turn.
 

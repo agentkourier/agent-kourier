@@ -1,0 +1,13 @@
+# Same name as a Binding in bindings.yaml, in another namespace, with its own broken reference.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: helper, namespace: other }
+spec:
+  agent:
+    backendRef: { namespace: recipe, name: agents }
+    name: helper
+    namespace: recipe
+  identity: { userId: agent-kourier-other }
+  chat:
+    connectionRef: { name: slak }
+    channel: CREPLACEMEALSO

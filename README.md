@@ -57,8 +57,8 @@ a note there.
   agent task with the answer.
 - **Alerts become conversations.** A `botMessage` trigger reads the alerts a bot
   posts to the channel, named by its bot ID, and starts an investigation in each
-  alert's thread, with a cooldown per alert, a rate limit and a daily cap. A preset
-  fills it in for Alertmanager; another bot's trigger is written in full. Agent
+  alert's thread, with a cooldown per alert, a rate limit and a daily cap. Every
+  trigger is written in full, and the docs have a worked one for Alertmanager. Agent
   Kourier only reads what is already posted, so your alerts arrive as before, whether or
   not Agent Kourier is running.
 - **Any streaming A2A backend.** A kagent agent, an agent running in Google AX and any
@@ -173,39 +173,25 @@ accepts requests only from its owner.
 and store an issued token, including a Dex example. Agent Kourier does not create accounts or mint tokens.
 
 To have the agent investigate the alerts a bot posts to that channel, list the
-triggers in the Binding's `chat` block. The example below is for Alertmanager, the one
-alert source with a preset; for another bot, write the trigger's `match`, `extract`
-and prompt template yourself, as
-[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows. `botId`
-is the `bot_id` carried by the alert
+triggers in the Binding's `chat` block. A `botMessage` trigger is written in full: its
+`match` and `extract` regexes, `thread` rules, `limits` and `promptTemplate`. It must set
+`limits`, both `rateLimit` and `maxRunsPerDay`, or the Binding does not load.
+[Investigate Alertmanager alerts](docs/how-to/investigate-alertmanager-alerts.md) has a
+complete trigger for Alertmanager's Slack receiver, with a comment on each regex;
+[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows how to write
+one for another bot. `botId` is the `bot_id` carried by the alert
 messages themselves, which starts with `B`. It is not the Slack app ID, which starts
 with `A`, and Agent Kourier rejects a name. The dry run in the
 [sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is
-one way to read it. The `alertmanager` preset supplies the matching, the thread
-rules, the limits and the prompt, and the [trigger reference](docs/reference/chat-triggers.md) has
-the fields a Binding can override.
+one way to read it. The [trigger reference](docs/reference/chat-triggers.md) has
+the fields.
 
-```yaml
-  chat:
-    connectionRef:
-      namespace: agent-kourier-system
-      name: slack
-    channel: C0123456789
-    output: live
-    triggers:
-      - type: mention
-      - type: botMessage
-        from:
-          botId: B0123456789
-        preset: alertmanager
-```
-
-The preset matches one message shape, and a message of another shape starts no
+The Alertmanager trigger matches one message shape, and a message of another shape starts no
 investigation. It needs a title that reads `FIRING (n) - <alertname>` or
 `RESOLVED - <alertname>` (optionally behind a bracketed tag such as `[prod] `), and Alertmanager's default fallback
 text, which begins `[FIRING:n]`. Alertmanager's default Slack title begins `[FIRING:1]` too, so a
 receiver that keeps the default title does not match. Either set the receiver's
-title to the shape above, or override the preset's `match` and `extract` entries for
+title to the shape above, or change the trigger's `match` and `extract` regexes for
 your own template.
 
 These are **configuration files**, loaded from
@@ -225,8 +211,8 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text | Implemented |
 | Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
-| Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, `alertmanager` preset) | Implemented |
-| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; no preset, and not exercised in the sandbox or the end-to-end tests | Implemented |
+| Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
+| Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
 | Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, epoch fencing in Postgres and chat writes and agent sends fenced on the replica, a standby that takes over. The failover test (kill the leader mid-turn, mid-post and mid-storm, freeze it past its Lease) checks that every reply appears once; a call already in flight in a frozen leader can still repeat | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier

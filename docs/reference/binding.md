@@ -95,13 +95,12 @@ Trigger is one way an event in the bound channel starts or continues a turn. Tri
 |---|---|---|---|---|
 | `type` | string | Yes | None | Type is mention, a person @mentioning Agent Kourier, or botMessage, a message a bot posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare on as the boolean true, and the loader's decoder follows it. One of `mention`, `botMessage`. |
 | `from` | [BotSource](#botsource) | No | None | From names the bot a botMessage trigger accepts. Required for botMessage. |
-| `preset` | string | No | None | Preset fills in match, extract, thread, limits and promptTemplate for a known sender. What the Binding sets itself overrides the preset field by field: a match, exclude or extract entry replaces the preset's entry of that name, and each part of thread and limits replaces the preset's. One of `alertmanager`. |
-| `match` | map[string]string | No | From preset, if set | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
-| `exclude` | map[string]string | No | From preset, if set | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
-| `extract` | map[string][Extract](#extract) | No | From preset, if set | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. |
-| `thread` | [TriggerThread](#triggerthread) | No | From preset, if set | Thread ties messages that share an extracted key to one thread. |
-| `promptTemplate` | string | No | From preset, if set | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage, directly or from the preset. |
-| `limits` | [TriggerLimits](#triggerlimits) | No | From preset, if set | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). What the Binding leaves out comes from the preset; a trigger with no preset and no limits is unlimited. |
+| `match` | map[string]string | No | None | Match maps a message field to a regex it must match. Every entry must match. Keys: `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
+| `exclude` | map[string]string | No | None | Exclude maps a message field to a regex; a message matching any entry is ignored. Keys: `text`, `title`, `titleLink`, `fallback`, `footer`, `attachmentText`. |
+| `extract` | map[string][Extract](#extract) | No | None | Extract names the values to pull out of a message. A message in which one of these regexes does not match does not match the trigger. |
+| `thread` | [TriggerThread](#triggerthread) | No | None | Thread ties messages that share an extracted key to one thread. |
+| `promptTemplate` | string | No | None | PromptTemplate is a Go template over the trigger's view of the message (.Channel, .State, .Key, .Fields, .Link, .Source). Required for botMessage. |
+| `limits` | [TriggerLimits](#triggerlimits) | No | None | Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required for botMessage: both rateLimit and maxRunsPerDay. |
 
 ## BotSource
 
@@ -126,19 +125,19 @@ TriggerThread decides which thread a message joins and when it closes the thread
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `by` | string | No | From preset, if set | By is key: messages with the same extracted "key" share a thread. One of `key`. |
-| `cooldown` | duration | No | From preset, if set | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. |
-| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for the preset's 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. |
-| `closeWhen` | map[string]string | No | From preset, if set | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. |
+| `by` | string | No | None | By is key: messages with the same extracted "key" share a thread. One of `key`. |
+| `cooldown` | duration | No | None | Cooldown is how long after a turn the same key starts no new turn. Required with by, and between 1m and 168h. |
+| `maxIdle` | duration | No | Larger of `24h` and twice the cooldown | MaxIdle is how long an open thread may go without a message of its key before Agent Kourier counts it abandoned, so that the key's next fire starts a new investigation instead of a note. It covers a resolve that never arrived. It needs by, is at least twice the cooldown, and is at most 720h; unset means the larger of 24h and twice the cooldown. It must be longer than the sender's repeat interval (Alertmanager's repeat_interval): an alert that keeps firing repeats at that interval, and a maxIdle shorter than it counts a live alert abandoned between two repeats and starts a second investigation for it. Twice the cooldown covers that only for a 4h cooldown against Alertmanager's 4h repeat_interval; a longer repeat_interval needs a maxIdle set above it. |
+| `closeWhen` | map[string]string | No | None | CloseWhen maps an extracted field to the value that closes the thread: Agent Kourier posts a note and starts no turn. Every entry must equal. |
 
 ## TriggerLimits
 
-TriggerLimits bounds how many investigations a botMessage trigger starts: a rate limit over a window and a cap for a day. The preset supplies the defaults, so a Binding sets only what it changes. Only a start is limited: a repeat, a close and a note never are.
+TriggerLimits bounds how many investigations a botMessage trigger starts: a rate limit over a window and a cap for a day. A botMessage trigger sets both. Only a start is limited: a repeat, a close and a note never are.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `rateLimit` | [RateLimit](#ratelimit) | No | From preset, otherwise unlimited | RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once. What the Binding leaves out of it comes from the preset, field by field. |
-| `maxRunsPerDay` | integer | No | From preset, otherwise no cap | MaxRunsPerDay caps starts in any 24 hours. An explicit 0 means no cap; leaving it out takes the preset's cap. Minimum 0. |
+| `rateLimit` | [RateLimit](#ratelimit) | No | None | RateLimit allows MaxRuns starts in any window of Per, and MaxConcurrent investigations running at once. Required for a botMessage trigger, with all three fields set. |
+| `maxRunsPerDay` | integer | No | None | MaxRunsPerDay caps starts in any 24 hours. Required for a botMessage trigger: an explicit 0 means no cap. Minimum 0. |
 
 ## RateLimit
 
@@ -146,9 +145,9 @@ RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `maxRuns` | integer | Yes | From preset, if set | Minimum 1. |
-| `per` | duration | Yes | From preset, if set | Per is the window length. |
-| `maxConcurrent` | integer | Yes | From preset, if set | Minimum 1. |
+| `maxRuns` | integer | Yes | None | Minimum 1. |
+| `per` | duration | Yes | None | Per is the window length. |
+| `maxConcurrent` | integer | Yes | None | Minimum 1. |
 
 ## Interactions
 

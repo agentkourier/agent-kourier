@@ -1,0 +1,10 @@
+# A quality scenario of sre-triage, as data. The shape is provisional: nothing runs it yet, and a runner will fix it.
+# The Deployment `checkout` of ../../agent/faults.yaml is the case; a person reads the agent's answer against `cause` and `evidence`.
+name: checkout crashes at start
+app: checkout
+alert: KubePodCrashLooping
+cause: 'checkout cannot resolve its dependency payments-db.shop.svc.cluster.local (no such host), logs a FATAL line and exits 1, so the container restarts in a loop. No Service called payments-db exists in shop.'
+evidence:
+  - 'the pod waits in CrashLoopBackOff with restarts counted'
+  - 'the log line FATAL: cannot resolve payments-db.shop.svc.cluster.local: no such host; refusing to start'
+  - 'there is no payments-db Service in shop'

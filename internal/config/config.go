@@ -178,17 +178,9 @@ func decode[T any, PT interface {
 	Validate() error
 }](j []byte, dst *[]T) []error {
 	obj := new(T)
-	strict, err := kjson.UnmarshalStrict(j, obj, kjson.DisallowUnknownFields)
+	errs, err := strictDecode(j, obj)
 	if err != nil {
 		return []error{err}
-	}
-	var errs []error
-	for _, e := range strict {
-		var fe kjson.FieldError
-		if errors.As(e, &fe) {
-			e = fmt.Errorf("%s: unknown field", fe.FieldPath())
-		}
-		errs = append(errs, e)
 	}
 	PT(obj).Default()
 	if err := PT(obj).Validate(); err != nil {
@@ -198,6 +190,39 @@ func decode[T any, PT interface {
 		*dst = append(*dst, *obj)
 	}
 	return errs
+}
+
+// strictDecode decodes the JSON in j into obj and returns each unknown field as an error "path: unknown field".
+// The error result is set when j cannot be decoded at all, as with a value of the wrong type.
+func strictDecode(j []byte, obj any) (unknown []error, err error) {
+	strict, err := kjson.UnmarshalStrict(j, obj, kjson.DisallowUnknownFields)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range strict {
+		var fe kjson.FieldError
+		if errors.As(e, &fe) {
+			e = fmt.Errorf("%s: unknown field", fe.FieldPath())
+		}
+		unknown = append(unknown, e)
+	}
+	return unknown, nil
+}
+
+// DecodeStrict decodes the YAML in data into obj as the loader decodes a resource: a duplicate key is an
+// error, and so is every field obj does not have, reported as "path: unknown field". All the problems are
+// reported together, joined. It does not default or validate obj. Files that are not resources, such as a
+// recipe's evals, use it to refuse the same mistakes.
+func DecodeStrict(data []byte, obj any) error {
+	j, err := yaml.YAMLToJSONStrict(data)
+	if err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	unknown, err := strictDecode(j, obj)
+	if err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	return errors.Join(unknown...)
 }
 
 // flatten splits an errors.Join result into its parts.

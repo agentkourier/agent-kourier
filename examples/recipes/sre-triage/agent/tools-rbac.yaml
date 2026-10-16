@@ -1,7 +1,7 @@
-# What the sandbox tool server may do in the cluster: what the built-in `view` ClusterRole allows, which is get, list
+# What the tool server may do in the cluster: what the built-in `view` ClusterRole allows, which is get, list
 # and watch on most namespaced resources, pod logs and events included, and no Secrets and no writes.
 # Cluster-wide, so the agent can see the nodes and the system namespaces when a fault in shop points there.
-# Proved by `kubectl auth can-i` in up.sh (create, delete and patch, and get on Secrets, as this ServiceAccount: all no).
+# Proved by `kubectl auth can-i` in hack/kind/sandbox/up.sh (create, delete and patch, and get on Secrets, as this ServiceAccount: all no).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

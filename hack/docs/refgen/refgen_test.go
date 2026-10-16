@@ -354,7 +354,7 @@ func TestReaderTextStripsMaintainerReferences(t *testing.T) {
 		{"work package", "is decided by the loader (WP-21).", "is decided by the loader."},
 		{"work package with a note", "measured (WP-20c review).", "measured."},
 		{"phase", "on approval (Phase 5). Defaults", "on approval. Defaults"},
-		{"see an identifier", "field by field (see applyPreset).", "field by field."},
+		{"see an identifier", "field by field (see ParsePromptTemplate).", "field by field."},
 		{"see a qualified identifier", "twice the cooldown (see TriggerThread.EffectiveMaxIdle). It", "twice the cooldown. It"},
 		{"see a clause", "Empty means a mention; see defaultTriggers.", "Empty means a mention."},
 		{"ordinary parenthetical", "the default (store.type sqlite) or (sha256:...)", "the default (store.type sqlite) or (sha256:...)"},
@@ -376,7 +376,7 @@ func TestPagesCarryNoMaintainerReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := regexp.MustCompile(`\((?:spec [^)]*|D\d+[^)]*|R\d+|WP-[^)]*|Phase \d+|see [A-Za-z_][\w.]*)\)|\bWP-\d+|applyPreset|EffectiveMaxIdle|defaultTriggers|IsReservedHeader`)
+	ref := regexp.MustCompile(`\((?:spec [^)]*|D\d+[^)]*|R\d+|WP-[^)]*|Phase \d+|see [A-Za-z_][\w.]*)\)|\bWP-\d+|EffectiveMaxIdle|defaultTriggers|IsReservedHeader`)
 	for path, content := range files {
 		for _, m := range ref.FindAllString(string(content), -1) {
 			t.Errorf("%s shows the maintainer reference %q", path, m)

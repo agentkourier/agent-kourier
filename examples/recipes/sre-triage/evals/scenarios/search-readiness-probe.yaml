@@ -1,0 +1,10 @@
+# A quality scenario of sre-triage, as data. The shape is provisional: nothing runs it yet, and a runner will fix it.
+# The Deployment `search` of ../../agent/faults.yaml is the case; a person reads the agent's answer against `cause` and `evidence`.
+name: search is never ready
+app: search
+alert: KubePodNotReady
+cause: 'The readiness probe of search requests /ready, which its server answers with 404, so the pod runs but is never Ready and the Service search has no ready endpoints. The app itself is up.'
+evidence:
+  - 'the pod is Running with no restarts and is not Ready'
+  - 'the readiness probe is an HTTP GET on /ready and fails with 404 (the events or the pod description say so)'
+  - 'the log line search ready on :8080 shows the server started'

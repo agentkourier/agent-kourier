@@ -3,7 +3,7 @@
 For anyone who has finished [Your first agent in Slack](first-agent-in-slack.md): at the end, an alert lands in a
 Slack channel, and the agent investigates it in that alert's thread without anyone typing a prompt.
 
-The alerts in this tutorial come from Alertmanager, because the sandbox runs one, and Agent Kourier ships a preset for
+The alerts in this tutorial come from Alertmanager, because the sandbox runs one, and the docs have a worked trigger for
 its messages. Alertmanager is the example, not a requirement: Agent Kourier reads what a bot posts to the channel, and
 another tool's bot needs a trigger of its own (see
 [Start investigations from any bot's messages](../how-to/any-bot-trigger.md)).
@@ -136,7 +136,7 @@ Next:
 
 - [Investigate Alertmanager alerts](../how-to/investigate-alertmanager-alerts.md) sets this up on your own cluster,
   and [Start investigations from any bot's messages](../how-to/any-bot-trigger.md) does it for another alerting tool.
-- [Chat triggers](../reference/chat-triggers.md) lists what the `alertmanager` preset matches and how its threads,
+- [Chat triggers](../reference/chat-triggers.md) lists the fields of a `botMessage` trigger and how its threads,
   cooldown and limits work.
 - [Why a broker](../explanation/why-a-broker.md) explains why Agent Kourier reads alerts from Slack and stays out of
   the paging path.

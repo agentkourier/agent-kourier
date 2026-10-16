@@ -1,9 +1,9 @@
 # A dry-run Binding for the alert trial: your alert channel, replayed through the trial trigger.
 # `agent-kourier dry-run` (hack/kind/sandbox/README.md, "Tune triggers with a dry run") loads it with the real loader, so
-# the defaults and the alertmanager preset apply as they do in production. Nothing here is applied to a cluster, and
+# the defaults and the validation apply as they do in production. Nothing here is applied to a cluster, and
 # the references (backend, connection, Secret) are never resolved: only the channel and the triggers are used.
 #
-# The trial narrows the preset to the kind receiver. The $ anchors it: without it, receiver=slack-critical would
+# The trial takes only the kind receiver. The $ anchors it: without it, receiver=slack-critical would
 # also match receiver=slack-critical-kind.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -24,6 +24,23 @@ spec:
       - type: mention
       - type: botMessage
         from: {botId: B0123456789} # the incoming webhook's bot: Alertmanager's alerts, Grafana's and the heartbeat
-        preset: alertmanager
-        match: {titleLink: 'receiver=slack-critical-kind$'}
+        match:
+          titleLink: 'receiver=slack-critical-kind$'
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
         exclude: {title: '^Prometheus heartbeat$'}
+        extract:
+          state: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)'}
+          key: {field: fallback, regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])'}
+          alertname: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          maxRunsPerDay: 40
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.

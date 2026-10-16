@@ -76,6 +76,19 @@ func TestScanText(t *testing.T) {
 		{"webhookPath", "status.webhookPath holds it.\n", []string{"webhook-path"}},
 		{"the hook URL path", "POST to /hooks/alertmanager/web.\n", []string{"webhook-path"}},
 		{"spec.alerts", "Set spec.alerts to match.\n", []string{"spec-alerts"}},
+		{"the removed preset field", "Set preset: alertmanager on the trigger.\n", []string{"removed-preset"}},
+		{"the removed preset by name", "The alertmanager preset fills it in.\n", []string{"removed-preset"}},
+		{"the removed preset, capitalised", "An Alertmanager preset is not needed.\n", []string{"removed-preset"}},
+		{"the removed preset field, double-quoted", "Set `preset: \"alertmanager\"` on the trigger.\n", []string{"removed-preset"}},
+		{"the removed preset field, single-quoted", "Set preset: 'alertmanager' on the trigger.\n", []string{"removed-preset"}},
+		{"the removed preset by name, in backticks", "The `alertmanager` preset fills it in.\n", []string{"removed-preset"}},
+		{"the removed preset by name, quoted", "The \"alertmanager\" preset fills it in.\n", []string{"removed-preset"}},
+		{"the removed preset field, with a backticked key", "Set `preset`: alertmanager on the trigger.\n", []string{"removed-preset"}},
+		{"the removed preset, name after the noun", "Set the preset `alertmanager` on the trigger.\n", []string{"removed-preset"}},
+		{"the removed preset, name after the noun, plain", "The preset Alertmanager filled it in.\n", []string{"removed-preset"}},
+		{"the removed preset, name after the noun, quoted", "The preset \"alertmanager\" filled it in.\n", []string{"removed-preset"}},
+		{"a trigger preset and the field name alone are not the removed preset", "A trigger preset: `preset:` is not a field.\n", nil},
+		{"Alertmanager and a preset in different places are not the removed preset", "Alertmanager posts it. A preset of colours.\n", nil},
 		{"approverGroups", "Name `approverGroups`.\n", []string{"unbuilt-field"}},
 		{"toolApprovals", "Set toolApprovals: true.\n", []string{"unbuilt-field"}},
 		{"directMessages", "A ChatConnection with directMessages.\n", []string{"unbuilt-field"}},
@@ -321,6 +334,16 @@ func TestPublicFiles(t *testing.T) {
 		"hack/docs/overrides/main.html":           "<p/>\n",
 		"hack/docs/overrides/partials/logo.html":  "<p/>\n",
 		"hack/docs/overrides/partials/ignored.go": "package x\n",
+		// The recipes' READMEs and YAML files (kourier/ resources, evals) are public, at any depth; other files are not yet.
+		"examples/recipes/README.md":                "x\n",
+		"examples/recipes/sre/README.md":            "x\n",
+		"examples/recipes/sre/agent/README.md":      "x\n",
+		"examples/recipes/sre/kourier/binding.yaml": "WP-1\n",
+		"examples/recipes/sre/kourier/other.yml":    "WP-1\n",
+		"examples/recipes/sre/evals/triggers.yaml":  "WP-1\n",
+		"examples/recipes/sre/notes.md":             "WP-1\n",
+		"examples/recipes/sre/agent/main.go":        "package x // WP-1\n",
+		"examples/ax/README.md":                     "WP-1\n",
 		// Binary files are skipped.
 		"docs/assets/logo.png": "\x89PNG",
 		"docs/favicon.ico":     "\x00",
@@ -336,6 +359,8 @@ func TestPublicFiles(t *testing.T) {
 		"docs/_headers", "docs/assets/diagrams/map.svg", "docs/assets/film/captions.vtt", "docs/data.json",
 		"docs/how-to/a.md", "docs/how-to/brand/kept.md", "docs/index.md", "docs/notes.txt", "docs/page.html",
 		"docs/site.webmanifest", "docs/stylesheets/brand.css",
+		"examples/recipes/README.md", "examples/recipes/sre/README.md", "examples/recipes/sre/agent/README.md",
+		"examples/recipes/sre/evals/triggers.yaml", "examples/recipes/sre/kourier/binding.yaml", "examples/recipes/sre/kourier/other.yml",
 		"hack/docs/overrides/main.html", "hack/docs/overrides/partials/logo.html",
 	}
 	if !slices.Equal(got, want) {
@@ -611,6 +636,74 @@ func TestRunScansPublishedFilesThatAreNotMarkdown(t *testing.T) {
 	for _, want := range []string{"docs/assets/film/captions.vtt:4: wrong-claim", "hack/docs/overrides/main.html:1: home-path"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRunChecksTheRecipeREADMEs(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"mkdocs.yml":                       testMkdocs,
+		"api/v1alpha1/types.go":            apiTypes,
+		"README.md":                        "Fine.\n",
+		"charts/agent-kourier/README.md":   "Fine.\n",
+		"charts/agent-kourier/values.yaml": "# fine\n",
+		"docs/index.md":                    "# Home\n",
+		"examples/recipes/README.md":       "# Recipes\n[docs](../../docs/index.md) [gone](../../docs/gone.md)\n",
+		"examples/recipes/a/README.md":     "Tracked in WP-1.\n[up](../README.md#recipes) [bad](../README.md#nope)\n",
+		"examples/recipes/a/notes.md":      "WP-1 [gone](gone.md)\n", // not a README: not a public page
+	})
+	var out bytes.Buffer
+	if code := run(root, &out); code != 1 {
+		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
+	}
+	for _, want := range []string{
+		"examples/recipes/README.md:2: dead-link", "examples/recipes/a/README.md:1: ", "examples/recipes/a/README.md:2: dead-anchor",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "notes.md") || strings.Contains(out.String(), "recipes/README.md:1") {
+		t.Errorf("output names a file or line that is clean or not public:\n%s", out.String())
+	}
+	// An allowlist entry excuses a finding in a recipe README, and a stale one is still a finding.
+	writeTree(t, root, map[string]string{"hack/docs/contentcheck/allowlist.txt": "examples/recipes/README.md | dead-link | ../../docs/gone.md | an example of a dead link\n" +
+		"examples/recipes/a/README.md | dead-link | nothing.md | stale\n"})
+	out.Reset()
+	run(root, &out)
+	if strings.Contains(out.String(), "recipes/README.md:2") || !strings.Contains(out.String(), "matches nothing") {
+		t.Errorf("allowlist handling for a recipe README:\n%s", out.String())
+	}
+}
+
+func TestRunScansTheRecipeYAML(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"mkdocs.yml":                       testMkdocs,
+		"api/v1alpha1/types.go":            apiTypes,
+		"README.md":                        "Fine.\n",
+		"charts/agent-kourier/README.md":   "Fine.\n",
+		"charts/agent-kourier/values.yaml": "# fine\n",
+		"docs/index.md":                    "# Home\n",
+		// An eval pasted from a real conversation can carry a home path; a Binding can carry a plan ID.
+		"examples/recipes/a/evals/triggers.yaml":  "cases:\n  - name: x\n    message: {text: '/Users/someone/work'}\n",
+		"examples/recipes/a/kourier/binding.yaml": "# see WP-1\nkind: Binding\n",
+		"examples/recipes/a/kourier/clean.yaml":   "kind: Binding\n",
+		"examples/recipes/a/agent/not-scanned.go": "package x // WP-1\n",
+	})
+	var out bytes.Buffer
+	if code := run(root, &out); code != 1 {
+		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
+	}
+	for _, want := range []string{"examples/recipes/a/evals/triggers.yaml:3: home-path", "examples/recipes/a/kourier/binding.yaml:1: planning-id"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	for _, not := range []string{"clean.yaml", "not-scanned.go"} {
+		if strings.Contains(out.String(), not) {
+			t.Errorf("output names %s:\n%s", not, out.String())
 		}
 	}
 }

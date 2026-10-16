@@ -2,7 +2,7 @@
 # limits: the first three start an investigation each in their own thread, the rest start nothing and get no note, and
 # one digest line in the channel, when the window ends, says how many were not investigated. The window is the shortest
 # there is (10s) so the digest comes within a minute; the daily cap is explicitly off (0), so that runs of the scenario
-# on one cluster never meet the preset's 40 a day. The bot is named by its ID (D36), the receiver anchored as in S14's.
+# on one cluster never meet a daily cap of 40. The bot is named by its ID (D36), the receiver anchored as in S14's.
 # A channel of its own on the fake Slack; the identity token is the same Secret as fast-chat's. The channel, the bot and
 # the agent are pinned by test/kindmanifests and test/e2e/scenarios.go. Like S14 it runs in the fast tier only: the full
 # tier's kagent has no scenario-alert agent.
@@ -24,8 +24,22 @@ spec:
     triggers:
       - type: botMessage
         from: {botId: B0S15ALERT1}
-        preset: alertmanager
-        match: {titleLink: 'receiver=slack-critical-kind$'}
+        match:
+          titleLink: 'receiver=slack-critical-kind$'
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
+        extract:
+          state: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)'}
+          key: {field: fallback, regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])'}
+          alertname: {field: title, regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
         limits:
           rateLimit: {maxRuns: 3, per: 10s, maxConcurrent: 5}
           maxRunsPerDay: 0
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.

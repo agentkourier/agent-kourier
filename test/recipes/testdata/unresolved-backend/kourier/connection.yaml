@@ -1,0 +1,6 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: slack, namespace: recipe }
+spec:
+  platform: slack
+  credentialsSecretRef: { name: slack }

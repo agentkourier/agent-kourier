@@ -20,7 +20,7 @@ const (
 	rChannel = "C0ALERTS"
 )
 
-// runLimits is the preset's limits with a 10 minute window: five starts in it, two at a time, 40 a day.
+// runLimits is the Alertmanager example's limits with a 10 minute window: five starts in it, two at a time, 40 a day.
 var runLimits = store.TriggerRunLimits{MaxRuns: 5, Per: 10 * time.Minute, MaxConcurrent: 2, MaxPerDay: 40, DigestWindow: 10 * time.Minute}
 
 func opening(ts string, at time.Time) store.TriggerThread {

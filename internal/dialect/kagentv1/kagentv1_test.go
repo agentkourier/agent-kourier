@@ -66,15 +66,15 @@ func TestAuthenticate(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		creds      dialect.Credentials
-		preset     http.Header
+		existing   http.Header
 		wantAuth   string
 		wantUser   string
 		wantStatic string
 		wantErr    bool
 	}{
-		{name: "token wins and no X-User-Id", creds: bearer, preset: http.Header{"X-User-Id": {"old"}}, wantAuth: "Bearer " + canary},
+		{name: "token wins and no X-User-Id", creds: bearer, existing: http.Header{"X-User-Id": {"old"}}, wantAuth: "Bearer " + canary},
 		{name: "user id only", creds: dialect.Credentials{UserID: "agent-kourier-sre"}, wantUser: "agent-kourier-sre"},
-		{name: "stale identity headers are replaced", creds: dialect.Credentials{UserID: "agent-kourier-sre"}, preset: http.Header{"Authorization": {"Bearer old"}}, wantUser: "agent-kourier-sre"},
+		{name: "stale identity headers are replaced", creds: dialect.Credentials{UserID: "agent-kourier-sre"}, existing: http.Header{"Authorization": {"Bearer old"}}, wantUser: "agent-kourier-sre"},
 		{name: "static headers apply", creds: dialect.Credentials{UserID: "u", Headers: hdr("X-Team", "sre")}, wantUser: "u", wantStatic: "sre"},
 		{name: "no identity", creds: dialect.Credentials{}, wantErr: true},
 		{name: "static Authorization", creds: dialect.Credentials{Token: secret.New("t"), Headers: hdr("Authorization", canary)}, wantErr: true},
@@ -91,7 +91,7 @@ func TestAuthenticate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://fd/", http.NoBody)
-			for k, v := range tc.preset {
+			for k, v := range tc.existing {
 				req.Header[k] = v
 			}
 			before := req.Header.Clone()

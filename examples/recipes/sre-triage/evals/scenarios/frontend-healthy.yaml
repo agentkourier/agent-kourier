@@ -1,0 +1,10 @@
+# A quality scenario of sre-triage, as data. The shape is provisional: nothing runs it yet, and a runner will fix it.
+# The Deployment `frontend` of ../../agent/faults.yaml is the case; a person reads the agent's answer against `cause` and `evidence`.
+name: frontend is fine
+app: frontend
+question: 'Is anything wrong with the frontend in shop?'
+cause: 'Nothing is wrong with the frontend. A good answer says so, and says how it knows, and does not invent a fault.'
+evidence:
+  - 'the pod is Running and Ready with no restarts'
+  - 'its readiness probe on / passes'
+  - 'the Service frontend selects the pod and has an endpoint'

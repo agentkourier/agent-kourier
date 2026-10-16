@@ -110,7 +110,7 @@ func (h *triggered) noted() (kinds []session.NoticeKind, threads []string) {
 	return kinds, threads
 }
 
-// The life of one alert, as the preset reads it: the first fire starts the investigation in its own thread; a
+// The life of one alert, as the Alertmanager trigger reads it: the first fire starts the investigation in its own thread; a
 // fire again, inside the cooldown or not, while the alert has not resolved, is a note in that thread; the
 // resolve is a note and closes the thread; a fire again within the cooldown of the start is a note in the same
 // thread, and is no new investigation; one after the cooldown is.

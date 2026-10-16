@@ -1,0 +1,6 @@
+# The agent belongs in the recipe's agent/ directory: Load refuses it here.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata: { name: helper, namespace: recipe }
+spec:
+  type: Declarative

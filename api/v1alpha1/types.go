@@ -258,13 +258,10 @@ type ChatAcknowledgment struct {
 // RateLimit allows MaxRuns agent runs per window and MaxConcurrent at once.
 type RateLimit struct {
 	// +kubebuilder:validation:Minimum=1
-	// +doc:default=From preset, if set
 	MaxRuns int32 `json:"maxRuns"`
 	// Per is the window length.
-	// +doc:default=From preset, if set
 	Per metav1.Duration `json:"per"`
 	// +kubebuilder:validation:Minimum=1
-	// +doc:default=From preset, if set
 	MaxConcurrent int32 `json:"maxConcurrent"`
 }
 

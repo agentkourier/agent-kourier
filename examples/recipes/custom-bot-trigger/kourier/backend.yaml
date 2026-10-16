@@ -1,0 +1,8 @@
+# The A2A server that hosts the agent. Replace the URL with your agent's: for the a2a dialect it is the exact
+# JSON-RPC endpoint, and the agent card is served at that URL plus /.well-known/agent-card.json.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: ci-agents, namespace: agent-kourier }
+spec:
+  dialect: a2a
+  url: http://ci-agent.agents.svc.cluster.local:8080

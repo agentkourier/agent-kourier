@@ -144,16 +144,16 @@ ok: Agent Kourier is connected to Slack
 ## 5. Change the agent prompt (optional)
 
 The demo agent's system instructions live in the `systemPrompt` key of
-[`hack/kind/sandbox/agent-prompt.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/sandbox/agent-prompt.yaml).
-The file is the `kagent/sandbox-sre-prompt` ConfigMap. [`agent.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/sandbox/agent.yaml)
+[`examples/recipes/sre-triage/agent/agent-prompt.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/sre-triage/agent/agent-prompt.yaml).
+The file is the `kagent/sandbox-sre-prompt` ConfigMap. [`agent.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/sre-triage/agent/agent.yaml)
 selects that key with `spec.template.systemPromptFrom`; the prompt does not grant Kubernetes access. Keep the
 read-only instructions and tools when editing it.
 
 After editing `data.systemPrompt`, apply the ConfigMap and then the Agent so kagent compiles a new prompt revision:
 
 ```sh
-kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent-prompt.yaml
-kubectl --context kind-agent-kourier-full -n kagent apply -f hack/kind/sandbox/agent.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f examples/recipes/sre-triage/agent/agent-prompt.yaml
+kubectl --context kind-agent-kourier-full -n kagent apply -f examples/recipes/sre-triage/agent/agent.yaml
 ```
 
 In a runtime probe against the pinned kagent 1.0.0-alpha5 sandbox release, the ConfigMap update changed the prompt

@@ -1,0 +1,7 @@
+name: an empty evidence item
+app: checkout
+alert: KubePodCrashLooping
+cause: a cause
+evidence:
+  - an item
+  - ""

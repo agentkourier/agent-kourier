@@ -17,6 +17,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
@@ -63,11 +64,16 @@ func botInbound(channel, id string, b chat.BotMessage) chat.Inbound {
 	return chat.Inbound{At: chat.Ref{Platform: "slack", Conn: conn, Channel: channel, ID: id}, Bot: &b}
 }
 
-// botTrigger is a botMessage trigger on bot, as the Binding loader would hand it on after defaulting.
+// botTrigger is a botMessage trigger on bot, as the Binding loader would hand it on after defaulting. Its limits are
+// the ones every botMessage trigger must set, wide enough that no test reaches them and no daily cap.
 func botTrigger(bot string, mutate func(*v1alpha1.Trigger)) v1alpha1.Trigger {
 	t := v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: bot},
 		PromptTemplate: "An alert.",
 		Match:          map[v1alpha1.MessageField]string{},
+		Limits: v1alpha1.TriggerLimits{
+			RateLimit:     &v1alpha1.RateLimit{MaxRuns: 1000, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1000},
+			MaxRunsPerDay: new(int32(0)),
+		},
 	}
 	if mutate != nil {
 		mutate(&t)
@@ -75,18 +81,19 @@ func botTrigger(bot string, mutate func(*v1alpha1.Trigger)) v1alpha1.Trigger {
 	return t
 }
 
-// trialTrigger is the owner's trial: the alertmanager preset for the webhook bot, narrowed to the kind
-// receiver (anchored, so that production's receiver of the same prefix stays out), with the heartbeat
+// trialTrigger is the owner's trial: the Alertmanager trigger written in full for the webhook bot, narrowed to
+// the kind receiver (anchored, so that production's receiver of the same prefix stays out), with the heartbeat
 // excluded.
 func trialTrigger() v1alpha1.Trigger {
-	return v1alpha1.Trigger{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: webhookBot}, Preset: v1alpha1.PresetAlertmanager,
-		Match:   map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: `receiver=slack-critical-kind$`},
-		Exclude: map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`}}
+	tr := chattest.AlertmanagerTrigger(webhookBot)
+	tr.Match[v1alpha1.FieldTitleLink] = `receiver=slack-critical-kind$`
+	tr.Exclude = map[v1alpha1.MessageField]string{v1alpha1.FieldTitle: `^Prometheus heartbeat$`}
+	return tr
 }
 
-// kindOnly is the trial's trigger without the preset: the webhook bot's messages whose link names the kind
+// kindOnly is the trial's trigger with only that narrowing: the webhook bot's messages whose link names the kind
 // receiver, and not the heartbeat. Tests of the intake's own mechanics use it, so that they do not depend on
-// what the preset says.
+// what the Alertmanager trigger says.
 func kindOnly() v1alpha1.Trigger {
 	return botTrigger(webhookBot, func(t *v1alpha1.Trigger) {
 		t.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: `receiver=slack-critical-kind$`}
@@ -97,7 +104,7 @@ func kindOnly() v1alpha1.Trigger {
 // productionTrigger is what the production Binding would say: the receiver anchored at its end.
 func productionTrigger() v1alpha1.Trigger {
 	tr := trialTrigger()
-	tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: `receiver=slack-critical$`}
+	tr.Match[v1alpha1.FieldTitleLink] = `receiver=slack-critical$`
 	return tr
 }
 
@@ -229,7 +236,7 @@ func snapshotOf(t *testing.T, triggers []v1alpha1.Trigger) *config.Snapshot {
 			Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
 			Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
 			Chat:     v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, Channel: channel, Triggers: triggers}}}
-		b.Default() // as the loader does: the presets are applied, and no triggers means the mention trigger
+		b.Default() // as the loader does: no triggers means the mention trigger
 		return b
 	}
 	allow := []string{"sre", "payments"}
@@ -280,7 +287,7 @@ func newTriggered(t *testing.T, triggers ...v1alpha1.Trigger) *triggered {
 	return h
 }
 
-// The matcher, on explicit regexes with no preset: every match entry must match, no exclude entry may, every
+// The matcher, on explicit regexes: every match entry must match, no exclude entry may, every
 // extract must find its group, and a trigger takes only the bot it names.
 func TestABotMessageMatchesATriggerOnItsRegexes(t *testing.T) {
 	const (
@@ -482,7 +489,7 @@ func TestAMatchCarriesTheBindingTheIndexTheFieldsAndTheMessage(t *testing.T) {
 	}
 }
 
-// The owner's alert channel, through the alertmanager preset with the trial's overrides: the kind alerts
+// The owner's alert channel, through the Alertmanager trigger with the trial's narrowing: the kind alerts
 // match and carry their state and key; production's, Grafana's and the heartbeat do not.
 func TestTheTrialTriggerTakesKindAlertsAndNothingElse(t *testing.T) {
 	tests := []struct {
@@ -554,12 +561,12 @@ func TestAnUnanchoredReceiverMatchWronglyTakesKindAlerts(t *testing.T) {
 			tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: receiver}
 		})
 	}
-	withPreset := func(receiver string) v1alpha1.Trigger {
+	withAlertmanager := func(receiver string) v1alpha1.Trigger {
 		tr := productionTrigger()
-		tr.Match = map[v1alpha1.MessageField]string{v1alpha1.FieldTitleLink: receiver}
+		tr.Match[v1alpha1.FieldTitleLink] = receiver
 		return tr
 	}
-	for name, mk := range map[string]func(string) v1alpha1.Trigger{"on the link alone": bare, "with the alertmanager preset": withPreset} {
+	for name, mk := range map[string]func(string) v1alpha1.Trigger{"on the link alone": bare, "with the Alertmanager trigger": withAlertmanager} {
 		t.Run(name, func(t *testing.T) {
 			takes := func(receiver string, m chat.BotMessage) bool {
 				h := newTriggered(t, mk(receiver))

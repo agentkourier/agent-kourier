@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +16,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
+
+// botMessageSource is the source every trigger start reports: the prompt view's Source and the session's origin
+// source.
+const botMessageSource = string(v1alpha1.TriggerBotMessage)
 
 // triggerAuditor is what the starter needs of the audit log: *audit.Writer.
 type triggerAuditor interface {
@@ -104,7 +107,7 @@ func permalinks(p chat.Platform) func(chat.Ref) (string, bool) {
 func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error {
 	at := m.Message.At
 	view := v1alpha1.PromptView{
-		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: cmp.Or(m.Preset, "botMessage"), Fields: m.Fields,
+		Channel: at.Channel, State: m.Fields["state"], Key: m.Fields["key"], Source: botMessageSource, Fields: m.Fields,
 	}
 	if link, ok := s.link(at); ok {
 		view.Link = link
@@ -124,7 +127,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m chat.TriggerMatch) error
 		Key:       session.Key{Connection: s.conn, Channel: at.Channel, Thread: at.ID},
 		Binding:   m.Binding,
 		MessageID: id, MessageRef: at.ID, Text: text, Create: true,
-		Origin: store.Origin{Source: cmp.Or(m.Preset, "botMessage"), Subject: feedback.AlertName(m.Fields["alertname"])},
+		Origin: store.Origin{Source: botMessageSource, Subject: feedback.AlertName(m.Fields["alertname"])},
 	})
 	switch {
 	case err != nil:

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
@@ -100,16 +100,13 @@ func newStarter(t *testing.T) *starter {
 	return s
 }
 
-// firing is the match of a kind-firing alert with the preset's trigger: what the Intake hands the starter.
+// firing is the match of a kind-firing alert with the Alertmanager trigger: what the Intake hands the starter.
 func firing(t *testing.T) chat.TriggerMatch {
 	t.Helper()
-	var b v1alpha1.Binding
-	b.Spec.Chat.Triggers = []v1alpha1.Trigger{{Type: v1alpha1.TriggerBotMessage, From: &v1alpha1.BotSource{BotID: "B0123456789"}, Preset: v1alpha1.PresetAlertmanager}}
-	b.Default()
-	tr := b.Spec.Chat.Triggers[0]
+	tr := chattest.AlertmanagerTrigger("B0123456789")
 	const link = "http://alertmanager.kind.local/#/alerts?receiver=slack-critical-kind"
 	return chat.TriggerMatch{
-		Binding: startBinding, Index: 1, Preset: tr.Preset, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0123456789:" + alertTS,
+		Binding: startBinding, Index: 1, PromptTemplate: tr.PromptTemplate, Thread: tr.Thread, MessageID: "slack:" + startConn + ":C0123456789:" + alertTS,
 		Fields:   map[string]string{"state": "FIRING", "key": "KubePodCrashLooping shop", "alertname": "KubePodCrashLooping"},
 		Received: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
 		Message: chat.Inbound{
@@ -154,7 +151,7 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 	if in.UserID != "" {
 		t.Errorf("UserID = %q; want none: nobody wrote this turn, and a user named here would be forged", in.UserID)
 	}
-	if want := (store.Origin{Source: "alertmanager", Subject: "KubePodCrashLooping"}); in.Origin != want {
+	if want := (store.Origin{Source: "botMessage", Subject: "KubePodCrashLooping"}); in.Origin != want {
 		t.Errorf("Origin = %+v; want %+v, the trigger source and bounded subject kept for feedback attribution", in.Origin, want)
 	}
 	if want := "An alert is FIRING in channel C0123456789: KubePodCrashLooping."; !strings.HasPrefix(in.Text, want) {
@@ -171,7 +168,6 @@ func TestOnStartSubmitsTheRenderedPromptAnchoredToTheAlert(t *testing.T) {
 func TestOnStartKeepsAValidatedCustomBotMessageSubjectForFeedback(t *testing.T) {
 	s := newStarter(t)
 	m := firing(t)
-	m.Preset = ""
 	m.PromptTemplate = "An alert."
 	m.Fields = map[string]string{"alertname": "CustomAlert"}
 	if err := s.OnStart(s.tel.Ctx, m); err != nil {
@@ -205,7 +201,7 @@ func TestOnStartKeepsTheAlertNameOnlyIfItIsNameShaped(t *testing.T) {
 			if err := s.OnStart(s.tel.Ctx, m); err != nil {
 				t.Fatalf("OnStart = %v", err)
 			}
-			if len(s.sub.got) != 1 || s.sub.got[0].Origin != (store.Origin{Source: "alertmanager"}) {
+			if len(s.sub.got) != 1 || s.sub.got[0].Origin != (store.Origin{Source: "botMessage"}) {
 				t.Errorf("submitted %+v; want one turn with the trigger source and no subject", s.sub.got)
 			}
 		})
@@ -290,18 +286,19 @@ func TestPermalinksOfAPlatformThatMakesNoneIsNoPermalink(t *testing.T) {
 	}
 }
 
-// The source of the view is the preset, or "botMessage" for a trigger that has none.
-func TestOnStartSourceIsThePresetOrTheTriggerType(t *testing.T) {
-	for preset, want := range map[string]string{"alertmanager": "alertmanager", "": "botMessage"} {
-		s := newStarter(t)
-		m := firing(t)
-		m.Preset, m.PromptTemplate = preset, "From {{ .Source }}"
-		if err := s.OnStart(s.tel.Ctx, m); err != nil {
-			t.Fatal(err)
-		}
-		if got := instructionOf(t, s.sub.got[0].Text); got != "From "+want {
-			t.Errorf("preset %q: instruction %q; want source %q", preset, got, want)
-		}
+// Every trigger start reports botMessage as the source, in the view and in the session's origin.
+func TestOnStartSourceIsTheTriggerType(t *testing.T) {
+	s := newStarter(t)
+	m := firing(t)
+	m.PromptTemplate = "From {{ .Source }}"
+	if err := s.OnStart(s.tel.Ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if got := instructionOf(t, s.sub.got[0].Text); got != "From botMessage" {
+		t.Errorf("instruction %q; want source botMessage", got)
+	}
+	if got := s.sub.got[0].Origin.Source; got != "botMessage" {
+		t.Errorf("origin source %q; want botMessage", got)
 	}
 }
 
@@ -367,7 +364,7 @@ func TestOnStartRefusalNamesTheValueAndTheReason(t *testing.T) {
 		reason   string
 		detail   string
 	}{
-		{"a key that has spaces, as the preset's does", "Key {{ .Key }}", func(*chat.TriggerMatch) {}, "Key", "characters", ".Key failed the prompt check."},
+		{"a key that has spaces, as an Alertmanager group's does", "Key {{ .Key }}", func(*chat.TriggerMatch) {}, "Key", "characters", ".Key failed the prompt check."},
 		{"a state that is too long", "{{ .State }}", func(m *chat.TriggerMatch) { m.Fields["state"] = long }, "State", "too_long", ".State failed the prompt check."},
 		{"an entry with a quote", "{{ .Fields.alertname }}", func(m *chat.TriggerMatch) { m.Fields["alertname"] = `a"b` }, "Fields.alertname", "characters", ".Fields.alertname failed the prompt check."},
 		{"a channel that is no name", "{{ .Channel }}", func(m *chat.TriggerMatch) { m.Message.At.Channel = "C 1" }, "Channel", "characters", ".Channel failed the prompt check."},

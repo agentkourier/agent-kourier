@@ -30,7 +30,7 @@ func alertPost(state, name, group string) fakeslack.WebhookPost {
 
 // TestS14_AnAlertStartsOneInvestigationInItsOwnThread: an Alertmanager alert posted through the channel's incoming
 // webhook (a bot message, the way the alert channel gets them) starts exactly one investigation, in the alert's own
-// thread. The agent's first turn is the preset's prompt with the whole alert in the hashed untrusted block, which the
+// thread. The agent's first turn is the trigger's prompt with the whole alert in the hashed untrusted block, which the
 // scenario agent says it saw. The alert firing again is a note in that thread and starts no second turn, and the
 // resolve is a note, "Resolved at". The decisions are counted.
 //
@@ -88,7 +88,7 @@ func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 			reply = b
 		}
 	}
-	// The scenario agent says the first line of the prompt it was given, which is the preset's template output over the
+	// The scenario agent says the first line of the prompt it was given, which is the trigger's template output over the
 	// alert, and the tag of the untrusted block Agent Kourier appended.
 	wantFirst := fmt.Sprintf("Investigating: An alert is FIRING in channel %s: %s. Block: untrusted-data-", ChannelS14, name)
 	if reply.ThreadTS != alert.TS || !strings.Contains(reply.Text, wantFirst) {

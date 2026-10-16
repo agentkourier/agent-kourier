@@ -22,11 +22,11 @@ func (a *alerts) limitedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const anchor = "limits: { maxRunsPerDay: 20 }"
+	const anchor = "rateLimit: { maxRuns: 5, per: 10m, maxConcurrent: 2 }"
 	if !strings.Contains(string(raw), anchor) {
 		t.Fatalf("the fixture's binding.yaml has no %q to replace", anchor)
 	}
-	limited := strings.Replace(string(raw), anchor, "limits: { rateLimit: { maxRuns: 2, per: 10s, maxConcurrent: 5 } }", 1)
+	limited := strings.Replace(string(raw), anchor, "rateLimit: { maxRuns: 2, per: 10s, maxConcurrent: 5 }", 1)
 	if err := os.WriteFile(file, []byte(limited), 0o600); err != nil {
 		t.Fatal(err)
 	}

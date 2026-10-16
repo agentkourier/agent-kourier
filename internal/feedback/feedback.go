@@ -309,8 +309,10 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 }
 
 // alertName maps the generic session origin to the feedback package's legacy alert attribution. The
-// alertmanager and botMessage sources carry validated alertname subjects from the trigger adapter,
-// and legacy is the migration's historical source; a subject on another source remains generic metadata.
+// botMessage source carries a validated alertname subject from the trigger adapter, and legacy is the
+// migration's historical source. alertmanager is no longer written: sessions created before trigger presets
+// were removed carry it as their origin source, and their votes still attribute to the alert. A subject on
+// another source remains generic metadata.
 func alertName(origin store.Origin) string {
 	if origin.Source != "alertmanager" && origin.Source != "botMessage" && origin.Source != "legacy" {
 		return ""
