@@ -20,7 +20,7 @@ spec:
     userId: agent-kourier-ax
     tokenSecretRef: {name: agent-kourier-agent-token}
   chat:
-    connectionRef: {namespace: agent-kourier, name: sandbox-slack}
-    channel: C_REPLACE_WITH_CHANNEL_ID
+    connectionRef: {namespace: agent-kourier, name: slack} # your ChatConnection
+    channel: C0123456789 # your channel's ID
     output: live
   interactions: {askUser: true}

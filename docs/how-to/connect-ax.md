@@ -26,7 +26,7 @@ apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
   name: ax
-  namespace: agent-kourier-system
+  namespace: agent-kourier
 spec:
   dialect: a2a
   url: https://ax-gateway.example.internal/a2a # (1)!

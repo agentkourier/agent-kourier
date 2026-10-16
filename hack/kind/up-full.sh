@@ -39,7 +39,7 @@ trap 'on_error $LINENO' ERR
 BUILD=
 trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; delete_agentkourier_pod "${DEX_TOKEN_POD:-}"' EXIT
 
-for tool in docker kind kubectl helm curl openssl jq; do
+for tool in docker kind kubectl helm curl openssl jq go; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"

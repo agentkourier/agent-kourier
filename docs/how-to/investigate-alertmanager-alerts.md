@@ -27,6 +27,24 @@ The trigger below matches one message shape. It needs:
 Alertmanager's default Slack title also begins `[FIRING:<n>]`, so a receiver that keeps the default title does not
 match. Set the receiver's title to the shape above, or change the `match` and `extract` regexes for your own template.
 
+In the Alertmanager configuration, keep the receiver's webhook URL, channel and text, and set these two fields:
+
+```yaml
+receivers:
+  - name: slack-critical # (1)!
+    slack_configs:
+      - send_resolved: true # (2)!
+        title: '{{ .Status | toUpper }}{{ if eq .Status "firing" }} ({{ .Alerts.Firing | len }}){{ end }} - {{ .CommonLabels.alertname }}'
+```
+
+1. The trigger below picks the receiver by this name, which Alertmanager puts in the title's link.
+2. Without it Alertmanager posts no `RESOLVED` message, so the thread never gets its "Resolved at" note.
+
+The sandbox's receiver uses the same title, behind a `[kind] ` tag
+([`hack/kind/sandbox/alertmanager/config.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/sandbox/alertmanager/config.yaml)).
+What Alertmanager puts in the title link and when it posts a resolve is Alertmanager's behaviour, which this
+repository does not check.
+
 ## Add the trigger
 
 In the Binding's `chat` block:
@@ -34,7 +52,7 @@ In the Binding's `chat` block:
 ```yaml
   chat:
     connectionRef:
-      namespace: agent-kourier-system
+      namespace: agent-kourier
       name: slack
     channel: C0123456789
     output: live
