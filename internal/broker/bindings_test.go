@@ -198,6 +198,9 @@ func TestBackendCarriesWhatTheSessionNeeds(t *testing.T) {
 	if !be.AcknowledgmentConfigured || !be.AcknowledgmentEnabled || be.AcknowledgmentEmoji != v1alpha1.DefaultAcknowledgmentEmoji {
 		t.Errorf("Backend acknowledgment = configured=%v enabled=%v emoji=%q; want enabled by default with %q", be.AcknowledgmentConfigured, be.AcknowledgmentEnabled, be.AcknowledgmentEmoji, v1alpha1.DefaultAcknowledgmentEmoji)
 	}
+	if want := (dialect.Platform{ID: "slack", Name: "Slack"}); be.Platform != want {
+		t.Errorf("Platform = %+v, want %+v: the platform of the Binding's ChatConnection", be.Platform, want)
+	}
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
 	be.Attribute(msg, dialect.User{ID: "U1", Name: "Ada"})
 	if _, ok := msg.Metadata["agentkourier.dev/actor"]; !ok {

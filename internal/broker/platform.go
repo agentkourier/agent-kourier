@@ -26,10 +26,12 @@ type Connection struct {
 	Credentials map[string]secret.Value
 }
 
-// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads. Its adapter
-// is built by RunConfig.newPlatform, which leaderHalf.openPlatform calls.
+// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, and the name
+// it is called in the text an agent reads ("Slack"). Its adapter is built by RunConfig.newPlatform, which
+// leaderHalf.openPlatform calls.
 type platformSpec struct {
 	Keys []string
+	Name string
 }
 
 // platformFor is the one place that names a platform: a second platform is one more case here, with its keys,
@@ -37,9 +39,16 @@ type platformSpec struct {
 // not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: []string{"botToken", "appToken"}}, true
+		return platformSpec{Keys: []string{"botToken", "appToken"}, Name: "Slack"}, true
 	}
 	return platformSpec{}, false
+}
+
+// actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is
+// spec.platform, and the display name is the one platformFor knows. A platform it does not know has an ID alone.
+func actorPlatform(id string) dialect.Platform {
+	spec, _ := platformFor(id)
+	return dialect.Platform{ID: id, Name: spec.Name}
 }
 
 // slackAPI is the Slack client as the Slack adapter takes it, which is the seam of RunConfig.newSlack.

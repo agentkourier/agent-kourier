@@ -47,11 +47,18 @@ func (Credentials) GoString() string { return Credentials{}.String() }
 // LogValue hides the secrets from log/slog.
 func (Credentials) LogValue() slog.Value { return slog.StringValue(Credentials{}.String()) }
 
+// Platform is the chat platform a User is on.
+type Platform struct {
+	ID   string // the platform's ID, as ChatConnection.spec.platform spells it, such as "slack"
+	Name string // how the platform is called to a reader, such as "Slack"; empty when unknown
+}
+
 // User is the person who typed or clicked, resolved by the chat platform.
 type User struct {
-	ID    string // platform user ID, such as a Slack U-ID
-	Name  string // display name; empty when unknown
-	Email string // empty when unknown
+	ID       string   // the platform's user ID (Slack: U123)
+	Name     string   // display name; empty when unknown
+	Email    string   // empty when unknown
+	Platform Platform // the platform the user is on; the zero value when unknown
 }
 
 // ErrUnusablePause is wrapped by the error ParseInteraction returns for a task that is

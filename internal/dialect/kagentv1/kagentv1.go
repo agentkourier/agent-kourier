@@ -5,6 +5,7 @@
 package kagentv1
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -91,8 +92,10 @@ func (*Dialect) Authenticate(req *http.Request, creds dialect.Credentials) error
 
 // Attribute records the acting user as message metadata (ActorMetadataKey) and as a prefix
 // the agent can read, such as "[Slack: Jane Doe (U123) <jane@example.com>]", at the start of
-// the first text part (its own part only when the message has no text). It changes msg in
-// place, so call it once per message. Names come from users, so the prefix
+// the first text part (its own part only when the message has no text). The label before the
+// colon is the platform's display name, or its ID when it has no name, and is left out when
+// the actor has no platform; the metadata carries the platform's ID as "platform". It changes
+// msg in place, so call it once per message. Names come from users, so the prefix
 // drops control and format characters (bidi overrides, zero-width) and brackets, and is
 // cut short. An actor with no ID is ignored. A HITL answer (see BuildResponse) gets the
 // metadata but no text part.
@@ -107,6 +110,9 @@ func (*Dialect) Attribute(msg *a2a.Message, actor dialect.User) {
 	if email := clean(actor.Email); email != "" {
 		who, meta["email"] = who+" <"+email+">", email
 	}
+	if actor.Platform.ID != "" {
+		meta["platform"] = actor.Platform.ID
+	}
 	if msg.Metadata == nil {
 		msg.Metadata = map[string]any{}
 	}
@@ -114,7 +120,10 @@ func (*Dialect) Attribute(msg *a2a.Message, actor dialect.User) {
 	if _, reply := msg.Metadata[HITLExtension]; reply {
 		return // a structured answer keeps its one measured shape; the actor is in metadata
 	}
-	msg.Parts = withPrefix(msg.Parts, "[Slack: "+who+"]")
+	if label := clean(cmp.Or(actor.Platform.Name, actor.Platform.ID)); label != "" {
+		who = label + ": " + who
+	}
+	msg.Parts = withPrefix(msg.Parts, "["+who+"]")
 }
 
 // withPrefix returns parts with prefix at the start of the first text part, then a newline.

@@ -167,8 +167,9 @@ type fixture struct {
 	rejected, audits []audit.Call  // what Rejected and the Auditor were given
 	actors           []audit.Actor // who the Auditor's calls named
 	attr             func(*a2a.Message, dialect.User)
-	bindingErr       error // when set, every Binding lookup fails with it (guarded by amu)
-	noRejected       bool  // the Backend has no identity Source to call Rejected on
+	platform         dialect.Platform // the Backend's chat platform
+	bindingErr       error            // when set, every Binding lookup fails with it (guarded by amu)
+	noRejected       bool             // the Backend has no identity Source to call Rejected on
 	textReplies      bool
 	feedback         bool // the Backend has feedback.enabled
 	output           v1alpha1.OutputMode
@@ -209,7 +210,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
+	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
 	if f.noRejected {
 		b.Rejected = nil
 	}

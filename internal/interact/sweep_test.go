@@ -335,7 +335,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	t.Cleanup(func() { _ = st.Close() })
 	now := t0.Add(timeout + time.Minute) // a minute past the deadline of a pause made at t0
 	r := &sweepRig{st: &flakyResolve{Store: st}, sess: &sweepSess{current: "task-1"}, upd: &updates{}, aud: &audits{}, clock: &now, press: &presses{waiting: map[string]bool{}},
-		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true}}}}
+		look: &sweepLookup{bindings: map[string]interact.Binding{"ns/b": {Dialect: kagentv1.New(0), Timeout: timeout, ToolApprovals: true, Platform: dialect.Platform{ID: "slack", Name: "Slack"}}}}}
 	r.reopened = interact.NewReopened(st)
 	r.ob = newOutbox(t, outbox.Config{Store: st, Platform: &poster{posted: map[string]string{}}, Now: func() time.Time { return t0 }, CallTimeout: 30 * time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})

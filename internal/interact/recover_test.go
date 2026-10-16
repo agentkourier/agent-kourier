@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
+	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -70,7 +71,7 @@ func TestRecoveryByState(t *testing.T) {
 		}, nil, session.ErrNotPaused, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newRig(t, nil)
+			r := newRig(t, func(b *interact.Binding) { b.Platform = dialect.Platform{ID: "slack", Name: "Slack"} })
 			r.sess.answerErr, r.sess.cancelErr = tc.answerErr, tc.cancelErr
 			if err := r.paused(t, task); err != nil {
 				t.Fatal(err)
@@ -87,8 +88,8 @@ func TestRecoveryByState(t *testing.T) {
 			if tc.wantAnswers > 0 {
 				m := r.sess.answers[0]
 				actor, _ := m.Metadata[kagentv1.ActorMetadataKey].(map[string]any)
-				if m.TaskID != "task-1" || m.ID != r.row(t, task).ID+"/answer" || m.Metadata[kagentv1.HITLExtension] == nil || actor["id"] != "U1" {
-					t.Errorf("answer message = %+v; want it for the task, with the interaction's message ID, the payload, and U1, who decided, as the actor", m)
+				if m.TaskID != "task-1" || m.ID != r.row(t, task).ID+"/answer" || m.Metadata[kagentv1.HITLExtension] == nil || actor["id"] != "U1" || actor["platform"] != "slack" || hasPrefix(m) {
+					t.Errorf("answer message = %+v; want it for the task, with the interaction's message ID, the payload, no prefix on its text, and U1, who decided, on slack as the actor", m)
 				}
 			}
 		})

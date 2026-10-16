@@ -240,7 +240,7 @@ func TestTurnMessage(t *testing.T) {
 func TestTurnAttribution(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
-	f.attr = (&kagentv1.Dialect{}).Attribute
+	f.attr, f.platform = (&kagentv1.Dialect{}).Attribute, dialect.Platform{ID: "slack", Name: "Slack"}
 	var logs bytes.Buffer // written by the runner, read once it has retired
 	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 	f.m.cfg.Users = fakeUsers{"U1": {ID: "U1", Name: "Ada", Email: "ada@example.com"}, "U3": {Name: "Eve"}}
@@ -261,6 +261,11 @@ func TestTurnAttribution(t *testing.T) {
 		f.agent.mu.Unlock()
 		if len(msg.Parts) != 1 || msg.Parts[0].Text() != tc.want {
 			t.Errorf("turn %d = %+v; want one part %q", i, msg.Parts, tc.want)
+		}
+		// The Backend's platform is on the actor whether or not the platform resolved the user.
+		actor, _ := msg.Metadata[kagentv1.ActorMetadataKey].(map[string]any)
+		if tc.user != "" && actor["platform"] != "slack" || tc.user == "" && actor != nil {
+			t.Errorf("turn %d actor = %v; want platform slack for a person's turn and no actor for an alert's", i, actor)
 		}
 	}
 	f.retired(t) // the runner logs the end of a turn after its final event

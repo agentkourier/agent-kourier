@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
@@ -79,4 +80,18 @@ func canceled(t *testing.T) context.Context {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	return ctx
+}
+
+// A turn is attributed to a person on a platform: the ID is the ChatConnection's spec.platform and the name is the one the
+// broker holds for it. A platform the broker does not know keeps its ID, with no name, so that a prefix still reads true.
+func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
+	for id, want := range map[string]dialect.Platform{
+		v1alpha1.PlatformSlack: {ID: "slack", Name: "Slack"},
+		"teams":                {ID: "teams"},
+		"":                     {},
+	} {
+		if got := actorPlatform(id); got != want {
+			t.Errorf("actorPlatform(%q) = %+v, want %+v", id, got, want)
+		}
+	}
 }

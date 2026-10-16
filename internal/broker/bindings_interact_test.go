@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -73,6 +74,9 @@ func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	}
 	if got.Dialect == nil || got.Dialect != f.b.kits[v1alpha1.DialectKagentV1].dialect {
 		t.Errorf("Dialect = %v, want the dialect the agent pool of that backend connects through", got.Dialect)
+	}
+	if want := (dialect.Platform{ID: "slack", Name: "Slack"}); got.Platform != want {
+		t.Errorf("Platform = %+v, want %+v: the platform of the Binding's ChatConnection", got.Platform, want)
 	}
 }
 

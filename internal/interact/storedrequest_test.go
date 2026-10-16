@@ -85,7 +85,7 @@ func TestNoSecretOfAToolCallIsStored(t *testing.T) {
 	}
 	reason, _ := approvals[0].(map[string]any)["rejection_reason"].(string) // Agent Kourier's own words, whatever they are
 	answer := dialect.Answer{RequestID: original.RequestID, Decisions: []dialect.Decision{{ToolID: "t1", Reason: reason}}}
-	want, err := interact.AnswerMessage(kagentv1.New(0), row.ID, *original, answer, "")
+	want, err := interact.AnswerMessage(kagentv1.New(0), row.ID, *original, answer, "", dialect.Platform{})
 	if err != nil {
 		t.Fatal(err)
 	}

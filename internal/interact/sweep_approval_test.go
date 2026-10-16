@@ -143,6 +143,9 @@ func TestAnApprovalThatTimesOutIsDeniedAndNotCancelled(t *testing.T) {
 				t.Fatalf("%d answers; want one denial", len(sent))
 			}
 			approvals, actor := approvalsSent(t, sent[0])
+			if got := platformSent(sent[0]); got != "slack" {
+				t.Errorf("denial is from a user on platform %q; want the Binding's, slack", got)
+			}
 			if !slices.Equal(approvals, tc.tools) || actor != "agent-kourier" || sent[0].ID != "ix-1/answer" || sent[0].TaskID != "task-1" {
 				t.Errorf("answer %+v by %q with ID %q for task %q; want every tool denied with the fixed reason, by agent-kourier, as the interaction's answer for task-1", approvals, actor, sent[0].ID, sent[0].TaskID)
 			}
@@ -550,6 +553,9 @@ func TestAPauseThatComesAgainAfterAnApprovalTimedOutIsDeniedAgain(t *testing.T) 
 	}
 	for _, m := range r.sess.answers {
 		approvals, actor := approvalsSent(t, m)
+		if got := platformSent(m); got != "slack" {
+			t.Errorf("denial is from a user on platform %q; want the Binding's, slack", got)
+		}
 		want := []wireApproval{{"t1", false, timeoutReason}, {"t2", false, timeoutReason}}
 		if !slices.Equal(approvals, want) || actor != "agent-kourier" || m.ID != r.row(t, approval()).ID+"/answer" || m.TaskID != "task-1" {
 			t.Errorf("answer %+v by %q with ID %q; want every tool denied with the fixed reason, by agent-kourier", approvals, actor, m.ID)

@@ -68,6 +68,9 @@ type Backend struct {
 	// Attribute records the acting user on a turn: the dialect's Attribute. Nil means a turn
 	// carries no attribution.
 	Attribute func(msg *a2a.Message, actor dialect.User)
+	// Platform is the chat platform of the Binding's ChatConnection, which the manager puts on the actor it
+	// attributes a turn to. The zero value attributes a turn with no platform.
+	Platform dialect.Platform
 	// Rejected is identity.Source.Rejected. The manager calls it for every call the front door
 	// refused the credentials of (ErrCredentialsRejected); it re-reads the token, and writes the
 	// only audit row for the call, so the manager does not audit it again. Nil does nothing.

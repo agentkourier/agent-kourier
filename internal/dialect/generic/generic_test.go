@@ -66,6 +66,20 @@ func TestConnectPinsEndpointAndPreservesActorRouting(t *testing.T) {
 	}
 }
 
+// TestAttributeNamesThePlatform pins that the a2a dialect attributes a turn as kagent-v1 does: the prefix label is the
+// platform's display name and the actor metadata carries its ID.
+func TestAttributeNamesThePlatform(t *testing.T) {
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))
+	generic.New(time.Second).Attribute(msg, dialect.User{ID: "U1", Name: "Ada", Platform: dialect.Platform{ID: "slack", Name: "Slack"}})
+	if got, want := msg.Parts[0].Text(), "[Slack: Ada (U1)]\nhi"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+	actor, _ := msg.Metadata[kagentv1.ActorMetadataKey].(map[string]any)
+	if actor["id"] != "U1" || actor["name"] != "Ada" || actor["platform"] != "slack" || len(actor) != 3 {
+		t.Errorf("actor = %v, want id, name and platform", actor)
+	}
+}
+
 func TestPlainQuestionValidationAndStableIdentity(t *testing.T) {
 	d := generic.New(time.Second)
 	defer d.CloseIdleConnections()

@@ -457,7 +457,7 @@ func (s *Sweeper) denyApproval(ctx context.Context, row store.Interaction, in di
 		}
 		s.audited[row.ID] = timeoutAudit{binding: binding, identity: b.Identity}
 	}
-	msg, err := AnswerMessage(b.Dialect, row.ID, in, denyAll(in, timeoutDenyReason), autoDecider)
+	msg, err := AnswerMessage(b.Dialect, row.ID, in, denyAll(in, timeoutDenyReason), autoDecider, b.Platform)
 	if err != nil {
 		s.cfg.Logger.WarnContext(ctx, "interact: the dialect would not build the denial of a timed-out approval, so its task is cancelled", "interaction", row.ID, "err", err)
 		return cancelled()

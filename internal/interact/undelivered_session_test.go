@@ -598,7 +598,7 @@ func TestAPersonsAnswerThatFailsToSendBehavesAsItDidBeforeTheWatcher(t *testing.
 		if err := p.st.SubmitInteraction(t.Context(), row.ID, raw, "UALICE1", t0.Add(2*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
-		msg, err := interact.AnswerMessage(kagentv1.New(0), row.ID, in, answer, "UALICE1")
+		msg, err := interact.AnswerMessage(kagentv1.New(0), row.ID, in, answer, "UALICE1", dialect.Platform{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -632,7 +632,7 @@ func TestAPersonsAnswerThatFailsToSendBehavesAsItDidBeforeTheWatcher(t *testing.
 
 func answerMsgFor(t *testing.T, row store.Interaction, in dialect.Interaction, answer dialect.Answer) *a2a.Message {
 	t.Helper()
-	msg, err := interact.AnswerMessage(kagentv1.New(0), row.ID, in, answer, "UALICE1")
+	msg, err := interact.AnswerMessage(kagentv1.New(0), row.ID, in, answer, "UALICE1", dialect.Platform{})
 	if err != nil {
 		t.Fatal(err)
 	}

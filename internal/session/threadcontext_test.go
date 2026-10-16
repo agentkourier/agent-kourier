@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
@@ -190,7 +191,7 @@ func TestAPinnedReplyTakesNoThreadContext(t *testing.T) {
 // names only the person who mentioned Agent Kourier.
 func TestThreadContextComesAfterTheAttribution(t *testing.T) {
 	f, sink, _ := threadedFixture(t, v1alpha1.ThreadRepliesMention)
-	f.attr = (&kagentv1.Dialect{}).Attribute
+	f.attr, f.platform = (&kagentv1.Dialect{}).Attribute, dialect.Platform{ID: "slack", Name: "Slack"}
 	f.enqueue(t, "turn", queuedRef, "U2", false)
 	f.m.wake(key)
 	waitFinal(t, sink)

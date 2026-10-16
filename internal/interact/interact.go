@@ -33,6 +33,8 @@ import (
 type Binding struct {
 	Dialect  dialect.Dialect
 	Identity string // the Binding's service identity, for the audit rows
+	// Platform is the chat platform of the Binding's ChatConnection. It is on the actor of every answer the intake sends.
+	Platform dialect.Platform
 	AskUser  bool
 	// ToolApprovals makes the intake post an approval as a prompt and leave it pending, for a press to decide. With it
 	// false, an approval is denied through the dialect as soon as it arrives (autoDeny). A press on a prompt that was posted
@@ -239,7 +241,7 @@ func (i *Intake) denyAgain(ctx context.Context, p Pause, b Binding, row store.In
 	if err := i.ensureTimeoutAudit(ctx, p.Binding, b.Identity, row); err != nil {
 		return false, err
 	}
-	msg, err := AnswerMessage(b.Dialect, row.ID, in, denyAll(in, timeoutDenyReason), autoDecider)
+	msg, err := AnswerMessage(b.Dialect, row.ID, in, denyAll(in, timeoutDenyReason), autoDecider, b.Platform)
 	if err != nil {
 		i.cfg.Logger.WarnContext(ctx, "interact: the dialect would not build the denial of a timed-out approval, so its task is cancelled", "interaction", row.ID, "err", err)
 		return false, nil

@@ -43,12 +43,14 @@ Every send is one user message with **exactly one text part**. No data or file p
 | `messageId` | Fixed for each chat message. A turn sent again, after `-32004` or an unknown outcome, keeps it. An answer to a question has its own |
 | `contextId` | Empty on a thread's first turn. After that, the context the agent returned |
 | `taskId` | Set only on an answer, to the paused task. A new turn never sets it |
-| `metadata["agentkourier.dev/actor"]` | On a turn a person wrote: `id`, and `name` and `email` when the chat platform knows them. A turn that a trigger started, such as an alert, carries none |
+| `metadata["agentkourier.dev/actor"]` | On a turn a person wrote: `id`, the person's ID on the chat platform (Slack: `U123`); `platform`, the platform's ID (`slack`); and `name` and `email` when the chat platform knows them. A turn that a trigger started, such as an alert, carries none |
 
-The text of a turn a person wrote starts with `[Slack: Name (U123) <email>]` and a newline, except in a `kagent-v1`
-structured answer. Alert fields, and thread replies that did not mention Agent Kourier, arrive in blocks the text
-marks as untrusted data. The actor and the prefix are informational: the identity that calls the agent is always the
-Binding's.
+The text of a turn a person wrote starts with `[<Platform>: Name (id) <email>]` and a newline, except in a `kagent-v1`
+structured answer. `<Platform>` is the chat platform's display name, so on Slack the prefix reads
+`[Slack: Name (U123) <email>]`. Read the actor from the metadata, not by parsing the prefix: the metadata has each
+field on its own, and a structured answer carries the metadata alone. Alert fields, and thread replies that did not
+mention Agent Kourier, arrive in blocks the text marks as untrusted data. The actor and the prefix are informational:
+the identity that calls the agent is always the Binding's.
 
 Every request carries one identity header, `Authorization: Bearer` from the Binding's `identity.tokenSecretRef` or
 `X-User-Id` from `identity.userId`, plus the AgentBackend's static `headers`. It may also carry the W3C trace context headers

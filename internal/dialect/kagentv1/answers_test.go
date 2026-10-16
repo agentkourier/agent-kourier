@@ -198,9 +198,9 @@ func TestAttributeLeavesAnswersWithoutAPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := plain(t, msg.Metadata[HITLExtension])
-	d.Attribute(&msg, dialect.User{ID: "U123", Email: "jane@example.com"})
+	d.Attribute(&msg, slackUser(dialect.User{ID: "U123", Email: "jane@example.com"}))
 	actor, _ := msg.Metadata[ActorMetadataKey].(map[string]any)
-	if len(msg.Parts) != 1 || actor["id"] != "U123" || !reflect.DeepEqual(plain(t, msg.Metadata[HITLExtension]), before) {
-		t.Errorf("parts = %d, actor = %v; want one part, the actor in metadata, the payload unchanged", len(msg.Parts), actor)
+	if len(msg.Parts) != 1 || actor["id"] != "U123" || actor["platform"] != "slack" || !reflect.DeepEqual(plain(t, msg.Metadata[HITLExtension]), before) {
+		t.Errorf("parts = %d, actor = %v; want one part, the actor and its platform in metadata, the payload unchanged", len(msg.Parts), actor)
 	}
 }

@@ -163,7 +163,7 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 	defer func() { op.Finish(telemetryErr) }()
 	row := pd.Interaction
 	w := wordsOf(pd.In.Kind)
-	msg, err := AnswerMessage(pd.Binding.Dialect, row.ID, pd.In, pd.Answer, pd.User)
+	msg, err := AnswerMessage(pd.Binding.Dialect, row.ID, pd.In, pd.Answer, pd.User, pd.Binding.Platform)
 	if err != nil {
 		d.cfg.Logger.InfoContext(ctx, "interact: the dialect refused an answer", "interaction", row.ID, "err", err)
 		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.invalid})
@@ -229,7 +229,7 @@ func (d *Decider) recorded(ctx context.Context, pd PressDecision, cur store.Inte
 	if err := errors.Join(json.Unmarshal(cur.Request, &in), json.Unmarshal(cur.Answer, &answer)); err != nil {
 		return a2a.Message{}, false, fmt.Errorf("interact: the stored request or answer of %s: %w", cur.ID, err)
 	}
-	msg, err = AnswerMessage(pd.Binding.Dialect, cur.ID, in, answer, cur.Decider)
+	msg, err = AnswerMessage(pd.Binding.Dialect, cur.ID, in, answer, cur.Decider, pd.Binding.Platform)
 	if err != nil {
 		return a2a.Message{}, false, fmt.Errorf("interact: rebuild the answer of %s: %w", cur.ID, err)
 	}

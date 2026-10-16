@@ -20,7 +20,9 @@ import (
 )
 
 // allowApprovals is a Binding that allows tool approvals, and not questions: neither flag gates the other.
-func allowApprovals(b *interact.Binding) { b.ToolApprovals, b.AskUser = true, false }
+func allowApprovals(b *interact.Binding) {
+	b.ToolApprovals, b.AskUser, b.Platform = true, false, dialect.Platform{ID: "slack", Name: "Slack"}
+}
 
 type reloadLookup struct{ b interact.Binding }
 

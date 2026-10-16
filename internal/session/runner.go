@@ -1418,8 +1418,8 @@ func (m *Manager) auditCall(ctx context.Context, key Key, actor audit.Actor, cal
 
 // message builds the A2A message of a turn: exactly one text part (R18), the queue's messageId
 // and the session's contextId, which is empty on a first turn. A turn a person wrote carries
-// who (D14): the user the platform resolves, else the ID alone. The dialect puts it into that
-// one part. A turn nobody wrote (an alert's prompt) carries none.
+// who (D14): the user the platform resolves, else the ID alone, and the Binding's platform either way. The
+// dialect puts it into that one part. A turn nobody wrote (an alert's prompt) carries none.
 func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Message {
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
 	msg.ID, msg.ContextID = r.ID, sess.ContextID
@@ -1434,6 +1434,7 @@ func (m *Manager) message(r store.Reply, sess store.Session, b Backend) *a2a.Mes
 		user = u
 		user.ID = r.UserID // the platform's answer never renames the author
 	}
+	user.Platform = b.Platform // the Binding's ChatConnection names it, whatever the lookup returned
 	b.Attribute(msg, user)
 	return msg
 }

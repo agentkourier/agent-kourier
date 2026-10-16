@@ -93,13 +93,30 @@ func approvalsSent(t *testing.T, msg *a2a.Message) (approvals []wireApproval, ac
 	return approvals, stringOf(who["id"])
 }
 
+// hasPrefix says whether a text part of msg starts with the attribution prefix, which a structured answer never gets:
+// its actor is in its metadata alone.
+func hasPrefix(msg *a2a.Message) bool {
+	for _, p := range msg.Parts {
+		if text, ok := p.Content.(a2a.Text); ok && strings.HasPrefix(string(text), "[Slack: ") {
+			return true
+		}
+	}
+	return false
+}
+
+// platformSent is the platform the actor of a message the rig's session was given is on ("" when it names none).
+func platformSent(msg *a2a.Message) string {
+	who, _ := msg.Metadata[kagentv1.ActorMetadataKey].(map[string]any)
+	return stringOf(who["platform"])
+}
+
 func stringOf(v any) string { s, _ := v.(string); return s }
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // approvalBinding is a Binding that allows tool approvals.
 func approvalBinding() interact.Binding {
-	return interact.Binding{Dialect: kagentv1.New(time.Second), ToolApprovals: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
+	return interact.Binding{Dialect: kagentv1.New(time.Second), ToolApprovals: true, Timeout: time.Minute, Identity: "secret:ns/tok", Platform: dialect.Platform{ID: "slack", Name: "Slack"}}
 }
 
 const (
@@ -158,6 +175,10 @@ func TestAPressDecidesAnApproval(t *testing.T) {
 			}
 			if got, actor := approvalsSent(t, sent[0]); !slices.Equal(got, tc.want) || actor != "UALICE1" {
 				t.Errorf("sent %+v as %q; want %+v as UALICE1", got, actor, tc.want)
+			}
+			// The answer names the platform the Binding's ChatConnection is on, and its text gets no prefix.
+			if who, _ := sent[0].Metadata[kagentv1.ActorMetadataKey].(map[string]any); who["platform"] != "slack" || hasPrefix(sent[0]) {
+				t.Errorf("answer actor = %v (prefixed: %v); want platform slack and no prefix in the text", who, hasPrefix(sent[0]))
 			}
 			if r.sess.keys[0] != key {
 				t.Errorf("sent to %+v; want the thread %+v", r.sess.keys[0], key)
@@ -812,6 +833,10 @@ func TestTheWinnersSecondPressSendsTheRecordedAnswerAndNotItsOwn(t *testing.T) {
 			for i, m := range sent {
 				if got, _ := approvalsSent(t, m); !slices.Equal(got, tc.recorded) {
 					t.Errorf("message %d carries %+v; want the recorded %+v", i+1, got, tc.recorded)
+				}
+				// The second press rebuilds the recorded answer (Decider.recorded), which names the Binding's platform too.
+				if got := platformSent(m); got != "slack" {
+					t.Errorf("message %d is from a user on platform %q; want slack", i+1, got)
 				}
 			}
 			if len(r.aud.got) != 1 || len(r.counted()) != 1 {
