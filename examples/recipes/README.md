@@ -9,7 +9,7 @@ This page lists the recipes and fixes the layout every recipe follows.
 
 | Recipe | Starts from | Shows |
 |---|---|---|
-| [`sre-triage`](sre-triage/README.md) | An Alertmanager alert posted to Slack | The `alertmanager` trigger preset, alert threads keyed by alert, and a read-only kagent agent that reads the cluster and can ask a question |
+| [`sre-triage`](sre-triage/README.md) | An Alertmanager alert posted to Slack | A `botMessage` trigger written in full for Alertmanager's posts, alert threads keyed by alert, and a read-only kagent agent that reads the cluster and can ask a question |
 | [`custom-bot-trigger`](custom-bot-trigger/README.md) | Another bot's post, such as a failed CI run | A hand-written `botMessage` trigger: `match`, `exclude`, `extract`, `thread` with a cooldown and `closeWhen`, `limits` and `promptTemplate`. Agent Kourier resources only; bring your own agent |
 
 ## Layout
@@ -57,7 +57,7 @@ tests may: `go test ./test/kindmanifests` pins the manifests in `sre-triage/agen
 ### Trigger evals
 
 A recipe whose Binding has a `botMessage` trigger can pin what that trigger takes in `evals/triggers.yaml`. The test
-builds the Binding from the recipe's `kourier/` directory, with defaults and presets applied, and hands each case's
+builds the Binding from the recipe's `kourier/` directory, with the loader's defaults applied, and hands each case's
 message to the same matcher the intake uses for a live message (the one `agent-kourier dry-run` replays history
 through). A case whose result differs from `expect` fails the test; the failure names the recipe, the case, what was
 expected and what came out, and, for a message of a named bot that no trigger took, each trigger and the field whose
@@ -118,8 +118,7 @@ evidence:                         # what a good answer cites
 The test fails, naming the file, for a field the shape does not have, a missing or blank `name`, `app`, `cause` or `evidence`, a
 blank evidence item, or neither or both of `alert` and `question`. A recipe without scenarios is not tested for this.
 What a field refers to is for the recipe's own tests: `go test ./test/kindmanifests` requires `sre-triage` to have
-exactly one scenario for each Deployment of its `faults.yaml`, and each of its alerts to be the preset that the sandbox
-fires for that app.
+exactly one scenario for each Deployment of its `faults.yaml`, and each of its alerts to be one the sandbox fires for that app.
 
 ## Planned recipes
 

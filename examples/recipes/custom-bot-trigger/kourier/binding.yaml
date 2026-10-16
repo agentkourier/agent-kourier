@@ -1,5 +1,5 @@
 # A CI bot's failure posts start an investigation in the channel, one thread per pipeline and branch.
-# The trigger is written by hand: there is no preset for this bot. The regexes read a made-up message shape;
+# The trigger is written by hand. The regexes read a made-up message shape;
 # replace them with ones written against your own bot's messages (see the README).
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding

@@ -14,9 +14,9 @@ repository, so what you read here is what the repository holds.
 
 The `sre-triage` recipe starts an investigation in the thread of each alert that Alertmanager posts to a channel. The
 agent reads the cluster with read-only tools, says what it found and what it checked, and can ask the thread a
-question. Its trigger is the `alertmanager` preset, so each alert group gets one thread, a repeat inside the cooldown
-or the thread's 24-hour idle limit adds a note, a resolve closes the thread, and the preset's limits apply: see
-[Investigate Alertmanager alerts](investigate-alertmanager-alerts.md).
+question. Its trigger is a `botMessage` trigger written in full, so each alert group gets one thread, a repeat inside the
+cooldown or the thread's 24-hour idle limit adds a note, a resolve closes the thread, and the trigger's limits apply: see
+[Investigate Alertmanager alerts](investigate-alertmanager-alerts.md), which shows the same trigger.
 
 !!! warning "The agent half runs on the kind full tier"
 
@@ -101,9 +101,9 @@ to read an agent's answer against. Nothing runs them yet, and their shape may ch
 
 ## Start investigations from a CI bot's failure posts
 
-The `custom-bot-trigger` recipe is for a bot that has no preset: Alertmanager is the only one with a preset. A CI
-system posts a message to a channel when a pipeline fails, and the recipe starts an investigation in a thread of its
-own for each pipeline and branch. It holds Agent Kourier's resources only and ships no agent, so the backend's `url`
+The `custom-bot-trigger` recipe is for any bot whose posts you want to act on: its trigger is written by hand, as the
+Alertmanager trigger is. A CI system posts a message to a channel when a pipeline fails, and the recipe starts an
+investigation in a thread of its own for each pipeline and branch. It holds Agent Kourier's resources only and ships no agent, so the backend's `url`
 has to point at an A2A agent you run. The trigger is written in full, as in
 [Start investigations from any bot's messages](any-bot-trigger.md): `match` and `exclude` pick out the bot's failure
 posts, `extract` pulls out a state, a pipeline and a key, `thread` gives one thread to each key and closes it when the
@@ -134,9 +134,9 @@ ChatConnection that names the Secret `slack-ci`. Replace `CREPLACEME` and `B0REP
 
 <!-- name-check: on -->
 
-With no `limits`, a trigger that has no preset is unlimited, so a storm of failing pipelines would start as many
-investigations. The recipe's README has the commands to create the Secret, load the directory into the chart and
-replay the channel's history through the trigger first.
+A `botMessage` trigger does not load without `limits`, and the limits are what bound a storm of failing pipelines,
+which would otherwise start as many investigations. The recipe's README has the commands to create the Secret, load the
+directory into the chart and replay the channel's history through the trigger first.
 
 ### Check it
 

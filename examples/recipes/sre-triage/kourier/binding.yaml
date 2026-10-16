@@ -3,10 +3,11 @@
 # B0REPLACEME with the bot ID of the Slack integration that posts the alerts; the bot ID is the message's bot_id, not the
 # app ID (A...) and not a display name.
 #
-# The trigger is the alertmanager preset, narrowed to one Alertmanager receiver. The preset supplies the thread per
-# alert group, the 4h cooldown, the close on RESOLVED, the limits and the first prompt. The titleLink match names the
-# receiver, and the $ anchors it so that receiver=slack-critical does not also take receiver=slack-critical-eu. The
-# exclude turns away the Watchdog heartbeat if your Alertmanager routes it to the same receiver.
+# The trigger is written in full, as in the Alertmanager how-to: its regexes read Alertmanager's Slack receiver message,
+# the thread is one per alert group with a 4h cooldown, a RESOLVED closes it, and the limits and the first prompt are set
+# here. The titleLink match names the receiver, and the $ anchors it so that receiver=slack-critical does not also take
+# receiver=slack-critical-eu. The exclude turns away the Watchdog heartbeat if your Alertmanager routes it to the same
+# receiver.
 # triggers is the whole list and holds no mention trigger: a mention in the channel starts nothing. A reply in an alert's
 # thread continues that thread's session (chat.threadReplies defaults to all).
 #
@@ -30,7 +31,30 @@ spec:
     triggers:
       - type: botMessage
         from: {botId: B0REPLACEME}
-        preset: alertmanager
-        match: {titleLink: 'receiver=slack-critical$'}
+        match:
+          titleLink: 'receiver=slack-critical$'
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+          fallback: '^\[(?:FIRING(?::\d+)?|RESOLVED)\] '
         exclude: {title: ' - Watchdog$'}
+        extract:
+          state:
+            field: title
+            regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)'
+          key:
+            field: fallback
+            regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])'
+          alertname:
+            field: title
+            regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$'
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          maxRunsPerDay: 40
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools. Report the likely cause, the evidence you
+          checked, and the next steps a person should take.
   interactions: {askUser: true}
