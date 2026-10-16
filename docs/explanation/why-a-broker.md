@@ -13,10 +13,8 @@ Agent Kourier handles the messaging work in a shared broker. Developers connect 
 streaming A2A endpoint through a declarative `Binding`, without adding Slack-specific code to the agent. Messages and
 alerts reach the agent through A2A, and its answers return to the Slack thread.
 
-When the project started, kagent had no webhook trigger and no way to take in alerts, and
-upstream had declined a Slack bot in core. A kagent maintainer stated that events arriving while an agent is asleep need
-a third party to act as a broker. The chat half of the problem was partly solved elsewhere; what was missing was the
-combination:
+Agents that are asleep or scaled to zero cannot receive an alert or a Slack message, so something else has to take it in
+and hold it. Existing Slack bridges covered part of this, but none provided the combination we needed:
 
 1. An alert becomes a Slack thread that is also a live agent session.
 2. People continue that session, and answer the agent's questions, in the thread.
@@ -60,8 +58,9 @@ oauth2-proxy in front of the agent. See [Security model](security.md).
 ## Why outside the paging path
 
 Agent Kourier is an additional reader of alerts, never a replacement. It reads the alert your alerting tool already posts
-to Slack. It is not an Alertmanager receiver and takes no webhook, so Alertmanager's routes are untouched. An Agent Kourier outage therefore never loses a
-page: the alert has already reached people through its own receiver. For the same reason, an alert that a rate limit or
+to Slack. It is not an Alertmanager receiver and takes no webhook, so Alertmanager's routes are untouched. An Agent
+Kourier outage does not stop an alert from reaching Slack, because the alert has already reached people through its own
+receiver. For the same reason, an alert that a rate limit or
 daily cap stops is not posted about one by one; it is counted in one digest line.
 
 ## Why protocol first

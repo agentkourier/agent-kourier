@@ -145,12 +145,12 @@ broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-
 Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with
 no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
 the actor with a static `ate-target-actor` header from `spec.headers`; the agent is
-an A2A server running as an ax task, which you build and run (ax ships none). No
+an A2A server running as an AX Task, which you build and run (AX does not ship one). No
 front door sits in this path, so the agent must verify the Binding's bearer ID token
 itself, as the reference agent does (issuer, audience and subject), or an
 OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
 in-thread text answers are tested in the AX kind tier. Structured tool approvals and
-tool step cards are kagent-only; the generic dialect shows no tool steps, and a structured pause cancels the task with a notice. ax's own
+tool step cards are kagent-only; the generic dialect shows no tool steps, and a structured pause cancels the task with a notice. AX's own
 lifecycle (task, template, egress policy) stays with the operator. See the
 [AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).

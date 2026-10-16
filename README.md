@@ -2,7 +2,7 @@
   <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: every thread, a live agent session." width="100%">
 </h1>
 
-<p align="center"><strong>Declarative chat gateway for Kubernetes agents.</strong></p>
+<p align="center"><strong>Declarative chat broker for Kubernetes agents.</strong></p>
 
 Agent Kourier connects Kubernetes agents to Slack without adding Slack-specific code to
 each agent. It carries messages and alerts to a supported streaming A2A endpoint and
@@ -166,8 +166,8 @@ backend's authorization identity.
 
 This lets an alert start an investigation and several channel members continue it
 under the same backend account, without each supplying a backend token. In the tested
-kagent 1.0.0-alpha5 OIDC setup, keeping that account stable matters because a session
-accepts requests only from its owner.
+kagent 1.0.0-alpha5 OIDC setup, a session accepts requests only from the identity that created it, so the Binding's
+identity must not change while its sessions are open.
 
 [Create the Binding identity](docs/how-to/create-binding-identity.md) explains how to choose a user ID or obtain
 and store an issued token, including a Dex example. Agent Kourier does not create accounts or mint tokens.

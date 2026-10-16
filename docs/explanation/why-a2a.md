@@ -6,9 +6,12 @@ platform, and what that choice costs.
 ## The choice
 
 Agent Kourier talks to every agent through the [Agent2Agent (A2A) protocol](https://a2a-protocol.org): JSON-RPC over
-HTTP, version 1.0 or 0.3, with streaming. A kagent agent, an agent running in a Google AX Task and a service you wrote
-yourself sit behind the same client. kagent adds one published extension, for structured questions and tool steps,
-which the `kagent-v1` dialect reads. Everything else is plain A2A, spoken by the generic `a2a` dialect.
+HTTP, version 1.0 or 0.3, with streaming. To the broker, a kagent agent, an agent running in a Google AX Task and any
+other agent that serves A2A look the same. kagent adds one published extension, for structured questions and tool
+steps, which the `kagent-v1` dialect reads. Everything else is plain A2A, spoken by the generic `a2a` dialect.
+
+kagent is the first backend we tested because it is the default way to provision agents, and it is Kubernetes-native by
+design. Agent Kourier does not depend on kagent: an AX agent or any other A2A agent connects through the same `Binding`.
 
 ## What the broker needs from an agent
 

@@ -80,7 +80,7 @@ Alert messages, other bots' messages, people's replies and agent output are all 
 
 ## The paging path
 
-Agent Kourier is not an Alertmanager receiver. It reads the alert your alerting tool already posts to Slack, so an Agent Kourier outage never loses a page.
+Agent Kourier is not an Alertmanager receiver. It reads the alert your alerting tool already posts to Slack, so an Agent Kourier outage does not stop an alert from reaching Slack.
 
 ## Not in scope
 

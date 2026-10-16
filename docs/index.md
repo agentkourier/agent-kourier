@@ -68,8 +68,9 @@ configuration to connect to Slack, with no Slack-specific code added to the agen
 
     ---
 
-    One broker between the chat, the alerts and your agents: a thread is a session, a restart loses no message, and
-    [two replicas on Postgres](explanation/high-availability.md) fail over without losing one.
+    One broker between the chat, the alerts and your agents: a thread is a session, conversations resume after a restart, and
+    [two replicas on Postgres](explanation/high-availability.md) fail over. The [delivery](explanation/delivery.md) and
+    failover pages say what a restart or failover can still repeat.
 
     [:octicons-arrow-right-24: Architecture](explanation/architecture.md)
 
