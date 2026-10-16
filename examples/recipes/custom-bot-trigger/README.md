@@ -1,8 +1,7 @@
 # custom-bot-trigger
 
 A CI system posts a message to a Slack channel when a pipeline fails. This recipe turns each failure into an agent
-investigation in its own thread, using a `botMessage` trigger written by hand, because no preset exists for this bot
-(the only preset is for Alertmanager).
+investigation in its own thread, using a `botMessage` trigger written by hand.
 
 It holds the Agent Kourier side only: a Binding, the AgentBackend and ChatConnection it refers to, and trigger evals.
 It ships no agent. Point the Binding at any agent you run; the [`sre-triage`](../sre-triage/README.md) recipe shows one wired to read-only
@@ -49,7 +48,7 @@ All of this is in the Binding's `triggers[0]`. The fields are described in
 | `thread.cooldown` | `2h` | After a thread closes, the key starts no new investigation until 2 hours after the message that started the thread; a failure inside that window adds a "Fired again" note to the closed thread and reopens it. The window is 1 minute to 168 hours. |
 | `thread.maxIdle` | `12h` | An open thread with no message of its key for this long counts as abandoned, and the key's next failure starts a new investigation. This covers a success post that never arrived. It must be at least twice the cooldown and at most 720 hours; unset, it is the larger of 24 hours and twice the cooldown. |
 | `thread.closeWhen` | `state: PASSED` | A message whose extracted fields all equal the entry closes its thread with a note and starts no turn. The field must be one the trigger extracts. |
-| `limits` | 3 starts in any 15 minutes, 1 at once, 20 a day | A start a limit stops makes no turn and posts nothing under the failure post; once per window one line in the channel counts the stopped starts. Only a start is limited. **A trigger with no `limits` and no preset is unlimited**, so a storm of failing pipelines would start as many investigations. |
+| `limits` | 3 starts in any 15 minutes, 1 at once, 20 a day | A start a limit stops makes no turn and posts nothing under the failure post; once per window one line in the channel counts the stopped starts. Only a start is limited. **A `botMessage` trigger does not load without `limits`**, and the limits are what bound a storm of failing pipelines, which would otherwise start as many investigations. |
 | `promptTemplate` | reads `.Fields.state`, `.Channel` and `.Fields.pipeline` | A Go template over the trigger's view of the message. It is parsed and run once at load, so a field the trigger does not extract rejects the Binding. |
 
 While a key's thread is open, every further failure of that key that comes within 12 hours of the key's last

@@ -19,9 +19,10 @@ the cluster with read-only tools, says what it found and what it checked, and ca
   Binding lists only the alert trigger.
 - The agent can ask the thread a question with its `ask_user` tool and waits for the answer (`askUser: true`).
 
-The trigger is the `alertmanager` preset, which supplies the thread, the cooldown, the close, the limits and the first
-prompt; the Binding narrows it to one receiver and turns away the Watchdog heartbeat. The preset's values are in
-[Chat triggers](../../../docs/reference/chat-triggers.md).
+The trigger is a `botMessage` trigger written in full in `kourier/binding.yaml`: its regexes, the thread per alert group,
+the 4h cooldown, the close, the limits and the first prompt. It is the same trigger as in
+[Investigate Alertmanager alerts](../../../docs/how-to/investigate-alertmanager-alerts.md). The Binding narrows it to one
+receiver and turns away the Watchdog heartbeat. The fields are in [Chat triggers](../../../docs/reference/chat-triggers.md).
 
 The agent cannot change anything, three ways. Its tool server's ServiceAccount is bound to the built-in `view`
 ClusterRole (cluster-wide, which has no write verbs and no access to Secrets); the tool server runs with `--read-only`;
@@ -42,9 +43,9 @@ evals/
 - **Slack.** A Slack app with a bot token and an app-level token, and the bot invited to the alert channel: see
   [Configure Slack](../../../docs/how-to/configure-slack.md). You need the channel's ID and the bot ID (`B...`) of the
   integration that posts the alerts: the `bot_id` of the alert messages, not the app ID and not a display name.
-- **An Alertmanager Slack receiver in the preset's shape.** The title must read `FIRING (<n>) - <alertname>` or
+- **An Alertmanager Slack receiver in the shape the trigger matches.** The title must read `FIRING (<n>) - <alertname>` or
   `RESOLVED - <alertname>`, and the fallback must be Alertmanager's default one. Alertmanager's own default title does
-  not match. A title template that does, the sandbox's receiver's without its `[kind] ` tag (the preset accepts the
+  not match. A title template that does, the sandbox's receiver's without its `[kind] ` tag (the trigger accepts the
   title with or without a `[tag] ` prefix of up to 32 bytes):
 
   ```yaml
@@ -57,7 +58,7 @@ evals/
   The group labels (`group_by`) decide the thread: alerts that share their values share a thread.
 - **A `repeat_interval` under 24 hours.** An alert that keeps firing is posted again at the receiver's `repeat_interval`
   (Alertmanager's behaviour, which this repository does not check). If that is longer than the trigger's
-  `thread.maxIdle`, which is 24 hours with the preset's cooldown unless you set it, the open thread counts as abandoned between two repeats and the
+  `thread.maxIdle`, which is 24 hours with the 4h cooldown unless you set it, the open thread counts as abandoned between two repeats and the
   next one starts a second investigation. Keep `repeat_interval` under 24 hours, or set `thread.maxIdle` above it.
 - **kagent 1.0.0-alpha5 on Agent Substrate, behind a verifying front door.** The agent in `agent/` is a kagent
   `Agent` that runs on a Substrate worker pool, as kagent 1.0 runs every agent. **The agent half runs on the kind full
@@ -161,8 +162,8 @@ Then wait for the next alert on the receiver. A thread opens under it and the in
 
 - **The channel, the bot and the receiver**: `kourier/binding.yaml`, as above. If you change the bot ID there, change
   `B0REPLACEME` in `evals/triggers.yaml` to match, or the evals no longer describe your Binding.
-- **The cooldown and the limits**: override them on the trigger, for example `thread: {cooldown: 2h}` or
-  `limits: {maxRunsPerDay: 20}`; each field you set replaces the preset's, and the others stay.
+- **The cooldown and the limits**: change the values in the trigger in `kourier/binding.yaml`, for example
+  `cooldown: 2h` under `thread` or `maxRunsPerDay: 20` under `limits`.
 - **How long a quiet open thread lasts**: `thread: {maxIdle: 48h}` on the trigger, for a `repeat_interval` of 24 hours
   or more. Set it above the `repeat_interval`; it must also be at least twice the cooldown and at most 720h.
 - **A mention trigger**: add `- type: mention` to `triggers` if people should also be able to start a session by
