@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,9 @@ import (
 // a model call that failed upstream left the thread empty. The outcome counter goes up by one for each.
 //
 // The fast tier only: the full tier's kagent has no agent of that name, so its Binding for CS12 points nowhere.
+// troubleshootingRef matches the reference a failure notice ends with (internal/session/failure.go).
+var troubleshootingRef = regexp.MustCompile(`AK-[0-9a-f]{24}`)
+
 func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier == "full" {
@@ -48,7 +52,9 @@ func TestS12_ATurnThatEndsWithoutOutputIsTold(t *testing.T) {
 			})
 			// The status message of the failed task has a key's last characters in it: the thread shows no part of it.
 			for _, b := range BotMessages(th) {
-				if strings.Contains(b.Text, "wxyz") || strings.Contains(b.Text, "401") || strings.Contains(b.Text, "AGENT_SECRET_MARKER") {
+				// The troubleshooting reference is random hex, which can hold "401" by chance; it is not the agent's text.
+				text := troubleshootingRef.ReplaceAllString(b.Text, "AK-…")
+				if strings.Contains(text, "wxyz") || strings.Contains(text, "401") || strings.Contains(text, "AGENT_SECRET_MARKER") {
 					t.Errorf("the thread says %q: the agent's status message reached it", b.Text)
 				}
 			}
