@@ -70,7 +70,7 @@ The Chrome extension's pointer is painted out only where it sat on blank chrome;
 ### The copy in the project README
 
 The project README plays the 16:9 demo from a GitHub attachment
-(`https://github.com/user-attachments/assets/c54bb9d3-bcac-45a7-9e35-9d46f16f45c8`). Attachments on the
+(`https://github.com/user-attachments/assets/e8dac6a8-534f-422e-aa24-4015e96e9772`). Attachments on the
 free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 570 kb/s
 (8.7 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
 repository without submitting it, and replace the URL in `README.md` with the one GitHub inserts.
@@ -82,3 +82,5 @@ ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 
 ```
 
 The attachment belongs to a private repository, so only people who can see the repository can play it.
+An attachment is authorized for the repository it was uploaded to: when the repository was re-created after its
+history was rewritten (2026-10-16), the old link stopped playing and the video had to be uploaded again.

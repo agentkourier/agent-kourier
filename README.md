@@ -20,7 +20,7 @@ tools and task logic; the broker owns the Slack connection and conversation deli
 
 ## What it looks like
 
-https://github.com/user-attachments/assets/c54bb9d3-bcac-45a7-9e35-9d46f16f45c8
+https://github.com/user-attachments/assets/e8dac6a8-534f-422e-aa24-4015e96e9772
 
 An illustration of one alert thread, not captured output:
 
