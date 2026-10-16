@@ -86,7 +86,8 @@ The Binding is validated when it loads: a regex that does not compile, an extrac
 ## Check it before going live
 
 Replay the channel's history through the trigger with a [dry run](tune-triggers.md). Each of the bot's messages should
-come out `matched`, with the state, alert name and key you expect, or `unmatched` with the regex that turned it away.
+come out `matched`, with the state, alert name and key you expect, `excluded` when an `exclude` regex turned it away, or
+`unmatched` with the step that turned it away (a `match` regex, an `extract`, or the sender's kind).
 Tune the regexes until the lines read right, then load the Binding.
 
 After it is live, `agentkourier_trigger_matched_total` and `agentkourier_trigger_unmatched_total` count the bot's

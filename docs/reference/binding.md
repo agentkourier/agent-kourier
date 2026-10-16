@@ -108,7 +108,7 @@ BotSource identifies the sender whose messages a trigger accepts: a message matc
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). Agent Kourier's own ID is refused at runtime: the load cannot know it. Pattern `^B[A-Z0-9]+$`. |
+| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives. Pattern `^B[A-Z0-9]+$`. |
 | `kind` | string | No | `bot` | Kind is what kind of sender ID names. Only bot exists today, and it is the default. One of `bot`. |
 
 ## Extract

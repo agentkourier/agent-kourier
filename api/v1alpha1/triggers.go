@@ -91,8 +91,9 @@ type Trigger struct {
 // BotSource identifies the sender whose messages a trigger accepts: a message matches only when its sender's ID
 // and kind both equal ID and Kind.
 type BotSource struct {
-	// ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). Agent Kourier's own
-	// ID is refused at runtime: the load cannot know it.
+	// ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
+	// Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
+	// matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
 	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
 	ID string `json:"id"`
 	// Kind is what kind of sender ID names. Only bot exists today, and it is the default.

@@ -38,7 +38,7 @@ spec:
           cooldown: 2h         # no second investigation for a key within 2h of the first starting
           maxIdle: 12h         # a thread with no message of its key for 12h counts as abandoned
           closeWhen: { state: PASSED }
-        limits:                # without limits a trigger is unlimited
+        limits:                # required: without rateLimit, or without maxRunsPerDay, the Binding does not load
           rateLimit: { maxRuns: 3, per: 15m, maxConcurrent: 1 }
           maxRunsPerDay: 20
         promptTemplate: |

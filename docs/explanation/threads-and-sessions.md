@@ -34,7 +34,7 @@ a redelivery of either, are one turn.
 
 ## Who the agent hears from
 
-Every turn runs as the Binding's service identity, whoever typed it. Agent Kourier puts the person's name and ID at the
+Every turn runs as the Binding's service identity, whoever typed it. Agent Kourier puts the person's name and ID, behind a label that names the chat platform (`Slack:`), at the
 start of the text they wrote. That prefix is informational, never authorization, and it is load-bearing: in kagent's
 measured behaviour the agent's own earlier replies reach the model as user messages, so the prefix is what tells a person's message from the
 agent's own output.

@@ -225,6 +225,16 @@ func TestLoadRejectsBadTriggers(t *testing.T) {
 				who + "spec.chat.triggers[0].promptTemplate: required",
 		},
 		{
+			name:     "a trigger written for the last tag: preset and from.botId",
+			triggers: "      - { type: botMessage, from: { botId: B0123456789 }, preset: alertmanager }\n",
+			want: who + "spec.chat.triggers[0].from.botId: unknown field\n" +
+				who + "spec.chat.triggers[0].preset: unknown field\n" +
+				who + "spec.chat.triggers[0].from.id: required\n" +
+				who + "spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; " + hint + "\n" +
+				who + "spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; " + hint + "\n" +
+				who + "spec.chat.triggers[0].promptTemplate: required",
+		},
+		{
 			name:     "match on titleLink and attachmentText, which are now link and body",
 			triggers: alertmanagerTrigger("          titleLink: 'receiver=a'\n          attachmentText: x\n", alertmanagerLimitsYAML),
 			want: who + `spec.chat.triggers[0].match.attachmentText: unsupported message field "attachmentText", must be one of text, title, link, fallback, footer, body` + "\n" +

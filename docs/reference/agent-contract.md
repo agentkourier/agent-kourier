@@ -43,7 +43,7 @@ Every send is one user message with **exactly one text part**. No data or file p
 | `messageId` | Fixed for each chat message. A turn sent again, after `-32004` or an unknown outcome, keeps it. An answer to a question has its own |
 | `contextId` | Empty on a thread's first turn. After that, the context the agent returned |
 | `taskId` | Set only on an answer, to the paused task. A new turn never sets it |
-| `metadata["agentkourier.dev/actor"]` | On a turn a person wrote: `id`, the person's ID on the chat platform (Slack: `U123`); `platform`, the platform's ID (`slack`); and `name` and `email` when the chat platform knows them. A turn that a trigger started, such as an alert, carries none |
+| `metadata["agentkourier.dev/actor"]` | On a turn a person wrote: `id`, the person's ID on the chat platform (Slack: `U123`); `platform`, the platform's ID (`slack`); and `name` and `email` when the chat platform knows them. An answer to a question or an approval carries `id` and `platform` for the person who decided, and no `name` or `email`. A denial Agent Kourier makes itself, for an approval that timed out or one the Binding does not allow, carries `id` `agent-kourier`, with the Binding's `platform`. A turn that a trigger started, such as an alert, carries none |
 
 The text of a turn a person wrote starts with `[<Platform>: Name (id) <email>]` and a newline, except in a `kagent-v1`
 structured answer. `<Platform>` is the chat platform's display name, so on Slack the prefix reads

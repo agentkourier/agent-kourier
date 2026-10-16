@@ -104,7 +104,7 @@ The template sees:
 | `.State` | The extracted `state`, empty if none. |
 | `.Key` | The extracted `key`. |
 | `.Fields` | Every extracted value, by name. |
-| `.Link` | The Slack permalink of the triggering message, built by Agent Kourier, never a field of the message. |
+| `.Link` | The platform's permalink to the triggering message (Slack: the message permalink), built by Agent Kourier, never a field of the message. Empty when the platform makes none or cannot make one. |
 | `.Source` | `botMessage`. |
 
 `.Fields`, `.State` and `.Key` come out of the sender's message, so each value the template reads is checked before it

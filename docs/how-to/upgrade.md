@@ -57,19 +57,48 @@ until the old pods have terminated, then upgrade again with `replicaCount` resto
 if `podDisruptionBudget` is enabled, switch it off or to `maxUnavailable` before scaling to zero (see the chart's
 values).
 
-## Upgrade to the release without trigger presets
+## Upgrade to the release that writes triggers in full
 
-A `botMessage` trigger is no longer filled in from a preset, and it must set its limits. A Binding that loaded before the
-upgrade can fail to load after it, so change your Bindings before you upgrade.
+A `botMessage` trigger is written in full in this release: nothing fills it in from a preset, it names its sender and the
+message fields it reads in terms that do not belong to one chat platform, and it must set its limits. The last tagged
+release, `v0.0.0-dev.4`, came before all of these changes, so a trigger written for it meets them together. A Binding
+with a `botMessage` trigger fails to load until you change it, so change your Bindings before you upgrade. A Binding
+with only `mention` triggers loads as before.
 
-- **`preset:` is not a field.** A trigger that sets it fails to load. The loader names the file, the Binding and the
-  field, for example `b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].preset: unknown field`. Nothing reads or
-  translates the old value.
-- **Limits are required.** A `botMessage` trigger without `limits.rateLimit` (all of `maxRuns`, `per` and
-  `maxConcurrent`) or without `limits.maxRunsPerDay` fails to load, and the error names the missing field. Before, such a
-  trigger loaded and started with no limit. `maxRunsPerDay: 0` still means no daily cap, and now has to be written.
+**What changed in a `botMessage` trigger.**
 
-A trigger that sets only a bot ID and a preset gives several errors at once: the unknown field, each missing limit and the missing prompt.
+- **`preset:` is not a field.** Nothing reads or translates the old value. The trigger the preset stood for is written
+  out in [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger).
+- **Limits are required.** A trigger without `limits.rateLimit` (all of `maxRuns`, `per` and `maxConcurrent`) or without
+  `limits.maxRunsPerDay` fails to load. Before, such a trigger loaded and started with no limit. `maxRunsPerDay: 0` still
+  means no daily cap, and now has to be written.
+- **Three names changed, and their values did not.**
+
+  | Before | Now | Where |
+  |---|---|---|
+  | `botId` | `id` | `from` |
+  | `titleLink` | `link` | the keys of `match` and `exclude`, and `field` of an `extract` entry |
+  | `attachmentText` | `body` | the keys of `match` and `exclude`, and `field` of an `extract` entry |
+
+  `from.id` is still the bot ID (`B...`) on Slack. `link` still holds the first legacy attachment's `title_link` and
+  `body` its `text`; `text`, `title`, `footer` and `fallback` keep their names.
+- **`from.kind` is new and optional.** It is `bot`, the default and the only value. A trigger takes a message only when
+  the sender's ID and kind both equal `from.id` and `from.kind`; every Slack bot is of kind `bot`.
+
+**What an old trigger reports.** The loader names the file, the Binding and the field of each problem. A trigger written
+for the last tag that sets only a bot ID (as `botId`) and a preset reports all of these, in one run:
+
+```text
+b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].from.botId: unknown field
+b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].preset: unknown field
+b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].from.id: required
+b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)
+b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; see the example in how-to/investigate-alertmanager-alerts (https://agentkourier.dev/how-to/investigate-alertmanager-alerts/)
+b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].promptTemplate: required
+```
+
+A trigger that did not use a preset reports only some of these. One that still has a `match`, `exclude` or `extract` on
+`titleLink` or `attachmentText` also reports `unsupported message field`, and the error lists the field names that exist.
 
 **What the broker does with a Binding that does not load.** One Binding that fails fails the whole config, so none of
 them is served.
@@ -87,64 +116,44 @@ them is served.
   start. A reload happens with `config.existingConfigMap`, or when the mounted files change in a running pod.
 
 The broker's log line, at start-up and on a reload, cuts the error text after 300 bytes, so with several errors you may see
-only the first, or part of it. Run `agent-kourier dry-run` (step 4 below) to see every error: it prints the
+only the first, or part of it. Run `agent-kourier dry-run` (step 3 below) to see every error: it prints the
 whole text.
 
-**Migrate each Binding that sets `preset:`.**
+**Migrate each Binding that has a `botMessage` trigger.**
 
-1. Copy the trigger from [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger) in place
-   of the preset trigger. Apart from `match.link`, it is the old preset written out: the same regexes, a 4 hour
-   cooldown, 5 starts in 10 minutes with 2 at once, 40 a day, and the prompt.
-2. Handle `match.link`. The example's is not part of the old preset: it limits the trigger to one receiver. Keep it,
-   set to your receiver, only if your preset trigger matched the title's link. Delete it otherwise, or the alerts of your
-   other receivers start nothing.
-3. Re-apply the rest of what you overrode, in the same fields: `exclude`, `thread`, `limits` or `promptTemplate`.
-4. Replay the channel's history with `agent-kourier dry-run` from the release you are upgrading to, against the edited
+1. If it sets `preset:`, replace the trigger with the one in
+   [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger). Apart from `match.link`, it is
+   the old preset written out: the same regexes, a 4 hour cooldown, 5 starts in 10 minutes with 2 at once, 40 a day, and
+   the prompt. Keep `match.link` only if your preset trigger matched the receiver in the title's link, set to your
+   receiver. It is not part of the old preset, and the alerts of your other receivers start nothing if you leave it in.
+   Then carry over what you overrode, under the new names: an `exclude`, `thread`, `limits` or `promptTemplate`, and a
+   `match`, `exclude` or `extract` on `titleLink` or `attachmentText` becomes one on `link` or `body`.
+2. If it does not set `preset:`, rename `botId`, `titleLink` and `attachmentText` as the table says, and add the
+   `limits` you want.
+3. Replay the channel's history with `agent-kourier dry-run` from the release you are upgrading to, against the edited
    Bindings ([Tune triggers with a dry run](tune-triggers.md)). It loads them with the broker's own loader, so it prints
-   the same errors the broker would, and each Alertmanager message should come out `matched`. The older release accepts
-   `preset:`, so its binary proves nothing.
+   the same errors the broker would, and each message you expect to start an investigation should come out `matched`.
+   The older release's binary proves nothing: it accepts `preset:` and `botId` and rejects the new keys.
 
-**The session source.** A trigger start now records the source `botMessage`, in `sessions.origin_source` and in the
-prompt's `.Source`; a start from a preset trigger recorded `alertmanager`. A `promptTemplate` that tested `.Source`
-against `alertmanager` needs the new value. Sessions created before the upgrade keep `alertmanager`, and a vote on
-their messages still counts under the alert's name ([Stored data](../reference/stored-data.md#feedback)).
+**What else changes.**
 
-## Upgrade to the release with platform-neutral trigger fields
-
-A trigger names its sender and the message fields it reads in terms that do not belong to one chat platform, and the
-API no longer fills in the acknowledgment reaction. A Binding written for the earlier release fails to load, so change
-your Bindings before you upgrade. If you also migrate off `preset:`, make both changes in one edit: the example in
-[Investigate Alertmanager alerts](investigate-alertmanager-alerts.md#add-the-trigger), which the preset section points to,
-already uses the new names.
-
-| Before | Now | Where |
-|---|---|---|
-| `botId` | `id` | `from` of a `botMessage` trigger |
-| `titleLink` | `link` | the keys of `match` and `exclude`, and `field` of an `extract` entry |
-| `attachmentText` | `body` | the keys of `match` and `exclude`, and `field` of an `extract` entry |
-
-- **The values do not change.** `from.id` is still the bot ID (`B...`) on Slack. `link` still holds the first legacy
-  attachment's `title_link` and `body` its `text`; `text`, `title`, `footer` and `fallback` keep their names.
-- **The old keys fail to load.** The loader names the file, the Binding and the field, for example
-  `b.yaml#1 Binding sre/sre-alerts: spec.chat.triggers[0].from.botId: unknown field`, then `from.id: required`. A
-  `match`, `exclude` or `extract` on `titleLink` or `attachmentText` fails with `unsupported message field`, and the
-  error lists the field names that exist.
-- **`from.kind` is new and optional.** It is `bot`, the default and the only value. A trigger takes a message only when
-  the sender's ID and kind both equal `from.id` and `from.kind`; every Slack bot is of kind `bot`.
+- **The session source.** A trigger start records the source `botMessage`, in `sessions.origin_source` and in the
+  prompt's `.Source`; a start from a preset trigger recorded `alertmanager`. A `promptTemplate` that tested `.Source`
+  against `alertmanager` needs the new value. Sessions created before the upgrade keep `alertmanager`, and a vote on
+  their messages still counts under the alert's name ([Stored data](../reference/stored-data.md#feedback)).
 - **The first prompt names the fields differently.** The block of untrusted data that follows a trigger's prompt has an
   element for each field the message has, named by the field: `<link>` and `<body>` where `<titleLink>` and
   `<attachmentText>` were. An agent instruction that names those elements needs the new names. A prompt template reads
   extracted values through `.Fields.<name>`, which are your own extract names, so a template is unaffected.
-- **The dry run names the new fields,** for example `trigger 1: match link`. Regexes are tried in the
-  order of the field names, so a message that fails two of them can now show a different field first.
+- **The dry run names the new fields,** for example `trigger 1: match link`, and for a sender of the right ID and the
+  wrong kind it says `sender kind`. Regexes are tried in the order of the field names, so a message that fails two of them
+  can now show a different field first.
 - **The acknowledgment reaction.** A Binding that left `chat.acknowledgment.emoji` out used to have
-  `hourglass_flowing_sand` written into it when it loaded. It now stays empty, and Slack supplies the same reaction, so
-  nothing changes on Slack. An `emoji` you set is used as before.
+  `hourglass_flowing_sand` written into it when it loaded. It now stays empty, and Agent Kourier's Slack adapter supplies
+  the same reaction, so nothing changes on Slack. An `emoji` you set is used as before.
 - **Alerts that are firing keep their threads.** An alert thread opened before the upgrade is looked up by the same
-  connection, channel, bot ID and key as before, so a repeat of an alert whose thread is open finds that thread and
-  adds a "Fired again" note to it, as it did before the upgrade, instead of starting a second investigation.
-
-To migrate, rename the keys in the table, then replay the channel's history with `agent-kourier dry-run` from the
-release you are upgrading to, against the edited Bindings ([Tune triggers with a dry run](tune-triggers.md)). It loads
-them with the broker's own loader, so it prints the same errors the broker would, and each message you expect to start an
-investigation should come out `matched`. The older release does not accept the new keys, so its binary proves nothing.
+  connection, channel, bot ID and key as before, so a repeat of an alert whose thread is open finds that thread and adds a
+  "Fired again" note to it, instead of starting a second investigation.
+- **The actor names the platform.** The `agentkourier.dev/actor` metadata of a turn a person wrote gains `platform`
+  (`slack`). On Slack the text prefix is unchanged, `[Slack: Name (U123) <email>]`
+  ([Agent contract](../reference/agent-contract.md)).

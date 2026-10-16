@@ -6,6 +6,11 @@ A2A
 :   The Agent2Agent protocol. Agent Kourier speaks A2A 1.0 over JSON-RPC, and A2A 0.3 to an agent whose card is a 0.3
     card, and needs an agent that streams.
 
+Actor
+:   Who a turn is from, as the agent sees it: the `agentkourier.dev/actor` metadata (`id`, `platform`, and `name` and
+    `email` when the chat platform knows them) and the prefix at the start of the text. It is information for the agent,
+    never authorization ([Agent contract](agent-contract.md)).
+
 AgentBackend
 :   The resource that names an A2A endpoint and the dialect to speak to it. Owned by the platform team.
 
@@ -66,6 +71,11 @@ Leader
 :   With Postgres, the one replica that does Agent Kourier's work, chosen by a Kubernetes Lease. Its writes are fenced
     by an epoch in the database.
 
+Message field
+:   One of `text`, `title`, `link`, `body`, `footer` and `fallback`: what a trigger's `match`, `exclude` and `extract`
+    read. `text` is the message's top-level text. The others are the heading, the heading's URL, the main text, the
+    small print and the plain-text summary of the message's structured part (Slack: its first legacy attachment).
+
 Outbox
 :   The durable table of posts Agent Kourier means to make. A post is recorded before it is sent, so a crash between
     sending and recording is found and not posted twice.
@@ -81,6 +91,10 @@ Redaction
 
 Reply queue
 :   The durable queue of thread replies that wait for the agent's active task to end.
+
+Sender
+:   Who posted a message a `botMessage` trigger reads, named by `from.id` and `from.kind`. A message matches only when
+    both are equal to the sender's.
 
 Session
 :   The conversation between a thread and an agent context, stored by Agent Kourier. A thread is a session.

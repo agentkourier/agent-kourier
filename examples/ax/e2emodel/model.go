@@ -107,6 +107,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, _ bo
 					continue
 				}
 				for _, p := range c.Parts {
+					// The model sees text only, not the actor metadata, and Slack is the only platform under test.
 					if strings.HasPrefix(p.Text, "[Slack: ") {
 						users = append(users, p.Text)
 					}

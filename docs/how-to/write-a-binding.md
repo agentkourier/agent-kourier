@@ -41,7 +41,6 @@ spec:
     threadReplies: all # (5)!
     acknowledgment:
       enabled: true # (6)!
-      emoji: hourglass_flowing_sand
 ```
 
 1. The platform team's AgentBackend. A reference to another namespace works only if that resource lists your

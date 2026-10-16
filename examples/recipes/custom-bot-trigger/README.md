@@ -111,7 +111,8 @@ entries from `.Fields` instead.
     ```
 
     Each of the bot's posts should come out `matched`, with the state, pipeline and key you expect, `excluded` for a
-    retry or flaky marker, or `unmatched` with the regex that turned it away
+    retry or flaky marker (an `exclude` regex turned it away), or `unmatched` with the step that turned it away (a
+    `match` regex, an `extract`, or the sender's kind)
     ([Tune triggers with a dry run](../../../docs/how-to/tune-triggers.md)).
 6. Load the three resources into Agent Kourier. The chart mounts a `config.existingConfigMap` at the directory Agent
    Kourier reads, one key per file, so the directory makes one:
