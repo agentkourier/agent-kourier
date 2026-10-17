@@ -375,7 +375,7 @@ func startBotIntake(t *testing.T, triggers ...v1alpha1.Trigger) *botIntake {
 	go func() { done <- platform.Run(ctx, intake) }()
 	t.Cleanup(func() {
 		cancel()
-		<-done
+		_ = <-done
 		if got := sub.submitted(); len(got) != 0 {
 			t.Errorf("a bot's message started a session: %+v (the Intake hands starts on, and CT-4 starts the session)", got)
 		}

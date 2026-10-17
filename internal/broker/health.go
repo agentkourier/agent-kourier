@@ -156,6 +156,6 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, wait time.Durat
 	if err != nil {
 		_ = srv.Close() // the requests in flight did not finish in time: cut them
 	}
-	<-failed
+	_ = <-failed // Serve returns http.ErrServerClosed once Shutdown or Close stops it
 	return err
 }

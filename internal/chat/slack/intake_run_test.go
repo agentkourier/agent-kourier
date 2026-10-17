@@ -73,7 +73,7 @@ func startIntake(t *testing.T) (*fakeslack.Server, *submitter) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- platform.Run(ctx, intake) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); _ = <-done })
 	waitConnected(t, fake)
 	return fake, sub
 }
