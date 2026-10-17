@@ -70,12 +70,16 @@ func Run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Durati
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
 		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
+		err := srv.Shutdown(shutdown)
+		if err != nil {
 			// The grace ran out with requests still in flight. Shutdown leaves them running, so close their
 			// connections: their contexts end, and the process is not held up by a stream that never finishes.
-			return errors.Join(fmt.Errorf("shut down: %w", err), srv.Close())
+			err = errors.Join(fmt.Errorf("shut down: %w", err), srv.Close())
 		}
-		return nil
+		// Shutdown closes only the listeners Serve has taken, and Serve may not have started yet. It returns at once
+		// on a server that is shutting down, closing ln as it goes, so waiting for it is what keeps "It closes ln".
+		<-done
+		return err
 	}
 }
 

@@ -52,6 +52,25 @@ func TestRunReportsAServerFailure(t *testing.T) {
 	}
 }
 
+// TestRunHasClosedTheListenerWhenItReturns pins the "It closes ln" promise for a context that ends before the server
+// has started: Shutdown cannot close a listener that Serve has not taken yet, so Run must wait for Serve to close it.
+// One run rarely hits the window; many do.
+func TestRunHasClosedTheListenerWhenItReturns(t *testing.T) {
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	for i := range 500 {
+		ln := listen(t)
+		if err := httpserve.Run(ended, ln, http.NotFoundHandler(), time.Second); err != nil {
+			t.Fatalf("run %d: Run = %v, want nil", i, err)
+		}
+		d := net.Dialer{Timeout: 100 * time.Millisecond}
+		if c, err := d.DialContext(t.Context(), "tcp", ln.Addr().String()); err == nil {
+			_ = c.Close()
+			t.Fatalf("run %d: the listener still accepts connections after Run returned", i)
+		}
+	}
+}
+
 func listen(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
