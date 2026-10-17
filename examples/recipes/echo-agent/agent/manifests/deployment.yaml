@@ -12,7 +12,7 @@
 # Secret as a file, and set ECHO_AGENT_TOKEN_FILE to the file's path; the agent then answers 401 to any other caller.
 # It reads the file on every request, so a rotated token works without a restart; a mounted Secret reaches the pod
 # some time after Agent Kourier's watch sees the change, so a few 401s are possible meanwhile.
-# This demo never needs real data, so leave it open only on a network you trust.
+# networkpolicy.yaml lets only Agent Kourier's namespace reach the agent, where the network plugin enforces it.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -5,4 +5,4 @@ target-version = "py314"
 select = ["E", "F", "I", "B", "UP", "S", "SIM"]
 
 [lint.per-file-ignores]
-"test_*.py" = ["S101", "S105"]  # asserts and a fake token constant are what tests are made of
+"{test_*,conftest,harness}.py" = ["S101", "S105"]  # asserts and a fake token constant are what tests are made of

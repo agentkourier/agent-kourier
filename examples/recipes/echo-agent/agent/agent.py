@@ -1,7 +1,8 @@
 """A plain A2A agent for Agent Kourier, with no model: read it top to bottom to see what your agent must do.
 
 Each block names the row of docs/reference/agent-contract.md it satisfies. The a2a-sdk serves the protocol (JSON-RPC,
-streaming, GetTask, ListTasks, SubscribeToTask, CancelTask), so this file holds only the agent's own behaviour.
+streaming, GetTask, ListTasks, SubscribeToTask, CancelTask), so this file holds only the agent's own behaviour, plus one
+patch to how the SDK ends a stream (Handler, below).
 Say `ask`, `fail` or `help` to try the paths a real agent has too; anything else is echoed back.
 """
 
@@ -10,7 +11,6 @@ import hmac
 import math
 import os
 import re
-from collections import OrderedDict
 
 import uvicorn
 from a2a.helpers import new_task_from_user_message, new_text_part
@@ -32,7 +32,6 @@ from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 
 CHUNKS, CHUNK_DELAY = 8, 0.25  # a reply streams in 8 pieces over about two seconds, so Slack's live update shows
-MAX_CONTEXTS = 1000  # conversations remembered; the oldest is forgotten first
 
 HELP = "Say `ask` and I will ask you a question, `fail` and I will fail, anything else and I will echo it back."
 
@@ -63,7 +62,8 @@ class EchoExecutor(AgentExecutor):
     """One A2A task per turn: execute() runs it and cancel() stops it."""
 
     def __init__(self) -> None:
-        self.turns: OrderedDict[str, tuple[int, str]] = OrderedDict()  # contextId -> (turn number, last words)
+        # contextId -> (turn number, last words). Unbounded and lost on a restart: a real agent persists this.
+        self.turns: dict[str, tuple[int, str]] = {}
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         # Contract, Replies: every event names the task and its contextId. The SDK made both ids: a thread's first turn
@@ -80,11 +80,10 @@ class EchoExecutor(AgentExecutor):
             return await self.reply(task, f"You answered: {words}")
 
         # Contract, Replies: a thread keeps its contextId, so remember what was said in it. Agent Kourier may send a
-        # turn twice with the same messageId; echoing twice is harmless, but an agent with side effects must drop it.
-        turn, previous = self.turns.pop(context.context_id, (0, ""))
+        # turn twice with the same messageId; echoing twice is harmless, but an agent with side effects must drop the
+        # repeat: keep the messageIds it has run, or look for them in the task store's history.
+        turn, previous = self.turns.get(context.context_id, (0, ""))
         self.turns[context.context_id] = (turn + 1, words)
-        while len(self.turns) > MAX_CONTEXTS:
-            self.turns.popitem(last=False)
 
         if words.lower() == "ask":
             return await task.requires_input(task.new_agent_message([new_text_part("What should I echo?")]))
@@ -102,6 +101,8 @@ class EchoExecutor(AgentExecutor):
         for start in range(0, len(text), size):
             # `append` adds to the artifact's text; the first piece, without it, starts the artifact.
             await task.add_artifact([new_text_part(text[start : start + size])], artifact_id="reply", append=start > 0)
+            # A real agent awaits its model or a tool here. Send an event at least every 5 minutes, even during a long
+            # tool call (Contract, Replies), and expect asyncio.CancelledError here if the task is canceled.
             await asyncio.sleep(CHUNK_DELAY)
         await task.complete()  # publishes the final status update; Handler below ends the stream with the full Task
 
@@ -115,7 +116,8 @@ class Handler(DefaultRequestHandler):
 
     This works around the SDK: a2a-sdk 1.2.2 ends a streaming reply, and a SubscribeToTask stream, with the last status
     update, not a Task. Without this class Agent Kourier treats the stream as dropped and settles the turn with GetTask
-    about a second later. Delete it if a later SDK ends its streams with the Task (test_agent.py checks that they do).
+    about a second later. To check a newer SDK, delete the class and run the tests: while the SDK still ends with a
+    status update, every test that reads a stream's final Task fails.
     """
 
     async def on_message_send_stream(self, params, context):
@@ -145,7 +147,7 @@ class RequireBearer:
         self.app, self.token_file = app, token_file
 
     def allows(self, given: bytes) -> bool:
-        try:
+        try:  # a blocking read of a few bytes; a busy server would cache it by the file's mtime
             with open(self.token_file, "rb") as f:
                 token = f.read().strip()
         except OSError:

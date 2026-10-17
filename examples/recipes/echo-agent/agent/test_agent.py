@@ -1,122 +1,34 @@
 """Tests for agent.py, driven through the a2a-sdk's own client over an in-process ASGI transport: no port, no network.
 
-Each test names the row of docs/reference/agent-contract.md it proves. The finished-task tests pin what the SDK
-answers to calls that name a finished task; read the comment above them before upgrading a2a-sdk.
+Each test names the row of docs/reference/agent-contract.md it proves. test_sdk_codes.py pins what the SDK itself
+answers to calls that name a finished task.
 """
 
 import asyncio
-import contextlib
-import types
-import uuid
 
-import httpx
 import pytest
-from a2a.client import ClientConfig, ClientFactory
-from a2a.types.a2a_pb2 import (
-    CancelTaskRequest,
-    GetTaskRequest,
-    ListTasksRequest,
-    Message,
-    Part,
-    Role,
-    SendMessageRequest,
-    SubscribeToTaskRequest,
-    TaskState,
-)
+from a2a.types.a2a_pb2 import CancelTaskRequest, GetTaskRequest, ListTasksRequest, SubscribeToTaskRequest
 
 import agent
+from harness import (
+    CANCELED,
+    DONE,
+    FAILED,
+    INPUT,
+    URL,
+    artifact_text,
+    asgi,
+    collect,
+    error_code,
+    final,
+    rpc,
+    running_task,
+    say,
+    serve,
+)
 
-URL = "http://echo-agent.test"
 TOKEN = "fake-test-token"  # not a secret: a constant for the bearer tests
-DONE, WORKING = TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_WORKING
-FAILED, CANCELED = TaskState.TASK_STATE_FAILED, TaskState.TASK_STATE_CANCELED
-INPUT = TaskState.TASK_STATE_INPUT_REQUIRED
 ACTOR = "agentkourier.dev/actor"
-
-
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-@pytest.fixture(autouse=True)
-def no_delay(monkeypatch):
-    monkeypatch.setattr(agent, "CHUNK_DELAY", 0)
-
-
-@pytest.fixture
-def gate(monkeypatch):
-    """Holds a reply after each piece until the test sets the gate, so a test can act in the middle of a stream.
-
-    Only agent.py's own use of asyncio is replaced (it calls asyncio.sleep and nothing else): no test waits on a clock.
-    """
-    opened = asyncio.Event()
-
-    async def hold(_seconds):
-        await opened.wait()
-
-    monkeypatch.setattr(agent, "asyncio", types.SimpleNamespace(sleep=hold))
-    return opened
-
-
-@contextlib.asynccontextmanager
-async def asgi(token_file="", headers=None):
-    """The app behind an in-process ASGI transport: yields a raw HTTP client."""
-    transport = httpx.ASGITransport(app=agent.build_app(URL, token_file))
-    async with httpx.AsyncClient(transport=transport, base_url=URL, headers=headers) as http:
-        yield http
-
-
-@contextlib.asynccontextmanager
-async def serve():
-    """Yields the raw HTTP client and the SDK's A2A client over it."""
-    async with asgi() as http:
-        yield http, await ClientFactory(ClientConfig(httpx_client=http)).create_from_url(URL)
-
-
-async def _collect(stream):
-    return [r async for r in stream]
-
-
-async def say(client, text, context_id="", task_id="", metadata=None):
-    """One send, like the broker's: a user message with one text part. Returns the stream's responses."""
-    message = Message(message_id=str(uuid.uuid4()), role=Role.ROLE_USER, parts=[Part(text=text)])
-    message.context_id, message.task_id = context_id, task_id
-    if metadata:
-        message.metadata.update(metadata)
-    return [r async for r in client.send_message(SendMessageRequest(message=message))]
-
-
-def final(events):
-    """The stream's last event, which must be a full Task."""
-    assert events[-1].HasField("task"), f"the stream did not end with a Task: {events[-1]}"
-    return events[-1].task
-
-
-def artifact_text(task):
-    """What Agent Kourier would show: the artifact text parts, joined."""
-    return "".join(part.text for artifact in task.artifacts for part in artifact.parts)
-
-
-async def rpc(http, method, params):
-    """A raw JSON-RPC call: returns the HTTP response, to see the error code on the wire."""
-    body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
-    return await http.post("/", json=body, headers={"A2A-Version": "1.0"})
-
-
-def error_code(response):
-    assert response.headers["content-type"].startswith("application/json"), response.text
-    return response.json()["error"]["code"]
-
-
-async def running_task(client):
-    """Wait until a task is working, so a test can act in the middle of its stream."""
-    for _ in range(200):
-        tasks = (await client.list_tasks(ListTasksRequest())).tasks
-        if any(t.status.state == WORKING for t in tasks):
-            return next(t for t in tasks if t.status.state == WORKING)
-        await asyncio.sleep(0.01)
-    raise AssertionError("no task started working")
 
 
 @pytest.mark.anyio
@@ -159,18 +71,6 @@ async def test_a_second_turn_keeps_the_context_names_turn_2_and_quotes_turn_1():
     assert "Turn 2. You" in artifact_text(second)
     assert artifact_text(second).endswith("Before that you said: one")
     assert "Turn 1. You" in artifact_text(other)
-
-
-@pytest.mark.anyio
-async def test_only_the_newest_contexts_are_remembered(monkeypatch):
-    """The agent keeps its state in memory, bounded."""
-    monkeypatch.setattr(agent, "MAX_CONTEXTS", 2)
-    async with serve() as (_, client):
-        oldest = final(await say(client, "a"))
-        await say(client, "b")
-        await say(client, "c")
-        forgotten = final(await say(client, "again", context_id=oldest.context_id))
-    assert "Turn 1. You" in artifact_text(forgotten)
 
 
 @pytest.mark.anyio
@@ -227,7 +127,7 @@ async def test_get_task_list_tasks_and_subscribe_answer_for_a_known_task(gate):
     async with serve() as (_, client):
         stream = asyncio.create_task(say(client, "keep going"))
         running = await running_task(client)
-        subscription = asyncio.create_task(_collect(client.subscribe(SubscribeToTaskRequest(id=running.id))))
+        subscription = asyncio.create_task(collect(client.subscribe(SubscribeToTaskRequest(id=running.id))))
         for _ in range(50):  # in-process there is no I/O: a few turns of the loop let the subscription attach
             await asyncio.sleep(0)
         gate.set()
@@ -307,68 +207,3 @@ def test_an_empty_token_file_stops_the_agent_instead_of_accepting_a_bare_bearer(
     token_file.write_text("\n")
     with pytest.raises(SystemExit):
         agent.build_app(URL, str(token_file))
-
-
-# Finished tasks: the broker reads JSON-RPC -32004 on a send as "busy" and retries it for ever (agent-contract.md,
-# Errors). The SDK's UnsupportedOperationError is -32004. These tests record what the SDK (a2a-sdk 1.2.2) answers when
-# a call names a finished task, so that a bump which changes a code fails here and not in a thread.
-#
-#   send naming a completed task   -32004   <- the broker would retry this for ever
-#   send naming a canceled task    -32004   <- the same
-#   CancelTask on a terminal task  -32002   (task not cancelable)
-#   SubscribeToTask on a terminal  -32004   (the broker subscribes only after GetTask shows the task running)
-#   any of the above, unknown task -32001   (task not found)
-#
-# A send that names a context but no task starts a new task and succeeds, so a normal next turn is unaffected.
-
-
-async def finished(client, gate, how):
-    """A completed or canceled task, to aim calls at."""
-    if how == "completed":
-        gate.set()
-        return final(await say(client, "hello"))
-    stream = asyncio.create_task(say(client, "a reply that takes a little while"))
-    task = await running_task(client)
-    await client.cancel_task(CancelTaskRequest(id=task.id))
-    canceled = final(await stream)
-    gate.set()  # later turns in the test are not held
-    return canceled
-
-
-def send_params(task_id, **ids):
-    """A SendStreamingMessage naming a task, as JSON-RPC params."""
-    message = {"messageId": str(uuid.uuid4()), "role": "ROLE_USER", "parts": [{"text": "again"}], "taskId": task_id}
-    return {"message": message | ids}
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("how", ["completed", "canceled"])
-async def test_finished_task_a_send_naming_a_finished_task_answers_32004(gate, how):
-    async with serve() as (http, client):
-        task = await finished(client, gate, how)
-        assert task.status.state == (DONE if how == "completed" else CANCELED)
-        by_task = await rpc(http, "SendStreamingMessage", send_params(task.id))
-        by_both = await rpc(http, "SendStreamingMessage", send_params(task.id, contextId=task.context_id))
-        new_turn = await say(client, "next turn", context_id=task.context_id)
-    assert (error_code(by_task), error_code(by_both)) == (-32004, -32004)
-    assert final(new_turn).status.state == DONE
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("how", ["completed", "canceled"])
-async def test_finished_task_cancel_task_on_a_finished_task_answers_32002_not_32004(gate, how):
-    async with serve() as (http, client):
-        task = await finished(client, gate, how)
-        response = await rpc(http, "CancelTask", {"id": task.id})
-    assert error_code(response) == -32002
-
-
-@pytest.mark.anyio
-async def test_finished_task_subscribe_to_a_finished_task_answers_32004_and_unknown_tasks_32001(gate):
-    async with serve() as (http, client):
-        task = await finished(client, gate, "completed")
-        subscribe = await rpc(http, "SubscribeToTask", {"id": task.id})
-        unknown = [await rpc(http, m, {"id": "no-such-task"}) for m in ("GetTask", "CancelTask", "SubscribeToTask")]
-        unknown.append(await rpc(http, "SendStreamingMessage", send_params("no-such-task")))
-    assert error_code(subscribe) == -32004
-    assert [error_code(r) for r in unknown] == [-32001] * 4
