@@ -1,0 +1,10 @@
+# The Service an AgentBackend names: http://echo-agent.<namespace>.svc.cluster.local:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-agent
+  labels: {app.kubernetes.io/name: echo-agent}
+spec:
+  selector: {app.kubernetes.io/name: echo-agent}
+  ports:
+    - {name: a2a, port: 8080, targetPort: a2a}
