@@ -37,6 +37,11 @@ var (
 	// a second full task. So the caller reconciles first, with FindTask on the contextId, and
 	// resends only when the turn is absent (spec 8.2).
 	ErrOutcomeUnknown = errors.New("agent: the outcome of the send is unknown")
+	// ErrMessageReply is joined to ErrOutcomeUnknown when the agent answered an Answer with a Message
+	// and no task event. The Message is not shown: an answer's task is known, and a Message cannot say
+	// where it stands, so the caller reads the task with GetTask. Unlike a lost stream, the agent did
+	// reply, so a task that still waits for input has not taken the answer it was given (spec 6.3).
+	ErrMessageReply = errors.New("agent: the agent replied to the answer with a message and no task")
 	// ErrBusy means the session already has an active task (JSON-RPC -32004). The message
 	// was not recorded. Do not retry at once: keep it queued, and resend it unchanged, with
 	// the same messageId, when the active task ends. -32004 also answers every send to a

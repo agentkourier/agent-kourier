@@ -339,10 +339,12 @@ with no output. The session records the reply's `contextId` (a message with none
 recorded context as it was) and no task, so there is nothing to reconcile, follow, stop or
 cancel. Any other `Message` is ignored: one that names a task, one from the user, one after
 the agent has named a task, and one in reply to an answer, whose task is known and is read
-with `GetTask` as after any unknown outcome. A send lost before its reply arrives cannot be
-looked up (no task holds its `messageId`), so it is sent again and may run twice. A crash
-after the reply arrives and before it is posted loses it: the turn has left the queue and no
-task is recorded, so it is neither posted nor sent again. The same holds for the unary
+with `GetTask` as after any unknown outcome; a task that still waits for input reopens the
+pause, and since the agent did reply, the thread is told the answer was not taken. A send
+lost before its reply arrives cannot be looked up (no task holds its `messageId`), so it is
+sent again and may run twice. A crash after the reply arrives and before it is posted loses
+it once the turn has left the queue (no task is recorded, so it is neither posted nor sent
+again); a crash before the turn leaves the queue sends it again. The same holds for the unary
 `SendMessage` that a2a-go v2.6.0 falls back to when a card does not advertise streaming
 (source), though the agent pool refuses such an agent. kagent answers every recorded send
 with a task (WP-02 fixtures).

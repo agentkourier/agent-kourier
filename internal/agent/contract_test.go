@@ -128,7 +128,8 @@ func streamMessage(role, taskID string) string {
 
 // Only an agent's Message that names no task, in reply to a Send, is a reply of its own. Any other is
 // ignored: the task's events that follow are the turn, and with none the outcome is unknown, as it was
-// before Messages were read. An answer's task is known, so a Message never ends it as a task-less turn.
+// before Messages were read. An answer's task is known, so a Message never ends it as a task-less turn;
+// the error says the agent replied with one (ErrMessageReply), so the caller can tell the thread.
 func TestAMessageThatIsNotAReplyIsIgnored(t *testing.T) {
 	answer := func(a *Agent, t *testing.T, h Handler) error {
 		msg := message("yes")
@@ -137,15 +138,18 @@ func TestAMessageThatIsNotAReplyIsIgnored(t *testing.T) {
 	}
 	send := func(a *Agent, t *testing.T, h Handler) error { return a.Send(t.Context(), message("hi"), h) }
 	for _, tc := range []struct {
-		name     string
-		call     func(*Agent, *testing.T, Handler) error
-		events   []string
-		wantText bool // the task's events that follow are the turn; else the outcome is unknown
+		name      string
+		call      func(*Agent, *testing.T, Handler) error
+		events    []string
+		wantText  bool // the task's events that follow are the turn; else the outcome is unknown
+		wantReply bool // the outcome is unknown, and the agent replied to the answer with a Message
 	}{
-		{"an agent Message on an answer", answer, []string{"data: " + agentMessage + "\n\n"}, false},
-		{"a Message that names a task", send, []string{streamMessage("ROLE_AGENT", "t-1"), contractWorking, contractTaskDone}, true},
-		{"a Message that names a task, alone", send, []string{streamMessage("ROLE_AGENT", "t-1")}, false},
-		{"the user's Message echoed", send, []string{streamMessage("ROLE_USER", ""), contractWorking, contractTaskDone}, true},
+		{"an agent Message on an answer", answer, []string{"data: " + agentMessage + "\n\n"}, false, true},
+		{"an agent Message naming the task on an answer", answer, []string{streamMessage("ROLE_AGENT", "t-paused")}, false, true},
+		{"the user's Message echoed on an answer", answer, []string{streamMessage("ROLE_USER", "")}, false, false},
+		{"a Message that names a task", send, []string{streamMessage("ROLE_AGENT", "t-1"), contractWorking, contractTaskDone}, true, false},
+		{"a Message that names a task, alone", send, []string{streamMessage("ROLE_AGENT", "t-1")}, false, false},
+		{"the user's Message echoed", send, []string{streamMessage("ROLE_USER", ""), contractWorking, contractTaskDone}, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) {
@@ -156,6 +160,9 @@ func TestAMessageThatIsNotAReplyIsIgnored(t *testing.T) {
 			h, got := collector()
 			err := tc.call(fa.agentWith(t, quick), t, h)
 			if !tc.wantText {
+				if errors.Is(err, ErrMessageReply) != tc.wantReply {
+					t.Errorf("errors.Is(err, ErrMessageReply) = %v, want %v; err = %v", !tc.wantReply, tc.wantReply, err)
+				}
 				if !errors.Is(err, ErrOutcomeUnknown) || len(*got) != 0 || fa.count("GetTask") != 0 || fa.count("CancelTask") != 0 {
 					t.Errorf("err = %v, events = %#v, GetTask %d, CancelTask %d; want ErrOutcomeUnknown and nothing else",
 						err, *got, fa.count("GetTask"), fa.count("CancelTask"))
