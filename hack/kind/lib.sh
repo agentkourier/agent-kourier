@@ -631,7 +631,7 @@ require_network_policy() {
 # The token is read from a Secret volume and passed to curl's stdin config, never its argv or logs.
 probe_ax_agents() {
   local pod=probe-ax-${RANDOM} phase deadline=$((SECONDS + 300))
-  sed "s/@NAME@/${pod}/g" "${HERE}/ax/probe.yaml" | "${K[@]}" apply -f - >/dev/null
+  sed -e "s/@NAME@/${pod}/g" -e "s|@CURL_IMAGE@|${CURL_IMAGE}|g" "${HERE}/ax/probe.yaml" | "${K[@]}" apply -f - >/dev/null
   while :; do
     phase=$("${K[@]}" -n agent-kourier get pod "${pod}" -o jsonpath='{.status.phase}') || phase=Failed
     case "${phase}" in

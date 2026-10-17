@@ -928,15 +928,7 @@ func TestAlertShNamesTheContextAndTheProbe(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
 	argv := readLog(t, logs, "kubectl.argv")
-	// The probe runs lib.sh's CURL_IMAGE, pinned by tag and digest; Renovate moves that pin, so it is read, not copied.
-	lib, err := os.ReadFile("../../hack/kind/lib.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pin := regexp.MustCompile(`(?m)^CURL_IMAGE=(curlimages/curl:[^@\s]+@sha256:[0-9a-f]{64})$`).FindSubmatch(lib)
-	if pin == nil {
-		t.Fatal("lib.sh does not pin CURL_IMAGE to curlimages/curl by tag and digest")
-	}
+	image := curlImage(t) // lib.sh's pin, read rather than copied: Renovate moves it
 	var runs int
 	for _, line := range strings.Split(strings.TrimSpace(argv), "\n") {
 		if strings.HasPrefix(line, "config view --kubeconfig ") {
@@ -947,7 +939,7 @@ func TestAlertShNamesTheContextAndTheProbe(t *testing.T) {
 		}
 		if strings.Contains(line, " run ") {
 			runs++
-			for _, want := range []string{"-n monitoring run ", "--rm", "-i", "--restart=Never", "--image=" + string(pin[1]) + " ", "http://alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts", "Content-Type: application/json", "@-"} {
+			for _, want := range []string{"-n monitoring run ", "--rm", "-i", "--restart=Never", "--image=" + image + " ", "http://alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts", "Content-Type: application/json", "@-"} {
 				if !strings.Contains(line, want) {
 					t.Errorf("the probe pod's command %q lacks %q", line, want)
 				}
