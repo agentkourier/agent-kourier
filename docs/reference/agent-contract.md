@@ -65,10 +65,14 @@ extension when the card lists it.
 | Name the task and its `contextId` on its events | The outcome is unknown and the turn is sent again |
 | Create a `contextId` on a thread's first turn, and keep it for every later turn | A different `contextId` posts "The agent no longer has this conversation" and the new context is kept |
 | Put the answer in **artifact text parts**, or in the text parts of a `Message` reply | Text in the status message or in `history` is not shown. A task that completes with no artifact text posts "The agent finished without any output." |
-| End the stream with a full `Task` in a terminal, `input-required` or `auth-required` state | The stream is treated as dropped, and `GetTask` settles the turn after a second |
+| End the stream with a full `Task`, or a `TaskStatusUpdateEvent`, in a terminal, `input-required` or `auth-required` state | The stream is treated as dropped: a second later, `GetTask` reads the task, and `SubscribeToTask` follows it if it is still running |
 | Send an event at least every 5 minutes, including during a long tool call | The stream is cut and the task followed again with `GetTask` and `SubscribeToTask` |
 | Run one task per context at a time | While a task of the session is recorded, no new turn is sent to it; replies queue behind it |
 | Treat a repeated `messageId` as the same turn | A thread's first turn has no context to look in, so after an unknown outcome it is sent again with the same `messageId`, and an agent that does not drop it runs it twice |
+
+When the stream closes normally after such a status update, without the full `Task`, Agent Kourier reads the task with one `GetTask`
+at once and takes it as the final one. If that call fails, or the task it returns is in none of those states, or the stream ended
+with an error, the stream is treated as dropped.
 
 A reply to a new turn that is one `Message` from the agent (role `agent`) with no `taskId` is the whole turn: its text
 parts, joined, are the answer, and the turn ends as completed. A message with no text posts "The agent finished without
