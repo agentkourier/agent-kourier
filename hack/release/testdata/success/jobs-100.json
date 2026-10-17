@@ -1,1 +1,1 @@
-{"jobs":[{"name":"lint","status":"completed","conclusion":"success"},{"name":"test","status":"completed","conclusion":"success"},{"name":"test-testhooks","status":"completed","conclusion":"success"}]}
+{"jobs":[{"name":"lint","status":"completed","conclusion":"success"},{"name":"test","status":"completed","conclusion":"success"},{"name":"test-testhooks","status":"completed","conclusion":"success"},{"name":"docs-agent","status":"completed","conclusion":"success"}]}

@@ -56,6 +56,7 @@ run_release_case() { # FIXTURE WANT_STATUS NAME
 
 echo "== exact successful push runs and non-skipped jobs"
 run_case success 0 success
+contains "success: checks CodeQL by default" "ok: codeql.yml run 301" "${TMP}/success.out"
 
 echo "== failed workflow run fails closed"
 run_case failure 1 failure
@@ -91,6 +92,14 @@ contains "unexpected-skip: names the skipped job" "unexpected skipped job 'unapp
 
 echo "== no matching run fails closed"
 run_case missing 1 missing
+
+echo "== a skipped CodeQL run fails closed"
+run_case codeql-skipped 1 codeql-skipped
+contains "codeql-skipped: reports the skipped run" "codeql.yml: latest push run 302 for ${SHA} concluded 'skipped'" "${TMP}/codeql-skipped.out"
+
+echo "== a CodeQL run without the Go analysis fails closed"
+run_case codeql-missing-job 1 codeql-missing-job
+contains "codeql-missing-job: names the missing required job" "required job 'analyze (go)' is missing" "${TMP}/codeql-missing-job.out"
 
 echo "== an absent GitHub Release returns 404 and permits the first build"
 run_release_case missing 0 release-absent
