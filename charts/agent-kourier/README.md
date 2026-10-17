@@ -9,7 +9,7 @@ chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `repl
 removing a Binding from the values is the other.
 
 ```sh
-helm install agent-kourier ./charts/agent-kourier -n agent-kourier-system --create-namespace -f my-values.yaml
+helm install agent-kourier ./charts/agent-kourier -n agent-kourier --create-namespace -f my-values.yaml
 ```
 
 From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a

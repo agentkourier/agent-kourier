@@ -3,7 +3,9 @@
 For an operator running the Helm chart: at the end, Agent Kourier runs a newer build with its sessions, outbox and
 audit log intact, and you know how to roll back.
 
-Each release publishes a signed multi-arch image and a chart whose default image is that image by digest.
+A tagged release will publish a signed multi-arch image and a chart whose default image is that image by digest. There
+is no tagged release yet: until there is, upgrade to a chart and image you built and pushed as in
+[Install with Helm](install-with-helm.md#build-an-image-the-nodes-can-pull).
 
 ## Upgrade the chart
 
@@ -60,8 +62,8 @@ values).
 ## Upgrade to the release that writes triggers in full
 
 A `botMessage` trigger is written in full in this release: nothing fills it in from a preset, it names its sender and the
-message fields it reads in terms that do not belong to one chat platform, and it must set its limits. The last tagged
-release, `v0.0.0-dev.4`, came before all of these changes, so a trigger written for it meets them together. A Binding
+message fields it reads in terms that do not belong to one chat platform, and it must set its limits. A build from
+before these changes took a shorter trigger, so a trigger written for it meets them all together. A Binding
 with a `botMessage` trigger fails to load until you change it, so change your Bindings before you upgrade. A Binding
 with only `mention` triggers loads as before.
 

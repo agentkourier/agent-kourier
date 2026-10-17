@@ -28,6 +28,10 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
+!!! note "Status: prerelease"
+    Agent Kourier has no tagged release yet. To install it, you build its image yourself, and the `v1alpha1`
+    resource format can change before the first stable release.
+
 ## What Agent Kourier handles
 
 Without a broker, every agent that talks to chat needs its own code for threads, streaming, questions, restarts and

@@ -9,7 +9,8 @@ looking at six small Deployments, five of them with faults seeded into them. It 
 ## What you need
 
 - macOS or Linux, with Docker running and enough room for one kind cluster.
-- `git`, `make`, `kind`, `kubectl`, Helm 4, `jq`, `curl` and `openssl` on your `PATH`.
+- `git`, `make`, `kind`, `kubectl`, Helm 4, `jq`, `curl`, `openssl` and Go on your `PATH`. The bring-up builds
+  test binaries with Go on your machine; use the version that `go.mod` names.
 - A Slack workspace where you may create apps. Use a sandbox workspace, not your company's.
 - An API key for the demo agent's model provider: OpenRouter, Anthropic, OpenAI, or Amazon Bedrock.
 
@@ -141,6 +142,15 @@ Wait for this line:
 ok: Agent Kourier is connected to Slack
 ```
 
+If it stops before that line, read the last error it printed:
+
+- Exit code 3 means everything is deployed but Slack rejected the tokens. Check `SLACK_BOT_TOKEN` and
+  `SLACK_APP_TOKEN` in the secrets file and run `make sandbox-up` again.
+- A refused secrets file names the key that is wrong. `hack/kind/sandbox/check-env.sh` checks the file on its own.
+- For anything else, see
+  [If it does not come up](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/sandbox/README.md#if-it-does-not-come-up)
+  in the sandbox guide.
+
 ## 5. Change the agent prompt (optional)
 
 The demo agent's system instructions live in the `systemPrompt` key of
@@ -221,3 +231,5 @@ Next:
 - [Your first alert investigation](first-alert-investigation.md) starts a session from an alert instead of a mention.
 - [Threads and sessions](../explanation/threads-and-sessions.md) explains what happened in the thread.
 - [Install with Helm](../how-to/install-with-helm.md) runs Agent Kourier on your own cluster.
+- [Start from a recipe](../how-to/recipes.md): the `docs-agent` recipe is an agent that runs on any cluster, with no
+  kagent, so it is the shortest way to a working agent once Agent Kourier is installed.

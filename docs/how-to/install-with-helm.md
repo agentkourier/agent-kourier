@@ -59,7 +59,11 @@ kubectl -n agent-kourier create secret generic agent-kourier-slack \
 
 If the agent, or a front door in front of it, verifies tokens, first
 [create the Binding identity](create-binding-identity.md) and obtain its token from the accepted issuer.
-Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store it in the Binding's namespace:
+Agent Kourier does not mint `$AGENT_TOKEN`; it is the issued bearer token. Store it in the Binding's namespace, which
+for a Binding under the chart's `config` is the release namespace (`agent-kourier` here) unless the entry sets its
+own `namespace`. The Dex example on that page
+stores its token itself, as `payments-agent-token` in `payments`; for this install, change its last command to
+`kubectl -n agent-kourier create secret generic agent-kourier-agent-token`. With a token from any other issuer:
 
 ```sh
 kubectl -n agent-kourier create secret generic agent-kourier-agent-token --from-literal=token="$AGENT_TOKEN"
@@ -161,8 +165,9 @@ right now, and I'm trying again." If the agent stays unreachable the turn eventu
 and I won't try it again." The log shows `session turn started` and then `session turn failed`, with the reason in
 `error`.
 
-Now connect a real agent: [kagent](connect-kagent.md), [any A2A agent](connect-a2a-agent.md) or
-[an agent on Google AX](connect-ax.md).
+Now connect a real agent. If you have none yet, start with the `docs-agent` [recipe](recipes.md): a plain A2A agent
+that runs on any cluster, with no kagent. To connect your own: [kagent](connect-kagent.md),
+[any A2A agent](connect-a2a-agent.md) or [an agent on Google AX](connect-ax.md).
 
 ## Stop it and keep the data
 

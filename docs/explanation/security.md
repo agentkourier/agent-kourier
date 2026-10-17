@@ -33,7 +33,8 @@ setup steps.
 
 Access is channel-scoped. A Binding places one agent in one channel; anyone in the channel can talk to it and answer
 its questions; a button press or typed answer counts only from a channel member and never from a bot. There are no
-per-user or group permissions in v1.
+per-user or group permissions in v1, with one exception: a Binding with tool approvals can set
+`interactions.approverGroups`, and then only members of those user groups may decide an approval.
 
 Bindings are namespaced, and shared resources list the namespaces allowed to refer to them in `allowedNamespaces`. A
 team's identity token Secret lives in its own namespace.
