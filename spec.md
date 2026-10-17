@@ -331,16 +331,21 @@ takes the queued turn as not the recorded task's own, so the task is followed fi
 turn is sent after it, and a resend treats the turn as absent: it is sent, behind a recorded
 task if one runs. A turn may therefore run twice.
 
-A2A lets an agent answer a send with one `Message` and no task. Agent Kourier takes that
-message's text parts as the turn's reply and ends the turn as completed; a message with
-nothing to read gets the same notice as a task that completed with no output. With no task,
-the session records the reply's `contextId` and no task, so the next turn continues the
-context, and there is nothing to reconcile, follow, stop or cancel. A send lost before its
-reply arrives cannot be looked up (no task holds its `messageId`), so it is sent again and
-may run twice. A `Message` after the agent has named a task is ignored. The same holds for
-the unary `SendMessage` that a2a-go v2.6.0 falls back to when a card does not advertise
-streaming (source), though the agent pool refuses such an agent. kagent answers every
-recorded send with a task (WP-02 fixtures).
+A2A lets an agent answer a send with one `Message` and no task. Agent Kourier takes such a
+message as the whole turn when it answers a new turn (not an answer to a question), comes from
+the agent (role `agent`) and names no `taskId`: its text parts are the reply and the turn ends
+as completed; a message with nothing to read gets the same notice as a task that completed
+with no output. The session records the reply's `contextId` (a message with none leaves the
+recorded context as it was) and no task, so there is nothing to reconcile, follow, stop or
+cancel. Any other `Message` is ignored: one that names a task, one from the user, one after
+the agent has named a task, and one in reply to an answer, whose task is known and is read
+with `GetTask` as after any unknown outcome. A send lost before its reply arrives cannot be
+looked up (no task holds its `messageId`), so it is sent again and may run twice. A crash
+after the reply arrives and before it is posted loses it: the turn has left the queue and no
+task is recorded, so it is neither posted nor sent again. The same holds for the unary
+`SendMessage` that a2a-go v2.6.0 falls back to when a card does not advertise streaming
+(source), though the agent pool refuses such an agent. kagent answers every recorded send
+with a task (WP-02 fixtures).
 
 | Dialect | Chat and alerts | Approvals | Notes |
 |---|---|---|---|

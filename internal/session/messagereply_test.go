@@ -77,3 +77,19 @@ func TestEmptyMessageReplyIsToldPerTurn(t *testing.T) {
 		t.Errorf("no-output notices = %+v; want two, one per turn", got)
 	}
 }
+
+// Each reply with no task is a first look: the life held for the thread starts again, so no reply's
+// text outlives its turn, after a task turn too.
+func TestLifeStartsAgainForEachMessageReply(t *testing.T) {
+	var l life
+	l.renews(agent.StateEvent{TaskID: "t1", ContextID: "c1", State: a2a.TaskStateCompleted})
+	for _, id := range []a2a.ArtifactID{"m1", "m2"} {
+		if !l.renews(agent.StateEvent{ContextID: "c1", State: a2a.TaskStateCompleted}) {
+			t.Errorf("reply %s: the state was not a first look", id)
+		}
+		l.renews(agent.TextEvent{ArtifactID: id, Text: "the answer"})
+		if len(l.text) != 1 {
+			t.Errorf("reply %s: life holds %d texts, want only this reply's", id, len(l.text))
+		}
+	}
+}

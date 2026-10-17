@@ -70,11 +70,14 @@ extension when the card lists it.
 | Run one task per context at a time | While a task of the session is recorded, no new turn is sent to it; replies queue behind it |
 | Treat a repeated `messageId` as the same turn | A thread's first turn has no context to look in, so after an unknown outcome it is sent again with the same `messageId`, and an agent that does not drop it runs it twice |
 
-A reply that is one `Message` and no task is the whole turn: its text parts, joined, are the answer, and the turn ends
-as completed. A message with no text posts "The agent finished without any output." The message's `contextId` is kept
-for the next turn, and no task is recorded, so there is nothing to follow or look up. A turn whose stream drops before
-the message arrives has an unknown outcome, and since no task holds its `messageId` a lookup finds nothing: it is sent
-again and may run twice. A `Message` that arrives after the agent has named a task is ignored.
+A reply to a new turn that is one `Message` from the agent (role `agent`) with no `taskId` is the whole turn: its text
+parts, joined, are the answer, and the turn ends as completed. A message with no text posts "The agent finished without
+any output." The message's `contextId` is kept for the next turn (a message with none leaves the context as it was), and
+no task is recorded, so there is nothing to follow, stop or look up. Any other `Message` is ignored: one that names a
+task, one from the user, one after the agent has named a task, and any reply to an answer to a question, whose outcome is
+then unknown and the paused task is read with `GetTask`. A turn whose stream drops before the message arrives has an
+unknown outcome, and since no task holds its `messageId` a lookup finds nothing: it is sent again and may run twice. If
+Agent Kourier stops after the message arrives and before it is posted, the answer is lost: the turn is not sent again.
 
 An artifact update with `append: true` adds to that artifact's text; any other replaces it. `lastChunk` is not read.
 An update with no text part leaves the artifact's text as it was, so to take text back, replace it with an empty text part.
