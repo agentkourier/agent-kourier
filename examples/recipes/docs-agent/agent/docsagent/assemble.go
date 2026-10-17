@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/mcptoolset"
@@ -42,6 +43,7 @@ type AssembleOptions struct {
 func Assemble(ctx context.Context, o AssembleOptions) (http.Handler, <-chan error, error) {
 	endpoint := o.MCPURL
 	var done <-chan error
+	var transport mcp.Transport // nil for an external server: the toolset builds its own from the endpoint
 	switch {
 	case endpoint != "":
 		if _, err := urlcheck.HTTP(endpoint); err != nil {
@@ -62,8 +64,9 @@ func Assemble(ctx context.Context, o AssembleOptions) (http.Handler, <-chan erro
 		if err != nil {
 			return nil, nil, err
 		}
+		transport = &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: loopbackClient(ctx)}
 	}
-	set, err := mcptoolset.New(mcptoolset.Config{Endpoint: endpoint})
+	set, err := mcptoolset.New(mcptoolset.Config{Endpoint: endpoint, Transport: transport})
 	if err != nil {
 		return nil, nil, fmt.Errorf("docsagent: build the MCP toolset: %w", err)
 	}
@@ -74,4 +77,16 @@ func Assemble(ctx context.Context, o AssembleOptions) (http.Handler, <-chan erro
 		return nil, nil, err
 	}
 	return h, done, nil
+}
+
+// loopbackClient returns the HTTP client that the agent's MCP toolset uses to reach the embedded server, with a
+// transport of its own whose idle connections it closes when ctx ends, as the server shuts down. The transport can
+// hold a connection that has carried no request (one dialed for a request that another connection served first),
+// and http.Server.Shutdown waits up to about five seconds before it counts such a connection as idle: longer than
+// the embedded server's grace, so the stop would fail. Nothing calls the tools by then, because the A2A server has
+// drained first.
+func loopbackClient(ctx context.Context) *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	context.AfterFunc(ctx, t.CloseIdleConnections)
+	return &http.Client{Transport: t}
 }
