@@ -660,11 +660,12 @@ type life struct {
 }
 
 // renews records e, and reports whether it was new: a first look at a task, a change of state,
-// text that differs from what was held, or a tool call or result not seen before.
+// text that differs from what was held, or a tool call or result not seen before. A reply with no
+// task (a Message) is a first look each time, so no reply's text outlives its turn.
 func (l *life) renews(e agent.Event) bool {
 	switch ev := e.(type) {
 	case agent.StateEvent:
-		if ev.TaskID != l.task {
+		if ev.TaskID != l.task || ev.TaskID == "" {
 			*l = life{task: ev.TaskID, state: ev.State, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
 			return true
 		}
@@ -800,7 +801,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	}
 	var final *a2a.Task
 	var recordErr error
-	named := false // the agent named the task
+	named := false // the agent took the turn: it named the task, or replied with a Message and no task
 	var pausedTaskID, pausedTurnID string
 	err = send(tctx, func(e agent.Event) {
 		paused := false
@@ -812,7 +813,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 			trace.SpanFromContext(tctx).SetAttributes(attribute.String("agentkourier.task.id", string(ev.TaskID)), attribute.String("agentkourier.context.id", ev.ContextID), attribute.String("agentkourier.task.state", string(ev.State)))
 			t.taskID = ev.TaskID
 			m.drives(c, ev.TaskID)
-			if !named { // the agent has named the task: record it before anyone renders it
+			if !named { // the agent has taken the turn: record it before anyone renders it
 				named = true
 				c.settle()
 				if t.sess.ContextID != "" && ev.ContextID != "" && ev.ContextID != t.sess.ContextID {
@@ -1482,7 +1483,9 @@ const (
 
 // accept records that the agent took the turn (spec 8.2): the session gets its contextId and
 // task, then the turn leaves the queue. In that order, so a crash in between leaves a task
-// recovery can find, never one nobody knows about. Both writes are idempotent, so the pair is
+// recovery can find, never one nobody knows about. A reply with no task (a Message, spec 6.3)
+// records the contextId alone, and there is nothing for recovery to find: a crash after this and
+// before the reply is posted loses the reply. Both writes are idempotent, so the pair is
 // retried, a bounded number of times. It does not rewrite the session row, so it cannot undo
 // a Submit's touch.
 func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent, turn store.TaskTurn) (err error) {

@@ -99,7 +99,7 @@ markdown_extensions:
   # Includes a recipe's files into a page (--8<-- "sre-triage/agent/agent.yaml"), so the page cannot drift from the
   # files. Only files under examples/recipes can be included; a missing file fails the build.
   - pymdownx.snippets:
-      base_path: [examples/recipes]
+      base_path: [examples/recipes, examples/helm]
       restrict_base_path: true
       check_paths: true
   - pymdownx.superfences:
@@ -126,6 +126,7 @@ validation:
 
 nav:
   - Home: index.md
+  - Demo: demo/index.md
   - Tutorials:
       - tutorials/index.md
       - Your first agent in Slack: tutorials/first-agent-in-slack.md

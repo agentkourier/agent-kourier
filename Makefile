@@ -127,6 +127,28 @@ docs-agent-smoke: ## Ask the docs agent fixed questions over A2A on loopback, wi
 docs-agent-smoke-live: ## Owner-run: the same questions with the real model named in the sandbox credentials file (SANDBOX_ENV overrides its path); incurs model usage
 	bash examples/recipes/docs-agent/agent/smoke-live.sh
 
+# The echo-agent recipe (examples/recipes/echo-agent/agent) is Python, not Go: a virtualenv under bin/ with the
+# versions and hashes pinned in requirements-dev.txt, on CPython 3.14 (requirements.txt is compiled for it).
+.PHONY: echo-agent-test echo-agent-lint echo-agent-image
+ECHO_AGENT  := examples/recipes/echo-agent/agent
+ECHO_PYTHON ?= python3.14
+ECHO_VENV   := bin/echo-agent-venv
+
+$(ECHO_VENV)/.installed: $(ECHO_AGENT)/requirements-dev.txt
+	$(ECHO_PYTHON) -m venv --clear $(ECHO_VENV)
+	$(ECHO_VENV)/bin/pip install --quiet --disable-pip-version-check --require-hashes -r $(ECHO_AGENT)/requirements-dev.txt
+	touch $@
+
+echo-agent-test: $(ECHO_VENV)/.installed ## Test the echo-agent recipe's Python agent with pytest (python3.14; ECHO_PYTHON overrides)
+	cd $(ECHO_AGENT) && $(CURDIR)/$(ECHO_VENV)/bin/python -m pytest -q
+
+echo-agent-lint: $(ECHO_VENV)/.installed ## Lint the echo-agent recipe with ruff (check and format check) and audit its pinned runtime packages with pip-audit (needs network)
+	cd $(ECHO_AGENT) && $(CURDIR)/$(ECHO_VENV)/bin/ruff check . && $(CURDIR)/$(ECHO_VENV)/bin/ruff format --check .
+	$(ECHO_VENV)/bin/pip-audit --disable-pip --require-hashes -r $(ECHO_AGENT)/requirements.txt
+
+echo-agent-image: ## Build the echo agent image, agent-kourier-echo-agent:dev (Docker)
+	docker build -t agent-kourier-echo-agent:dev $(ECHO_AGENT)
+
 .PHONY: e2e-ax-up e2e-ax e2e-ax-down
 e2e-ax-up: ## Bring up AX/Substrate with deterministic ADK scenarios and fake Slack
 	hack/kind/up-ax.sh

@@ -29,9 +29,11 @@ jobs:
       # module cache and the build cache, and golangci-lint's cache where it lints), keyed on the job, the runner OS,
       # the Go version and the go.sum files it builds from. (setup-go's own cache gives every job one key: the first
       # job to finish saves it and the others' saves are refused.) Every run restores, falling back to the job's
-      # newest entry for the same Go version and then for any. Only a job that succeeds on a push to main saves, and
-      # only when its key was not an exact hit, so pull requests read main's caches without filling the quota. The
-      # timeouts stay at the cold-cache times: a run after a go.sum change, or after an eviction, starts cold.
+      # newest entry for the same Go version and then for any. Only a push to main saves, and only when its key was
+      # not an exact hit, so pull requests read main's caches without filling the quota. It saves after a failed step
+      # too, though not after a cancel: a failing test leaves what was compiled valid, and a job that saved only on
+      # success would stay cold for every pull request while a flaky test kept failing it on main. The timeouts stay
+      # at the cold-cache times: a run after a go.sum change, or after an eviction, starts cold.
       - id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -67,7 +69,7 @@ jobs:
         env:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - run: make build
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -114,7 +116,7 @@ jobs:
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
       - run: make test-scripts
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -153,7 +155,7 @@ jobs:
             go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
             go-test-testhooks-${{ runner.os }}-
       - run: make test-testhooks
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -194,7 +196,7 @@ jobs:
             go-docs-agent-${{ runner.os }}-
       - run: make docs-agent-test
       - run: make docs-agent-lint
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -202,3 +204,22 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
             ~/.cache/golangci-lint
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
+  # The echo-agent recipe is Python (examples/recipes/echo-agent/agent), so no Go job builds or tests it. The Makefile
+  # targets make a virtualenv from the hashed requirements-dev.txt; setup-python's pip cache is keyed on the requirements
+  # files. The image build proves the Dockerfile and requirements.txt still install together.
+  echo-agent:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: examples/recipes/echo-agent/agent/requirements*.txt
+      - run: make echo-agent-test
+      - run: make echo-agent-lint
+      - run: make echo-agent-image

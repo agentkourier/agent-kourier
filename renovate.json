@@ -83,12 +83,25 @@
       "matchManagers": [
         "pip-compile"
       ],
-      "groupName": "documentation Python dependencies"
+      "groupName": "documentation Python dependencies",
+      "matchFileNames": [
+        "hack/docs/**"
+      ]
+    },
+    {
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchFileNames": [
+        "examples/recipes/echo-agent/**"
+      ],
+      "groupName": "echo-agent Python dependencies"
     }
   ],
   "pip-compile": {
     "managerFilePatterns": [
-      "/(^|/)hack/docs/requirements\\.txt$/"
+      "/(^|/)hack/docs/requirements\\.txt$/",
+      "/(^|/)examples/recipes/echo-agent/agent/requirements(-dev)?\\.txt$/"
     ]
   },
   "customManagers": [

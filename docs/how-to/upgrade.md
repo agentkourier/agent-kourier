@@ -1,16 +1,19 @@
 # Upgrade
 
-For an operator running the Helm chart: at the end, Agent Kourier runs a newer build with its sessions, outbox and
+For an operator running the Helm chart: at the end, Agent Kourier runs a newer release with its sessions, outbox and
 audit log intact, and you know how to roll back.
 
-A tagged release will publish a signed multi-arch image and a chart whose default image is that image by digest. There
-is no tagged release yet: until there is, upgrade to a chart and image you built and pushed as in
-[Install with Helm](install-with-helm.md#build-an-image-the-nodes-can-pull).
+Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.0`. To run a build that is not
+released, see [Build from source](install-with-helm.md#build-from-source).
 
 ## Upgrade the chart
 
+Pass the values file you installed with (`my-values.yaml` in [Install with Helm](install-with-helm.md#write-the-values)):
+`helm upgrade` replaces the release's values with the ones you give it.
+
 ```sh
-helm upgrade agent-kourier oci://<registry>/<repo>/charts/agent-kourier --version <new version> \
+helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <new version> \
   -n agent-kourier -f my-values.yaml
 ```
 

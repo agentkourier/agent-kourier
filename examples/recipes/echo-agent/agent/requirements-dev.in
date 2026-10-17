@@ -1,0 +1,6 @@
+# What the tests and the lint need, on top of requirements.in. Compile with:
+#   uv pip compile examples/recipes/echo-agent/agent/requirements-dev.in --generate-hashes --universal --python-version 3.14 -o examples/recipes/echo-agent/agent/requirements-dev.txt
+-r requirements.in
+pytest
+ruff
+pip-audit

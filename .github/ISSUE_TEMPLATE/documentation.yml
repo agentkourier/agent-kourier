@@ -1,0 +1,30 @@
+name: Documentation
+description: A page is wrong, out of date, unclear, or missing something.
+labels: [documentation]
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The docs must say what the code does. A page that disagrees with Agent Kourier's behaviour is a bug in the
+        page, and this is the place to report it.
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: The page's URL on agentkourier.dev, or the file in this repository.
+      placeholder: https://agentkourier.dev/how-to/install-with-helm/
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+      description: Quote the sentence or command, and say what happened when you followed it.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What it should say
+      description: Your suggested wording or fix, if you have one.

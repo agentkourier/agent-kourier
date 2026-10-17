@@ -80,10 +80,8 @@ Post it twice for the "Fired again" note. Post `Pipeline PASSED - web-build` wit
   use `identity.tokenSecretRef` instead: [Create the Binding identity](../../../docs/how-to/create-binding-identity.md).
 - **To run the dry run (step 3): Go and a checkout, or Docker instead of Go.** The dry run is a subcommand of the
   `agent-kourier` binary. Run it with Go at the version in `go.mod`, from a checkout of this repository, as below; or
-  with Docker, using the Agent Kourier image, whose entrypoint is that binary. No image is published: build
-  `agent-kourier:dev` with `make image` (from a checkout), or use the image you built for
-  [Install with Helm](../../../docs/how-to/install-with-helm.md). Either way you run it from the checkout, since the
-  command reads this recipe's `kourier/` directory.
+  with Docker, using the released image `ghcr.io/agentkourier/agent-kourier:v0.1.0`, whose entrypoint is that binary.
+  Either way you run it from the checkout, since the command reads this recipe's `kourier/` directory.
 
 ## Files
 
@@ -126,11 +124,11 @@ evals/
 
     With Docker instead of Go, mount the directory and pass the token through the environment. `SLACK_BOT_TOKEN` must be
     exported (`export SLACK_BOT_TOKEN`) for `-e SLACK_BOT_TOKEN` to pass it in; the token is then not on the command
-    line. The image is `agent-kourier:dev` from `make image`, or yours:
+    line. The image is the released one:
 
     ```sh
     docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/examples/recipes/custom-bot-trigger/kourier:/config:ro" \
-      agent-kourier:dev dry-run --config /config --binding agent-kourier/ci-failures
+      ghcr.io/agentkourier/agent-kourier:v0.1.0 dry-run --config /config --binding agent-kourier/ci-failures
     ```
 
     Each of the bot's posts should come out `matched`, with the state, pipeline and key you expect, `excluded` for a

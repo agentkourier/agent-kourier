@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshoot an install
+    url: https://agentkourier.dev/how-to/troubleshoot/
+    about: The common install, Slack and agent connection failures, and what each one looks like.
+  - name: Documentation
+    url: https://agentkourier.dev
+    about: Install, configure and troubleshoot. Many questions are answered in Troubleshoot an install.

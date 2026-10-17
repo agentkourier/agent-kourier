@@ -8,13 +8,49 @@ access to the Secrets they name.
 chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `replicaCount: 2` is an active/passive pair (see High availability). `replicaCount: 0` is the kill switch (Agent Kourier stops, the volume or the database and the config stay);
 removing a Binding from the values is the other.
 
+Agent Kourier does nothing without its resources, which the chart takes under `config`: a ChatConnection, an
+AgentBackend and a Binding. Put them in a values file, `my-values.yaml`. Download the commented starter and change the
+lines it marks `yours`:
+
 ```sh
-helm install agent-kourier ./charts/agent-kourier -n agent-kourier --create-namespace -f my-values.yaml
+curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
 ```
 
-From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a
-ChatConnection. Check any values file with `helm lint --strict -f my-values.yaml charts/agent-kourier` and
-`helm template` before installing. `ci/` holds the values the tests render: `minimal`, `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
+It holds the same resources as this:
+
+```yaml
+config:
+  chatConnections:
+    slack:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: agent-kourier-slack}   # a Secret with botToken and appToken keys
+  agentBackends:
+    agent:
+      spec:
+        dialect: a2a
+        url: http://my-agent.my-namespace.svc.cluster.local:8083/a2a/
+  bindings:
+    my-binding:
+      spec:
+        agent: {backendRef: {name: agent}, namespace: my-namespace, name: my-agent}
+        identity: {userId: agent-kourier}
+        chat: {connectionRef: {name: slack}, channel: C0123456789, output: live}
+        interactions: {askUser: false}
+```
+
+Then install the published chart with it:
+
+```sh
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.0 \
+  -n agent-kourier --create-namespace -f my-values.yaml
+```
+
+[Install with Helm](https://agentkourier.dev/how-to/install-with-helm/#write-the-values) walks through each field, the
+Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
+`image.digest` stamped with the release's image. From source (`charts/agent-kourier` in a checkout) the chart also
+needs `image.repository`. Check a values file with `helm template` before installing, or from a checkout with
+`helm lint --strict -f my-values.yaml charts/agent-kourier`. `ci/` holds the values the tests render: `minimal`, `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
 `hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `fast-postgres` (the fast tier's on Postgres:
 `E2E_STORE=postgres make e2e-fast-up`; `fast-postgres-ha` is an overlay on it, layered with a second `-f`, for two replicas and a shorter lease:
 `E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up`, which the two-replica failover end-to-end test runs on), `ax` (the AX tier's, with a database file of its own) and `sandbox` (the sandbox
@@ -224,7 +260,7 @@ for obj in serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/a
   kubectl -n agent-kourier annotate --overwrite "$obj" meta.helm.sh/release-name=agent-kourier meta.helm.sh/release-namespace=agent-kourier
   kubectl -n agent-kourier label --overwrite "$obj" app.kubernetes.io/managed-by=Helm
 done
-helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.yaml
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.0 -n agent-kourier -f my-values.yaml
 ```
 
 Or leave the volume out of the release: `--set persistence.existingClaim=agent-kourier-data`, and nothing the chart manages can delete it.
