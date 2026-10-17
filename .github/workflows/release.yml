@@ -28,7 +28,7 @@ jobs:
   # The tag's workflow file runs this read-only gate before the build job receives package-write access. A run
   # from a pull request, another branch, another SHA or a skipped/failed job never satisfies the release gate.
   gate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: read # list the exact workflow runs and their jobs
@@ -53,7 +53,7 @@ jobs:
 
   build:
     needs: gate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read # checkout
@@ -121,7 +121,7 @@ jobs:
   # repository code and one action, and takes the digests the build job reported.
   sign:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       packages: write # cosign writes the signatures to GHCR
@@ -145,7 +145,7 @@ jobs:
   # identity is the exact tagged workflow, not a repository-wide or branch-wide identity.
   verify:
     needs: [build, sign]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       packages: read # read the signatures from GHCR
@@ -174,7 +174,7 @@ jobs:
   # has the only contents:write permission in the workflow; it has no registry or signing permission.
   publish:
     needs: [build, verify]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: write # create the GitHub Release after signature verification

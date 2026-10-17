@@ -23,7 +23,7 @@ env:
 jobs:
   govulncheck:
     name: govulncheck (${{ matrix.module }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -50,7 +50,7 @@ jobs:
 
   secrets:
     name: gitleaks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -83,7 +83,7 @@ jobs:
   image:
     name: trivy (${{ matrix.name }})
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
     permissions:
       contents: read
@@ -136,7 +136,7 @@ jobs:
   released-image-rescan:
     name: rescan released image digests
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
