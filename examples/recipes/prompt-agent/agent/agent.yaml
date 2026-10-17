@@ -1,0 +1,19 @@
+# An agent, in Pydantic AI's agent spec format: nothing here is specific to Agent Kourier. agent.py reads this file and
+# stops at start on anything it does not allow (load_agent in agent.py), so a mistake here narrows the agent, never
+# widens it.
+#
+# model is provider:name. The provider reads its key from the environment (anthropic: ANTHROPIC_API_KEY, openai:
+# OPENAI_API_KEY, openrouter: OPENROUTER_API_KEY); openai-chat: and ollama: read OPENAI_BASE_URL and OLLAMA_BASE_URL.
+model: anthropic:claude-haiku-5-5
+name: ops-helper
+description: Answers questions about alerts using the team's runbooks.
+instructions: |
+  You help on-call engineers with alerts. Look up the runbook before you answer, and keep answers short.
+  If you need something only the person can tell you, ask with ask_user.
+capabilities:
+  # MCP is the only capability allowed, over http(s), with allowed_tools: the agent can call exactly these MCP tools
+  # (and ask_user). ${NAME} is replaced with the environment variable NAME, in authorization_token and headers only.
+  - MCP:
+      url: http://runbooks-mcp.ops.svc.cluster.local:8080/mcp
+      authorization_token: Bearer ${RUNBOOKS_MCP_TOKEN}
+      allowed_tools: [runbook, recent_deploys]
