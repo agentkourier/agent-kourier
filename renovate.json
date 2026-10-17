@@ -36,6 +36,13 @@
       "enabled": false
     },
     {
+      "description": "Agent Kourier's own image: the digests in hack/security/test.sh are fake fixtures, and a release stamps the real one",
+      "matchDepNames": [
+        "ghcr.io/agentkourier/agent-kourier"
+      ],
+      "enabled": false
+    },
+    {
       "matchManagers": [
         "github-actions"
       ],
