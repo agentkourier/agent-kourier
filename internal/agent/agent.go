@@ -118,6 +118,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
 	asm := newAssembler(h, a.tool)
+	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
 	err = a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 	})
