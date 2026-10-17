@@ -10,3 +10,4 @@
 docs/how-to/upgrade.md | removed-trigger-field | botId | the upgrade page names the renamed sender field so that a reader can find it in an old Binding
 docs/how-to/upgrade.md | removed-trigger-field | titleLink | the upgrade page names the renamed link field so that a reader can find it in an old Binding
 docs/how-to/upgrade.md | removed-trigger-field | attachmentText | the upgrade page names the renamed body field so that a reader can find it in an old Binding
+docs/how-to/install-with-helm.md | local-chart-install | helm install agent-kourier ./charts/agent-kourier | the Build from source section installs a change that is not released yet, from a checkout
