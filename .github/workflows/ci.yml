@@ -19,7 +19,7 @@ concurrency:
 jobs:
   # Observed on a cold cache: setup, fmt and lint took about 7 minutes. 15 leaves room for twice that, and for build.
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,7 +47,7 @@ jobs:
 
   # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that.
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,7 +72,7 @@ jobs:
   # 23 minutes that were left after the lint, and one package in it (internal/chat/chattest) took 213 seconds alone.
   # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part.
   test-testhooks:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +87,7 @@ jobs:
   # The docs-agent recipe is a separate Go module (examples/recipes/docs-agent/agent), so the jobs above do not build
   # or test it. Its tests include the refusals that keep its corpus reader inside the corpus.
   docs-agent:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
