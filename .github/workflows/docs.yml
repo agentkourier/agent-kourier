@@ -82,8 +82,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # External links. The repository's own GitHub links are skipped while it is private, and so is the site itself
-  # until its domain serves it.
+  # External links in docs/.
   links:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -101,8 +100,6 @@ jobs:
             --exclude '\.svc\.cluster\.local'
             --exclude-path docs/brand
             --exclude-path docs/spikes
-            --exclude '^https://github\.com/agentkourier/'
-            --exclude '^https://agentkourier\.dev'
             --exclude '^https://api\.slack\.com/apps'
             'docs/**/*.md'
         env:
