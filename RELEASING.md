@@ -11,9 +11,9 @@ is that image by digest. Nothing is released by hand.
    release version the public docs name to match. `make docs-check` lists each page that still names the old version
    (`release-version`), so the pull request cannot go green with a page left behind. Merge it. Skip this for a
    prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
-3. Before tagging, confirm that both `ci.yml` and `security.yml` have completed successfully for that exact
-   commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a missing,
-   pending, failed or pull-request-only run blocks the release.
+3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
+   exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
+   missing, pending, failed or pull-request-only run blocks the release.
 4. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
 5. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
@@ -25,10 +25,13 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
 
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
-- First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test` and
-  `test-testhooks` jobs. `security.yml` must contain successful `govulncheck (root)`, `govulncheck (ax)`, `gitleaks`,
-  `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs. The scheduled released-image rescan is the only permitted
-  skipped job. A pending run fails closed with a message to wait; the gate never reruns or changes a workflow run.
+- First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
+  `test-testhooks` and `docs-agent` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs.
+  `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
+  requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
+  The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
+  to wait; the gate never reruns or changes a workflow run.
 - Refuses a final tag `vX.Y.Z` unless `charts/agent-kourier/Chart.yaml` at the tagged commit says `version: X.Y.Z`
   (`hack/release/check-version.sh`), so no release goes out before the pull request that points the docs at it.
 - Checks the Releases API before granting the build job access to the registry. A 404 means this is the first
@@ -148,8 +151,9 @@ The release workflow refuses a tag that is not on `main`, so what ships has pass
 release tag only from a commit that GitHub signed when it squash-merged a pull request (the commit shows as
 Verified on GitHub); nothing in the workflow checks this. The commits on `main` from before signed commits were
 required, the tip of `main` at that time included, are unsigned, so the first release is cut from a later squash
-merge. The release gate (`hack/release/check-ci.sh`) checks a subset of the required checks, listed under
-[What the workflow does](#what-the-workflow-does).
+merge. The release gate (`hack/release/check-ci.sh`) checks the same jobs as the `main` ruleset, on the push run
+for the tagged commit, as listed under [What the workflow does](#what-the-workflow-does); a change to either list
+belongs with a change to the other.
 
 ## CI
 
