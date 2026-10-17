@@ -17,6 +17,16 @@ install is likely to meet. For the install itself, see [Install with Helm](insta
 Keep the pod log open while you reproduce a problem. The `session turn` lines say what the
 turn did and why it stopped.
 
+When the pod restarts in a loop, read the log of the run that ended and its exit code:
+
+```sh
+kubectl -n agent-kourier logs deploy/agent-kourier --previous
+kubectl -n agent-kourier describe pod -l app.kubernetes.io/name=agent-kourier   # Last State: Terminated, Exit Code
+```
+
+The last line of that log is plain text, not JSON: `agent-kourier:` and the reason it stopped, cut after 300 bytes.
+The sections below go by exit code.
+
 ## Slack says the agent's task failed
 
 For recognized context-limit, rate-limit, authentication, timeout or permission failures, the Slack notice gives a
@@ -27,6 +37,52 @@ Copy the `AK-` troubleshooting reference from the Slack notice and search the Ag
 `failure_ref`. The matching `session turn ended` entry includes the bounded `failure_category`, full `task` ID and
 `session` context ID when one is available. Use those IDs to find the corresponding agent or controller log entries;
 the backend's own logs may have details Agent Kourier deliberately leaves out.
+
+## The pod exits with code 1
+
+```text
+agent-kourier: slack rejected the tokens: invalid_auth
+```
+
+Slack refused a token for good, so Agent Kourier stops rather than retry. The word at the end is Slack's own code:
+`invalid_auth`, `not_authed`, `token_revoked` or `account_inactive`. The usual cause is a token copied incompletely or
+from another Slack app, or one that has been revoked since.
+
+Agent Kourier checks the bot token before it opens the Socket Mode connection with the app token. At the default `info`
+log level, if no `slack: socket mode connecting` line comes before the error, Slack refused the bot token; if one does,
+look at the app token too. The dry run in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install)
+tests the bot token on its own: it exits 1 when Slack refuses it.
+
+Replace the Secret with the right tokens, then restart rather than wait out the crash loop's back-off:
+
+```sh
+kubectl -n agent-kourier create secret generic agent-kourier-slack \
+  --from-literal=botToken="$SLACK_BOT_TOKEN" --from-literal=appToken="$SLACK_APP_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n agent-kourier rollout restart deploy/agent-kourier
+```
+
+## The pod exits with code 2
+
+```text
+agent-kourier: the broker cannot be wired: v1 serves exactly one ChatConnection, and the config has 2 [agent-kourier/slack, agent-kourier/slack2]
+```
+
+The resource files loaded, but Agent Kourier cannot be put together from them, or an environment variable has a value
+it cannot use. A restart fails the same way. The text after `the broker cannot be wired:` says which:
+
+- `v1 serves exactly one ChatConnection, and the config has` a count other than 1: keep exactly one entry under
+  `config.chatConnections`.
+- `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/agent-kourier-slack:` (or `appToken`): the
+  key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
+  empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
+  for [code 1](#the-pod-exits-with-code-1).
+- A variable's name, its value and what it wants, such as
+  `AGENTKOURIER_AUDIT_RETENTION is "1h", want keep, or a duration of at least 24h0m0s such as 8760h`. The chart sets these
+  variables from its values (`auditRetention` here) and from `extraEnv`: fix the value there.
+
+A misspelt field, or a Secret that is missing or lacks a key, is not a code 2. Those stop the start while the files
+load, and exit 4: see [The pod exits with code 4 and the error says `load config`](#the-pod-exits-with-code-4-and-the-error-says-load-config).
 
 ## The pod exits with code 3
 
@@ -44,6 +100,31 @@ kubectl auth can-i watch secrets -n agent-kourier --as system:serviceaccount:age
 The chart grants `list` and `watch` in each namespace that holds a Secret the config names, and `rbac.secretNamespaces`
 adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
 read the ConfigMap to find the namespaces.
+
+## The pod exits with code 4 and the error says `load config`
+
+```text
+agent-kourier: bootstrap: load config: binding-my-binding.yaml#1 Binding agent-kourier/my-binding: spec.chat.chanel: unknown field
+binding-my-binding.yaml#1 Binding agent-kourier/my-binding: spec.chat.channel: required
+```
+
+A resource file did not load. Each problem is on a line of its own: the file and the number of the document in it, the
+resource, the field, and what is wrong with it. With a ConfigMap the chart writes, the file is named after the
+resource's kind and name. The usual problems:
+
+- `unknown field`: a misspelt or misplaced field. The chart passes each `spec` through as written, so `helm lint` and
+  `helm template` accept it, and it shows only here, as a pod that restarts in a loop.
+- `required`, or a value that does not match its pattern, such as a channel name where the channel ID belongs.
+- `not found` on a reference: a Binding's `connectionRef` or `backendRef` that names no resource, or a Secret that
+  does not exist in that namespace.
+- `has no key "botToken"` (or `appToken`): the Slack Secret exists, but not with these key names. They are case
+  sensitive.
+
+The line is cut after 300 bytes, so with several problems you may see only the first. For the problems in the files
+themselves, run `agent-kourier dry-run` against the rendered values, as in
+[Check the values before you install](install-with-helm.md#check-the-values-before-you-install): it prints every one
+in full and needs no cluster. It does not check references or Secrets, so for those, read the names in the error
+against `kubectl -n agent-kourier get secret`.
 
 ## The pod exits with code 4 and never becomes ready
 

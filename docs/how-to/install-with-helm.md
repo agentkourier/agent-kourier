@@ -13,32 +13,64 @@ thing to wire.
 - A Kubernetes cluster whose nodes can pull your image, and a namespace for Agent Kourier.
 - A Slack app with a bot token and an app-level token, invited to a channel: see [Configure Slack](configure-slack.md).
 - A registry for the image. The nodes need read access to it.
-- `docker` with a buildx builder that can make attestations, `helm` and `jq`.
+- A checkout of this repository, `docker` and `helm`. The release route below needs more; it lists what.
 
 ## Build an image the nodes can pull
 
-A tagged release publishes a multi-arch image and the chart. There is no release yet, so build one:
+There is no published release yet, so you build the image and push it to your registry.
+
+`make image` builds the production image, `agent-kourier:dev`, for the architecture of the Docker daemon that builds it.
+If the nodes run another architecture, as amd64 nodes do when you build on an Apple silicon laptop, name theirs with
+`DOCKER_DEFAULT_PLATFORM`. The Go build cross-compiles, so this needs no emulation. Then tag the image for your
+registry and push it:
 
 ```sh
-docker buildx create --name agent-kourier-release --driver docker-container
-PLATFORMS=linux/amd64 BUILDER=agent-kourier-release make release-image VERSION=v0.0.1-dev.1
+DOCKER_DEFAULT_PLATFORM=linux/amd64 make image   # the nodes' platform
+docker image inspect --format '{{.Os}}/{{.Architecture}}' agent-kourier:dev
+docker tag agent-kourier:dev <registry>/<repo>/agent-kourier:<tag>
+docker push <registry>/<repo>/agent-kourier:<tag>
 ```
 
-That builds an image and a chart package in `bin/release` and pushes nothing. To push, run it from a clean checkout,
-tag that commit with the same version, log in to the registry, and add:
-
-```sh
-PUSH=1 REGISTRY=<registry>/<repo>/agent-kourier CHART_REGISTRY=oci://<registry>/<repo>/charts \
-  make release-image VERSION=v0.0.1-dev.1
-```
-
-- A push refuses a tree with uncommitted or untracked files, and a version whose tag is not at `HEAD`. Keep
-  `my-values.yaml` outside the checkout. A build that pushes nothing skips both checks.
-- Many registries make tags immutable. Each build then needs a new version.
-- The chart comes out stamped with the image digest, so you set no image values.
+- Push each build under a new tag. The chart's `image.pullPolicy` is `IfNotPresent`, so a node that already has a tag
+  runs what it has and does not pull a rebuild pushed under the same tag.
+- Many registries make tags immutable, which enforces the same thing.
 
 The first pull of a new repository path is the real test of node access. If the nodes pull with their own
 credentials, check that the repository falls under whatever policy grants that access before you debug anything else.
+
+### Or build a release
+
+`make release-image` builds what a tagged release publishes: an image for `linux/amd64` and `linux/arm64` with
+provenance and SBOM attestations, and the chart package stamped with that image's digest. It is the route for a build
+you want to promote, and it needs more than the route above:
+
+- A buildx builder that can make multi-platform images with attestations. Docker's default `docker` driver cannot,
+  unless it uses the containerd image store.
+- `helm` and `jq`.
+- To push: a clean checkout (no uncommitted or untracked files, so keep `my-values.yaml` outside it), a git tag equal to
+  `VERSION` at `HEAD`, a registry login of your own, and both `REGISTRY` and `CHART_REGISTRY`.
+- To push: [Trivy](https://trivy.dev). Every push scans each platform's image first and fails on any `HIGH` or
+  `CRITICAL` finding, including one that has no fix yet. `hack/security/install-trivy.sh` downloads the version CI uses,
+  checks its checksum, and prints its path for `TRIVY_BIN`.
+
+Without `PUSH=1` it pushes nothing and skips the checkout, tag and scan checks. It writes the image as an OCI archive to
+`bin/release`, which no node can pull, with the chart package beside it. That run checks that the build works:
+
+```sh
+docker buildx create --name agent-kourier-release --driver docker-container
+BUILDER=agent-kourier-release make release-image VERSION=v0.0.1-dev.1
+```
+
+To push, tag the commit `v0.0.1-dev.1`, log in to the registry, and run:
+
+```sh
+TRIVY_BIN=$(hack/security/install-trivy.sh) BUILDER=agent-kourier-release PUSH=1 \
+  REGISTRY=<registry>/<repo>/agent-kourier CHART_REGISTRY=oci://<registry>/<repo>/charts \
+  make release-image VERSION=v0.0.1-dev.1
+```
+
+The pushed chart carries the image's repository and digest, so you set no image values when you install it. If the
+registry makes tags immutable, each push needs a new version, and so a new git tag.
 
 ## Create the Secrets
 
@@ -112,20 +144,54 @@ config:
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).
 
+## Check the values before you install
+
+The chart passes each resource's `spec` through as written, so `helm lint` and `helm template` accept a misspelt field
+such as `chanel:`. Agent Kourier rejects it when it starts, and the pod restarts in a loop. `agent-kourier dry-run`
+loads the same files with the same loader, so it finds those errors before you install. Render the files the chart
+writes, with `yq`:
+
+```sh
+mkdir -p rendered
+helm template agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.yaml \
+  --set image.repository=unused --show-only templates/configmap.yaml |
+  yq -r '.data[] | "---\n" + .' > rendered/resources.yaml
+```
+
+Then run the dry run from the image you built, with the bot token in `SLACK_BOT_TOKEN` (exported) and the Binding
+named as `namespace/name`:
+
+```sh
+docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/rendered:/config:ro" \
+  agent-kourier:dev dry-run --config /config --binding agent-kourier/my-binding
+```
+
+If the image is for another architecture than your machine's, Docker runs it under emulation where it can, as Docker
+Desktop does. With Go installed, `go run ./cmd/agent-kourier dry-run --config rendered ...` from the checkout does the
+same without the image.
+
+An error that starts `agent-kourier dry-run: load /config:` names the file, the resource and the field. The files load
+before the token is read, so without a token the dry run still checks them, and then stops at `no bot token`. With one,
+it reads the Binding's channel, and it exits 1 if Slack rejects the token. It does not check references between
+resources or the Secrets: those errors show only when the pod starts. Reading the rest of its output is in
+[Tune triggers with a dry run](tune-triggers.md).
+
 ## Install the chart
 
-Install the chart you pushed. It is stamped with its image:
+The chart in the source tree has no image, and the render fails without one. Pass the image you pushed:
+
+```sh
+helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.yaml \
+  --set image.repository=<registry>/<repo>/agent-kourier --set image.tag=<tag>
+```
+
+To pin the image, pass `--set image.digest=sha256:<digest>` in place of the tag; a digest wins over a tag.
+
+If you pushed a release, install the chart you pushed instead. It is stamped with its image:
 
 ```sh
 helm install agent-kourier oci://<registry>/<repo>/charts/agent-kourier --version 0.0.1-dev.1 \
   -n agent-kourier -f my-values.yaml
-```
-
-A chart from the source tree has no image, and the render fails without one. Pass the one you built:
-
-```sh
-helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.yaml \
-  --set image.repository=<registry>/<repo>/agent-kourier --set image.digest=sha256:<digest>
 ```
 
 The defaults run one replica with SQLite on a 1 GiB volume. For Postgres and a standby, see
