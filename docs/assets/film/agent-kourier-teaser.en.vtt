@@ -5,27 +5,27 @@ Narration of the Agent Kourier teaser (docs/brand/film/narration.json, "teaser")
 Cue times read from the 16:9 render with ffmpeg silencedetect.
 
 1
-00:00:00.300 --> 00:00:01.900
-Your agents are ready.
+00:00:00.350 --> 00:00:01.800
+Your agent is ready.
 
 2
-00:00:02.100 --> 00:00:04.000
-But nothing brings them the work.
+00:00:02.100 --> 00:00:04.500
+The chat integration is another project.
 
 3
-00:00:04.700 --> 00:00:06.700
+00:00:04.950 --> 00:00:06.900
 Introducing Agent Kourier:
 
 4
-00:00:06.800 --> 00:00:10.700
-the always-on chat gateway
-for A2A agents on Kubernetes.
+00:00:07.100 --> 00:00:11.300
+a Kubernetes-native broker between team chat
+and A2A agents.
 
 5
-00:00:11.300 --> 00:00:15.400
-Alerts and questions become live agent sessions,
-right in the thread.
+00:00:11.600 --> 00:00:14.800
+Alerts and questions become agent sessions
+in the thread.
 
 6
-00:00:15.600 --> 00:00:17.000
-Slack first.
+00:00:15.100 --> 00:00:17.800
+Slack today, more platforms planned.
