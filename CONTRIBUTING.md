@@ -5,9 +5,9 @@ before a large change saves both of us time.
 
 ## Before you start
 
-- **Bugs and questions:** open an issue with the version or commit, your deployment (Helm or a
-  container, SQLite or Postgres), the agent backend, and what you saw. Redact tokens and private
-  messages.
+- **Bugs and questions:** open an issue with the bug or question form. The bug form asks for the version
+  or commit, your deployment (Helm or a container, SQLite or Postgres), the agent backend, and what you
+  saw. Redact tokens and private messages.
 - **Security problems:** do not open an issue. Follow [SECURITY.md](SECURITY.md).
 - **Features and larger changes:** open an issue first. A change that adds a Go module dependency,
   changes the `v1alpha1` resource format, or touches the chat or agent contracts needs agreement
@@ -28,7 +28,7 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
 
 ## Pull requests
 
-- One concern per pull request. Split a change that mixes a fix, a refactor and a feature.
+- The pull request template lists the checks to run and what to confirm. One concern per pull request. Split a change that mixes a fix, a refactor and a feature.
 - Write the test first where you can. Unit tests use the standard library `testing` package,
   table-driven where it fits.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and the

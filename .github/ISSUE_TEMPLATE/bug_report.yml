@@ -1,0 +1,72 @@
+name: Bug report
+description: Agent Kourier does something it should not, or fails to do what the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **A security problem does not go here:** report it privately, as SECURITY.md says.
+
+        Redact tokens, Secret values, private Slack messages and workspace or channel identifiers from everything
+        you paste. A fake value such as `C0123456789` is fine.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release (`agent-kourier --version`, or the chart version), or the commit for a build from source.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it runs
+      options:
+        - Helm chart from ghcr.io (published release)
+        - Helm chart from a checkout
+        - Container without the chart
+        - kind sandbox or end-to-end tier from this repository
+        - Other (say below)
+    validations:
+      required: true
+  - type: dropdown
+    id: store
+    attributes:
+      label: Store
+      options:
+        - SQLite (one replica)
+        - Postgres, one replica
+        - Postgres, two replicas (leader election)
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Agent backend
+      options:
+        - kagent 1.0 (kagent-v1 dialect)
+        - kagent 0.9.x (a2a dialect)
+        - Google AX (a2a dialect)
+        - Another A2A agent (a2a dialect)
+        - None yet
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest steps that show it. Include the Binding or values that matter, redacted.
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The broker's log lines around the failure (`kubectl logs deploy/agent-kourier`), redacted.
+      render: text

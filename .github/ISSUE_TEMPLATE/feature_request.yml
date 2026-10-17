@@ -1,0 +1,40 @@
+name: Feature request
+description: Something Agent Kourier should do that it does not.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A change to the `v1alpha1` resource format, a new Go module dependency, or the chat or agent contracts needs
+        agreement here before code. CONTRIBUTING.md has the rest.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, and what stops you today. A real case helps more than a design.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would like Agent Kourier to do. An example Binding or values snippet is welcome.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: What you tried or considered instead, and why it falls short.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Slack and chat platforms
+        - Triggers and alerts
+        - Agent backends and dialects
+        - Sessions, threads and questions
+        - Helm chart and install
+        - Store, high availability and upgrades
+        - Telemetry and audit
+        - Docs and recipes
