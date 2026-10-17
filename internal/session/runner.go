@@ -991,9 +991,11 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 		m.finish(t, TurnAnswerRejected)
 		return ended, m.end(context.WithoutCancel(m.ctx), t.key, t.c.ttl)
 	case errors.Is(err, agent.ErrBusy):
-		return m.readAnswered(t, err)
+		return m.readAnswered(t, err, "")
+	case errors.Is(err, agent.ErrMessageReply): // the agent replied, and not with the task: one that still waits did not take it
+		return m.readAnswered(t, nil, answerMessageDetail)
 	case errors.Is(err, agent.ErrOutcomeUnknown):
-		return m.readAnswered(t, nil)
+		return m.readAnswered(t, nil, "")
 	case errors.Is(err, agent.ErrCredentialsRejected):
 		m.rejected(t, err)
 	}
@@ -1005,6 +1007,7 @@ func (m *Manager) unanswered(t *tstate, err error) (outcome, error) {
 const (
 	answerBusyDetail     = "the agent is busy with the task, and did not take the answer"
 	answerNotReadyDetail = "the agent's session was not ready, and did not take the answer"
+	answerMessageDetail  = "the agent replied with a message that did not continue the task, so the answer was not taken"
 )
 
 // readAnswered reads the task an answer may or may not have reached: refused is the -32004 it got (busy,
@@ -1012,8 +1015,9 @@ const (
 // unknown (it may have been delivered). An ended task drops the answer; a WORKING one past maxWorkingAge that
 // refused it is cancelled (R17); any other WORKING one is followed, so its end is seen and the queue goes on (the
 // thread is told when it refused the answer, and why); one still waiting for input reopens the pause, and tells
-// the thread the same.
-func (m *Manager) readAnswered(t *tstate, refused error) (outcome, error) {
+// the thread the same. waiting is what the thread is told when the outcome was unknown and the task still waits,
+// empty for nothing: the agent may never have had the answer, but one that replied with a Message did.
+func (m *Manager) readAnswered(t *tstate, refused error, waiting string) (outcome, error) {
 	busy := refused != nil
 	detail := answerBusyDetail
 	if errors.Is(refused, agent.ErrNotReady) {
@@ -1038,7 +1042,7 @@ func (m *Manager) readAnswered(t *tstate, refused error) (outcome, error) {
 		return m.resume(t.c)
 	}
 	if !busy {
-		detail = "" // an outcome that was unknown, and the task still waits: nothing is said
+		detail = waiting // an outcome that was unknown, and the task still waits
 	}
 	return m.repark(t, detail), nil
 }
@@ -1484,8 +1488,8 @@ const (
 // accept records that the agent took the turn (spec 8.2): the session gets its contextId and
 // task, then the turn leaves the queue. In that order, so a crash in between leaves a task
 // recovery can find, never one nobody knows about. A reply with no task (a Message, spec 6.3)
-// records the contextId alone, and there is nothing for recovery to find: a crash after this and
-// before the reply is posted loses the reply. Both writes are idempotent, so the pair is
+// records the contextId alone, and there is nothing for recovery to find: a crash after both writes
+// and before the reply is posted loses the reply, and one between them sends the turn again. Both writes are idempotent, so the pair is
 // retried, a bounded number of times. It does not rewrite the session row, so it cannot undo
 // a Submit's touch.
 func (m *Manager) accept(ctx context.Context, r store.Reply, ev agent.StateEvent, turn store.TaskTurn) (err error) {

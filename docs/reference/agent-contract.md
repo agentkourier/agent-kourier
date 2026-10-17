@@ -62,7 +62,7 @@ extension when the card lists it.
 | The agent must | Otherwise |
 |---|---|
 | Answer a send with task events: `Task`, `TaskStatusUpdateEvent` and `TaskArtifactUpdateEvent`, or with one `Message` and no task (see below) | A stream that ends with neither names no task, so the outcome is unknown. The turn is sent again, and may run again, until it fails after 15 minutes with "the agent could not be reached" |
-| Name the task and its `contextId` on its events | The outcome is unknown and the turn is sent again |
+| Name the task and its `contextId` on its events | With no task ID there is nothing to follow: if the stream then ends before a full `Task`, the thread is told the request failed, and the turn is not sent again. With no `contextId` the context already recorded is kept; a thread's first turn has none, so its next turn starts a new context |
 | Create a `contextId` on a thread's first turn, and keep it for every later turn | A different `contextId` posts "The agent no longer has this conversation" and the new context is kept |
 | Put the answer in **artifact text parts**, or in the text parts of a `Message` reply | Text in the status message or in `history` is not shown. A task that completes with no artifact text posts "The agent finished without any output." |
 | End the stream with a full `Task` in a terminal, `input-required` or `auth-required` state | The stream is treated as dropped, and `GetTask` settles the turn after a second |
@@ -74,10 +74,13 @@ A reply to a new turn that is one `Message` from the agent (role `agent`) with n
 parts, joined, are the answer, and the turn ends as completed. A message with no text posts "The agent finished without
 any output." The message's `contextId` is kept for the next turn (a message with none leaves the context as it was), and
 no task is recorded, so there is nothing to follow, stop or look up. Any other `Message` is ignored: one that names a
-task, one from the user, one after the agent has named a task, and any reply to an answer to a question, whose outcome is
-then unknown and the paused task is read with `GetTask`. A turn whose stream drops before the message arrives has an
-unknown outcome, and since no task holds its `messageId` a lookup finds nothing: it is sent again and may run twice. If
-Agent Kourier stops after the message arrives and before it is posted, the answer is lost: the turn is not sent again.
+task, one from the user, one after the agent has named a task, and any reply to an answer to a question. An answer
+replied to with a message alone has an unknown outcome, and the paused task is read with `GetTask`: if it still waits for
+input, the thread is told the request failed and the question stays open for another answer. A turn whose stream drops
+before the message arrives has an unknown outcome, and since no task holds its `messageId` a lookup finds nothing: it is
+sent again and may run twice. If Agent Kourier stops after the message arrives and before it is posted, the answer is
+lost once the turn has left the queue; stopped earlier than that, the turn's outcome is unknown and it is handled the
+same way as a dropped stream.
 
 An artifact update with `append: true` adds to that artifact's text; any other replaces it. `lastChunk` is not read.
 An update with no text part leaves the artifact's text as it was, so to take text back, replace it with an empty text part.

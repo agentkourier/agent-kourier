@@ -131,6 +131,8 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 			err = a.cancelWedged(ctx, err, cmp.Or(asm.taskID, msg.TaskID))
 		}
 		return err
+	case asm.taskID == "" && asm.unshown: // the agent replied to the answer with a message alone
+		return fmt.Errorf("%w: %w", ErrMessageReply, beforeAnyEvent(err))
 	case asm.taskID == "": // nothing to reconnect to
 		return beforeAnyEvent(err)
 	}
