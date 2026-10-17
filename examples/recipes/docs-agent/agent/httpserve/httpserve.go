@@ -78,7 +78,9 @@ func Run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Durati
 		}
 		// Shutdown closes only the listeners Serve has taken, and Serve may not have started yet. It returns at once
 		// on a server that is shutting down, closing ln as it goes, so waiting for it is what keeps "It closes ln".
-		<-done
+		if serveErr := <-done; !errors.Is(serveErr, http.ErrServerClosed) {
+			err = errors.Join(err, fmt.Errorf("serve: %w", serveErr))
+		}
 		return err
 	}
 }
