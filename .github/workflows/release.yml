@@ -76,7 +76,7 @@ jobs:
       # The version test/chart passes with; ci.yml pins the same one.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v4.3.0
+          version: v4.3.1
       # install-trivy.sh pins the Aqua Security release and verifies its official SHA-256 checksum. The
       # release script invokes the shared scanner before any image or chart push.
       - name: Install pinned Trivy
@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v3.0.6
+          cosign-release: v3.1.3
       - name: Sign the image and the chart by digest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -152,7 +152,7 @@ jobs:
     steps:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v3.0.6
+          cosign-release: v3.1.3
       - name: Verify the image and chart signatures
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
