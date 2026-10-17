@@ -75,41 +75,19 @@ Tokens never go in the values file. The chart refuses a value that looks like a 
 ## Write the values
 
 The chart takes Agent Kourier's three resource kinds under `config`: the ChatConnection, the AgentBackend and the
-Binding. They are nested, so they go in a values file rather than in `--set` flags. Save this as `my-values.yaml`, the
-file the `-f` flags below pass to Helm. It is a complete first install, with an agent that does not exist yet:
+Binding. They are nested, so they go in a values file rather than in `--set` flags. Download the starter file, a
+complete first install with an agent that does not exist yet:
 
-```yaml title="my-values.yaml"
-config:
-  chatConnections:
-    slack:
-      spec:
-        platform: slack
-        credentialsSecretRef: {name: agent-kourier-slack}
-  agentBackends:
-    agent:
-      spec:
-        dialect: a2a
-        url: http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ # (1)!
-  bindings:
-    my-binding:
-      spec:
-        agent:
-          backendRef: {name: agent}
-          namespace: my-namespace
-          name: my-agent
-        identity:
-          userId: agent-kourier # (2)!
-        chat:
-          connectionRef: {name: slack}
-          channel: C0123456789 # (3)!
-          output: live
-        interactions: {askUser: false}
+```sh
+curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
 ```
 
-1. The `a2a` dialect sends to this URL exactly as written and follows no redirect. Write the trailing slash if the
-   agent's route has one.
-2. Add `tokenSecretRef: {name: agent-kourier-agent-token}` here when you created that Secret.
-3. The channel ID, which starts with `C` (`G` for an older private channel), not the channel's name.
+It is this file. Change the four lines marked `yours`: the agent's URL, namespace and name, and the channel's ID, which
+starts with `C` (`G` for an older private channel), not the channel's name. The `-f` flags below pass it to Helm.
+
+```yaml title="my-values.yaml"
+--8<-- "my-values.yaml"
+```
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).

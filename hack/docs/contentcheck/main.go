@@ -369,7 +369,11 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(files, recipes, docs, overrides), nil
+	helmExamples, err := textFiles(root, "examples/helm", nil)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(files, recipes, helmExamples, docs, overrides), nil
 }
 
 // allowEntry is one deliberate exception: a line of path that matches rule and holds text.

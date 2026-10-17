@@ -9,7 +9,14 @@ chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `repl
 removing a Binding from the values is the other.
 
 Agent Kourier does nothing without its resources, which the chart takes under `config`: a ChatConnection, an
-AgentBackend and a Binding. Put them in a values file, `my-values.yaml`:
+AgentBackend and a Binding. Put them in a values file, `my-values.yaml`. Download the commented starter and change the
+lines it marks `yours`:
+
+```sh
+curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
+```
+
+It holds the same resources as this:
 
 ```yaml
 config:
