@@ -42,18 +42,24 @@ class Clock:
 
     def __init__(self) -> None:
         self.requested: list[float] = []  # the seconds each sleep asked for
-        self.ticks: asyncio.Queue = asyncio.Queue()
+        self.sleepers: list[asyncio.Future] = []
 
     def __getattr__(self, name):
         return getattr(asyncio, name)
 
     async def sleep(self, seconds):
         self.requested.append(seconds)
-        await self.ticks.get()
+        self.sleepers.append(asyncio.get_running_loop().create_future())
+        await self.sleepers[-1]
+
+    @property
+    def waiting(self) -> list[asyncio.Future]:
+        """The sleeps that have not ended, and were not cancelled, oldest first."""
+        return [s for s in self.sleepers if not s.done()]
 
     def tick(self) -> None:
-        """Ends the oldest sleep, as if its time had passed."""
-        self.ticks.put_nowait(None)
+        """Ends the oldest sleep still waiting, as if its time had passed."""
+        self.waiting[0].set_result(None)
 
 
 @pytest.fixture

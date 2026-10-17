@@ -38,6 +38,7 @@ from starlette.responses import PlainTextResponse
 HEARTBEAT = 120  # seconds between `working` updates during a run; the contract allows 5 minutes of silence
 MAX_KEPT = 1000  # contexts, replied messageIds and paused questions kept in memory; the oldest is forgotten past this
 ENV = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class Recent(OrderedDict):
@@ -56,20 +57,41 @@ def ask_user(question: str) -> str:
     raise CallDeferred
 
 
-def expand(value: str, path: str) -> str:
-    """Replaces ${NAME} with the environment variable NAME, so a token is never written in agent.yaml."""
-    if unset := [name for name in ENV.findall(value) if name not in os.environ]:
-        raise SystemExit(f"{path}: the environment variable {unset[0]} is not set")
-    return ENV.sub(lambda m: os.environ[m.group(1)], value)
+def expand(value: str, path: str, secrets: set[str]) -> str:
+    """Replaces ${NAME} with the environment variable NAME, so a token is never written in agent.yaml.
+
+    The value is stripped (a Secret made from a file often ends in a newline, which is not a legal header value) and
+    must then be non-empty and free of control characters. Each value goes into `secrets`, for redact() to remove.
+    """
+
+    def environment(match: re.Match) -> str:
+        name = match.group(1)
+        if name not in os.environ:
+            raise SystemExit(f"{path}: the environment variable {name} is not set")
+        text = os.environ[name].strip()
+        if not text or CONTROL.search(text):  # never quote the value: it is a secret
+            raise SystemExit(f"{path}: the environment variable {name} is empty or holds a control character")
+        secrets.add(text)
+        return text
+
+    return ENV.sub(environment, value)
 
 
-def load_agent(path: str, model=None) -> Agent:
+def redact(text: str, secrets) -> str:
+    """Hides the expanded values in text that leaves the agent: GetTask serves a failed task's message to any caller."""
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, "[redacted]")
+    return text
+
+
+def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
     """Rule: chat and alert text is untrusted, so the agent may use only the MCP tools agent.yaml lists, nothing else.
 
     Anything else stops the agent at start, naming the file. Pydantic AI's spec offers a shell (LocalWorkspace), web
     access and more, and an MCP `url` that is a path makes it run that script over stdio. `model` replaces the spec's.
+    Returns the agent and the values ${NAME} expanded to.
     """
-    spec = AgentSpec.from_file(path)
+    spec, secrets = AgentSpec.from_file(path), set()
     for cap in spec.capabilities:
         args = dict(cap.kwargs)  # an MCP given as a bare string has no keyword arguments, so it fails the checks below
         if cap.name != "MCP":
@@ -78,18 +100,27 @@ def load_agent(path: str, model=None) -> Agent:
             raise SystemExit(
                 f"{path}: an MCP entry needs url: http(s)://..., as a keyword, not a path, a command or a string"
             )
-        if "allowed_tools" not in args:
-            raise SystemExit(f"{path}: an MCP entry must list allowed_tools: the tools the agent may call")
-        if args.get("native"):
+        # Pydantic AI filters tools only for a list: null, or no list at all, would offer every tool the server has.
+        tools = args.get("allowed_tools")
+        if not (isinstance(tools, list) and tools and all(isinstance(t, str) for t in tools)):
+            raise SystemExit(f"{path}: an MCP entry must list allowed_tools, as names: the tools the agent may call")
+        # Anything but false (a mapping, null, true) makes the model provider call the server itself, with the token.
+        if args.get("native", False) is not False:
             raise SystemExit(f"{path}: native MCP is not allowed: the model provider would call the server itself")
         # A token belongs in these two places, and only here is ${NAME} expanded: an expanded prompt would send the
         # token to the model.
         if "authorization_token" in args:
-            args["authorization_token"] = expand(args["authorization_token"], path)
-        if args.get("headers"):
-            args["headers"] = {name: expand(value, path) for name, value in args["headers"].items()}
+            if not isinstance(args["authorization_token"], str):
+                raise SystemExit(f"{path}: authorization_token must be a string")
+            args["authorization_token"] = expand(args["authorization_token"], path, secrets)
+        headers = args.get("headers")
+        if headers is not None:
+            if not (isinstance(headers, dict) and all(isinstance(v, str) for v in headers.values())):
+                raise SystemExit(f"{path}: headers must be a mapping of names to string values")
+            args["headers"] = {name: expand(value, path, secrets) for name, value in headers.items()}
         cap.arguments = args
-    return Agent.from_spec(spec, model=model, tools=[ask_user], output_type=[str, DeferredToolRequests])
+    agent = Agent.from_spec(spec, model=model, tools=[ask_user], output_type=[str, DeferredToolRequests])
+    return agent, secrets
 
 
 def build_card(agent: Agent, url: str) -> AgentCard:
@@ -141,8 +172,8 @@ async def heartbeat(task: TaskUpdater):
 class PromptExecutor(AgentExecutor):
     """One A2A task per turn: execute() runs it and cancel() stops it."""
 
-    def __init__(self, agent: Agent) -> None:
-        self.agent = agent
+    def __init__(self, agent: Agent, secrets: set[str]) -> None:
+        self.agent, self.secrets = agent, secrets
         # All of this is in memory and bounded (MAX_KEPT): after a restart, or enough other threads, a thread starts
         # over.
         self.history = Recent()  # contextId -> the run's messages as JSON
@@ -180,11 +211,15 @@ class PromptExecutor(AgentExecutor):
         """Contract, Replies: a repeated messageId is the same turn. If its first run completes, answer with its reply.
 
         A first turn is resent with no contextId after an unknown outcome, so the repeat arrives in a new context, which
-        inherits the conversation. A repeat that arrives while the first run goes on waits for it. A failed run runs
-        again.
+        inherits the conversation. A repeat that arrives while the first run goes on waits for it, with a heartbeat of
+        its own, and the shield keeps its own cancel from cancelling the first run's future. A failed run runs again.
         """
         first = self.turns.get(message_id)
-        if first is None or not (done := await asyncio.shield(first)):
+        if first is None:
+            return False
+        async with heartbeat(task):
+            done = await asyncio.shield(first)
+        if not done:
             return False
         first_ctx, reply = done
         self.history[ctx] = self.history.get(first_ctx, b"[]")
@@ -229,7 +264,9 @@ class PromptExecutor(AgentExecutor):
             # Contract, Task states: Agent Kourier reads this text, and only this, to pick a failure category. An MCP
             # server's 401 arrives as "MCPError: Server returned an error response", with no status to map to
             # "authentication": the MCP client drops it (mcp/client/streamable_http.py), as for other error statuses.
-            await task.failed(task.new_agent_message([new_text_part(f"{type(e).__name__}: {e}"[:1000])]))
+            # An exception can quote the header it was sent with, and GetTask serves this text to any caller.
+            text = redact(f"{type(e).__name__}: {e}", self.secrets)[:1000]
+            await task.failed(task.new_agent_message([new_text_part(text)]))
             return None
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -266,12 +303,12 @@ class RequireBearer:
 
 def build_app(url: str, spec_path: str = "agent.yaml", token_file: str = "", model=None):
     """The ASGI app: the card at /.well-known/agent-card.json and JSON-RPC at /, so the AgentBackend's url is `url`."""
-    agent = load_agent(spec_path, model)
+    agent, secrets = load_agent(spec_path, model)
     card = build_card(agent, url)
     # Tasks stay in memory until a restart, unbounded like the echo agent's: GetTask must find them (-32001 reads as the
     # session gone), and so must ListTasks (a turn it cannot find is sent again).
     handler = DefaultRequestHandler(
-        agent_executor=PromptExecutor(agent), task_store=InMemoryTaskStore(), agent_card=card
+        agent_executor=PromptExecutor(agent, secrets), task_store=InMemoryTaskStore(), agent_card=card
     )
     app = Starlette(routes=create_agent_card_routes(card) + create_jsonrpc_routes(handler, rpc_url="/"))
     if token_file:  # without a token file the agent accepts every caller, and spends your model key for them

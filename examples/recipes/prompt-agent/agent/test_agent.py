@@ -59,6 +59,8 @@ def scripted(seen: list | None = None, release: asyncio.Event | None = None):
             yield f"Refused: {last.model_response()}"
         elif last.content == "boom":
             raise RuntimeError("model exploded")
+        elif last.content == "leak":
+            raise RuntimeError(f"rejected Bearer {TOKEN}")
         elif last.content == "hold":
             await release.wait()
             yield "held"
@@ -189,7 +191,36 @@ async def test_the_variable_is_not_expanded_in_the_prompt_so_a_prompt_cannot_pul
 
 def test_the_example_agent_yaml_passes_the_policy(monkeypatch):
     monkeypatch.setenv("RUNBOOKS_MCP_TOKEN", TOKEN)
-    assert agent.load_agent(str(HERE / "agent.yaml"), scripted()).name
+    loaded, secrets = agent.load_agent(str(HERE / "agent.yaml"), scripted())
+    assert loaded.name and secrets == {TOKEN}
+
+
+@pytest.mark.anyio
+async def test_a_token_with_a_trailing_newline_works(spec, server, monkeypatch):
+    """A Secret made from a file often ends in a newline, which is not a legal header value."""
+    monkeypatch.setenv("OPS_MCP_TOKEN", f"  {TOKEN}\n")
+    async with serve(spec, scripted()) as client:
+        _, task = await say(client, "runbook")
+    assert task.status.state == DONE and [c["tool"] for c in server.calls()] == ["runbook"]
+
+
+@pytest.mark.parametrize("value", ["", " \n", "fake\nmore", "fake\x07", "fake\tmore"])
+def test_a_variable_that_is_empty_or_holds_a_control_character_stops_the_agent_without_showing_it(
+    spec, monkeypatch, value
+):
+    monkeypatch.setenv("OPS_MCP_TOKEN", value)
+    with pytest.raises(SystemExit, match="OPS_MCP_TOKEN") as stopped:
+        agent.load_agent(spec, scripted())
+    assert "fake" not in str(stopped.value)
+
+
+@pytest.mark.anyio
+async def test_the_token_is_redacted_from_the_failed_message_that_GetTask_serves(spec):
+    """An exception can quote the header it was sent with; the task store serves the status message to any caller."""
+    async with serve(spec, scripted()) as client:
+        _, task = await say(client, "leak")
+    text = task.status.message.parts[0].text
+    assert task.status.state == FAILED and TOKEN not in text and text == "RuntimeError: rejected Bearer [redacted]"
 
 
 REFUSALS = {  # an agent.yaml `capabilities:` list, and what the refusal must name
@@ -197,7 +228,26 @@ REFUSALS = {  # an agent.yaml `capabilities:` list, and what the refusal must na
     "a capability with no arguments": ("- WebFetch", "WebFetch"),
     "MCP without allowed_tools": ("- MCP: {url: 'http://x/mcp'}", "allowed_tools"),
     "MCP given its url alone": ("- MCP: 'http://x/mcp'", "url"),
+    "MCP with allowed_tools null": ("- MCP: {url: 'http://x/mcp', allowed_tools: null}", "allowed_tools"),
+    "MCP with a blank allowed_tools": ("- MCP:\n      url: 'http://x/mcp'\n      allowed_tools:", "allowed_tools"),
+    "MCP with allowed_tools empty": ("- MCP: {url: 'http://x/mcp', allowed_tools: []}", "allowed_tools"),
+    "MCP with allowed_tools a string": ("- MCP: {url: 'http://x/mcp', allowed_tools: runbook}", "allowed_tools"),
+    "MCP with a tool name that is not a string": ("- MCP: {url: 'http://x/mcp', allowed_tools: [1]}", "allowed_tools"),
     "MCP with native on": ("- MCP: {url: 'http://x/mcp', allowed_tools: [a], native: true}", "native"),
+    "MCP with native an empty mapping": ("- MCP: {url: 'http://x/mcp', allowed_tools: [a], native: {}}", "native"),
+    "MCP with native null": ("- MCP: {url: 'http://x/mcp', allowed_tools: [a], native: null}", "native"),
+    "MCP with a null authorization_token": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], authorization_token: null}",
+        "authorization_token",
+    ),
+    "MCP with headers that are not a mapping": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: [a]}",
+        "headers",
+    ),
+    "MCP with a header value that is not a string": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {X-Id: 5}}",
+        "headers",
+    ),
     "MCP with a script path as its url": ("- MCP: {url: mcp_server.py, allowed_tools: [runbook]}", "url"),
     "MCP with a command as its url": ("- MCP: {url: 'python mcp_server.py', allowed_tools: [a]}", "url"),
     "MCP with a file url": ("- MCP: {url: 'file:///etc/passwd', allowed_tools: [a]}", "url"),
@@ -328,9 +378,8 @@ async def test_a_working_status_goes_out_every_heartbeat_while_a_tool_call_runs(
 async def test_no_heartbeat_goes_out_once_the_turn_has_ended(spec, clock):
     async with serve(spec, scripted()) as client:
         await say(client, "hello")
-        clock.tick()
         await asyncio.sleep(0.05)
-    assert clock.requested == [agent.HEARTBEAT] and clock.ticks.qsize() == 1, "nothing was waiting for the tick"
+    assert clock.requested == [agent.HEARTBEAT] and clock.waiting == [], "the heartbeat's sleep was cancelled"
 
 
 @pytest.mark.anyio
@@ -366,6 +415,71 @@ async def test_a_repeat_that_arrives_while_the_first_still_runs_waits_for_it(spe
         await first
         _, repeated = await again
     assert len(seen) == 1 and artifact_text(repeated) == "held" and repeated.status.state == DONE
+
+
+async def task_ids(client, count):
+    """The ids of the tasks the agent holds, once there are `count` of them."""
+    for _ in range(500):
+        ids = [t.id for t in (await client.list_tasks(ListTasksRequest())).tasks]
+        if len(ids) == count:
+            return ids
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"never {count} tasks")
+
+
+@pytest.mark.anyio
+async def test_a_repeat_that_waits_for_the_first_run_sends_a_heartbeat_too(spec, clock):
+    """Contract, Replies: an event at least every 5 minutes, on the repeat's stream as well as the first's."""
+    seen, release = [], asyncio.Event()
+    async with serve(spec, scripted(seen, release)) as client:
+        first = asyncio.create_task(say(client, "hold", message_id="m-1"))
+        await until(lambda: len(seen) == 1 and len(clock.requested) == 1, "the first run and its heartbeat")
+        again = asyncio.create_task(say(client, "hold", message_id="m-1"))
+        await until(lambda: len(clock.requested) == 2, "the repeat's heartbeat")
+        clock.tick()  # the first run's beat is the older sleeper, so it gets the first tick
+        clock.tick()
+        await until(lambda: len(clock.requested) == 4, "both heartbeats")
+        release.set()
+        await first
+        events, _ = await again
+    assert len(working(events)) == 2, "one `working` when the repeat began, and one heartbeat"
+
+
+@pytest.mark.anyio
+async def test_a_repeat_runs_again_when_the_run_it_waited_for_is_cancelled(spec):
+    seen, release = [], asyncio.Event()
+    async with serve(spec, scripted(seen, release)) as client:
+        first = asyncio.create_task(say(client, "hold", message_id="m-1"))
+        await until(lambda: len(seen) == 1, "the model to start")
+        [first_id] = await task_ids(client, 1)
+        again = asyncio.create_task(say(client, "hold", message_id="m-1"))
+        await task_ids(client, 2)
+        await client.cancel_task(CancelTaskRequest(id=first_id))
+        _, canceled = await first
+        release.set()
+        _, repeated = await again
+    assert canceled.status.state == CANCELED
+    assert len(seen) == 2 and repeated.status.state == DONE and artifact_text(repeated) == "held"
+
+
+@pytest.mark.anyio
+async def test_cancelling_a_waiting_repeat_leaves_the_first_run_and_later_repeats_intact(spec):
+    """The repeat waits on a future the first run owns: cancelling the repeat must not cancel that future."""
+    seen, release = [], asyncio.Event()
+    async with serve(spec, scripted(seen, release)) as client:
+        first = asyncio.create_task(say(client, "hold", message_id="m-1"))
+        await until(lambda: len(seen) == 1, "the model to start")
+        [first_id] = await task_ids(client, 1)
+        again = asyncio.create_task(say(client, "hold", message_id="m-1"))
+        repeat_id = next(i for i in await task_ids(client, 2) if i != first_id)
+        await client.cancel_task(CancelTaskRequest(id=repeat_id))
+        _, canceled = await again
+        release.set()
+        _, done = await first
+        _, third = await say(client, "hold", message_id="m-1")
+    assert canceled.status.state == CANCELED
+    assert done.status.state == DONE and artifact_text(done) == "held"
+    assert third.status.state == DONE and artifact_text(third) == "held" and len(seen) == 1
 
 
 @pytest.mark.anyio
