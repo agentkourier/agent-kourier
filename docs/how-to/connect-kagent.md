@@ -11,7 +11,9 @@ Binding's turns reach one of its agents.
     **1. Check the cluster can run it.** kagent 1.0 runs every agent session on Agent Substrate, which needs the
     pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` feature
     gates and `certificates.k8s.io/v1beta1`. They are off by default through Kubernetes 1.36, and managed EKS through 1.36 cannot
-    enable them. From 1.37 the APIs are GA, but `v1beta1` is still off by default, and the pinned Substrate needs it. Check:
+    enable them. From 1.37 the APIs are GA, but `v1beta1` is still off by default, and the pinned Substrate needs it; EKS
+    1.37 serves the GA `v1` APIs but not `v1beta1`. The project's kind tiers turn them on, so a cluster that runs the kind
+    tiers' kagent may still not run it elsewhere. Check:
 
     ```sh
     kubectl api-resources --api-group=certificates.k8s.io   # lists clustertrustbundles and podcertificaterequests
