@@ -2,7 +2,11 @@
 
 ## Report a vulnerability
 
-Send suspected vulnerabilities to [security@agentkourier.dev](mailto:security@agentkourier.dev).
+Report suspected vulnerabilities privately through GitHub: on the repository's
+[Security tab](https://github.com/agentkourier/agent-kourier/security), choose "Report a vulnerability"
+([open a report](https://github.com/agentkourier/agent-kourier/security/advisories/new)). The report is visible
+only to you and the maintainer, and the fix can be coordinated in a private security advisory. If you cannot
+use GitHub, email [security@agentkourier.dev](mailto:security@agentkourier.dev) instead.
 Do not disclose a suspected vulnerability in a public issue or pull request before a fix and
 disclosure date have been agreed with the maintainer.
 
