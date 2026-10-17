@@ -187,7 +187,7 @@ func start(t *testing.T, c RunConfig) *running {
 	ctx, cancel := context.WithCancel(t.Context())
 	r := &running{t: t, cfg: c, cancel: cancel, done: make(chan error, 1)}
 	go func() { r.done <- Run(ctx, c) }()
-	t.Cleanup(func() { cancel(); <-r.done })
+	t.Cleanup(func() { cancel(); _ = <-r.done })
 	return r
 }
 

@@ -269,7 +269,7 @@ func TestRunEndingReportsTheConnectionDown(t *testing.T) {
 	}
 
 	cancel()
-	<-done
+	_ = <-done
 
 	if got := st.get(); len(got) != 2 || !got[0] || got[1] {
 		t.Errorf("OnConnection was told %v; want up, then down when Run ended", got)

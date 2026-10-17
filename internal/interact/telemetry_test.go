@@ -68,7 +68,7 @@ func TestPressProcessingContinuesTheTraceOfThePressAcrossARestart(t *testing.T) 
 		t.Fatal("the press was not processed")
 	}
 	cancel()
-	<-done
+	_ = <-done
 	root, write := h.Span(t, "agentkourier.interaction.press"), h.Span(t, "agentkourier.store.RecordPress")
 	process := h.Span(t, "agentkourier.interaction.process")
 	if processing.TraceID() != root.SpanContext.TraceID() || process.SpanContext.TraceID() != root.SpanContext.TraceID() {
