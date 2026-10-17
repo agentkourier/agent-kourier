@@ -1,0 +1,108 @@
+WEBVTT
+
+NOTE
+Narration of the Agent Kourier demo (docs/brand/film/narration.json, "demo").
+Cue times read from the 16:9 render with ffmpeg silencedetect.
+
+1
+00:00:00.500 --> 00:00:02.800
+You've put AI agents on Kubernetes.
+
+2
+00:00:03.150 --> 00:00:06.450
+They can read logs, check rollouts,
+and find the cause.
+
+3
+00:00:07.350 --> 00:00:10.950
+But they only work when someone
+opens a prompt and asks.
+
+4
+00:00:11.800 --> 00:00:13.600
+Alerts fire in your monitoring.
+
+5
+00:00:13.950 --> 00:00:15.300
+Questions come up in chat.
+
+6
+00:00:15.650 --> 00:00:17.300
+Your agents hear neither.
+
+7
+00:00:18.600 --> 00:00:20.450
+Introducing Agent Kourier:
+
+8
+00:00:20.700 --> 00:00:24.650
+a Kubernetes-native broker between team chat
+and A2A agents.
+
+9
+00:00:25.450 --> 00:00:30.400
+An alert, or a question, becomes an agent session,
+in the thread where it landed.
+
+10
+00:00:30.750 --> 00:00:31.600
+Slack today.
+
+11
+00:00:33.400 --> 00:00:39.450
+When an alert lands in the channel, Agent Kourier picks it up,
+opens the thread, and hands it to your agent.
+
+12
+00:00:39.900 --> 00:00:43.850
+It investigates right there, step by step,
+and reports what it found.
+
+13
+00:00:47.350 --> 00:00:50.400
+Reply in the thread,
+and the same session continues.
+
+14
+00:00:50.650 --> 00:00:52.950
+Same context, nothing re-explained.
+
+15
+00:00:55.300 --> 00:00:57.700
+Or skip the alert, and just ask.
+
+16
+00:01:01.350 --> 00:01:05.650
+When the agent needs a decision,
+it asks, and waits for your answer.
+
+17
+00:01:09.350 --> 00:01:12.950
+Teams add one Binding, in YAML,
+next to their agent.
+
+18
+00:01:13.350 --> 00:01:15.250
+The platform wiring is shared.
+
+19
+00:01:16.950 --> 00:01:20.500
+It works with kagent,
+or any A2A agent that streams.
+
+20
+00:01:20.800 --> 00:01:26.900
+It's a two-way session: it answers as it works,
+asks when it needs you, and keeps the context when you reply.
+
+21
+00:01:27.400 --> 00:01:30.050
+Slack today; more chat platforms are planned.
+
+22
+00:01:30.700 --> 00:01:31.650
+Agent Kourier.
+
+23
+00:01:32.050 --> 00:01:34.450
+Write the agent, not the chat integration.

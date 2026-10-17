@@ -67,6 +67,27 @@ output), cropped to the message list or the thread so the workspace name never s
 disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with, except its channel ID, which is a placeholder; Slack is named as the supported platform today, with more planned, and no other platform is named.
 The Chrome extension's pointer is painted out only where it sat on blank chrome; shots where it covered text were reframed or retimed.
 
+### The copies on the site
+
+The site (`docs/index.md` and `docs/demo.md`) plays the 16:9 teaser and demo from the R2 bucket
+`agentkourier-media`, public only at `https://media.agentkourier.dev`; `r2.dev` access is off and the bucket has
+no CORS rule. Each render is stored under `<name>.<first 12 hex digits of its SHA-256>.mp4`, so a re-cut gets a
+new URL and never replaces the one a deployed page plays. A zone transform rule sets
+`Cache-Control: public, max-age=31536000, immutable` on the domain's 200 and 206 responses. The posters and the
+captions stay in `docs/assets/film/`: the content check reads the captions, and a same-origin `<track>` needs no CORS.
+
+After a re-cut:
+
+1. Upload the new renders, which prints each URL:
+   `hack/docs/upload-film.sh out/agent-kourier-teaser-16x9.mp4 out/agent-kourier-demo-16x9.mp4`
+   (after `npx --yes wrangler@4.147.0 login`). Or, in the dashboard, upload copies renamed to
+   `<name>.<sha12>.mp4` (`shasum -a 256` gives the hash) to the bucket's root.
+2. Put the new URLs in the `<source>` and download link of `docs/index.md` and `docs/demo.md`.
+3. Regenerate the captions (`docs/assets/film/*.en.vtt`) from `narration.json`, with cue times from
+   `ffmpeg -i <render> -af silencedetect=noise=-35dB:d=0.25 -f null -`, and replace each poster with the cut's end card
+   at 1280x720.
+4. Leave the old objects in the bucket until no deployed page plays them.
+
 ### The copy in the project README
 
 The project README plays the 16:9 demo from a GitHub attachment
@@ -81,6 +102,6 @@ ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 
   -c:a aac -b:a 112k -movflags +faststart build/readme/agent-kourier-demo.mp4
 ```
 
-The attachment belongs to a private repository, so only people who can see the repository can play it.
+Anyone who can see the repository can play the attachment; the repository is public.
 An attachment is authorized for the repository it was uploaded to: when the repository was re-created after its
 history was rewritten (2026-10-16), the old link stopped playing and the video had to be uploaded again.
