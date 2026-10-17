@@ -28,7 +28,8 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
 
 ## Pull requests
 
-- The pull request template lists the checks to run and what to confirm. One concern per pull request. Split a change that mixes a fix, a refactor and a feature.
+- The pull request template lists the checks to run and what to confirm.
+- One concern per pull request. Split a change that mixes a fix, a refactor and a feature.
 - Write the test first where you can. Unit tests use the standard library `testing` package,
   table-driven where it fits.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and the

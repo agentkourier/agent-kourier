@@ -1,12 +1,14 @@
 name: Feature request
 description: Something Agent Kourier should do that it does not.
 labels: [enhancement]
+type: Feature
 body:
   - type: markdown
     attributes:
       value: |
         A change to the `v1alpha1` resource format, a new Go module dependency, or the chat or agent contracts needs
-        agreement here before code. CONTRIBUTING.md has the rest.
+        agreement here before code.
+        [CONTRIBUTING.md](https://github.com/agentkourier/agent-kourier/blob/main/CONTRIBUTING.md) has the rest.
   - type: textarea
     id: problem
     attributes:

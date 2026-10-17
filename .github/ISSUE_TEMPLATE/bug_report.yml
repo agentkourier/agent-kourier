@@ -1,11 +1,13 @@
 name: Bug report
 description: Agent Kourier does something it should not, or fails to do what the docs say.
 labels: [bug]
+type: Bug
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. **A security problem does not go here:** report it privately, as SECURITY.md says.
+        Thanks for the report. **A security problem does not go here:** report it privately, as
+        [SECURITY.md](https://github.com/agentkourier/agent-kourier/blob/main/SECURITY.md) says.
 
         Redact tokens, Secret values, private Slack messages and workspace or channel identifiers from everything
         you paste. A fake value such as `C0123456789` is fine.
@@ -13,7 +15,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: The release (`agent-kourier --version`, or the chart version), or the commit for a build from source.
+      description: The chart and app version from `helm -n agent-kourier list`, or the commit for a build from source.
       placeholder: v0.1.0
     validations:
       required: true
@@ -43,6 +45,7 @@ body:
     id: backend
     attributes:
       label: Agent backend
+      multiple: true
       options:
         - kagent 1.0 (kagent-v1 dialect)
         - kagent 0.9.x (a2a dialect)
@@ -62,11 +65,19 @@ body:
     id: reproduce
     attributes:
       label: How to reproduce it
-      description: The smallest steps that show it. Include the Binding or values that matter, redacted.
+      description: The smallest steps that show it.
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: The Binding, AgentBackend, ChatConnection or chart values that matter, redacted.
       render: yaml
   - type: textarea
     id: logs
     attributes:
       label: Logs
-      description: The broker's log lines around the failure (`kubectl logs deploy/agent-kourier`), redacted.
+      description: >-
+        The broker's log lines around the failure, redacted. With the chart:
+        `kubectl -n agent-kourier logs -l app.kubernetes.io/name=agent-kourier --prefix --tail=200`
+        (every replica, so the leader's lines are there).
       render: text

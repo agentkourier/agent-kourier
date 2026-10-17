@@ -1,7 +1,7 @@
 <!--
 Title: a Conventional Commit, for example `fix(session): keep the reply queue across a reload`.
-One concern per pull request. A change to the v1alpha1 format, a new Go module dependency, or the chat or agent
-contracts needs an agreed issue first. See CONTRIBUTING.md.
+One concern per pull request. A change to the v1alpha1 format, a new Go module dependency, or the chat or
+agent contracts needs an agreed issue first. See CONTRIBUTING.md.
 -->
 
 ## What and why
@@ -20,7 +20,9 @@ contracts needs an agreed issue first. See CONTRIBUTING.md.
 ## Checklist
 
 - [ ] Tests cover the change, written first where possible.
-- [ ] Every statement of behaviour the docs gain or change was checked against the code, not copied from another page.
-- [ ] No real token, Secret, private message or workspace identifier in code, tests, fixtures or this description.
-- [ ] A release pull request also sets `version` in `charts/agent-kourier/Chart.yaml`, and `make docs-check` passes
-      (see RELEASING.md).
+- [ ] Every statement of behaviour the docs gain or change was checked against the code, not copied from
+      another page.
+- [ ] No real token, Secret, private message or workspace identifier in code, tests, fixtures or this
+      description.
+
+<!-- A release pull request (the chart version bump) follows RELEASING.md. -->
