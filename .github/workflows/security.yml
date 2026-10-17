@@ -67,7 +67,7 @@ jobs:
             go-govulncheck-${{ matrix.module }}-${{ runner.os }}-
       - name: Run govulncheck
         run: hack/security/govulncheck.sh "${{ matrix.directory }}"
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
