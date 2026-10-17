@@ -1,0 +1,9 @@
+# The A2A server that hosts the agent. Replace the name (replace-me) and the host in the url (REPLACE-ME). For the
+# a2a dialect the url is the exact JSON-RPC endpoint, used as written. Leave this file out if the AgentBackend is
+# already in your config.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: replace-me, namespace: agent-kourier }
+spec:
+  dialect: a2a
+  url: http://REPLACE-ME.agents.svc.cluster.local:8080
