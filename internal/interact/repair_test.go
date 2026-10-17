@@ -341,7 +341,7 @@ func TestRunRepairsAtOnceAndNotAfterTheFirstTick(t *testing.T) {
 	go func() { done <- r.r.Run(ctx) }()
 	waitFor(t, "the prompt, long before the first tick", func() bool { return len(r.up.list()) == 1 })
 	cancel()
-	<-done
+	_ = <-done
 }
 
 // TestAHungEditDoesNotHoldUpTheRepair: an edit that never answers is cut off, so the repair goes on to the

@@ -46,6 +46,10 @@ linters:
       disable:
         - fieldalignment  # memory layout micro-optimisation; hurts struct readability
         - shadow          # noisy on the idiomatic `if err := ...` pattern
+    staticcheck:
+      # golangci-lint's default set, less S1005: errcheck (since v1.30) reports a dropped error received from a
+      # channel, and `_ = <-done` is how a drain says it means to drop it, which S1005 would remove again.
+      checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022", "-S1005"]
   exclusions:
     rules:
       - path: _test\.go

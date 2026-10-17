@@ -730,7 +730,7 @@ func TestEachButtonOfAnApprovalIsDecodedToItsAction(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); _ = <-done })
 	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("never connected")
@@ -845,7 +845,7 @@ func TestAnUnknownButtonOfAPromptNamesNoPrompt(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); _ = <-done })
 	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("never connected")
@@ -876,7 +876,7 @@ func TestADecisionButtonInTheBlockOfAMessagePartCarriesNoAction(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- w.p.Run(ctx, rec) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); _ = <-done })
 	for deadline := time.Now().Add(5 * time.Second); w.fake.Connections() == 0; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("never connected")
