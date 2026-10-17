@@ -1,0 +1,28 @@
+# echo-agent: a mention of the Agent Kourier bot in the channel starts a thread and a session with the echo agent, which
+# echoes what it is told. Replace CREPLACEECHO with the channel's ID (C..., or G... for an older private channel), not
+# its name. It is not the placeholder of the other recipes: each recipe has a channel of its own, so that no two
+# Bindings share one.
+#
+# triggers is the whole list: only a mention starts a session. A reply in the thread that the mention started
+# continues the session (chat.threadReplies defaults to all).
+#
+# interactions.askUser lets the agent ask the thread a question and wait for the answer: say "ask" to the agent. There
+# are no tool approvals: the agent has no tools.
+#
+# identity.userId is sent to the agent as X-User-Id, for an agent that trusts its network, as this one does by default.
+# Use identity.tokenSecretRef instead when the agent checks a token (agent/README.md says how to turn that on).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: echo-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: echo-agents}
+    name: echo-agent         # on the a2a dialect the backend url alone selects the agent and these are labels;
+    namespace: echo-agent    # the Binding needs them either way
+  identity: {userId: agent-kourier-echo}
+  chat:
+    connectionRef: {name: slack}
+    channel: CREPLACEECHO
+    triggers:
+      - type: mention
+  interactions: {askUser: true}

@@ -1,0 +1,19 @@
+# Only Agent Kourier's namespace may reach the agent, on 8080, and the agent may reach nothing: it calls no model and no
+# other service, so it needs no egress, not even DNS. The policy takes effect only if the cluster's network plugin
+# enforces NetworkPolicy; without that, anything in the cluster can call the agent. If Agent Kourier runs in another
+# namespace, change the namespace name below. Like the other files here, it names no namespace of its own: apply it
+# with them (kubectl apply -n echo-agent -f manifests/).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: echo-agent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: echo-agent}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: agent-kourier}
+      ports:
+        - {protocol: TCP, port: 8080}
