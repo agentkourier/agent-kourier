@@ -26,13 +26,42 @@ const publishedChart = "oci://ghcr.io/agentkourier/charts/agent-kourier"
 // semverPattern matches a semantic version with an optional prerelease suffix, captured without a leading v.
 const semverPattern = `(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)`
 
-// releaseRefs match the places a page names a release version on one line. Each captures the version.
-var releaseRefs = []*regexp.Regexp{
-	regexp.MustCompile(`ghcr\.io/agentkourier/agent-kourier:v` + semverPattern),
-	regexp.MustCompile(`ghcr\.io/agentkourier/charts/agent-kourier:` + semverPattern),
-	regexp.MustCompile(`agentkourier/agent-kourier/\.github/workflows/release\.yml@refs/tags/v` + semverPattern),
+// releasePrefixes are the artifact references a version follows directly: the image tag, the chart's tag, and the
+// release workflow's signing identity. They are found as plain text, and only the version after them is a pattern.
+var releasePrefixes = []string{
+	"ghcr.io/agentkourier/agent-kourier:v",
+	"ghcr.io/agentkourier/charts/agent-kourier:",
+	"agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v",
+}
+
+// versionAt matches a version at the start of the text after a release prefix.
+var versionAt = regexp.MustCompile(`^` + semverPattern)
+
+// releaseProse match the sentences that name the current release on one line. Each captures the version.
+var releaseProse = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bcurrent release is\s+` + "`?" + `v?` + semverPattern),
 	regexp.MustCompile(`\bStatus: v` + semverPattern),
+}
+
+// prefixedVersions returns, for each release prefix on line, the match indices of the version after it, in the shape
+// FindAllStringSubmatchIndex gives: the whole reference, then the version.
+func prefixedVersions(line string) [][]int {
+	var out [][]int
+	for _, prefix := range releasePrefixes {
+		for from := 0; ; {
+			i := strings.Index(line[from:], prefix)
+			if i < 0 {
+				break
+			}
+			start := from + i
+			after := start + len(prefix)
+			if m := versionAt.FindStringSubmatchIndex(line[after:]); m != nil {
+				out = append(out, []int{start, after + m[1], after + m[2], after + m[3]})
+			}
+			from = after
+		}
+	}
+	return out
 }
 
 // helmVersion matches the --version of a helm command and captures the version; a placeholder such as <new version>
@@ -79,7 +108,10 @@ func releaseVersionFindings(path, text, want string) []finding {
 	}
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		for _, re := range releaseRefs {
+		for _, m := range prefixedVersions(line) {
+			add(i, line, m)
+		}
+		for _, re := range releaseProse {
 			for _, m := range re.FindAllStringSubmatchIndex(line, -1) {
 				add(i, line, m)
 			}

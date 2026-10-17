@@ -825,6 +825,8 @@ func TestReleaseVersionFindings(t *testing.T) {
 		{"the current release in prose", "The current release is `0.1.0`.\n", []int{1}},
 		{"the status line", "> **Status: v0.1.0, the first release.**\n", []int{1}},
 		{"another project's version", "kagent 0.9.4 speaks A2A 0.3.\n", nil},
+		{"two references on one line, one stale", "ghcr.io/agentkourier/agent-kourier:v0.2.0 and ghcr.io/agentkourier/charts/agent-kourier:0.1.0\n", []int{1}},
+		{"the image with no version tag", "ghcr.io/agentkourier/agent-kourier@sha256:abc\n", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []int

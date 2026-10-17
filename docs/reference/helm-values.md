@@ -99,7 +99,7 @@ config:
         chat: {connectionRef: {name: slack-main}, channel: C0123456789, output: live, threadReplies: all, acknowledgment: {enabled: true}}  # the default; the platform's own reaction (Slack: hourglass_flowing_sand); set emoji to a bare reaction name to change it
 ```
 
-A commented first-install file for any A2A agent, to download and fill in: https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
+A commented first-install file for any A2A agent, to download and fill in, is the repository's examples/helm/my-values.yaml: https://agentkourier.dev/how-to/install-with-helm/#write-the-values
 
 | Key | Default | Description |
 |---|---|---|
