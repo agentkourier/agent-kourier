@@ -23,6 +23,19 @@
       "groupName": "Go modules"
     },
     {
+      "description": "goldmark v2 is an API rewrite; the test-only CommonMark scanner in internal/chat/chattest stays on v1",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/yuin/goldmark"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
       "matchManagers": [
         "github-actions"
       ],
