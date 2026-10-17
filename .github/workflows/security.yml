@@ -33,20 +33,47 @@ jobs:
         include:
           - module: root
             directory: .
+            go-sum: go.sum
           - module: ax
             directory: examples/ax
+            go-sum: examples/ax/go.sum
           - module: docs-agent
             directory: examples/recipes/docs-agent/agent
+            go-sum: examples/recipes/docs-agent/agent/go.sum
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # A cache per module, as ci.yml describes. The script pins govulncheck's version, so it is in the key too.
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: go-govulncheck-${{ matrix.module }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles(matrix.go-sum, 'hack/security/govulncheck.sh') }}
+          restore-keys: |
+            go-govulncheck-${{ matrix.module }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-govulncheck-${{ matrix.module }}-${{ runner.os }}-
       - name: Run govulncheck
         run: hack/security/govulncheck.sh "${{ matrix.directory }}"
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   secrets:
     name: gitleaks

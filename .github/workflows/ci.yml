@@ -25,11 +25,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The Go version is go.mod's; setup-go caches the module cache and the build cache, keyed on go.sum.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # The Go version is go.mod's. Each Go job here, in security.yml and in codeql.yml has a cache of its own (the
+      # module cache and the build cache, and golangci-lint's cache where it lints), keyed on the job, the runner OS,
+      # the Go version and the go.sum files it builds from. (setup-go's own cache gives every job one key: the first
+      # job to finish saves it and the others' saves are refused.) Every run restores, falling back to the job's
+      # newest entry for the same Go version and then for any. Only a job that succeeds on a push to main saves, and
+      # only when its key was not an exact hit, so pull requests read main's caches without filling the quota. The
+      # timeouts stay at the cold-cache times: a run after a go.sum change, or after an eviction, starts cold.
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+            ~/.cache/golangci-lint
+          key: go-lint-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-lint-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-lint-${{ runner.os }}-
       - name: fmt leaves no diff
         run: |
           make fmt
@@ -44,6 +67,14 @@ jobs:
         env:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - run: make build
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+            ~/.cache/golangci-lint
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that.
   test:
@@ -53,10 +84,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-test-${{ runner.os }}-
       # The chart tests (test/chart) render with helm and skip without it, so CI installs it and
       # AGENTKOURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -67,6 +114,13 @@ jobs:
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
       - run: make test-scripts
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # The same packages as the first pass but under ./internal/..., built with the testhooks tag: it did not finish in the
   # 23 minutes that were left after the lint, and one package in it (internal/chat/chattest) took 213 seconds alone.
@@ -78,11 +132,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-test-testhooks-${{ runner.os }}-
       - run: make test-testhooks
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # The docs-agent recipe is a separate Go module (examples/recipes/docs-agent/agent), so the jobs above do not build
   # or test it. Its tests include the refusals that keep its corpus reader inside the corpus.
@@ -93,12 +170,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # Its lint builds golangci-lint from the root module, so the key covers both go.sum files.
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
-            examples/recipes/docs-agent/agent/go.sum
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+            ~/.cache/golangci-lint
+          key: go-docs-agent-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum', 'examples/recipes/docs-agent/agent/go.sum') }}
+          restore-keys: |
+            go-docs-agent-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-docs-agent-${{ runner.os }}-
       - run: make docs-agent-test
       - run: make docs-agent-lint
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+            ~/.cache/golangci-lint
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
