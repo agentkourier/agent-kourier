@@ -89,6 +89,9 @@ type RunConfig struct {
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)
+	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
+	// signal, so a test can hold Run there and send the signal while the leader half is up.
+	leaderLaunched func()
 }
 
 // validate says whether c can run. A missing field is an error wrapping ErrWiring, which is a usage

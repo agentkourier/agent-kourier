@@ -119,6 +119,9 @@ func (s *ctxSlack) Run(ctx context.Context, _ slack.Sink) error {
 // A signal after startup ends Run's own context and nothing else: each part sees its context end at its
 // own shutdown step. Here the Slack run must still be live when the intake step begins, and that is
 // after the signal, so the test gives a context that a signal cancelled by mistake time to show it.
+// The signal comes while Run is held just after launching the leader half, which by then has started
+// the Slack run: Run must have stopped cancelling its parts on a signal before it launched the leader
+// half, not once it caught up with it.
 func TestRunKeepsThePartsRunningUntilTheirShutdownStepAfterASignal(t *testing.T) {
 	slk := &ctxSlack{got: make(chan context.Context, 1)}
 	var slackCtx context.Context // set before the signal, read after it
@@ -131,14 +134,22 @@ func TestRunKeepsThePartsRunningUntilTheirShutdownStepAfterASignal(t *testing.T)
 		liveAtIntake.Store(slackCtx.Err() == nil)
 		ended.Store(true)
 	}}
+	hold := make(chan struct{})
 	c := startConfig(t)
 	c.newSlack = func(slack.Config) slackAPI { return slk }
 	c.shutdownTrace = trace.record
+	c.leaderLaunched = func() { <-hold }
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 	slackCtx = <-slk.got // the Slack run has begun, so startup is over
 
 	r.cancel()
+	select {
+	case <-slackCtx.Done():
+		t.Error("the signal ended the Slack run's context while Run was held after launching the leader half: the signal cancelled the parts at once")
+	case <-time.After(200 * time.Millisecond): // a cancellation that the signal sent in error arrives within this
+	}
+	close(hold)
 	if err := r.wait(); err != nil {
 		t.Fatalf("Run = %v after its context ended, want nil", err)
 	}

@@ -221,6 +221,11 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		leaderDone <- <-chatDone
 	}
+	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal during the leader half's
+	// start also aborts it (the shutdown does, through the gate), so that a Recover or Reconcile cannot hold a signal
+	// for the length of the grace period. The watch stops before the leader half can start: stopped after, a signal
+	// that came once the leader half was up but before this goroutine got here would end runCtx, and every part at once.
+	stopStartupWatch()
 	if fenced == nil {
 		go runLeader()
 	} else {
@@ -232,11 +237,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			return err
 		}
 	}
-
-	// From here a signal ends ctx only, and the shutdown stops the parts in order. A signal during the leader half's
-	// start also aborts it (the shutdown does, through the gate), so that a Recover or Reconcile cannot hold a signal
-	// for the length of the grace period.
-	stopStartupWatch()
+	if cfg.leaderLaunched != nil {
+		cfg.leaderLaunched()
+	}
 	select {
 	case <-ctx.Done():
 		return nil
