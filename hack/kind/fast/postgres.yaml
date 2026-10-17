@@ -23,7 +23,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: postgres
-          image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+          image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
           imagePullPolicy: IfNotPresent
           # Speed over durability: the data is thrown away with the tier.
           args: ["-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
