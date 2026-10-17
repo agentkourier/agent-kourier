@@ -52,7 +52,7 @@ def build_card(url: str) -> AgentCard:
 
 
 def words_of(context: RequestContext) -> str:
-    """The person's words, without the prefix and the bot mention Agent Kourier puts in front of them."""
+    """The person's words, without the prefix line Agent Kourier adds and any <@user> mention Slack leaves in."""
     text = context.get_user_input()
     if "agentkourier.dev/actor" in context.message.metadata:  # Contract, What Agent Kourier sends: a person's turn
         text = text.split("\n", 1)[-1]  # starts with "[Slack: Name (U123) <email>]" and a newline
@@ -66,8 +66,8 @@ class EchoExecutor(AgentExecutor):
         self.turns: OrderedDict[str, tuple[int, str]] = OrderedDict()  # contextId -> (turn number, last words)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # Contract, Replies: every event names the task and its contextId, and the first event is the Task itself.
-        # The SDK made both ids. A thread's first turn arrives with no contextId; later turns carry the one we sent.
+        # Contract, Replies: every event names the task and its contextId. The SDK made both ids: a thread's first turn
+        # arrives with no contextId, and later turns carry the one we sent. The SDK also needs the Task to come first.
         if context.current_task is None:
             await event_queue.enqueue_event(new_task_from_user_message(context.message))
         task = TaskUpdater(event_queue, context.task_id, context.context_id)
@@ -103,7 +103,7 @@ class EchoExecutor(AgentExecutor):
             # `append` adds to the artifact's text; the first piece, without it, starts the artifact.
             await task.add_artifact([new_text_part(text[start : start + size])], artifact_id="reply", append=start > 0)
             await asyncio.sleep(CHUNK_DELAY)
-        await task.complete()  # the SDK ends the stream with the task in its final state
+        await task.complete()  # publishes the final status update; Handler below ends the stream with the full Task
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Contract, Methods: CancelTask. The SDK stops execute(); this records that the task was canceled."""
@@ -135,34 +135,48 @@ class Handler(DefaultRequestHandler):
 
 
 class RequireBearer:
-    """Contract, Errors: Agent Kourier sends the Binding's token as `Authorization: Bearer`; something must check it."""
+    """Contract, Errors: Agent Kourier sends the Binding's token as `Authorization: Bearer`; something must check it.
 
-    def __init__(self, app, token: bytes) -> None:
-        self.app, self.expected = app, b"Bearer " + token
+    The file is read on every request, so a rotated token works without a restart. A mounted Secret reaches the pod
+    some time after Agent Kourier's watch sees the change, so a few 401s are possible meanwhile.
+    """
+
+    def __init__(self, app, token_file: str) -> None:
+        self.app, self.token_file = app, token_file
+
+    def allows(self, given: bytes) -> bool:
+        try:
+            with open(self.token_file, "rb") as f:
+                token = f.read().strip()
+        except OSError:
+            return False
+        return bool(token) and hmac.compare_digest(given, b"Bearer " + token)
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] == "http":
-            given = dict(scope["headers"]).get(b"authorization", b"")
-            if not hmac.compare_digest(given, self.expected):
+        if scope["type"] != "lifespan" and not self.allows(dict(scope["headers"]).get(b"authorization", b"")):
+            if scope["type"] == "http":
                 return await PlainTextResponse("unauthorized", status_code=401)(scope, receive, send)
+            return await send({"type": "websocket.close"})  # fail closed for anything that is not HTTP
         await self.app(scope, receive, send)
 
 
 def build_app(url: str, token_file: str = ""):
     """The ASGI app: the card at /.well-known/agent-card.json and JSON-RPC at /, so the AgentBackend's url is `url`."""
     card = build_card(url)
+    # Tasks stay in memory until a restart, unbounded on purpose: GetTask and ListTasks must find them, or Agent
+    # Kourier reads -32001 as the session being gone. A real agent keeps tasks in a persistent store with retention.
     handler = Handler(agent_executor=EchoExecutor(), task_store=InMemoryTaskStore(), agent_card=card)
     app = Starlette(routes=create_agent_card_routes(card) + create_jsonrpc_routes(handler, rpc_url="/"))
     if token_file:  # without a token file the agent accepts every caller: this is a demo, not a backend for real data
-        with open(token_file, "rb") as f:
-            token = f.read().strip()
-        if not token:
-            raise SystemExit(f"{token_file} is empty")
-        app = RequireBearer(app, token)
+        with open(token_file, "rb") as f:  # a missing or empty file stops the agent at start
+            if not f.read().strip():
+                raise SystemExit(f"{token_file} is empty")
+        app = RequireBearer(app, token_file)
     return app
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     public_url = os.environ.get("ECHO_AGENT_URL", f"http://localhost:{port}")
-    uvicorn.run(build_app(public_url, os.environ.get("ECHO_AGENT_TOKEN_FILE", "")), host="0.0.0.0", port=port)  # noqa: S104
+    app = build_app(public_url, os.environ.get("ECHO_AGENT_TOKEN_FILE", ""))
+    uvicorn.run(app, host="0.0.0.0", port=port)  # noqa: S104 (all interfaces, so the Service can reach the pod)

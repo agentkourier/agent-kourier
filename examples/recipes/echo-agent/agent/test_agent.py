@@ -6,6 +6,7 @@ answers to calls that name a finished task; read the comment above them before u
 
 import asyncio
 import contextlib
+import types
 import uuid
 
 import httpx
@@ -43,6 +44,21 @@ def no_delay(monkeypatch):
     monkeypatch.setattr(agent, "CHUNK_DELAY", 0)
 
 
+@pytest.fixture
+def gate(monkeypatch):
+    """Holds a reply after each piece until the test sets the gate, so a test can act in the middle of a stream.
+
+    Only agent.py's own use of asyncio is replaced (it calls asyncio.sleep and nothing else): no test waits on a clock.
+    """
+    opened = asyncio.Event()
+
+    async def hold(_seconds):
+        await opened.wait()
+
+    monkeypatch.setattr(agent, "asyncio", types.SimpleNamespace(sleep=hold))
+    return opened
+
+
 @contextlib.asynccontextmanager
 async def asgi(token_file="", headers=None):
     """The app behind an in-process ASGI transport: yields a raw HTTP client."""
@@ -56,6 +72,10 @@ async def serve():
     """Yields the raw HTTP client and the SDK's A2A client over it."""
     async with asgi() as http:
         yield http, await ClientFactory(ClientConfig(httpx_client=http)).create_from_url(URL)
+
+
+async def _collect(stream):
+    return [r async for r in stream]
 
 
 async def say(client, text, context_id="", task_id="", metadata=None):
@@ -189,9 +209,8 @@ async def test_help_lists_the_commands_and_the_actor_prefix_and_bot_mention_are_
 
 
 @pytest.mark.anyio
-async def test_cancel_in_the_middle_of_a_stream_ends_the_task_canceled_and_stops_the_reply(monkeypatch):
+async def test_cancel_in_the_middle_of_a_stream_ends_the_task_canceled_and_stops_the_reply(gate):
     """Contract, Methods: CancelTask. The task ends canceled and the rest of the reply is never sent."""
-    monkeypatch.setattr(agent, "CHUNK_DELAY", 0.05)
     async with serve() as (_, client):
         stream = asyncio.create_task(say(client, "a reply that takes a little while"))
         task = await running_task(client)
@@ -203,13 +222,16 @@ async def test_cancel_in_the_middle_of_a_stream_ends_the_task_canceled_and_stops
 
 
 @pytest.mark.anyio
-async def test_get_task_list_tasks_and_subscribe_answer_for_a_known_task(monkeypatch):
+async def test_get_task_list_tasks_and_subscribe_answer_for_a_known_task(gate):
     """Contract, Methods: GetTask, ListTasks (with the turn's messageId in history) and SubscribeToTask."""
-    monkeypatch.setattr(agent, "CHUNK_DELAY", 0.05)
     async with serve() as (_, client):
         stream = asyncio.create_task(say(client, "keep going"))
         running = await running_task(client)
-        resumed = [r async for r in client.subscribe(SubscribeToTaskRequest(id=running.id))]
+        subscription = asyncio.create_task(_collect(client.subscribe(SubscribeToTaskRequest(id=running.id))))
+        for _ in range(50):  # in-process there is no I/O: a few turns of the loop let the subscription attach
+            await asyncio.sleep(0)
+        gate.set()
+        resumed = await subscription
         done = final(await stream)
         got = await client.get_task(GetTaskRequest(id=done.id))
         # The broker lists with the context and no history length; the turn must still be found by its messageId.
@@ -247,6 +269,39 @@ async def test_with_a_token_file_the_right_bearer_is_served(tmp_path):
         assert error_code(await rpc(http, "GetTask", {"id": "x"})) == -32001  # past the check, to the SDK
 
 
+@pytest.mark.anyio
+async def test_a_rotated_token_works_without_a_restart_and_the_old_one_stops_working(tmp_path):
+    """The token file is read on every request, so rotating the Binding's token needs no restart."""
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN)
+    async with asgi(str(token_file)) as http:
+        card = "/.well-known/agent-card.json"
+        old, new = {"Authorization": "Bearer " + TOKEN}, {"Authorization": "Bearer rotated-fake-token"}
+        assert (await http.get(card, headers=old)).status_code == 200
+        token_file.write_text("rotated-fake-token\n")
+        assert (await http.get(card, headers=new)).status_code == 200
+        assert (await http.get(card, headers=old)).status_code == 401
+        token_file.write_text("")  # an empty file at request time admits nobody, not even a bare "Bearer "
+        assert (await http.get(card, headers=new)).status_code == 401
+        assert (await http.get(card, headers={"Authorization": "Bearer "})).status_code == 401
+        token_file.unlink()
+        assert (await http.get(card, headers=new)).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_anything_but_http_and_lifespan_without_the_bearer_is_closed(tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN)
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    app = agent.build_app(URL, str(token_file))
+    await app({"type": "websocket", "headers": []}, None, send)
+    assert sent == [{"type": "websocket.close"}]
+
+
 def test_an_empty_token_file_stops_the_agent_instead_of_accepting_a_bare_bearer(tmp_path):
     token_file = tmp_path / "token"
     token_file.write_text("\n")
@@ -267,14 +322,17 @@ def test_an_empty_token_file_stops_the_agent_instead_of_accepting_a_bare_bearer(
 # A send that names a context but no task starts a new task and succeeds, so a normal next turn is unaffected.
 
 
-async def finished(client, how):
+async def finished(client, gate, how):
     """A completed or canceled task, to aim calls at."""
     if how == "completed":
+        gate.set()
         return final(await say(client, "hello"))
     stream = asyncio.create_task(say(client, "a reply that takes a little while"))
     task = await running_task(client)
     await client.cancel_task(CancelTaskRequest(id=task.id))
-    return final(await stream)
+    canceled = final(await stream)
+    gate.set()  # later turns in the test are not held
+    return canceled
 
 
 def send_params(task_id, **ids):
@@ -285,10 +343,9 @@ def send_params(task_id, **ids):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("how", ["completed", "canceled"])
-async def test_finished_task_a_send_naming_a_finished_task_answers_32004(monkeypatch, how):
-    monkeypatch.setattr(agent, "CHUNK_DELAY", 0.05 if how == "canceled" else 0)
+async def test_finished_task_a_send_naming_a_finished_task_answers_32004(gate, how):
     async with serve() as (http, client):
-        task = await finished(client, how)
+        task = await finished(client, gate, how)
         assert task.status.state == (DONE if how == "completed" else CANCELED)
         by_task = await rpc(http, "SendStreamingMessage", send_params(task.id))
         by_both = await rpc(http, "SendStreamingMessage", send_params(task.id, contextId=task.context_id))
@@ -299,18 +356,17 @@ async def test_finished_task_a_send_naming_a_finished_task_answers_32004(monkeyp
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("how", ["completed", "canceled"])
-async def test_finished_task_cancel_task_on_a_finished_task_answers_32002_not_32004(monkeypatch, how):
-    monkeypatch.setattr(agent, "CHUNK_DELAY", 0.05 if how == "canceled" else 0)
+async def test_finished_task_cancel_task_on_a_finished_task_answers_32002_not_32004(gate, how):
     async with serve() as (http, client):
-        task = await finished(client, how)
+        task = await finished(client, gate, how)
         response = await rpc(http, "CancelTask", {"id": task.id})
     assert error_code(response) == -32002
 
 
 @pytest.mark.anyio
-async def test_finished_task_subscribe_to_a_finished_task_answers_32004_and_unknown_tasks_32001():
+async def test_finished_task_subscribe_to_a_finished_task_answers_32004_and_unknown_tasks_32001(gate):
     async with serve() as (http, client):
-        task = await finished(client, "completed")
+        task = await finished(client, gate, "completed")
         subscribe = await rpc(http, "SubscribeToTask", {"id": task.id})
         unknown = [await rpc(http, m, {"id": "no-such-task"}) for m in ("GetTask", "CancelTask", "SubscribeToTask")]
         unknown.append(await rpc(http, "SendStreamingMessage", send_params("no-such-task")))
