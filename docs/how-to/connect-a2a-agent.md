@@ -11,7 +11,8 @@ The agent must:
   does not;
 - offer a JSON-RPC interface. A card that lists only gRPC or REST is refused;
 - serve its card at the endpoint URL plus `/.well-known/agent-card.json`, with a trailing slash on the URL trimmed;
-- put its answer in artifact text parts, and answer with task events, not a bare message.
+- answer with task events and put its answer in artifact text parts, or answer with one message and no task. A message
+  is the whole answer, and with no task there is nothing to follow after a dropped stream or to look up after a restart.
 
 The [agent contract](../reference/agent-contract.md) lists the rest: the methods it must serve, what each message
 carries, and how replies, task states and errors are read.

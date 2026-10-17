@@ -61,7 +61,25 @@ func (a *assembler) apply(ev a2a.Event) {
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
 		a.artifact(e.Artifact, e.Append, false)
+	case *a2a.Message:
+		a.message(e)
 	}
+}
+
+// message folds a reply that is one Message and no task (spec 6.3, 8.3): the agent ran the turn
+// and has nothing more to send. It is told as a task that completed with the message as its
+// status, under no task ID, in the message's context: the state first (the turn is the agent's
+// now), then the message's parts as one artifact named after the message, then the end. A
+// Message after the agent has named a task is no reply of its own and is ignored.
+func (a *assembler) message(m *a2a.Message) {
+	if a.taskID != "" || a.final != nil {
+		return
+	}
+	a.track("", m.ContextID)
+	a.setState(a2a.TaskStateCompleted)
+	a.artifact(&a2a.Artifact{ID: a2a.ArtifactID(m.ID), Parts: m.Parts}, false, false)
+	a.final = &a2a.Task{ContextID: a.contextID, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted, Message: m}}
+	a.emit(FinalEvent{Task: a.final})
 }
 
 // settled reports whether a task has nothing more to stream: it ended or awaits input.

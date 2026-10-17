@@ -201,12 +201,14 @@ func (m *Manager) taskEnded(t *tstate, task *a2a.Task) {
 	case state == a2a.TaskStateCanceled:
 		kind = NoticeTaskCanceled
 	}
-	if kind != "" {
-		if kind == NoticeTaskFailed {
-			m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, task.ID, kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
-		} else {
-			m.taskNotice(m.ctx, t.key, task.ID, kind, t.r.MessageRef)
-		}
+	switch {
+	case kind == "":
+	case task.ID == "": // the agent replied with a Message: no task to name the notice after, so it is the turn's
+		m.notice(t, kind, detail)
+	case kind == NoticeTaskFailed:
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: taskNoticeID(t.key, task.ID, kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
+	default:
+		m.taskNotice(m.ctx, t.key, task.ID, kind, t.r.MessageRef)
 	}
 	m.finish(t, stateOutcome(task.Status.State), append([]any{"output", output}, logExtra...)...)
 }

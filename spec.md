@@ -331,6 +331,17 @@ takes the queued turn as not the recorded task's own, so the task is followed fi
 turn is sent after it, and a resend treats the turn as absent: it is sent, behind a recorded
 task if one runs. A turn may therefore run twice.
 
+A2A lets an agent answer a send with one `Message` and no task. Agent Kourier takes that
+message's text parts as the turn's reply and ends the turn as completed; a message with
+nothing to read gets the same notice as a task that completed with no output. With no task,
+the session records the reply's `contextId` and no task, so the next turn continues the
+context, and there is nothing to reconcile, follow, stop or cancel. A send lost before its
+reply arrives cannot be looked up (no task holds its `messageId`), so it is sent again and
+may run twice. A `Message` after the agent has named a task is ignored. The same holds for
+the unary `SendMessage` that a2a-go v2.6.0 falls back to when a card does not advertise
+streaming (source), though the agent pool refuses such an agent. kagent answers every
+recorded send with a task (WP-02 fixtures).
+
 | Dialect | Chat and alerts | Approvals | Notes |
 |---|---|---|---|
 | `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text. Replies enqueued after the question pass the same authorization, audit, and deadline checks as Submit before being sent as plain messages. | A2A 1.0 and 0.3 agents without a structured HITL extension, with a card at the exact RPC URL plus `/.well-known/agent-card.json`, as AX serves it |
@@ -887,6 +898,8 @@ making the prefix optional breaks multi-turn context.
   calls and results arrive as separate data-part artifacts, each a single
   `lastChunk: true` chunk. The client appends on `append: true` and otherwise replaces,
   per artifact.
+- A reply that is one `Message` and no task (6.3) arrives whole: its text parts, joined, are
+  one artifact keyed by the message's `messageId`, and the turn ends with it.
 - Edits are throttled per message (default one edit per 2 seconds, configurable) and
   coalesced. Tool calls appear as short status lines.
 - Slack's `chat.startStream` requires a recipient user in channels. Chat threads use
