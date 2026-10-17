@@ -28,6 +28,19 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
+<div class="ak-strip">
+<div class="ak-strip__group">
+<p class="ak-strip__label">Chat</p>
+<span class="ak-strip__name">Slack</span>
+</div>
+<div class="ak-strip__group">
+<p class="ak-strip__label">Agents</p>
+<span class="ak-strip__name">A2A</span>
+<span class="ak-strip__name">kagent</span>
+<span class="ak-strip__name">Google AX</span>
+</div>
+</div>
+
 !!! note "Status: v0.1.0"
     The current release is `0.1.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0.
@@ -46,11 +59,11 @@ own agent to its own channel with a namespaced Binding, committed next to the ag
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="assets/film/agent-kourier-teaser-poster-16x9.jpg" aria-label="Agent Kourier teaser, 20 seconds, narrated">
-<source src="assets/film/agent-kourier-teaser-16x9.mp4" type="video/mp4">
+<source src="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4" type="video/mp4">
 <track kind="captions" src="assets/film/agent-kourier-teaser.en.vtt" srclang="en" label="English" default>
-<a href="assets/film/agent-kourier-teaser-16x9.mp4">Download the teaser (MP4, 20 seconds)</a>.
+<a href="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4">Download the teaser (MP4, 20 seconds)</a>.
 </video>
-<figcaption>The teaser, 20 seconds, narrated with captions.</figcaption>
+<figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (98 seconds).</figcaption>
 </figure>
 
 <div class="grid cards" markdown>
@@ -76,7 +89,7 @@ own agent to its own channel with a namespaced Binding, committed next to the ag
 
     ---
 
-    One broker between the chat, the alerts and your agents: a thread is a session, conversations resume after a restart, and
+    One broker between your chat and your agents: a thread is a session, conversations resume after a restart, and
     [two replicas on Postgres](explanation/high-availability.md) fail over. The [delivery](explanation/delivery.md) and
     failover pages say what a restart or failover can still repeat.
 
@@ -115,23 +128,5 @@ Agent Kourier carries them.</p>
 
 A repeat of the same alert attaches to its thread, and its resolve posts a note there. Agent Kourier reads the alert
 your alerting tool already posts to Slack, so your alerts arrive as before, whether or not Agent Kourier is running.
-The docs have a worked trigger for Alertmanager;
-another tool's bot needs a trigger of its own.
-
-<div class="ak-strip">
-<div class="ak-strip__group">
-<p class="ak-strip__label">Chat</p>
-<span class="ak-strip__name">Slack</span>
-</div>
-<div class="ak-strip__group">
-<p class="ak-strip__label">Agents</p>
-<span class="ak-strip__name">A2A</span>
-<span class="ak-strip__name">kagent</span>
-<span class="ak-strip__name">Google AX</span>
-</div>
-<div class="ak-strip__group">
-<p class="ak-strip__label">Alerts</p>
-<span class="ak-strip__name">Alertmanager</span>
-<span class="ak-strip__name">any bot's message</span>
-</div>
-</div>
+The docs have a [worked trigger for Alertmanager](how-to/investigate-alertmanager-alerts.md);
+[another tool's bot](how-to/any-bot-trigger.md) needs a trigger of its own.

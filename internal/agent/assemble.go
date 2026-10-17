@@ -27,7 +27,8 @@ type assembler struct {
 	contextID string
 	state     a2a.TaskState
 	final     *a2a.Task
-	changes   int // events emitted so far: text, tool, state, and final
+	changes   int  // events emitted so far: text, tool, state, and final
+	replies   bool // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 }
 
 func newAssembler(h Handler, classify ToolClassifier) *assembler {
@@ -61,7 +62,27 @@ func (a *assembler) apply(ev a2a.Event) {
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
 		a.artifact(e.Artifact, e.Append, false)
+	case *a2a.Message:
+		a.message(e)
 	}
+}
+
+// message folds a reply that is one Message and no task (spec 6.3, 8.3): the agent ran the turn
+// and has nothing more to send. It is told as a task that completed with the message as its
+// status, under no task ID, in the message's context: the state first (the turn is the agent's
+// now), then the message's parts as one artifact named after the message, then the end.
+// Any other Message is ignored, so it changes nothing: one on an Answer or a follow, whose task
+// is known and must not be forgotten, one that names a task, one not from the agent (an echo of
+// the turn), and one after the agent has named a task.
+func (a *assembler) message(m *a2a.Message) {
+	if !a.replies || m.TaskID != "" || m.Role != a2a.MessageRoleAgent || a.taskID != "" || a.final != nil {
+		return
+	}
+	a.track("", m.ContextID)
+	a.setState(a2a.TaskStateCompleted)
+	a.artifact(&a2a.Artifact{ID: a2a.ArtifactID(m.ID), Parts: m.Parts}, false, false)
+	a.final = &a2a.Task{ContextID: a.contextID, Status: a2a.TaskStatus{State: a2a.TaskStateCompleted, Message: m}}
+	a.emit(FinalEvent{Task: a.final})
 }
 
 // settled reports whether a task has nothing more to stream: it ended or awaits input.
