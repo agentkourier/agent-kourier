@@ -618,6 +618,50 @@ func TestTheControllerRestartTouchesOnlyTheController(t *testing.T) {
 	}
 }
 
+// curlImage is lib.sh's CURL_IMAGE, the pinned curl image every probe pod runs. Renovate bumps it, so a test reads it here
+// rather than naming a version; it fails the test unless the image is curl pinned by tag and digest.
+func curlImage(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../hack/kind/lib.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^CURL_IMAGE=(\S*)$`).FindAllSubmatch(raw, -1)
+	if len(m) != 1 || !regexp.MustCompile(`^curlimages/curl:[^@\s]+@sha256:[0-9a-f]{64}$`).Match(m[0][1]) {
+		t.Fatalf("lib.sh sets CURL_IMAGE %q; want it once, as curlimages/curl:VERSION@sha256:DIGEST", m)
+	}
+	return string(m[0][1])
+}
+
+// TestProbePodsShareTheCurlImage: the verify scripts, which do not source lib.sh, set the same CURL_IMAGE as lib.sh, and
+// the AX probe Pod takes lib.sh's through a placeholder, so a Renovate bump of the curl image reaches every probe pod.
+func TestProbePodsShareTheCurlImage(t *testing.T) {
+	image := curlImage(t)
+	for _, f := range []string{"fast/verify.sh", "full/verify.sh"} {
+		raw, err := os.ReadFile("../../hack/kind/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "\nCURL_IMAGE="+image+"\n") {
+			t.Errorf("%s does not set CURL_IMAGE=%s, lib.sh's", f, image)
+		}
+	}
+	probe, err := os.ReadFile("../../hack/kind/ax/probe.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imgs := imageRef.FindAllSubmatch(probe, -1); len(imgs) != 1 || string(imgs[0][1]) != "'@CURL_IMAGE@'" {
+		t.Errorf("ax/probe.yaml names images %q; want only '@CURL_IMAGE@', which lib.sh fills in", imgs)
+	}
+	lib, err := os.ReadFile("../../hack/kind/lib.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(lib), `-e "s|@CURL_IMAGE@|${CURL_IMAGE}|g" "${HERE}/ax/probe.yaml"`) {
+		t.Error("lib.sh's probe_ax_agents does not fill ax/probe.yaml's @CURL_IMAGE@ with CURL_IMAGE")
+	}
+}
+
 // TestFullTierHasTheToolsScenarioAgent: S13 runs in both tiers, so the full tier's kagent has an agent of the name its
 // Binding gives (scenario-tools), whose model is the scenario model playing the "tools" scenario, and whose tools are the
 // scenario MCP server's, run without approval (the calls are the scenario, and S13's Binding does not allow approvals).
