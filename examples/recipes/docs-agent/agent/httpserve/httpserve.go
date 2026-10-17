@@ -55,8 +55,8 @@ func limitBody(h http.Handler) http.Handler {
 
 // Run serves h on ln until ctx ends, then stops accepting and waits up to grace for requests in flight. It returns
 // nil after a clean shutdown, and the server's error otherwise. A request still running when the grace ends is cut
-// off: its connection is closed, its context ends and the error says the shutdown did not finish. It closes ln.
-// Request bodies are capped at MaxBodyBytes.
+// off: its connection is closed, its context ends and the error says the shutdown did not finish. ln is closed by the
+// time Run returns. Request bodies are capped at MaxBodyBytes.
 func Run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Duration) error {
 	srv := newServer(h)
 	done := make(chan error, 1)
@@ -70,12 +70,16 @@ func Run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Durati
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
 		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
+		err := srv.Shutdown(shutdown)
+		if err != nil {
 			// The grace ran out with requests still in flight. Shutdown leaves them running, so close their
 			// connections: their contexts end, and the process is not held up by a stream that never finishes.
-			return errors.Join(fmt.Errorf("shut down: %w", err), srv.Close())
+			err = errors.Join(fmt.Errorf("shut down: %w", err), srv.Close())
 		}
-		return nil
+		// Serve closes ln on its way out, and may not have started when the shutdown began; wait for it, so that
+		// nothing still accepts on ln once Run has returned. Its error is ErrServerClosed by now.
+		_ = <-done
+		return err
 	}
 }
 

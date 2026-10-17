@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,5 +124,33 @@ func TestRunClosesWhatOutlivesTheGrace(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(5 * time.Second):
 		t.Error("the handler's context was never cancelled: the connection was left open")
+	}
+}
+
+// closeRecorder records whether its listener has been closed.
+type closeRecorder struct {
+	net.Listener
+	closed atomic.Bool
+}
+
+func (l *closeRecorder) Close() error {
+	l.closed.Store(true)
+	return l.Listener.Close()
+}
+
+// TestRunHasClosedTheListenerWhenItReturns pins that Run's return means the listener is closed, even when the context
+// has ended before the server got going: a caller that dials after Run returns is refused, not queued on a listener
+// that nothing accepts from. The loop is for the race between Serve starting and the shutdown.
+func TestRunHasClosedTheListenerWhenItReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for i := range 200 {
+		ln := &closeRecorder{Listener: listen(t)}
+		if err := httpserve.Run(ctx, ln, http.NotFoundHandler(), time.Second); err != nil {
+			t.Fatalf("run %d: Run = %v, want nil", i, err)
+		}
+		if !ln.closed.Load() {
+			t.Fatalf("run %d: Run returned before the listener was closed", i)
+		}
 	}
 }
