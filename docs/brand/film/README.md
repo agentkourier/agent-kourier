@@ -69,7 +69,7 @@ The Chrome extension's pointer is painted out only where it sat on blank chrome;
 
 ### The copies on the site
 
-The site (`docs/index.md` and `docs/demo.md`) plays the 16:9 teaser and demo from the R2 bucket
+The site (`docs/index.md` and `docs/demo/index.md`) plays the 16:9 teaser and demo from the R2 bucket
 `agentkourier-media`, public only at `https://media.agentkourier.dev`; `r2.dev` access is off and the bucket has
 no CORS rule. Each render is stored under `<name>.<first 12 hex digits of its SHA-256>.mp4`, so a re-cut gets a
 new URL and never replaces the one a deployed page plays. A zone transform rule sets
@@ -82,7 +82,7 @@ After a re-cut:
    `hack/docs/upload-film.sh out/agent-kourier-teaser-16x9.mp4 out/agent-kourier-demo-16x9.mp4`
    (after `npx --yes wrangler@4.147.0 login`). Or, in the dashboard, upload copies renamed to
    `<name>.<sha12>.mp4` (`shasum -a 256` gives the hash) to the bucket's root.
-2. Put the new URLs in the `<source>` and download link of `docs/index.md` and `docs/demo.md`.
+2. Put the new URLs in the `<source>` and download link of `docs/index.md` and `docs/demo/index.md`.
 3. Regenerate the captions (`docs/assets/film/*.en.vtt`) from `narration.json`, with cue times from
    `ffmpeg -i <render> -af silencedetect=noise=-35dB:d=0.25 -f null -`, and replace each poster with the cut's end card
    at 1280x720.

@@ -20,4 +20,4 @@ and the agent asks for a decision and waits for the answer. Then a team adds its
 
 The Slack shots are screen recordings of a demo environment with seeded faults and real agent output, sped up in
 places; a note under each shot says so. To run a sandbox like it on your own machine, follow
-[Your first agent in Slack](tutorials/first-agent-in-slack.md).
+[Your first agent in Slack](../tutorials/first-agent-in-slack.md).

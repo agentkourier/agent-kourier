@@ -11,7 +11,7 @@
 # minutes, and that would fail the checks that follow.
 #
 # The owner runs this by hand after `npx --yes wrangler@<WRANGLER_VERSION> login`; CI holds no R2 token.
-# It prints each public URL, for docs/index.md and docs/demo.md.
+# It prints each public URL, for docs/index.md and docs/demo/index.md.
 set -euo pipefail
 
 WRANGLER_VERSION=4.147.0
