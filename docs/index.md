@@ -1,7 +1,8 @@
 ---
 description: >-
-  Connect Kubernetes agents to Slack without adding Slack-specific code to each agent.
-  Agent Kourier handles messaging and conversation delivery through declarative bindings to streaming A2A agents.
+  Write the agent, not the chat integration. Agent Kourier connects streaming A2A agents to team chat and handles
+  threads, streamed replies, questions, alert investigations, restarts and failover. Slack today; more platforms
+  planned.
 hide:
   - navigation
   - toc
@@ -15,9 +16,11 @@ hide:
 <h1 class="ak-hero__name">Agent Kourier</h1>
 </div>
 
-<p class="ak-hero__pitch">Connect your Kubernetes agents to Slack without writing Slack handlers for each agent.
-Agent Kourier carries messages and alerts to a supported streaming A2A endpoint and brings answers back to the same
-thread. Connect an agent to a channel with a declarative Binding.</p>
+<p class="ak-hero__headline">Write the agent, not the chat integration.</p>
+
+<p class="ak-hero__pitch">A Binding connects a chat channel to an agent that serves streaming A2A. Agent Kourier
+handles the chat side: a session per thread, streamed replies, questions to people, investigations started by alerts,
+and recovery after a restart or failover. Slack is supported today, and other chat platforms are planned.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
@@ -25,16 +28,17 @@ thread. Connect an agent to a channel with a declarative Binding.</p>
 </div>
 </div>
 
-## Build the agent, configure its Slack connection
+## What Agent Kourier handles
 
-Handling Slack events, tracking threads, formatting replies, and recovering conversations after a restart adds work
-beyond the agent's own task logic. Repeating that integration for each agent means maintaining the same messaging code
-in multiple places.
+Without a broker, every agent that talks to chat needs its own code for threads, streaming, questions, restarts and
+alerts. Agent Kourier does that work once for every agent you bind. It keeps a session per thread, queues replies that
+arrive while the agent works, streams the answer into one message, posts the agent's questions in the thread, recovers
+each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
+tools and task logic.
 
-Agent Kourier handles that work in a shared broker. Your agent owns its tools and task logic; Agent Kourier owns the
-Slack connection and conversation delivery. An agent that already exposes a supported streaming A2A endpoint needs
-configuration to connect to Slack, with no Slack-specific code added to the agent.
-[Why a broker](explanation/why-a-broker.md) explains the separation of responsibilities.
+The platform team runs Agent Kourier and owns the chat app and the agent backends. Each application team connects its
+own agent to its own channel with a namespaced Binding, committed next to the agent's manifests.
+[Why a broker](explanation/why-a-broker.md) explains the split.
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="assets/film/agent-kourier-teaser-poster-16x9.jpg" aria-label="Agent Kourier teaser, 20 seconds, narrated">
