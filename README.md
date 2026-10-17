@@ -22,7 +22,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 
 ## What it looks like
 
-https://github.com/user-attachments/assets/206616a4-93fe-4935-9a25-38c2a5f5655f
+https://github.com/user-attachments/assets/1af66d63-78cd-437d-a3a2-2e178904d177
 
 An illustration of one alert thread, not captured output:
 

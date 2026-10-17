@@ -42,7 +42,7 @@ Narrated, with real Slack footage. The v1 files above are kept in `out/v1/`; the
 
 | File | What |
 |---|---|
-| `out/agent-kourier-demo-{16x9,9x16,1x1}.mp4` | The demo cut, 107 s: animated problem and solution, real footage, animated setup and close. |
+| `out/agent-kourier-demo-{16x9,9x16,1x1}.mp4` | The demo cut, 98 s: animated problem and solution, real footage, animated setup and close. |
 | `out/agent-kourier-teaser-{16x9,9x16,1x1}.mp4` | The 20 s teaser cut from it. |
 | `out/poster-*.png`, `out/contact-sheet-{demo,teaser}-*.png`, `out/storyboard.{pdf,png,html}` | Poster frame, contact sheets, storyboard. |
 | `film.html` | The motion graphics and the frame that sits around footage. Copy, palette and layouts at the top; the mark is `docs/brand/assets/svg/agent-kourier-mark-dark.svg`. |
@@ -70,7 +70,7 @@ The Chrome extension's pointer is painted out only where it sat on blank chrome;
 ### The copy in the project README
 
 The project README plays the 16:9 demo from a GitHub attachment
-(`https://github.com/user-attachments/assets/206616a4-93fe-4935-9a25-38c2a5f5655f`). Attachments on the
+(`https://github.com/user-attachments/assets/1af66d63-78cd-437d-a3a2-2e178904d177`). Attachments on the
 free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 570 kb/s
 (8.7 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
 repository without submitting it, and replace the URL in `README.md` with the one GitHub inserts.

@@ -52,11 +52,6 @@
       "text": "When the agent needs a decision, it asks, and waits for your answer."
     },
     {
-      "id": "r5",
-      "shot": "R5 restart",
-      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes, and no incoming message is lost."
-    },
-    {
       "id": "yaml",
       "shot": "T1 Binding",
       "text": "Teams add one Binding, in YAML, next to their agent. The platform wiring is shared."

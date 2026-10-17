@@ -65,13 +65,6 @@
       "treat": "-1/2",
       "seconds": 4.65
     },
-    "r5": {
-      "cut": "demo",
-      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes, and no incoming message is lost.",
-      "say": "[confident, measured, authoritative] And if Agent Courier restarts mid-answer, the thread still finishes, and no incoming message is lost.",
-      "treat": "-1/2",
-      "seconds": 6.41
-    },
     "yaml": {
       "cut": "demo",
       "text": "Teams add one Binding, in YAML, next to their agent. The platform wiring is shared.",
