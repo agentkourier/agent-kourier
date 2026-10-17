@@ -74,8 +74,9 @@ Tokens never go in the values file. The chart refuses a value that looks like a 
 
 ## Write the values
 
-The chart takes the three resource kinds under `config`. This is a complete first install, with an agent that does
-not exist yet:
+The chart takes Agent Kourier's three resource kinds under `config`: the ChatConnection, the AgentBackend and the
+Binding. They are nested, so they go in a values file rather than in `--set` flags. Save this as `my-values.yaml`, the
+file the `-f` flags below pass to Helm. It is a complete first install, with an agent that does not exist yet:
 
 ```yaml title="my-values.yaml"
 config:
@@ -112,6 +113,8 @@ config:
 
 Every field is in the [Binding](../reference/binding.md), [AgentBackend](../reference/agentbackend.md) and
 [ChatConnection](../reference/chatconnection.md) references, and every chart value in [Helm values](../reference/helm-values.md).
+`helm show values oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.0` prints the chart's defaults with their
+comments. Keep the file: an upgrade passes it again.
 
 ## Check the values before you install
 

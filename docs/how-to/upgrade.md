@@ -9,6 +9,9 @@ released, see [Build from source](install-with-helm.md#build-from-source).
 
 ## Upgrade the chart
 
+Pass the values file you installed with (`my-values.yaml` in [Install with Helm](install-with-helm.md#write-the-values)):
+`helm upgrade` replaces the release's values with the ones you give it.
+
 ```sh
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <new version> \
   -n agent-kourier -f my-values.yaml
