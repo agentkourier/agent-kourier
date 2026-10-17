@@ -38,6 +38,8 @@ type ToolResultEvent struct {
 }
 
 // StateEvent reports a change of the task's state. A state that repeats is not a change.
+// TaskID is empty when the agent replied with a Message and no task: the turn then has only
+// its ContextID, and its one state is COMPLETED.
 type StateEvent struct {
 	TaskID    a2a.TaskID
 	ContextID string
@@ -46,7 +48,9 @@ type StateEvent struct {
 
 // FinalEvent is the last event of a send that reaches an end state: the task is finished
 // (completed, canceled, failed, or rejected) or paused for input. Task holds the agent's
-// last word, including the question of an input-required pause.
+// last word, including the question of an input-required pause. A reply that is one Message,
+// with no task, ends with a COMPLETED Task that has no ID, the message's contextId, and the
+// message as its status message.
 type FinalEvent struct {
 	Task *a2a.Task
 }

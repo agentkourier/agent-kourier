@@ -1,0 +1,54 @@
+# The echo agent: one pod that serves A2A on 8080. It needs no model and no credentials.
+#
+# Apply it into the namespace echo-agent, which the AgentBackend in ../../kourier names (kubectl create namespace
+# echo-agent, then kubectl apply -n echo-agent -f manifests/). The files name no namespace, so the Service lands next
+# to it. Build the image with make echo-agent-image and load or push it where your nodes pull from.
+#
+# One replica on purpose: what the agent remembers of a conversation lives in the pod's memory, and the Service does
+# not pin a thread to a pod. With two, a follow-up can reach the pod that has not seen the conversation, and it counts
+# its turns from 1 again. A restart does the same.
+#
+# By default the agent accepts every caller. To require the Binding's token, put it in a Secret you create, mount the
+# Secret as a file, and set ECHO_AGENT_TOKEN_FILE to the file's path; the agent then answers 401 to any other caller.
+# It reads the file on every request, so a rotated token works without a restart; a mounted Secret reaches the pod
+# some time after Agent Kourier's watch sees the change, so a few 401s are possible meanwhile.
+# networkpolicy.yaml lets only Agent Kourier's namespace reach the agent, where the network plugin enforces it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-agent
+  labels: {app.kubernetes.io/name: echo-agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: echo-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: echo-agent}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: echo-agent
+          image: agent-kourier-echo-agent:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: a2a, containerPort: 8080}
+          env:
+            - {name: ECHO_AGENT_URL, value: "http://echo-agent:8080"} # the URL the agent card names; Agent Kourier ignores it
+          readinessProbe:
+            tcpSocket: {port: a2a}
+          livenessProbe:
+            tcpSocket: {port: a2a}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}

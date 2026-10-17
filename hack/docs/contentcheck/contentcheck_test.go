@@ -106,6 +106,16 @@ func TestScanText(t *testing.T) {
 		{"toolApprovals is not toolApprovalsEnabled", "A hypothetical toolApprovalsEnabled.\n", nil},
 		{"a roadmap word is not the file", "Read the roadmap in the issue tracker.\n", nil},
 
+		// The release.
+		{"says there is no tagged release", "There is no tagged release yet.\n", []string{"stale-release"}},
+		{"says no release yet", "Agent Kourier has no release yet.\n", []string{"stale-release"}},
+		{"says no image is published", "No image is published: build one.\n", []string{"stale-release"}},
+		{"the brand kit is not published is not about a release", "The brand kit is not published.\n", nil},
+		{"helm install from a checkout", "helm install agent-kourier ./charts/agent-kourier -n x\n", []string{"local-chart-install"}},
+		{"helm template from a checkout", "helm template x ./charts/agent-kourier --show-only y\n", []string{"local-chart-install"}},
+		{"helm install of the published chart", "helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier\n", nil},
+		{"helm lint of the chart directory is no install", "helm lint --strict charts/agent-kourier\n", nil},
+
 		// A home directory.
 		{"a home directory", "cd /Users/someone/src\n", []string{"home-path"}},
 		{"a users URL path is not a home directory", "GET /api/users/42 and https://example.com/users/x\n", nil},
@@ -796,5 +806,60 @@ func TestRunSaysWhenTheWorkspaceRuleDidNotRun(t *testing.T) {
 	out.Reset()
 	if code := run(root, "(unclosed", &out); code != 2 {
 		t.Errorf("run with a bad pattern = %d, want 2; output:\n%s", code, out.String())
+	}
+}
+
+func TestReleaseVersionFindings(t *testing.T) {
+	for _, tt := range []struct {
+		name, text string
+		want       []int // lines of the findings
+	}{
+		{"the image at the chart's version", "image ghcr.io/agentkourier/agent-kourier:v0.2.0\n", nil},
+		{"the image at another version", "image ghcr.io/agentkourier/agent-kourier:v0.1.0\n", []int{1}},
+		{"helm --version on the chart's line", "helm install x " + publishedChart + " --version 0.1.0\n", []int{1}},
+		{"helm --version on the continuation line", "helm install x " + publishedChart + " \\\n  --version 0.1.0 -n y\n", []int{2}},
+		{"helm --version at the chart's version", "helm install x " + publishedChart + " --version 0.2.0\n", nil},
+		{"a placeholder version", "helm upgrade x " + publishedChart + " --version <new version>\n", nil},
+		{"another chart's --version", "helm install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent --version 0.9.4\n", nil},
+		{"the signing identity's tag", "--certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.1.0\n", []int{1}},
+		{"the current release in prose", "The current release is `0.1.0`.\n", []int{1}},
+		{"the status line", "> **Status: v0.1.0, the first release.**\n", []int{1}},
+		{"another project's version", "kagent 0.9.4 speaks A2A 0.3.\n", nil},
+		{"two references on one line, one stale", "ghcr.io/agentkourier/agent-kourier:v0.2.0 and ghcr.io/agentkourier/charts/agent-kourier:0.1.0\n", []int{1}},
+		{"the image with no version tag", "ghcr.io/agentkourier/agent-kourier@sha256:abc\n", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []int
+			for _, f := range releaseVersionFindings("docs/x.md", tt.text, "0.2.0") {
+				got = append(got, f.line)
+				if f.rule != releaseVersionRuleID {
+					t.Errorf("rule %q, want %q", f.rule, releaseVersionRuleID)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("findings on lines %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if got := releaseVersionFindings("docs/x.md", "ghcr.io/agentkourier/agent-kourier:v0.1.0\n", ""); got != nil {
+		t.Errorf("with no chart version, findings %v, want none", got)
+	}
+}
+
+func TestChartVersion(t *testing.T) {
+	root := t.TempDir()
+	if v, err := chartVersion(root); v != "" || err != nil {
+		t.Errorf("no chart: chartVersion = %q, %v, want \"\", nil", v, err)
+	}
+	writeTree(t, root, map[string]string{chartFile: "apiVersion: v2\nname: agent-kourier\nversion: \"1.2.3\"\nappVersion: dev\n"})
+	if v, err := chartVersion(root); v != "1.2.3" || err != nil {
+		t.Errorf("chartVersion = %q, %v, want 1.2.3", v, err)
+	}
+	writeTree(t, root, map[string]string{chartFile: "apiVersion: v2\nname: agent-kourier\n"})
+	if _, err := chartVersion(root); err == nil {
+		t.Error("a Chart.yaml with no version: chartVersion returned no error")
+	}
+	if v, err := chartVersion("../../.."); v == "" || err != nil {
+		t.Errorf("the repository's chart: chartVersion = %q, %v, want a version", v, err)
 	}
 }

@@ -1,0 +1,4 @@
+# What the agent runs on. Compile with:
+#   uv pip compile examples/recipes/echo-agent/agent/requirements.in --generate-hashes --universal --python-version 3.14 -o examples/recipes/echo-agent/agent/requirements.txt
+a2a-sdk[http-server]==1.2.2
+uvicorn==0.54.0  # the ASGI server; a2a-sdk[http-server] brings Starlette but no server

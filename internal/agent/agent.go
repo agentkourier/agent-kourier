@@ -118,7 +118,8 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
 	asm := newAssembler(h, a.tool)
-	err = a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
+	err = a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 	})
 	switch {
@@ -194,7 +195,7 @@ func (a *Agent) resume(ctx context.Context, conn Conn, asm *assembler) error {
 	if asm.final != nil {
 		return nil
 	}
-	return a.read(ctx, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	return a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: asm.taskID})
 	})
 }
@@ -204,12 +205,17 @@ var errInactive = errors.New("agent: no event within the inactivity timeout")
 // read feeds a stream to asm until the task settles, cutting the stream after
 // InactivityTimeout without an event. It returns the stream's error, errInactive when the
 // watchdog cut it, or io.ErrUnexpectedEOF when it ended cleanly first.
-func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
+//
+// A stream that ends cleanly after a status update that settled the task, without the full
+// task (as the a2a-sdk Python server has been seen to end its streams), is not a drop: one GetTask on conn,
+// at once, supplies the final task. Only if that fails, or finds the task unsettled, does
+// read return io.ErrUnexpectedEOF.
+func (a *Agent) read(ctx context.Context, conn Conn, asm *assembler, open func(context.Context) iter.Seq2[a2a.Event, error]) error {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchdog := time.AfterFunc(a.cfg.InactivityTimeout, cancel)
 	defer watchdog.Stop()
-	err := error(io.ErrUnexpectedEOF)
+	var err error
 	for ev, streamErr := range open(sctx) {
 		if streamErr != nil {
 			err = classOnly(streamErr)
@@ -221,10 +227,20 @@ func (a *Agent) read(ctx context.Context, asm *assembler, open func(context.Cont
 			return nil
 		}
 	}
-	if ctx.Err() == nil && sctx.Err() != nil {
-		err = errInactive
+	switch {
+	case ctx.Err() == nil && sctx.Err() != nil:
+		return errInactive
+	case err != nil:
+		return err
+	case ctx.Err() == nil && settled(asm.state) && asm.taskID != "":
+		if task, gerr := a.getTask(ctx, conn, asm.taskID); gerr == nil {
+			asm.apply(task)
+			if asm.final != nil {
+				return nil
+			}
+		}
 	}
-	return err
+	return io.ErrUnexpectedEOF
 }
 
 // GetTask returns the task's current state. UnaryTimeout bounds it, resolving the

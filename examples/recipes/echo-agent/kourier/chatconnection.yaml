@@ -1,0 +1,8 @@
+# The Slack workspace, over Socket Mode. The Secret slack, in namespace agent-kourier, holds the keys botToken (xoxb-...)
+# and appToken (xapp-...); you make it, and no token belongs in this file.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: slack, namespace: agent-kourier}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack}

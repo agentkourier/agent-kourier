@@ -1,0 +1,22 @@
+name: Question
+description: Ask how to do something with Agent Kourier, when the docs do not answer it.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The [documentation](https://agentkourier.dev) covers installing, writing a Binding, connecting an agent and
+        troubleshooting. If it answers your question only in part, say which page you read: that is a docs gap worth
+        fixing. Redact tokens and private messages.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What you want to do, and where you are stuck.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: The version, how it runs (Helm, container), the agent backend, and the config that matters, redacted.

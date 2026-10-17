@@ -1,0 +1,40 @@
+# A first install of the Agent Kourier Helm chart: one Slack connection, one agent and one channel.
+#
+#   curl -fsSLo my-values.yaml https://raw.githubusercontent.com/agentkourier/agent-kourier/main/examples/helm/my-values.yaml
+#
+# Change the four lines marked "yours", then install with -f my-values.yaml. The steps around it (the Secrets, a dry
+# run that checks this file, the install) are in https://agentkourier.dev/how-to/install-with-helm/.
+# Keep the file: an upgrade passes it again.
+config:
+  # How Agent Kourier talks to Slack. The Secret holds the bot token and the app-level token under the keys botToken
+  # and appToken, in the release's namespace.
+  chatConnections:
+    slack:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: agent-kourier-slack}
+
+  # Where the agent is: its A2A endpoint, called exactly as written (keep a trailing slash if the route has one).
+  agentBackends:
+    agent:
+      spec:
+        dialect: a2a
+        url: http://my-agent.my-namespace.svc.cluster.local:8083/a2a/ # yours: the agent's A2A URL
+
+  # Which channel talks to which agent.
+  bindings:
+    my-binding:
+      spec:
+        agent:
+          backendRef: {name: agent}
+          namespace: my-namespace # yours: the agent's namespace
+          name: my-agent # yours: the agent's name
+        identity:
+          # The identity Agent Kourier calls the agent as. If the agent verifies tokens, also set
+          # tokenSecretRef: {name: agent-kourier-agent-token}, a Secret with the token under the key token.
+          userId: agent-kourier
+        chat:
+          connectionRef: {name: slack}
+          channel: C0123456789 # yours: the channel's ID (starts with C), not its name
+          output: live
+        interactions: {askUser: false}

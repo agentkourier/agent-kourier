@@ -44,6 +44,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: hack/release/check-ci.sh "${REPOSITORY}" "${SHA}" ci.yml security.yml codeql.yml
+      - name: Require the tag to be the chart's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: hack/release/check-version.sh "${TAG}"
       - name: Refuse tags with an existing GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
