@@ -29,6 +29,7 @@ type assembler struct {
 	final     *a2a.Task
 	changes   int  // events emitted so far: text, tool, state, and final
 	replies   bool // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
+	unshown   bool // an agent Message came before any task where it cannot be the reply: on an Answer
 }
 
 func newAssembler(h Handler, classify ToolClassifier) *assembler {
@@ -73,9 +74,17 @@ func (a *assembler) apply(ev a2a.Event) {
 // now), then the message's parts as one artifact named after the message, then the end.
 // Any other Message is ignored, so it changes nothing: one on an Answer or a follow, whose task
 // is known and must not be forgotten, one that names a task, one not from the agent (an echo of
-// the turn), and one after the agent has named a task.
+// the turn), and one after the agent has named a task. An agent's Message on an Answer before
+// any task is noted (unshown), so the send can say that the agent did reply.
 func (a *assembler) message(m *a2a.Message) {
-	if !a.replies || m.TaskID != "" || m.Role != a2a.MessageRoleAgent || a.taskID != "" || a.final != nil {
+	if m.Role != a2a.MessageRoleAgent || a.taskID != "" {
+		return
+	}
+	if !a.replies {
+		a.unshown = true
+		return
+	}
+	if m.TaskID != "" {
 		return
 	}
 	a.track("", m.ContextID)
