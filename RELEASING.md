@@ -152,9 +152,9 @@ runs as two more jobs side by side, `make test-race` with `make test-scripts` (`
 (`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
 so the chart tests cannot skip. Each Go job in `ci.yml`, `security.yml` and `codeql.yml` restores a cache of its own
 (the module cache and the build cache, plus golangci-lint's cache in the jobs that lint), keyed on the job, the runner
-OS, the Go version and the `go.sum` files it builds from. Only a job that succeeds on a push to `main` saves one, and
-only when its exact key is not saved yet; pull requests read `main`'s caches and save none, so a pull request runs cold
-until a push run on `main` has saved them. Each job has its own timeout, set from the times seen on a cold cache. The kind
+OS, the Go version and the `go.sum` files it builds from. Only a job on a push to `main` saves one, when its exact key
+is not saved yet, whether its steps passed or failed (a cancelled job saves nothing); pull requests read `main`'s caches
+and save none, so a pull request runs cold until a push run on `main` has saved them. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions, and the pinned node and base images pulled (the tiers
 take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR).
