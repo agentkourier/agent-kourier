@@ -527,7 +527,7 @@ kubectl --context $CTX -n ate-system logs deploy/atenet-egress -c agentgateway |
 Is Agent Kourier connected to Slack? `/readyz` does not say, on purpose: Agent Kourier is ready to serve while Slack is down, and `ready` is logged
 before the Slack connection is tried. Ask the gauge, or read the log:
 
-- `agentkourier_chat_connected{connection="agent-kourier-system/slack-main"}` is `1` while Socket Mode is up and `0` while it is not (after a drop, or
+- `agentkourier_chat_connected{connection="agent-kourier/sandbox-slack"}` is `1` while Socket Mode is up and `0` while it is not (after a drop, or
   before the first connection). A `0` that stays means Agent Kourier cannot reach Slack or Slack turns it away.
 - `kubectl --context $CTX -n agent-kourier logs deploy/agent-kourier-sandbox | grep 'slack:'` shows the connection's life: `slack: socket mode connecting`,
   `slack: socket mode websocket opened`, `slack: socket mode connected` (Slack said hello; `num_connections` above 1 means another process uses the same

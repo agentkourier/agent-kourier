@@ -32,7 +32,7 @@ this kind, with its AgentBackend, ChatConnection and checks.
 
 ```yaml
   chat:
-    connectionRef: {namespace: agent-kourier-system, name: slack}
+    connectionRef: {namespace: agent-kourier, name: slack}
     channel: C0123456789
     triggers:
       - type: mention # (1)!

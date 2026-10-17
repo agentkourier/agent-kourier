@@ -14,8 +14,11 @@ Slack is the supported platform today. Each platform is an adapter behind one ch
 interface and its conformance suite, and the resource API takes a second platform without
 breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no change to them.
 
-[Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
-[Architecture](docs/explanation/architecture.md) · [Specification](spec.md)
+[Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
+[Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md)
+
+> **Status: prerelease.** There is no tagged release yet: you build the image yourself, and the `v1alpha1` resource
+> format can change before the first stable release. See [Status](#status).
 
 ## What it looks like
 
@@ -107,6 +110,11 @@ A team adds a binding to connect an agent to a channel. Multiple bindings can sh
 a backend and messaging connection. Cross-namespace references require the owning
 resource to allow the referring namespace.
 
+The resources below look like Kubernetes objects, but they are **configuration files**, loaded from
+`AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
+custom resources reconciled by an Agent Kourier controller. GitOps can manage the
+ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
+
 For example, this configuration connects a payments agent hosted by kagent to a
 Slack channel through shared infrastructure:
 
@@ -115,7 +123,7 @@ apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata:
   name: kagent
-  namespace: agent-kourier-system
+  namespace: agent-kourier
 spec:
   dialect: kagent-v1
   url: http://kagent-frontdoor.kagent.svc.cluster.local:4180
@@ -125,7 +133,7 @@ apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata:
   name: slack
-  namespace: agent-kourier-system
+  namespace: agent-kourier
 spec:
   platform: slack
   credentialsSecretRef:
@@ -140,7 +148,7 @@ metadata:
 spec:
   agent:
     backendRef:
-      namespace: agent-kourier-system
+      namespace: agent-kourier
       name: kagent
     namespace: payments
     name: payments-agent
@@ -150,7 +158,7 @@ spec:
       key: token
   chat:
     connectionRef:
-      namespace: agent-kourier-system
+      namespace: agent-kourier
       name: slack
     channel: C0123456789
     output: live
@@ -160,7 +168,7 @@ spec:
 
 This example assumes the agent and authenticated backend endpoint already exist.
 Replace the endpoint, agent reference, and channel ID for your deployment. The
-`agent-kourier-slack` Secret belongs in `agent-kourier-system` with `botToken` and `appToken`
+`agent-kourier-slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
 keys; `payments-agent-token` belongs in `payments` with a `token` key. Each binding
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
@@ -178,11 +186,6 @@ own regexes, thread rules, limits and prompt.
 complete one for Alertmanager's Slack receiver, including the title it expects;
 [Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) covers
 other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the fields.
-
-These are **configuration files**, loaded from
-`AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
-custom resources reconciled by an Agent Kourier controller. GitOps can manage the
-ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 
 ## Integrations
 
@@ -215,11 +218,10 @@ an audit log, exports Prometheus metrics and can export OpenTelemetry traces. Se
 [observability](docs/reference/logs-and-traces.md), and [stored data](docs/reference/stored-data.md) for what
 Agent Kourier keeps and for how long.
 
-To try it first, use the [sandbox deployment guide](hack/kind/sandbox/README.md), which runs
+To try it first, follow [Your first agent in Slack](docs/tutorials/first-agent-in-slack.md), which runs
 Agent Kourier against a real Slack workspace and a kagent agent in kind. To run it on a
 cluster, follow [Install with Helm](docs/how-to/install-with-helm.md), and see
-[troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer. The
-[specification](spec.md) records the detailed behaviour.
+[troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer.
 
 ### High availability
 
@@ -253,8 +255,8 @@ The build produces `bin/agent-kourier`. Kubernetes test environments and the rea
 sandbox are available through the Makefile; run `make` to list the targets.
 
 A race build of the whole module puts several gigabytes in the Go build cache for each
-worktree, because package paths are part of the cache key. A checkout per work package
-fills a disk. Check `df -h` before a long run, and run `go clean -cache` after merging.
+worktree, because package paths are part of the cache key. A checkout per
+worktree fills a disk. Check `df -h` before a long run, and run `go clean -cache` after merging.
 
 ## License
 

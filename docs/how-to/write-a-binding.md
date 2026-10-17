@@ -24,7 +24,7 @@ metadata:
 spec:
   agent:
     backendRef: # (1)!
-      namespace: agent-kourier-system
+      namespace: agent-kourier
       name: kagent
     namespace: payments # (2)!
     name: payments-agent
@@ -34,7 +34,7 @@ spec:
       key: token
   chat:
     connectionRef:
-      namespace: agent-kourier-system
+      namespace: agent-kourier
       name: slack
     channel: C0123456789
     output: live # (4)!
