@@ -9,10 +9,11 @@ chart refuses `replicaCount` above 1 with it. With `store.type: postgres`, `repl
 removing a Binding from the values is the other.
 
 ```sh
-helm install agent-kourier ./charts/agent-kourier -n agent-kourier --create-namespace -f my-values.yaml
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.0 \
+  -n agent-kourier --create-namespace -f my-values.yaml
 ```
 
-From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a
+The published chart has `image.repository` and `image.digest` stamped with the release's image. From source, the chart needs `image.repository` (a released chart has it stamped, with the release's digest) and, in practice, a
 ChatConnection. Check any values file with `helm lint --strict -f my-values.yaml charts/agent-kourier` and
 `helm template` before installing. `ci/` holds the values the tests render: `minimal`, `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
 `hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `fast-postgres` (the fast tier's on Postgres:
@@ -224,7 +225,7 @@ for obj in serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/a
   kubectl -n agent-kourier annotate --overwrite "$obj" meta.helm.sh/release-name=agent-kourier meta.helm.sh/release-namespace=agent-kourier
   kubectl -n agent-kourier label --overwrite "$obj" app.kubernetes.io/managed-by=Helm
 done
-helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.yaml
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.1.0 -n agent-kourier -f my-values.yaml
 ```
 
 Or leave the volume out of the release: `--set persistence.existingClaim=agent-kourier-data`, and nothing the chart manages can delete it.

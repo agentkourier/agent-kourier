@@ -10,6 +10,8 @@
 // YAML, JSON, SVG, WebVTT, the web manifest, plain text and the Cloudflare _headers file; images and video are skipped.
 // Two kinds of check run:
 //
+//   - Release rules: every release version a page names is the chart's (release.go), no page says there is no
+//     release, and no install command takes the chart from a checkout.
 //   - Content rules (the table in this file): internal work-package, decision and risk IDs and tasks/ paths, names that
 //     were removed from the product or the docs, fields the API types do not have yet, and, when CONTENTCHECK_WORKSPACE is
 //     set, identifiers of the owner's workspace. They apply to every line, code fences and inline code included: a leak in an example is still a leak.
@@ -107,6 +109,11 @@ var rules = []rule{
 
 	r("home-path", `/Users/`,
 		"is a path on a developer's machine"),
+
+	r("stale-release", `(?i)\bno (?:tagged |published )?releases? yet\b|\bthere is no (?:tagged |published )?release\b|\bno image is published\b|\bbuild (?:the|its) image yourself\b`,
+		"says there is no release; there is one: point at the published chart and image"),
+	r("local-chart-install", `\bhelm\b.*\b(?:install|upgrade|template)\b.*\./charts/agent-kourier\b`,
+		"installs the chart from a checkout; install the published chart, "+publishedChart+", and keep a deliberate source install in the allowlist"),
 }
 
 // workspaceEnv names the environment variable that holds the workspace rule's pattern. The owner's workspace, organisation,
@@ -385,6 +392,7 @@ func parseAllowlist(path, text string) ([]*allowEntry, []finding) {
 		known[ru.id] = true
 	}
 	known[workspaceRuleID] = true
+	known[releaseVersionRuleID] = true
 	for _, id := range linkRules {
 		known[id] = true
 	}
@@ -478,6 +486,10 @@ func check(root, workspace string) ([]finding, error) {
 		return nil, err
 	}
 	active := activeRules(api)
+	release, err := chartVersion(root)
+	if err != nil {
+		return nil, err
+	}
 	if workspace != "" {
 		ru, err := workspaceRule(workspace)
 		if err != nil {
@@ -494,6 +506,7 @@ func check(root, workspace string) ([]finding, error) {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
 		out = append(out, scanText(active, p, string(b))...)
+		out = append(out, releaseVersionFindings(p, string(b), release)...)
 		if isLinkChecked(p) {
 			out = append(out, links.check(p, string(b))...)
 		}

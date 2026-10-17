@@ -7,11 +7,15 @@ is that image by digest. Nothing is released by hand.
 ## Cut a release
 
 1. Merge what ships to `main`.
-2. Before tagging, confirm that both `ci.yml` and `security.yml` have completed successfully for that exact
+2. Open a release pull request that sets `version` in `charts/agent-kourier/Chart.yaml` to `X.Y.Z` and every
+   release version the public docs name to match. `make docs-check` lists each page that still names the old version
+   (`release-version`), so the pull request cannot go green with a page left behind. Merge it. Skip this for a
+   prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
+3. Before tagging, confirm that both `ci.yml` and `security.yml` have completed successfully for that exact
    commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a missing,
    pending, failed or pull-request-only run blocks the release.
-3. `git tag vX.Y.Z <commit on main>` and `git push origin vX.Y.Z`.
-4. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
+4. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
+5. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
 
 If a first release attempt fails before its GitHub Release is created, rerun that tag after fixing the failure.
@@ -25,6 +29,8 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
   `test-testhooks` jobs. `security.yml` must contain successful `govulncheck (root)`, `govulncheck (ax)`, `gitleaks`,
   `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs. The scheduled released-image rescan is the only permitted
   skipped job. A pending run fails closed with a message to wait; the gate never reruns or changes a workflow run.
+- Refuses a final tag `vX.Y.Z` unless `charts/agent-kourier/Chart.yaml` at the tagged commit says `version: X.Y.Z`
+  (`hack/release/check-version.sh`), so no release goes out before the pull request that points the docs at it.
 - Checks the Releases API before granting the build job access to the registry. A 404 means this is the first
   release attempt; a published or draft Release, an authorization failure or any other API error stops the workflow.
 - Refuses a tag that is not on `main`.

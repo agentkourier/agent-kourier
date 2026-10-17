@@ -28,9 +28,9 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
-!!! note "Status: prerelease"
-    Agent Kourier has no tagged release yet. To install it, you build its image yourself, and the `v1alpha1`
-    resource format can change before the first stable release.
+!!! note "Status: v0.1.0"
+    The current release is `0.1.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+    The `v1alpha1` resource format can change before 1.0.
 
 ## What Agent Kourier handles
 

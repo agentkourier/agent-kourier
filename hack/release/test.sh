@@ -6,6 +6,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CHECK=${HERE}/check-ci.sh
 CHECK_RELEASE=${HERE}/check-release.sh
+CHECK_VERSION=${HERE}/check-version.sh
 FAKE_GH=${HERE}/testdata/fake-gh
 FIXTURES=${HERE}/testdata
 SHA=0123456789abcdef0123456789abcdef01234567
@@ -107,5 +108,39 @@ contains "release-draft: refuses a draft conflict" "already exists as a draft" "
 echo "== an authorization error fails closed"
 run_release_case release-auth-error 1 release-auth-error
 contains "release-auth-error: reports an indeterminate release state" "could not determine whether release" "${TMP}/release-auth-error.out"
+
+run_version_case() { # TAG CHART_VERSION WANT_STATUS NAME
+  local tag=$1 version=$2 want=$3 name=$4 status chart
+  chart=${TMP}/${name}-Chart.yaml
+  if [ -n "${version}" ]; then
+    printf 'apiVersion: v2\nname: agent-kourier\nversion: %s\nappVersion: dev\n' "${version}" >"${chart}"
+  else
+    printf 'apiVersion: v2\nname: agent-kourier\n' >"${chart}"
+  fi
+  set +e
+  "${CHECK_VERSION}" "${tag}" "${chart}" >"${TMP}/${name}.out" 2>&1
+  status=$?
+  set -e
+  check "${name}: exit status" "${want}" "${status}"
+}
+
+echo "== a release tag must be the chart's version"
+run_version_case v1.2.3 1.2.3 0 version-match
+run_version_case v1.2.3 '"1.2.3"' 0 version-quoted
+run_version_case v1.2.4 1.2.3 1 version-mismatch
+contains "version-mismatch: says what to do" "merge a pull request that sets the chart's version to 1.2.4" "${TMP}/version-mismatch.out"
+run_version_case v1.2.3 '' 1 version-missing
+contains "version-missing: names the missing version" "has no version" "${TMP}/version-missing.out"
+run_version_case v1.3.0-rc.1 1.2.3 0 version-prerelease
+contains "version-prerelease: skips the check" "is a prerelease" "${TMP}/version-prerelease.out"
+run_version_case 1.2.3 1.2.3 1 version-no-v
+run_version_case v1.2 1.2.3 1 version-short
+
+echo "== the repository's chart version passes as a release tag"
+set +e
+"${CHECK_VERSION}" "v$(sed -n 's/^version:[[:space:]]*//p' "${HERE}/../../charts/agent-kourier/Chart.yaml" | head -n 1)" >"${TMP}/version-repo.out" 2>&1
+status=$?
+set -e
+check "version-repo: the chart's own version passes" 0 "${status}"
 
 echo "all passed"
