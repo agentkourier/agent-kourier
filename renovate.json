@@ -43,6 +43,26 @@
       "enabled": false
     },
     {
+      "description": "kagent's Go ADK runtime is pinned by digest alone, to the build the pinned kagent release ships; it moves by hand with KAGENT_VERSION in hack/kind/up-full.sh",
+      "matchDepNames": [
+        "ghcr.io/kagent-dev/kagent/golang-adk"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The kind fast tier's Postgres stays on major 17: its manifest mounts the data directory where 17 keeps it, and 18 moved it. hack/postgres/test.sh moves majors on its own",
+      "matchFileNames": [
+        "hack/kind/fast/postgres.yaml"
+      ],
+      "matchDepNames": [
+        "postgres"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
       "matchManagers": [
         "github-actions"
       ],
@@ -75,7 +95,8 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/^hack\\/.*\\.sh$/"
+        "/^hack\\/.*\\.sh$/",
+        "/^hack\\/.*\\.ya?ml$/"
       ],
       "matchStrings": [
         "(?:^|[=\\s\"'])(?<depName>[a-z0-9][a-z0-9./_-]*):(?<currentValue>[a-zA-Z0-9][a-zA-Z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
