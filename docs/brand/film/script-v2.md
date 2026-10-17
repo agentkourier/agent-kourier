@@ -17,7 +17,7 @@ the footage captions) are the script. This table is a copy for reading; if it an
 Both cuts follow the same arc: the problem, the reveal, the product working, the close. Sources are named
 generally (alerts, chat) with the supported tool beside them (Alertmanager first, Slack today).
 
-### Demo cut, 106.6 s
+### Demo cut, 97.6 s
 
 | # | Beat | Narration | On screen |
 |---|---|---|---|
@@ -30,9 +30,8 @@ generally (alerts, chat) with the supported tool beside them (Alertmanager first
 | 7 | Real footage: reply | Reply in the thread, and the same session continues. Same context, nothing re-explained. | **Reply in the thread.** Same session, full context. |
 | 8 | Real footage: mention | Or skip the alert, and just ask. | **Or just ask.** A mention opens its own thread. |
 | 9 | Real footage: question | When the agent needs a decision, it asks, and waits for your answer. | **It asks when it needs to.** Answer in the thread and it carries on. |
-| 10 | Real footage: restart | And if Agent Kourier restarts mid-answer, the thread still finishes, and no incoming message is lost. | **A restart loses no message.** The thread still finishes. |
-| 11 | Setup, animated | Teams add one Binding, in YAML, next to their agent. The platform wiring is shared. | **One Binding per channel.** Declared in YAML, next to your agent. The Binding the demo ran with, its channel ID replaced by a placeholder. |
-| 12 | Close, animated | It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · It answers, asks back, and keeps the context · Slack today, more chat platforms planned. End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. |
+| 10 | Setup, animated | Teams add one Binding, in YAML, next to their agent. The platform wiring is shared. | **One Binding per channel.** Declared in YAML, next to your agent. The Binding the demo ran with, its channel ID replaced by a placeholder. |
+| 11 | Close, animated | It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · It answers, asks back, and keeps the context · Slack today, more chat platforms planned. End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. |
 
 ### Teaser, 20 s
 
@@ -52,9 +51,9 @@ alerting-safety point lives in the README and the close sells the general produc
 are not built or would overstate: steering an agent mid-turn (a reply is queued until the turn ends) and
 tool approvals from Slack (planned).
 
-The restart line says only what holds in every case. It used to say "Nothing lost. One answer, not two.", but one
-window is accepted (a crash just after a stream starts leaves the partial reply, and the recovered turn posts the whole
-answer again; see the delivery guarantees page), so the line now says the thread finishes and no incoming message is lost.
+The restart scene was cut (owner, 2026-10-16): it added little, the footage shows a graceful pod deletion rather
+than a crash, and its line had to be hedged to stay true (one delivery window is accepted; see the delivery
+guarantees page). The README and docs cover recovery; the film does not show it.
 
 ### Narration
 
@@ -90,7 +89,7 @@ All from one sandbox session. The demo cut needs all of it; the teaser uses R1 t
 | R2 | Video | Follow-up reply in R1's thread, answered in the thread | Demo 5, teaser 4 |
 | R3 | Video | @mention in the ask channel, thread opens, answer streams | Demo 6, teaser 5 |
 | R4 | Video | Agent asks a question (input blocks and Submit), person answers, agent carries on | Demo 7 |
-| R5 | Video | Kourier pod deleted mid-stream, the thread still completes, no duplicate post | Demo 8 |
+| R5 | Video | Kourier pod deleted mid-stream, the thread still completes | Cut from the film, 2026-10-16 |
 | S1 | Still | R1's finished thread, whole thread visible | Poster frame, README hero, social card |
 | S2 | Still | R4's prompt with choices and Submit | Docs |
 | T1 | Text | The sandbox Binding (`hack/kind/sandbox/agent-kourier/config/binding.yaml`) | Demo 9. Typeset from the file, no recording needed |

@@ -64,8 +64,6 @@ const DEMO = [
       { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 37.2, 2.4, 2.4, 'threadTop', HEADER]] },
   { rec: 'r4', line: 'r4', lead: 0.3, cap: 'It asks when it needs to.', sub: 'Answer in the thread and it carries on.',
     shots: [[S1, 147.5, 3.4, 3.4, 'threadTop', HEADER], [S1, 166.2, 13.8, 4.6, 'threadTop', HEADER]] },
-  { rec: 'r5', line: 'r5', lead: 0.3, cap: 'A restart loses no message.', sub: 'The thread still finishes.',
-    shots: [[S1, 226.0, 5.0, 2.5, 'threadTop', HEADER], [S1, 234.0, 2.5, 2.5, 'threadTop', HEADER, '$ kubectl delete pod -l app.kubernetes.io/instance=agent-kourier-sandbox'], [S1, 277.5, 4.0, 4.0, 'threadLow']] },
   { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.6 },
   { mg: 'close', line: 'close', lead: 0.3, dur: 21.0, query: { endAt: 14.1 } },
 ];
