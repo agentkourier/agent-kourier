@@ -81,8 +81,8 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   `AGENTKOURIER_AUDIT_RETENTION is "1h", want keep, or a duration of at least 24h0m0s such as 8760h`. The chart sets these
   variables from its values (`auditRetention` here) and from `extraEnv`: fix the value there.
 
-A misspelt field, or a Secret that is missing or lacks a key, is not a code 2. Those stop the start while the files
-load, and exit 4: see [The pod exits with code 4 and the error says `load config`](#the-pod-exits-with-code-4-and-the-error-says-load-config).
+A misspelt field, or a Secret that is missing or lacks a key, also exits 2, with `load config` after
+`the broker cannot be wired:`: see [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
 
 ## The pod exits with code 3
 
@@ -101,10 +101,10 @@ The chart grants `list` and `watch` in each namespace that holds a Secret the co
 adds more. A `config.existingConfigMap` needs `rbac.secretNamespaces`, because the chart cannot
 read the ConfigMap to find the namespaces.
 
-## The pod exits with code 4 and the error says `load config`
+## The pod exits with code 2 and the error says `load config`
 
 ```text
-agent-kourier: bootstrap: load config: binding-my-binding.yaml#1 Binding agent-kourier/my-binding: spec.chat.chanel: unknown field
+agent-kourier: bootstrap: the broker cannot be wired: load config: binding-my-binding.yaml#1 Binding agent-kourier/my-binding: spec.chat.chanel: unknown field
 binding-my-binding.yaml#1 Binding agent-kourier/my-binding: spec.chat.channel: required
 ```
 

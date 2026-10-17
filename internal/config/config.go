@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,6 +27,18 @@ import (
 
 // maxFileSize is the largest config file Load reads, so a runaway file cannot exhaust memory.
 const maxFileSize = 1 << 20
+
+// ErrInvalid is wrapped by an error of Load or Resolve that holds a problem the operator must fix in the config: a
+// document that does not decode or validate, a reference or Secret that is missing, a directory that does not exist.
+// A restart would find the same problem. A directory or file that cannot be read, a Secret that cannot be read and
+// a cancellation do not wrap it.
+var ErrInvalid = errors.New("the config is invalid")
+
+// invalid marks err as a problem with the config: it wraps ErrInvalid without changing err's text.
+type invalid struct{ error }
+
+func (e invalid) Unwrap() error      { return e.error }
+func (invalid) Is(target error) bool { return target == ErrInvalid }
 
 // Set holds every object found in a config directory, defaulted and validated, in file then
 // document order. References between objects are not resolved. A Set from Load also remembers
@@ -49,11 +62,16 @@ type Set struct {
 // Load reports every problem it finds, joined, each prefixed with "<file>#<n> <kind>
 // <namespace>/<name>:" (n is the 1-based document number in the file) and returns a nil Set.
 // Resolve uses the same prefix for its problems with the objects of the Set Load returns.
-// A missing directory gives an error wrapping fs.ErrNotExist.
+// A missing directory gives an error wrapping fs.ErrNotExist. Each problem with the config wraps ErrInvalid, and so
+// does a missing directory.
 func Load(ctx context.Context, dir string) (*Set, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read config directory: %w", err)
+		err = fmt.Errorf("read config directory: %w", err)
+		if errors.Is(err, fs.ErrNotExist) {
+			err = invalid{err}
+		}
+		return nil, err
 	}
 	l := &loader{set: &Set{}, seen: map[identity]string{}}
 	for _, e := range entries {
@@ -93,10 +111,15 @@ type loader struct {
 	errs []error
 }
 
-// fail records problems found at loc, the location and whatever is known of the object.
+// fail records problems found at loc, the location and whatever is known of the object. Each wraps ErrInvalid
+// but a file that cannot be read (an *fs.PathError), which is not the config's fault.
 func (l *loader) fail(loc string, errs ...error) {
 	for _, err := range errs {
-		l.errs = append(l.errs, fmt.Errorf("%s: %w", loc, err))
+		err = fmt.Errorf("%s: %w", loc, err)
+		if !errors.As(err, new(*fs.PathError)) {
+			err = invalid{err}
+		}
+		l.errs = append(l.errs, err)
 	}
 }
 

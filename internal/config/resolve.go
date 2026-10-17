@@ -83,7 +83,7 @@ func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 // starts with the object's location, "<file>#<n> <kind> <namespace>/<name>:", as Load's problems do; an object added or renamed after Load has the location Load gave its new identity, if any, and
 // otherwise the problem starts with "<kind> <namespace>/<name>:". If ctx ends first, the
 // error also wraps ctx's, once, ahead of the reference problems found so far; Secret
-// problems are then incomplete.
+// problems are then incomplete. Each problem wraps ErrInvalid but a Secret that could not be read.
 func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, error) {
 	r := &resolver{
 		secrets:  secrets,
@@ -133,11 +133,16 @@ type resolver struct {
 }
 
 // fail records err, if any, as a problem with the field at path of the object from, starting with where Load found
-// the object when it is known.
+// the object when it is known. The problem is the config's: it wraps ErrInvalid.
 func (r *resolver) fail(from identity, path string, err error) {
 	if err == nil {
 		return
 	}
+	r.record(from, path, invalid{err})
+}
+
+// record records err as a problem with from at path, unmarked: for one that is not the config's fault.
+func (r *resolver) record(from identity, path string, err error) {
 	loc := strings.TrimSpace(r.sources[from] + " " + from.String())
 	r.problems = append(r.problems, problem{from, fmt.Errorf("%s: %s: %w", loc, path, err)})
 }

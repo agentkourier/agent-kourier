@@ -118,7 +118,7 @@ func (r *resolver) checkSecret(ctx context.Context, from identity, path, name st
 	case errors.Is(err, ErrSecretNotFound):
 		r.fail(from, path, fmt.Errorf("%s not found", secret))
 	case err != nil:
-		r.fail(from, path, fmt.Errorf("read %s: %w", secret, err))
+		r.record(from, path, fmt.Errorf("read %s: %w", secret, err)) // the cache, not the config, failed
 	default:
 		for _, k := range keys {
 			if !slices.Contains(have, k) {
