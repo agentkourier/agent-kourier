@@ -33,9 +33,40 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
   table-driven where it fits.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and the
   pull request title, for example `fix(session): keep the reply queue across a reload`.
-- CI runs lint, the docs check, the build and the unit tests; keep them green. Opening a pull
-  request asks the code owner in [.github/CODEOWNERS](.github/CODEOWNERS) for a review.
+- Opening a pull request asks the code owner in [.github/CODEOWNERS](.github/CODEOWNERS) for a
+  review.
 - Never commit a real token, Secret or private message. Test credentials are fake constants.
+- Signing your commits is optional. `main` accepts only squash merges and requires signed commits,
+  and the squash commit is the one GitHub creates and signs when the pull request merges; the
+  commits on your branch are not on `main`. To have your own commits shown as Verified, see
+  GitHub's guide to [signing commits](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
+
+## Checks
+
+A pull request merges into `main` only when these checks pass and its branch is up to date with
+`main`:
+
+- From `ci`: `lint` (`make fmt` leaves no diff, `make lint`, `make docs-check`, `make build`),
+  `test` (`make test-race` with helm installed, so the chart tests cannot skip, then
+  `make test-scripts`), `test-testhooks` (`make test-testhooks`) and `docs-agent` (the tests and
+  lint of the separate module under `examples/recipes/docs-agent/agent`).
+- From `security`: `govulncheck (root)`, `govulncheck (ax)` and `govulncheck (docs-agent)` (one
+  per Go module), `gitleaks` (a secret scan of the whole git history), and `trivy (linux-amd64)` and
+  `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
+- From `codeql`: `analyze (go)` (CodeQL code scanning).
+
+The `docs` workflow (`build`, the strict site build, and `links`, an external link check) runs only
+when a pull request touches the documentation sources, and its checks are not required; keep them
+green anyway.
+
+From a fork, a maintainer approves your pull request's workflow runs before they start: the
+repository requires approval for every outside contributor.
+
+The content check (`make docs-check`) has a rule that looks for workspace identifiers, and its
+pattern comes from a repository secret. A pull request from a fork cannot read the secret, so on
+that pull request the rule does not run and the check prints a notice saying so; the rule runs
+again on the push to `main` after the merge. You do not need to set `CONTENTCHECK_WORKSPACE`
+locally.
 
 ## Code conventions
 
