@@ -1,7 +1,7 @@
 # The echo agent: one pod that serves A2A on 8080. It needs no model and no credentials.
 #
-# Apply it into the namespace you choose (kubectl apply -n <namespace> -f manifests/); the file names none, so the
-# Service lands next to it. Build the image with make echo-agent-image and load or push it where your nodes pull from.
+# Apply it into the namespace echo-agent, which the AgentBackend in ../../kourier names (kubectl create namespace
+# echo-agent, then kubectl apply -n echo-agent -f manifests/). The files name no namespace, so the Service lands next to it. Build the image with make echo-agent-image and load or push it where your nodes pull from.
 #
 # One replica on purpose: what the agent remembers of a conversation lives in the pod's memory, and the Service does
 # not pin a thread to a pod. With two, a follow-up can reach the pod that has not seen the conversation, and it counts

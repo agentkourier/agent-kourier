@@ -111,7 +111,12 @@ class EchoExecutor(AgentExecutor):
 
 
 class Handler(DefaultRequestHandler):
-    """Contract, Replies: end a stream with the full Task. The SDK ends it with the last status update instead."""
+    """Contract, Replies: end a stream with the full Task.
+
+    This works around the SDK: a2a-sdk 1.2.2 ends a streaming reply, and a SubscribeToTask stream, with the last status
+    update, not a Task. Without this class Agent Kourier treats the stream as dropped and settles the turn with GetTask
+    about a second later. Delete it if a later SDK ends its streams with the Task (test_agent.py checks that they do).
+    """
 
     async def on_message_send_stream(self, params, context):
         async for event in self.then_task(super().on_message_send_stream(params, context), context):
