@@ -1,8 +1,10 @@
 # The fast tier's Postgres, for Agent Kourier's Postgres store (E2E_STORE=postgres make e2e-fast-up; lib.sh's deploy_postgres). One pod
 # with its data in an emptyDir, so it lives and dies with the tier: nothing of it outlives `hack/kind/down.sh fast`. The image is
-# the one hack/postgres/test.sh runs the store's tests on (postgres 17, by the digest of its multi-arch index); the cluster pulls
-# it. Its password is the Secret postgres-auth, which deploy_postgres makes with a generated password; Agent Kourier's DSN, with the same
-# password, is the Secret agent-kourier-pg of namespace agent-kourier. Neither is in this file. The Service is ClusterIP, as every double's.
+# postgres 17, by the digest of its multi-arch index; the cluster pulls it. It stays on 17 (renovate.json takes no major here)
+# while hack/postgres/test.sh runs the store's tests on 18, whose image keeps its data under /var/lib/postgresql/18/docker.
+# Its password is the Secret postgres-auth, which deploy_postgres makes with a generated password; Agent Kourier's DSN, with the
+# same password, is the Secret agent-kourier-pg of namespace agent-kourier. Neither is in this file. The Service is ClusterIP, as
+# every double's.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
