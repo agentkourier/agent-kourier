@@ -126,6 +126,7 @@ validation:
 
 nav:
   - Home: index.md
+  - Demo: demo/index.md
   - Tutorials:
       - tutorials/index.md
       - Your first agent in Slack: tutorials/first-agent-in-slack.md
