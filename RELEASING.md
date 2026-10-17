@@ -115,23 +115,35 @@ A bad release is not deleted or retagged: cut a new tag with the fix.
 ## Who can release: repository settings
 
 The workflow runs the files in the tagged commit, so a workflow cannot police who tags; the repository settings
-do. They are the real control, and they are settings, not code: the owner applies them (Settings, Rules).
+do. They are the real control, and they are settings, not code: the owner applies them (Settings, Rules). These
+are applied now:
 
-1. A tag ruleset: Target tags, pattern `v*`, enforcement Active, bypass list limited to the maintainers' team
-   (or the owner). Rules: Restrict creations, Restrict updates, Restrict deletions, Block force pushes. Only
-   maintainers can create a release tag, and a released tag cannot be moved or deleted.
-2. Branch protection (a ruleset or classic rule) on `main`: Require a pull request before merging, with one
-   approval; require `lint`, `test` and `test-testhooks` from `ci`, plus `govulncheck (root)`, `govulncheck (ax)`,
-   `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; require the branch to be up to date;
-   block force pushes; and restrict deletions. The scheduled released-image rescan is intentionally not a required
-   main-push check. The release workflow also refuses a tag that is not on `main`, so what ships has passed this.
-   GitHub's Free plan does not enforce private-repository branch and tag rulesets, so these controls remain a
-   repository-administration prerequisite until the repository plan or visibility supports them.
+1. The `main` ruleset (target: the default branch, enforcement Active):
+   - Require a pull request before merging, with 0 approvals: the project has one maintainer, who cannot approve
+     their own pull request. Squash is the only allowed merge method.
+   - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
+   - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
+     `test-testhooks` and `docs-agent` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; and
+     `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
+   - Block force pushes and restrict deletions.
+   - Bypass: repository admins, for pull requests only. An admin can merge a pull request whose requirements are
+     not met, but cannot push to `main` directly.
+2. The `release tags` ruleset (target: tags matching `refs/tags/v*`, enforcement Active): Restrict creations,
+   Restrict updates, Restrict deletions and Block force pushes, with repository admins on the bypass list
+   (always). Only an admin can create a release tag, and a released tag cannot be moved or deleted.
 3. Actions: Workflow permissions "Read repository contents" by default (the workflows ask for more by job).
    Optionally add a `release` environment with required reviewers and move the `build` job into it, which
    puts a human approval between a tag and a push.
 4. After the first release: Packages, `agent-kourier` and `charts/agent-kourier`, link them to this repository and set
    visibility (public if the cluster pulls without a pull secret).
+
+The release workflow refuses a tag that is not on `main`, so what ships has passed the `main` ruleset. Cut a
+release tag only from a commit that GitHub signed when it squash-merged a pull request (the commit shows as
+Verified on GitHub); nothing in the workflow checks this. The commits on `main` from before signed commits were
+required, the tip of `main` at that time included, are unsigned, so the first release is cut from a later squash
+merge. The release gate (`hack/release/check-ci.sh`) checks a subset of the required checks, listed under
+[What the workflow does](#what-the-workflow-does).
 
 ## CI
 
