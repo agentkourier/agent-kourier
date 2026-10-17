@@ -42,7 +42,7 @@ printf 'POSTGRES_USER=agentkourier\nPOSTGRES_DB=agentkourier\nPOSTGRES_PASSWORD=
 docker run -d --name "$name" --label agent-kourier.test=postgres \
 	--env-file "$envfile" \
 	-p 127.0.0.1::5432 \
-	--tmpfs /var/lib/postgresql/data:rw,size=1g \
+	--tmpfs /var/lib/postgresql:rw,size=1g \
 	"$POSTGRES_IMAGE" \
 	-c fsync=off -c synchronous_commit=off -c full_page_writes=off >/dev/null
 rm -f "$envfile"
