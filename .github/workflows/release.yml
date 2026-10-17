@@ -1,4 +1,4 @@
-# A pushed tag v* first proves that the exact tagged commit passed the push-to-main CI and security workflows.
+# A pushed tag v* first proves that the exact tagged commit passed the push-to-main CI, security and CodeQL workflows.
 # It then builds the multi-arch image, refuses it if any platform's binary carries a test hook, scans every
 # platform image before push, pushes it to GHCR with the workflow's own token, attaches SBOM and provenance
 # attestations, packages the Helm chart with that image's digest as its default image and pushes it, and then
@@ -38,12 +38,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
-      - name: Require successful CI and security runs for this SHA
+      - name: Require successful CI, security and CodeQL runs for this SHA
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           SHA: ${{ github.sha }}
-        run: hack/release/check-ci.sh "${REPOSITORY}" "${SHA}" ci.yml security.yml
+        run: hack/release/check-ci.sh "${REPOSITORY}" "${SHA}" ci.yml security.yml codeql.yml
       - name: Require the tag to be the chart's version
         env:
           TAG: ${{ github.ref_name }}

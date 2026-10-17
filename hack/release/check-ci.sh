@@ -26,19 +26,22 @@ REPOSITORY=$1
 SHA=$2
 shift 2
 WORKFLOWS=("$@")
-[ ${#WORKFLOWS[@]} -gt 0 ] || WORKFLOWS=(ci.yml security.yml)
+[ ${#WORKFLOWS[@]} -gt 0 ] || WORKFLOWS=(ci.yml security.yml codeql.yml)
 
 # These are the display names returned by the Actions jobs API. Matrix jobs include their matrix value
-# in the name, as security.yml defines it. Keep this list in lockstep with the workflows: a renamed or
-# missing required job must stop a release until this gate is reviewed with that workflow change.
-CI_REQUIRED_JOBS=(lint test test-testhooks)
+# in the name, as security.yml and codeql.yml define it. Together they are the status checks the main
+# ruleset requires. Keep these lists in lockstep with the workflows and the ruleset: a renamed or
+# missing required job must stop a release until this gate is reviewed with that change.
+CI_REQUIRED_JOBS=(lint test test-testhooks docs-agent)
 SECURITY_REQUIRED_JOBS=(
   'govulncheck (root)'
   'govulncheck (ax)'
+  'govulncheck (docs-agent)'
   gitleaks
   'trivy (linux-amd64)'
   'trivy (linux-arm64)'
 )
+CODEQL_REQUIRED_JOBS=('analyze (go)')
 
 [[ "${REPOSITORY}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "REPOSITORY must be OWNER/REPOSITORY (got '${REPOSITORY}')"
 [[ "${SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || die "SHA must be a 40-character commit SHA (got '${SHA}')"
@@ -95,6 +98,7 @@ check_workflow() {
   case "${workflow}" in
     ci.yml) required=("${CI_REQUIRED_JOBS[@]}") ;;
     security.yml) required=("${SECURITY_REQUIRED_JOBS[@]}") ;;
+    codeql.yml) required=("${CODEQL_REQUIRED_JOBS[@]}") ;;
     *) required=() ;;
   esac
   for expected in "${required[@]}"; do
