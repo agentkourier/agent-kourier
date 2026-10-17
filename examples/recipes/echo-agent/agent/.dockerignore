@@ -1,0 +1,4 @@
+# The Dockerfile copies agent.py and requirements.txt by name; this keeps everything else out of the build context.
+*
+!agent.py
+!requirements.txt
