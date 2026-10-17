@@ -31,11 +31,14 @@ poster frame, contact sheets, a storyboard, and the source files.
 ## Decisions already made, which you should keep unless I say otherwise
 
 - The name is always "Agent Kourier", never "Kourier" alone. Identifiers are `agent-kourier`.
-- The category line is "The always-on chat gateway for A2A agents on Kubernetes". The hook is "Every
-  thread, a live agent session."
-- The pitch is general, not on-call only. Alerts and chat are named as sources, with the first
-  supported tool beside each ("Alertmanager first", "Slack first"). Do not write copy that makes Slack
-  or Alertmanager sound like the only tools the design allows.
+- The hook is "Write the agent, not the chat integration." and the category line is "A Kubernetes-native
+  broker between team chat and streaming A2A agents", matching the project README. The pitch leads with what
+  Agent Kourier saves an agent builder: the agent keeps its tools and task logic, Agent Kourier handles the
+  chat side. Keep the copy plain and factual; the owner finds slogan-style lines cheesy.
+- The pitch is general, not on-call only, and chat-neutral: say "team chat", name Slack as the supported
+  platform today with more planned, and name no other platform until one is committed. Alerts are one way
+  in, not the product.
+- Every claim about restarts and delivery must hold in every case; check the delivery guarantees page.
 - Never invent a product screen or a metric. Every Slack frame is a real recording of the real
   product; the YAML on screen is the Binding the demo ran with, with a placeholder for the channel ID
   (real workspace identifiers stay out of the film and its source). If a claim was not demonstrated, it is

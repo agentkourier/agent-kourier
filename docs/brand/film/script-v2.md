@@ -4,8 +4,9 @@ Status: built 2026-10-10 (`out/agent-kourier-demo-*.mp4`, `out/agent-kourier-tea
 
 ## Positioning
 
-- **Hook:** Every thread, a live agent session. (Slack is the first chat tool, not the only one the design allows, so the close does not say "Slack thread".)
-- **Category:** The always-on chat gateway for A2A agents on Kubernetes. (Owner's choice, 2026-10-10; it matches the README. An earlier draft said "session broker".)
+- **Hook:** Write the agent, not the chat integration. (The README's headline since 2026-10-16. It replaced "Every thread, a live agent session.", which the owner dropped rather than keep as a second line.)
+- **Category:** A Kubernetes-native broker between team chat and streaming A2A agents. Slack is the supported platform today and more are planned; no other platform is named, because none is committed. (Replaced "the always-on chat gateway for A2A agents on Kubernetes", 2026-10-16.)
+- **Positioning:** lead with what Agent Kourier saves an agent builder: the agent keeps its tools and task logic, Agent Kourier handles the chat side. Plain and factual; the owner finds slogan-style copy cheesy.
 - **Hero use case:** an alert opens a session. Second way in: someone asks.
 
 ## The script as built
@@ -14,33 +15,33 @@ Status: built 2026-10-10 (`out/agent-kourier-demo-*.mp4`, `out/agent-kourier-tea
 the footage captions) are the script. This table is a copy for reading; if it and those files differ, they win.
 
 Both cuts follow the same arc: the problem, the reveal, the product working, the close. Sources are named
-generally (alerts, chat) with the first supported tool beside them (Alertmanager, Slack).
+generally (alerts, chat) with the supported tool beside them (Alertmanager first, Slack today).
 
-### Demo cut, 107.4 s
+### Demo cut, 106.6 s
 
 | # | Beat | Narration | On screen |
 |---|---|---|---|
 | 1 | Problem, animated | You've put AI agents on Kubernetes. They can read logs, check rollouts, and find the cause. | **You've put AI agents on Kubernetes.** They can read logs, check rollouts and find the cause. Chips: logs, rollouts, events. |
 | 2 | Problem, animated | But they only work when someone opens a prompt and asks. | **But they only work when someone opens a prompt and asks.** |
-| 3 | Problem, animated | Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither. | **Alerts fire in your monitoring. Questions come up in chat.** Your agents hear neither. Nodes: Alerts (Alertmanager first), Chat (Slack first). |
-| 4 | Reveal, animated | Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes. | **Introducing Agent Kourier.** The always-on chat gateway for A2A agents on Kubernetes. |
-| 5 | Solution, animated | An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first. | **An alert or a question becomes a live agent session.** In the thread. Slack first. |
+| 3 | Problem, animated | Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither. | **Alerts fire in your monitoring. Questions come up in chat.** Your agents hear neither. Nodes: Alerts (Alertmanager first), Chat (Slack today). |
+| 4 | Reveal, animated | Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents. | **Introducing Agent Kourier.** A Kubernetes-native broker between team chat and streaming A2A agents. |
+| 5 | Solution, animated | An alert, or a question, becomes an agent session, in the thread where it landed. Slack today. | **An alert or a question becomes an agent session.** In the thread. Slack today. |
 | 6 | Real footage: alert | When an alert lands in the channel, Agent Kourier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found. | **An alert opens a session.** Nobody typed a prompt. |
 | 7 | Real footage: reply | Reply in the thread, and the same session continues. Same context, nothing re-explained. | **Reply in the thread.** Same session, full context. |
 | 8 | Real footage: mention | Or skip the alert, and just ask. | **Or just ask.** A mention opens its own thread. |
 | 9 | Real footage: question | When the agent needs a decision, it asks, and waits for your answer. | **It asks when it needs to.** Answer in the thread and it carries on. |
-| 10 | Real footage: restart | And if Agent Kourier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two. | **A restart loses no message.** The thread still finishes, once. |
+| 10 | Real footage: restart | And if Agent Kourier restarts mid-answer, the thread still finishes, and no incoming message is lost. | **A restart loses no message.** The thread still finishes. |
 | 11 | Setup, animated | Teams add one Binding, in YAML, next to their agent. The platform wiring is shared. | **One Binding per channel.** Declared in YAML, next to your agent. The Binding the demo ran with, its channel ID replaced by a placeholder. |
-| 12 | Close, animated | Bring the agent you have: kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Start with Slack and Alertmanager; it's built for more. Agent Kourier. Every thread, a live agent session. | Pills: kagent, or any A2A agent that streams · It answers, asks back, and keeps the context · Start with Slack and Alertmanager, built for more. End card: **Agent Kourier.** Every thread, a live agent session. The always-on chat gateway for A2A agents on Kubernetes. |
+| 12 | Close, animated | It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · It answers, asks back, and keeps the context · Slack today, more chat platforms planned. End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. |
 
 ### Teaser, 20 s
 
 | # | Beat | Narration | On screen |
 |---|---|---|---|
-| 1 | Problem, animated | Your agents are ready. But nothing brings them the work. | **Your agents are ready.** Nothing brings them the work. |
-| 2 | Reveal, animated | Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes. | **Introducing Agent Kourier.** The always-on chat gateway for A2A agents on Kubernetes. |
-| 3 | Real footage | Alerts and questions become live agent sessions, right in the thread. Slack first. | An alert opens a session. · Reply in the thread. · Or just ask. |
-| 4 | End card | | **Agent Kourier.** Every thread, a live agent session. |
+| 1 | Problem, animated | Your agent is ready. The chat integration is another project. | **Your agent is ready.** The chat integration is another project. |
+| 2 | Reveal, animated | Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents. | **Introducing Agent Kourier.** A Kubernetes-native broker between team chat and streaming A2A agents. |
+| 3 | Real footage | Alerts and questions become agent sessions in the thread. Slack today, more platforms planned. | An alert opens a session. · Reply in the thread. · Or just ask. |
+| 4 | End card | | **Agent Kourier.** Write the agent, not the chat integration. |
 
 ### The close
 
@@ -50,6 +51,10 @@ qualify, is this a real conversation or a one-shot bot, and am I tied to these t
 alerting-safety point lives in the README and the close sells the general product. Not claimed, because they
 are not built or would overstate: steering an agent mid-turn (a reply is queued until the turn ends) and
 tool approvals from Slack (planned).
+
+The restart line says only what holds in every case. It used to say "Nothing lost. One answer, not two.", but one
+window is accepted (a crash just after a stream starts leaves the partial reply, and the recovered turn posts the whole
+answer again; see the delivery guarantees page), so the line now says the thread finishes and no incoming message is lost.
 
 ### Narration
 

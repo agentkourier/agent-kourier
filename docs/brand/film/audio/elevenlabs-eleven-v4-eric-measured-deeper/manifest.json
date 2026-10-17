@@ -25,17 +25,17 @@
     },
     "reveal": {
       "cut": "demo",
-      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes.",
-      "say": "[confident, measured, authoritative] Introducing Agent Courier: the always-on chat gateway for A-to-A agents on Kubernetes.",
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents.",
+      "say": "[confident, measured, authoritative] Introducing Agent Courier: a Kubernetes-native broker between team chat and A-to-A agents.",
       "treat": "-1/2",
-      "seconds": 6.02
+      "seconds": 6.25
     },
     "promise": {
       "cut": "demo",
-      "text": "An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first.",
-      "say": "[confident, measured, authoritative] An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first.",
+      "text": "An alert, or a question, becomes an agent session, in the thread where it landed. Slack today.",
+      "say": "[confident, measured, authoritative] An alert, or a question, becomes an agent session, in the thread where it landed. Slack today.",
       "treat": "-1/2",
-      "seconds": 6.74
+      "seconds": 6.33
     },
     "r1": {
       "cut": "demo",
@@ -67,10 +67,10 @@
     },
     "r5": {
       "cut": "demo",
-      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two.",
-      "say": "[confident, measured, authoritative] And if Agent Courier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two.",
+      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes, and no incoming message is lost.",
+      "say": "[confident, measured, authoritative] And if Agent Courier restarts mid-answer, the thread still finishes, and no incoming message is lost.",
       "treat": "-1/2",
-      "seconds": 6.98
+      "seconds": 6.41
     },
     "yaml": {
       "cut": "demo",
@@ -81,31 +81,31 @@
     },
     "close": {
       "cut": "demo",
-      "text": "Bring the agent you have: kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Start with Slack and Alertmanager; it's built for more. Agent Kourier. Every thread, a live agent session.",
-      "say": "[confident, measured, authoritative] Bring the agent you have: K agent, or any A-to-A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Start with Slack and Alertmanager; it's built for more. Agent Courier. Every thread, a live agent session.",
+      "text": "It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration.",
+      "say": "[confident, measured, authoritative] It works with K agent, or any A-to-A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Courier. Write the agent, not the chat integration.",
       "treat": "-1/2",
-      "seconds": 18.5
+      "seconds": 17.69
     },
     "t-problem": {
       "cut": "teaser",
-      "text": "Your agents are ready. But nothing brings them the work.",
-      "say": "[confident, measured, authoritative] Your agents are ready. But nothing brings them the work.",
+      "text": "Your agent is ready. The chat integration is another project.",
+      "say": "[confident, measured, authoritative] Your agent is ready. The chat integration is another project.",
       "treat": "-1/2",
-      "seconds": 3.95
+      "seconds": 4.26
     },
     "t-reveal": {
       "cut": "teaser",
-      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes.",
-      "say": "[confident, measured, authoritative] Introducing Agent Courier: the always-on chat gateway for A-to-A agents on Kubernetes.",
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents.",
+      "say": "[confident, measured, authoritative] Introducing Agent Courier: a Kubernetes-native broker between team chat and A-to-A agents.",
       "treat": "-1/2",
-      "seconds": 6.09
+      "seconds": 6.32
     },
     "t-proof": {
       "cut": "teaser",
-      "text": "Alerts and questions become live agent sessions, right in the thread. Slack first.",
-      "say": "[confident, measured, authoritative] Alerts and questions become live agent sessions, right in the thread. Slack first.",
+      "text": "Alerts and questions become agent sessions in the thread. Slack today, more platforms planned.",
+      "say": "[confident, measured, authoritative] Alerts and questions become agent sessions in the thread. Slack today, more platforms planned.",
       "treat": "-1/2",
-      "seconds": 5.7
+      "seconds": 6.17
     }
   }
 }

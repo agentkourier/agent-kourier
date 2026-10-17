@@ -64,18 +64,18 @@ const DEMO = [
       { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 37.2, 2.4, 2.4, 'threadTop', HEADER]] },
   { rec: 'r4', line: 'r4', lead: 0.3, cap: 'It asks when it needs to.', sub: 'Answer in the thread and it carries on.',
     shots: [[S1, 147.5, 3.4, 3.4, 'threadTop', HEADER], [S1, 166.2, 13.8, 4.6, 'threadTop', HEADER]] },
-  { rec: 'r5', line: 'r5', lead: 0.3, cap: 'A restart loses no message.', sub: 'The thread still finishes, once.',
+  { rec: 'r5', line: 'r5', lead: 0.3, cap: 'A restart loses no message.', sub: 'The thread still finishes.',
     shots: [[S1, 226.0, 5.0, 2.5, 'threadTop', HEADER], [S1, 234.0, 2.5, 2.5, 'threadTop', HEADER, '$ kubectl delete pod -l app.kubernetes.io/instance=agent-kourier-sandbox'], [S1, 277.5, 4.0, 4.0, 'threadLow']] },
   { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.6 },
-  { mg: 'close', line: 'close', lead: 0.3, dur: 21.8, query: { endAt: 15.2 } },
+  { mg: 'close', line: 'close', lead: 0.3, dur: 21.0, query: { endAt: 14.1 } },
 ];
 const TEASER = [
-  { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.5 },
+  { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.8 },
   { mg: 't-reveal', line: 't-reveal', lead: 0.2, dur: 6.6 },
   { rec: 't1', line: 't-proof', lead: 0.2, cap: 'An alert opens a session.', sub: '', shots: [[S4, 43.4, 6.0, 2.0, 'threadTop', HEADER]] },
   { rec: 't2', cap: 'Reply in the thread.', sub: '', shots: [[S4, 106.6, 6.0, 2.0, 'threadTop', HEADER]] },
   { rec: 't3', cap: 'Or just ask.', sub: '', shots: [[S1, 37.2, 2.0, 2.0, 'threadTop', HEADER]] },
-  { mg: 't-end', dur: 2.9 },
+  { mg: 't-end', dur: 2.6 },
 ];
 const CUTS = { demo: DEMO, teaser: TEASER };
 
@@ -212,7 +212,7 @@ async function stills(browser, ars) {
   const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 4.0], ['close', 13.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
   for (const ar of ars) {
     for (const [seg, t] of shots) {
-      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 15.2 } : {}) });
+      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 14.1 } : {}) });
       await page.screenshot({ path: join(dir, `${ar}-${seg}-${t}.png`) });
       await page.close();
     }
@@ -267,7 +267,7 @@ async function storyboard(browser) {
     h2{font-size:17px;margin:2px 0 8px} .span{font-family:"SF Mono",Menlo,monospace;font-size:12.5px;opacity:.65;margin-left:6px;font-weight:400}
     dl{margin:0;display:grid;grid-template-columns:96px 1fr;gap:5px 12px} dt{opacity:.6;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding-top:2px} dd{margin:0}
     </style><h1>Agent Kourier · storyboard (demo cut)</h1>
-    <p class="lead">Every thread, a live agent session. The always-on chat gateway for A2A agents on Kubernetes. Slack and Alertmanager first, built for more.</p>
+    <p class="lead">Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. Slack today; more chat platforms planned.</p>
     <p class="meta">${at.toFixed(1)} s · 30 fps · 16:9, 9:16, 1:1 · narration: ElevenLabs Eleven v4 "Eric" via OpenRouter, directed measured, lowered one semitone · footage: the kind sandbox, real Slack, real agent output, seeded faults</p>
     ${rows.map(r => `<section class="shot"><img src="${r.img}" alt=""><div><h2><span class="n">${r.n}</span>${esc(r.id)}<span class="span">${r.span}</span></h2><dl>
       ${r.said ? `<dt>Narration</dt><dd>${esc(r.said)}</dd>` : ''}${r.cap ? `<dt>On screen</dt><dd>${esc(r.cap)}</dd>` : ''}<dt>Source</dt><dd>${esc(r.source)}</dd></dl></div></section>`).join('')}</html>`;

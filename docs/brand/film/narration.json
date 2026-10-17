@@ -24,12 +24,12 @@
     {
       "id": "reveal",
       "shot": "Reveal",
-      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes."
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents."
     },
     {
       "id": "promise",
       "shot": "Promise",
-      "text": "An alert, or a question, becomes a live agent session, in the thread where it landed. Slack first."
+      "text": "An alert, or a question, becomes an agent session, in the thread where it landed. Slack today."
     },
     {
       "id": "r1",
@@ -54,7 +54,7 @@
     {
       "id": "r5",
       "shot": "R5 restart",
-      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes. Nothing lost. One answer, not two."
+      "text": "And if Agent Kourier restarts mid-answer, the thread still finishes, and no incoming message is lost."
     },
     {
       "id": "yaml",
@@ -64,24 +64,24 @@
     {
       "id": "close",
       "shot": "Close",
-      "text": "Bring the agent you have: kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Start with Slack and Alertmanager; it's built for more. Agent Kourier. Every thread, a live agent session."
+      "text": "It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
     }
   ],
   "teaser": [
     {
       "id": "t-problem",
       "shot": "Problem",
-      "text": "Your agents are ready. But nothing brings them the work."
+      "text": "Your agent is ready. The chat integration is another project."
     },
     {
       "id": "t-reveal",
       "shot": "Reveal",
-      "text": "Introducing Agent Kourier: the always-on chat gateway for A2A agents on Kubernetes."
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents."
     },
     {
       "id": "t-proof",
       "shot": "R1 to R3",
-      "text": "Alerts and questions become live agent sessions, right in the thread. Slack first."
+      "text": "Alerts and questions become agent sessions in the thread. Slack today, more platforms planned."
     }
   ]
 }
