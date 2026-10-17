@@ -39,20 +39,20 @@ const COPY = {
         tall: [['But they only work', 'when someone opens', 'a prompt and asks.'], []] },
   p3: { wide: [['Alerts fire in your monitoring.', 'Questions come up in chat.'], ['Your agents hear neither.']],
         tall: [['Alerts fire in', 'your monitoring.', 'Questions come up', 'in chat.'], ['Your agents hear neither.']] },
-  reveal: { wide: [['Introducing Agent Kourier'], ['The always-on chat gateway', 'for A2A agents on Kubernetes.']],
-            tall: [['Introducing', 'Agent Kourier'], ['The always-on chat gateway', 'for A2A agents on Kubernetes.']] },
-  promise: { wide: [['An alert or a question', 'becomes a live agent session.'], ['In the thread. Slack first.']],
-             tall: [['An alert or', 'a question', 'becomes a live', 'agent session.'], ['In the thread. Slack first.']] },
-  tproblem: { wide: [['Your agents are ready.'], ['Nothing brings them the work.']],
-              tall: [['Your agents', 'are ready.'], ['Nothing brings them', 'the work.']] },
+  reveal: { wide: [['Introducing Agent Kourier'], ['A Kubernetes-native broker between team chat', 'and streaming A2A agents.']],
+            tall: [['Introducing', 'Agent Kourier'], ['A Kubernetes-native broker', 'between team chat and', 'streaming A2A agents.']] },
+  promise: { wide: [['An alert or a question', 'becomes an agent session.'], ['In the thread. Slack today.']],
+             tall: [['An alert or', 'a question', 'becomes an', 'agent session.'], ['In the thread. Slack today.']] },
+  tproblem: { wide: [['Your agent is ready.'], ['The chat integration is another project.']],
+              tall: [['Your agent', 'is ready.'], ['The chat integration', 'is another project.']] },
   yaml: { '16x9': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']],
           '1x1': [['One Binding per channel.'], ['Declared in YAML, next to your agent.']],
           '9x16': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']] },
-  pills: ['kagent, or any A2A agent that streams', 'It answers, asks back, and keeps the context', 'Start with Slack and Alertmanager, built for more'],
-  pillAt: [0.2, 5.1, 11.6],
+  pills: ['kagent, or any A2A agent that streams', 'It answers, asks back, and keeps the context', 'Slack today, more chat platforms planned'],
+  pillAt: [0.2, 4.0, 10.6],
   can: ['logs', 'rollouts', 'events'],
-  hook: 'Every thread, a live agent session.',
-  category: 'The always-on chat gateway for A2A agents on Kubernetes',
+  hook: 'Write the agent, not the chat integration.',
+  category: 'A Kubernetes-native broker between team chat and streaming A2A agents',
 };
 
 // The Binding the demo ran with: hack/kind/sandbox/agent-kourier/config/binding.yaml, comments removed and the
@@ -377,7 +377,7 @@ if (!OVERLAY && STORY.includes(SEG)) {
     el('path', { d: 'M24 7c-7.2 0-12 5.2-12 12.5v8.5l-4.5 6.5h33l-4.5-6.5v-8.5C36 12.2 31.2 7 24 7z' }, g);
     el('path', { d: 'M19.5 38.5a4.5 4.5 0 0 0 9 0' }, g);
   });
-  const slack = source(L.slack, 'Chat', 'Slack first', g => {
+  const slack = source(L.slack, 'Chat', 'Slack today', g => {
     el('path', { d: 'M9 10h30a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H22l-8 7v-7H9a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z' }, g);
     for (const x of [16, 24, 32]) el('circle', { cx: x, cy: 22.5, r: 1.2, fill: C.white }, g);
   });
@@ -496,7 +496,7 @@ if (!OVERLAY && STORY.includes(SEG)) {
     'p3': t => ({ G: SLOT.p3 + t, head: 'p3', subAt: 4.2 }),
     'reveal': t => ({ G: SLOT.reveal + t, head: 'reveal', subAt: 2.3 }),
     'promise': t => ({ G: SLOT.promise + t, head: 'promise', subAt: 4.0 }),
-    't-problem': t => ({ G: SLOT.p3 + 0.2 + t, head: 'tproblem', subAt: 1.7, fade: true }),
+    't-problem': t => ({ G: SLOT.p3 + 0.2 + t, head: 'tproblem', subAt: 2.0, fade: true }),
     't-reveal': t => ({ G: t < 3.1 ? SLOT.reveal + t : SLOT.promise + (t - 3.1), head: 'reveal', subAt: 2.1 }),
   };
 

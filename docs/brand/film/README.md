@@ -64,7 +64,7 @@ node build.mjs sheets && node build.mjs storyboard
 
 Rules the v2 film keeps: every Slack frame is a real recording of the kind sandbox (seeded faults, real agent
 output), cropped to the message list or the thread so the workspace name never shows; sped-up footage is
-disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with, except its channel ID, which is a placeholder; Slack is named as the first chat tool, not the only one.
+disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with, except its channel ID, which is a placeholder; Slack is named as the supported platform today, with more planned, and no other platform is named.
 The Chrome extension's pointer is painted out only where it sat on blank chrome; shots where it covered text were reframed or retimed.
 
 ### The copy in the project README
