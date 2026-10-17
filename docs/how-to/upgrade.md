@@ -105,8 +105,8 @@ A trigger that did not use a preset reports only some of these. One that still h
 **What the broker does with a Binding that does not load.** One Binding that fails fails the whole config, so none of
 them is served.
 
-- *At start-up*, the broker does not start. It prints the error to stderr and exits with a non-zero status, and the pod
-  never becomes Ready. With SQLite (the default) the Deployment's strategy is `Recreate`, so the old pod is already gone when the
+- *At start-up*, the broker does not start. It prints the error to stderr and exits with
+  [code 2](../reference/cli.md#exit-codes), and the pod never becomes Ready. With SQLite (the default) the Deployment's strategy is `Recreate`, so the old pod is already gone when the
   new one fails: no broker runs, and no alert is investigated, until you fix the Binding or [roll back](#roll-back).
   Alertmanager's own receivers still notify people. With Postgres the strategy is a rolling update with
   `maxUnavailable: 0`, so the new pod that never becomes Ready does not take the old pod away, and the old pod keeps its
