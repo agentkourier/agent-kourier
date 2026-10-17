@@ -4,10 +4,10 @@
 # The kind node image and the base of the images the tiers build (mockllm; the fast tier's test
 # doubles, through a build argument). Used by the scripts that source this file.
 # shellcheck disable=SC2034
-NODE_IMAGE=kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
+NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 # The Go image Agent Kourier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.2.
-GO_IMAGE=golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c
+GO_IMAGE=golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
 # One full tier per Docker host: the cluster name is fixed, so two checkouts share it. The fast
 # tier is a separate cluster; use_tier fast points CLUSTER and OWNER_LABEL at it.
 CLUSTER=agent-kourier-full
@@ -368,7 +368,7 @@ deploy_postgres() {
 }
 
 # The curl image the scripts' probe pods run, pinned; the same as the verify scripts'.
-CURL_IMAGE=curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+CURL_IMAGE=curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
 
 # delete_agentkourier_pod NAME: delete a throwaway pod of namespace agent-kourier, if there is one. Needs K.
 # An empty NAME is nothing to delete.
