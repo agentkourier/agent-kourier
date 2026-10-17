@@ -22,7 +22,7 @@ var (
 	// the process exits, with the code in the error, because no retry would help.
 	ErrSlackAuth = errors.New("slack rejected the tokens")
 	// ErrWiring is wrapped by an error that means the broker was put together wrongly, or its
-	// config asks for what v1 does not do: a usage error, not a failure of a dependency.
+	// config is invalid or asks for what v1 does not do: a usage error, not a failure of a dependency.
 	ErrWiring = errors.New("the broker cannot be wired")
 )
 

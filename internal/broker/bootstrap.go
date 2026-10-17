@@ -3,6 +3,7 @@ package broker
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -64,7 +65,8 @@ func (c *Config) Stop() { c.Secrets.Stop() }
 // Bootstrap loads the config once to learn which namespaces hold the Secrets it refers to,
 // starts a resolver that watches exactly those and waits for its caches (an error names the
 // cause, so a denied list fails at once with "forbidden"), then starts the Reloader over it. The
-// Reloader runs until ctx ends. On failure nothing is left running.
+// Reloader runs until ctx ends. On failure nothing is left running. A config that does not load because the operator
+// must fix it (config.ErrInvalid) gives an error wrapping ErrWiring, since a restart would find it again.
 func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapOptions) (*Config, error) {
 	log := opts.Logger
 	if log == nil {
@@ -72,7 +74,7 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	}
 	set, err := config.Load(ctx, opts.Dir)
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, wiring(fmt.Errorf("load config: %w", err))
 	}
 	namespaces := slices.Compact(slices.Sorted(slices.Values(append(set.SecretNamespaces(), opts.ExtraNamespaces...))))
 	secrets := k8ssecrets.New(client, namespaces, k8ssecrets.WithLogger(log))
@@ -88,7 +90,15 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	})
 	if err := rl.Start(ctx); err != nil {
 		secrets.Stop()
-		return nil, err
+		return nil, wiring(err)
 	}
 	return &Config{Reloader: rl, Secrets: secrets, namespaces: namespaces}, nil
+}
+
+// wiring wraps ErrWiring around err when the config is at fault, and returns other errors as they are.
+func wiring(err error) error {
+	if errors.Is(err, config.ErrInvalid) {
+		return fmt.Errorf("%w: %w", ErrWiring, err)
+	}
+	return err
 }
