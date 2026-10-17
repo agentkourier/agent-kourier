@@ -100,7 +100,7 @@ spec:
     spec:
       containers:
         - name: capture
-          image: python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f
+          image: python:3.15-alpine@sha256:2699b90f4d562a22e2dd076c82f964032f64814204bff36d271a54ba4cc2c7e2
           command: [python, /app/capture.py]
           ports: [{containerPort: 8080}]
           volumeMounts: [{name: app, mountPath: /app}]
