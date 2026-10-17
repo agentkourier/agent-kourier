@@ -163,8 +163,9 @@ class RequireBearer:
 def build_app(url: str, token_file: str = ""):
     """The ASGI app: the card at /.well-known/agent-card.json and JSON-RPC at /, so the AgentBackend's url is `url`."""
     card = build_card(url)
-    # Tasks stay in memory until a restart, unbounded on purpose: GetTask and ListTasks must find them, or Agent
-    # Kourier reads -32001 as the session being gone. A real agent keeps tasks in a persistent store with retention.
+    # Tasks stay in memory until a restart, unbounded on purpose: GetTask must find them (-32001 reads as the session
+    # gone), and so must ListTasks (a turn it cannot find is sent again). A real agent keeps them in a persistent store
+    # with retention.
     handler = Handler(agent_executor=EchoExecutor(), task_store=InMemoryTaskStore(), agent_card=card)
     app = Starlette(routes=create_agent_card_routes(card) + create_jsonrpc_routes(handler, rpc_url="/"))
     if token_file:  # without a token file the agent accepts every caller: this is a demo, not a backend for real data
