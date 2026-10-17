@@ -613,6 +613,12 @@ func TestAPersonsAnswerThatFailsToSendBehavesAsItDidBeforeTheWatcher(t *testing.
 		if err := p.mgr.Answer(t.Context(), key, answerMsgFor(t, row, in, answer)); err != nil {
 			t.Errorf("a second answer = %v; want the pause open", err)
 		}
+		// Answer returns once the runner has the answer; the task it completes ends on the runner. Both runs are compared
+		// once that turn is over: it has told the thread there was no output, and the runner has let go of the task.
+		until(t, "the second answer's turn to end", func() bool {
+			return slices.ContainsFunc(p.sink.seen(), func(n string) bool { return strings.HasPrefix(n, string(session.NoticeNoOutput)+" ") }) &&
+				!p.mgr.HoldsTask(key, "task-1")
+		})
 		got = append(got, p.sink.seen()...)
 		got = append(got, p.calls.seen()...)
 		got = append(got, p.notices()...)
