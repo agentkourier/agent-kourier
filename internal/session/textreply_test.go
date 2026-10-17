@@ -541,15 +541,17 @@ func TestRecoveredTextReplyRetriesBackOff(t *testing.T) {
 
 func TestTextReplyClearsReactionFromPreviousProcess(t *testing.T) {
 	f, sink := textPauseFixture(t)
-	r := store.Reply{ID: "previous-process-answer", Key: key, UserID: "U1", MessageRef: "2", Text: "answer", EnqueuedAt: t0}
-	if _, err := f.st.EnqueueReply(t.Context(), r); err != nil {
-		t.Fatal(err)
-	}
+	// The handler is in place before the reply exists: the runner is still on its way to its park, and a reply it
+	// read before then would go to the fixture's default, which judges it no answer and skips it for good.
 	f.setTextReply(func(ctx context.Context, k Key, reply store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		msg := answerMsg(reply.ID)
 		msg.TaskID = task.ID
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
+	r := store.Reply{ID: "previous-process-answer", Key: key, UserID: "U1", MessageRef: "2", Text: "answer", EnqueuedAt: t0}
+	if _, err := f.st.EnqueueReply(t.Context(), r); err != nil {
+		t.Fatal(err)
+	}
 	f.m.start(key) // a prior process’s queued reply is woken by recovery, not a handler setter
 	f.retired(t)
 	if got := sink.dequeued(); len(got) != 1 || got[0] != queuedID(r.ID)+" "+r.MessageRef {
