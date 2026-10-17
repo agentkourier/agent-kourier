@@ -204,3 +204,22 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
             ~/.cache/golangci-lint
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
+  # The echo-agent recipe is Python (examples/recipes/echo-agent/agent), so no Go job builds or tests it. The Makefile
+  # targets make a virtualenv from the hashed requirements-dev.txt; setup-python's pip cache is keyed on the requirements
+  # files. The image build proves the Dockerfile and requirements.txt still install together.
+  echo-agent:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: examples/recipes/echo-agent/agent/requirements*.txt
+      - run: make echo-agent-test
+      - run: make echo-agent-lint
+      - run: make echo-agent-image

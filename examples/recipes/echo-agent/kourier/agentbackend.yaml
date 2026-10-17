@@ -1,0 +1,10 @@
+# The A2A server that hosts the echo agent. On the a2a dialect the url is the exact JSON-RPC endpoint, used as written,
+# and the agent card is served at that url plus /.well-known/agent-card.json. The agent serves JSON-RPC at the root, so
+# the url has no path. This is the Service that agent/manifests/ creates in the namespace echo-agent; replace it if you
+# put the agent somewhere else.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: echo-agents, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://echo-agent.echo-agent.svc.cluster.local:8080
