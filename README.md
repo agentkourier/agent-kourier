@@ -1,19 +1,18 @@
 <h1 align="center">
-  <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: every thread, a live agent session." width="100%">
+  <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: write the agent, not the chat integration." width="100%">
 </h1>
 
-<p align="center"><strong>Declarative chat broker for Kubernetes agents.</strong></p>
+<p align="center">A Kubernetes-native broker between team chat and streaming A2A agents. Slack today; more platforms planned.</p>
 
-Agent Kourier connects Kubernetes agents to Slack without adding Slack-specific code to
-each agent. It carries messages and alerts to a supported streaming A2A endpoint and
-brings the agent's answers back to the same thread. Developers connect an agent to a
-channel through a declarative `Binding`.
+Agent Kourier runs in your cluster between your team's chat and your agents. A `Binding`
+connects a channel to an agent that serves streaming A2A, and Agent Kourier handles the
+chat side: a session per thread, streamed replies, questions to people, investigations
+started by alerts, and recovery after a restart or failover. The agent needs no chat code.
+It keeps its tools and task logic.
 
-Connecting an agent to Slack adds work beyond building the agent itself: handling Slack
-events, tracking threads, formatting replies, and recovering conversations after a restart.
-Repeating that integration for each agent means maintaining the same messaging code in
-multiple places. Agent Kourier handles that work in a shared broker. The agent owns its
-tools and task logic; the broker owns the Slack connection and conversation delivery.
+Slack is the supported platform today. Each platform is an adapter behind one chat
+interface and its conformance suite, and the resource API takes a second platform without
+breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no change to them.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](hack/kind/sandbox/README.md) ·
 [Architecture](docs/explanation/architecture.md) · [Specification](spec.md)
@@ -36,37 +35,52 @@ Alertmanager     FIRING (1) - PaymentsApiErrorRate
                  Nothing else in the Deployment differs from the previous revision.
 ```
 
-The alert's thread is the agent session. People in the channel reply in it without
-a mention. A repeat of the same alert attaches to the thread, and its resolve posts
-a note there.
+The answers come from the agent. The alert's thread is the agent session. People in the
+channel reply in it without a mention. A repeat of the same alert attaches to the thread,
+and its resolve posts a note there.
 
-## Why a broker
+## What Agent Kourier handles
 
-- **Connect agents without writing Slack handlers.** A `Binding` connects a channel to
-  an agent that exposes a supported streaming A2A endpoint. Multiple bindings share
-  the broker's Slack connection and conversation handling.
-- **Conversations survive a restart.** Agent Kourier persists sessions, queued replies and
-  pending questions. After a restart it continues each conversation where it stopped.
-- **A crash does not repeat a post.** Posts go through a durable outbox. After a
-  crash between posting and recording, Agent Kourier finds the message it already posted
-  and does not post it again. A streamed reply is the exception: if Agent Kourier dies
-  between starting a stream and recording it, the partial stream stays and the
-  recovered turn posts the whole answer as a new message.
-- **Questions are answered in the thread.** With `interactions.askUser` set on the
-  `Binding`, Agent Kourier renders the agent's question in the thread and resumes the same
-  agent task with the answer.
-- **Alerts become conversations.** A `botMessage` trigger reads the alerts a bot
-  posts to the channel, named by its bot ID, and starts an investigation in each
-  alert's thread, with a cooldown per alert, a rate limit and a daily cap. Every
-  trigger is written in full, and the docs have a worked one for Alertmanager. Agent
-  Kourier only reads what is already posted, so your alerts arrive as before, whether or
-  not Agent Kourier is running.
-- **Any streaming A2A backend.** A kagent agent, an agent running in Google AX and any
-  other A2A 1.0 or 0.3 agent whose card advertises streaming use the same `Binding`.
-  Backend-specific behaviour lives in a dialect.
-- **Teams own their bindings.** A `Binding` is namespaced. The platform team runs the
-  broker and the shared Slack connection. An application team wires its own channel
-  to its own agent.
+Without a broker, each of these is code in every agent that talks to chat:
+
+- **Threads as sessions.** Each thread keeps one agent context for 90 days after its last
+  activity by default. A reply anywhere in the thread continues it.
+- **Replies during a turn.** Agent Kourier queues a reply sent while the agent works and
+  sends it, in order, when the task ends. A reaction shows that it accepted the reply.
+- **Streamed output.** With `output: live`, the answer streams into one chat message, with
+  tool calls shown as status lines where the backend reports them.
+- **Questions and approvals.** With `interactions.askUser`, the agent's question appears in
+  the thread and the answer resumes the same task. With kagent, a tool call can wait for an
+  Approve or Deny press, optionally limited to Slack user groups.
+- **Restart recovery.** Agent Kourier stores sessions, queued replies and pending questions,
+  and posts through a durable outbox, so a crash does not repeat a post
+  ([one exception](docs/explanation/delivery.md#the-one-window)).
+- **Suspended agents.** Agent Kourier holds the Slack connection and the thread while an
+  agent is suspended or scaled down, and calls the agent when the next turn arrives.
+- **Alert investigations.** A trigger reads the alerts a bot already posts to the channel
+  and starts an investigation in each alert's thread, with a cooldown per alert, a rate
+  limit and a daily cap. There is no webhook, so alerts reach people whether or not Agent
+  Kourier is running.
+- **Feedback.** An investigation's final message has useful and not-useful buttons, and
+  Prometheus counts the votes per agent and alert name.
+- **Backend choice.** kagent, an agent in Google AX, and any A2A 1.0 or 0.3 agent whose card
+  advertises streaming use the same `Binding`. Changing the runtime leaves the Slack
+  configuration as it is.
+
+## For platform teams
+
+The platform team installs Agent Kourier and owns the shared resources: the chat app (a
+`ChatConnection`), the agent backends (`AgentBackend`), and the namespaces allowed to use
+each. Application teams connect their own agents to their own channels with a namespaced
+`Binding`, committed next to the agent's manifests.
+
+- **One chat app.** Every Binding that uses a `ChatConnection` posts through it, so there is
+  one set of chat credentials (on Slack, one app's tokens) to review and rotate, not one per
+  agent.
+- **One audit log.** It records each agent call and approval decision with the Slack user,
+  when a person started it, and the service identity it ran as.
+- **Standard operations.** A Helm chart, Prometheus metrics, optional OpenTelemetry traces,
+  and two replicas on Postgres with leader election and fencing.
 
 ## How it works
 
@@ -152,34 +166,18 @@ uses a service identity for agent calls; individual Slack users do not supply th
 backend's authorization identity.
 
 This lets an alert start an investigation and several channel members continue it
-under the same backend account, without each supplying a backend token. In the tested
-kagent 1.0.0-alpha5 OIDC setup, a session accepts requests only from the identity that created it, so the Binding's
-identity must not change while its sessions are open.
-
+under the same backend account, without each supplying a backend token.
 [Create the Binding identity](docs/how-to/create-binding-identity.md) explains how to choose a user ID or obtain
-and store an issued token, including a Dex example. Agent Kourier does not create accounts or mint tokens.
+and store an issued token, and why the identity must not change while sessions are open.
+Agent Kourier does not create accounts or mint tokens.
 
-To have the agent investigate the alerts a bot posts to that channel, list the
-triggers in the Binding's `chat` block. A `botMessage` trigger is written in full: its
-`match` and `extract` regexes, `thread` rules, `limits` and `promptTemplate`. It must set
-`limits`, both `rateLimit` and `maxRunsPerDay`, or the Binding does not load.
+To have the agent investigate the alerts a bot posts to that channel, add a
+`botMessage` trigger to the Binding's `chat` block. A trigger is written in full, with its
+own regexes, thread rules, limits and prompt.
 [Investigate Alertmanager alerts](docs/how-to/investigate-alertmanager-alerts.md) has a
-complete trigger for Alertmanager's Slack receiver, with a comment on each regex;
-[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) shows how to write
-one for another bot. `from.id` is the `bot_id` carried by the alert
-messages themselves, which starts with `B`. It is not the Slack app ID, which starts
-with `A`, and Agent Kourier rejects a name. The dry run in the
-[sandbox guide](hack/kind/sandbox/README.md) prints each message's sender, which is
-one way to read it. The [trigger reference](docs/reference/chat-triggers.md) has
-the fields.
-
-The Alertmanager trigger matches one message shape, and a message of another shape starts no
-investigation. It needs a title that reads `FIRING (n) - <alertname>` or
-`RESOLVED - <alertname>` (optionally behind a bracketed tag such as `[prod] `), and Alertmanager's default fallback
-text, which begins `[FIRING:n]`. Alertmanager's default Slack title begins `[FIRING:1]` too, so a
-receiver that keeps the default title does not match. Either set the receiver's
-title to the shape above, or change the trigger's `match` and `extract` regexes for
-your own template.
+complete one for Alertmanager's Slack receiver, including the title it expects;
+[Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) covers
+other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the fields.
 
 These are **configuration files**, loaded from
 `AGENTKOURIER_CONFIG_DIR`, usually through a mounted ConfigMap. They are not yet live
@@ -194,39 +192,19 @@ ConfigMap, Secrets, and Deployment; CRD/controller reconciliation is planned.
 | Chat platform | Slack over the Events API (HTTP) | Planned |
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
-| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Approval prompts are enabled per Binding; a disabled approval is denied through kagent with a notice. Broker end-to-end tests with fake Slack cover approve, deny, timeout, group authorization, mixed decisions and stale presses. Needs a cluster that serves the pod-certificate APIs (see below) | Implemented |
+| Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text | Implemented |
 | Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
-| Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, epoch fencing in Postgres and chat writes and agent sends fenced on the replica, a standby that takes over. The failover test (kill the leader mid-turn, mid-post and mid-storm, freeze it past its Lease) checks that every reply appears once; a call already in flight in a frozen leader can still repeat | Implemented |
+| Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, fencing, and a standby that takes over. See [High availability and failover](docs/explanation/high-availability.md) | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
 rejects an agent whose card does not advertise streaming. A team can change or add
 a runtime and keep the same messaging configuration. What a thread can do still
 depends on what the backend exposes. See [backend reference](docs/reference/agentbackend.md) for
 the contract.
-
-### Running kagent 1.0 off kind
-
-kagent 1.0 runs every agent session on Agent Substrate, and Substrate needs the
-pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and
-`PodCertificateRequest` feature gates and `certificates.k8s.io/v1beta1`. They are off by
-default through Kubernetes 1.36, and the pinned Substrate (0.3.0-alpha1) still needs
-`certificates.k8s.io/v1beta1` on 1.37. Managed EKS through 1.36 cannot enable them, and EKS 1.37 serves the GA `v1` APIs but not `v1beta1`. The full and AX kind tiers
-turn them on, so a cluster that kind runs fine may still not run kagent 1.0. Check the
-target cluster first:
-
-```sh
-kubectl api-resources --api-group=certificates.k8s.io   # lists clustertrustbundles and podcertificaterequests
-kubectl api-versions | grep certificates.k8s.io/v1beta1
-```
-
-Without them, use an agent that does not need Substrate, through the `a2a` dialect.
-kagent 0.9.x is one. It speaks A2A 0.3, which the dialect reads. See
-[Connect a kagent agent](docs/how-to/connect-kagent.md) for the URL form and the
-limits.
 
 ## Status
 
@@ -246,67 +224,22 @@ cluster, follow [Install with Helm](docs/how-to/install-with-helm.md), and see
 ### High availability
 
 On Postgres, Agent Kourier runs as two replicas, active/passive. With SQLite it is one
-replica, and the chart refuses more.
-
-| Part | What it does |
-|---|---|
-| Leader election | A Kubernetes Lease picks the leader, which does all the work: Socket Mode, turns, the outbox, sweeps. A standby takes the Lease about 15 s after the leader's last renewal (a lease duration), or seconds after the leader stops on a signal and hands it over |
-| Fencing | Every write to Postgres checks the leader's epoch, and every write to Slack checks the replica's own Lease clock, so a deposed or paused leader's writes are refused and it exits |
-| Standby | Ready, serving health and metrics, with its config and Secret caches warm; it does no work and opens no Slack connection |
-| Takeover | The same recovery as a restart: queued turns resume, the outbox adopts what was already posted, and a stream the old leader left open is replaced with the whole answer |
-| Drains and spreading | An optional PodDisruptionBudget (`podDisruptionBudget.enabled`, off by default; `minAvailable: 1` keeps a drain from taking both replicas), and the render refuses a budget that would block every drain. Anti-affinity, `priorityClassName`, `nodeSelector` and `tolerations` go in the chart's values; the chart sets no spread of its own |
-
-See [High availability and failover](docs/explanation/high-availability.md) for how it
-works and what a failover can still repeat, and
-[Run two replicas](docs/how-to/high-availability.md) to set it up and drill a failover.
+replica, and the chart refuses more. The leader does all the work; the standby serves
+health and metrics, opens no Slack connection, and takes over about 15 s after the
+leader's last renewal, with the same recovery as a restart. Every write to Postgres and
+to Slack is fenced, so a deposed leader's writes are refused.
+[High availability and failover](docs/explanation/high-availability.md) explains how it
+works and what a failover can still repeat;
+[Run two replicas](docs/how-to/high-availability.md) sets it up and drills a failover.
 
 ## Using Google AX
 
-Agent Kourier does not call AX's own API. It speaks A2A to an agent that runs inside an AX
-Task, through AX's router, with the generic `a2a` dialect. What that needs:
-
-- **Your own A2A agent.** AX ships no A2A agent, so you build and run one as an AX
-  Task. [`examples/ax`](examples/ax/README.md) is the reference: an ADK agent on
-  Bedrock Haiku.
-- **The agent verifies Agent Kourier's token.** Agent Kourier sends the Binding's service ID
-  token as a bearer token. With kagent the front door checks it; with AX nothing
-  does unless your agent does (the reference checks issuer, audience and subject),
-  or you put an OIDC-verifying proxy in front of the router.
-- **A TLS gateway in front of the router** that forwards only the A2A endpoint and
-  card and fixes the actor header, reachable from Agent Kourier only.
-- **Questions are plain text.** The agent's question appears in the thread and a
-  person answers by replying there or with the answer form. Structured tool approvals and tool step cards
-  are kagent-only.
-- **AX's lifecycle stays with the operator.** Agent Kourier creates, pauses or resumes no
-  task.
-
-The `AgentBackend` points at the gateway, and the header names the actor
-(`<atespace>/<actor>`). Agent Kourier fetches the agent's card at the URL plus
-`/.well-known/agent-card.json`:
-
-```yaml
-apiVersion: agentkourier.dev/v1alpha1
-kind: AgentBackend
-metadata:
-  name: ax
-  namespace: agent-kourier-system
-spec:
-  dialect: a2a
-  url: https://ax-gateway.example.internal/a2a # the exact JSON-RPC endpoint, used as written: a trailing
-                                               # slash is kept, and no redirect is followed (kagent 0.9.x
-                                               # answered a POST without its slash with a 307 where this was measured)
-  headers:
-    - name: ate-target-actor
-      value: agent-kourier-ax/assistant
-```
-
-The [AX example guide](examples/ax/README.md) has the deployment steps (the gateway,
-egress and credential injection, the template overlay) and an acceptance procedure
-to run before a real channel. The AX kind tier (`make e2e-ax-up`, `make e2e-ax`)
-runs the shared Slack scenarios against a real AX and Substrate install with a
-deterministic model; see [its guide](hack/kind/ax/README.md). Support is
-experimental: a real AX deployment's pause and resume is covered by the acceptance
-procedure, not yet by a production deployment.
+Agent Kourier speaks A2A to an agent you run inside an AX Task, through AX's router, with
+the generic `a2a` dialect; it does not call AX's own API or manage the Task.
+[Connect an agent on Google AX](docs/how-to/connect-ax.md) lists what that needs (your
+own A2A agent, token verification, a TLS gateway) and what a thread can do there, and the
+[AX example](examples/ax/README.md) is a reference agent with deployment steps and an
+acceptance procedure. Support is experimental.
 
 ## Development
 

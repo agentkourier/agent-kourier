@@ -390,6 +390,14 @@
   letter-spacing: -0.03em;
   line-height: 1;
 }
+.md-typeset .ak-hero__headline {
+  margin: 0;
+  max-width: 40rem;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
 .md-typeset .ak-hero__pitch {
   margin: 0;
   max-width: 40rem;
