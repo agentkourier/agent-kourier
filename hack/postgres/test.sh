@@ -11,7 +11,7 @@ set -euo pipefail
 
 # postgres:17 on Debian, by digest of its multi-arch index. To move to another major or a newer build:
 # docker pull postgres:<major>, then docker image inspect it for the digest.
-POSTGRES_IMAGE="postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3"
+POSTGRES_IMAGE="postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336"
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 name="agent-kourier-pg-test-$$-$RANDOM"
