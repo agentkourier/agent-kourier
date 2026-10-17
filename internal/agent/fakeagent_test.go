@@ -98,13 +98,14 @@ func (fa *fakeAgent) callAt(i int) rpc {
 	return fa.calls[i]
 }
 
-// agent returns an Agent that talks to fa over a plain JSON-RPC client.
+// agent returns an Agent that talks to fa over a plain JSON-RPC client. With noStreaming set,
+// the client's card says the agent does not stream, so a2a-go sends a unary SendMessage.
 func (fa *fakeAgent) agent(t *testing.T) *Agent { return fa.agentWith(t, Config{}) }
 
 func (fa *fakeAgent) agentWith(t *testing.T, cfg Config) *Agent {
 	t.Helper()
 	card := &a2a.AgentCard{SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)}}
-	card.Capabilities.Streaming = true
+	card.Capabilities.Streaming = !fa.noStreaming
 	client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithDefaultsDisabled(), a2aclient.WithJSONRPCTransport(fa.Client()))
 	if err != nil {
 		t.Fatal(err)
