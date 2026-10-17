@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,5 +124,81 @@ func TestRunClosesWhatOutlivesTheGrace(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(5 * time.Second):
 		t.Error("the handler's context was never cancelled: the connection was left open")
+	}
+}
+
+// closeRecorder records whether its listener has been closed.
+type closeRecorder struct {
+	net.Listener
+	closed atomic.Bool
+}
+
+func (l *closeRecorder) Close() error {
+	l.closed.Store(true)
+	return l.Listener.Close()
+}
+
+// TestRunHasClosedTheListenerWhenItReturns pins that Run's return means the listener is closed, even when the context
+// has ended before the server got going: a caller that dials after Run returns is refused, not queued on a listener
+// that nothing accepts from. The loop is for the race between Serve starting and the shutdown.
+func TestRunHasClosedTheListenerWhenItReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for i := range 200 {
+		ln := &closeRecorder{Listener: listen(t)}
+		if err := httpserve.Run(ctx, ln, http.NotFoundHandler(), time.Second); err != nil {
+			t.Fatalf("run %d: Run = %v, want nil", i, err)
+		}
+		if !ln.closed.Load() {
+			t.Fatalf("run %d: Run returned before the listener was closed", i)
+		}
+	}
+}
+
+// acceptedListener reports each connection it accepts, once the server has it.
+type acceptedListener struct {
+	net.Listener
+	accepted chan net.Conn
+}
+
+func (l *acceptedListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.accepted <- c
+	}
+	return c, err
+}
+
+// TestRunDoesNotWaitForAConnectionThatSentNothing pins that a connection that is open but has not sent a request does
+// not hold up the shutdown. Such a connection is what a client's pool keeps when it dialled for a request that
+// another connection then served; net/http's Shutdown waits up to 5 seconds for one, which is the whole grace of
+// the embedded MCP server.
+func TestRunDoesNotWaitForAConnectionThatSentNothing(t *testing.T) {
+	ln := &acceptedListener{Listener: listen(t), accepted: make(chan net.Conn, 1)}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- httpserve.Run(ctx, ln, http.NotFoundHandler(), 2*time.Second) }()
+	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	select {
+	case <-ln.accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server never accepted the connection")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run = %v, want nil: a connection with no request has nothing to drain", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("read on the idle connection after Run = %v, want EOF: the server should have closed it", err)
 	}
 }

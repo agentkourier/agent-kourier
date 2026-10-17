@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -55,10 +56,14 @@ func limitBody(h http.Handler) http.Handler {
 
 // Run serves h on ln until ctx ends, then stops accepting and waits up to grace for requests in flight. It returns
 // nil after a clean shutdown, and the server's error otherwise. A request still running when the grace ends is cut
-// off: its connection is closed, its context ends and the error says the shutdown did not finish. It closes ln.
-// Request bodies are capped at MaxBodyBytes.
+// off: its connection is closed, its context ends and the error says the shutdown did not finish. A connection that
+// has not sent a request is closed when the shutdown begins: it has nothing to drain. ln is closed by the time Run
+// returns. Request bodies are capped at MaxBodyBytes.
 func Run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Duration) error {
 	srv := newServer(h)
+	var fresh freshConns
+	srv.ConnState = fresh.track
+	srv.RegisterOnShutdown(fresh.closeAll)
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ln) }()
 	select {
@@ -70,13 +75,56 @@ func Run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Durati
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
 		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
+		err := srv.Shutdown(shutdown)
+		if err != nil {
 			// The grace ran out with requests still in flight. Shutdown leaves them running, so close their
 			// connections: their contexts end, and the process is not held up by a stream that never finishes.
-			return errors.Join(fmt.Errorf("shut down: %w", err), srv.Close())
+			err = errors.Join(fmt.Errorf("shut down: %w", err), srv.Close())
 		}
-		return nil
+		// Serve closes ln on its way out, and may not have started when the shutdown began; wait for it, so that
+		// nothing still accepts on ln once Run has returned. Its error is ErrServerClosed by now.
+		_ = <-done
+		return err
 	}
+}
+
+// freshConns tracks the server's connections that have not yet sent a byte of a request (http.StateNew), and closes
+// them when the shutdown begins. Shutdown would otherwise wait for each one until it is 5 seconds old, in case a
+// request is on its way. A client's connection pool leaves such connections behind: when it dials for a request and
+// an idle connection serves that request first, it keeps the new one for later, unused. The embedded MCP server's
+// client does that, and its server's whole grace is 5 seconds.
+type freshConns struct {
+	mu      sync.Mutex
+	conns   map[net.Conn]struct{}
+	closing bool
+}
+
+// track is the server's ConnState hook. A connection that arrives once closeAll has run is closed at once.
+func (f *freshConns) track(c net.Conn, state http.ConnState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case state == http.StateNew && f.closing:
+		_ = c.Close()
+	case state == http.StateNew:
+		if f.conns == nil {
+			f.conns = make(map[net.Conn]struct{})
+		}
+		f.conns[c] = struct{}{}
+	default:
+		delete(f.conns, c)
+	}
+}
+
+// closeAll closes the connections that have sent nothing, and every such connection that arrives after it.
+func (f *freshConns) closeAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closing = true
+	for c := range f.conns {
+		_ = c.Close()
+	}
+	clear(f.conns)
 }
 
 // Loopback serves h on a free port of the loopback interface, in the background, until ctx ends. It returns the
