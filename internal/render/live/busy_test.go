@@ -1,11 +1,13 @@
 package live_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,21 +26,42 @@ import (
 // turn ends however it ends. They run over a FakePlatform, which models a platform that drops the mark when a message is
 // posted in the thread.
 
-// busyEnv is a renderer over a FakePlatform, with the outbox over it too, so that the first post of a turn lands there.
+// busyFake is the FakePlatform, with a MarkBusy that fails once its context is done, as the HTTP call of a real platform does,
+// and that counts every call made to it, those the fake refuses for its caps included.
+type busyFake struct {
+	*chattest.FakePlatform
+	asked atomic.Int32
+}
+
+func (f *busyFake) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
+	f.asked.Add(1)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.FakePlatform.MarkBusy(ctx, t, busy)
+}
+
+// busyEnv is a renderer over a busyFake, with the outbox over it too, so that the first post of a turn lands there.
 type busyEnv struct {
 	*env
 	fake *chattest.FakePlatform
+	by   *busyFake
 	at   chat.Target
 }
 
-func setupBusy(t *testing.T) *busyEnv {
+// setupBusy is the renderer over the fake; prepare, if there is any, changes the fake before the renderer asks it what it can do.
+func setupBusy(t *testing.T, prepare ...func(*chattest.FakePlatform)) *busyEnv {
 	t.Helper()
 	e := setup(t)
 	fake := chattest.NewFake()
-	e.cfg.Platform = fake
-	e.cfg.Sender = newOutbox(t, outbox.Config{Store: e.store, Platform: fake, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	for _, f := range prepare {
+		f(fake)
+	}
+	by := &busyFake{FakePlatform: fake}
+	e.cfg.Platform = by
+	e.cfg.Sender = newOutbox(t, outbox.Config{Store: e.store, Platform: by, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	e.live = newRenderer(t, e.cfg)
-	return &busyEnv{env: e, fake: fake, at: chat.Target{Channel: "C1", Thread: e.root}}
+	return &busyEnv{env: e, fake: fake, by: by, at: chat.Target{Channel: "C1", Thread: e.root}}
 }
 
 // start starts an alert-thread turn in the progress mode.
@@ -159,30 +182,31 @@ func TestTheMarkIsClearedOnEveryEndOfATurn(t *testing.T) {
 // Without the progress modes that show activity, on the stream path, or on a platform that cannot, the thread is never marked.
 func TestTheThreadIsNeverMarkedWhereItIsNotWanted(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		turn live.Turn
-		caps func(chat.Caps) chat.Caps
+		name    string
+		turn    live.Turn
+		prepare func(*chattest.FakePlatform)
 	}{
 		{"the steps mode", live.Turn{Mode: v1alpha1.OutputLive, Progress: v1alpha1.ProgressSteps}, nil},
 		{"no mode", live.Turn{Mode: v1alpha1.OutputLive}, nil},
 		{"output final, which ignores the mode", live.Turn{Mode: v1alpha1.OutputFinal, Progress: sa}, nil},
 		{"a chat thread, which streams", live.Turn{Mode: v1alpha1.OutputLive, Progress: sa, Recipient: "U1"}, nil},
 		{"a chat thread in the activity mode", live.Turn{Mode: v1alpha1.OutputLive, Progress: activity, Recipient: "U1"}, nil},
-		{"a platform that does not mark threads", live.Turn{Mode: v1alpha1.OutputLive, Progress: sa}, func(c chat.Caps) chat.Caps { c.Busy = false; return c }},
+		{"a platform that does not mark threads", live.Turn{Mode: v1alpha1.OutputLive, Progress: sa}, func(f *chattest.FakePlatform) { c := f.Capabilities(); c.Busy = false; f.SetCaps(c) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := setupBusy(t)
-			if tc.caps != nil {
-				b.fake.SetCaps(tc.caps(b.fake.Capabilities()))
+			var prepare []func(*chattest.FakePlatform)
+			if tc.prepare != nil {
+				prepare = append(prepare, tc.prepare)
 			}
+			b := setupBusy(t, prepare...)
 			run, _ := b.startFor(t, tc.turn)
 			run.Handle(call("c1", "search", map[string]any{"q": "up"}))
 			run.Handle(result("c1", map[string]any{"output": "x"}))
 			run.Handle(text("a", "Done."))
 			run.Handle(agent.FinalEvent{})
 			b.finish(t, run)
-			if got := b.fake.BusyCalls(); len(got) != 0 {
-				t.Errorf("MarkBusy was called %d times: %+v; want never", len(got), got)
+			if n := b.by.asked.Load(); n != 0 || len(b.fake.BusyCalls()) != 0 {
+				t.Errorf("MarkBusy was called %d times: %+v; want never", n, b.fake.BusyCalls())
 			}
 			if len(b.fake.Messages()) != 1 {
 				t.Errorf("%d messages, want the reply", len(b.fake.Messages()))
@@ -228,10 +252,13 @@ func TestAFailedMarkIsLoggedOnceAndTheTurnGoesOn(t *testing.T) {
 	b.fake.FailNext("MarkBusy", fmt.Errorf("the connection broke"))
 	run := b.start(t, sa)
 	b.waitMarks(t, true)
-	run.Handle(text("a", "Done."))
+	run.Handle(text("a", "Part."))
+	b.until(t, "the post", 3*time.Second, func() bool { return len(b.fake.Messages()) == 1 })
+	run.Handle(text("a", "Part, then the rest."))
+	b.until(t, "the update", 3*time.Second, func() bool { return b.fake.Messages()[0].Updates == 1 })
 	run.Handle(agent.FinalEvent{})
 	b.finish(t, run)
-	b.waitMarks(t, true, false) // the failed mark, no refresh after the post, and the clear
+	b.waitMarks(t, true, false) // the failed mark, no refresh after either write, and the clear
 	if n := strings.Count(b.logs.String(), "busy"); n != 1 {
 		t.Errorf("log %q; want one line about the mark", b.logs.String())
 	}
