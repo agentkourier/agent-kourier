@@ -140,7 +140,7 @@ func (a *AgentBackend) Validate() error {
 	var p problems
 	p.meta(a.ObjectMeta)
 	s := &a.Spec
-	p.oneOf("spec.dialect", string(s.Dialect), string(DialectA2A), string(DialectKagentV1))
+	p.oneOf("spec.dialect", string(s.Dialect), string(DialectA2A), string(DialectKagentV1), string(DialectKagentV09))
 	if s.URL == "" {
 		p.add("spec.url", "required")
 	} else if u, err := url.Parse(s.URL); err != nil {

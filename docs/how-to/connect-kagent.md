@@ -61,8 +61,10 @@ Binding's turns reach one of its agents.
 
 === "kagent 0.9.x"
 
-    kagent 0.9.x speaks A2A 0.3, which the generic `a2a` dialect reads. It runs on a cluster without the
-    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster.
+    kagent 0.9.x speaks A2A 0.3 and uses the `kagent-v0.9` dialect: the generic `a2a` dialect's connection and
+    plain-text questions, plus kagent's tool parts, so tool calls show as step cards. It runs on a cluster without
+    the pod-certificate APIs. Its connection, the `a2a` dialect's, is tested against kagent 0.9.4 on a real cluster;
+    the step cards are tested against a turn recorded from it.
 
     **1. Find the controller's Service.** Its name depends on the Helm release name. Argo CD names the release after the
     Application, so an Application called `my-kagent` makes the Service
@@ -81,19 +83,21 @@ Binding's turns reach one of its agents.
       agentBackends:
         kagent:
           spec:
-            dialect: a2a
+            dialect: kagent-v0.9
             url: http://<controller-service>.<namespace>.svc.cluster.local:8083/api/a2a/<agent-namespace>/<agent>/
     ```
 
-    With the `a2a` dialect the URL names one agent, so each agent needs its own AgentBackend.
+    The dialect uses the URL as written, so the URL names one agent and each agent needs its own AgentBackend. A
+    backend on `dialect: a2a` reaches the same agent and shows no step cards.
 
     **3. Know the limits of this setup.**
 
     - A 0.3 agent has no task list. After a restart, or after a send whose outcome is unknown, Agent Kourier cannot ask
       whether the agent already has the turn. It sends again, and the agent may run the turn twice. That is harmless for
       a read-only agent and not for one that changes things.
-    - The `a2a` dialect does not see tool calls, so the agent's own tool list and the role behind its tools are the only
-      fence on a write. It shows no step cards.
+    - kagent 0.9.x offers no tool approval: its card lists no human-in-the-loop extension. Tool calls show as step cards,
+      but nothing asks before one runs, so the agent's own tool list and the role behind its tools are the only fence on
+      a write.
     - A text `input-required` pause is shown as a question, and the reply is sent as text, only when the Binding sets
       `interactions.askUser: true`. Whether kagent 0.9.x ever pauses with a text question has not been tested.
     - The controller accepted a placeholder token in the first install, so nothing verifies the Binding's identity. Put

@@ -185,7 +185,7 @@ causes.
 The agent's router redirects a POST to the same path with a trailing slash. The kagent 0.9.x installs this was
 written against did.
 Agent Kourier follows no redirects, because a redirect could carry the Binding's token
-somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` dialect sends to the
+somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` and `kagent-v0.9` dialects send to the
 URL exactly as written.
 
 ### `HTTP 401` or `HTTP 403` at the card fetch
@@ -221,10 +221,11 @@ A 0.3 agent has no task list, so Agent Kourier cannot ask whether the agent alre
 before it sends the turn again. After a restart that interrupted a turn, or after a send
 whose outcome was unknown because the stream dropped before the first event, the turn may run
 a second time and post a second answer. For a read-only agent that wastes a model call and
-nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
-Kourier does not see a tool call, so the agent's own tool list and the role behind its tools
-are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
-`interactions.toolApprovals: true`; the generic `a2a` dialect accepts no structured approval pause.
+nothing else. An agent that changes things can do the change twice. kagent 0.9.x offers no
+tool approval, so the agent's own tool list and the role behind its tools are the only fence on
+a write; the `kagent-v0.9` dialect shows a tool call as a step card but cannot hold it back. Slack tool approvals are available only to a
+`kagent-v1` Binding with `interactions.toolApprovals: true`; the `a2a` and `kagent-v0.9` dialects accept no structured
+approval pause.
 
 ## `Multi-Attach error for volume` while the pod rolls
 
@@ -236,7 +237,9 @@ claim's volume.
 ## The agent answers, but tool calls do not show as step cards
 
 The `a2a` dialect never renders tool calls as step cards, for any agent on it, so none of them
-will. The answer text renders. Only the `kagent-v1` dialect reports tool parts.
+will. The answer text renders. Only the `kagent-v1` and `kagent-v0.9` dialects report tool parts, and only kagent's.
+A kagent 0.9.x agent on `dialect: a2a` shows no step cards; set its AgentBackend's `dialect` to `kagent-v0.9` and keep
+the `url`. See [Connect a kagent agent](connect-kagent.md).
 
 ## The kagent install uses far more memory than expected
 

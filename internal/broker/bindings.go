@@ -18,6 +18,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv09"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/identity"
 	"github.com/agentkourier/agent-kourier/internal/interact"
@@ -75,7 +76,7 @@ type Bindings struct {
 	secrets identity.SecretReader
 	aud     identity.Auditor
 	opts    Options
-	kits    map[v1alpha1.Dialect]kit // one pool per dialect; a2a and kagent-v1
+	kits    map[v1alpha1.Dialect]kit // one pool per dialect; a2a, kagent-v1 and kagent-v0.9
 }
 
 // NewBindings returns Bindings that read the config from snaps, Secrets through secrets, and
@@ -94,9 +95,14 @@ func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Au
 	}
 	d := kagentv1.New(opts.ResponseTimeout)
 	g := generic.New(opts.ResponseTimeout)
+	v09 := kagentv09.New(opts.ResponseTimeout)
 	return &Bindings{
 		snaps: snaps, secrets: secrets, aud: aud, opts: opts,
-		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}, v1alpha1.DialectA2A: {g, agent.NewPool(g, opts.Agent), g.Attribute, g.CloseIdleConnections}},
+		kits: map[v1alpha1.Dialect]kit{
+			v1alpha1.DialectKagentV1:  {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections},
+			v1alpha1.DialectKagentV09: {v09, agent.NewPool(v09, opts.Agent), v09.Attribute, v09.CloseIdleConnections},
+			v1alpha1.DialectA2A:       {g, agent.NewPool(g, opts.Agent), g.Attribute, g.CloseIdleConnections},
+		},
 	}, nil
 }
 
@@ -123,8 +129,8 @@ func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
 	}
 	k, ok := b.kits[rb.Backend.Spec.Dialect]
 	if !ok {
-		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: backend %s uses the %q dialect, supported dialects are %q and %q",
-			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectA2A)
+		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: backend %s uses the %q dialect, supported dialects are %q, %q and %q",
+			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectKagentV09, v1alpha1.DialectA2A)
 	}
 	return rb, k, nil
 }

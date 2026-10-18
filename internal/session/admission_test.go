@@ -187,7 +187,7 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 }
 
 func TestTakesTextReplies(t *testing.T) {
-	for dialect, want := range map[string]bool{dialectA2A: true, dialectKagent: false, "": false} {
+	for dialect, want := range map[string]bool{dialectA2A: true, string(v1alpha1.DialectKagentV09): true, dialectKagent: false, "": false} {
 		if got := TakesTextReplies(dialect); got != want {
 			t.Errorf("TakesTextReplies(%q) = %v; want %v", dialect, got, want)
 		}

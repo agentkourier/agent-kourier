@@ -21,8 +21,8 @@ AgentBackendSpec is the desired state of an AgentBackend.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `dialect` | string | Yes | None | One of `a2a`, `kagent-v1`. |
-| `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a. The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does. At least 1 character. |
+| `dialect` | string | Yes | None | One of `a2a`, `kagent-v1`, `kagent-v0.9`. |
+| `url` | string | Yes | None | URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a and kagent-v0.9. For a2a and kagent-v0.9 the card must be served at URL + "/.well-known/agent-card.json", as AX and kagent 0.9.x do. At least 1 character. |
 | `headers` | [][Header](#header) | No | Empty list | Headers are sent on every request. Omitted headers add no static headers. |
 | `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this backend. Each is a DNS-1123 label. An empty list permits references only from the backend's own namespace. |
 

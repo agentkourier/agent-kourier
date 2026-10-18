@@ -152,9 +152,9 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 	backend, err := find(r.backends, "AgentBackend", from, b.Spec.Agent.BackendRef,
 		func(be *v1alpha1.AgentBackend) []string { return be.Spec.AllowedNamespaces })
 	r.fail(from, "spec.agent.backendRef", err)
-	if backend != nil && backend.Spec.Dialect != v1alpha1.DialectKagentV1 && backend.Spec.Dialect != v1alpha1.DialectA2A {
-		r.fail(from, "spec.agent.backendRef", fmt.Errorf("%s uses the %q dialect, supported dialects are %q and %q",
-			identity{"AgentBackend", backend.Namespace, backend.Name}, backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectA2A))
+	if backend != nil && backend.Spec.Dialect != v1alpha1.DialectKagentV1 && backend.Spec.Dialect != v1alpha1.DialectKagentV09 && backend.Spec.Dialect != v1alpha1.DialectA2A {
+		r.fail(from, "spec.agent.backendRef", fmt.Errorf("%s uses the %q dialect, supported dialects are %q, %q and %q",
+			identity{"AgentBackend", backend.Namespace, backend.Name}, backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectKagentV09, v1alpha1.DialectA2A))
 		backend = nil
 	}
 	conn, err := find(r.conns, "ChatConnection", from, b.Spec.Chat.ConnectionRef,

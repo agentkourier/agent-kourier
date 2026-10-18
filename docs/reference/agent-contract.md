@@ -1,7 +1,8 @@
 # Agent contract
 
 This page lists what an agent must do, beyond speaking A2A, for Agent Kourier to carry its turns, and what happens
-when it does not. It applies to both dialects; where `a2a` and `kagent-v1` differ, the row says so. The method names
+when it does not. It applies to every dialect; where `a2a` and `kagent-v1` differ, the row says so. `kagent-v0.9`
+behaves as `a2a` in every row except one, data parts (see [Replies](#replies)). The method names
 are A2A 1.0's, with the 0.3 name in brackets.
 
 ## Discovery and transport
@@ -91,8 +92,9 @@ An update with no text part leaves the artifact's text as it was, so to take tex
 An artifact whose text is empty is left out of the message.
 A task snapshot (from `GetTask`, `SubscribeToTask` or a replayed send) whose text for an artifact is a prefix of the text already
 received is taken as older and skipped, so a take-back that is missed when the stream drops is not applied.
-File parts are never shown. Data parts are not shown either, except on `kagent-v1`, which shows kagent's tool call
-and tool result parts as step cards.
+File parts are never shown. Data parts are not shown either, except on `kagent-v1` and `kagent-v0.9`, which show
+kagent's tool call and tool result parts as step cards. On `kagent-v0.9` those parts come in the messages of status
+updates, as kagent 0.9.x sends them, and the text of those messages is not shown.
 
 ## Task states
 

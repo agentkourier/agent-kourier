@@ -94,8 +94,9 @@ func TestValidateJoinsAllProblems(t *testing.T) {
 func TestAgentBackendValidate(t *testing.T) {
 	hdr := func(o *AgentBackend, h Header) { o.Spec.Headers = []Header{h} }
 	runMutations[AgentBackend](t, "agentbackend.yaml", []mutation[AgentBackend]{
-		{"bad dialect", func(o *AgentBackend) { o.Spec.Dialect = "foo" }, `spec.dialect: unsupported value "foo", must be one of a2a, kagent-v1`},
+		{"bad dialect", func(o *AgentBackend) { o.Spec.Dialect = "foo" }, `spec.dialect: unsupported value "foo", must be one of a2a, kagent-v1, kagent-v0.9`},
 		{"generic dialect ok", func(o *AgentBackend) { o.Spec.Dialect = DialectA2A }, ""},
+		{"kagent 0.9 dialect ok", func(o *AgentBackend) { o.Spec.Dialect = DialectKagentV09 }, ""},
 		{"empty url", func(o *AgentBackend) { o.Spec.URL = "" }, "spec.url: required"},
 		{"url without http scheme", func(o *AgentBackend) { o.Spec.URL = "ftp://kagent" },
 			`spec.url: invalid URL "ftp://kagent": must be an http or https URL with a host`},

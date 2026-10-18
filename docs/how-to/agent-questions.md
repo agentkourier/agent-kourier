@@ -29,7 +29,7 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
 === "Generic A2A"
 
-    The `a2a` dialect shows an agent's text-only `input-required` pause as one text question, which you can
+    The `a2a` dialect, and `kagent-v0.9`, show an agent's text-only `input-required` pause as one text question, which you can
     answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause with structured parts
     cannot be used, so the task is cancelled and the thread is told. In a Binding with
     `chat.threadReplies: mention`, that reply needs no mention.

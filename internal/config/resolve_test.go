@@ -108,7 +108,7 @@ func TestResolveSpecExample(t *testing.T) {
 func TestResolveRejectsABindingOnAnUnbuiltDialect(t *testing.T) {
 	set := specSet(t)
 	set.AgentBackends[0].Spec.Dialect = "unknown"
-	const why = `: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot uses the "unknown" dialect, supported dialects are "kagent-v1" and "a2a"`
+	const why = `: spec.agent.backendRef: AgentBackend agent-kourier-system/kagent-pilot uses the "unknown" dialect, supported dialects are "kagent-v1", "kagent-v0.9" and "a2a"`
 	wantProblems(t, set, specSecrets(), atChatOnly+"Binding sre/chat-only"+why, atSREAlerts+"Binding sre/sre-alerts"+why)
 
 	set = specSet(t) // the dialect that is built still resolves

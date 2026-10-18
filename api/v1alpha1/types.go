@@ -18,8 +18,9 @@ type (
 
 // Values of the enumerations, plus the only platform and alert source type in v1.
 const (
-	DialectA2A      Dialect = "a2a"
-	DialectKagentV1 Dialect = "kagent-v1"
+	DialectA2A       Dialect = "a2a"
+	DialectKagentV1  Dialect = "kagent-v1"
+	DialectKagentV09 Dialect = "kagent-v0.9"
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
@@ -98,10 +99,10 @@ type AgentBackendList struct {
 
 // AgentBackendSpec is the desired state of an AgentBackend.
 type AgentBackendSpec struct {
-	// +kubebuilder:validation:Enum=a2a;kagent-v1
+	// +kubebuilder:validation:Enum=a2a;kagent-v1;kagent-v0.9
 	Dialect Dialect `json:"dialect"`
-	// URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a.
-	// The a2a card must be served at URL + "/.well-known/agent-card.json", as AX does.
+	// URL is the http or https base URL for kagent-v1, or the exact JSON-RPC endpoint for a2a and kagent-v0.9.
+	// For a2a and kagent-v0.9 the card must be served at URL + "/.well-known/agent-card.json", as AX and kagent 0.9.x do.
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
 	// Headers are sent on every request. Omitted headers add no static headers.

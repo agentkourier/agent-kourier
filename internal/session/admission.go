@@ -187,11 +187,13 @@ type ReplyFacts struct {
 }
 
 // TakesTextReplies says whether a Binding whose backend speaks dialect has questions that a typed reply in the
-// thread can answer (spec 8.4: the a2a dialect). It is the one definition. What it leaves to data is per question:
+// thread can answer (spec 8.4: the a2a and kagent-v0.9 dialects). It is the one definition. What it leaves to data is per question:
 // the dialect marks each question it makes (dialect.Interaction.TextReplies), the store keeps the mark (the
 // text_replies column) for PendingTextQuestion, and IsTextQuestion is the shape that interact checks before it decides
 // an answer.
-func TakesTextReplies(name string) bool { return name == string(v1alpha1.DialectA2A) }
+func TakesTextReplies(name string) bool {
+	return name == string(v1alpha1.DialectA2A) || name == string(v1alpha1.DialectKagentV09)
+}
 
 // gated says the mode holds this reply back: in mention mode a reply that does not mention Agent Kourier is no turn (D38).
 // The mode is the session's Binding's, and only a session whose Binding is gone has the channel's current Binding's

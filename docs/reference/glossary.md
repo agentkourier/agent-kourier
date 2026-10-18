@@ -43,7 +43,8 @@ Cooldown
 
 Dialect
 :   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. `a2a`
-    is generic; `kagent-v1` adds kagent's human-in-the-loop extension.
+    is generic; `kagent-v1` adds kagent's human-in-the-loop extension; `kagent-v0.9` is `a2a` that also reads kagent
+    0.9.x's tool parts.
 
 Digest line
 :   One line at the top level of a channel that counts the alerts a trigger's limits stopped in a window.

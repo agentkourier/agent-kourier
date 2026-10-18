@@ -281,7 +281,7 @@ type ChatPlatform interface {  // Slack; the Go name is chat.Platform
 // (one or more tool calls with arguments) or AskUser (questions, each with optional
 // choices and multi-select). Either kind may be nested: raised by a sub-agent, in which
 // case it also carries the path to that sub-agent (name, task, and context).
-type Dialect interface {       // a2a (generic), kagent-v1
+type Dialect interface {       // a2a (generic), kagent-v1, kagent-v0.9
     Endpoint(backend *AgentBackend, agent AgentRef) (url string, err error)
     // Sets the Binding identity (bearer token, else X-User-Id, never both) and the
     // backend's static headers; refuses reserved static headers and leaves req unchanged.
@@ -293,7 +293,7 @@ type Dialect interface {       // a2a (generic), kagent-v1
     // nil, nil: no structured pause (free text only where the dialect allows it).
     // ErrUnusablePause: paused but unanswerable, so report it and cancel the task.
     ParseInteraction(task a2a.Task) (*Interaction, error)
-    // Classifies an artifact part as a tool call or tool result; ok false means plain content.
+    // Classifies an artifact or status-message part as a tool call or tool result; ok false means plain content.
     ToolPart(part *a2a.Part) (tool ToolPart, ok bool)
     BuildResponse(in Interaction, answer Answer) (a2a.Message, error) // errors if incomplete
 }
@@ -353,6 +353,15 @@ with a task (WP-02 fixtures).
 |---|---|---|---|
 | `a2a` | Yes | Free-text only. An `input-required` pause with no recognized extension is shown as text. Replies enqueued after the question pass the same authorization, audit, and deadline checks as Submit before being sent as plain messages. | A2A 1.0 and 0.3 agents without a structured HITL extension, with a card at the exact RPC URL plus `/.well-known/agent-card.json`, as AX serves it |
 | `kagent-v1` | Yes | Yes: tool approvals, ask-user questions, and nested sub-agent interactions, through extension `https://kagent.dev/extensions/hitl/v1` | `POST /agents/{ns}/{name}`, card at `.well-known/agent-card.json`. Auth by bearer token in OIDC mode, or `X-User-Id` in insecure mode. |
+| `kagent-v0.9` | Yes | Free-text only, as `a2a` | kagent 0.9.x. The `a2a` dialect (exact RPC URL used as written, card under it) that also reads kagent's tool parts, so tool calls show as step cards. |
+
+`kagent-v0.9` is a dialect of its own, not a 0.9.x mode of `kagent-v1`, for three reasons.
+kagent 0.9.x serves an agent at `/api/a2a/{ns}/{name}/` on the controller, which `kagent-v1`'s
+`/agents/{ns}/{name}` path cannot reach. Its card lists no HITL extension, and `kagent-v1`
+treats every pause without that payload as unusable and cancels the task, where the `a2a`
+reading shows a text question. And `kagent-v1` means kagent 1.0 behind a verifying front door
+(D32), which a URL used as written to the 0.9.x controller is not. The `a2a` dialect stays
+agent-neutral: it leaves kagent's tool parts opaque.
 
 kagent 1.0.0-alpha5 validates HITL responses far less than assumed (WP-02, measured). Too
 few answers, or an answer outside the offered choices, is accepted. An empty answer list
@@ -393,7 +402,7 @@ lifecycle API. It is a supported backend through the `a2a` dialect:
 2. **Also supported:** a kagent agent that delegates sandboxed work to ax. Users have
    demonstrated this pattern (ax issue #394).
 
-Structured tool approvals (S11) and tool step cards (S13) are kagent-only. A generic
+Structured tool approvals (S11) are `kagent-v1` only; tool step cards (S13) are `kagent-v1` and `kagent-v0.9`. A generic
 A2A agent, on ax or elsewhere, asks questions as plain text and leaves other pause
 data opaque. A separate ax dialect is revisited if ax ships durable interactions
 (issue #430, an outside proposal with no maintainer response yet) or makes
@@ -905,6 +914,16 @@ making the prefix optional breaks multi-turn context.
   calls and results arrive as separate data-part artifacts, each a single
   `lastChunk: true` chunk. The client appends on `append: true` and otherwise replaces,
   per artifact.
+- kagent 0.9.x (0.9.4, measured; `test/fixtures/kagent/v09-tools`) sends tool calls and results
+  only as the messages of `status-update` events, never as artifacts, and marks each data part
+  with metadata `kagent_type` (`function_call`, `function_response`) where 1.0 uses
+  `kagent.dev/a2a/part-type`. The stream ends with a `completed` status update, not a task, so
+  the final task comes from `GetTask`. The `kagent-v1` and `kagent-v0.9` dialects read both
+  markings. The client delivers a status message's tool parts once each, by message ID and part
+  position, and a part that already came as an artifact (same kind and call ID) is not delivered
+  again. It does not read a status message's text: 0.9.4 sends the final answer there and as an
+  artifact. Tool parts in a task snapshot's `history` are not read, so a stream that reconnects
+  mid-turn misses the steps that ran while it was down.
 - A reply that is one `Message` and no task (6.3) arrives whole: its text parts, joined, are
   one artifact keyed by the message's `messageId`, and the turn ends with it.
 - Edits are throttled per message (default one edit per 2 seconds, configurable) and
