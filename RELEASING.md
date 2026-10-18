@@ -161,7 +161,13 @@ belongs with a change to the other.
 `.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
 runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
 (`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
-so the chart tests cannot skip. Each Go job in `ci.yml`, `security.yml` and `codeql.yml` restores a cache of its own
+so the chart tests cannot skip. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
+every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
+proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
+ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
+behaves the same on a fork's pull request. It belongs in the `main` ruleset's required checks: the owner adds
+`zizmor` from `ci` there, and the same change adds it to `CI_REQUIRED_JOBS` in `hack/release/check-ci.sh` and to
+the lists above. Each Go job in `ci.yml`, `security.yml` and `codeql.yml` restores a cache of its own
 (the module cache and the build cache, plus golangci-lint's cache in the jobs that lint), keyed on the job, the runner
 OS, the Go version and the `go.sum` files it builds from. Only a job on a push to `main` saves one, when its exact key
 is not saved yet, whether its steps passed or failed (a cancelled job saves nothing); pull requests read `main`'s caches
