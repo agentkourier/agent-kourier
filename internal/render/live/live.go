@@ -230,15 +230,14 @@ type Run struct {
 	rowMade   bool   // the stream's outbox row exists
 	recorded  bool   // and holds the stream's ts
 	stopped   bool
-	adoptStop bool            // the message is a stream of an earlier run, to stop before it is updated
-	diverged  bool            // the streamed text is not a prefix of the final text
-	stream    chat.Stream     // the stream this turn started
-	streamed  string          // the markdown sent to the stream so far
-	stepsSent []chat.Step     // the steps sent to the stream, each as it was last sent
-	detailed  map[string]bool // the steps whose detail was sent: a platform that appends a card's detail is sent it once
-	stepsOff  bool            // the platform refused a step for good: the turn goes on without steps
-	stepFails int             // steps that failed in a row
-	more      bool            // a write left steps to begin, which the next window goes on with
+	adoptStop bool        // the message is a stream of an earlier run, to stop before it is updated
+	diverged  bool        // the streamed text is not a prefix of the final text
+	stream    chat.Stream // the stream this turn started
+	streamed  string      // the markdown sent to the stream so far
+	stepsSent []chat.Step // the steps sent to the stream, each as it was last sent
+	stepsOff  bool        // the platform refused a step for good: the turn goes on without steps
+	stepFails int         // steps that failed in a row
+	more      bool        // a write left steps to begin, which the next window goes on with
 }
 
 // stepRec is a tool call of a stream, which is a step: the call, how it ended, and where in the text it was made.

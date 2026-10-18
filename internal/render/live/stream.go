@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -30,10 +29,9 @@ import (
 // sent ahead of a step that came before it). The final has no such limit, since it is the last window there is.
 //
 // A step that stands for time is a step like these. A Working… card is begun when the delay passes (live.go, openIdle), and
-// the call that claims it moves it on under the call's title, with the call's detail, which is sent then and not again: a
-// platform that appends a card's detail (Slack does) would show it twice. So in the modes that show activity a step's detail
-// goes with the first chunk that has one, and the steps mode sends it as it always did, with the begin and the finish. The
-// activity card is the exception that proves it: it carries no detail until it is done, and then its summary.
+// the call that claims it moves it on under the call's title, with the call's detail. Every chunk of a step carries its
+// detail, as chat.Step says; a platform that shows only the first (Slack appends a card's detail) is the adapter's to
+// handle, so the card has the detail once.
 //
 // A platform that refuses the stream for good, as it would a start it can never take, does not cost the reply: the
 // turn goes to the post path through the outbox, under a row of its own, as a recovered turn that finds a row with no
@@ -203,19 +201,9 @@ func (u *Run) shown(v view) view {
 // When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
 // among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
 func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, error) {
-	wire := st
-	if u.progress != v1alpha1.ProgressSteps && u.detailed[st.ID] {
-		wire.Detail = "" // a platform appends a card's detail: the one it has stays
-	}
-	err := u.stream.Step(ctx, wire)
+	err := u.stream.Step(ctx, st)
 	if err == nil {
 		u.sentStep(st)
-		if wire.Detail != "" {
-			if u.detailed == nil {
-				u.detailed = map[string]bool{}
-			}
-			u.detailed[st.ID] = true
-		}
 		u.stepFails = 0
 		return true, nil
 	}

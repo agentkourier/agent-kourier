@@ -646,32 +646,6 @@ func TestTheProgressModesWire(t *testing.T) {
 	}
 }
 
-// checkStepFieldsOnce fails if any step ID has its detail in more than one task_update chunk: Slack appends a card's detail
-// (observed 2026-10-18), so a step that sent it twice shows it twice. The steps mode is exempt, as it was: its golden is the
-// wire as it was before the progress modes.
-func checkStepFieldsOnce(t *testing.T, g golden) {
-	t.Helper()
-	details := map[string]int{}
-	for _, r := range g.Requests {
-		chunks, _ := r.Form["chunks"].([]any)
-		for _, raw := range chunks {
-			c, _ := raw.(map[string]any)
-			if c["type"] != "task_update" {
-				continue
-			}
-			id, _ := c["id"].(string)
-			if d, _ := c["details"].(string); d != "" {
-				details[id]++
-			}
-		}
-	}
-	for id, n := range details {
-		if n > 1 {
-			t.Errorf("step %s sent its detail in %d chunks; want one, since Slack appends it", id, n)
-		}
-	}
-}
-
 // The sink passes the Binding's progress mode to the renderer: the turn shows Working… once the delay has passed in the modes
 // that show activity, and not in steps, which is also what a turn with no mode is (the API fills a Binding's, so a turn
 // without one is not a Binding's). Output final ignores the mode.

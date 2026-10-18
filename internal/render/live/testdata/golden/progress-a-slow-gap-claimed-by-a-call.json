@@ -108,7 +108,8 @@
         {
           "id": "s1",
           "title": "kubectl_get",
-          "status": "complete"
+          "status": "complete",
+          "details": "namespace=\"prod\", password=[redacted]"
         }
       ],
       "outbox_id": "turn-1/reply"
