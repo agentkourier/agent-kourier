@@ -107,9 +107,11 @@ type TaskUpdate struct {
 // AppendStep adds a task_update chunk to the end of the streaming message ts, which is a step begun, or a step that
 // moves to its outcome. The error holds no token.
 //
-// UNCONFIRMED(WP-04): that a task_update with an ID the stream has seen updates that card and does not add another,
-// that it replaces and does not merge, and how Slack renders details and output (the documentation lists them, with
-// no more than "additional descriptive information" and "results or completion data").
+// Slack merges the chunks of one ID into one card (observed 2026-10-18 in two workspaces, read back through the API and
+// in the web client): a task_update with an ID the stream has seen updates that card and does not add another; its
+// title and status replace the card's; its details and output are appended to the card's, so a chunk that repeats
+// them shows them twice; and a chunk that leaves them out, or sends them empty, keeps what the card had. AppendStep
+// sends u as it is, and the stream (Step) sends details and output once.
 func (c *Client) AppendStep(ctx context.Context, channel, ts string, u TaskUpdate) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.AppendStep")
 	defer func() { finishChat(ctx, op, "AppendStep", telemetryErr) }()

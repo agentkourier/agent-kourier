@@ -226,6 +226,39 @@ func checkGolden(t *testing.T, name string, got golden) {
 	}
 }
 
+// checkStepFieldsOnce fails if any step ID has its details, or its output, in more than one task_update chunk. Slack
+// appends both to the card's (observed 2026-10-18), so a step that sent them twice shows them twice.
+func checkStepFieldsOnce(t *testing.T, g golden) {
+	t.Helper()
+	details, output := map[string]int{}, map[string]int{}
+	for _, r := range g.Requests {
+		chunks, _ := r.Form["chunks"].([]any)
+		for _, raw := range chunks {
+			c, _ := raw.(map[string]any)
+			if c["type"] != "task_update" {
+				continue
+			}
+			id, _ := c["id"].(string)
+			if d, _ := c["details"].(string); d != "" {
+				details[id]++
+			}
+			if o, _ := c["output"].(string); o != "" {
+				output[id]++
+			}
+		}
+	}
+	for id, n := range details {
+		if n > 1 {
+			t.Errorf("step %s sent its details in %d chunks; want one, since Slack appends them", id, n)
+		}
+	}
+	for id, n := range output {
+		if n > 1 {
+			t.Errorf("step %s sent its output in %d chunks; want one, since Slack appends it", id, n)
+		}
+	}
+}
+
 // scripts are the turns that are recorded. Each is a function of the environment that drives a turn to its end.
 var scripts = []struct {
 	name string
@@ -359,6 +392,7 @@ func TestTheWireIsWhatItWasBeforeThePort(t *testing.T) {
 			e := setup(t)
 			s.run(t, e)
 			got := e.record(t) // every script ends by waiting for its renderer to be done
+			checkStepFieldsOnce(t, got)
 			checkGolden(t, s.name, got)
 		})
 	}

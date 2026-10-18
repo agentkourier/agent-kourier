@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -85,7 +86,7 @@ func TestAppendStepSendsATaskUpdateChunkInTheSameModeAsTheText(t *testing.T) {
 	if err := c.AppendStep(ctx, "C1", ts, slack.TaskUpdate{ID: "s1", Title: "search", Status: "in_progress", Details: "q=up"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AppendStep(ctx, "C1", ts, slack.TaskUpdate{ID: "s1", Title: "search", Status: "complete", Details: "q=up", Output: "found"}); err != nil {
+	if err := c.AppendStep(ctx, "C1", ts, slack.TaskUpdate{ID: "s1", Title: "search", Status: "complete", Output: "found"}); err != nil {
 		t.Fatal(err)
 	}
 	forms := calls.sent("/chat.appendStream")
@@ -251,5 +252,117 @@ func TestAStepThatSlackRefusesIsAnError(t *testing.T) {
 	calls.status, calls.body = http.StatusOK, `{"ok":false,"error":"invalid_chunks"}`
 	if err := st.Step(t.Context(), chat.Step{ID: "s1", Title: "search"}); err == nil || !strings.Contains(err.Error(), "invalid_chunks") {
 		t.Fatalf("Step = %v; want Slack's error", err)
+	}
+}
+
+// taskFields counts, for each task ID in the task_update chunks of forms, the chunks that carry details and the
+// chunks that carry output.
+func taskFields(t *testing.T, forms []url.Values) (details, output map[string]int) {
+	t.Helper()
+	details, output = map[string]int{}, map[string]int{}
+	for _, f := range forms {
+		for _, c := range chunkList(t, f) {
+			if c["type"] != "task_update" {
+				continue
+			}
+			id, _ := c["id"].(string)
+			if d, _ := c["details"].(string); d != "" {
+				details[id]++
+			}
+			if o, _ := c["output"].(string); o != "" {
+				output[id]++
+			}
+		}
+	}
+	return details, output
+}
+
+// Slack appends a task_update's details and output to the card's, and keeps them when a chunk leaves them out
+// (observed 2026-10-18), so a step's details and its output go in one chunk each, at most: a step moved to its
+// outcome sends its title and status alone, and the card still shows its details once.
+func TestAStepSendsItsDetailsAndItsOutputOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		states  []chat.StepState
+		output  int
+		status  string
+		wantOut bool
+	}{
+		{"begun and done", []chat.StepState{chat.StepRunning, chat.StepDone}, 0, "complete", false},
+		{"begun and failed", []chat.StepState{chat.StepRunning, chat.StepFailed}, 0, "error", false},
+		{"begun and ended with no result", []chat.StepState{chat.StepRunning, chat.StepEnded}, 1, "complete", true},
+		{"ended when first sent", []chat.StepState{chat.StepEnded}, 1, "complete", true},
+		{"sent in one state twice", []chat.StepState{chat.StepRunning, chat.StepRunning, chat.StepEnded, chat.StepEnded}, 1, "complete", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, fake, calls, root := updateClient(t)
+			p := slack.NewPlatform(c, "agent-kourier-system/slack-main")
+			st, err := p.Stream(t.Context(), chat.Target{Channel: "C1", Thread: root}, "U1", "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range tc.states {
+				if err := st.Step(t.Context(), chat.Step{ID: "s1", Title: "kubectl", Detail: `ns="prod"`, State: s}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			forms := calls.sent("/chat.appendStream")
+			if len(forms) != len(tc.states) {
+				t.Fatalf("%d appends; want one for each step sent", len(forms))
+			}
+			for i, f := range forms {
+				if c := chunkList(t, f)[0]; c["title"] != "kubectl" || c["status"] == "" {
+					t.Errorf("chunk %d = %v; want the title and the status in every chunk", i, c)
+				}
+			}
+			details, output := taskFields(t, forms)
+			if details["s1"] != 1 || output["s1"] != tc.output {
+				t.Errorf("details in %d chunks and output in %d; want details in one and output in %d", details["s1"], output["s1"], tc.output)
+			}
+			th := fake.Thread("C1", root)
+			got := th[len(th)-1].Tasks()
+			if len(got) != 1 || got[0].Details != `ns="prod"` || got[0].Status != tc.status || (got[0].Output != "") != tc.wantOut {
+				t.Errorf("Tasks = %+v; want the details once, status %s, and output only for a step with no result", got, tc.status)
+			}
+		})
+	}
+}
+
+// A step that Slack refused was not applied, so its details go with the next chunk for it; one whose call was lost may
+// have been, and its details do not go again, for a card that shows them twice is what sending them once prevents.
+func TestAStepsDetailsGoAgainOnlyAfterSlackRefusedTheChunk(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fail  func(*counter)
+		again bool
+	}{
+		{"refused", func(c *counter) { c.status, c.body = http.StatusOK, `{"ok":false,"error":"internal_error"}` }, true},
+		{"lost", func(c *counter) { c.err = errors.New("connection reset") }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, calls, root := updateClient(t)
+			p := slack.NewPlatform(c, "agent-kourier-system/slack-main")
+			st, err := p.Stream(t.Context(), chat.Target{Channel: "C1", Thread: root}, "U1", "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls.mu.Lock()
+			tc.fail(calls)
+			calls.mu.Unlock()
+			if err := st.Step(t.Context(), chat.Step{ID: "s1", Title: "kubectl", Detail: `ns="prod"`}); err == nil {
+				t.Fatal("Step = nil; want the failure")
+			}
+			calls.mu.Lock()
+			calls.status, calls.body, calls.err = 0, "", nil
+			calls.mu.Unlock()
+			if err := st.Step(t.Context(), chat.Step{ID: "s1", Title: "kubectl", Detail: `ns="prod"`, State: chat.StepDone}); err != nil {
+				t.Fatal(err)
+			}
+			forms := calls.sent("/chat.appendStream")
+			last := chunkList(t, forms[len(forms)-1])[0]
+			if _, has := last["details"]; has != tc.again {
+				t.Errorf("the chunk after the failure = %v; want details in it: %v", last, tc.again)
+			}
+		})
 	}
 }
