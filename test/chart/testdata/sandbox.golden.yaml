@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-token-refresh
   namespace: agent-kourier
 spec:
@@ -105,7 +105,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox
   namespace: agent-kourier
 spec:
@@ -206,7 +206,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-data
   namespace: agent-kourier
 spec:
@@ -225,7 +225,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-secrets
   namespace: agent-kourier
 rules:
@@ -245,7 +245,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-token-refresh
   namespace: agent-kourier
 rules:
@@ -266,7 +266,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-secrets
   namespace: agent-kourier
 roleRef:
@@ -286,7 +286,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-token-refresh
   namespace: agent-kourier
 roleRef:
@@ -307,7 +307,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox
   namespace: agent-kourier
 ---
@@ -320,6 +320,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.1
+    helm.sh/chart: agent-kourier-0.1.2
   name: agent-kourier-sandbox-token-refresh
   namespace: agent-kourier
