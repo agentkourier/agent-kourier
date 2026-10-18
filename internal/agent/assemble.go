@@ -22,7 +22,8 @@ type assembler struct {
 	emit      Handler
 	classify  ToolClassifier
 	text      map[a2a.ArtifactID]string
-	tools     map[string]bool // "artifact/part" of the tool parts already delivered
+	tools     map[string]bool // where each tool part already delivered was: "artifact/part" or "message id/part"
+	toolIDs   map[string]bool // "call id" or "result id" of each tool part delivered with an ID: true if from a status message
 	taskID    a2a.TaskID
 	contextID string
 	state     a2a.TaskState
@@ -36,7 +37,7 @@ func newAssembler(h Handler, classify ToolClassifier) *assembler {
 	if h == nil {
 		h = func(Event) {}
 	}
-	a := &assembler{classify: classify, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}}
+	a := &assembler{classify: classify, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}, toolIDs: map[string]bool{}}
 	a.emit = func(e Event) {
 		a.changes++
 		h(e)
@@ -59,6 +60,7 @@ func (a *assembler) apply(ev a2a.Event) {
 		}
 	case *a2a.TaskStatusUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
+		a.statusMessage(e.Status.Message)
 		a.setState(e.Status.State)
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
@@ -127,7 +129,7 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	hasText := false
 	for i, p := range art.Parts {
 		if tp, ok := a.toolPart(p); ok {
-			a.tool(art.ID, i, tp)
+			a.tool(string(art.ID)+"/"+strconv.Itoa(i), false, art.ID, tp)
 		} else if t, isText := p.Content.(a2a.Text); isText {
 			text.WriteString(string(t))
 			hasText = true
@@ -147,6 +149,20 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	}
 }
 
+// statusMessage delivers the tool parts of a status update's message once each: kagent 0.9.x
+// sends a turn's tool calls and results there and never as artifacts (test/fixtures/kagent/v09-tools).
+// The message's text is not read: 0.9.x repeats there the answer that its artifact holds.
+func (a *assembler) statusMessage(m *a2a.Message) {
+	if m == nil {
+		return
+	}
+	for i, p := range m.Parts {
+		if tp, ok := a.toolPart(p); ok {
+			a.tool("message "+m.ID+"/"+strconv.Itoa(i), true, "", tp)
+		}
+	}
+}
+
 func (a *assembler) toolPart(p *a2a.Part) (dialect.ToolPart, bool) {
 	if a.classify == nil {
 		return dialect.ToolPart{}, false
@@ -154,13 +170,23 @@ func (a *assembler) toolPart(p *a2a.Part) (dialect.ToolPart, bool) {
 	return a.classify(p)
 }
 
-// tool delivers a tool part once, however often a snapshot repeats it.
-func (a *assembler) tool(art a2a.ArtifactID, i int, tp dialect.ToolPart) {
-	key := string(art) + "/" + strconv.Itoa(i)
-	if a.tools[key] {
+// tool delivers a tool part once, however often a snapshot or a status update repeats it: where
+// names its place, an artifact's part or a status message's part. Within one source the place
+// is the part's identity, since kagent 1.0 sends two results for one call ID as two artifacts
+// when a call is approved (test/fixtures/kagent/approval). Across sources the call ID and kind
+// are: a part an agent sends both as an artifact and as a status message is delivered once.
+func (a *assembler) tool(where string, fromMessage bool, art a2a.ArtifactID, tp dialect.ToolPart) {
+	if a.tools[where] {
 		return
 	}
-	a.tools[key] = true
+	a.tools[where] = true
+	if tp.ID != "" {
+		id := string(tp.Kind) + " " + tp.ID
+		if first, seen := a.toolIDs[id]; seen && first != fromMessage {
+			return
+		}
+		a.toolIDs[id] = fromMessage
+	}
 	if tp.Kind == dialect.ToolCall {
 		a.emit(ToolCallEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Args: tp.Args})
 	} else {
