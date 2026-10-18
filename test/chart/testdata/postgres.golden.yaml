@@ -48,7 +48,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier-config
   namespace: agent-kourier
 ---
@@ -60,7 +60,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier
   namespace: agent-kourier
 spec:
@@ -77,7 +77,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: fa3f4ef5c61b14338493c1f93fc350be474053a0c730e82d661bb1139d6e1f02
+        checksum/config: f277d5fdbe3a55c562191b8a69e0019a358532bd94591e6a599bd58171248c9e
       labels:
         app.kubernetes.io/instance: agent-kourier
         app.kubernetes.io/name: agent-kourier
@@ -173,7 +173,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier-leader
   namespace: agent-kourier
 spec: {}
@@ -186,7 +186,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier
   namespace: agent-kourier
 spec:
@@ -249,7 +249,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier-leader
   namespace: agent-kourier
 rules:
@@ -271,7 +271,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier-secrets
   namespace: agent-kourier
 rules:
@@ -291,7 +291,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier-leader
   namespace: agent-kourier
 roleRef:
@@ -311,7 +311,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier-secrets
   namespace: agent-kourier
 roleRef:
@@ -332,6 +332,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.1.0
+    helm.sh/chart: agent-kourier-0.1.1
   name: agent-kourier
   namespace: agent-kourier
