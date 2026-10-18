@@ -146,7 +146,7 @@ func TestBodyLeavesNoBlankParagraphForHiddenText(t *testing.T) {
 
 func TestTurnHasTheBodyThenTheToolLine(t *testing.T) {
 	tool := &agent.ToolCallEvent{Name: "run", Args: map[string]any{"v": "<!channel>"}}
-	m, ok := Turn([]agent.TextEvent{{ArtifactID: "a", Text: hostileText}}, tool, caps(40000))
+	m, ok := Turn([]agent.TextEvent{{ArtifactID: "a", Text: hostileText}}, tool, chat.ToolCalling, caps(40000))
 	if !ok || len(m.Parts) != 2 {
 		t.Fatalf("Turn = %+v, %v; want a body and a tool line", m, ok)
 	}
@@ -162,18 +162,65 @@ func TestTurnHasTheBodyThenTheToolLine(t *testing.T) {
 }
 
 func TestTurnWithOnlyAToolCallFallsBackToItsStatusLine(t *testing.T) {
-	m, ok := Turn(nil, &agent.ToolCallEvent{Name: "t"}, caps(40000))
+	m, ok := Turn(nil, &agent.ToolCallEvent{Name: "t"}, chat.ToolCalling, caps(40000))
 	if !ok || len(m.Parts) != 1 || m.Fallback != "Calling t()" {
 		t.Errorf("Turn = %+v, %v; want the status line as the fallback and the only part", m, ok)
 	}
-	if m, ok := Turn(nil, nil, caps(40000)); ok || len(m.Parts) != 0 {
+	if m, ok := Turn(nil, nil, chat.ToolCalling, caps(40000)); ok || len(m.Parts) != 0 {
 		t.Errorf("Turn of nothing = %+v, %v", m, ok)
+	}
+}
+
+func TestToolTextNamesTheStateOfTheCall(t *testing.T) {
+	line := Tool("kubectl", map[string]any{"ns": "prod"})
+	for state, want := range map[chat.ToolState]string{
+		chat.ToolCalling: `Calling kubectl(ns="prod")`,
+		chat.ToolRan:     `Ran kubectl(ns="prod")`,
+		chat.ToolFailed:  `kubectl(ns="prod") failed`,
+	} {
+		line.State = state
+		if got := ToolText(line); got != want {
+			t.Errorf("ToolText(%q) = %q, want %q", state, got, want)
+		}
+	}
+}
+
+// A call that has its result is a line of its own tense, but only while there is no text: text is what the line was
+// holding the place of, and past work does not sit under it as a call under way does.
+func TestTurnShowsAReturnedCallOnlyWhileThereIsNoText(t *testing.T) {
+	call := &agent.ToolCallEvent{Name: "run", Args: map[string]any{"q": "x"}}
+	text := []agent.TextEvent{{ArtifactID: "a", Text: "Looking"}}
+	for name, tc := range map[string]struct {
+		events    []agent.TextEvent
+		state     chat.ToolState
+		wantLine  bool
+		wantState chat.ToolState
+		fallback  string
+	}{
+		"calling, no text":    {nil, chat.ToolCalling, true, chat.ToolCalling, `Calling run(q="x")`},
+		"ran, no text":        {nil, chat.ToolRan, true, chat.ToolRan, `Ran run(q="x")`},
+		"failed, no text":     {nil, chat.ToolFailed, true, chat.ToolFailed, `run(q="x") failed`},
+		"calling, with text":  {text, chat.ToolCalling, true, chat.ToolCalling, "Looking"},
+		"ran, with text":      {text, chat.ToolRan, false, "", "Looking"},
+		"failed, with text":   {text, chat.ToolFailed, false, "", "Looking"},
+		"text of white space": {[]agent.TextEvent{{ArtifactID: "a", Text: " \u200b"}}, chat.ToolRan, true, chat.ToolRan, `Ran run(q="x")`},
+	} {
+		m, ok := Turn(tc.events, call, tc.state, caps(40000))
+		var line *chat.ToolLine
+		for _, p := range m.Parts {
+			if l, is := p.(chat.ToolLine); is {
+				line = &l
+			}
+		}
+		if !ok || (line != nil) != tc.wantLine || (line != nil && line.State != tc.wantState) || m.Fallback != tc.fallback {
+			t.Errorf("%s: Turn = %+v, %v; want a line %t in the state %q and the fallback %q", name, m, ok, tc.wantLine, tc.wantState, tc.fallback)
+		}
 	}
 }
 
 func TestTurnCutsTheBodyAtTheCapsAndTheFallbackAtMaxFallback(t *testing.T) {
 	long := []agent.TextEvent{{ArtifactID: "a", Text: strings.Repeat("x", 3000)}}
-	m, _ := Turn(long, nil, caps(2000))
+	m, _ := Turn(long, nil, chat.ToolCalling, caps(2000))
 	body := m.Parts[0].(chat.Body).Markdown
 	if chat.Units(body) != 2000 || !strings.HasSuffix(body, chat.Truncated) {
 		t.Errorf("body is %d units; want exactly the cap of 2000, marked truncated", chat.Units(body))
@@ -183,7 +230,7 @@ func TestTurnCutsTheBodyAtTheCapsAndTheFallbackAtMaxFallback(t *testing.T) {
 	}
 	// A place that has its own limit uses it.
 	small := chat.Caps{MaxText: 40000, Limits: map[chat.Where]int{chat.WhereBody: 100}}
-	if m, _ := Turn(long, nil, small); chat.Units(m.Parts[0].(chat.Body).Markdown) != 100 {
+	if m, _ := Turn(long, nil, chat.ToolCalling, small); chat.Units(m.Parts[0].(chat.Body).Markdown) != 100 {
 		t.Errorf("body of %d units; want the body limit of 100", chat.Units(m.Parts[0].(chat.Body).Markdown))
 	}
 }

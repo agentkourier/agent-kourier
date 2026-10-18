@@ -7,14 +7,19 @@ on:
   schedule:
     - cron: '27 3 * * *'
   workflow_dispatch:
-  workflow_run:
+  # zizmor flags every workflow_run trigger (dangerous-triggers): it runs in this repository's context and a pull
+  # request's run can start it. Every job but released-image-rescan skips workflow_run, and that job runs only after a
+  # successful release run started by a push (a tag), which a pull request's run never is. It reads nothing from the
+  # triggering run (no artifact, no head SHA; the checkout is main), holds read permissions only, and must stay that way.
+  workflow_run: # zizmor: ignore[dangerous-triggers] only the rescan runs, and it reads nothing from the triggering run
     workflows: [release]
     types: [completed]
 
 permissions: {}
 
+# The event is in the group: a workflow_run or scheduled run has main as its ref, and must not cancel a pending push run.
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -23,6 +28,7 @@ env:
 jobs:
   govulncheck:
     name: govulncheck (${{ matrix.module }})
+    if: ${{ github.event_name != 'workflow_run' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -66,7 +72,9 @@ jobs:
             go-govulncheck-${{ matrix.module }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
             go-govulncheck-${{ matrix.module }}-${{ runner.os }}-
       - name: Run govulncheck
-        run: hack/security/govulncheck.sh "${{ matrix.directory }}"
+        env:
+          MODULE_DIR: ${{ matrix.directory }}
+        run: hack/security/govulncheck.sh "${MODULE_DIR}"
       - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -77,6 +85,7 @@ jobs:
 
   secrets:
     name: gitleaks
+    if: ${{ github.event_name != 'workflow_run' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -151,7 +160,8 @@ jobs:
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
           PLATFORM: ${{ matrix.platform }}
           TRIVY_BIN: ${{ steps.trivy.outputs.path }}
-        run: hack/security/scan-image.sh "${IMAGE_REF}" "${PLATFORM}" "${RUNNER_TEMP}/trivy-${{ matrix.name }}.sarif"
+          REPORT_NAME: trivy-${{ matrix.name }}
+        run: hack/security/scan-image.sh "${IMAGE_REF}" "${PLATFORM}" "${RUNNER_TEMP}/${REPORT_NAME}.sarif"
       - name: Upload Trivy report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -162,7 +172,7 @@ jobs:
 
   released-image-rescan:
     name: rescan released image digests
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:

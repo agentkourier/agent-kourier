@@ -1,0 +1,13 @@
+# zizmor's policy for the workflows (hack/security/lint-workflows.sh, the zizmor job in ci.yml). The regular persona
+# runs and any finding fails. A finding is fixed, or suppressed in the workflow itself with an inline
+# `# zizmor: ignore[<audit>]` comment next to the line and a reason; there are no file-wide ignores here.
+#
+# Known gap: zizmor v1.30.1's cache-poisoning audit flags actions/cache and setup-go's cache in a release (tag-push)
+# workflow but not actions/cache/restore, the form ci.yml uses. release.yml restores no cache; keep it that way.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # zizmor's implicit default, stated so a looser rule here is a visible change: every action is pinned by a
+        # full commit SHA, actions/* and github/* included.
+        "*": hash-pin
