@@ -215,6 +215,10 @@ func TestALongGapBeginsOneWorkingCardAndNoOtherWrite(t *testing.T) {
 	if n := e.writes(); n != 2 {
 		t.Fatalf("%d requests after two minutes of nothing; want the stream's start and the one card", n)
 	}
+	// The gap is used: a run that kept it open would arm the delay again at once, and again after each timer, without end.
+	if n := e.clk.waiting(); n != 0 {
+		t.Fatalf("%d timers pending after the card; want the gap used, and the run waiting for an event", n)
+	}
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 }
@@ -251,7 +255,7 @@ func TestTheActivityCardCountsInItsTitleAndSummarisesOnce(t *testing.T) {
 	run.Handle(result("c1", map[string]any{"output": "SECRETOUT"}))
 	e.until(t, "the first step counted", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 1 step" })
 	run.Handle(call("c2", "TOOLNAME_TWO", map[string]any{"q": "ARGVALUE_TWO"}))
-	run.Handle(result("c2", map[string]any{"error": "no such pod"}))
+	run.Handle(result("c2", map[string]any{"error": "NOSUCHPOD"}))
 	e.until(t, "the second step counted", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
 	e.elapse(4 * time.Second)
 	took := e.tookSince(started)
@@ -265,7 +269,7 @@ func TestTheActivityCardCountsInItsTitleAndSummarisesOnce(t *testing.T) {
 		"s1 Working… 2 steps, 1 failed in_progress",
 		"s1 Worked complete [Took "+took+", 2 steps (1 failed)]",
 	)
-	for _, secret := range []string{"TOOLNAME", "ARGVALUE", "SECRETOUT", "no such pod"} {
+	for _, secret := range []string{"TOOLNAME", "ARGVALUE", "SECRETOUT", "NOSUCHPOD"} {
 		if strings.Contains(e.wire(), secret) {
 			t.Errorf("a request carries %q in the activity mode:\n%s", secret, e.wire())
 		}
@@ -503,7 +507,7 @@ func TestTheActivityLineOnAnAlertThreadCountsAndNamesNoTool(t *testing.T) {
 		t.Fatalf("%d requests after two minutes with no event; want no write from the clock:\n%s", n, strings.Join(e.requests(), "\n"))
 	}
 	run.Handle(call("c2", "TOOLNAME_TWO", map[string]any{"q": "ARGVALUE_TWO"}))
-	run.Handle(result("c2", map[string]any{"error": "no such pod"}))
+	run.Handle(result("c2", map[string]any{"error": "NOSUCHPOD"}))
 	e.until(t, "the line with the minutes", 3*time.Second, func() bool { return strings.Contains(e.said(), "Working… (2 min, 2 steps, 1 failed)") })
 	run.Handle(text("a", "The answer."))
 	e.until(t, "the text", 3*time.Second, func() bool { return e.reply().Text == "The answer." })
@@ -512,7 +516,7 @@ func TestTheActivityLineOnAnAlertThreadCountsAndNamesNoTool(t *testing.T) {
 	}
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
-	for _, secret := range []string{"TOOLNAME", "ARGVALUE", "SECRETOUT", "no such pod", "Calling", "Ran "} {
+	for _, secret := range []string{"TOOLNAME", "ARGVALUE", "SECRETOUT", "NOSUCHPOD", "Calling", "Ran "} {
 		if strings.Contains(e.sentLines(), secret) || strings.Contains(e.wire(), secret) {
 			t.Errorf("a request carries %q in the activity mode:\n%s", secret, e.wire())
 		}
@@ -592,10 +596,12 @@ var progressScripts = []struct {
 		e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
 		run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 		e.until(t, "one step", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 1 step" })
+		// The clock is set before the last events, never after the last write: the text must reach the run while it waits for
+		// its window, together with the final, or it is written as an append of its own.
+		e.advanceTo(started.Add(20 * time.Second))
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
-		e.until(t, "two steps", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
-		e.advanceTo(started.Add(20 * time.Second))
+		eventually(t, "two steps", func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
 		run.Handle(text("a", "Three pods, all ready."))
 		run.Handle(agent.FinalEvent{})
 		e.finish(t, run)
