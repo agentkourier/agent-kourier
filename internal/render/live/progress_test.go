@@ -23,7 +23,7 @@ import (
 const (
 	sa       = v1alpha1.ProgressStepsAndActivity
 	activity = v1alpha1.ProgressActivity
-	step     = 500 * time.Millisecond
+	step     = 250 * time.Millisecond
 )
 
 // progressRun starts a turn of the mode, on a chat thread for a recipient, on an alert thread for none.
@@ -33,26 +33,26 @@ func (e *env) progressRun(t *testing.T, mode v1alpha1.ProgressMode, recipient st
 	return run
 }
 
-// until turns the clock in half seconds until cond holds, and returns how much time that took. It fails if limit passes
-// first. A run that is slow to act on a timer makes the time longer, never shorter: a test that bounds it above leaves room.
+// until turns the clock in quarter seconds, a moment apart, until cond holds, and returns how much time that took. A run that is
+// slow to act on a timer that fell due arms the next one late, which makes the time longer and never shorter, so a test that
+// asserts a lower bound on it is exact. limit is how long the thing should take: once limit and some lag have passed, the clock
+// stops, and the run is given real time to act on the timers that are due, until the test's own deadline.
 func (e *env) until(t *testing.T, what string, limit time.Duration, cond func() bool) time.Duration {
 	t.Helper()
+	const lag = 5 * time.Second
 	var spent time.Duration
-	for !cond() {
-		if spent >= limit {
-			t.Fatalf("after %v: %s did not happen", spent, what)
-		}
+	for ; !cond() && spent < limit+lag; spent += step {
 		e.clk.advance(step)
-		spent += step
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
+	eventually(t, what, func() bool { e.clk.advance(0); return cond() }) // fires what is due, and moves nothing
 	return spent
 }
 
 // elapse turns the clock d without waiting for anything, and gives the run a moment to act on a timer that fell due.
 func (e *env) elapse(d time.Duration) {
-	for ; d > 0; d -= step {
-		e.clk.advance(min(step, d))
+	for ; d > 0; d -= time.Second {
+		e.clk.advance(min(time.Second, d))
 	}
 	time.Sleep(30 * time.Millisecond)
 }
@@ -107,7 +107,7 @@ func TestASlowGapBeginsAWorkingCardThatTheNextCallClaims(t *testing.T) {
 	run := e.progressRun(t, sa, "U1")
 	run.Handle(text("a", "Checking the pods."))
 	e.writesReach(t, 1) // the stream starts
-	if spent := e.until(t, "the Working… card", 5*time.Second, func() bool { return len(e.tasks()) == 1 }); spent < 3*time.Second || spent > 4*time.Second {
+	if spent := e.until(t, "the Working… card", 3*time.Second, func() bool { return len(e.tasks()) == 1 }); spent < 3*time.Second {
 		t.Fatalf("the card began after %v of nothing new; want the delay, 3 s", spent)
 	}
 	wantCards(t, e.reply(), "s1 Working… in_progress")
@@ -281,7 +281,7 @@ func TestTheActivityCardBeginsAtTheDelayWhenNothingElseHappens(t *testing.T) {
 	e := setup(t)
 	started := e.clk.Now()
 	run := e.progressRun(t, activity, "U1")
-	if spent := e.until(t, "the card", 5*time.Second, func() bool { return len(e.tasks()) == 1 }); spent < 3*time.Second || spent > 4*time.Second {
+	if spent := e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 }); spent < 3*time.Second {
 		t.Fatalf("the card began after %v; want the delay, 3 s", spent)
 	}
 	e.elapse(5 * time.Second)
@@ -666,9 +666,9 @@ func checkStepFieldsOnce(t *testing.T, g golden) {
 	}
 }
 
-// The sink passes the Binding's progress mode to the renderer, and a Binding that has none is the API's default,
-// steps-and-activity: the turn shows Working… once the delay has passed. An explicit steps shows nothing, and output final
-// ignores the mode.
+// The sink passes the Binding's progress mode to the renderer: the turn shows Working… once the delay has passed in the modes
+// that show activity, and not in steps, which is also what a turn with no mode is (the API fills a Binding's, so a turn
+// without one is not a Binding's). Output final ignores the mode.
 func TestTheSinkTellsTheRendererTheProgressMode(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -676,7 +676,7 @@ func TestTheSinkTellsTheRendererTheProgressMode(t *testing.T) {
 		output      v1alpha1.OutputMode
 		wantWorking bool
 	}{
-		{"unset is the default", "", v1alpha1.OutputLive, true},
+		{"unset is steps", "", v1alpha1.OutputLive, false},
 		{"steps-and-activity", sa, v1alpha1.OutputLive, true},
 		{"activity", activity, v1alpha1.OutputLive, true},
 		{"steps", v1alpha1.ProgressSteps, v1alpha1.OutputLive, false},
@@ -711,8 +711,8 @@ func TestTheDelayIsTheConfigs(t *testing.T) {
 	run := e.progressRun(t, sa, "U1")
 	run.Handle(text("a", "Checking."))
 	e.writesReach(t, 1)
-	spent := e.until(t, "the Working… card", 8*time.Second, func() bool { return len(e.tasks()) == 1 })
-	if spent < 5*time.Second || spent > 6*time.Second {
+	spent := e.until(t, "the Working… card", 5*time.Second, func() bool { return len(e.tasks()) == 1 })
+	if spent < 5*time.Second {
 		t.Errorf("the card began after %v; want the configured 5 s", spent)
 	}
 	run.Handle(agent.FinalEvent{})

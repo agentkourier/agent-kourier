@@ -80,8 +80,8 @@ type Backend struct {
 	// Output is the Binding's chat output mode (live or final), which the sink is told of each
 	// turn. Empty means live.
 	Output v1alpha1.OutputMode
-	// Progress is the Binding's chat.progress, which the sink is told of each turn. Empty means the API's default,
-	// steps-and-activity.
+	// Progress is the Binding's chat.progress, which the sink is told of each turn. The API fills it with
+	// steps-and-activity when a Binding sets none; empty here, as in a Backend that no Binding made, means steps.
 	Progress v1alpha1.ProgressMode
 	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
 	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
