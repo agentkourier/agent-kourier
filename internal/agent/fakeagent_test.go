@@ -14,6 +14,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
@@ -111,6 +112,21 @@ func (fa *fakeAgent) agentWith(t *testing.T, cfg Config) *Agent {
 		t.Fatal(err)
 	}
 	return New(func(context.Context) (Conn, error) { return client, nil }, kagentv1.New(0).ToolPart, cfg)
+}
+
+// agentV03 returns an Agent that talks to fa over A2A 0.3 JSON-RPC (message/stream), as it talks to kagent 0.9.x.
+func (fa *fakeAgent) agentV03(t *testing.T) *Agent {
+	t.Helper()
+	iface := a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)
+	iface.ProtocolVersion = a2av0.Version
+	card := &a2a.AgentCard{SupportedInterfaces: []*a2a.AgentInterface{iface}}
+	card.Capabilities.Streaming = true
+	client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithDefaultsDisabled(),
+		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: fa.Client()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(func(context.Context) (Conn, error) { return client, nil }, kagentv1.New(0).ToolPart, Config{})
 }
 
 // sseEvents returns the events of a recorded SSE stream, each ready to write.

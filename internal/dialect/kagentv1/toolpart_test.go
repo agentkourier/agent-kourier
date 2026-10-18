@@ -10,9 +10,16 @@ import (
 )
 
 func dataPart(partType any, data any) *a2a.Part {
+	return keyedPart("kagent.dev/a2a/part-type", partType, data)
+}
+
+// v09Part is a data part as kagent 0.9.x marks it (test/fixtures/kagent/v09-tools).
+func v09Part(partType any, data any) *a2a.Part { return keyedPart("kagent_type", partType, data) }
+
+func keyedPart(key string, partType any, data any) *a2a.Part {
 	p := a2a.NewDataPart(data)
 	if partType != nil {
-		p.Metadata = map[string]any{"kagent.dev/a2a/part-type": partType}
+		p.Metadata = map[string]any{key: partType}
 	}
 	return p
 }
@@ -28,6 +35,9 @@ func TestToolPart(t *testing.T) {
 	}{
 		{"call", dataPart("function_call", call), dialect.ToolPart{Kind: dialect.ToolCall, ID: "call_1", Name: "add_numbers", Args: map[string]any{"a": 3.0}}, true},
 		{"result", dataPart("function_response", result), dialect.ToolPart{Kind: dialect.ToolResult, ID: "call_1", Name: "add_numbers", Result: map[string]any{"output": "8"}}, true},
+		{"0.9.x call", v09Part("function_call", call), dialect.ToolPart{Kind: dialect.ToolCall, ID: "call_1", Name: "add_numbers", Args: map[string]any{"a": 3.0}}, true},
+		{"0.9.x result", v09Part("function_response", result), dialect.ToolPart{Kind: dialect.ToolResult, ID: "call_1", Name: "add_numbers", Result: map[string]any{"output": "8"}}, true},
+		{"0.9.x unknown part type", v09Part("thought", call), dialect.ToolPart{}, false},
 		{"unknown part type", dataPart("thought", call), dialect.ToolPart{}, false},
 		{"part type is not a string", dataPart(7, call), dialect.ToolPart{}, false},
 		{"no part type", dataPart(nil, call), dialect.ToolPart{}, false},
