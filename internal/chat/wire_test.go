@@ -34,6 +34,10 @@ func TestTheStoredV1FormIsPinned(t *testing.T) {
 				`{"kind":"context","text":"c"},{"kind":"note","text":"n"},{"kind":"tool","name":"kubectl","summary":"ns=prod"},` +
 				`{"kind":"mention","text":"said","user":"U1"},` +
 				`{"kind":"buttons","buttons":[{"id":"go","label":"Go","value":"ix-1","primary":true},{"id":"no","label":"No","value":"ix-1"}]}]}}`},
+		"tool lines that have returned": {chat.Say(chat.Message{Parts: []chat.Part{
+			chat.ToolLine{Name: "kubectl", Summary: "ns=prod", State: chat.ToolRan}, chat.ToolLine{Name: "ping", State: chat.ToolFailed},
+		}}),
+			`{"v":1,"message":{"parts":[{"kind":"tool","name":"kubectl","summary":"ns=prod","state":"ran"},{"kind":"tool","name":"ping","state":"failed"}]}}`},
 		"prompt": {chat.Ask(prompt),
 			`{"v":1,"prompt":{"id":"ix-1","hint":"Which?","questions":[{"text":"Env?","choices":["prod","dev"],"multiple":true},` +
 				`{"text":"Why?"}],"deadline":"2026-10-02T12:00:00Z","subagent":"sre"}}`},

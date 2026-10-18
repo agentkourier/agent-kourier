@@ -702,7 +702,9 @@ func (c *checker) stream(p placement, name, text string) {
 }
 
 // step sends text as a step of a stream in each state a step goes through: begun, done, failed, and ended with no
-// outcome, which a platform shows with words of its own beside the text.
+// outcome, which a platform shows with words of its own beside the text. Each state is a step of its own, first sent
+// in that state, since a platform may send a step's detail only with the first call for it (Slack appends a card's
+// details, so a detail sent again is shown twice).
 func (c *checker) step(p placement, name, text string, st chat.Step) {
 	if !c.caps.Streams || !c.caps.Steps {
 		return
@@ -712,8 +714,9 @@ func (c *checker) step(p placement, name, text string, st chat.Step) {
 		c.add(RuleRejected, p.where, "Stream", name, "a stream of plain text was refused: %v", err)
 		return
 	}
+	id := st.ID
 	for _, state := range []chat.StepState{chat.StepRunning, chat.StepDone, chat.StepFailed, chat.StepEnded} {
-		st.State = state
+		st.ID, st.State = id+"-"+state.String(), state
 		c.s.Sent()
 		_ = c.s.Inert()
 		c.verify(p, "Step ("+state.String()+")", name, text, stream.Step(c.ctx, st))

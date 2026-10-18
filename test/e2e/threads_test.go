@@ -269,7 +269,7 @@ func TestTasksReadsTheChunksOfTheView(t *testing.T) {
 	raw := `{"streaming":false,"chunks":[` +
 		`{"type":"task_update","id":"s1","title":"check_status","status":"in_progress","details":"service=\"api\""},` +
 		`{"type":"markdown_text","text":"hi"},` +
-		`{"type":"task_update","id":"s1","title":"check_status","status":"complete","details":"service=\"api\""}]}`
+		`{"type":"task_update","id":"s1","title":"check_status","status":"complete"}]}`
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		t.Fatal(err)
 	}
