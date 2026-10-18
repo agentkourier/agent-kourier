@@ -94,6 +94,30 @@ var markdownCases = []struct {
 	{"two spans in a line", "`a` and `b`", "`a` and `b`"},
 	{"two backtick runs side by side are one run", "`a``b`", "\\`a\\`\\`b\\`"},
 
+	// A pipe table is a block, its columns aligned.
+	{"a table", "| a | b |\n|---|---|\n| 1 | 2 |", "```\n| a   | b   |\n|-----|-----|\n| 1   | 2   |\n```"},
+	{"a table and the line break after it", "| a | b |\n|---|---|\n| 1 | 2 |\n", "```\n| a   | b   |\n|-----|-----|\n| 1   | 2   |\n```\n"},
+	{"a table ends at a blank line", "| a |\n|---|\n| 1 |\n\nafter <b>", "```\n| a   |\n|-----|\n| 1   |\n```\n\nafter &lt;b&gt;"},
+	{"a table ends at a line that is not a row", "| a |\n|---|\n| 1 |\nafter", "```\n| a   |\n|-----|\n| 1   |\n```\nafter"},
+	{"a table with no rows", "| head | x |\n| --- | --- |", "```\n| head | x   |\n|------|-----|\n```"},
+	{"a table's spans lose their backticks", "| Pod | Node |\n|---|---|\n| `web-1` | ``a b`` and ``c`d`` |", "```\n| Pod   | Node            |\n|-------|-----------------|\n| web-1 | a b and ``c`d`` |\n```"},
+	{"a table's escaped pipe is a pipe in its cell", "| a | b |\n|---|---|\n| x \\| y | 2 |", "```\n| a     | b   |\n|-------|-----|\n| x | y | 2   |\n```"},
+	{"a table's alignment is kept", "| name | n | mid |\n|:--|--:|:-:|\n| a | 1 | b |\n| bb | 100 | ccccc |", "```\n| name |   n |  mid  |\n|------|-----|-------|\n| a    |   1 |   b   |\n| bb   | 100 | ccccc |\n```"},
+	{"a table's short row is padded and its long row kept whole", "| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |", "```\n| a   | b   |     |\n|-----|-----|-----|\n| 1   |     |     |\n| 1   | 2   | 3   |\n```"},
+	{"a table's code is raw but for tokens", "| a |\n|---|\n| <@U1> <!here> [t](u) & 2>&1 |", "```\n| a                                 |\n|-----------------------------------|\n| &lt;@U1> &lt;!here> [t](u) & 2>&1 |\n```"},
+	{"a table's fence in a cell is text", "| ``` |\n|---|\n| ~~~ |", "```\n| ``` |\n|-----|\n| ~~~ |\n```"},
+	{"a table in a list item is a block at column 0", "- see:\n  | a |\n  |---|\n  | 1 |\n- next", "- see:\n```\n| a   |\n|-----|\n| 1   |\n```\n- next"},
+	{"a table too wide for a line is a record a row", "| Pod | Namespace | Request |\n|---|---|---|\n| kube-apiserver-proxmox-quickstart-control-plane-2zfxq | kube-system | 250m |\n| `sre-agent-54b48c9c66-tg829` | kagent | 1500m |",
+		"```\nPod:       kube-apiserver-proxmox-quickstart-control-plane-2zfxq\nNamespace: kube-system\nRequest:   250m\n\nPod:       sre-agent-54b48c9c66-tg829\nNamespace: kagent\nRequest:   1500m\n```"},
+	{"a header and a delimiter of different widths is no table", "| a | b |\n|---|", "| a | b |\n|---|"},
+	{"a header and no delimiter is no table", "| a | b |\nnot | a delimiter", "| a | b |\nnot | a delimiter"},
+	{"a delimiter with no pipe is a setext heading", "| a\n---", "| a\n---"},
+	{"a table needs its leading pipe", "a | b\n|---|---|\n1 | 2", "a | b\n|---|---|\n1 | 2"},
+	{"a lone row is prose", "| a & b |", "| a &amp; b |"},
+	{"the table of 2026-10-18",
+		"**Highest CPU requests on the busiest worker (`gq82h`)**\n\n| Pod | Request | Limit |\n|---|---:|---:|\n| `metrics-server-7d9c` | 100m | — |\n| `cilium-x2b4k` | 100m | — |\n| `sre-agent-54b48c9c66-tg829` | 500m | 1500m |\n\nTo get actual usage, run:",
+		"**Highest CPU requests on the busiest worker (`gq82h`)**\n\n```\n| Pod                        | Request | Limit |\n|----------------------------|---------|-------|\n| metrics-server-7d9c        |    100m |     — |\n| cilium-x2b4k               |    100m |     — |\n| sre-agent-54b48c9c66-tg829 |    500m | 1500m |\n```\n\nTo get actual usage, run:"},
+
 	// The trial of 2026-10-04.
 	{"trial: the OOMKilled answer's list item",
 		"2. *Update the Deployment* to fix the limits, if the code is legitimate:\n   ```bash\n   kubectl set resources deployment/recommender -n shop --limits=memory=512Mi\n   # or edit the deployment YAML and fix the container command\n   kubectl edit deployment recommender -n shop\n   ```",
@@ -169,6 +193,31 @@ func TestMarkdownStreamHoldsBackOnlyWhatIsUndecided(t *testing.T) {
 		{"~ and ~~", "\\~\\~\\~ and ", false}, // a run of tildes, until it ends
 		{"x", "~~x", false},
 		{"`", "\\`", true}, // the end of the text writes what is held
+	}
+	for i, st := range steps {
+		if got := m.text(st.in, math.MaxInt, st.final); got != st.want {
+			t.Fatalf("step %d, %q: got %q, want %q", i, st.in, got, st.want)
+		}
+	}
+	if m.held != "" {
+		t.Fatalf("held %q at the end", m.held)
+	}
+}
+
+// A table is held back until it ends, since its last row may widen a column.
+func TestMarkdownStreamHoldsBackATableUntilItEnds(t *testing.T) {
+	var m mdText
+	steps := []struct {
+		in, want string
+		final    bool
+	}{
+		{"Rows:\n", "Rows:\n", false},
+		{"| a |", "", false}, // a header, until the next line says
+		{"\n|--", "", false}, // what may be a delimiter
+		{"-|\n| 1 |\n", "", false},
+		{"| 22222 |\n  ", "", false}, // a row may follow
+		{"x", "```\n| a     |\n|-------|\n| 1     |\n| 22222 |\n```\n  x", false},
+		{"\n| a |\nb", "\n| a |\nb", true}, // a header without a delimiter is prose
 	}
 	for i, st := range steps {
 		if got := m.text(st.in, math.MaxInt, st.final); got != st.want {
