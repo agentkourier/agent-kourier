@@ -110,6 +110,7 @@ var markdownCases = []struct {
 	{"a table's span before a token is as wide as it is shown", "| a |\n|---|\n| `<`@U1 |", "```\n| a       |\n|---------|\n| &lt;@U1 |\n```"},
 	{"a table too wide for a line is a record a row", "| Pod | Namespace | Request |\n|---|---|---|\n| kube-apiserver-proxmox-quickstart-control-plane-2zfxq | kube-system | 250m |\n| `sre-agent-54b48c9c66-tg829` | kagent | 1500m |",
 		"```\nPod:       kube-apiserver-proxmox-quickstart-control-plane-2zfxq\nNamespace: kube-system\nRequest:   250m\n\nPod:       sre-agent-54b48c9c66-tg829\nNamespace: kagent\nRequest:   1500m\n```"},
+	{"a table's delimiter may have any white space", "| a |\n|\u00a0--- |\n| 1 |\n", "```\n| a   |\n|-----|\n| 1   |\n```\n"},
 	{"a header and a delimiter of different widths is no table", "| a | b |\n|---|", "| a | b |\n|---|"},
 	{"a header and no delimiter is no table", "| a | b |\nnot | a delimiter", "| a | b |\nnot | a delimiter"},
 	{"a delimiter with no pipe is a setext heading", "| a\n---", "| a\n---"},
@@ -272,7 +273,7 @@ func TestMarkdownTableLongerThanTheHoldStreams(t *testing.T) {
 			if !shownBeforeTheEnd {
 				t.Fatal("no row was shown before the table ended")
 			}
-			if m.code || m.tbl != nil || m.held != "" {
+			if m.code || m.tbl.layout != nil || m.held != "" {
 				t.Fatalf("state at the end: %+v", m)
 			}
 			if bad := slackReading(want); len(bad) > 0 {
@@ -308,15 +309,138 @@ func TestMarkdownTableLongerThanTheHoldStreams(t *testing.T) {
 // A row after the hold that is wider than its column pushes the rest of its row out, and a line that is no row closes
 // the block before it.
 func TestMarkdownTableRowsAfterTheHold(t *testing.T) {
-	l := (&tableFit{}).layoutOf([]string{"a", "b"}, []byte("lr"))
-	m := mdText{code: true, tbl: l}
+	m := mdText{code: true, tbl: openTable{layout: headerLayout([]string{"a", "b"}, []byte("lr"))}}
 	got := m.text("| xxxxx | 1 | extra |\n| y |\nafter", math.MaxInt, true)
 	want := "| xxxxx |   1 | extra |\n| y   |     |\n```\nafter"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if m.code || m.tbl != nil {
+	if m.code || m.tbl.layout != nil {
 		t.Fatalf("state after the table: %+v", m)
+	}
+}
+
+// A row that would pad every row of a table to its width does not: it makes the table compact, or, past the hold, it is
+// written after the rows held, in their columns. An unfit header keeps a table aligned however wide it is.
+func TestMarkdownWideRowPadsNoRowHeld(t *testing.T) {
+	for _, tc := range []struct {
+		width      int
+		first, end string // the first row, and the end of the last
+	}{
+		{3000, "| 0 | x |\n", strings.Repeat("y", 3000) + " |\n```\nafter\n"},
+		{5000, "| 0   | x   |\n", strings.Repeat("y", 5000) + " |\n```\nafter\n"},
+	} {
+		var b strings.Builder
+		b.WriteString("| ~n | v |\n|---|---|\n")
+		for i := range 60 {
+			fmt.Fprintf(&b, "| %d | x |\n", i)
+		}
+		b.WriteString("| 61 | " + strings.Repeat("y", tc.width) + " |\nafter\n")
+		in := b.String()
+		want := markdown(in, math.MaxInt)
+		if chat.Units(want) > chat.Units(in)+400 {
+			t.Fatalf("width %d: %d units written of %d", tc.width, chat.Units(want), chat.Units(in))
+		}
+		var m mdText
+		var got strings.Builder
+		for i := 0; i < len(in); i += 5 {
+			out := m.text(in[i:min(i+5, len(in))], maxMarkdown, i+5 >= len(in))
+			if strings.HasSuffix(out, chat.Truncated) {
+				t.Fatalf("width %d: the piece at %d was cut: %d units", tc.width, i, chat.Units(out))
+			}
+			got.WriteString(out)
+		}
+		if got.String() != want {
+			t.Fatalf("width %d, in pieces:\n%q\nat once:\n%q", tc.width, got.String(), want)
+		}
+		if !strings.Contains(want, "|\n"+tc.first) || !strings.HasSuffix(want, tc.end) {
+			t.Fatalf("width %d: want the first row %q and the end %q: %q", tc.width, tc.first, tc.end, want[:120])
+		}
+	}
+}
+
+// A table that would be much longer written than as the agent wrote it is written compact, and one that fits the
+// limit of a text as the agent wrote it fits it written.
+func TestMarkdownTableTooLongWrittenIsCompact(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| Pod | Status | Restarts | Age | Node |\n|---|---|---|---|---|\n")
+	for i := 0; chat.Units(b.String()) < 11400; i++ {
+		if i%40 == 0 {
+			fmt.Fprintf(&b, "| very-long-pod-name-deployment-abcdef-%d | CrashLoopBackOff | 12 | 5d | worker-gq82h |\n", i)
+		} else {
+			fmt.Fprintf(&b, "| p%d | Running | 0 | 1d | w1 |\n", i)
+		}
+	}
+	in := b.String()
+	got := markdown(in, maxMarkdown)
+	if strings.HasSuffix(got, chat.Truncated) {
+		t.Fatalf("%d units as the agent wrote it, cut written", chat.Units(in))
+	}
+	if !strings.HasPrefix(got, "```\n| Pod | Status | Restarts | Age | Node |\n|---|---|---|---|---|\n") || !strings.Contains(got, "\n| p1 | Running | 0 | 1d | w1 |\n") {
+		t.Fatalf("not compact: %q", got[:300])
+	}
+}
+
+// Rows after the hold that would make the table too long padded in its columns are written compact from the first
+// that would.
+func TestMarkdownTableRowsAfterTheHoldGoCompact(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| Pod | Node |\n|---|---|\n")
+	for i := range 80 {
+		fmt.Fprintf(&b, "| pod-%03d-abcdefghijklmnopqrstuvwxyz-0123456789 | worker-%03d |\n", i, i)
+	}
+	for i := range 2000 {
+		fmt.Fprintf(&b, "| %d | w |\n", i)
+	}
+	in := b.String() + "after"
+	got := markdown(in, math.MaxInt)
+	if tooLong(chat.Units(got), chat.Units(in), tableHold) {
+		t.Fatalf("%d units written of %d", chat.Units(got), chat.Units(in))
+	}
+	if !strings.Contains(got, "|\n|"+strings.Repeat("-", 40)) || !strings.Contains(got, "\n| 1999 | w |\n```\nafter") {
+		t.Fatalf("the rows are not aligned, then compact: %q", got[len(got)-200:])
+	}
+}
+
+// A table past its hold that ends with the text, after its line break, ends as a table within it does: with the fence
+// and the line break.
+func TestMarkdownTablePastTheHoldEndsWithItsLineBreak(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| a |\n|---|\n")
+	for i := range 300 {
+		fmt.Fprintf(&b, "| row-%03d-xxxxxxx |\n", i)
+	}
+	if got := markdown(b.String(), math.MaxInt); !strings.HasSuffix(got, "| row-299-xxxxxxx |\n```\n") {
+		t.Fatalf("ends %q", got[len(got)-40:])
+	}
+}
+
+// With a small hold every table of the cases goes past it: the same text in pieces is the same text at once, and it
+// and every cut of it are read by Slack as Agent Kourier means.
+func TestMarkdownSmallHold(t *testing.T) {
+	for _, hold := range []int{1, 40, 120} {
+		for _, tc := range markdownCases {
+			want := (&mdText{hold: hold}).text(tc.in, math.MaxInt, true)
+			if bad := slackReading(want); len(bad) > 0 {
+				t.Fatalf("hold %d, %s: %v in %q", hold, tc.name, bad, want)
+			}
+			runes := []rune(tc.in)
+			for at := 0; at <= len(runes); at++ {
+				m := mdText{hold: hold}
+				got := m.text(string(runes[:at]), math.MaxInt, false) + m.text(string(runes[at:]), math.MaxInt, true)
+				if got != want {
+					t.Fatalf("hold %d, %s, cut at %d: %q\nwant %q", hold, tc.name, at, got, want)
+				}
+			}
+			for limit := 0; limit < 80; limit += 3 {
+				m := mdText{hold: hold}
+				first := m.text(tc.in, limit, false)
+				rest := m.text("\n<@U1> `x` [a](b)\n```\n<!here>\n```\nend ``` ~~~", math.MaxInt, true)
+				if bad := slackReading(first + rest); len(bad) > 0 {
+					t.Fatalf("hold %d, %s, limit %d: %v in %q", hold, tc.name, limit, bad, first+rest)
+				}
+			}
+		}
 	}
 }
 
@@ -563,13 +687,14 @@ func FuzzMarkdownReading(f *testing.F) {
 		f.Add(s, uint16(len(s)/2), uint16(len(s)))
 	}
 	f.Fuzz(func(t *testing.T, in string, at, limit uint16) {
-		whole := markdown(in, math.MaxInt)
+		hold := fuzzHold(uint64(limit))
+		whole := (&mdText{hold: hold}).text(in, math.MaxInt, true)
 		if bad := slackReading(whole); len(bad) > 0 {
-			t.Fatalf("%v\nin  %q\nout %q", bad, in, whole)
+			t.Fatalf("hold %d: %v\nin  %q\nout %q", hold, bad, in, whole)
 		}
 		clean := chat.Clean(in, false)
 		cut := runeBoundary(clean, int(at))
-		var m mdText
+		m := mdText{hold: hold}
 		first := m.text(clean[:cut], int(limit)%400, false)
 		if chat.Units(first) > int(limit)%400 {
 			t.Fatalf("%d units for a limit of %d: %q", chat.Units(first), int(limit)%400, first)
@@ -588,9 +713,10 @@ func FuzzMarkdownChunks(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, in string, seed uint64) {
 		clean := chat.Clean(in, false)
-		want := markdown(clean, math.MaxInt)
+		hold := fuzzHold(seed)
+		want := (&mdText{hold: hold}).text(clean, math.MaxInt, true)
 		rnd := rand.New(rand.NewPCG(seed, 7))
-		var m mdText
+		m := mdText{hold: hold}
 		var got strings.Builder
 		var pieces []string
 		for rest := clean; rest != ""; {
@@ -604,13 +730,23 @@ func FuzzMarkdownChunks(f *testing.F) {
 		}
 		got.WriteString(m.text("", math.MaxInt, true))
 		if got.String() != want {
-			t.Fatalf("in pieces %q\n got %q\nwant %q", pieces, got.String(), want)
+			t.Fatalf("hold %d, in pieces %q\n got %q\nwant %q", hold, pieces, got.String(), want)
 		}
 	})
 }
 
-// layoutOf is the layout of a table of the header head alone, for the tests of rows after the hold.
-func (f *tableFit) layoutOf(head []string, aligns []byte) *tableLayout {
-	f.add(head)
-	return f.layout(aligns)
+// headerLayout is the layout of a table of the header head alone, for the tests of rows after the hold.
+func headerLayout(head []string, aligns []byte) *tableLayout {
+	var f tableFit
+	f.add(head, "| "+strings.Join(head, " | ")+" |")
+	return f.layout(aligns, tableHold)
+}
+
+// fuzzHold is the hold of a table for a fuzz run: tableHold for a third of them, and otherwise one so small that the
+// tables of short inputs go past it.
+func fuzzHold(n uint64) int {
+	if n%3 == 0 {
+		return 0
+	}
+	return 1 + int(n>>2%200)
 }

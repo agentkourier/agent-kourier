@@ -42,12 +42,13 @@ const fenceMark = "```"
 // inside a block that Agent Kourier does not know of, so everything is escaped, prose and code alike (escapeRune), and no code
 // is written or read. That is safe whatever state Slack is in, and costs only the look of code in what is sent.
 type mdText struct {
-	code   bool         // inside a block that Agent Kourier opened
-	inLine bool         // past the start of the line that held begins in
-	indent int          // the white space of the opener, which the lines of the block lose
-	held   string       // text not yet written: the cleaned input from the first thing that is not decided
-	blind  bool         // Slack's state is not known: escape everything (see above)
-	tbl    *tableLayout // the layout of the table whose block is open, which the rows still to come are written in
+	code   bool      // inside a block that Agent Kourier opened
+	inLine bool      // past the start of the line that held begins in
+	indent int       // the white space of the opener, which the lines of the block lose
+	held   string    // text not yet written: the cleaned input from the first thing that is not decided
+	blind  bool      // Slack's state is not known: escape everything (see above)
+	tbl    openTable // the table whose block is open, which the rows still to come are written in
+	hold   int       // the hold of a table (holdSize): tableHold if 0, and less only in tests
 }
 
 // text returns md cleaned, escaped as the document is read so far and cut to limit units: what is held back is not in
@@ -108,8 +109,8 @@ func (m *mdText) feed(s string, final bool, o *mdOut) {
 			break
 		}
 	}
-	if final && m.held == "" && m.tbl != nil && !m.inLine && o.put(fenceMark) {
-		m.code, m.tbl = false, nil // the text ends with a row of a table, whose block is closed
+	if final && m.held == "" && m.tbl.layout != nil && !m.inLine && o.put(fenceMark+"\n") {
+		m.code, m.tbl = false, openTable{} // the text ends with a row of a table and its line break: the block is closed
 	}
 }
 
@@ -119,7 +120,7 @@ func (m *mdText) step(final bool, o *mdOut) bool {
 	line, _, hasNL := strings.Cut(m.held, "\n")
 	complete := hasNL || final
 	switch {
-	case !m.inLine && m.tbl != nil:
+	case !m.inLine && m.tbl.layout != nil:
 		return m.tableRow(final, o)
 	case !m.inLine:
 		if !m.code {

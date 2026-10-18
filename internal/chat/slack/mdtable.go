@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -14,19 +15,40 @@ import (
 // after them that start with "|", up to the first that does not. A table without the leading pipe is prose, as it was:
 // that keeps a line of prose from being held back until its end in case it is a table's header.
 //
-// A table is held back until it ends, since its last row may widen a column, but no longer than tableHold: its columns
-// are as wide as the rows that fit in that make them, and each row after those is written as it comes, in those
-// columns. The block is written here, not put back to be read as a block's lines are, since a row read again would
-// be taken for a row of the table; its text goes through codePiece all the same (putCode), whatever cellText did.
+// A table is held back until it ends, since its last row may widen a column, but no longer than its hold (tableHold):
+// its columns are as wide as the rows that fit in that make them, and each row after those is written as it comes, in
+// those columns. A table that would be much longer written than as the agent wrote it, aligned or a record a row, is
+// written compact instead: its cells between pipes, unpadded (tooLong). The block is written here, not put back to be
+// read as a block's lines are, since a row read again would be taken for a row of the table; its text goes through
+// codePiece all the same (putCode), whatever cellText did.
 
 // tableWidth is the widest line of an aligned table; a wider one is written a record a row, which a narrow window does
 // not wrap into a mess.
 const tableWidth = 80
 
-// tableHold is about the most of a table, as it is written, that is held back to align its columns. A table held whole
-// would go out in one text, which the limit of a text can cut (and the rows and the text after the cut with it), and
-// would leave a stream showing nothing for as long as the agent writes it.
+// tableHold is about the most of a table, as it is written or as the agent wrote it, that is held back to align its
+// columns. A table held whole would go out in one text, which the limit of a text can cut (and the rows and the text
+// after the cut with it), and would leave a stream showing nothing for as long as the agent writes it.
 const tableHold = 4000
+
+// tooLong says whether a table of raw runes as the agent wrote it is too long at out runes written, aligned or a record
+// a row: half as long again, and a quarter of the hold more, which a short table never is.
+func tooLong(out, raw, hold int) bool { return out > raw*3/2+hold/4 }
+
+// openTable is the table whose block is open: its layout, and its length so far as the agent wrote it and as it is
+// written, by which its rows go compact once they are tooLong.
+type openTable struct {
+	layout   *tableLayout
+	raw, out int
+}
+
+// holdSize is the hold of a table: tableHold, unless a test sets less.
+func (m *mdText) holdSize() int {
+	if m.hold > 0 {
+		return m.hold
+	}
+	return tableHold
+}
 
 // tableState is what table did with the start of the text held.
 type tableState int
@@ -49,7 +71,7 @@ func (m *mdText) table(final bool, o *mdOut) tableState {
 	}
 	delim, after, hasNL := strings.Cut(rest, "\n")
 	if !hasNL && !final {
-		if strings.Trim(delim, "|:- \t") == "" {
+		if strings.TrimFunc(delim, delimiterRune) == "" {
 			return tableWait
 		}
 		return noTable
@@ -59,8 +81,10 @@ func (m *mdText) table(final bool, o *mdOut) tableState {
 	if !ok {
 		return noTable
 	}
+	hold := m.holdSize()
 	var f tableFit
-	f.add(head)
+	f.add(head, header)
+	f.raw += utf8.RuneCountInString(delim) + 1
 	end, ended := len(m.held), true // where the text after what is written starts, and whether the table ends there
 	if hasNL {
 		end = len(header) + 1 + len(delim) + 1
@@ -75,25 +99,28 @@ func (m *mdText) table(final bool, o *mdOut) tableState {
 				end-- // the line break before this line is the one after the table
 				break
 			}
-			f.add(splitRow(line))
+			g := f.with(splitRow(line), line)
+			if len(f.rows) > 1 && (g.size(hold) > hold || g.raw > hold) {
+				ended = false // this row and the ones after it are written as they come
+				break
+			}
+			f = g
 			if !lineNL {
 				end = len(m.held)
 				break
 			}
 			end += len(line) + 1
 			after = more
-			if f.size() > tableHold {
-				ended = false // the rows after this one are written as they come
-				break
-			}
 		}
 	}
-	l := f.layout(aligns)
+	l := f.layout(aligns, hold)
+	text := l.render(f.rows)
 	if !o.put(fenceMark + "\n") {
 		return tableFull
 	}
-	m.code, m.indent, m.tbl = true, 0, l
-	if !putCode(l.render(f.rows), o) {
+	m.code, m.indent = true, 0
+	m.tbl = openTable{layout: l, raw: f.raw, out: utf8.RuneCountInString(text) + 1}
+	if !putCode(text, o) {
 		return tableFull
 	}
 	if !ended {
@@ -106,13 +133,14 @@ func (m *mdText) table(final bool, o *mdOut) tableState {
 	if !o.put("\n" + fenceMark) {
 		return tableFull
 	}
-	m.code, m.tbl = false, nil
+	m.code, m.tbl = false, openTable{}
 	m.held, m.inLine = m.held[end:], true // the line break after the table, if any, ends the line of the fence
 	return tableDone
 }
 
 // tableRow reads the line held at the start of a line in the open block of a table: a row is written in the table's
-// layout, and any other line closes the block before it. It says whether to go on, as step does.
+// layout, compact from the first that would make the table tooLong, and any other line closes the block before it. It
+// says whether to go on, as step does.
 func (m *mdText) tableRow(final bool, o *mdOut) bool {
 	line, _, hasNL := strings.Cut(m.held, "\n")
 	if !hasNL && !final {
@@ -124,17 +152,25 @@ func (m *mdText) tableRow(final bool, o *mdOut) bool {
 		if !o.put(fenceMark + "\n") {
 			return false
 		}
-		m.code, m.tbl = false, nil
+		m.code, m.tbl = false, openTable{}
 		return true
 	}
-	if !putCode(m.tbl.row(splitRow(line)), o) {
+	cells := splitRow(line)
+	text := m.tbl.layout.row(cells)
+	raw := m.tbl.raw + utf8.RuneCountInString(line) + 1
+	if m.tbl.layout.form != formCompact && tooLong(m.tbl.out+utf8.RuneCountInString(text)+1, raw, m.holdSize()) {
+		m.tbl.layout = m.tbl.layout.compact()
+		text = m.tbl.layout.row(cells)
+	}
+	if !putCode(text, o) {
 		return false
 	}
+	m.tbl.raw, m.tbl.out = raw, m.tbl.out+utf8.RuneCountInString(text)+1
 	if !hasNL { // the end of the text, and of the table
 		if !o.put("\n" + fenceMark) {
 			return false
 		}
-		m.code, m.tbl, m.held = false, nil, ""
+		m.code, m.tbl, m.held = false, openTable{}, ""
 		return false
 	}
 	if !o.put("\n") {
@@ -163,6 +199,9 @@ func waitUnless(final bool) tableState {
 	}
 	return tableWait
 }
+
+// delimiterRune is a rune a delimiter line may have, as delimiter and splitRow read it.
+func delimiterRune(r rune) bool { return r == '|' || r == ':' || r == '-' || unicode.IsSpace(r) }
 
 // isRow says whether line starts with "|", after white space.
 func isRow(line string) bool {
@@ -259,10 +298,19 @@ type tableFit struct {
 	rows   [][]string
 	widths []int // each column's widest cell, and 3 at least
 	chars  int   // the runes of the cells of the rows after the header
+	raw    int   // the runes of the table's lines as the agent wrote them, each with its line break
 }
 
-// add adds a row of cells as splitRow reads them.
-func (f *tableFit) add(row []string) {
+// with is f and a row more, which leaves f as it is.
+func (f tableFit) with(row []string, line string) tableFit {
+	f.widths = slices.Clone(f.widths)
+	f.add(row, line)
+	return f
+}
+
+// add adds a row, its cells as splitRow reads them from line.
+func (f *tableFit) add(row []string, line string) {
+	f.raw += utf8.RuneCountInString(line) + 1
 	cells := make([]string, len(row))
 	for j, c := range row {
 		cells[j] = cellText(c)
@@ -302,8 +350,8 @@ func (f *tableFit) label() int {
 	return n
 }
 
-// size is about how long the table is, written.
-func (f *tableFit) size() int {
+// spread is about how long the table is written aligned, or a record a row if it is too wide for that.
+func (f *tableFit) spread() int {
 	if !f.records() {
 		return (len(f.rows) + 1) * (f.line() + 1) // its rows and the delimiter, each with a line break
 	}
@@ -311,26 +359,70 @@ func (f *tableFit) size() int {
 	return rows*cols*(f.label()+2) + f.chars + 2*rows
 }
 
-// layout is how the table is written, from the rows so far: the rows after them do not change it.
-func (f *tableFit) layout(aligns []byte) *tableLayout {
-	head := make([]string, len(f.widths))
-	copy(head, f.rows[0])
-	return &tableLayout{head: head, aligns: aligns, widths: f.widths, records: f.records(), label: f.label()}
+// form is how the table is written: aligned, or a record a row if it is too wide for that, unless that is tooLong.
+func (f *tableFit) form(hold int) tableForm {
+	switch {
+	case tooLong(f.spread(), f.raw, hold):
+		return formCompact
+	case f.records():
+		return formRecords
+	}
+	return formAligned
 }
 
-// tableLayout is how the rows of a table are written: in columns, or a record a row. It does not change once it is made.
+// size is about how long the table is, written.
+func (f *tableFit) size(hold int) int {
+	if f.form(hold) == formCompact {
+		return f.raw
+	}
+	return f.spread()
+}
+
+// layout is how the table is written, from the rows so far: the rows after them do not change it, but to make it compact.
+func (f *tableFit) layout(aligns []byte, hold int) *tableLayout {
+	head := make([]string, len(f.widths))
+	copy(head, f.rows[0])
+	return &tableLayout{head: head, aligns: aligns, widths: f.widths, form: f.form(hold), label: f.label()}
+}
+
+// tableForm is the form a table's rows are written in.
+type tableForm int
+
+const (
+	formAligned tableForm = iota // in columns, padded
+	formRecords                  // a record a row
+	formCompact                  // the cells between pipes, unpadded
+)
+
+// tableLayout is how the rows of a table are written. It does not change once it is made.
 type tableLayout struct {
-	head    []string // the header's cells as shown, one a column
-	aligns  []byte   // the alignment of the header's columns, as delimiter reads it
-	widths  []int
-	records bool
-	label   int
+	head   []string // the header's cells as shown, one a column
+	aligns []byte   // the alignment of the header's columns, as delimiter reads it
+	widths []int
+	form   tableForm
+	label  int
+}
+
+// compact is l, its rows written compact.
+func (l *tableLayout) compact() *tableLayout {
+	c := *l
+	c.form = formCompact
+	return &c
 }
 
 // render writes rows, the header first, as the lines of a block: in columns, with the delimiter after the header, or
-// each row after the header a record, with a blank line between them.
+// each row after the header a record, with a blank line between them, or compact, with a delimiter of three dashes a
+// column.
 func (l *tableLayout) render(rows [][]string) string {
-	if l.records {
+	switch l.form {
+	case formCompact:
+		var b strings.Builder
+		b.WriteString(compactRow(rows[0]) + "\n|" + strings.Repeat("---|", len(rows[0])))
+		for _, r := range rows[1:] {
+			b.WriteString("\n" + compactRow(r))
+		}
+		return b.String()
+	case formRecords:
 		recs := make([]string, 0, len(rows)-1)
 		for _, r := range rows[1:] {
 			recs = append(recs, l.record(r))
@@ -355,11 +447,17 @@ func (l *tableLayout) row(raw []string) string {
 	for j, c := range raw {
 		cells[j] = cellText(c)
 	}
-	if l.records {
+	switch l.form {
+	case formCompact:
+		return compactRow(cells)
+	case formRecords:
 		return "\n" + l.record(cells)
 	}
 	return l.aligned(cells)
 }
+
+// compactRow is a row as its cells between pipes, unpadded.
+func compactRow(r []string) string { return "| " + strings.Join(r, " | ") + " |" }
 
 // aligned is a row as a line of columns. A short row is padded, and none is cut: a cell wider than its column, or past
 // the last, pushes the rest of its row out.
