@@ -163,6 +163,22 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
+  # zizmor audits every workflow and fails on any finding: pull_request_target and workflow_run triggers, template
+  # injection into run steps, persisted checkout credentials, caches in a release workflow (zizmor.yml names the gap),
+  # actions not pinned by SHA. .github/zizmor.yml is its policy and hack/security/lint-workflows.sh what the job
+  # proves. The token is only for zizmor's online audits (impostor commits, known vulnerable actions) and is read-only,
+  # as on a fork's pull request. Findings print in the log; none is uploaded as SARIF, which needs security-events: write.
+  zizmor:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make lint-workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # The docs-agent recipe is a separate Go module (examples/recipes/docs-agent/agent), so the jobs above do not build
   # or test it. Its tests include the refusals that keep its corpus reader inside the corpus.
   docs-agent:

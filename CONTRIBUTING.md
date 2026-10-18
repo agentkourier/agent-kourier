@@ -56,6 +56,13 @@ A pull request merges into `main` only when these checks pass and its branch is 
   `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
 - From `codeql`: `analyze (go)` (CodeQL code scanning).
 
+`ci` also runs `zizmor` (`make lint-workflows`), which audits the workflows under `.github/workflows` with
+[zizmor](https://docs.zizmor.sh) and fails on any finding: a `pull_request_target` or `workflow_run` trigger,
+template expansion into a `run` step, a checkout that keeps its credentials, `actions/cache` or a setup action's cache
+in a release workflow, or an action not pinned by a full commit SHA. It is not a required check yet. If you change a workflow, run
+`make lint-workflows` (it installs the pinned zizmor and needs `jq`); `.github/zizmor.yml` says how a finding is
+fixed or suppressed.
+
 The `docs` workflow (`build`, the strict site build, and `links`, an external link check) runs only
 when a pull request touches the documentation sources, and its checks are not required; keep them
 green anyway.

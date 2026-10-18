@@ -1,0 +1,19 @@
+# A tag-push (release) workflow that restores caches earlier runs wrote: actions/cache, and setup-go's own cache,
+# which is on by default. (zizmor v1.30.1 does not flag actions/cache/restore here; see .github/zizmor.yml.)
+name: fixture
+on:
+  push:
+    tags: ["v*"]
+permissions: {}
+jobs:
+  release:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: go-release
+      - run: make build
