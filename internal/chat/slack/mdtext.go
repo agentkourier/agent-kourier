@@ -28,7 +28,7 @@ const fenceMark = "```"
 //   - a backtick run, then text with no backtick, then a run of the same length, in a line of prose, is a code span
 //     (rows 03, 21, 50), written with one backtick each side and raw inside like a block;
 //   - a pipe table out of a block is written as a block, its columns aligned (mdtable.go), and is held back until it
-//     ends;
+//     ends, or until enough of it has come to set its columns;
 //   - everything else is prose: escapeRune, and every backtick as "\`" (rows 34, 53, 55) and every tilde of a run of
 //     three or more as "\~" (rows 35, 42, 43), so that Slack never opens code by itself.
 //
@@ -42,11 +42,12 @@ const fenceMark = "```"
 // inside a block that Agent Kourier does not know of, so everything is escaped, prose and code alike (escapeRune), and no code
 // is written or read. That is safe whatever state Slack is in, and costs only the look of code in what is sent.
 type mdText struct {
-	code   bool   // inside a block that Agent Kourier opened
-	inLine bool   // past the start of the line that held begins in
-	indent int    // the white space of the opener, which the lines of the block lose
-	held   string // text not yet written: the cleaned input from the first thing that is not decided
-	blind  bool   // Slack's state is not known: escape everything (see above)
+	code   bool         // inside a block that Agent Kourier opened
+	inLine bool         // past the start of the line that held begins in
+	indent int          // the white space of the opener, which the lines of the block lose
+	held   string       // text not yet written: the cleaned input from the first thing that is not decided
+	blind  bool         // Slack's state is not known: escape everything (see above)
+	tbl    *tableLayout // the layout of the table whose block is open, which the rows still to come are written in
 }
 
 // text returns md cleaned, escaped as the document is read so far and cut to limit units: what is held back is not in
@@ -104,8 +105,11 @@ func (m *mdText) feed(s string, final bool, o *mdOut) {
 	m.held += s
 	for m.held != "" && !o.full {
 		if !m.step(final, o) {
-			return
+			break
 		}
+	}
+	if final && m.held == "" && m.tbl != nil && !m.inLine && o.put(fenceMark) {
+		m.code, m.tbl = false, nil // the text ends with a row of a table, whose block is closed
 	}
 }
 
@@ -115,13 +119,15 @@ func (m *mdText) step(final bool, o *mdOut) bool {
 	line, _, hasNL := strings.Cut(m.held, "\n")
 	complete := hasNL || final
 	switch {
+	case !m.inLine && m.tbl != nil:
+		return m.tableRow(final, o)
 	case !m.inLine:
 		if !m.code {
-			switch m.table(final) {
-			case tableWait:
+			switch m.table(final, o) {
+			case tableWait, tableFull:
 				return false
-			case tableRead:
-				return true // the text held now starts with the table's block, which is read in its turn
+			case tableDone:
+				return true
 			}
 		}
 		return m.start(line, complete, o)

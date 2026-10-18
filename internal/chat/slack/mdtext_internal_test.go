@@ -107,6 +107,7 @@ var markdownCases = []struct {
 	{"a table's code is raw but for tokens", "| a |\n|---|\n| <@U1> <!here> [t](u) & 2>&1 |", "```\n| a                                 |\n|-----------------------------------|\n| &lt;@U1> &lt;!here> [t](u) & 2>&1 |\n```"},
 	{"a table's fence in a cell is text", "| ``` |\n|---|\n| ~~~ |", "```\n| ``` |\n|-----|\n| ~~~ |\n```"},
 	{"a table in a list item is a block at column 0", "- see:\n  | a |\n  |---|\n  | 1 |\n- next", "- see:\n```\n| a   |\n|-----|\n| 1   |\n```\n- next"},
+	{"a table's span before a token is as wide as it is shown", "| a |\n|---|\n| `<`@U1 |", "```\n| a       |\n|---------|\n| &lt;@U1 |\n```"},
 	{"a table too wide for a line is a record a row", "| Pod | Namespace | Request |\n|---|---|---|\n| kube-apiserver-proxmox-quickstart-control-plane-2zfxq | kube-system | 250m |\n| `sre-agent-54b48c9c66-tg829` | kagent | 1500m |",
 		"```\nPod:       kube-apiserver-proxmox-quickstart-control-plane-2zfxq\nNamespace: kube-system\nRequest:   250m\n\nPod:       sre-agent-54b48c9c66-tg829\nNamespace: kagent\nRequest:   1500m\n```"},
 	{"a header and a delimiter of different widths is no table", "| a | b |\n|---|", "| a | b |\n|---|"},
@@ -226,6 +227,96 @@ func TestMarkdownStreamHoldsBackATableUntilItEnds(t *testing.T) {
 	}
 	if m.held != "" {
 		t.Fatalf("held %q at the end", m.held)
+	}
+}
+
+// A table longer than tableHold is written as it comes once its columns are set: no text of it is cut that fits the
+// limit of a text, and a stream shows its rows before it ends. Its rows after the hold keep the columns of those before.
+func TestMarkdownTableLongerThanTheHoldStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name, header, row string
+		rows              int
+	}{
+		{"aligned", "| Pod | Namespace | Request |\n|---|---|--:|\n", "| pod-%03d-abcdefghijklmnopqrstuvwxyz0123 | default | 100m |\n", 190},
+		{"a record a row", "| Pod | Namespace | Request |\n|---|---|---|\n", "| kube-apiserver-proxmox-quickstart-control-plane-2zfxq-%03d | kube-system | 250m |\n", 130},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pieces := []string{"Pods:\n\n" + tc.header}
+			for i := range tc.rows {
+				pieces = append(pieces, fmt.Sprintf(tc.row, i))
+			}
+			pieces = append(pieces, "\nThe busiest is <@U1> `pod-007`.\n", "Done.")
+			in := strings.Join(pieces, "")
+			if chat.Units(in) > maxMarkdown {
+				t.Fatalf("the input is %d units, over the limit it must fit", chat.Units(in))
+			}
+
+			var m mdText
+			var got strings.Builder
+			shownBeforeTheEnd := false
+			for i, p := range pieces {
+				out := m.text(p, maxMarkdown, i == len(pieces)-1)
+				if strings.HasSuffix(out, chat.Truncated) {
+					t.Fatalf("piece %d was cut: %d units", i, chat.Units(out))
+				}
+				if chat.Units(out) > tableHold+200 {
+					t.Fatalf("piece %d is %d units: the table was held back past its hold", i, chat.Units(out))
+				}
+				shownBeforeTheEnd = shownBeforeTheEnd || (i > 1 && i < tc.rows && out != "")
+				got.WriteString(out)
+			}
+			want := markdown(in, math.MaxInt)
+			if got.String() != want {
+				t.Fatalf("in pieces:\n%q\nat once:\n%q", got.String(), want)
+			}
+			if !shownBeforeTheEnd {
+				t.Fatal("no row was shown before the table ended")
+			}
+			if m.code || m.tbl != nil || m.held != "" {
+				t.Fatalf("state at the end: %+v", m)
+			}
+			if bad := slackReading(want); len(bad) > 0 {
+				t.Fatalf("%v in %q", bad, want)
+			}
+			if !strings.HasSuffix(want, "```\n\nThe busiest is &lt;@U1&gt; `pod-007`.\nDone.") {
+				t.Fatalf("the text after the table is not prose after its block: %q", want[max(len(want)-120, 0):])
+			}
+			for i := range tc.rows {
+				if !strings.Contains(want, fmt.Sprintf("-%03d", i)) {
+					t.Fatalf("row %d is missing", i)
+				}
+			}
+			if records := strings.Contains(want, "\nPod:       kube-"); records != (tc.name == "a record a row") {
+				t.Fatalf("written a record a row: %v", records)
+			}
+			if tc.name == "aligned" {
+				lines := strings.Split(want, "\n")
+				var widths []int
+				for _, l := range lines {
+					if strings.HasPrefix(l, "| pod-") {
+						widths = append(widths, utf8.RuneCountInString(l))
+					}
+				}
+				if len(widths) != 190 || widths[0] != widths[189] {
+					t.Fatalf("%d rows, the first %d wide and the last %v", len(widths), widths[0], widths[len(widths)-1])
+				}
+			}
+		})
+	}
+}
+
+// A row after the hold that is wider than its column pushes the rest of its row out, and a line that is no row closes
+// the block before it.
+func TestMarkdownTableRowsAfterTheHold(t *testing.T) {
+	l := (&tableFit{}).layoutOf([]string{"a", "b"}, []byte("lr"))
+	m := mdText{code: true, tbl: l}
+	got := m.text("| xxxxx | 1 | extra |\n| y |\nafter", math.MaxInt, true)
+	want := "| xxxxx |   1 | extra |\n| y   |     |\n```\nafter"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if m.code || m.tbl != nil {
+		t.Fatalf("state after the table: %+v", m)
 	}
 }
 
@@ -516,4 +607,10 @@ func FuzzMarkdownChunks(f *testing.F) {
 			t.Fatalf("in pieces %q\n got %q\nwant %q", pieces, got.String(), want)
 		}
 	})
+}
+
+// layoutOf is the layout of a table of the header head alone, for the tests of rows after the hold.
+func (f *tableFit) layoutOf(head []string, aligns []byte) *tableLayout {
+	f.add(head)
+	return f.layout(aligns)
 }
