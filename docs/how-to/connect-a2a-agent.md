@@ -55,7 +55,7 @@ In the Binding's `identity`:
 - An agent's question, when it pauses with `input-required` and text, if the Binding sets `interactions.askUser: true`.
   A single question with no choices also takes a typed reply in the thread.
 - A `Working…` card (a line, in an alert thread) while the agent is silent for 3 seconds, with the default
-  `chat.progress`. It counts no steps, since the dialect reports no tool calls.
+  `chat.progress`.
 - Not: structured choices, tool approvals, or tool calls as step cards. The generic `a2a` dialect accepts only a
   text-only input-required question; a structured pause is refused and the task is cancelled. These capabilities come
   from kagent's extension, which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
