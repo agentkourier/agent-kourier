@@ -1,4 +1,4 @@
-# Actions referenced by a movable tag or branch instead of a full commit SHA, actions/* included.
+# A third-party action referenced by a branch instead of a full commit SHA.
 name: fixture
 on: pull_request
 permissions: {}
@@ -6,5 +6,4 @@ jobs:
   build:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/setup-go@v7
       - uses: azure/setup-helm@main

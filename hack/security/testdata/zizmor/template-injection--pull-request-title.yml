@@ -1,4 +1,4 @@
-# A pull request's title and head branch name expanded into a shell script.
+# A pull request's title expanded into a shell script.
 name: fixture
 on: pull_request
 permissions: {}
@@ -7,4 +7,3 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - run: echo "${{ github.event.pull_request.title }}"
-      - run: echo "${{ github.head_ref }}"

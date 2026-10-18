@@ -50,16 +50,17 @@ cd "${ROOT}"
 # An inline ignore covers every finding whose span holds the comment, and zizmor reports each trigger of an `on:`
 # block as its own finding spanning the whole block: the ignore on security.yml's workflow_run would also hide a
 # pull_request_target added beside it. So the findings the ignores hide must be exactly these (audit, file, zizmor's
-# annotation); add a line here only with the ignore comment and its reason.
+# annotation); add a line here only with the ignore comment and its reason. This run uses the same mode as the audit
+# above (online when a token is set), so an ignore of an online audit is counted too.
 expected_ignored=$(sort <<'EXPECTED'
 dangerous-triggers	./.github/workflows/security.yml	workflow_run is almost always used insecurely
 EXPECTED
 )
-ignored=$("${ZIZMOR_BIN}" "${ARGS[@]}" --no-ignores --no-exit-codes --offline --quiet --format json . |
+ignored=$("${ZIZMOR_BIN}" "${ARGS[@]}" --no-ignores --no-exit-codes --quiet --format json . |
   jq -r '.[] | select(.ignored) | [.ident, .locations[0].symbolic.key.Local.verbatim_path, .locations[0].symbolic.annotation] | @tsv' |
   sort) || die "could not list the findings zizmor ignores"
 if [ "${ignored}" != "${expected_ignored}" ]; then
   printf 'expected ignored findings:\n%s\nignored findings:\n%s\n' "${expected_ignored}" "${ignored}" >&2
   die "the findings zizmor's ignore comments hide changed; fix the new finding or update expected_ignored"
 fi
-printf 'zizmor ignore comments hide only the expected findings (%d)\n' "$(wc -l <<<"${expected_ignored}" | tr -d ' ')"
+printf 'zizmor ignore comments hide only the expected findings (%d)\n' "$(grep -c . <<<"${expected_ignored}" || true)"

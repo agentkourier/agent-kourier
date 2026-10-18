@@ -164,9 +164,9 @@ jobs:
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # zizmor audits every workflow and fails on any finding: pull_request_target and workflow_run triggers, template
-  # injection into run steps, persisted checkout credentials, caches in a release workflow (zizmor.yml names the gap),
-  # actions not pinned by SHA. .github/zizmor.yml is its policy and hack/security/lint-workflows.sh what the job
-  # proves. The token is only for zizmor's online audits (impostor commits, known vulnerable actions) and is read-only,
+  # injection of outsider-controlled values into run steps, persisted checkout credentials, caches in a release
+  # workflow (zizmor.yml names the gap), actions not pinned by SHA. .github/zizmor.yml is its policy and
+  # hack/security/lint-workflows.sh what the job proves. The token is only for zizmor's online audits (impostor commits, known vulnerable actions) and is read-only,
   # as on a fork's pull request. Findings print in the log; none is uploaded as SARIF, which needs security-events: write.
   zizmor:
     runs-on: ubuntu-26.04

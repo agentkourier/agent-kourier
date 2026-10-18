@@ -8,17 +8,18 @@ on:
     - cron: '27 3 * * *'
   workflow_dispatch:
   # zizmor flags every workflow_run trigger (dangerous-triggers): it runs in this repository's context and a pull
-  # request's run can start it. The only job it runs is released-image-rescan, and only after a successful release run
-  # started by a push (a tag): a pull request's run never matches. That job reads nothing from the triggering run (no
-  # artifact, no head SHA; the checkout is main), holds read permissions only, and must stay that way.
-  workflow_run: # zizmor: ignore[dangerous-triggers] the rescan above reads nothing from the run that triggered it
+  # request's run can start it. Every job but released-image-rescan skips workflow_run, and that job runs only after a
+  # successful release run started by a push (a tag), which a pull request's run never is. It reads nothing from the
+  # triggering run (no artifact, no head SHA; the checkout is main), holds read permissions only, and must stay that way.
+  workflow_run: # zizmor: ignore[dangerous-triggers] only the rescan runs, and it reads nothing from the triggering run
     workflows: [release]
     types: [completed]
 
 permissions: {}
 
+# The event is in the group: a workflow_run or scheduled run has main as its ref, and must not cancel a pending push run.
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -27,6 +28,7 @@ env:
 jobs:
   govulncheck:
     name: govulncheck (${{ matrix.module }})
+    if: ${{ github.event_name != 'workflow_run' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -83,6 +85,7 @@ jobs:
 
   secrets:
     name: gitleaks
+    if: ${{ github.event_name != 'workflow_run' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
