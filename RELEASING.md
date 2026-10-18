@@ -9,7 +9,8 @@ is that image by digest. Nothing is released by hand.
 1. Merge what ships to `main`.
 2. Open a release pull request that sets `version` in `charts/agent-kourier/Chart.yaml` to `X.Y.Z` and every
    release version the public docs name to match. `make docs-check` lists each page that still names the old version
-   (`release-version`), so the pull request cannot go green with a page left behind. Merge it. Skip this for a
+   (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
+   the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). Merge it. Skip this for a
    prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
