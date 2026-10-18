@@ -928,7 +928,7 @@ making the prefix optional breaks multi-turn context.
   - `steps`: a card per tool call in a chat thread, the status line above in an alert thread.
   - `steps-and-activity` (the default): the same, and a gap longer than the delay adds one `Working…`. In a stream it is a
     card begun in the running state with no detail. The next tool call takes that card over: the card's title becomes the
-    tool's, the tool's detail is sent then, and the result finishes it with its status alone (one card, as many writes as
+    tool's, the tool's detail is shown then, and the result finishes it with its status alone (one card, as many writes as
     `steps`). Text, or the end of the turn, ends a card no call took, retitled `Wrote the answer` and done; a turn that
     ends with no text at all ends the card under its own title, as any step with no result is ended. A call that arrives
     before the delay begins its card directly. On the update path `Working…` is a line of small print that replaces the
@@ -939,8 +939,8 @@ making the prefix optional breaks multi-turn context.
     16 steps (7 failed)` as its detail, sent once. On the update path the line is `Working… (2 min, 12 steps, 3 failed)`,
     the minutes only from one, rewritten only by a write that an event causes, and replaced by the first text.
   - On Slack a `task_update` with an ID the stream has seen updates that card: its title and status replace the card's, and
-    its details and output are appended, so a detail is sent once per card in the modes that show activity (the `steps` mode
-    keeps the wire it had). Stopping a stream turns a card still running into an error, so every card, an unclaimed
+    its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
+    call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still running into an error, so every card, an unclaimed
     `Working…` card included, is finished before the stop.
   - `output: final` ignores `progress`; the acknowledgment reaction is then the only signal until the answer is posted. A
     stream that has no steps (a platform without them, or Slack's markdown mode, or a platform that refused a step) shows
