@@ -320,3 +320,20 @@ func TestConnectSocketWaitsForItsOwnConnection(t *testing.T) {
 		}
 	}
 }
+
+func TestSlackShowsTheStatusCallsOfAThread(t *testing.T) {
+	f, ctx := newFixture(t), t.Context()
+	root := f.post(t, slack.MsgOptionText("alert", false))
+	if got, err := f.sl.ThreadStatuses(ctx, "C1"); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("ThreadStatuses before any call = %#v, %v; want an empty list", got, err)
+	}
+	for _, status := range []string{"is working…", ""} {
+		if err := f.bot.SetAssistantThreadsStatus(slack.AssistantThreadsSetStatusParameters{ChannelID: "C1", ThreadTS: root, Status: status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []fakeslack.ThreadStatus{{Channel: "C1", ThreadTS: root, Status: "is working…"}, {Channel: "C1", ThreadTS: root}}
+	if got, err := f.sl.ThreadStatuses(ctx, "C1"); err != nil || len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ThreadStatuses = %+v, %v; want %+v", got, err, want)
+	}
+}

@@ -95,6 +95,25 @@ func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 		t.Errorf("the investigation is %q in thread %q; want it in the alert's thread, saying %q and a block", reply.Text, reply.ThreadTS, wantFirst)
 	}
 
+	// The turn ran on the update path (an alert has no one to stream to) in the default progress mode, so the thread was shown as
+	// busy when the turn began and the mark was cleared when it ended. The fake keeps the calls in order.
+	err := Wait(s.ctx, 30*time.Second, "the alert thread to be marked busy and then cleared", func(ctx context.Context) (bool, error) {
+		all, err := s.slack.ThreadStatuses(ctx, ChannelS14)
+		if err != nil {
+			return false, err
+		}
+		var mine []fakeslack.ThreadStatus
+		for _, st := range all {
+			if st.ThreadTS == alert.TS {
+				mine = append(mine, st)
+			}
+		}
+		return len(mine) >= 2 && mine[0].Status == "is working…" && mine[len(mine)-1].Status == "", nil
+	})
+	if err != nil {
+		t.Errorf("%v", err)
+	}
+
 	// A fire again is a note in the same thread, and no second turn.
 	again := post(alertPost("FIRING", name, group))
 	s.thread(ChannelS14, alert.TS, "the note of the repeat", has("Fired again at"))
@@ -102,7 +121,7 @@ func TestS14_AnAlertStartsOneInvestigationInItsOwnThread(t *testing.T) {
 	post(alertPost("RESOLVED", name, group))
 	th = s.thread(ChannelS14, alert.TS, "the note of the resolve", has("Resolved at"))
 
-	err := Consistently(s.ctx, 5*time.Second, "the thread holds the one investigation and the two notes", func(ctx context.Context) (bool, error) {
+	err = Consistently(s.ctx, 5*time.Second, "the thread holds the one investigation and the two notes", func(ctx context.Context) (bool, error) {
 		th, err := s.slack.Thread(ctx, ChannelS14, alert.TS)
 		return investigations(th) == 1 && len(BotMessages(th)) == 4, err // the alert is a bot's message too: the alert, the reply, two notes
 	})
