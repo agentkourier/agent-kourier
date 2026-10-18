@@ -14,7 +14,11 @@
 // forward, so nothing has to be taken back. Otherwise, such as in an alert thread, or on a platform that does not
 // stream, the turn posts and updates, and shows the latest tool call as a status line, in the past tense once its result
 // has arrived (render.Turn says when the line is shown). Neither path ever
-// updates a message that is still streaming. Text is built at the last step, from the raw events (package
+// updates a message that is still streaming. Between tool calls the agent is silent and the model is deciding, which
+// can take longer than a person waits, so a turn may show that it is working (Turn.Progress, spec 8.3): once a gap with
+// nothing new passes Config.ActivityDelay, a Working… card begins in the stream, or a Working… line in the message
+// that is updated. The delay is one timer wake of the run, and it is the only write that comes of a clock: every other
+// write follows an event. Text is built at the last step, from the raw events (package
 // render), and is literal: the platform makes it inert.
 package live
 
@@ -76,6 +80,10 @@ type Config struct {
 	// FinalDeadline is how long the final text is tried for, from the moment the run sees it
 	// (default 3 minutes). It outlasts the turn's context, which ends when the send returns.
 	FinalDeadline time.Duration
+	// ActivityDelay is how long a turn goes with nothing new (no text, and no tool call under way) before it shows that
+	// it is working (default 3 seconds). It is the renderer's own setting, not the Binding's. Only the progress modes
+	// steps-and-activity and activity use it.
+	ActivityDelay time.Duration
 	// Now and After are the clock, which a test injects: time.Now and time.After by default.
 	Now    func() time.Time
 	After  func(time.Duration) <-chan time.Time
@@ -112,6 +120,9 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.FinalDeadline <= 0 {
 		cfg.FinalDeadline = 3 * time.Minute
 	}
+	if cfg.ActivityDelay <= 0 {
+		cfg.ActivityDelay = 3 * time.Second
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -146,6 +157,11 @@ type Turn struct {
 	// Mode is live, which updates the message as the turn runs, or final, which posts it once
 	// when the turn ends.
 	Mode v1alpha1.OutputMode
+	// Progress is how much of the agent's work the turn shows before its text arrives (spec 8.3): a card or line per tool
+	// call (steps), those and a Working… indicator in a gap (steps-and-activity), or one Working… indicator that counts
+	// the steps and names no tool (activity). Empty, and a Mode of final, mean steps: a final turn shows nothing until
+	// it ends.
+	Progress v1alpha1.ProgressMode
 	// Recipient is the person who asked, to whom Slack shows a stream in a channel. Empty, as in an
 	// alert thread, takes the chat.update path.
 	Recipient string
@@ -174,6 +190,11 @@ type Run struct {
 	// eligible says the turn may show steps: it began as a stream, on a platform that has them. It is set at the
 	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
 	eligible bool
+	// progress is the Turn's, reduced to what the run does: steps unless the mode is one that shows activity and the
+	// turn shows output as it goes. timed says the run keeps time: it has an activity mode and something to show it
+	// with (a stream that has steps, or a message that is updated). Both are set at the start and never changed.
+	progress v1alpha1.ProgressMode
+	timed    bool
 
 	mu        sync.Mutex // guards the state below
 	texts     map[a2a.ArtifactID]string
@@ -186,6 +207,19 @@ type Run struct {
 	// rate.
 	paused bool
 
+	// Below: only a run that is timed keeps these.
+	started  time.Time       // when the run started
+	gapAt    time.Time       // when the gap began: the last text, the last tool result with none under way, or the start
+	gapSeq   int             // which gap it is: it changes each time a gap begins
+	gapOpen  bool            // the gap has not yet shown that the agent is working, and may
+	idle     bool            // the message that is updated shows Working… (steps-and-activity)
+	texted   bool            // text that shows has arrived
+	calls    map[string]bool // the tool calls that have an ID: true once the result has arrived
+	inflight int             // calls with an ID that have no result yet
+	finished int             // tool calls whose result has arrived
+	failed   int             // and those that report a failure
+	begun    bool            // the activity mode has begun to show: its card, or its line
+
 	// Below: the goroutine's alone.
 	deadline <-chan time.Time // the final text's own deadline, once the final is seen
 	sends    int              // Sends tried
@@ -196,14 +230,15 @@ type Run struct {
 	rowMade   bool   // the stream's outbox row exists
 	recorded  bool   // and holds the stream's ts
 	stopped   bool
-	adoptStop bool        // the message is a stream of an earlier run, to stop before it is updated
-	diverged  bool        // the streamed text is not a prefix of the final text
-	stream    chat.Stream // the stream this turn started
-	streamed  string      // the markdown sent to the stream so far
-	stepsSent []chat.Step // the steps sent to the stream, each in the state it was last sent
-	stepsOff  bool        // the platform refused a step for good: the turn goes on without steps
-	stepFails int         // steps that failed in a row
-	more      bool        // a write left steps to begin, which the next window goes on with
+	adoptStop bool            // the message is a stream of an earlier run, to stop before it is updated
+	diverged  bool            // the streamed text is not a prefix of the final text
+	stream    chat.Stream     // the stream this turn started
+	streamed  string          // the markdown sent to the stream so far
+	stepsSent []chat.Step     // the steps sent to the stream, each as it was last sent
+	detailed  map[string]bool // the steps whose detail was sent: a platform that appends a card's detail is sent it once
+	stepsOff  bool            // the platform refused a step for good: the turn goes on without steps
+	stepFails int             // steps that failed in a row
+	more      bool            // a write left steps to begin, which the next window goes on with
 }
 
 // stepRec is a tool call of a stream, which is a step: the call, how it ended, and where in the text it was made.
@@ -211,13 +246,26 @@ type stepRec struct {
 	call  agent.ToolCallEvent
 	state chat.StepState
 	after int // how many text artifacts there were when the call was made: the step follows their text
+	// A step that stands for time and not for a call is one of these. working is a Working… card that no call has
+	// claimed: the next call takes it over, and text or the end of the turn finishes it as wrote. activity is the one
+	// card of the activity mode, which shows counts and no call; it is done at the first text, with what it counted then.
+	working, wrote, activity bool
+	steps, failed            int       // the counts an activity card was done with
+	endedAt                  time.Time // and when
 }
 
 // Start begins rendering a turn and returns it. Its goroutine ends once the final text is
 // written, or given up on, or when ctx ends.
 func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && r.caps.Streams
-	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}}
+	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
+	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
+		u.progress = t.Progress
+	}
+	if u.timed = u.progress != v1alpha1.ProgressSteps && (!streaming || r.caps.Steps); u.timed {
+		u.started = r.cfg.Now()
+		u.gapAt, u.gapOpen, u.gapSeq, u.calls = u.started, true, 1, map[string]bool{}
+	}
 	r.runs.Add(1)
 	go func() { defer r.runs.Done(); u.run(ctx) }()
 	return u
@@ -234,6 +282,10 @@ func (u *Run) Handle(ev agent.Event) {
 		return
 	default:
 	}
+	var now time.Time
+	if u.timed { // only a run that keeps time reads the clock, which a test may hold
+		now = u.cfg.Now()
+	}
 	u.mu.Lock()
 	switch e := ev.(type) {
 	case agent.TextEvent:
@@ -241,9 +293,17 @@ func (u *Run) Handle(ev agent.Event) {
 			u.order = append(u.order, e.ArtifactID)
 		}
 		u.texts[e.ArtifactID] = e.Text
+		if u.timed && (u.texted || strings.TrimSpace(chat.Clean(e.Text, false)) != "") { // text that shows, once there is some
+			u.texted, u.idle = true, false
+			u.endWorking(now)
+			u.reopenGap(now)
+		}
 	case agent.ToolCallEvent:
 		u.noteCall(e)
 		u.beginStep(e)
+		if u.timed {
+			u.callMade(e, now)
+		}
 	case agent.ToolResultEvent:
 		if u.tool != nil && u.tool.CallID == e.CallID && u.toolState == chat.ToolCalling {
 			u.toolState = chat.ToolRan
@@ -252,9 +312,16 @@ func (u *Run) Handle(ev agent.Event) {
 			}
 		}
 		u.endStep(e)
+		if u.timed {
+			u.resultIn(e, now)
+		}
 	case agent.FinalEvent:
 		u.final = true
 		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
+		if u.timed {
+			u.gapOpen = false
+			u.endWorking(now)
+		}
 	}
 	u.mu.Unlock()
 	select {
@@ -275,9 +342,18 @@ func (u *Run) noteCall(e agent.ToolCallEvent) {
 }
 
 // beginStep records a tool call as a step of the stream, once: a call that is reported again is the same step, and
-// a call with no ID, which no result can name, is a step of its own. The caller holds u.mu.
+// a call with no ID, which no result can name, is a step of its own. A call that comes while the last step is a
+// Working… card that nothing has claimed takes that card over, so a gap and the call that ended it are one card; it
+// costs no step beyond the card. The activity mode shows no step for a call. The caller holds u.mu.
 func (u *Run) beginStep(e agent.ToolCallEvent) {
-	if !u.eligible || len(u.steps) >= maxSteps || (e.CallID != "" && u.stepIndex(e.CallID) >= 0) {
+	if !u.eligible || u.progress == v1alpha1.ProgressActivity || (e.CallID != "" && u.stepIndex(e.CallID) >= 0) {
+		return
+	}
+	if n := len(u.steps); n > 0 && u.steps[n-1].working { // a Working… card that is still unclaimed: the call is that card
+		u.steps[n-1].call, u.steps[n-1].working = e, false
+		return
+	}
+	if len(u.steps) >= maxSteps {
 		return
 	}
 	u.steps = append(u.steps, stepRec{call: e, after: len(u.order)})
@@ -292,6 +368,111 @@ func (u *Run) endStep(e agent.ToolResultEvent) {
 			u.steps[i].state = chat.StepFailed
 		}
 	}
+}
+
+// callMade notes a tool call for the activity indicators: a call with an ID is under way until its result, and a call under
+// way is no gap. In the activity mode the first tool event begins it. The caller holds u.mu.
+func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
+	if _, known := u.calls[e.CallID]; e.CallID != "" && !known {
+		u.calls[e.CallID] = false
+		u.inflight++
+	}
+	u.idle = false // the tool's own line takes the place of Working…
+	u.beginActivity()
+	u.reopenGap(now)
+}
+
+// resultIn counts the result of a tool call the run knows, once, and ends the call's time as a call under way: a new gap
+// begins if no other call is. The caller holds u.mu.
+func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
+	if done, known := u.calls[e.CallID]; known && !done {
+		u.calls[e.CallID] = true
+		u.inflight--
+		u.finished++
+		if render.Failed(e.Response) {
+			u.failed++
+		}
+	}
+	u.beginActivity()
+	u.reopenGap(now)
+}
+
+// reopenGap begins a gap at now, in which the run waits the delay for something new before it shows that it is working. No
+// gap runs while a call is under way (its own card, or line, is the sign), once the turn is final, or, in the activity
+// mode, once the indicator has begun or the first text has come: the indicator is for the time before the text, it
+// begins once, and it is rewritten by events and never by the clock. The caller holds u.mu.
+func (u *Run) reopenGap(now time.Time) {
+	over := u.progress == v1alpha1.ProgressActivity && (u.texted || u.begun)
+	u.gapOpen = !u.final && u.inflight == 0 && !over
+	if u.gapOpen {
+		u.gapAt = now
+		u.gapSeq++
+	}
+}
+
+// beginActivity begins the activity mode's indicator, once, if no text has come: the one card of a stream, or the line of a
+// message that is updated. The caller holds u.mu.
+func (u *Run) beginActivity() {
+	if u.progress != v1alpha1.ProgressActivity || u.texted || u.begun {
+		return
+	}
+	u.begun = true
+	if u.eligible {
+		u.steps = append(u.steps, stepRec{activity: true, after: len(u.order)})
+	}
+}
+
+// openIdle is the delay timer firing for the gap seq: if that gap is still the gap and has run the delay, the run shows
+// that it is working, which is a Working… card unless the platform has no cards, and the line of a message that is
+// updated. It is the one thing a clock writes; the gap is then used, and a new one begins with the next event. A gap that
+// events have ended since the timer was set shows nothing. now is read by the caller.
+func (u *Run) openIdle(seq int, now time.Time) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.gapOpen || u.gapSeq != seq || now.Before(u.gapAt.Add(u.cfg.ActivityDelay)) {
+		return
+	}
+	u.gapOpen = false
+	if u.progress == v1alpha1.ProgressActivity {
+		u.beginActivity()
+		return
+	}
+	u.idle = true
+	if n := len(u.steps); u.eligible && len(u.steps) < maxSteps && (n == 0 || !u.steps[n-1].working) {
+		u.steps = append(u.steps, stepRec{working: true, after: len(u.order)})
+	}
+}
+
+// endWorking finishes what stands for time when text comes or the turn ends: a Working… card that no call claimed, as a
+// card that wrote the answer, and the activity card, with the counts and the time it stands at. A Working… card is
+// retitled only if text came, since a turn that ended with none did not write an answer: it is ended with the steps
+// that have no result, at the final. The caller holds u.mu.
+func (u *Run) endWorking(now time.Time) {
+	n := len(u.steps)
+	if n == 0 {
+		return
+	}
+	switch r := &u.steps[n-1]; {
+	case r.working && u.texted:
+		r.working, r.wrote, r.state = false, true, chat.StepDone
+	case r.activity && r.state == chat.StepRunning:
+		r.state, r.steps, r.failed, r.endedAt = chat.StepDone, u.finished, u.failed, now
+	}
+}
+
+// arm returns the timer for the open gap, the one it was given if that is still the gap's, and nil if no gap is open. seq
+// is the gap the timer is for. It is the run's goroutine's alone.
+func (u *Run) arm(timer <-chan time.Time, seq int) (<-chan time.Time, int) {
+	u.mu.Lock()
+	open, at, cur := u.gapOpen, u.gapAt, u.gapSeq
+	u.mu.Unlock()
+	switch {
+	case !open:
+		return nil, seq
+	case timer != nil && cur == seq:
+		return timer, seq
+	}
+	return u.cfg.After(max(at.Add(u.cfg.ActivityDelay).Sub(u.cfg.Now()), 0)), cur
 }
 
 // stepIndex is the place of the step of the call callID, or -1. The caller holds u.mu.
@@ -327,13 +508,19 @@ func (u *Run) run(ctx context.Context) {
 	var ref chat.Ref // the message, once there is one
 	var next time.Time
 	fails := 0
+	var gap <-chan time.Time // the delay timer of the open gap, if the turn keeps time
+	gapSeq := 0              // and the gap it is for
 	for {
+		gap, gapSeq = u.arm(gap, gapSeq)
 		select {
 		case <-ctx.Done():
 			if !u.isFinal() { // a turn that never ended owes nothing
 				return
 			}
 		case <-u.wake:
+		case <-gap: // nothing new for the delay: the turn shows that it is working
+			gap = nil
+			u.openIdle(gapSeq, u.cfg.Now())
 		}
 		for {
 			if u.isFinal() && finalOp == nil {
@@ -455,11 +642,11 @@ func (u *Run) want(v view) string {
 	return string(key)
 }
 
-// stepsKey is the steps by ID and state: what a stream shows of them.
+// stepsKey is the steps by ID, state and title: what a stream shows of them.
 func stepsKey(steps []chat.Step) string {
 	var b strings.Builder
 	for _, s := range steps {
-		fmt.Fprintf(&b, "%s:%d;", s.ID, s.State)
+		fmt.Fprintf(&b, "%s:%d:%s;", s.ID, s.State, s.Title)
 	}
 	return b.String()
 }
@@ -522,18 +709,36 @@ func (u *Run) snapshot() view {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
 	tool, toolState, final, paused := u.tool, u.toolState, u.final, u.paused
+	idle, begun, finished, failed := u.idle, u.begun && !u.texted, u.finished, u.failed
 	var recs []stepRec
 	if u.stepsOn() {
 		recs = slices.Clone(u.steps)
 	}
 	u.mu.Unlock()
+	var now time.Time
+	if u.timed {
+		now = u.cfg.Now()
+	}
 	v := view{final: final, rated: final && !paused}
 	var shown *agent.ToolCallEvent
-	if tool != nil && !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
+	var status string           // the update path's indicator that the agent is working
+	if !final && !u.streaming { // on the stream path a tool call is a step, and has no status line
 		shown = tool
+		switch {
+		case u.progress == v1alpha1.ProgressActivity: // names no tool
+			shown = nil
+			if begun {
+				status = render.ActivityLine(now.Sub(u.started), finished, failed)
+			}
+		case idle: // Working… takes the place of the line of a call that has returned
+			shown, status = nil, render.WorkingTitle
+		}
 	}
 	v.body = render.Body(events, u.caps.Limit(chat.WhereStream))
 	v.m, v.ok = render.Turn(events, shown, toolState, u.caps)
+	if status != "" {
+		v.m, v.ok = render.WithStatus(v.m, status), true
+	}
 	if v.rated && len(u.turn.Footer) > 0 { // a turn that ended with no text is replaced below by "(no output)", footer and all
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
@@ -547,11 +752,29 @@ func (u *Run) snapshot() view {
 		if strings.HasPrefix(v.body, before) {
 			pos = len(before)
 		}
-		v.steps = append(v.steps, render.Step(fmt.Sprintf("s%d", i+1), r.call, state))
+		v.steps = append(v.steps, u.stepOf(fmt.Sprintf("s%d", i+1), r, state, now, finished, failed))
 		v.pos = append(v.pos, pos)
 	}
 	v.ok = v.ok || len(v.steps) > 0
 	return v
+}
+
+// stepOf is the step a record shows in the state given: the call it is, or the card that stands for time. A Working… card
+// at the final has no result to wait for, and is ended with the steps that have none (state).
+func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, finished, failed int) chat.Step {
+	switch {
+	case r.activity && r.state == chat.StepRunning:
+		return render.ActivityStep(id, finished, failed, now.Sub(u.started), false)
+	case r.activity:
+		return render.ActivityStep(id, r.steps, r.failed, r.endedAt.Sub(u.started), true)
+	case r.working:
+		st := render.WorkingStep(id)
+		st.State = state
+		return st
+	case r.wrote:
+		return render.WroteStep(id)
+	}
+	return render.Step(id, r.call, state)
 }
 
 // stepsOn says whether the stream shows steps: the turn is eligible for them (a stream, on a platform that has them),

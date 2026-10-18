@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -27,6 +28,12 @@ import (
 // platform, and a platform's rate limit is a few a minute, so a window finishes the steps that have an outcome to show,
 // and begins no more than maxBegins new ones, which the next window goes on with (the text waits for them: it is never
 // sent ahead of a step that came before it). The final has no such limit, since it is the last window there is.
+//
+// A step that stands for time is a step like these. A Working… card is begun when the delay passes (live.go, openIdle), and
+// the call that claims it moves it on under the call's title, with the call's detail, which is sent then and not again: a
+// platform that appends a card's detail (Slack does) would show it twice. So in the modes that show activity a step's detail
+// goes with the first chunk that has one, and the steps mode sends it as it always did, with the begin and the finish. The
+// activity card is the exception that proves it: it carries no detail until it is done, and then its summary.
 //
 // A platform that refuses the stream for good, as it would a start it can never take, does not cost the reply: the
 // turn goes to the post path through the outbox, under a row of its own, as a recovered turn that finds a row with no
@@ -70,8 +77,8 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 		}
 		u.recorded = true
 	}
-	for _, st := range v.steps { // the steps with an outcome to show, which are over, and ask nothing of the text
-		if sent, begun := u.stepState(st.ID); begun && sent != st.State && st.State != chat.StepRunning {
+	for _, st := range v.steps { // the steps with an outcome or a title to show, which ask nothing of the text
+		if sent, begun := u.sentOf(st.ID); begun && (sent.Title != st.Title || (sent.State != st.State && st.State != chat.StepRunning)) {
 			if ok, err := u.sendStep(ctx, st, v.final); err != nil {
 				return err
 			} else if !ok {
@@ -81,7 +88,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 	}
 	limit, begins := len(v.body), 0 // the text is sent as far as the steps that are begun allow
 	for i, st := range v.steps {
-		if _, begun := u.stepState(st.ID); begun {
+		if _, begun := u.sentOf(st.ID); begun {
 			continue
 		}
 		if !v.final && begins == maxBegins {
@@ -151,14 +158,14 @@ func (u *Run) appendText(ctx context.Context, body string, n int) error {
 	return nil
 }
 
-// stepState is the state the step id was last sent in, and whether it was sent at all.
-func (u *Run) stepState(id string) (chat.StepState, bool) {
+// sentOf is the step id as it was last sent, and whether it was sent at all.
+func (u *Run) sentOf(id string) (chat.Step, bool) {
 	for _, s := range u.stepsSent {
 		if s.ID == id {
-			return s.State, true
+			return s, true
 		}
 	}
-	return 0, false
+	return chat.Step{}, false
 }
 
 // sentStep records that st was sent.
@@ -172,13 +179,12 @@ func (u *Run) sentStep(st chat.Step) {
 	u.stepsSent = append(u.stepsSent, st)
 }
 
-// shown is v as the stream shows it now: the text and the steps that have been sent, each in the state it was sent in.
+// shown is v as the stream shows it now: the text and the steps that have been sent, each as it was sent.
 func (u *Run) shown(v view) view {
 	out := view{body: u.streamed}
 	for _, st := range v.steps {
-		if sent, begun := u.stepState(st.ID); begun {
-			st.State = sent
-			out.steps = append(out.steps, st)
+		if sent, begun := u.sentOf(st.ID); begun {
+			out.steps = append(out.steps, sent)
 		}
 	}
 	return out
@@ -197,9 +203,19 @@ func (u *Run) shown(v view) view {
 // When the steps of a turn are ended, the cards already shown stay in the state they were last sent in, a running one
 // among them. UNCONFIRMED(WP-04): how Slack shows such a card once the stream stops.
 func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, error) {
-	err := u.stream.Step(ctx, st)
+	wire := st
+	if u.progress != v1alpha1.ProgressSteps && u.detailed[st.ID] {
+		wire.Detail = "" // a platform appends a card's detail: the one it has stays
+	}
+	err := u.stream.Step(ctx, wire)
 	if err == nil {
 		u.sentStep(st)
+		if wire.Detail != "" {
+			if u.detailed == nil {
+				u.detailed = map[string]bool{}
+			}
+			u.detailed[st.ID] = true
+		}
 		u.stepFails = 0
 		return true, nil
 	}
