@@ -598,6 +598,7 @@ var progressScripts = []struct {
 		e.until(t, "one step", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 1 step" })
 		// The clock is set before the last events, never after the last write: the text must reach the run while it waits for
 		// its window, together with the final, or it is written as an append of its own.
+		time.Sleep(100 * time.Millisecond) // the run reads the clock for its next window when the write returns, which is after Slack has it
 		e.advanceTo(started.Add(20 * time.Second))
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
