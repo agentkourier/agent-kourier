@@ -117,6 +117,36 @@ func TestTurnRefCarriesTheBindingsThreadReplies(t *testing.T) {
 	}
 }
 
+// The renderer is told the Binding's chat.progress on every turn, whoever wrote it.
+func TestTurnRefCarriesTheBindingsProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode v1alpha1.ProgressMode
+		user string
+	}{
+		{"activity, a person's turn", v1alpha1.ProgressActivity, "U1"},
+		{"steps, an alert's first prompt", v1alpha1.ProgressSteps, ""},
+		{"unset", "", "U1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			sink := f.live()
+			f.progress = tc.mode
+			in := inbound("1")
+			in.UserID = tc.user
+			if _, err := f.submit(in); err != nil {
+				t.Fatal(err)
+			}
+			<-sink.finals
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if len(sink.refs) != 1 || sink.refs[0].Progress != tc.mode {
+				t.Errorf("turn refs = %+v; want one with progress %q", sink.refs, tc.mode)
+			}
+		})
+	}
+}
+
 func TestRecoveredTurnCarriesTheBindingsThreadReplies(t *testing.T) {
 	f, sink := restarted(t)
 	f.threadReplies = v1alpha1.ThreadRepliesMention

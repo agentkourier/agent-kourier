@@ -156,6 +156,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Rejected:                 src.Rejected,
 		Identity:                 src.Identity(),
 		Output:                   rb.Binding.Spec.Chat.Output,
+		Progress:                 rb.Binding.Spec.Chat.Progress,
 		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
 		AcknowledgmentEnabled:    ackEnabled,

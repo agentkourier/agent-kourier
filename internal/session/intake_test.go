@@ -173,6 +173,7 @@ type fixture struct {
 	textReplies      bool
 	feedback         bool // the Backend has feedback.enabled
 	output           v1alpha1.OutputMode
+	progress         v1alpha1.ProgressMode
 	threadReplies    v1alpha1.ThreadReplies // the Binding's chat.threadReplies; empty is all
 	ackConfigured    bool
 	ackEnabled       bool
@@ -210,7 +211,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Feedback: f.feedback, ThreadReplies: f.threadReplies, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
+	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Progress: f.progress, Feedback: f.feedback, ThreadReplies: f.threadReplies, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
 	if f.noRejected {
 		b.Rejected = nil
 	}

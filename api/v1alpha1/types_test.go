@@ -124,16 +124,22 @@ func boolPtr(v bool) *bool { return &v }
 
 func TestDefault(t *testing.T) {
 	b := load[Binding](t, "binding-minimal.yaml")
+	if b.Spec.Chat.Progress != ProgressStepsAndActivity {
+		t.Errorf("progress after Default = %q; want the default, %q", b.Spec.Chat.Progress, ProgressStepsAndActivity)
+	}
 	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 ||
 		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Feedback.Enabled {
 		t.Errorf("defaults not applied: %+v", b.Spec)
 	}
 
 	set := &Binding{Spec: BindingSpec{
-		Chat:         ChatBinding{Output: OutputFinal},
+		Chat:         ChatBinding{Output: OutputFinal, Progress: ProgressActivity},
 		Interactions: Interactions{Timeout: metav1.Duration{Duration: time.Minute}},
 	}}
 	set.Default()
+	if set.Spec.Chat.Progress != ProgressActivity {
+		t.Errorf("Default overwrote an explicit progress: %q", set.Spec.Chat.Progress)
+	}
 	if set.Spec.Chat.Output != OutputFinal || set.Spec.Interactions.Timeout.Duration != time.Minute {
 		t.Errorf("Default overwrote explicit values: %+v", set.Spec)
 	}
