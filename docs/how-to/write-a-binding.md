@@ -90,6 +90,10 @@ already holds the channel.
   [Start investigations from any bot's messages](any-bot-trigger.md) for another tool's bot.
 - **Keep threads around for less than 90 days:** set `session.threadTTL`, for example `720h`.
 - **Rating buttons on answers:** set `feedback.enabled: true`. Investigations that a trigger started always carry them.
+- **Choose what a live reply shows while the agent works:** set `chat.progress` to `steps`, `steps-and-activity` (the
+  default) or `activity`. The default adds a `Working…` card, or line in an alert thread, when 3 seconds pass with nothing
+  new; `activity` shows one card that counts the steps and names no tool; `steps` is the cards and lines alone. See
+  [Output](../explanation/threads-and-sessions.md#output).
 - **Change the processing reaction:** set `chat.acknowledgment.emoji` to a bare Slack reaction name. The reaction is removed when
   the turn ends; a question removes it before the thread waits for an answer, and the answer gets its own reaction.
 

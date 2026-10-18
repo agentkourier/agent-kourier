@@ -52,7 +52,8 @@ Without a broker, each of these is code in every agent that talks to chat:
 - **Replies during a turn.** Agent Kourier queues a reply sent while the agent works and
   sends it, in order, when the task ends. A reaction shows that it accepted the reply.
 - **Streamed output.** With `output: live`, the answer streams into one chat message, with
-  tool calls shown as status lines where the backend reports them.
+  tool calls shown as status lines where the backend reports them, and a `Working…` sign of life while the agent is
+  silent (`chat.progress`).
 - **Questions and approvals.** With `interactions.askUser`, the agent's question appears in
   the thread and the answer resumes the same task. With kagent, a tool call can wait for an
   Approve or Deny press, optionally limited to Slack user groups.

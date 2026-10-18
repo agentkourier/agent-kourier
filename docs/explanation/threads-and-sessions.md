@@ -55,9 +55,40 @@ others are ignored, and the next mentioned turn carries them to the agent as con
 
 ## Output
 
-With `output: live`, the answer streams into one message as the agent writes it; tool calls appear as short status
-lines or step cards. A dropped stream is reconciled by asking the agent for the task and subscribing to it again. With
-`output: final`, the answer is posted once, when the turn ends.
+With `output: live`, the answer streams into one message as the agent writes it. A dropped stream is reconciled by
+asking the agent for the task and subscribing to it again. With `output: final`, the answer is posted once, when the turn
+ends; nothing else is shown until then but the acknowledgment reaction, and `chat.progress` has no effect.
+
+What a live reply shows of the agent's work depends on where the thread is and on `chat.progress`.
+
+- **A chat thread** (a message someone sent, so Slack shows the stream to that person) shows a step card for each tool
+  call, in the order the calls were made. The card begins when the call arrives and finishes when its result does. Only the
+  `kagent-v1` dialect reports tool calls.
+- **An alert thread** has no one to show a stream to, so one message is updated instead. A line of small print names the
+  latest tool call: `Calling name(arguments)` while it is under way, `Ran name(arguments)` once its result has arrived,
+  and `name(arguments) failed` if the result reports a failure. A call that has its result is shown only while the message
+  has no text yet, and the text replaces the line.
+
+`chat.progress` adds a sign of life for the seconds when the agent says nothing, which is when a model is deciding its next
+step. It is one of three values:
+
+| `progress` | Chat thread | Alert thread |
+|---|---|---|
+| `steps` | A card for each tool call. | The line for the latest tool call. |
+| `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`. | The same, and `Working…` as a line of small print once 3 seconds pass with nothing new, in place of the line of a call that returned, until the next text or tool call. |
+| `activity` | One card for the whole wait, begun at the first tool call or result, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, until the first text. |
+
+The `activity` mode never shows a tool's name or arguments. No mode shows the agent's reasoning: Agent Kourier does not read
+it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
+`Working…` card or line is written once for a gap; every other write follows an event, as it does without the
+activity modes, and the `activity` line's elapsed minutes are refreshed only when an event makes a write.
+
+A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
+`Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.
+
+On the generic `a2a` dialect there are no tool events: `steps` shows nothing until text, `steps-and-activity` shows a
+`Working…` card in each gap, and `activity` shows its card with no step count. When the platform has no step cards, or Slack
+refuses them for a stream (the stream is then plain text), no mode shows a card.
 
 ## Restarts
 
