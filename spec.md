@@ -940,8 +940,8 @@ making the prefix optional breaks multi-turn context.
     the minutes only from one, rewritten only by a write that an event causes, and replaced by the first text.
   - On Slack a `task_update` with an ID the stream has seen updates that card: its title and status replace the card's, and
     its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
-    call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still running into an error, so every card, an unclaimed
-    `Working…` card included, is finished before the stop.
+    call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still
+    running into an error, so every card, an unclaimed `Working…` card included, is finished before the stop.
   - `output: final` ignores `progress`; the acknowledgment reaction is then the only signal until the answer is posted. A
     stream that has no steps (a platform without them, or Slack's markdown mode, or a platform that refused a step) shows
     no card in any mode; the status line of the update path is not put on a stream, since appended stream text cannot be

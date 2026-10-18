@@ -596,12 +596,15 @@ var progressScripts = []struct {
 		e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
 		run.Handle(result("c1", map[string]any{"output": "3 pods"}))
 		e.until(t, "one step", 3*time.Second, func() bool { return e.tasks()[0].Title == "Working… 1 step" })
-		// The clock is set before the last events, never after the last write: the text must reach the run while it waits for
-		// its window, together with the final, or it is written as an append of its own.
-		time.Sleep(100 * time.Millisecond) // the run reads the clock for its next window when the write returns, which is after Slack has it
-		e.advanceTo(started.Add(20 * time.Second))
+		// The order is what makes the wire and the summary's time the same every time. The last events come first, and the run
+		// waits for its window: it has read the clock for it only once its timer is pending. The clock is then set to the time
+		// the summary should give, which fires that timer, so the second step is written at once. The text and the final come
+		// after that write, to a run that waits for its next window, and reach it together; set the clock after them, or before
+		// the timer is pending, and the text is written as an append of its own, or the second step never is.
 		run.Handle(call("c2", "fetch", nil))
 		run.Handle(result("c2", map[string]any{"error": "call rejected"}))
+		eventually(t, "the run to wait for its window", func() bool { return e.clk.waiting() == 1 })
+		e.advanceTo(started.Add(20 * time.Second))
 		eventually(t, "two steps", func() bool { return e.tasks()[0].Title == "Working… 2 steps, 1 failed" })
 		run.Handle(text("a", "Three pods, all ready."))
 		run.Handle(agent.FinalEvent{})

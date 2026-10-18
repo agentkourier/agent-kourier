@@ -30,8 +30,8 @@ import (
 //
 // A step that stands for time is a step like these. A Working… card is begun when the delay passes (live.go, openIdle), and
 // the call that claims it moves it on under the call's title, with the call's detail. Every chunk of a step carries its
-// detail, as chat.Step says; a platform that shows only the first (Slack appends a card's detail) is the adapter's to
-// handle, so the card has the detail once.
+// detail, as chat.Step says; a platform that shows only the first non-empty one (Slack appends a card's detail) is the
+// adapter's to handle, so the card has the detail once.
 //
 // A platform that refuses the stream for good, as it would a start it can never take, does not cost the reply: the
 // turn goes to the post path through the outbox, under a row of its own, as a recovered turn that finds a row with no
