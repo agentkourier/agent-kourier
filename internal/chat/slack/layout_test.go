@@ -72,6 +72,21 @@ func textOf(b map[string]any) string {
 	return s
 }
 
+func TestAToolLineSaysHowFarTheCallHasGot(t *testing.T) {
+	for state, want := range map[chat.ToolState]string{
+		chat.ToolCalling: "Calling kubectl(a=1)",
+		chat.ToolRan:     "Ran kubectl(a=1)",
+		chat.ToolFailed:  "kubectl(a=1) failed",
+	} {
+		w := newWorld(t)
+		blocks := w.post(t, chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.ToolLine{Name: "kubectl", Summary: "a=1", State: state}}}))
+		elements, _ := blocks[0]["elements"].([]any)
+		if len(blocks) != 1 || len(elements) != 1 || elements[0].(map[string]any)["text"] != want {
+			t.Errorf("state %q: blocks %v; want one context block saying %q", state, blocks, want)
+		}
+	}
+}
+
 func TestPostRendersEachPartAsItsBlockAndTagsTheMessage(t *testing.T) {
 	w := newWorld(t)
 	msg := chat.Message{Fallback: "the fallback", Parts: []chat.Part{

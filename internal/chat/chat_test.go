@@ -104,7 +104,8 @@ func TestWhereClassesAreExactlyTheRichAndLinePlaces(t *testing.T) {
 
 var everyPart = chat.Message{Fallback: "fallback", Parts: []chat.Part{
 	chat.Header{Text: "head"}, chat.Body{Markdown: "*body*"}, chat.Context{Text: "ctx"}, chat.Note{Text: "note"},
-	chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\""}, chat.Mention{User: "U0123456789", Text: "answered first"},
+	chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\""}, chat.ToolLine{Name: "kubectl", Summary: "ns=\"prod\"", State: chat.ToolRan},
+	chat.ToolLine{Name: "ping", State: chat.ToolFailed}, chat.Mention{User: "U0123456789", Text: "answered first"},
 	chat.Buttons{Buttons: []chat.Button{{ID: "go", Label: "Go", Value: "ix-1", Primary: true}}},
 }}
 
@@ -147,17 +148,18 @@ func TestAPartOfAnUnknownKindIsRefusedNotGuessedAt(t *testing.T) {
 func TestValidateRefusesWhatCannotBeDelivered(t *testing.T) {
 	prompt := chat.Prompt{ID: "ix-1", Questions: []chat.Question{{Text: "q"}}}
 	for name, o := range map[string]chat.Outgoing{
-		"a payload of another version":   {V: 2, Message: &chat.Message{Fallback: "x"}},
-		"a legacy payload with no V":     {Message: &chat.Message{Fallback: "x"}},
-		"nothing set":                    {V: chat.OutgoingVersion},
-		"two forms set":                  {V: chat.OutgoingVersion, Message: &chat.Message{Fallback: "x"}, Prompt: &prompt},
-		"an empty message":               chat.Say(chat.Message{}),
-		"a button with no label":         chat.Say(chat.Message{Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "a"}}}}}),
-		"a prompt with no ID":            chat.Ask(chat.Prompt{Questions: prompt.Questions}),
-		"a prompt with no question":      chat.Ask(chat.Prompt{ID: "ix-1"}),
-		"an ending with an unknown kind": chat.End(chat.Ending{Outcome: "vanished"}),
-		"a nil part":                     chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{chat.Header{Text: "h"}, nil}}),
-		"a part by pointer":              chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{&chat.Header{Text: "h"}}}),
+		"a payload of another version":    {V: 2, Message: &chat.Message{Fallback: "x"}},
+		"a legacy payload with no V":      {Message: &chat.Message{Fallback: "x"}},
+		"nothing set":                     {V: chat.OutgoingVersion},
+		"two forms set":                   {V: chat.OutgoingVersion, Message: &chat.Message{Fallback: "x"}, Prompt: &prompt},
+		"an empty message":                chat.Say(chat.Message{}),
+		"a button with no label":          chat.Say(chat.Message{Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "a"}}}}}),
+		"a prompt with no ID":             chat.Ask(chat.Prompt{Questions: prompt.Questions}),
+		"a prompt with no question":       chat.Ask(chat.Prompt{ID: "ix-1"}),
+		"an ending with an unknown kind":  chat.End(chat.Ending{Outcome: "vanished"}),
+		"a nil part":                      chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{chat.Header{Text: "h"}, nil}}),
+		"a part by pointer":               chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{&chat.Header{Text: "h"}}}),
+		"a tool line of an unknown state": chat.Say(chat.Message{Parts: []chat.Part{chat.ToolLine{Name: "t", State: "vanished"}}}),
 	} {
 		if err := o.Validate(); !errors.Is(err, chat.ErrInvalid) {
 			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)
@@ -208,5 +210,15 @@ func TestIsSenderComparesTheIDAndTheKind(t *testing.T) {
 				t.Errorf("IsSender = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAToolLineBeginsCallingAndTheStatesDifferInTheirWire(t *testing.T) {
+	if got := (chat.ToolLine{}).State; got != chat.ToolCalling {
+		t.Errorf("zero ToolLine state = %q, want ToolCalling: a line stored before the state existed is a call under way", got)
+	}
+	var o chat.Outgoing
+	if err := json.Unmarshal([]byte(`{"v":1,"message":{"parts":[{"kind":"tool","name":"t"}]}}`), &o); err != nil || o.Message.Parts[0] != (chat.ToolLine{Name: "t"}) {
+		t.Errorf("reading a tool line stored with no state = %+v, %v; want a call under way", o, err)
 	}
 }

@@ -908,7 +908,13 @@ making the prefix optional breaks multi-turn context.
 - A reply that is one `Message` and no task (6.3) arrives whole: its text parts, joined, are
   one artifact keyed by the message's `messageId`, and the turn ends with it.
 - Edits are throttled per message (default one edit per 2 seconds, configurable) and
-  coalesced. Tool calls appear as short status lines.
+  coalesced. In a chat thread (a stream with progress steps) a tool call is a step, begun when the call is made
+  and finished when its result arrives. Where the message is updated instead, as in an alert thread, the latest
+  tool call is a short status line, which a result moves to the past tense: `Calling name(summary)` while the call
+  is under way, `Ran name(summary)` once its result has arrived, `name(summary) failed` if the result reports a
+  failure (`render.Failed`). A returned call's line is written even when no text has arrived, so a line that
+  said `Calling` is replaced; it is shown only while the turn has no text, and goes when text arrives. A call
+  under way keeps its line beside the text, and the final message has no line.
 - Slack's `chat.startStream` requires a recipient user in channels. Chat threads use
   it with the requesting user as recipient. Alert threads have no requesting user, so
   they use throttled `chat.update`. Rate limits for both are verified in Phase 0.
