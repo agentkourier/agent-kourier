@@ -1,0 +1,47 @@
+# Sets a pull request's type labels from its Conventional Commits title (hack/github/pr-labels.sh), so the generated
+# release notes (.github/release.yml) group it. Neither trigger is pull_request_target, which zizmor's policy denies:
+#   pull_request  labels an open pull request from a branch of this repository as it is opened, retitled or reopened.
+#                 A fork's pull_request run gets a read-only token and cannot label, so the job skips it.
+#   push to main  labels the pull request a squash merge came from, a fork's included, with the title it merged under.
+# The job runs only this repository's script: a pull request it runs for is from a branch, whose author can already
+# push to the repository.
+name: pr-labels
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: pr-labels-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: hack/github
+      - name: Label the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "${EVENT}" = push ]; then
+            hack/github/pr-labels.sh commit "${REPOSITORY}" "${SHA}"
+          else
+            hack/github/pr-labels.sh pr "${REPOSITORY}" "${NUMBER}"
+          fi

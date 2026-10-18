@@ -33,7 +33,12 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
 - Write the test first where you can. Unit tests use the standard library `testing` package,
   table-driven where it fits.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and the
-  pull request title, for example `fix(session): keep the reply queue across a reload`.
+  pull request title, for example `fix(session): keep the reply queue across a reload`. The title's
+  type sets the pull request's type label (`feat` is `enhancement`, `fix` is `bug`, a `deps` scope
+  is `dependencies`, a `!` adds `breaking-change`; [hack/github/pr-labels.sh](hack/github/pr-labels.sh)
+  has the full list), and the release notes group changes by that label. Retitle to change it;
+  a type label added by hand is removed when the title does not call for it. A pull request from
+  a fork gets its label when it merges.
 - Opening a pull request asks the code owner in [.github/CODEOWNERS](.github/CODEOWNERS) for a
   review.
 - Never commit a real token, Secret or private message. Test credentials are fake constants.

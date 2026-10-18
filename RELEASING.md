@@ -61,7 +61,8 @@ Once a published or draft GitHub Release exists for the tag, the read-only gate 
 - In a separate read-only verification job, verifies both signatures with the OIDC issuer and the exact identity
   `https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/<tag>`.
 - In a final job with `contents: write` and no checkout, creates the GitHub Release with generated notes and the
-  verified digests. Re-running a completed release leaves matching release information unchanged; conflicting
+  verified digests. `.github/release.yml` groups the notes by the labels `pr-labels.yml` sets from each pull
+  request's title, and leaves out release pull requests (`chore(release): ...`). Re-running a completed release leaves matching release information unchanged; conflicting
   tag, prerelease state or digest information fails rather than being overwritten.
 
 The job summary lists both digests. The chart's `tag` stays empty: the digest wins.

@@ -24,10 +24,11 @@ test-race: ## Run unit tests with the race detector (the chart tests need helm; 
 test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
 	go test -race -timeout 20m -tags testhooks ./internal/...
 
-test-scripts: ## Run kind, security policy and release gate tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate and PR label tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
+	hack/github/test.sh
 
 lint-workflows: ## Lint .github/workflows with zizmor after proving its policy fails each unsafe fixture (installs the pinned zizmor unless ZIZMOR_BIN is set; needs jq)
 	hack/security/lint-workflows.sh
