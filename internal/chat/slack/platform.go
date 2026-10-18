@@ -251,11 +251,16 @@ type stream struct {
 	ref      chat.Ref
 	markdown atomic.Bool // the stream is in MarkdownMode, which a refusal of the chunks mode changes it to
 
-	// mu orders the texts of the stream: esc is the reading of the one document that Slack makes of them (mdText), so
-	// a text is read and sent before the next is read.
-	mu  sync.Mutex
-	esc mdText
+	// mu orders the texts and the steps of the stream: esc is the reading of the one document that Slack makes of the
+	// texts (mdText), so a text is read and sent before the next is read, and shown is what each step's card holds.
+	mu    sync.Mutex
+	esc   mdText
+	shown map[string]card
 }
+
+// card is what a step's card in Slack holds of the fields that Slack appends to: whether its details and its output
+// were sent.
+type card struct{ details, output bool }
 
 func (s *stream) Ref() chat.Ref { return s.ref }
 
@@ -336,8 +341,12 @@ const noResult = "No result was reported."
 // be plain, so nothing in it may be a link or a mention if it is rendered as markdown) and cut at the cap of a task's
 // text, and a title that is nothing once cleaned is shown as blank, as a button's label is.
 //
-// The chunk always carries the whole card, title and details with the status, so that it reads the same whether Slack
-// replaces a task by a chunk or merges the two.
+// Slack merges the chunks of one ID into one card (AppendStep): the title and the status replace the card's, and the
+// details and the output are appended to it. So every chunk carries the title and the status, and the details and the
+// output go in the first chunk that has them, and in none after: a step moved to its outcome keeps the details it was
+// begun with. A chunk that Slack refused was not applied, and its details and output go with the next chunk of the
+// step; one whose call was lost may have been, and they do not go again, for a card that shows them twice is worse
+// than one that lacks them.
 func (s *stream) Step(ctx context.Context, st chat.Step) error {
 	if s.streamMode() == MarkdownMode {
 		return chat.ErrNoSteps // a stream in the markdown_text mode cannot take a task_update chunk
@@ -345,22 +354,35 @@ func (s *stream) Step(ctx context.Context, st chat.Step) error {
 	if st.ID == "" {
 		return fmt.Errorf("%w: a step with no ID", chat.ErrInvalid)
 	}
-	u := TaskUpdate{
-		ID:      st.ID,
-		Title:   cmp.Or(stepText(st.Title, caps.Limit(chat.WhereStepTitle)), "(blank)"),
-		Details: stepText(st.Detail, caps.Limit(chat.WhereStepDetail)),
-	}
+	u := TaskUpdate{ID: st.ID, Title: cmp.Or(stepText(st.Title, caps.Limit(chat.WhereStepTitle)), "(blank)")}
+	output := ""
 	switch st.State {
 	case chat.StepDone:
 		u.Status = string(slackgo.TaskCardStatusComplete)
 	case chat.StepFailed:
 		u.Status = string(slackgo.TaskCardStatusError)
 	case chat.StepEnded:
-		u.Status, u.Output = string(slackgo.TaskCardStatusComplete), noResult
+		u.Status, output = string(slackgo.TaskCardStatusComplete), noResult
 	default:
 		u.Status = string(slackgo.TaskCardStatusInProgress)
 	}
-	return notStreaming(s.p.c.AppendStep(ctx, s.ref.Channel, s.ref.ID, u))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	was := s.shown[st.ID]
+	if !was.details {
+		u.Details = stepText(st.Detail, caps.Limit(chat.WhereStepDetail))
+	}
+	if !was.output {
+		u.Output = output
+	}
+	err := s.p.c.AppendStep(ctx, s.ref.Channel, s.ref.ID, u)
+	if err == nil || !refused(err) {
+		if s.shown == nil {
+			s.shown = map[string]card{}
+		}
+		s.shown[st.ID] = card{details: was.details || u.Details != "", output: was.output || u.Output != ""}
+	}
+	return notStreaming(err)
 }
 
 // Stop adds the last markdown, if any, and ends the stream, tagged with tag, in one call. What was streamed stays

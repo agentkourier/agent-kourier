@@ -17,19 +17,22 @@ func task(id, title string, status slack.TaskCardStatus) slack.TaskUpdateChunk {
 	return c
 }
 
-// TestTasksAreTheLastStateOfEachTaskUpdateInTheOrderOfItsFirst: a task_update with an ID the stream has seen is the
-// same task, in the state it now has, and a task keeps the place of its first chunk.
-func TestTasksAreTheLastStateOfEachTaskUpdateInTheOrderOfItsFirst(t *testing.T) {
+// TestTasksMergeEachTaskUpdateAsSlackDoes: a task_update with an ID the stream has seen is the same task, and a task
+// keeps the place of its first chunk. Its title and status replace the card's; its details and output are appended to
+// the card's; and a chunk that leaves them out keeps them (Slack, observed 2026-10-18).
+func TestTasksMergeEachTaskUpdateAsSlackDoes(t *testing.T) {
 	fake, api := newFake(t)
 	parent := post(t, api, text("question"))
 	ts, err := startIn(api, "C1", parent, append(recipients(), chunks(slack.NewMarkdownTextChunk("Hel")))...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := task("s1", "search", slack.TaskCardStatusComplete)
-	done.Details, done.Output = "q=up", "found"
+	begun := task("s1", "search", slack.TaskCardStatusInProgress)
+	begun.Details = "q=up"
+	done := task("s1", "searched", slack.TaskCardStatusComplete)
+	done.Output = "found"
 	for _, c := range []slack.StreamChunk{
-		task("s1", "search", slack.TaskCardStatusInProgress),
+		begun,
 		task("s2", "fetch", slack.TaskCardStatusInProgress),
 		done,
 		task("s2", "fetch", slack.TaskCardStatusError),
@@ -39,19 +42,19 @@ func TestTasksAreTheLastStateOfEachTaskUpdateInTheOrderOfItsFirst(t *testing.T) 
 		}
 	}
 	want := []fakeslack.Task{
-		{ID: "s1", Title: "search", Status: "complete", Details: "q=up", Output: "found"},
+		{ID: "s1", Title: "searched", Status: "complete", Details: "q=up", Output: "found"},
 		{ID: "s2", Title: "fetch", Status: "error"},
 	}
 	if got := fake.Thread("C1", parent)[1].Tasks(); !slices.Equal(got, want) {
 		t.Fatalf("Tasks = %+v; want %+v", got, want)
 	}
-	// A later chunk replaces the earlier one whole: a field it leaves out is gone. (UNCONFIRMED(WP-04): that Slack
-	// replaces and does not merge; the stricter reading is the one that finds an adapter that drops a field.)
-	if _, _, err := api.AppendStream("C1", ts, chunks(task("s1", "search", slack.TaskCardStatusComplete))); err != nil {
+	again := task("s1", "searched", slack.TaskCardStatusComplete)
+	again.Details, again.Output = "q=up", "found"
+	if _, _, err := api.AppendStream("C1", ts, chunks(again)); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.Thread("C1", parent)[1].Tasks()[0]; got.Details != "" || got.Output != "" {
-		t.Fatalf("Tasks()[0] = %+v; want the details and the output gone with the chunk that left them out", got)
+	if got := fake.Thread("C1", parent)[1].Tasks()[0]; got.Details != "q=upq=up" || got.Output != "foundfound" {
+		t.Fatalf("Tasks()[0] = %+v; want the details and the output that were sent again appended, as Slack shows them", got)
 	}
 }
 
