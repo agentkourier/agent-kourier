@@ -57,16 +57,44 @@ jobs:
         with:
           persist-credentials: false
       # Go runs the reference generator (hack/docs/refgen), the name check (hack/docs/namecheck) and the content check
-      # (hack/docs/contentcheck: internal IDs, removed names, workspace identifiers, and the READMEs' links).
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # (hack/docs/contentcheck: internal IDs, removed names, workspace identifiers, and the READMEs' links). Its cache
+      # and pip's are the job's own and follow ci.yml's rules: every run restores, only a push to main saves.
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+          cache: false
+      - id: go-env
+        name: Locate the Go caches
+        run: |
+          echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
+          echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: go-docs-build-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-docs-build-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-docs-build-${{ runner.os }}-
+      # pip's download and wheel cache, keyed on the requirements file the docs virtualenv installs from.
+      - id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: hack/docs/requirements.txt
+      - id: pip-env
+        name: Locate the pip cache
+        run: echo "cache=$(python -m pip cache dir)" >>"${GITHUB_OUTPUT}"
+      - id: pip-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pip-env.outputs.cache }}
+          key: pip-docs-build-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('hack/docs/requirements.txt') }}
+          restore-keys: |
+            pip-docs-build-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
+            pip-docs-build-${{ runner.os }}-
       # Generates the reference pages, fails on a misspelt product name or a content-check finding, and builds with
       # --strict, so a broken internal link or anchor, a page missing from the nav, or any other warning fails the
       # build. The content check's workspace rule takes its pattern from a secret.
@@ -75,6 +103,18 @@ jobs:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - name: The committed reference pages are current
         run: git diff --exit-code -- docs/reference
+      - if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+      - if: ${{ !cancelled() && steps.pip-cache.outcome == 'success' && steps.pip-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pip-env.outputs.cache }}
+          key: ${{ steps.pip-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: site
