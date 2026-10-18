@@ -1,0 +1,9 @@
+# A pull request's head branch name expanded into a shell script.
+name: fixture
+on: pull_request
+permissions: {}
+jobs:
+  greet:
+    runs-on: ubuntu-26.04
+    steps:
+      - run: echo "${{ github.head_ref }}"
