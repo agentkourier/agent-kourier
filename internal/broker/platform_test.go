@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -93,5 +95,23 @@ func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
 		if got := actorPlatform(id); got != want {
 			t.Errorf("actorPlatform(%q) = %+v, want %+v", id, got, want)
 		}
+	}
+}
+
+// The renderer is given the built platform and asks it for the busy mark by a type assertion; embedding the interface hides
+// the method, so the built platform says it itself, for whatever platform it holds, the fenced one included.
+func TestTheBuiltPlatformShowsAThreadAsBusyWhenItsPlatformCan(t *testing.T) {
+	at := chat.Target{Channel: "C1", Thread: "1.1"}
+	fake := chattest.NewFake()
+	var p chat.Platform = builtPlatform{Platform: fake}
+	marker, ok := p.(chat.BusyMarker)
+	if !ok {
+		t.Fatal("the built platform is not a chat.BusyMarker")
+	}
+	if err := marker.MarkBusy(t.Context(), at, true); err != nil || !fake.Busy(at) {
+		t.Errorf("MarkBusy = %v, busy %v; want the platform marked", err, fake.Busy(at))
+	}
+	if err := (builtPlatform{Platform: &recordingPlatform{}}).MarkBusy(t.Context(), at, true); !errors.Is(err, chat.ErrNoBusy) {
+		t.Errorf("MarkBusy of a platform that cannot = %v, want ErrNoBusy", err)
 	}
 }
