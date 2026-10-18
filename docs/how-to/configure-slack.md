@@ -52,8 +52,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     ```sh
     mkdir -p ~/.config/agent-kourier
-    ( umask 077; touch ~/.config/agent-kourier/slack-secret.env )
-    chmod 600 ~/.config/agent-kourier/slack-secret.env
+    touch ~/.config/agent-kourier/slack-secret.env && chmod 600 ~/.config/agent-kourier/slack-secret.env
     ```
 
     Open the file in an editor and write the two tokens, one `key=value` per line, with no quotes:
@@ -72,6 +71,11 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     kubectl reads the tokens from the file, so they are on no command line and in no shell history. The key names are
     fixed: `botToken` and `appToken`. Keep the file at mode 600 for the check in step 6, and delete it afterwards.
+
+    The path is only an example: any file that only you can read works, and Agent Kourier never reads it; kubectl does.
+    If your cluster's Secrets come from a secrets manager (External Secrets, Sealed Secrets), create
+    `agent-kourier-slack` with the keys `botToken` and `appToken` that way instead, and skip the file; step 6 then
+    needs `SLACK_BOT_TOKEN` set some other way.
 
     **5. Declare the connection.** In the chart's values:
 
