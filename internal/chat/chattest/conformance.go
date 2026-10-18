@@ -307,7 +307,44 @@ func (c *checker) contract() {
 		c.zeroStop()
 		c.stepContract()
 	}
+	c.busyContract()
 	c.s.Sent() // the contract checks are not text checks
+	_ = c.s.Inert()
+}
+
+// busyContract checks what a platform promises of the busy mark (chat.BusyMarker). A platform whose Caps.Busy is false says
+// ErrNoBusy if it implements the interface at all, and one whose Caps.Busy is true implements it, sets and clears a mark
+// without error or ErrNoBusy (which a platform may say later, once it finds it cannot), refuses a target with no thread as
+// invalid, and shows no text for any of it: the mark's words are the platform's own.
+func (c *checker) busyContract() {
+	b, implemented := c.s.Platform.(chat.BusyMarker)
+	switch {
+	case !implemented && c.caps.Busy:
+		c.add(RuleContract, 0, "MarkBusy", "busy", "Busy is true and the platform is no chat.BusyMarker")
+		return
+	case !implemented:
+		return
+	}
+	c.s.Sent()
+	_ = c.s.Inert()
+	for _, busy := range []bool{true, false} {
+		err := b.MarkBusy(c.ctx, c.target, busy)
+		switch {
+		case !c.caps.Busy && !errors.Is(err, chat.ErrNoBusy):
+			c.add(RuleContract, 0, "MarkBusy", "no busy", "a platform with Busy false gave %v for busy %t, want chat.ErrNoBusy", err, busy)
+		case c.caps.Busy && err != nil && !errors.Is(err, chat.ErrNoBusy):
+			c.add(RuleContract, 0, "MarkBusy", "busy", "busy %t was refused: %v", busy, err)
+		}
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "MarkBusy", "busy text", "a mark and a clear showed %d texts, want none: the mark has words of the platform's own, which are not text of the turn", len(shown))
+	}
+	if c.caps.Busy {
+		if err := b.MarkBusy(c.ctx, chat.Target{Conn: c.target.Conn, Channel: c.target.Channel}, true); !errors.Is(err, chat.ErrInvalid) && !errors.Is(err, chat.ErrNoBusy) {
+			c.add(RuleContract, 0, "MarkBusy", "no thread", "a target with no thread gave %v, want an error wrapping chat.ErrInvalid (or chat.ErrNoBusy, from a platform that has said it cannot)", err)
+		}
+	}
+	c.s.Sent()
 	_ = c.s.Inert()
 }
 

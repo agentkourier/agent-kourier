@@ -523,3 +523,61 @@ func TestATooLongToolIsRefusedNotCutAndALongEndingIsShown(t *testing.T) {
 		t.Errorf("Post of an ending of a tool over the limit = %v, want it accepted: an ending is cut, not refused", err)
 	}
 }
+
+func TestAThreadIsBusyFromTheMarkUntilTheClearOrAPostInIt(t *testing.T) {
+	f := NewFake()
+	other := chat.Target{Channel: "C1", Thread: "2.2"}
+	for _, step := range []struct {
+		name string
+		do   func() error
+		want [2]bool // busy in tgt, and in other
+	}{
+		{"nothing yet", func() error { return nil }, [2]bool{false, false}},
+		{"a mark", func() error { return f.MarkBusy(ctx, tgt, true) }, [2]bool{true, false}},
+		{"the mark again", func() error { return f.MarkBusy(ctx, tgt, true) }, [2]bool{true, false}},
+		{"a post in another thread", func() error { _, err := f.Post(ctx, other, say("x"), "t1"); return err }, [2]bool{true, false}},
+		{"a post in the thread", func() error { _, err := f.Post(ctx, tgt, say("x"), "t2"); return err }, [2]bool{false, false}},
+		{"a mark after it", func() error { return f.MarkBusy(ctx, tgt, true) }, [2]bool{true, false}},
+		{"a stream in the thread", func() error {
+			if err := f.MarkBusy(ctx, tgt, true); err != nil {
+				return err
+			}
+			_, err := f.Stream(ctx, tgt, "U1", "x")
+			return err
+		}, [2]bool{false, false}},
+		{"a mark and a clear", func() error {
+			if err := f.MarkBusy(ctx, tgt, true); err != nil {
+				return err
+			}
+			return f.MarkBusy(ctx, tgt, false)
+		}, [2]bool{false, false}},
+		{"a clear of nothing", func() error { return f.MarkBusy(ctx, tgt, false) }, [2]bool{false, false}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if got := [2]bool{f.Busy(tgt), f.Busy(other)}; got != step.want {
+			t.Errorf("%s: busy = %v, want %v", step.name, got, step.want)
+		}
+	}
+	if got := f.BusyCalls(); len(got) != 7 || got[0] != (BusyCall{Target: tgt, Busy: true}) || got[6].Busy {
+		t.Errorf("BusyCalls = %+v, want the seven calls in order, each as made", got)
+	}
+}
+
+func TestAMarkNeedsAThreadAndTheCaps(t *testing.T) {
+	f := NewFake()
+	if err := f.MarkBusy(ctx, chat.Target{Channel: "C1"}, true); !errors.Is(err, chat.ErrInvalid) {
+		t.Errorf("MarkBusy of no thread = %v, want ErrInvalid", err)
+	}
+	f.SetCaps(chat.Caps{Streams: true, MaxText: 4000})
+	if err := f.MarkBusy(ctx, tgt, true); !errors.Is(err, chat.ErrNoBusy) || f.Busy(tgt) {
+		t.Errorf("MarkBusy with Busy false = %v, busy %v, want ErrNoBusy and no mark", err, f.Busy(tgt))
+	}
+	f.SetCaps(chat.Caps{Busy: true, MaxText: 4000})
+	boom := errors.New("boom")
+	f.FailNext("MarkBusy", boom)
+	if err := f.MarkBusy(ctx, tgt, true); !errors.Is(err, boom) || f.Busy(tgt) {
+		t.Errorf("a failed MarkBusy = %v, busy %v, want the error and no mark", err, f.Busy(tgt))
+	}
+}
