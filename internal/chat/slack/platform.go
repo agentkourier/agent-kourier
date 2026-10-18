@@ -38,6 +38,11 @@ type Platform struct {
 	// from then on starts in the mode that works, with no failed call first. warned makes the log of it one.
 	markdown atomic.Bool
 	warned   sync.Once
+
+	// statusOff is latched when Slack refused the assistant status for good (MarkBusy): the platform makes no more calls for
+	// it. statusWarned makes the log of it one.
+	statusOff    atomic.Bool
+	statusWarned sync.Once
 }
 
 // API is what the Platform asks of the Slack client: *Client, or a double of it.

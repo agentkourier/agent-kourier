@@ -50,7 +50,7 @@ const ackReaction = "hourglass_flowing_sand"
 // numbered line, and an answer on the line of its question. The name of a tool awaiting approval has the same
 // limit, and its arguments, which are shown as preformatted text, have maxApprovalArgs.
 var caps = chat.Caps{
-	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection, AckReaction: ackReaction,
+	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: maxSection, AckReaction: ackReaction,
 	Limits: map[chat.Where]int{
 		chat.WhereFallback: maxSection, chat.WhereHeader: maxHeader, chat.WhereBody: maxMarkdown, chat.WhereStream: maxMarkdown,
 		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300, chat.WhereToolArgs: maxApprovalArgs,
