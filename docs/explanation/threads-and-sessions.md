@@ -100,14 +100,13 @@ answer` and `Stopped`. A card that was never sent when a turn ends with no text 
 A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
 `Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.
 
-On Slack, an alert thread in `steps-and-activity` or `activity` also gets Slack's assistant status, an `is working…` row
-with a spinner at the bottom of the thread, from the moment the turn starts, before the thread has any reply. Agent Kourier
-sets it again after each write it makes anyway, because a reply in the thread takes it off, and clears it when the turn
-ends, whether the turn finished, failed, was cancelled or stopped to ask a question. It adds no write of its own on a timer.
-Slack shows it only to people who have Slack open when it is set, so it adds to the `Working…` line and does not replace
-it. A chat thread never sets it. It needs the optional `assistant:write` scope; without it Slack may refuse the call,
-and Agent Kourier then logs that once and goes on without the status
-([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do)).
+On Slack, an alert thread in `steps-and-activity` or `activity` also gets Slack's assistant status, `is working…`. Agent
+Kourier sets it when the turn starts, before the thread has any reply, and again after each write, because a reply in the
+thread takes it off. It clears it when the turn ends, whether the turn finished, failed, was cancelled or stopped to ask a
+question. It adds no write of its own on a timer. A chat thread never sets it. If Slack refuses the call, Agent Kourier logs
+that once and sets no status until it restarts; the replies are unaffected. In our testing the status reached only clients
+that were open when it was set, so it adds to the `Working…` line and does not replace it
+([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do) has what was tested and which scope).
 
 On the generic `a2a` dialect there are no tool events: `steps` shows nothing until text, `steps-and-activity` shows a
 `Working…` card in each gap, and `activity` shows its card with no step count. When the platform has no step cards, or Slack

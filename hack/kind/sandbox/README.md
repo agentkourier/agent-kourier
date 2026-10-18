@@ -131,7 +131,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` (Slack's method pages name no other scope) |
 | `reactions.add`, `reactions.remove` | `reactions:write` |
-| `assistant.threads.setStatus` | `assistant:write`, optional: the status an alert thread shows while an agent works |
+| `assistant.threads.setStatus` | `chat:write` (unverified: slack-go says it accepts `chat:write` or `assistant:write`), the status an alert thread shows while an agent works |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |

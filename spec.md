@@ -963,7 +963,9 @@ making the prefix optional breaks multi-turn context.
     `no_permission`, `unknown_method`; UNCONFIRMED(WP-04): none has been recorded from Slack) turns the status off for the
     connection for the life of the process, logged once at info level, and every later call says `chat.ErrNoBusy` without a
     request. Any other error is logged at warn level, ends the marking for that turn alone, and the turn still clears what
-    the failed call may have set. The scope is optional in the manifest and the docs.
+    the failed call may have set. The manifest asks for `chat:write` alone: slack-go's documentation of the method says it accepts
+    `chat:write` or `assistant:write`, and that `assistant:write` is being deprecated (unverified against Slack); that the
+    status shows with `chat:write` alone is unverified, since the app that showed it in the probe also had `assistant:write`.
   - `output: final` ignores `progress`; the acknowledgment reaction is then the only signal until the answer is posted. A
     stream that has no steps (a platform without them, or Slack's markdown mode, or a platform that refused a step) shows
     no card in any mode; the status line of the update path is not put on a stream, since appended stream text cannot be

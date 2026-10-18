@@ -129,21 +129,29 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` |
 | `reactions.add`, `reactions.remove` | `reactions:write` |
-| `assistant.threads.setStatus` | `assistant:write`, optional (see below) |
+| `assistant.threads.setStatus` | `chat:write` (unverified; see below) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
-`assistant:write` is optional. It lets Agent Kourier set Slack's assistant status on an alert thread, which Slack shows as an
-`is working…` row with a spinner at the bottom of the thread while an agent investigates (and under the alert in the
-channel, until it has a reply). A thread started by a person's message streams its reply instead and never sets it.
-Only people who have the thread open when the status is set see it, and it is gone once Agent Kourier replies in the
-thread or the turn ends. Agent Kourier sets it only when `chat.progress` is not `steps` and `output` is `live`. If Slack
-refuses it (the app lacks the scope, or the workspace does not have the feature), Agent Kourier logs that once, at info
-level, and sets no status for the rest of the process; the replies are unaffected. An app made from an older copy of the
-manifest has no such scope: add `assistant:write` to the bot token's scopes and reinstall the app to turn it on.
+While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
+status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and
+never in a thread that a person's message started, whose reply streams instead. It sets the status when the turn starts and
+again after each write, because a reply in the thread takes it off, and clears it when the turn ends.
+
+The Slack Go library that Agent Kourier uses says the method accepts `chat:write` or `assistant:write`, and that
+`assistant:write` is being deprecated in favor of `chat:write` (unverified against Slack's own documentation). In our
+testing an app that had only `chat:write` was answered `ok`; whether it showed the status was not checked, and the app that
+showed it also had `assistant:write`. The manifest asks for `chat:write` alone. If Slack answers with a code that says the app,
+token or workspace cannot use the method (`missing_scope`, `not_allowed_token_type`, `not_allowed`, `access_denied`,
+`feature_not_enabled`, `no_permission` or `unknown_method`; these codes are unverified, since none has been recorded from
+Slack), Agent Kourier logs that once at info level and sets no status on that connection until it restarts. Replies are
+unaffected.
+
+In our testing (Slack's desktop web client, October 2026; mobile not checked), the status reached only clients that were open
+when it was set, a reply in the thread removed it, and it had not expired after nearly three minutes.
 
 The manifest enables no direct messages: it has no `im:` scopes or events. The manifest includes `usergroups:read`. If
 your app was not made from this manifest, add that scope to the bot token's scopes and reinstall the app before using
