@@ -71,7 +71,11 @@ func (m Message) Validate() error {
 	}
 	for i, p := range m.Parts {
 		switch p := p.(type) {
-		case Header, Body, Context, Note, ToolLine, Mention:
+		case Header, Body, Context, Note, Mention:
+		case ToolLine:
+			if !p.State.valid() {
+				return fmt.Errorf("%w: part %d is a tool line of the state %q", ErrInvalid, i, p.State)
+			}
 		case Buttons:
 			for j, btn := range p.Buttons {
 				if btn.ID == "" || btn.Label == "" {
@@ -102,12 +106,30 @@ type Context struct{ Text string }
 // Note is a sentence Agent Kourier wrote itself, such as a notice: literal text, which may run to several lines.
 type Note struct{ Text string }
 
-// ToolLine is the status line of a tool call: the tool's name and a summary of its arguments. The caller redacts
-// the secrets out of the arguments and cuts the summary before it makes this (a platform cannot: it sees one
-// string), and the adapter shows both as literal text on one line, as "Calling name(summary)".
+// ToolState is how far the tool call of a ToolLine has got.
+type ToolState string
+
+// The states of a ToolLine. The zero value is ToolCalling, which is what a line stored before it had a state
+// says, so a stored line without one is read as it always was.
+const (
+	// ToolCalling is a call under way.
+	ToolCalling ToolState = ""
+	// ToolRan is a call whose result has arrived and does not report a failure.
+	ToolRan ToolState = "ran"
+	// ToolFailed is a call whose result reports that it failed.
+	ToolFailed ToolState = "failed"
+)
+
+func (s ToolState) valid() bool { return s == ToolCalling || s == ToolRan || s == ToolFailed }
+
+// ToolLine is the status line of a tool call: the tool's name, a summary of its arguments, and how far the call has
+// got. The caller redacts the secrets out of the arguments and cuts the summary before it makes this (a platform
+// cannot: it sees one string), and the adapter shows name and summary as literal text on one line, in words of its own
+// for the state: "Calling name(summary)", "Ran name(summary)" or "name(summary) failed".
 type ToolLine struct {
 	Name    string
 	Summary string
+	State   ToolState
 }
 
 // Mention is a line that names a person, and says something of them: User, as a mention where the platform has them,
@@ -143,6 +165,7 @@ type wirePart struct {
 	Markdown string   `json:"markdown,omitempty"`
 	Name     string   `json:"name,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
+	State    string   `json:"state,omitempty"`
 	User     string   `json:"user,omitempty"`
 	Buttons  []Button `json:"buttons,omitempty"`
 }
@@ -166,7 +189,7 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		case Note:
 			w.Parts = append(w.Parts, wirePart{Kind: "note", Text: p.Text})
 		case ToolLine:
-			w.Parts = append(w.Parts, wirePart{Kind: "tool", Name: p.Name, Summary: p.Summary})
+			w.Parts = append(w.Parts, wirePart{Kind: "tool", Name: p.Name, Summary: p.Summary, State: string(p.State)})
 		case Mention:
 			w.Parts = append(w.Parts, wirePart{Kind: "mention", User: p.User, Text: p.Text})
 		case Buttons:
@@ -197,7 +220,7 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 		case "note":
 			out.Parts = append(out.Parts, Note{p.Text})
 		case "tool":
-			out.Parts = append(out.Parts, ToolLine{Name: p.Name, Summary: p.Summary})
+			out.Parts = append(out.Parts, ToolLine{Name: p.Name, Summary: p.Summary, State: ToolState(p.State)})
 		case "mention":
 			out.Parts = append(out.Parts, Mention{User: p.User, Text: p.Text})
 		case "buttons":
