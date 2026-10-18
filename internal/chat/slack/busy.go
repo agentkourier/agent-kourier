@@ -19,12 +19,12 @@ const busyStatus = "is working…"
 // SetThreadStatus sets the assistant status of the thread threadTS in channel to status (assistant.threads.setStatus), the
 // row with a spinner at the bottom of a thread that shows who is working in it, and an empty status takes it off. Slack takes it in a
 // thread that the app did not open, with no stream, and clears it itself when the app posts in the thread. It reaches only
-// the clients that have the thread open when it is set. An empty channel or threadTS is store.ErrInvalid, and no call is made.
-// The error holds no token and keeps the Slack code for errors.As. The app may need the assistant:write scope.
+// the clients that are open when it is set. An empty channel or threadTS is store.ErrInvalid, and no call is made. The error
+// holds no token and keeps the Slack code for errors.As.
 //
-// UNCONFIRMED(WP-04): which scope Slack requires (the library's documentation says chat:write also does), what an app
-// without it is answered with (one workspace's was answered ok, and whether it showed the status is not known), and the
-// codes of refusesStatus.
+// UNCONFIRMED(WP-04): which scope Slack requires. slack-go's documentation of the method says it accepts chat:write or
+// assistant:write, and that assistant:write is being deprecated in favor of chat:write; an app with only chat:write was
+// answered ok in one probe (2026-10-18), and whether it showed the status there is not known. Also the codes of refusesStatus.
 func (c *Client) SetThreadStatus(ctx context.Context, channel, threadTS, status string) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.SetThreadStatus")
 	defer func() { finishChat(ctx, op, "SetThreadStatus", telemetryErr) }()
@@ -70,8 +70,8 @@ func (p *Platform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error
 	if errors.As(err, &resp) && refusesStatus(resp.Err) {
 		p.statusOff.Store(true)
 		p.statusWarned.Do(func() {
-			p.log.InfoContext(ctx, "slack: the assistant status of a thread was refused, so threads are not shown as busy while an agent works; "+
-				"the Slack app needs the assistant:write scope for it (optional)", "conn", p.conn, "code", resp.Err)
+			p.log.InfoContext(ctx, "slack: Slack refused assistant.threads.setStatus, so threads are not shown as busy on this connection until restart",
+				"conn", p.conn, "code", resp.Err)
 		})
 		return fmt.Errorf("%w: %w", chat.ErrNoBusy, err)
 	}

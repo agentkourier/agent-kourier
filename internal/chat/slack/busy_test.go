@@ -115,8 +115,8 @@ func TestARefusalTurnsTheStatusOffOnceAndForGood(t *testing.T) {
 			if n := len(rt.calls()); n != 1 {
 				t.Errorf("requests = %d, want the one that was refused", n)
 			}
-			if n := strings.Count(logs.String(), "\n"); n != 1 || !strings.Contains(logs.String(), code) || !strings.Contains(logs.String(), "assistant:write") {
-				t.Errorf("log = %q, want one line that names the code and the scope", logs.String())
+			if n := strings.Count(logs.String(), "\n"); n != 1 || !strings.Contains(logs.String(), code) || !strings.Contains(logs.String(), "assistant.threads.setStatus") {
+				t.Errorf("log = %q, want one line that names the code and the method", logs.String())
 			}
 			if strings.Contains(logs.String(), "xoxb-fake-token") {
 				t.Error("the log holds the token")
