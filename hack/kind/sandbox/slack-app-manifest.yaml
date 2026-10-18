@@ -1,6 +1,6 @@
 display_information:
   name: Agent Kourier
-  description: agent-kourier dogfood (sandbox workspace only)
+  description: Brings A2A agents into Slack threads, through Agent Kourier.
 features:
   bot_user:
     display_name: Agent Kourier
