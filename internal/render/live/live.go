@@ -12,7 +12,8 @@
 // stream.go). On a platform that has progress steps (Caps.Steps) a stream shows each tool call as a step, where in
 // the text it was made: begun when the call is, finished when its result is. A step is only ever moved
 // forward, so nothing has to be taken back. Otherwise, such as in an alert thread, or on a platform that does not
-// stream, the turn posts and updates, and shows a tool call as a status line while it runs. Neither path ever
+// stream, the turn posts and updates, and shows the latest tool call as a status line, in the past tense once its result
+// has arrived (render.Turn says when the line is shown). Neither path ever
 // updates a message that is still streaming. Text is built at the last step, from the raw events (package
 // render), and is literal: the platform makes it inert.
 package live
@@ -174,12 +175,13 @@ type Run struct {
 	// start and never changed, which is why Handle may read it; streaming, which a takeover clears, is the goroutine's.
 	eligible bool
 
-	mu    sync.Mutex // guards the state below
-	texts map[a2a.ArtifactID]string
-	order []a2a.ArtifactID
-	tool  *agent.ToolCallEvent // the call being made, if any
-	steps []stepRec            // the tool calls of a stream, in the order they were made
-	final bool
+	mu        sync.Mutex // guards the state below
+	texts     map[a2a.ArtifactID]string
+	order     []a2a.ArtifactID
+	tool      *agent.ToolCallEvent // the latest call made, if any: the update path's status line is about it
+	toolState chat.ToolState       // how far the latest call has got: under way, or how it ended
+	steps     []stepRec            // the tool calls of a stream, in the order they were made
+	final     bool
 	// paused says the final event was a pause for input, not the end of the task: the reply so far is a question, and no answer to
 	// rate.
 	paused bool
@@ -240,11 +242,14 @@ func (u *Run) Handle(ev agent.Event) {
 		}
 		u.texts[e.ArtifactID] = e.Text
 	case agent.ToolCallEvent:
-		u.tool = &e
+		u.noteCall(e)
 		u.beginStep(e)
 	case agent.ToolResultEvent:
-		if u.tool != nil && u.tool.CallID == e.CallID {
-			u.tool = nil
+		if u.tool != nil && u.tool.CallID == e.CallID && u.toolState == chat.ToolCalling {
+			u.toolState = chat.ToolRan
+			if render.Failed(e.Response) {
+				u.toolState = chat.ToolFailed
+			}
 		}
 		u.endStep(e)
 	case agent.FinalEvent:
@@ -256,6 +261,17 @@ func (u *Run) Handle(ev agent.Event) {
 	case u.wake <- struct{}{}:
 	default: // a signal is waiting already
 	}
+}
+
+// noteCall makes e the latest call, under way: the update path's status line is about it. A call that is reported
+// again after its result keeps the outcome it has, so that the line does not go back to a call under way that nothing
+// would end. The caller holds u.mu.
+func (u *Run) noteCall(e agent.ToolCallEvent) {
+	if u.tool != nil && e.CallID != "" && u.tool.CallID == e.CallID {
+		u.tool = &e
+		return
+	}
+	u.tool, u.toolState = &e, chat.ToolCalling
 }
 
 // beginStep records a tool call as a step of the stream, once: a call that is reported again is the same step, and
@@ -486,7 +502,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 
 // view is what the state shows at one moment.
 type view struct {
-	m     chat.Message // the message of the update path: the text so far, and while a tool call is under way its status line
+	m     chat.Message // the message of the update path: the text so far, and the latest tool call's status line as render.Turn shows it
 	body  string       // the text a stream carries
 	steps []chat.Step  // the steps a stream shows, in the order of the calls, each in the state to show
 	pos   []int        // where in body each step follows: the text before that place was written before the call
@@ -495,16 +511,17 @@ type view struct {
 	ok    bool // there is something to show yet
 }
 
-// snapshot builds the state: the text so far as the body and, while a tool call is under way, its status line on the
-// update path, and on the stream path the steps. Once the turn is final the line is gone, and a step with no result is
-// ended: the turn will not hear of it again.
+// snapshot builds the state: the text so far as the body and, on the update path, the status line of the latest tool
+// call, in the tense of how far it has got (render.Turn says when it is shown), and on the stream path the steps. A
+// state with a status line is writable with no text, so a call that returned replaces the line that said it was under way.
+// Once the turn is final the line is gone, and a step with no result is ended: the turn will not hear of it again.
 func (u *Run) snapshot() view {
 	u.mu.Lock()
 	events := make([]agent.TextEvent, 0, len(u.order))
 	for _, id := range u.order {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
-	tool, final, paused := u.tool, u.final, u.paused
+	tool, toolState, final, paused := u.tool, u.toolState, u.final, u.paused
 	var recs []stepRec
 	if u.stepsOn() {
 		recs = slices.Clone(u.steps)
@@ -516,7 +533,7 @@ func (u *Run) snapshot() view {
 		shown = tool
 	}
 	v.body = render.Body(events, u.caps.Limit(chat.WhereStream))
-	v.m, v.ok = render.Turn(events, shown, u.caps)
+	v.m, v.ok = render.Turn(events, shown, toolState, u.caps)
 	if v.rated && len(u.turn.Footer) > 0 { // a turn that ended with no text is replaced below by "(no output)", footer and all
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
