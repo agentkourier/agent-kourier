@@ -102,9 +102,10 @@ A Binding that sets no `progress` gets `steps-and-activity`, so a Binding writte
 
 On Slack, an alert thread in `steps-and-activity` or `activity` also gets Slack's assistant status, `is working…`. Agent
 Kourier sets it when the turn starts, before the thread has any reply, and again after each write, because a reply in the
-thread takes it off. It clears it when the turn ends, whether the turn finished, failed, was cancelled or stopped to ask a
-question. It adds no write of its own on a timer. A chat thread never sets it. If Slack refuses the call, Agent Kourier logs
-that once and sets no status until it restarts; the replies are unaffected. In our testing the status reached only clients
+thread may take it off. It clears it when the turn ends, whether the turn finished, failed, was cancelled or stopped to ask a
+question. It adds no write of its own on a timer. A chat thread never sets it. If Slack answers that the app or workspace cannot use the method, Agent Kourier logs
+that once at info level and sets no status on that connection until it restarts; any other error stops it for that turn only.
+The replies are unaffected. In our testing the status reached only clients
 that were open when it was set, so it adds to the `Working…` line and does not replace it
 ([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do) has what was tested and which scope).
 

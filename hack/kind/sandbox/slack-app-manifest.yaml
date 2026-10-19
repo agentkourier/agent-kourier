@@ -9,12 +9,14 @@ oauth_config:
   scopes:
     bot:
       - app_mentions:read
+      # For assistant.threads.setStatus, the status an alert thread shows while an agent works. This is the scope with which we have
+      # seen the status render. slack-go says chat:write may also cover the method and that assistant:write is being deprecated
+      # (unverified against Slack).
+      - assistant:write
       - channels:history
       - channels:read
       - groups:history
       - groups:read
-      # chat:write also covers assistant.threads.setStatus, the status an alert thread shows while an agent works: slack-go says the
-      # method accepts chat:write or assistant:write, and that assistant:write is being deprecated (unverified against Slack).
       - chat:write
       - reactions:write
       - usergroups:read

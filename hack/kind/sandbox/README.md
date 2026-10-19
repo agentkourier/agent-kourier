@@ -131,7 +131,7 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` (Slack's method pages name no other scope) |
 | `reactions.add`, `reactions.remove` | `reactions:write` |
-| `assistant.threads.setStatus` | `chat:write` (unverified: slack-go says it accepts `chat:write` or `assistant:write`), the status an alert thread shows while an agent works |
+| `assistant.threads.setStatus` | `assistant:write`, the scope with which we have seen the status of an alert thread render while an agent works (slack-go says `chat:write` may also do, unverified) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
@@ -143,7 +143,7 @@ and chunk-mode streams work: the `task_update` cards of tool calls are placed in
 and a finished step shows status complete. **Confirmed by a direct API call (2026-10-18):** `chat.startStream` in a
 channel thread accepts the form Agent Kourier sends, `recipient_user_id` with `recipient_team_id` (documented as required
 in channels). Still UNCONFIRMED: that the streaming methods need no app feature beyond `chat:write` (the "Agents & AI
-Apps" feature and `assistant:write` are named on none of the three method pages, and nothing here enables them); and that
+Apps" feature and `assistant:write` are named on none of the three method pages, and nothing here enables the feature; the manifest's `assistant:write` is for the status of an alert thread, not for streams); and that
 `chat.stopStream` takes the metadata Agent Kourier sends (its page lists `blocks` and `metadata`). If `chat.startStream` fails with `missing_scope` or a feature
 error, that is the finding: note the error code in the checklist's streaming row and add the scope or feature to the
 manifest. Direct messages are not enabled (no `im:` scopes or events), so the app has no DM trigger.
