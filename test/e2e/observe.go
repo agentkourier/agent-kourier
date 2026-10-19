@@ -42,3 +42,12 @@ func (s *Slack) Reactions(ctx context.Context, channel, ts string) ([]fakeslack.
 	err := s.c.do(ctx, http.MethodGet, "/_control/reactions?"+url.Values{"channel": {channel}, "ts": {ts}}.Encode(), nil, &out)
 	return out, err
 }
+
+// ThreadStatuses returns the calls of assistant.threads.setStatus that Agent Kourier made for channel, oldest first, each with
+// its thread and the status it set; an empty status is a clear. The fake keeps the calls and does not model Slack taking a
+// status off when the bot posts.
+func (s *Slack) ThreadStatuses(ctx context.Context, channel string) ([]fakeslack.ThreadStatus, error) {
+	var out []fakeslack.ThreadStatus
+	err := s.c.do(ctx, http.MethodGet, "/_control/thread-statuses?"+url.Values{"channel": {channel}}.Encode(), nil, &out)
+	return out, err
+}

@@ -948,6 +948,26 @@ making the prefix optional breaks multi-turn context.
     its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
     call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still
     running into an error, so every card, an unclaimed `Working…` card included, is finished before the stop.
+  - On the update path only (no stream recipient, as in an alert thread), and only when `output` is `live` and `progress` is
+    not `steps`, the renderer also marks the thread busy, through the optional `chat.BusyMarker` (`Caps.Busy`). On Slack
+    that is `assistant.threads.setStatus` with the status `is working…` and no loading messages. The mark is set when the turn
+    starts, set again after each write the run makes anyway (a post in the thread takes it off), and cleared with an empty
+    status when the run ends: final, failed, paused for input, cancelled or the turn's context ending. It has no timer and
+    no write of its own, each call is bounded to 5 s, no failure of it fails the turn, and a chat thread (a stream) never
+    uses it. Probed 2026-10-18 in a channel thread the app did not open, in a workspace whose app has
+    `assistant:write`: it renders as a bot-avatar row with a spinner at the bottom of the thread, and under the parent in
+    the channel view when the parent has no replies; a bot reply in the thread clears it; it coexists with an open stream;
+    it reaches only clients that are open when it is set; and none expired in 2 min 45 s. An app without the scope was
+    answered `ok` in another workspace, and whether it showed there is unverified. A refusal whose code says the app or
+    workspace cannot (`missing_scope`, `not_allowed_token_type`, `not_allowed`, `access_denied`, `feature_not_enabled`,
+    `no_permission`, `unknown_method`; UNCONFIRMED(WP-04): none has been recorded from Slack) turns the status off for the
+    connection for the life of the process, logged once at info level, and every later call says `chat.ErrNoBusy` without a
+    request. Any other error is logged at warn level, ends the marking for that turn alone, and the turn still clears what
+    the failed call may have set. The manifest asks for `assistant:write`, the scope with which the status was seen to render (also with Slack's agent app
+    feature off, 2026-10-18). slack-go's documentation of the method says it accepts `chat:write` or `assistant:write`, and that
+    `assistant:write` is being deprecated (unverified against Slack); that the status shows with `chat:write` alone is
+    unverified, because Slack kept `assistant:write` on a token after it was removed from the app and the app reinstalled.
+    An app made from an older manifest may get the status anyway or be refused, and a refusal is only logged.
   - `output: final` ignores `progress`; the acknowledgment reaction is then the only signal until the answer is posted. A
     stream that has no steps (a platform without them, or Slack's markdown mode, or a platform that refused a step) shows
     no card in any mode; the status line of the update path is not put on a stream, since appended stream text cannot be

@@ -180,6 +180,12 @@ Binding fails to load for it.
   some, and as the message's first post if nothing else has been said. The next text or tool call replaces it. Each gap
   costs one more message update. A turn that is silent for 3 seconds and then ends with nothing to show, or fails, now
   leaves a message saying `(no output)` where under `steps` it posted nothing.
+- **An alert thread on Slack gains an assistant status.** Agent Kourier sets Slack's `is working…` status on the thread when
+  the turn starts and again after each write, because a reply in the thread may take it off, and clears it when the turn ends.
+  If Slack answers that the app or workspace cannot use the method, Agent Kourier logs that once at info level and sets no
+  status on that connection until it restarts; any other error stops it for that turn only. The manifest now asks for
+  `assistant:write`, with which we have seen the status render; an app made from an older manifest may get the status anyway
+  or be refused, and a refusal is only logged. Which scope the call needs is unverified; see [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do).
 - **`output: final` is unchanged.** It posts once when the turn ends, whatever `progress` says.
 
 To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line

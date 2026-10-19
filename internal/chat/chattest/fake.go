@@ -73,8 +73,16 @@ type FakePlatform struct {
 	sink       chat.Sink
 	ready      chan struct{}
 	runErr     error
-	sent       []Shown        // what was received since Sent was last called
-	said       []chat.Inbound // what Say delivered, which ThreadBetween reads with what was posted
+	sent       []Shown            // what was received since Sent was last called
+	said       []chat.Inbound     // what Say delivered, which ThreadBetween reads with what was posted
+	busy       map[[2]string]bool // the threads shown as busy, by channel and thread
+	busyCalls  []BusyCall
+}
+
+// BusyCall is a call of MarkBusy: the thread, and whether it set the mark or took it off.
+type BusyCall struct {
+	Target chat.Target
+	Busy   bool
 }
 
 // NewFake returns a fake with every capability, and limits like a real platform's.
@@ -82,10 +90,10 @@ func NewFake() *FakePlatform {
 	return &FakePlatform{
 		MaxQuestions: 20, MaxTools: 20, Now: time.Now,
 		caps: chat.Caps{
-			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 4000, AckReaction: "hourglass",
+			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 4000, AckReaction: "hourglass",
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
-		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, ready: make(chan struct{}),
+		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, busy: map[[2]string]bool{}, ready: make(chan struct{}),
 	}
 }
 
@@ -241,6 +249,7 @@ func (f *FakePlatform) Post(_ context.Context, t chat.Target, o chat.Outgoing, t
 	}
 	ref := chat.Ref{Platform: "fake", Conn: t.Conn, Channel: t.Channel, Thread: t.Thread, ID: fmt.Sprintf("%d.000", len(f.messages)+1)}
 	f.keep(&Message{Ref: ref, Out: o, Tag: tag, Posted: f.Now()})
+	delete(f.busy, [2]string{t.Channel, t.Thread}) // a message in the thread takes the mark off, as a platform's may
 	f.sent = append(f.sent, f.show(o)...)
 	return ref, nil
 }
@@ -308,6 +317,7 @@ func (f *FakePlatform) Stream(_ context.Context, t chat.Target, to, markdown str
 	}
 	ref := chat.Ref{Platform: "fake", Conn: t.Conn, Channel: t.Channel, Thread: t.Thread, ID: fmt.Sprintf("%d.000", len(f.messages)+1)}
 	f.keep(&Message{Ref: ref, Streamed: markdown, Streaming: true, Recipient: to, Posted: f.Now()})
+	delete(f.busy, [2]string{t.Channel, t.Thread})
 	f.sent = append(f.sent, f.showMarkdown(markdown))
 	return &fakeStream{f, ref}, nil
 }
@@ -433,6 +443,45 @@ func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error
 	}
 	m.Reactions = slices.DeleteFunc(m.Reactions, func(n string) bool { return n == name })
 	return nil
+}
+
+var _ chat.BusyMarker = (*FakePlatform)(nil)
+
+// MarkBusy implements chat.BusyMarker. A thread stays busy until it is cleared or Post puts a message in it, which is
+// what a platform's mark does (chat.BusyMarker). A fake whose caps say no Busy says chat.ErrNoBusy and shows none.
+func (f *FakePlatform) MarkBusy(_ context.Context, t chat.Target, busy bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.caps.Busy {
+		return chat.ErrNoBusy
+	}
+	if t.Thread == "" {
+		return fmt.Errorf("fake platform: %w: a thread to mark", chat.ErrInvalid)
+	}
+	f.busyCalls = append(f.busyCalls, BusyCall{Target: t, Busy: busy})
+	if err := f.fail("MarkBusy"); err != nil {
+		return err
+	}
+	if busy {
+		f.busy[[2]string{t.Channel, t.Thread}] = true
+	} else {
+		delete(f.busy, [2]string{t.Channel, t.Thread})
+	}
+	return nil
+}
+
+// Busy says whether the thread t is shown as busy now.
+func (f *FakePlatform) Busy(t chat.Target) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.busy[[2]string{t.Channel, t.Thread}]
+}
+
+// BusyCalls returns the calls of MarkBusy that reached the platform, in order, those that failed included.
+func (f *FakePlatform) BusyCalls() []BusyCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.busyCalls)
 }
 
 var _ chat.ThreadReader = (*FakePlatform)(nil)

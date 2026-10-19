@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -95,6 +96,10 @@ type Renderer struct {
 	cfg  Config
 	caps chat.Caps      // what the platform can do and how much it shows, asked once
 	runs sync.WaitGroup // the goroutines of the turns started and not over
+	// busy is the platform as a chat.BusyMarker, if it is one and says it shows a thread as busy (Caps.Busy). busyOff is set
+	// once it has said it cannot: no turn asks again.
+	busy    chat.BusyMarker
+	busyOff atomic.Bool
 }
 
 // New returns a Renderer over cfg. It refuses a Config without its Sender, Platform or Store, naming the field, so that a
@@ -132,7 +137,11 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities()}, nil
+	r := &Renderer{cfg: cfg, caps: cfg.Platform.Capabilities()}
+	if m, ok := cfg.Platform.(chat.BusyMarker); ok && r.caps.Busy {
+		r.busy = m
+	}
+	return r, nil
 }
 
 // Wait returns once every turn started so far has ended, or with ctx's error if that comes first, so that
@@ -195,6 +204,8 @@ type Run struct {
 	// with (a stream that has steps, or a message that is updated). Both are set at the start and never changed.
 	progress v1alpha1.ProgressMode
 	timed    bool
+	// busy marks the thread as busy while the turn runs: only a turn on the update path in a mode that shows activity has one.
+	busy *busyMark
 
 	mu        sync.Mutex // guards the state below
 	texts     map[a2a.ArtifactID]string
@@ -275,6 +286,9 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 	u := &Run{cfg: r.cfg, caps: r.caps, turn: t, streaming: streaming, eligible: streaming && r.caps.Steps, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
 		u.progress = t.Progress
+	}
+	if r.busy != nil && !streaming && u.progress != v1alpha1.ProgressSteps {
+		u.busy = &busyMark{m: r.busy, off: &r.busyOff, at: chat.Target{Channel: t.Channel, Thread: t.Thread}, run: u}
 	}
 	if u.timed = u.progress != v1alpha1.ProgressSteps && (!streaming || r.caps.Steps); u.timed {
 		u.started = r.cfg.Now()
@@ -527,6 +541,8 @@ func (u *Run) stepIndex(callID string) int {
 // run writes the state each time its window opens, until the final text is out.
 func (u *Run) run(ctx context.Context) {
 	defer close(u.done)
+	defer func() { u.busy.clear(ctx) }() // on every way out: the turn is over, and the thread is not busy
+	u.busy.set(ctx)
 	var finalOp *telemetry.Operation
 	finalCtx := ctx
 	writes := 0
@@ -643,6 +659,7 @@ func (u *Run) run(ctx context.Context) {
 				finalOutcome = "delivered"
 				return
 			}
+			u.busy.set(ctx) // a post in the thread may have taken the mark off; this rides the write just made and adds none
 			break
 		}
 	}

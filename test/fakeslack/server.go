@@ -80,6 +80,9 @@
 //   - reactions.add and reactions.remove (reactions.go): already_reacted and no_reaction,
 //     message_not_found (and the code for a deleted message), the characters a name may have, and
 //     no event being sent.
+//   - assistant.threads.setStatus (status.go): invalid_arguments for a call without a channel_id, thread_ts or status; it
+//     checks no scope and keeps the calls, in order (ThreadStatuses, GET /_control/thread-statuses), and does not model
+//     Slack taking a status off when the bot posts.
 //   - conversations.history and conversations.replies: invalid_limit; metadata
 //     only with include_all_metadata=1; with only oldest set, results stay
 //     newest first and cursors walk back toward oldest; replies return the
@@ -148,6 +151,7 @@ type Server struct {
 
 	channelTypes map[string]string      // set by SetChannelType, guarded by mu
 	ephemerals   map[string][]Ephemeral // per channel, in order, guarded by mu
+	statuses     []ThreadStatus         // the calls of assistant.threads.setStatus, in order, guarded by mu
 	ownPending   []ownEvent             // events queued by the request holding ownMu, for flushOwn; guarded by mu
 	ownSent      map[ownKey][]string    // envelope IDs of events sent for each bot message, guarded by mu
 
@@ -309,6 +313,8 @@ func (s *Server) dispatch(r *http.Request) (response, string) {
 		return s.addReaction(r.Form)
 	case "reactions.remove":
 		return s.removeReaction(r.Form)
+	case "assistant.threads.setStatus":
+		return s.setThreadStatus(r.Form)
 	case "conversations.history":
 		return s.history(r.Form)
 	case "conversations.replies":
