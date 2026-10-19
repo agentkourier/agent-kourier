@@ -48,7 +48,7 @@ type Step struct {
 	Title string
 	// Detail is a short line about it, such as the redacted summary of a tool's arguments (the secrets taken out by
 	// the caller, never the raw arguments): literal text, one line, untrusted. It may be empty. A step's detail is the
-	// one it was first sent with: a platform may show only that one, as Slack does.
+	// first non-empty detail it was sent with: a platform may show only that one, as Slack does.
 	Detail string
 	// State is how far the step has got.
 	State StepState

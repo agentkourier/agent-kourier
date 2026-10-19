@@ -200,6 +200,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D40 | Fields that work | The API carries only fields that work. Phase 5 added `Binding.spec.interactions.toolApprovals` and `approverGroups`; `toolApprovals` defaults to false, and `approverGroups` is validated and used when approvals are enabled. Three feature areas remain out of the types until their phase: `ChatConnection.spec.directMessages` with its `defaultBindingRef` (Phase 4; a direct message is not routed), `ChatConnection.spec.mode` and the `signingSecret` Secret key (Phase 4; only Socket Mode is served), and `Binding.status` with its conditions (Phase 4, with the controller of D30; nothing sets it). A config that sets one of those three still fails strict decoding. |
 | D41 | Presets removed | Trigger presets are removed. A preset hid the regexes, thread rules, limits and prompt of a known sender behind one word, and it does not carry to a second chat platform, where each platform would need its own regex set. Alert-specific behaviour is a `botMessage` trigger written in full, from an example the docs carry (Alertmanager's Slack receiver is the canonical one). A `botMessage` trigger must set `limits.rateLimit` (all three fields) and `limits.maxRunsPerDay`; the preset was what gave an alert trigger a spend cap (D31), so without it the cap is explicit. An explicit `maxRunsPerDay: 0` still means no cap and is allowed, because the choice is written in the config. A config that sets `preset:` fails strict decoding, as D39 and D40 did for their fields, so a deployed config drops the key and pastes the example. Every trigger start reports source `botMessage` (the prompt view's `.Source` and the session's origin source); votes on sessions created before this change keep the `alertmanager` source they were stored with. Supersedes the preset parts of D31 and D39. (Owner, 2026-10-15.) |
 | D42 | Second platform, additively | The API takes a second chat platform without breaking a Slack Binding. Renaming a field, changing its meaning, or changing a default that an apiserver would persist is breaking. Loosening validation, widening an enum, adding an optional field or a `spec.<platform>` block, and adding a metadata key are not. So four changes are made before release and the rest waits for the second adapter. (1) `from.botId` becomes `from.id` plus an optional `from.kind`. `kind` is an enum that holds only `bot` and defaults to `bot`; a later platform widens it (research: a Mattermost webhook post carries its owner's `user_id`, and Teams has application identity types, upstream behaviour not measured by us). D36 still applies: an ID, never a display name. A trigger accepts a message only when the sender's ID and kind both equal `from.id` and `from.kind`. The Slack adapter gives every bot sender kind `bot`, so Slack behaviour is unchanged. The kind is not part of the thread key hash. A thread open at the upgrade is still found. The consequence of leaving the kind out of the hash is that two triggers in one channel that name the same ID with different kinds would share key threads, so a second adapter with more than one kind per ID (for example, a Mattermost bot that also owns a webhook) must revisit this. (2) The trigger message fields `attachmentText` and `titleLink` become `body` and `link`; `text`, `title`, `footer` and `fallback` keep their names. Each name is defined by what it holds, and each adapter documents how it flattens its native message into them (8.2). The names the untrusted block gives the fields follow. (3) The API has no Slack default for the acknowledgment reaction: `chat.acknowledgment.emoji` has no default marker and `Default()` does not fill it, and the platform supplies its own when it is unset (Slack: `hourglass_flowing_sand`), because once CRDs ship an apiserver default is written into every stored object. `enabled` still defaults to true. (4) The agent contract names the platform: the `agentkourier.dev/actor` metadata gains `platform`, the platform's ID (`slack`), and the text prefix is `[<Platform>: Name (id) <email>]` with the platform's display name, so it stays `[Slack: …]` on Slack (8.5). Two conventions go with them, with nothing built for them yet. A `ChatConnection` keeps credentials in `credentialsSecretRef`, with keys fixed per platform (Slack: `botToken` and `appToken`); non-secret settings go in a `spec.<platform>` block that is added along with the platform, and Slack has none. A doc comment that says "Slack channel ID", "Slack bot ID" or "Slack user group" says "the platform's ID (Slack: `C…`)" instead; the ID regexes in the types stay until a second adapter moves them to per-platform checks at resolution, and loosening them then breaks nothing. A config that sets `botId`, `attachmentText` or `titleLink` fails strict decoding, as D39, D40 and D41 did for their fields, so a deployed config renames them. Amends D36 (bot ID becomes sender ID and kind); the rows that name the old fields stay as history. (Owner, 2026-10-15.) |
+| D44 | Progress modes | A Binding's `chat.progress` is `steps`, `steps-and-activity` (default) or `activity`: how much of the agent's work a live reply shows before its text, so that no mode leaves a long stretch with nothing moving. The idle title is `Working…` in every mode, since the model's reasoning is never read and a gap promises nothing about what the agent is doing. The 3 s delay is the renderer's (`live.Config.ActivityDelay`), not the API's. `output: final` ignores the field. The default changes what a Binding that sets none shows (owner, 2026-10-18, after the real-Slack probes of 8.3). |
 
 ## 6. Architecture
 
@@ -448,6 +449,7 @@ spec:
     connectionRef: { namespace: agent-kourier-system, name: slack-main }
     channel: C0123456789             # investigation channel ID, not name (Slack: C…)
     output: live                     # live | final
+    progress: steps-and-activity     # steps | steps-and-activity | activity; see 8.3
     threadReplies: all               # all | mention; see 8.2
     triggers:                        # empty means [{type: mention}]; see 8.2
       - type: mention
@@ -915,6 +917,42 @@ making the prefix optional breaks multi-turn context.
   failure (`render.Failed`). A returned call's line is written even when no text has arrived, so a line that
   said `Calling` is replaced; it is shown only while the turn has no text, and goes when text arrives. A call
   under way keeps its line beside the text, and the final message has no line.
+- `chat.progress` (D44) chooses what a live reply shows while the agent is silent. kagent emits a tool call only once the
+  model has finished writing it, so each card lands already finished, and the seconds the model spends deciding the next
+  step would look like a stall (measured on a real cluster, 2026-10-18: 16 tool calls over 206 s, the longest unchanged
+  stretch 22 s). The renderer's run loop wakes on a timer as well as on events. A gap is the time since the last text, the
+  last tool result with no other call under way, or the start of the turn; no gap runs while a call with an ID is under
+  way. When a gap has run `Config.ActivityDelay` (3 s) with nothing new, the renderer shows that the agent is working, once
+  for the gap; every other write follows an event. So a gap longer than the delay costs at most two writes more than `steps`
+  spends in a chat thread (each `Step` is its own `chat.appendStream`: the card's begin and, when no tool call takes it over,
+  its end), and one more `chat.update` in an alert thread. The `activity` mode writes its card when a result
+  changes a count, at most once a window (the actual `chat.appendStream` rate tier is unverified). The modes:
+  - `steps`: a card per tool call in a chat thread, the status line above in an alert thread.
+  - `steps-and-activity` (the default): the same, and a gap longer than the delay adds one `Working…`. In a stream it is a
+    card begun in the running state with no detail. The next tool call takes that card over: the card's title becomes the
+    tool's, the tool's detail is shown then, and the result finishes it with its status alone (one card; the gap cost the begin).
+    A card no call took is ended under a title of its own, so that no card ticks on `Working…`: `Wrote the answer` if text
+    came while it was open; at the end of the turn, `Finished` for a completed task, `Waiting for your answer` for a
+    pause for input, and `Stopped`, an error and not a tick, for a task that failed, was cancelled or was rejected. A card
+    that was never sent when the turn ends with no text is not sent at all: no stream is made for it. A call that arrives
+    before the delay begins its card directly. On the update path `Working…` is a line of small print that replaces the
+    line of a call that returned, shown under the text if there is some; the next text or call replaces it.
+  - `activity`: one card `Working…`, begun at the first tool call or result or at the delay, whichever is first, and only
+    if no text has come. No card or line of the reply names a tool or holds an argument (an approval prompt still names the tool, 8.4). Its title carries the counts of the tool calls that
+    have a result, `Working… 12 steps, 3 failed`; at the first text, or at the end of a completed task, it is done as
+    `Worked`, with the summary `Took 3 min 26 s, 16 steps (7 failed)` as its detail, sent once; a pause for input ends it as
+    `Waiting for your answer` and a failed, cancelled or rejected task as `Stopped`, an error, with the same summary. On the
+    update path the line is `Working… (2 min, 12 steps, 3 failed)`, the minutes only from one, rewritten only by a write
+    that an event causes, and replaced by the first text.
+  - On Slack a `task_update` with an ID the stream has seen updates that card: its title and status replace the card's, and
+    its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
+    call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still
+    running into an error, so every card, an unclaimed `Working…` card included, is finished before the stop.
+  - `output: final` ignores `progress`; the acknowledgment reaction is then the only signal until the answer is posted. A
+    stream that has no steps (a platform without them, or Slack's markdown mode, or a platform that refused a step) shows
+    no card in any mode; the status line of the update path is not put on a stream, since appended stream text cannot be
+    taken back. On the generic `a2a` dialect there are no tool events: `steps` shows nothing until text,
+    `steps-and-activity` shows a `Working…` card in each gap, and `activity` shows its card with no step count.
 - Slack's `chat.startStream` requires a recipient user in channels. Chat threads use
   it with the requesting user as recipient. Alert threads have no requesting user, so
   they use throttled `chat.update`. Rate limits for both are verified in Phase 0.

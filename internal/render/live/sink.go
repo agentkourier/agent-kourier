@@ -76,7 +76,7 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	if mode == "" {
 		mode = v1alpha1.OutputLive
 	}
-	turn := Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Recipient: recipient, Recovered: t.Recovered}
+	turn := Turn{Source: t.MessageID, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Progress: t.Progress, Recipient: recipient, Recovered: t.Recovered}
 	turn.Footer = footerOf(t)
 	return s.runs.Start(ctx, turn).Handle
 }

@@ -200,6 +200,7 @@ func (b *Binding) Validate() error {
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
+	p.oneOf("spec.chat.progress", string(s.Chat.Progress), string(ProgressSteps), string(ProgressStepsAndActivity), string(ProgressActivity))
 	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
 	if a := s.Chat.Acknowledgment; a == nil {
 		p.add("spec.chat.acknowledgment", "required after defaulting")

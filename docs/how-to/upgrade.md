@@ -162,3 +162,25 @@ whole text.
 - **The actor names the platform.** The `agentkourier.dev/actor` metadata of a turn a person wrote gains `platform`
   (`slack`). On Slack the text prefix is unchanged, `[Slack: Name (U123) <email>]`
   ([Agent contract](../reference/agent-contract.md)).
+
+## Upgrade to the release with progress modes
+
+This release adds `chat.progress` to the Binding, and its default changes what a Binding that does not set it shows. No
+Binding fails to load for it.
+
+- **A chat thread gains `Working…` cards.** When 3 seconds pass with no new text and no tool call under way, a card titled
+  `Working…` begins in the stream. The next tool call takes that card over, so it carries the tool's name; if text comes
+  first, the card is retitled `Wrote the answer`; a card still open when the turn ends becomes `Finished`, or `Stopped` (an
+  error) if the task failed or was cancelled. A thread that used to show one card for each tool call can now show one more,
+  and each gap longer than 3 seconds costs at most two more writes to Slack (the card's begin and, when no tool call takes
+  it over, its end). This needs a platform with step cards; on the generic `a2a` dialect, which reports no tool calls, the
+  cards are `Working…` cards alone.
+- **An alert thread gains a `Working…` line.** After the same 3 seconds, the message the investigation updates shows
+  `Working…` as a line of small print in place of the line of a tool call that returned, under the text so far if there is
+  some, and as the message's first post if nothing else has been said. The next text or tool call replaces it. Each gap
+  costs one more message update. A turn that is silent for 3 seconds and then ends with nothing to show, or fails, now
+  leaves a message saying `(no output)` where under `steps` it posted nothing.
+- **`output: final` is unchanged.** It posts once when the turn ends, whatever `progress` says.
+
+To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line
+that never names a tool (a tool approval prompt still does). See [Output](../explanation/threads-and-sessions.md#output).

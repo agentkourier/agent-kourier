@@ -1,0 +1,130 @@
+{
+  "requests": [
+    {
+      "path": "/chat.startStream",
+      "form": {
+        "channel": "C1",
+        "parse": "none",
+        "recipient_user_id": "U1",
+        "thread_ts": "ROOT",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "id": "s1",
+            "status": "in_progress",
+            "title": "Working…",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "id": "s1",
+            "status": "in_progress",
+            "title": "Working… 1 step",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "id": "s1",
+            "status": "in_progress",
+            "title": "Working… 2 steps, 1 failed",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.appendStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "details": "Took 20 s, 2 steps (1 failed)",
+            "id": "s1",
+            "status": "complete",
+            "title": "Worked",
+            "type": "task_update"
+          }
+        ],
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    },
+    {
+      "path": "/chat.stopStream",
+      "form": {
+        "channel": "C1",
+        "chunks": [
+          {
+            "text": "Three pods, all ready.",
+            "type": "markdown_text"
+          }
+        ],
+        "outbox_id": "turn-1/reply",
+        "parse": "none",
+        "ts": "TS1",
+        "unfurl_links": "false",
+        "unfurl_media": "false"
+      }
+    }
+  ],
+  "thread": [
+    {
+      "text": "root",
+      "thread": true
+    },
+    {
+      "text": "Three pods, all ready.",
+      "blocks": [
+        {
+          "text": "Three pods, all ready.",
+          "type": "markdown"
+        }
+      ],
+      "thread": true,
+      "tasks": [
+        {
+          "id": "s1",
+          "title": "Worked",
+          "status": "complete",
+          "details": "Took 20 s, 2 steps (1 failed)"
+        }
+      ],
+      "outbox_id": "turn-1/reply"
+    }
+  ]
+}

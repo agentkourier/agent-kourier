@@ -14,6 +14,7 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -142,6 +143,16 @@ func Turn(events []agent.TextEvent, tool *agent.ToolCallEvent, state chat.ToolSt
 		}
 	}
 	return m, len(m.Parts) > 0
+}
+
+// WithStatus is m with a line of small print under its parts, the activity indicator of a message that is updated:
+// Working… or its counts. Where m has no text, the line is its fallback too. m is not changed.
+func WithStatus(m chat.Message, line string) chat.Message {
+	m.Parts = append(slices.Clone(m.Parts), chat.Context{Text: line})
+	if m.Fallback == "" {
+		m.Fallback = line
+	}
+	return m
 }
 
 // Nothing is the message of a turn that ended with nothing to show: it is there so that a tool status line is not

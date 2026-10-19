@@ -236,7 +236,9 @@ claim's volume.
 ## The agent answers, but tool calls do not show as step cards
 
 The `a2a` dialect never renders tool calls as step cards, for any agent on it, so none of them
-will. The answer text renders. Only the `kagent-v1` dialect reports tool parts.
+will. The answer text renders. Only the `kagent-v1` dialect reports tool parts. With the default `chat.progress`
+(`steps-and-activity`), a `Working…` card still appears in a chat thread when 3 seconds pass with no new text; see
+[Output](../explanation/threads-and-sessions.md#output).
 
 ## The kagent install uses far more memory than expected
 
