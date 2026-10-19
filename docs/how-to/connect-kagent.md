@@ -99,6 +99,10 @@ Binding's turns reach one of its agents.
       agent's own tool list and the role behind its tools are the only fence on a write.
     - A text `input-required` pause is shown as a question, and the reply is sent as text, only when the Binding sets
       `interactions.askUser: true`. Whether kagent 0.9.x ever pauses with a text question has not been tested.
+    - Slack tool approvals need the `kagent-v1` dialect; `interactions.toolApprovals` has no effect here. Reached
+      without that dialect, kagent 1.0.0-alpha5 pauses for an approval with text alone, asking for a
+      `FunctionResponse`. Agent Kourier handles such a pause as the question above, so the reply is sent as plain text
+      and never as an approval. Whether 0.9.x pauses for approvals this way has not been tested.
     - The controller accepted a placeholder token in the first install, so nothing verifies the Binding's identity. Put
       a verifying front door in front of it if that matters.
 

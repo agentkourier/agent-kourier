@@ -224,7 +224,10 @@ a second time and post a second answer. For a read-only agent that wastes a mode
 nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
 Kourier shows the tool calls it can read, but it cannot approve or deny them, so the agent's own
 tool list and the role behind its tools are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
-`interactions.toolApprovals: true`; the generic `a2a` dialect accepts no structured approval pause.
+`interactions.toolApprovals: true`. On the `a2a` dialect, a kagent approval pause that arrives as text alone (kagent
+1.0.0-alpha5 sends one that asks for a `FunctionResponse`; 0.9.x has not been tested) is handled as a question: on a
+Binding with `interactions.askUser: false` the task is cancelled, and otherwise kagent's text is posted and the reply
+is sent back as plain text, never as an approval.
 
 ## `Multi-Attach error for volume` while the pod rolls
 

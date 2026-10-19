@@ -61,8 +61,12 @@ In the Binding's `identity`:
   [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). Without that marker the calls are
   not shown.
 - Not: structured choices or tool approvals. The generic `a2a` dialect accepts only a text-only input-required
-  question; a structured pause is refused and the task is cancelled. These capabilities come from kagent's extension,
-  which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
+  question; a pause with any part that is not text is refused and the task is cancelled. These capabilities come from
+  kagent's extension, which only the `kagent-v1` dialect speaks, so `interactions.toolApprovals` has no effect here.
+- A kagent agent on this dialect pauses for a tool approval with text alone, asking for a `FunctionResponse`
+  (recorded with kagent 1.0.0-alpha5; not tested with 0.9.x). Agent Kourier handles that pause as a question. On a
+  Binding with `interactions.askUser: false` it cancels the task and tells the thread the agent asked a question. With
+  `askUser: true` it posts kagent's text, and the reply goes to kagent as plain text, never as an approval.
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it
