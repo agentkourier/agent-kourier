@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -172,7 +174,8 @@ func TestAnUnclaimedWorkingCardIsRetitledAndFinishedWhenTextComes(t *testing.T) 
 	}
 }
 
-// An unclaimed card is finished before the stop when the turn ends with the gap open and no more text.
+// An unclaimed card is finished before the stop when the turn ends with the gap open and no more text. No text came while it
+// was open, so it does not say that it wrote the answer.
 func TestAnUnclaimedWorkingCardIsFinishedBeforeTheStop(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "U1")
@@ -181,24 +184,60 @@ func TestAnUnclaimedWorkingCardIsFinishedBeforeTheStop(t *testing.T) {
 	e.until(t, "the Working… card", 5*time.Second, func() bool { return len(e.tasks()) == 1 })
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
-	wantCards(t, e.reply(), "s1 Working… in_progress", "s1 Wrote the answer complete")
+	wantCards(t, e.reply(), "s1 Working… in_progress", "s1 Finished complete")
 	paths := e.rec.orderOf()
 	if paths[len(paths)-1] != "/chat.stopStream" {
 		t.Errorf("the last request is %s; want the stop, after the card is finished", paths[len(paths)-1])
 	}
 }
 
-// A turn that ends with no text at all did not write an answer: its card is ended, as a call with no result is, and not
-// retitled.
-func TestAnUnclaimedWorkingCardOfATurnWithNoTextIsEndedNotRetitled(t *testing.T) {
+// How the task ended is how a card that is under way ends: a tick for a completed task and for a pause for input, an error for
+// a task that failed or was cancelled, in both modes that show a card. The task did not finish, so nothing in its stream
+// ticks.
+func TestACardUnderWayEndsByHowTheTaskEnded(t *testing.T) {
+	for _, mode := range []v1alpha1.ProgressMode{sa, activity} {
+		for _, tc := range []struct {
+			name   string
+			final  agent.FinalEvent
+			status string
+			title  string
+		}{
+			{"completed", agent.FinalEvent{}, "complete", "Finished"},
+			{"failed", agent.FinalEvent{Task: &a2a.Task{Status: a2a.TaskStatus{State: a2a.TaskStateFailed}}}, "error", "Stopped"},
+			{"canceled", agent.FinalEvent{Task: &a2a.Task{Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}}, "error", "Stopped"},
+			{"input required", agent.FinalEvent{Task: &a2a.Task{Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}}, "complete", "Waiting for your answer"},
+		} {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				e := setup(t)
+				run := e.progressRun(t, mode, "U1")
+				if mode == activity {
+					if tc.title == "Finished" {
+						tc.title = "Worked"
+					}
+					run.Handle(call("c1", "search", nil))
+					run.Handle(result("c1", map[string]any{"output": "x"}))
+				}
+				e.until(t, "the card", 5*time.Second, func() bool { return len(e.tasks()) == 1 })
+				run.Handle(tc.final)
+				e.finish(t, run)
+				got := e.reply().Tasks()
+				if len(got) != 1 || got[0].Status != tc.status || got[0].Title != tc.title {
+					t.Errorf("tasks %+v; want the card %q as %s", got, tc.title, tc.status)
+				}
+			})
+		}
+	}
+}
+
+// A silent turn whose card was never shown and that ends empty makes no stream for the card: it ends as a turn with nothing to
+// show did before the card, with no request.
+func TestACardThatWasNeverShownMakesNoStreamAtTheEnd(t *testing.T) {
 	e := setup(t)
 	run := e.progressRun(t, sa, "U1")
-	e.until(t, "the Working… card", 5*time.Second, func() bool { return e.writes() >= 2 && len(e.tasks()) == 1 })
-	run.Handle(agent.FinalEvent{})
+	run.Handle(agent.FinalEvent{Task: &a2a.Task{Status: a2a.TaskStatus{State: a2a.TaskStateFailed}}}) // before the delay: no card yet
 	e.finish(t, run)
-	got := cards(t, e.reply())
-	if len(got) != 2 || got[0] != "s1 Working… in_progress" || !strings.HasPrefix(got[1], "s1 Working… complete") {
-		t.Errorf("cards %v; want the card ended under its own title", got)
+	if n := e.writes(); n != 0 {
+		t.Errorf("%d requests for a turn that failed with nothing to show; want none", n)
 	}
 }
 
@@ -760,4 +799,94 @@ func TestAnAlertThreadShowsWorkingUnderTheTextInAGapAfterIt(t *testing.T) {
 	}
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
+}
+
+// A call with no ID can never have a result, so it is under way until the next event: no Working… card begins beside its
+// own card, and Working… does not replace its line on an alert thread.
+func TestACallWithNoIDHasNoWorkingBesideIt(t *testing.T) {
+	t.Run("chat thread", func(t *testing.T) {
+		e := setup(t)
+		run := e.progressRun(t, sa, "U1")
+		run.Handle(text("a", "Checking."))
+		e.writesReach(t, 1)
+		run.Handle(call("", "search", nil))
+		e.until(t, "the card", 3*time.Second, func() bool { return len(e.tasks()) == 1 })
+		e.elapse(time.Minute)
+		if n := e.writes(); n != 2 {
+			t.Fatalf("%d requests a minute after a call with no ID; want the stream's start and its card", n)
+		}
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+		wantCards(t, e.reply(), "s1 search in_progress", "s1 search complete {No result was reported.}")
+	})
+	t.Run("alert thread", func(t *testing.T) {
+		e := setup(t)
+		run := e.progressRun(t, sa, "")
+		run.Handle(call("", "search", nil))
+		eventually(t, "the line", func() bool { return strings.Contains(e.said(), "Calling search") })
+		e.elapse(time.Minute)
+		if got := e.said(); !strings.Contains(got, "Calling search") || strings.Contains(got, "Working") {
+			t.Errorf("blocks %s; want the line of the call, which has no result to wait for, and no Working…", got)
+		}
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+	})
+	t.Run("activity counts it", func(t *testing.T) {
+		e := setup(t)
+		run := e.progressRun(t, activity, "U1")
+		run.Handle(call("", "search", nil))
+		e.until(t, "the call counted", 3*time.Second, func() bool { return len(e.tasks()) == 1 && e.tasks()[0].Title == "Working… 1 step" })
+		run.Handle(agent.FinalEvent{})
+		e.finish(t, run)
+	})
+}
+
+// A call reported again after its result leaves Working… where it is on an alert thread, and does not bring back the line of
+// the call.
+func TestACallReportedAgainDoesNotBringBackItsLine(t *testing.T) {
+	e := setup(t)
+	run := e.progressRun(t, sa, "")
+	run.Handle(call("c1", "search", nil))
+	e.writesReach(t, 1)
+	run.Handle(result("c1", map[string]any{"output": "x"}))
+	e.until(t, "Working…", 8*time.Second, func() bool { return strings.Contains(e.said(), "Working…") })
+	run.Handle(call("c1", "search", nil))
+	e.elapse(2 * time.Second)
+	if got := e.said(); !strings.Contains(got, "Working…") || strings.Contains(got, "search") {
+		t.Errorf("blocks %s; want Working… still, and no line of the call that was reported again", got)
+	}
+	run.Handle(agent.FinalEvent{})
+	e.finish(t, run)
+}
+
+// The modes go on after a stream turn is taken over by the update path (a recovered turn that finds a message that was never a
+// stream): the message shows Working… in a gap, and the activity mode its line.
+func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode v1alpha1.ProgressMode
+		want string
+	}{{"steps-and-activity", sa, "Working…"}, {"activity", activity, "Working… (1 step)"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			e.postedByUpdate(t)
+			again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true, Progress: tc.mode})
+			if tc.mode == activity {
+				again.Handle(call("c1", "search", nil))
+				again.Handle(result("c1", map[string]any{"output": "x"}))
+			} else {
+				again.Handle(text("a", "partial"))
+			}
+			e.until(t, tc.want, 8*time.Second, func() bool { return strings.Contains(e.said(), tc.want) })
+			if len(e.rec.sent("/chat.startStream")) != 0 {
+				t.Error("the taken-over turn started a stream")
+			}
+			again.Handle(text("a", "the whole answer"))
+			again.Handle(agent.FinalEvent{})
+			e.finish(t, again)
+			if m := e.reply(); m.Text != "the whole answer" || strings.Contains(string(m.Blocks), "Working") {
+				t.Errorf("final message %+v; want the answer, with no indicator left", m)
+			}
+		})
+	}
 }

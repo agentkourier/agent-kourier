@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
@@ -50,7 +51,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 			return err
 		}
 		if !created { // an earlier attempt at this turn started a stream, or tried to
-			return u.takeOver(ctx, ref, v, id)
+			return u.takeOver(ctx, ref, id)
 		}
 		u.rowMade = true
 	}
@@ -63,7 +64,7 @@ func (u *Run) writeStream(ctx context.Context, ref *chat.Ref, v view) error {
 		if err != nil {
 			if u.cfg.Platform.Classify(chat.OpPost, err).Class == chat.Permanent {
 				u.cfg.Logger.WarnContext(ctx, "live: the platform refused the stream for good; the reply is posted instead", "channel", u.turn.Channel, "err", err)
-				return u.postInstead(ctx, ref, v)
+				return u.postInstead(ctx, ref)
 			}
 			return err
 		}
@@ -242,7 +243,7 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 // whole text is posted as a new message, under a row of its own.
 // UNCONFIRMED(WP-04): whether the update that follows the stop of an adopted stream removes the cards the earlier run
 // showed, or leaves them as they were last sent.
-func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, v view, id string) error {
+func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 	row, err := u.cfg.Store.GetOutbox(ctx, id)
 	if err != nil {
 		return err
@@ -250,15 +251,30 @@ func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, v view, id string) er
 	if row.MessageRef != "" {
 		u.streaming = false
 		*ref, u.adoptStop = u.cfg.Platform.RefAt(u.turn.Channel, u.turn.Thread, row.MessageRef), true
-		return u.write(ctx, ref, v)
+		return u.writeMoved(ctx, ref)
 	}
-	return u.postInstead(ctx, ref, v)
+	return u.postInstead(ctx, ref)
 }
 
 // postInstead gives up the stream and posts the reply through the outbox, under a row of its own: the row of the
 // stream has no payload, and is not one that Run ever delivers.
-func (u *Run) postInstead(ctx context.Context, ref *chat.Ref, v view) error {
+func (u *Run) postInstead(ctx context.Context, ref *chat.Ref) error {
 	u.streaming = false
 	u.turn.Source = outbox.RepostedSource(u.turn.Source)
+	return u.writeMoved(ctx, ref)
+}
+
+// writeMoved writes a turn that has just moved from the stream to the update path. The view it was given was the stream's,
+// which shows a tool call as a step and a wait as a card, and so may have no message at all; the update path's own view
+// shows them as status lines, and is the one to write. A state with nothing to show yet writes nothing, and a turn that
+// ended with nothing says so, as the run does.
+func (u *Run) writeMoved(ctx context.Context, ref *chat.Ref) error {
+	v := u.snapshot()
+	if !v.ok {
+		if !v.final {
+			return nil
+		}
+		v.m, v.body, v.ok = render.Nothing(), render.NoOutput, true
+	}
 	return u.write(ctx, ref, v)
 }

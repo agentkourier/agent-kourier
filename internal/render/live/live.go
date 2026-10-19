@@ -215,6 +215,7 @@ type Run struct {
 	idle     bool            // the message that is updated shows Working… (steps-and-activity)
 	texted   bool            // text that shows has arrived
 	calls    map[string]bool // the tool calls that have an ID: true once the result has arrived
+	anon     bool            // the latest event was a tool call with no ID, which no result can end: it is under way until the next event
 	inflight int             // calls with an ID that have no result yet
 	finished int             // tool calls whose result has arrived
 	failed   int             // and those that report a failure
@@ -245,13 +246,27 @@ type stepRec struct {
 	call  agent.ToolCallEvent
 	state chat.StepState
 	after int // how many text artifacts there were when the call was made: the step follows their text
-	// A step that stands for time and not for a call is one of these. working is a Working… card that no call has
-	// claimed: the next call takes it over, and text or the end of the turn finishes it as wrote. activity is the one
-	// card of the activity mode, which shows counts and no call; it is done at the first text, with what it counted then.
-	working, wrote, activity bool
-	steps, failed            int       // the counts an activity card was done with
-	endedAt                  time.Time // and when
+	kind  stepKind
+	// ending is how a card that stands for time ended; NotEnded while it is under way. Only a card under way can be taken over.
+	ending render.Ending
+	// An activity card is ended with what it counted by then, and when.
+	steps, failed int
+	endedAt       time.Time
 }
+
+// stepKind is what a step stands for. The zero value is a tool call.
+type stepKind int
+
+const (
+	// callStep is a tool call: the call, and how it ended.
+	callStep stepKind = iota
+	// workingStep is a Working… card for a gap. The next tool call takes it over and it becomes that call's step; text, or the
+	// end of the turn, ends it under a title of its own (render.WorkingEnded).
+	workingStep
+	// activityStep is the one card of the activity mode, which shows counts and no call; it ends at the first text or the end
+	// of the turn, with what it counted then.
+	activityStep
+)
 
 // Start begins rendering a turn and returns it. Its goroutine ends once the final text is
 // written, or given up on, or when ctx ends.
@@ -293,8 +308,8 @@ func (u *Run) Handle(ev agent.Event) {
 		}
 		u.texts[e.ArtifactID] = e.Text
 		if u.timed && (u.texted || strings.TrimSpace(chat.Clean(e.Text, false)) != "") { // text that shows, once there is some
-			u.texted, u.idle = true, false
-			u.endWorking(now)
+			u.texted, u.idle, u.anon = true, false, false
+			u.endWorking(now, render.EndedByText)
 			u.reopenGap(now)
 		}
 	case agent.ToolCallEvent:
@@ -319,7 +334,7 @@ func (u *Run) Handle(ev agent.Event) {
 		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
 		if u.timed {
 			u.gapOpen = false
-			u.endWorking(now)
+			u.endWorking(now, endingOf(e.Task))
 		}
 	}
 	u.mu.Unlock()
@@ -327,6 +342,21 @@ func (u *Run) Handle(ev agent.Event) {
 	case u.wake <- struct{}{}:
 	default: // a signal is waiting already
 	}
+}
+
+// endingOf is how a task's end closes a card that stands for time: by the state the task was left in. A final with no task is
+// a reply that was one message, which completed.
+func endingOf(task *a2a.Task) render.Ending {
+	if task == nil {
+		return render.EndedCompleted
+	}
+	switch task.Status.State {
+	case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+		return render.EndedPaused
+	case a2a.TaskStateFailed, a2a.TaskStateCanceled, a2a.TaskStateRejected:
+		return render.EndedFailed
+	}
+	return render.EndedCompleted
 }
 
 // noteCall makes e the latest call, under way: the update path's status line is about it. A call that is reported
@@ -348,8 +378,8 @@ func (u *Run) beginStep(e agent.ToolCallEvent) {
 	if !u.eligible || u.progress == v1alpha1.ProgressActivity || (e.CallID != "" && u.stepIndex(e.CallID) >= 0) {
 		return
 	}
-	if n := len(u.steps); n > 0 && u.steps[n-1].working { // a Working… card that is still unclaimed: the call is that card
-		u.steps[n-1].call, u.steps[n-1].working = e, false
+	if n := len(u.steps); n > 0 && u.steps[n-1].open() { // a Working… card that is still unclaimed: the call is that card
+		u.steps[n-1].call, u.steps[n-1].kind = e, callStep
 		return
 	}
 	if len(u.steps) >= maxSteps {
@@ -370,11 +400,20 @@ func (u *Run) endStep(e agent.ToolResultEvent) {
 }
 
 // callMade notes a tool call for the activity indicators: a call with an ID is under way until its result, and a call under
-// way is no gap. In the activity mode the first tool event begins it. The caller holds u.mu.
+// way is no gap. A call with no ID can never have a result, so it is under way until the next event and is counted as it
+// arrives. A call that is reported again, with an ID the run has, changes nothing. In the activity mode the first tool event
+// begins it. The caller holds u.mu.
 func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
-	if _, known := u.calls[e.CallID]; e.CallID != "" && !known {
+	if e.CallID == "" {
+		u.anon = true
+		u.finished++
+	} else {
+		if _, known := u.calls[e.CallID]; known {
+			return
+		}
 		u.calls[e.CallID] = false
 		u.inflight++
+		u.anon = false
 	}
 	u.idle = false // the tool's own line takes the place of Working…
 	u.beginActivity()
@@ -384,6 +423,7 @@ func (u *Run) callMade(e agent.ToolCallEvent, now time.Time) {
 // resultIn counts the result of a tool call the run knows, once, and ends the call's time as a call under way: a new gap
 // begins if no other call is. The caller holds u.mu.
 func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
+	u.anon = false
 	if done, known := u.calls[e.CallID]; known && !done {
 		u.calls[e.CallID] = true
 		u.inflight--
@@ -402,7 +442,7 @@ func (u *Run) resultIn(e agent.ToolResultEvent, now time.Time) {
 // begins once, and it is rewritten by events and never by the clock. The caller holds u.mu.
 func (u *Run) reopenGap(now time.Time) {
 	over := u.progress == v1alpha1.ProgressActivity && (u.texted || u.begun)
-	u.gapOpen = !u.final && u.inflight == 0 && !over
+	u.gapOpen = !u.final && u.inflight == 0 && !u.anon && !over
 	if u.gapOpen {
 		u.gapAt = now
 		u.gapSeq++
@@ -417,7 +457,7 @@ func (u *Run) beginActivity() {
 	}
 	u.begun = true
 	if u.eligible {
-		u.steps = append(u.steps, stepRec{activity: true, after: len(u.order)})
+		u.steps = append(u.steps, stepRec{kind: activityStep, after: len(u.order)})
 	}
 }
 
@@ -437,25 +477,24 @@ func (u *Run) openIdle(seq int, now time.Time) {
 		return
 	}
 	u.idle = true
-	if n := len(u.steps); u.eligible && len(u.steps) < maxSteps && (n == 0 || !u.steps[n-1].working) {
-		u.steps = append(u.steps, stepRec{working: true, after: len(u.order)})
+	if n := len(u.steps); u.eligible && len(u.steps) < maxSteps && (n == 0 || !u.steps[n-1].open()) {
+		u.steps = append(u.steps, stepRec{kind: workingStep, after: len(u.order)})
 	}
 }
 
-// endWorking finishes what stands for time when text comes or the turn ends: a Working… card that no call claimed, as a
-// card that wrote the answer, and the activity card, with the counts and the time it stands at. A Working… card is
-// retitled only if text came, since a turn that ended with none did not write an answer: it is ended with the steps
-// that have no result, at the final. The caller holds u.mu.
-func (u *Run) endWorking(now time.Time) {
+// endWorking ends what stands for time, as e says, when text comes or the turn ends: a Working… card that no call claimed,
+// and the activity card, with the counts and the time it stands at. A card ends once. Only text that came while a Working…
+// card was open says that it wrote the answer; a final that ends it says how the task ended. The caller holds u.mu.
+func (u *Run) endWorking(now time.Time, e render.Ending) {
 	n := len(u.steps)
-	if n == 0 {
+	if n == 0 || u.steps[n-1].ending != render.NotEnded {
 		return
 	}
-	switch r := &u.steps[n-1]; {
-	case r.working && u.texted:
-		r.working, r.wrote, r.state = false, true, chat.StepDone
-	case r.activity && r.state == chat.StepRunning:
-		r.state, r.steps, r.failed, r.endedAt = chat.StepDone, u.finished, u.failed, now
+	switch r := &u.steps[n-1]; r.kind {
+	case workingStep:
+		r.ending = e
+	case activityStep:
+		r.ending, r.steps, r.failed, r.endedAt = e, u.finished, u.failed, now
 	}
 }
 
@@ -473,6 +512,9 @@ func (u *Run) arm(timer <-chan time.Time, seq int) (<-chan time.Time, int) {
 	}
 	return u.cfg.After(max(at.Add(u.cfg.ActivityDelay).Sub(u.cfg.Now()), 0)), cur
 }
+
+// open says the step is a Working… card that nothing has claimed or ended.
+func (r stepRec) open() bool { return r.kind == workingStep && r.ending == render.NotEnded }
 
 // stepIndex is the place of the step of the call callID, or -1. The caller holds u.mu.
 func (u *Run) stepIndex(callID string) int {
@@ -742,6 +784,10 @@ func (u *Run) snapshot() view {
 		v.m.Parts = append(slices.Clone(v.m.Parts), u.turn.Footer...)
 	}
 	for i, r := range recs {
+		id := fmt.Sprintf("s%d", i+1)
+		if _, sent := u.sentOf(id); final && r.kind != callStep && v.body == "" && !sent {
+			continue // a card for time that was never shown is not content of a turn with no text: no stream is made for it
+		}
 		state := r.state
 		if final && state == chat.StepRunning {
 			state = chat.StepEnded
@@ -751,27 +797,24 @@ func (u *Run) snapshot() view {
 		if strings.HasPrefix(v.body, before) {
 			pos = len(before)
 		}
-		v.steps = append(v.steps, u.stepOf(fmt.Sprintf("s%d", i+1), r, state, now, finished, failed))
+		v.steps = append(v.steps, u.stepOf(id, r, state, now, finished, failed))
 		v.pos = append(v.pos, pos)
 	}
 	v.ok = v.ok || len(v.steps) > 0
 	return v
 }
 
-// stepOf is the step a record shows in the state given: the call it is, or the card that stands for time. A Working… card
-// at the final has no result to wait for, and is ended with the steps that have none (state).
+// stepOf is the step a record shows in the state given: the call it is, or the card that stands for time. A call with no
+// result at the final is ended with them (state); a card that stands for time has its own ending.
 func (u *Run) stepOf(id string, r stepRec, state chat.StepState, now time.Time, finished, failed int) chat.Step {
-	switch {
-	case r.activity && r.state == chat.StepRunning:
-		return render.ActivityStep(id, finished, failed, now.Sub(u.started), false)
-	case r.activity:
-		return render.ActivityStep(id, r.steps, r.failed, r.endedAt.Sub(u.started), true)
-	case r.working:
-		st := render.WorkingStep(id)
-		st.State = state
-		return st
-	case r.wrote:
-		return render.WroteStep(id)
+	switch r.kind {
+	case workingStep:
+		return render.WorkingEnded(id, r.ending)
+	case activityStep:
+		if r.ending == render.NotEnded {
+			return render.ActivityStep(id, finished, failed, now.Sub(u.started), r.ending)
+		}
+		return render.ActivityStep(id, r.steps, r.failed, r.endedAt.Sub(u.started), r.ending)
 	}
 	return render.Step(id, r.call, state)
 }
