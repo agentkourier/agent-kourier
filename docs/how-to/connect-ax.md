@@ -40,7 +40,8 @@ spec:
 ## What to expect
 
 - With `interactions.askUser: true`, questions arrive as plain text, and a person answers by replying in the thread or with the answer form.
-- Structured tool approvals and tool step cards are kagent-only.
+- Structured tool approvals are kagent-only. Tool step cards need the agent to mark its tool parts as Google ADK or
+  kagent does; see [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
 - The AX kind tier (`make e2e-ax-up`, `make e2e-ax`) runs the shared Slack scenarios against a real AX and Substrate
   install with a deterministic model: streaming, context across restarts, actor suspend and resume, queued replies and
   text questions answered in the thread.

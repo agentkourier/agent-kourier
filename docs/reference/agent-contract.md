@@ -91,8 +91,36 @@ An update with no text part leaves the artifact's text as it was, so to take tex
 An artifact whose text is empty is left out of the message.
 A task snapshot (from `GetTask`, `SubscribeToTask` or a replayed send) whose text for an artifact is a prefix of the text already
 received is taken as older and skipped, so a take-back that is missed when the stream drops is not applied.
-File parts are never shown. Data parts are not shown either, except on `kagent-v1`, which shows kagent's tool call
-and tool result parts as step cards.
+File parts are never shown. Data parts are not shown either, except the tool call and tool result parts below.
+
+### Tool calls and results
+
+A2A defines no tool call, so Agent Kourier reads the conventions of the frameworks that write one. On every dialect, a data
+part is a tool call or a tool result when its metadata holds exactly one of these keys with the string value
+`function_call` or `function_response`:
+
+| Metadata key | Written by |
+|---|---|
+| `adk_type` | Google ADK's A2A converter |
+| `kagent_type` | kagent 0.9.x, which uses that converter with its own prefix |
+| `kagent.dev/a2a/part-type` | kagent 1.0 |
+
+The part's `data` must be an object with a non-empty string `name`. Its `id` is the call's ID, which the result repeats,
+and a call's `args` and a result's `response` are its arguments and what it returned. Any other part stays unread,
+including a marked part with no `name`, one that holds two of the keys, and ADK's other types (`tool_call`,
+`tool_response`, `executable_code` and `code_execution_result`).
+
+Agent Kourier reads these parts in the artifacts of a task and in the message of a status update or of a task snapshot, when
+the message is the agent's own (role `agent`) and the task is `working`. ADK's newer converter and kagent 1.0 put them in
+artifacts; ADK's older converter and kagent 0.9.x put them in status messages. The text of a status message is still not
+shown. Each part is read once: a part sent again, in a snapshot or in both places, is not a second call. A part that says
+something else under the same call ID is a different part and is read. Because a task snapshot is history, a result it holds
+for a call whose result already arrived in the stream is ignored, and of several results of one call in a snapshot the last
+counts. A result that arrives before its call waits for the call, and is read when the turn ends if the call never comes.
+
+Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
+`error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
+kagent 1.0's pause payload, so only `kagent-v1` reads them.
 
 ## Task states
 

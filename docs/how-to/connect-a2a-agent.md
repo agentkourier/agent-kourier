@@ -56,9 +56,13 @@ In the Binding's `identity`:
   A single question with no choices also takes a typed reply in the thread.
 - A `Working…` card (a line, in an alert thread) while the agent is silent for 3 seconds, with the default
   `chat.progress`.
-- Not: structured choices, tool approvals, or tool calls as step cards. The generic `a2a` dialect accepts only a
-  text-only input-required question; a structured pause is refused and the task is cancelled. These capabilities come
-  from kagent's extension, which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
+- Tool calls as step cards, when the agent marks its tool parts as Google ADK or kagent does (`adk_type`, `kagent_type`
+  or `kagent.dev/a2a/part-type`, set to `function_call` or `function_response`): see
+  [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). Without that marker the calls are
+  not shown.
+- Not: structured choices or tool approvals. The generic `a2a` dialect accepts only a text-only input-required
+  question; a structured pause is refused and the task is cancelled. These capabilities come from kagent's extension,
+  which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it

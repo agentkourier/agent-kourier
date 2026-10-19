@@ -43,7 +43,8 @@ team is new to Agent Kourier.**
   with the final text when the turn ends. If the A2A stream drops after such a lead-in was sent and before the emptying
   update arrives, the lead-in is not cleared: Agent Kourier skips a `GetTask` or `SubscribeToTask` snapshot whose text
   is a prefix of the text it holds (`internal/agent/assemble.go`), so the lead-in can stay in the final message.
-  Thoughts are always dropped. The agent's tool calls are not shown: the `a2a` dialect has no step cards.
+  Thoughts are always dropped. The agent's tool calls are not shown: it sends no tool parts, which the `a2a` dialect shows as step cards only when
+  they are marked as Google ADK or kagent marks them.
 
 ## What you'll see in Slack
 

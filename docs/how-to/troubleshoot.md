@@ -222,8 +222,8 @@ before it sends the turn again. After a restart that interrupted a turn, or afte
 whose outcome was unknown because the stream dropped before the first event, the turn may run
 a second time and post a second answer. For a read-only agent that wastes a model call and
 nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
-Kourier does not see a tool call, so the agent's own tool list and the role behind its tools
-are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
+Kourier shows the tool calls it can read, but it cannot approve or deny them, so the agent's own
+tool list and the role behind its tools are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
 `interactions.toolApprovals: true`; the generic `a2a` dialect accepts no structured approval pause.
 
 ## `Multi-Attach error for volume` while the pod rolls
@@ -235,8 +235,12 @@ claim's volume.
 
 ## The agent answers, but tool calls do not show as step cards
 
-The `a2a` dialect never renders tool calls as step cards, for any agent on it, so none of them
-will. The answer text renders. Only the `kagent-v1` dialect reports tool parts. With the default `chat.progress`
+Agent Kourier shows a tool call as a step card only when the agent marks the call as Google ADK or kagent does, on any
+dialect: a data part whose metadata has `adk_type`, `kagent_type` or `kagent.dev/a2a/part-type` set to `function_call` or
+`function_response`, and whose data has a `name`. An agent that reports its tool calls some other way, or in a part
+without a `name`, shows none; the answer text still renders. The marked part must be in an artifact, or in a status
+update's message from the agent while the task is `working`; see
+[Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). With the default `chat.progress`
 (`steps-and-activity`), a `Working…` card still appears in a chat thread when 3 seconds pass with no new text; see
 [Output](../explanation/threads-and-sessions.md#output).
 
