@@ -13,11 +13,14 @@ import (
 
 // The file that init writes renders with the chart, and Agent Kourier loads what the chart renders: the check in init
 // reads the values the way the chart's template does, and this test holds the two together. It needs helm, as the chart
-// tests do, and is skipped without it.
+// tests do, and is skipped without it (or fails when AGENTKOURIER_REQUIRE_HELM=1).
 func TestInitValuesRenderWithTheChart(t *testing.T) {
 	helm, err := exec.LookPath("helm")
 	if err != nil {
-		t.Skip("helm is not on PATH: this test renders charts/agent-kourier with `helm template` and is skipped without it")
+		if os.Getenv("AGENTKOURIER_REQUIRE_HELM") == "1" {
+			t.Fatal("helm is not on PATH, and AGENTKOURIER_REQUIRE_HELM=1 says the chart tests must run")
+		}
+		t.Skip("helm is not on PATH: this test renders charts/agent-kourier with `helm template` and is skipped without it (install helm, or set AGENTKOURIER_REQUIRE_HELM=1 to make this a failure)")
 	}
 	for _, tc := range []struct {
 		name string

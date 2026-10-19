@@ -56,7 +56,9 @@ func (s *channelsStub) serve(t *testing.T, pages [][]map[string]string, fail str
 	return srv.URL + "/"
 }
 
-func listedChannel(id, name string) map[string]string { return map[string]string{"id": id, "name": name} }
+func listedChannel(id, name string) map[string]string {
+	return map[string]string{"id": id, "name": name}
+}
 
 func channelsClient(url string) *slack.Client {
 	return slack.New(slack.Config{BotToken: secret.New(channelsToken), APIURL: url, PageLimit: 2})
