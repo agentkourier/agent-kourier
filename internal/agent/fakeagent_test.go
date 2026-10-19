@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
-	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
 // rpc is one JSON-RPC request the fake agent received.
@@ -33,7 +36,8 @@ type fakeAgent struct {
 	calls       []rpc
 	noStreaming bool
 	cardGate    chan struct{}
-	cardStatus  int // when set, the card fetch fails with this HTTP status
+	cardStatus  int  // when set, the card fetch fails with this HTTP status
+	v03         bool // the card is an A2A 0.3 card, and the agent speaks 0.3 (message/stream), as kagent 0.9.x does
 }
 
 func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fakeAgent {
@@ -67,6 +71,11 @@ func newFakeAgent(t *testing.T, serve func(call rpc, w http.ResponseWriter)) *fa
 		}
 		if fa.cardStatus != 0 { // the front door refuses the card fetch
 			http.Error(w, "refused", fa.cardStatus)
+			return
+		}
+		if fa.v03 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, fa.v03CardJSON())
 			return
 		}
 		card := a2a.AgentCard{Name: "ask", SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)}}
@@ -112,19 +121,25 @@ func (fa *fakeAgent) agentWith(t *testing.T, cfg Config) *Agent {
 	return New(func(context.Context) (Conn, error) { return client, nil }, cfg)
 }
 
-// agentV03 returns an Agent that talks to fa over A2A 0.3 JSON-RPC (message/stream), as it talks to kagent 0.9.x.
-func (fa *fakeAgent) agentV03(t *testing.T) *Agent {
+// agentVia returns an Agent that connects the way production does: a Pool of d fetches fa's card and
+// builds the client from it, so the dialect's own handling of the card and of the protocol version is in the path.
+func (fa *fakeAgent) agentVia(t *testing.T, d dialect.Dialect) *Agent {
 	t.Helper()
-	iface := a2a.NewAgentInterface(fa.URL, a2a.TransportProtocolJSONRPC)
-	iface.ProtocolVersion = a2av0.Version
-	card := &a2a.AgentCard{SupportedInterfaces: []*a2a.AgentInterface{iface}}
-	card.Capabilities.Streaming = true
-	client, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithDefaultsDisabled(),
-		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: fa.Client()}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return New(func(context.Context) (Conn, error) { return client, nil }, Config{})
+	p := NewPool(d, Config{})
+	t.Cleanup(p.Close)
+	return p.Agent(Target{
+		Binding:     "team/sre",
+		Backend:     &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A, URL: fa.URL}},
+		Agent:       v1alpha1.AgentRef{Name: "ask", Namespace: "kagent"},
+		Credentials: token("t"),
+	})
+}
+
+// v03CardJSON is the card kagent 0.9.x serves: A2A 0.3, so one url and a preferredTransport and no supportedInterfaces.
+func (fa *fakeAgent) v03CardJSON() string {
+	return fmt.Sprintf(`{"name": "sre_investigator", "description": "A read-only SRE assistant", "url": %q, "preferredTransport": "JSONRPC",
+  "version": "", "capabilities": {"streaming": true}, "defaultInputModes": ["text"], "defaultOutputModes": ["text"],
+  "skills": [{"id": "investigate", "name": "Investigate", "description": "reads the cluster", "tags": ["sre"]}]}`, fa.URL+"/")
 }
 
 // sseEvents returns the events of a recorded SSE stream, each ready to write.

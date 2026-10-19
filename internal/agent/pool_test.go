@@ -55,8 +55,8 @@ func (fa *fakeAgent) auths() []string {
 	return out
 }
 
-// The Pool wires the dialect's ToolPart in, so an Agent from it cannot miss tool parts.
-func TestPoolAgentsRecognizeTheDialectsToolParts(t *testing.T) {
+// An Agent from the Pool delivers tool parts, whatever the dialect it was made with.
+func TestPoolAgentsDeliverToolParts(t *testing.T) {
 	fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { sse(t, w, "approval/01-pause-approve.response.sse", -1) })
 	h, got := collector()
 	if err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Send(t.Context(), message("add"), h); err != nil {

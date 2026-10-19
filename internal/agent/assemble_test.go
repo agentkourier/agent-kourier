@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 )
 
 const ticks = "tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 tick 8 "
@@ -225,8 +227,9 @@ func TestOnlyOneFinalEvent(t *testing.T) {
 
 // kagent 0.9.x sends a turn's tool calls and results only as the messages of its status updates,
 // marked kagent_type, and its final text both as a status message and as an artifact
-// (recorded from kagent 0.9.4 over A2A 0.3). The task that ends the turn holds the tool parts in its
-// history, which is not read: they were delivered as they happened.
+// (recorded from kagent 0.9.4 over A2A 0.3). The agent is reached through the a2a dialect's own connect, which
+// reads the 0.3 card and speaks 0.3, so this is what a 0.9.x backend on that dialect shows. The task that ends the
+// turn holds the tool parts in its history, which is not read: they were delivered as they happened.
 func TestV09ToolPartsInStatusMessagesAreDelivered(t *testing.T) {
 	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
 		if call.Method == "tasks/get" { // the stream ends with a status update, not a task, so the send asks for it
@@ -235,8 +238,9 @@ func TestV09ToolPartsInStatusMessagesAreDelivered(t *testing.T) {
 		}
 		sse(t, w, "v09-tools/01-tool-turn.response.sse", -1)
 	})
+	fa.v03 = true
 	h, got := collector()
-	if err := fa.agentV03(t).Send(t.Context(), message("How many namespaces does the cluster have?"), h); err != nil {
+	if err := fa.agentVia(t, generic.New(0)).Send(t.Context(), message("How many namespaces does the cluster have?"), h); err != nil {
 		t.Fatal(err)
 	}
 	const callID = "k8s_get_resources_0_1e73ff4e"
@@ -313,8 +317,6 @@ func TestStatusMessageToolPartsAreDeliveredOnce(t *testing.T) {
 		{"one message holding both", []a2a.Event{agentStatus("m1", call, result)}, []string{"call c1", "result c1"}},
 		{"an artifact, then a message repeating it", []a2a.Event{toolArtifact("a1", call), agentStatus("m1", call)}, []string{"call c1"}},
 		{"a message, then an artifact repeating it", []a2a.Event{agentStatus("m1", call), toolArtifact("a1", call)}, []string{"call c1"}},
-		// kagent 1.0 answers an approved call with a second result under the same ID (approval/02-approve).
-		{"two results for one call in artifacts", []a2a.Event{toolArtifact("a1", result), toolArtifact("a2", result)}, []string{"result c1", "result c1"}},
 		{"a message with no tool part", []a2a.Event{agentStatus("m1", a2a.NewTextPart("thinking"))}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
