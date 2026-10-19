@@ -700,7 +700,13 @@ func stepsKey(steps []chat.Step) string {
 // stream path, takes the next step of the stream.
 func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.render.write", attribute.Bool("agentkourier.render.final", v.final), attribute.Bool("agentkourier.render.streaming", u.streaming))
-	defer func() { op.Finish(telemetryErr) }()
+	defer func() {
+		spanErr := telemetryErr
+		if errors.Is(spanErr, errNothingToShow) { // a turn with nothing to post is a normal end, not a failed write
+			spanErr = nil
+		}
+		op.Finish(spanErr)
+	}()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.cfg.WriteTimeout) // see WriteTimeout
 	defer cancel()
 	if u.streaming {

@@ -918,6 +918,10 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 		if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
 			t.Errorf("a write of an empty message was tried:\n%s", l)
 		}
+		// The turn ends as having nothing to show, not as a write that failed and was retried until the run gave up.
+		if l := e.logs.String(); strings.Contains(l, "writing the message failed") || strings.Contains(l, "giving up") {
+			t.Errorf("the end of a turn with nothing to show was retried as a failed write:\n%s", l)
+		}
 	})
 	t.Run("a message stands: it says there was no output", func(t *testing.T) {
 		e := setup(t)
