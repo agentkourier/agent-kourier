@@ -923,20 +923,24 @@ making the prefix optional breaks multi-turn context.
   stretch 22 s). The renderer's run loop wakes on a timer as well as on events. A gap is the time since the last text, the
   last tool result with no other call under way, or the start of the turn; no gap runs while a call with an ID is under
   way. When a gap has run `Config.ActivityDelay` (3 s) with nothing new, the renderer shows that the agent is working, once
-  for the gap; every other write follows an event, so a mode spends no more Slack calls than `steps` does (the actual
-  `chat.appendStream` rate tier is unverified). The modes:
+  for the gap; every other write follows an event. So a gap longer than the delay costs at most one write more than `steps`
+  spends: the begin of the card (a `chat.update` in an alert thread). The `activity` mode writes its card when a result
+  changes a count, at most once a window (the actual `chat.appendStream` rate tier is unverified). The modes:
   - `steps`: a card per tool call in a chat thread, the status line above in an alert thread.
   - `steps-and-activity` (the default): the same, and a gap longer than the delay adds one `Working…`. In a stream it is a
     card begun in the running state with no detail. The next tool call takes that card over: the card's title becomes the
-    tool's, the tool's detail is shown then, and the result finishes it with its status alone (one card, as many writes as
-    `steps`). Text, or the end of the turn, ends a card no call took, retitled `Wrote the answer` and done; a turn that
-    ends with no text at all ends the card under its own title, as any step with no result is ended. A call that arrives
+    tool's, the tool's detail is shown then, and the result finishes it with its status alone (one card; the gap cost the begin).
+    A card no call took is ended under a title of its own, so that no card ticks on `Working…`: `Wrote the answer` if text
+    came while it was open; at the end of the turn, `Finished` for a completed task, `Waiting for your answer` for a
+    pause for input, and `Stopped`, an error and not a tick, for a task that failed, was cancelled or was rejected. A card
+    that was never sent when the turn ends with no text is not sent at all: no stream is made for it. A call that arrives
     before the delay begins its card directly. On the update path `Working…` is a line of small print that replaces the
     line of a call that returned, shown under the text if there is some; the next text or call replaces it.
   - `activity`: one card `Working…`, begun at the first tool call or result or at the delay, whichever is first, and only
     if no text has come. No card names a tool or holds an argument. Its title carries the counts of the tool calls that
-    have a result, `Working… 12 steps, 3 failed`; at the first text it is done as `Worked`, with the summary `Took 3 min 26 s,
-    16 steps (7 failed)` as its detail, sent once. On the update path the line is `Working… (2 min, 12 steps, 3 failed)`,
+    have a result, `Working… 12 steps, 3 failed`; at the first text, or at the end of a completed task, it is done as `Worked`, with the summary `Took 3 min 26 s,
+    16 steps (7 failed)` as its detail, sent once; a pause for input ends it as `Waiting for your answer` and a failed,
+    cancelled or rejected task as `Stopped`, an error, with the same summary. On the update path the line is `Working… (2 min, 12 steps, 3 failed)`,
     the minutes only from one, rewritten only by a write that an event causes, and replaced by the first text.
   - On Slack a `task_update` with an ID the stream has seen updates that card: its title and status replace the card's, and
     its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
