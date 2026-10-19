@@ -104,9 +104,6 @@ type Dialect interface {
 	// and an error wrapping ErrUnusablePause, naming the reason, when the task is paused
 	// but cannot be answered: the caller reports that in the thread and cancels the task.
 	ParseInteraction(task a2a.Task) (*Interaction, error)
-	// ToolPart classifies a part of an artifact or of a status message as a tool call or a tool
-	// result. ok is false for any other part, which the caller treats as plain content.
-	ToolPart(part *a2a.Part) (tool ToolPart, ok bool)
 	// BuildResponse returns the message that answers in. It validates the answer itself
 	// (backends accept incomplete ones, or wedge on them) and returns an error, having
 	// built nothing, unless every question is answered or every tool decided.

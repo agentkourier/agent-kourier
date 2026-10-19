@@ -87,9 +87,6 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	return &dialect.Interaction{TextReplies: true, Kind: dialect.AskUser, TaskID: task.ID, ContextID: task.ContextID, RequestID: request, Questions: []dialect.Question{{Text: question}}, Hint: "Reply in this thread or submit your answer below."}, nil
 }
 
-// ToolPart leaves backend-specific data parts opaque.
-func (*Dialect) ToolPart(*a2a.Part) (dialect.ToolPart, bool) { return dialect.ToolPart{}, false }
-
 // BuildResponse addresses one complete text answer to the paused task.
 func (*Dialect) BuildResponse(in dialect.Interaction, answer dialect.Answer) (a2a.Message, error) {
 	if in.Kind != dialect.AskUser || in.TaskID == "" || answer.RequestID != in.RequestID || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 0 || len(answer.Answers) != 1 || len(answer.Answers[0]) != 1 || strings.TrimSpace(answer.Answers[0][0]) == "" || len(answer.Decisions) != 0 {

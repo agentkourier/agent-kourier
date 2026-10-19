@@ -12,8 +12,6 @@ import (
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-
-	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
 
 const ticks = "tick 1 tick 2 tick 3 tick 4 tick 5 tick 6 tick 7 tick 8 "
@@ -49,13 +47,10 @@ func fixtureEvents(t *testing.T, name string) []a2a.Event {
 	return evs
 }
 
-// run feeds events to a fresh assembler that knows kagent's tool parts.
-func run(evs ...[]a2a.Event) (*assembler, []Event) { return runWith(kagentv1.New(0).ToolPart, evs...) }
-
-// runWith feeds events to a fresh assembler and returns what it emitted.
-func runWith(classify ToolClassifier, evs ...[]a2a.Event) (*assembler, []Event) {
+// run feeds events to a fresh assembler and returns what it emitted.
+func run(evs ...[]a2a.Event) (*assembler, []Event) {
 	var got []Event
-	asm := newAssembler(func(e Event) { got = append(got, e) }, classify)
+	asm := newAssembler(func(e Event) { got = append(got, e) })
 	for _, batch := range evs {
 		for _, ev := range batch {
 			asm.apply(ev)
@@ -228,20 +223,6 @@ func TestOnlyOneFinalEvent(t *testing.T) {
 	}
 }
 
-// Without a classifier a dialect has said nothing about data parts, so they stay opaque.
-func TestToolPartsAreOpaqueWithoutAClassifier(t *testing.T) {
-	_, got := runWith(nil, fixtureEvents(t, "approval/01-pause-approve.response.sse"))
-	for _, e := range got {
-		switch e.(type) {
-		case ToolCallEvent, ToolResultEvent:
-			t.Errorf("event %#v from an assembler with no classifier", e)
-		}
-	}
-	if _, ok := got[len(got)-1].(FinalEvent); !ok {
-		t.Errorf("last event = %#v, want FinalEvent", got[len(got)-1])
-	}
-}
-
 // kagent 0.9.x sends a turn's tool calls and results only as the messages of its status updates,
 // marked kagent_type, and its final text both as a status message and as an artifact
 // (recorded from kagent 0.9.4 over A2A 0.3). The task that ends the turn holds the tool parts in its
@@ -345,12 +326,5 @@ func TestStatusMessageToolPartsAreDeliveredOnce(t *testing.T) {
 				t.Errorf("texts = %q, want none: a status message's text is not an artifact", got)
 			}
 		})
-	}
-}
-
-func TestStatusMessageToolPartsAreOpaqueWithoutAClassifier(t *testing.T) {
-	call := v09Tool("function_call", map[string]any{"id": "c1", "name": "get"})
-	if _, got := runWith(nil, []a2a.Event{agentStatus("m1", call)}); tools(got) != nil {
-		t.Errorf("tool events = %q from an assembler with no classifier", tools(got))
 	}
 }

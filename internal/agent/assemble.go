@@ -9,18 +9,12 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 )
 
-// ToolClassifier tells a tool call or tool result part from other content. It is the
-// dialect's ToolPart method: what marks a tool part is the backend's convention, not A2A's.
-// With no classifier, data parts are opaque and no tool event is delivered.
-type ToolClassifier func(part *a2a.Part) (dialect.ToolPart, bool)
-
 // assembler folds the events of one send, and of every reconnect within it, into Events.
 // A task snapshot (from GetTask, SubscribeToTask, or a replayed send) and a live chunk
 // take the same path, so the same text never arrives twice: an artifact chunk with
 // append: true adds to the artifact's text, and anything else replaces it (spec 8.3).
 type assembler struct {
 	emit      Handler
-	classify  ToolClassifier
 	text      map[a2a.ArtifactID]string
 	tools     map[string]bool // where each tool part already delivered was: "artifact/part" or "message id/part"
 	toolIDs   map[string]bool // "call id" or "result id" of each tool part delivered with an ID: true if from a status message
@@ -33,11 +27,11 @@ type assembler struct {
 	unshown   bool // an agent Message came before any task where it cannot be the reply: on an Answer
 }
 
-func newAssembler(h Handler, classify ToolClassifier) *assembler {
+func newAssembler(h Handler) *assembler {
 	if h == nil {
 		h = func(Event) {}
 	}
-	a := &assembler{classify: classify, text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}, toolIDs: map[string]bool{}}
+	a := &assembler{text: map[a2a.ArtifactID]string{}, tools: map[string]bool{}, toolIDs: map[string]bool{}}
 	a.emit = func(e Event) {
 		a.changes++
 		h(e)
@@ -128,7 +122,7 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	var text strings.Builder
 	hasText := false
 	for i, p := range art.Parts {
-		if tp, ok := a.toolPart(p); ok {
+		if tp, ok := dialect.DecodeToolPart(p); ok {
 			a.tool(string(art.ID)+"/"+strconv.Itoa(i), false, art.ID, tp)
 		} else if t, isText := p.Content.(a2a.Text); isText {
 			text.WriteString(string(t))
@@ -157,17 +151,10 @@ func (a *assembler) statusMessage(m *a2a.Message) {
 		return
 	}
 	for i, p := range m.Parts {
-		if tp, ok := a.toolPart(p); ok {
+		if tp, ok := dialect.DecodeToolPart(p); ok {
 			a.tool("message "+m.ID+"/"+strconv.Itoa(i), true, "", tp)
 		}
 	}
-}
-
-func (a *assembler) toolPart(p *a2a.Part) (dialect.ToolPart, bool) {
-	if a.classify == nil {
-		return dialect.ToolPart{}, false
-	}
-	return a.classify(p)
 }
 
 // tool delivers a tool part once, however often a snapshot or a status update repeats it: where

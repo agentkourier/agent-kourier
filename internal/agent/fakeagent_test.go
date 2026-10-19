@@ -15,8 +15,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
-
-	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
 
 // rpc is one JSON-RPC request the fake agent received.
@@ -111,7 +109,7 @@ func (fa *fakeAgent) agentWith(t *testing.T, cfg Config) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(func(context.Context) (Conn, error) { return client, nil }, kagentv1.New(0).ToolPart, cfg)
+	return New(func(context.Context) (Conn, error) { return client, nil }, cfg)
 }
 
 // agentV03 returns an Agent that talks to fa over A2A 0.3 JSON-RPC (message/stream), as it talks to kagent 0.9.x.
@@ -126,7 +124,7 @@ func (fa *fakeAgent) agentV03(t *testing.T) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(func(context.Context) (Conn, error) { return client, nil }, kagentv1.New(0).ToolPart, Config{})
+	return New(func(context.Context) (Conn, error) { return client, nil }, Config{})
 }
 
 // sseEvents returns the events of a recorded SSE stream, each ready to write.

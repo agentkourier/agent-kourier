@@ -165,7 +165,7 @@ func memAgent(t *testing.T, m *memConn, tune func(*Config)) *Agent {
 	if tune != nil {
 		tune(&cfg)
 	}
-	return New(func(context.Context) (Conn, error) { return m, nil }, nil, cfg)
+	return New(func(context.Context) (Conn, error) { return m, nil }, cfg)
 }
 
 // sending is a Send running in a goroutine of the test's synctest bubble.

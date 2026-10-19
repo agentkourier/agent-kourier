@@ -72,14 +72,13 @@ func (c Config) withDefaults() Config {
 // Agent talks to one agent through a Source. It is safe for concurrent use.
 type Agent struct {
 	source Source
-	tool   ToolClassifier
 	cfg    Config
 }
 
-// New returns an Agent that gets its connection from source and recognizes tool parts with
-// tool, normally the backend dialect's ToolPart. A nil tool leaves data parts opaque.
-func New(source Source, tool ToolClassifier, cfg Config) *Agent {
-	return &Agent{source: source, tool: tool, cfg: cfg.withDefaults()}
+// New returns an Agent that gets its connection from source. It reads tool parts the same way
+// whatever the backend's dialect (dialect.DecodeToolPart).
+func New(source Source, cfg Config) *Agent {
+	return &Agent{source: source, cfg: cfg.withDefaults()}
 }
 
 // Send sends msg and delivers the reply to h as it streams, returning when the task ends
@@ -117,7 +116,7 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	if err != nil {
 		return fmt.Errorf("%w: connect to agent: %w", ErrNotSent, typed(err, false))
 	}
-	asm := newAssembler(h, a.tool)
+	asm := newAssembler(h)
 	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
 	err = a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return conn.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: msg})

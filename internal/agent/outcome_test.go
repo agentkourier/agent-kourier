@@ -67,7 +67,7 @@ func TestSourceFailureDuringReconnectKeepsTheTask(t *testing.T) {
 			}
 			return m, nil
 		}
-		s := sendAsync(t, New(source, nil, Config{ReconnectDelay: time.Second}))
+		s := sendAsync(t, New(source, Config{ReconnectDelay: time.Second}))
 		s.feed(send, item{ev: working()})
 		s.feed(send, item{err: io.ErrUnexpectedEOF})
 		err := s.result()
@@ -81,7 +81,7 @@ func TestSourceFailureDuringReconnectKeepsTheTask(t *testing.T) {
 // A Source that fails before anything is sent is its own outcome: retrying is safe.
 func TestSourceFailureBeforeSendingIsNotSent(t *testing.T) {
 	boom := errors.New("secret not found")
-	err := New(func(context.Context) (Conn, error) { return nil, boom }, nil, Config{}).Send(t.Context(), message("hi"), nil)
+	err := New(func(context.Context) (Conn, error) { return nil, boom }, Config{}).Send(t.Context(), message("hi"), nil)
 	if !errors.Is(err, ErrNotSent) || !errors.Is(err, boom) || errors.Is(err, ErrOutcomeUnknown) || errors.Is(err, ErrStreamLost) {
 		t.Errorf("err = %v, want ErrNotSent wrapping the Source's error", err)
 	}

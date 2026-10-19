@@ -49,7 +49,7 @@ func TestGetTaskAndCancelTaskResults(t *testing.T) {
 func TestUnaryDeadlineCoversTheSource(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		stuck := func(ctx context.Context) (Conn, error) { <-ctx.Done(); return nil, ctx.Err() }
-		agent := New(stuck, nil, Config{UnaryTimeout: time.Second})
+		agent := New(stuck, Config{UnaryTimeout: time.Second})
 		if _, err := agent.GetTask(t.Context(), "t1"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("GetTask err = %v, want DeadlineExceeded", err)
 		}

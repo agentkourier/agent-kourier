@@ -185,7 +185,7 @@ func TestAMessageThatIsNotAReplyIsIgnored(t *testing.T) {
 // A Message after the agent has named a task is not the reply: the task's own events are.
 func TestAssemblerIgnoresAMessageAfterATask(t *testing.T) {
 	h, got := collector()
-	asm := newAssembler(h, nil)
+	asm := newAssembler(h)
 	asm.replies = true
 	asm.apply(working())
 	before := len(*got)
