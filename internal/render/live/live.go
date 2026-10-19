@@ -583,7 +583,8 @@ func (u *Run) run(ctx context.Context) {
 					finalOutcome = "empty_output"
 					return
 				}
-				v.m, v.body, v.ok = render.Nothing(), render.NoOutput, true // but a message stands: do not leave its tool line up
+				// But a message stands: do not leave its tool line up. Nothing was shown, so there is nothing to rate (Turn.Footer).
+				v.m, v.body, v.ok, v.rated = render.Nothing(), render.NoOutput, true, false
 			}
 			if !v.ok || (u.turn.Mode == v1alpha1.OutputFinal && !v.final) {
 				break

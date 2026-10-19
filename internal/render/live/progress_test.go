@@ -967,15 +967,21 @@ func TestAnEmptyStreamIsStoppedWhenTheTurnEndsWithNothingToShow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := setup(t)
 			e.spy(t, true, func(int) error { return chat.ErrNoSteps })
-			run := e.progressRun(t, tc.mode, "U1")
+			// The turn has a footer: a turn that ended with nothing to show is not one to rate (Turn.Footer), so the stop
+			// that ends its empty stream carries no buttons, as the update path's "(no output)" carries none.
+			run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Progress: tc.mode, Recipient: "U1", Footer: footer})
 			tc.drive(t, e, run)
 			run.Handle(tc.final)
 			e.finish(t, run)
 			if n := len(e.rec.sent("/chat.stopStream")); n != 1 {
 				t.Errorf("%d stops; want the empty stream stopped, once", n)
 			}
-			if m := e.reply(); m.Streaming || m.Text != "(no output)" {
+			m := e.reply()
+			if m.Streaming || m.Text != "(no output)" {
 				t.Errorf("message %+v; want it stopped, saying there was no output", m)
+			}
+			if buttons, questions := hasFooter(string(m.Blocks)); buttons || questions > 0 {
+				t.Errorf("the stopped empty stream asks for a rating: %s", m.Blocks)
 			}
 		})
 	}
