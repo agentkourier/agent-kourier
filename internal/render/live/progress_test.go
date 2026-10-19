@@ -952,10 +952,10 @@ func TestAnEmptyStreamIsStoppedWhenTheTurnEndsWithNothingToShow(t *testing.T) {
 		drive func(t *testing.T, e *env, run *live.Run)
 		final agent.FinalEvent
 	}{
-		{"steps-and-activity, silent, failed", sa, func(t *testing.T, e *env, run *live.Run) {
+		{"steps-and-activity, silent, failed", sa, func(t *testing.T, e *env, _ *live.Run) {
 			e.until(t, "the stream to start for the card", 3*time.Second, func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 		}, failed},
-		{"activity, silent, failed", activity, func(t *testing.T, e *env, run *live.Run) {
+		{"activity, silent, failed", activity, func(t *testing.T, e *env, _ *live.Run) {
 			e.until(t, "the stream to start for the card", 3*time.Second, func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
 		}, failed},
 		{"steps, a call and an empty end", v1alpha1.ProgressSteps, func(t *testing.T, e *env, run *live.Run) {
