@@ -940,3 +940,43 @@ func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testin
 		}
 	})
 }
+
+// A stream that was started for a step and whose steps the platform then refuses (Slack in markdown mode takes no task_update
+// chunk) is an empty message. A turn that ends with nothing to show must stop it, with the text of a turn that has no output, or
+// it is left open for good. It is the same in the steps mode: a tool call, and then an empty end.
+func TestAnEmptyStreamIsStoppedWhenTheTurnEndsWithNothingToShow(t *testing.T) {
+	failed := agent.FinalEvent{Task: &a2a.Task{Status: a2a.TaskStatus{State: a2a.TaskStateFailed}}}
+	for _, tc := range []struct {
+		name  string
+		mode  v1alpha1.ProgressMode
+		drive func(t *testing.T, e *env, run *live.Run)
+		final agent.FinalEvent
+	}{
+		{"steps-and-activity, silent, failed", sa, func(t *testing.T, e *env, run *live.Run) {
+			e.until(t, "the stream to start for the card", 3*time.Second, func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+		}, failed},
+		{"activity, silent, failed", activity, func(t *testing.T, e *env, run *live.Run) {
+			e.until(t, "the stream to start for the card", 3*time.Second, func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+		}, failed},
+		{"steps, a call and an empty end", v1alpha1.ProgressSteps, func(t *testing.T, e *env, run *live.Run) {
+			run.Handle(call("c1", "search", nil))
+			run.Handle(result("c1", map[string]any{"output": "x"}))
+			eventually(t, "the stream to start for the step", func() bool { return len(e.rec.sent("/chat.startStream")) == 1 })
+		}, agent.FinalEvent{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setup(t)
+			e.spy(t, true, func(int) error { return chat.ErrNoSteps })
+			run := e.progressRun(t, tc.mode, "U1")
+			tc.drive(t, e, run)
+			run.Handle(tc.final)
+			e.finish(t, run)
+			if n := len(e.rec.sent("/chat.stopStream")); n != 1 {
+				t.Errorf("%d stops; want the empty stream stopped, once", n)
+			}
+			if m := e.reply(); m.Streaming || m.Text != "(no output)" {
+				t.Errorf("message %+v; want it stopped, saying there was no output", m)
+			}
+		})
+	}
+}

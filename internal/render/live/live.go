@@ -576,7 +576,10 @@ func (u *Run) run(ctx context.Context) {
 			}
 			v := u.snapshot()     // after the wait, so that what is sent is the latest
 			if !v.ok && v.final { // the turn ended with nothing to show
-				if ref.ID == "" {
+				// A stream that was started stands as a message too, though ref is the update path's alone: it was started for a step
+				// that the platform then refused, and is empty. It is stopped with the text of a turn with no output, as the update
+				// path's message is, or it is left open for good.
+				if ref.ID == "" && !u.streamOpen() {
 					finalOutcome = "empty_output"
 					return
 				}
@@ -643,6 +646,9 @@ func (u *Run) run(ctx context.Context) {
 		}
 	}
 }
+
+// streamOpen says a stream this turn started has not been stopped. It is the goroutine's.
+func (u *Run) streamOpen() bool { return u.streaming && u.stream != nil && !u.stopped }
 
 // isFinal says whether the turn's final event has arrived.
 func (u *Run) isFinal() bool {

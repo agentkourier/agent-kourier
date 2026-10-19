@@ -178,8 +178,9 @@ Binding fails to load for it.
 - **An alert thread gains a `Working…` line.** After the same 3 seconds, the message the investigation updates shows
   `Working…` as a line of small print in place of the line of a tool call that returned, under the text so far if there is
   some, and as the message's first post if nothing else has been said. The next text or tool call replaces it. Each gap
-  costs one more message update.
+  costs one more message update. A turn that is silent for 3 seconds and then ends with nothing to show, or fails, now
+  leaves a message saying `(no output)` where under `steps` it posted nothing.
 - **`output: final` is unchanged.** It posts once when the turn ends, whatever `progress` says.
 
 To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line
-and never names a tool. See [Output](../explanation/threads-and-sessions.md#output).
+that never names a tool (a tool approval prompt still does). See [Output](../explanation/threads-and-sessions.md#output).

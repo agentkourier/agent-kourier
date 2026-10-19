@@ -78,12 +78,18 @@ step. It is one of three values:
 | `steps-and-activity` (the default) | The same, and when 3 seconds pass with no new text and no tool call under way, a card titled `Working…` begins. The next tool call takes that card over, so it carries the tool's name and arguments from then on; text instead retitles it `Wrote the answer`. | The same, and `Working…` as a line of small print once 3 seconds pass with nothing new, in place of the line of a call that returned, until the next text or tool call. |
 | `activity` | One card for the whole wait, begun at the first tool call or result, or after 3 seconds, and only before any text. Its title counts the tool calls that have a result, such as `Working… 12 steps, 3 failed`. At the first text it becomes `Worked`, with `Took 3 min 26 s, 16 steps (7 failed)`. | One line, `Working… (2 min, 12 steps, 3 failed)`, until the first text. |
 
-The `activity` mode never shows a tool's name or arguments. No mode shows the agent's reasoning: Agent Kourier does not read
+The `activity` mode never shows a tool's name or arguments in the reply's cards and lines; a tool approval prompt, with
+`interactions.toolApprovals`, still names the tool and shows its arguments. No mode shows the agent's reasoning: Agent Kourier does not read
 it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
 `Working…` card or line is written once for a gap, and no other write follows the clock. A gap longer than the delay costs
 at most two writes more than `steps` spends in a chat thread (the card's begin and, when no tool call takes it over, its
 end), and one more message update in an alert thread. The `activity` card is written when a result changes a count, at most
 once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
+
+In an alert thread, a turn that is silent for 3 seconds now posts `Working…` as its message. If the turn then ends with
+nothing to show, or fails, that message is left saying `(no output)`; under `steps` such a turn posted nothing. A chat
+thread whose stream was started for a card, and whose platform then refuses cards, is stopped with the same `(no output)`
+when the turn ends empty, and is not left open.
 
 A `Working…` card that no tool call took over ends under a title that says how, never as a tick on `Working…`. If text came
 while it was open it is `Wrote the answer`. If the turn ends first, it is `Finished` for a completed task, `Waiting for your

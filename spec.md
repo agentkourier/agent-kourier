@@ -938,7 +938,7 @@ making the prefix optional breaks multi-turn context.
     before the delay begins its card directly. On the update path `Working…` is a line of small print that replaces the
     line of a call that returned, shown under the text if there is some; the next text or call replaces it.
   - `activity`: one card `Working…`, begun at the first tool call or result or at the delay, whichever is first, and only
-    if no text has come. No card names a tool or holds an argument. Its title carries the counts of the tool calls that
+    if no text has come. No card or line of the reply names a tool or holds an argument (an approval prompt still names the tool, 8.4). Its title carries the counts of the tool calls that
     have a result, `Working… 12 steps, 3 failed`; at the first text, or at the end of a completed task, it is done as
     `Worked`, with the summary `Took 3 min 26 s, 16 steps (7 failed)` as its detail, sent once; a pause for input ends it as
     `Waiting for your answer` and a failed, cancelled or rejected task as `Stopped`, an error, with the same summary. On the
