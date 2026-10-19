@@ -80,10 +80,10 @@ step. It is one of three values:
 
 The `activity` mode never shows a tool's name or arguments. No mode shows the agent's reasoning: Agent Kourier does not read
 it, and the `Working…` title says nothing about what the agent is doing. The 3 second delay is not configurable. The
-`Working…` card or line is written once for a gap, and no other write follows the clock, so a gap longer than the delay
-costs at most one write more than `steps` spends (the card's begin, or one more message update). The `activity` card is
-written when a result changes a count, at most once in a throttle window, and its line's elapsed minutes are refreshed only
-when an event makes a write.
+`Working…` card or line is written once for a gap, and no other write follows the clock. A gap longer than the delay costs
+at most two writes more than `steps` spends in a chat thread (the card's begin and, when no tool call takes it over, its
+end), and one more message update in an alert thread. The `activity` card is written when a result changes a count, at most
+once in a throttle window, and its line's elapsed minutes are refreshed only when an event makes a write.
 
 A `Working…` card that no tool call took over ends under a title that says how, never as a tick on `Working…`. If text came
 while it was open it is `Wrote the answer`. If the turn ends first, it is `Finished` for a completed task, `Waiting for your

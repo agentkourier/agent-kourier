@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -889,4 +890,49 @@ func TestTheProgressModesGoOnAfterTheTurnMovesToTheUpdatePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A turn that moves from the stream to the update path and ends with nothing to show follows the rule of a turn that never
+// streamed: where a message stands it is updated to "(no output)", and where there is none nothing is posted. It is never a
+// write of a message with no parts, which would fail for good.
+func TestAMovedTurnThatEndsWithNothingToShowDoesNotWriteAnEmptyMessage(t *testing.T) {
+	// The first write is made with all the events: the call, its result and the final.
+	events := func(run *live.Run) {
+		run.Handle(call("c1", "search", nil))
+		run.Handle(result("c1", map[string]any{"output": "x"}))
+		run.Handle(agent.FinalEvent{})
+	}
+	t.Run("the stream is refused: no message stands, and none is posted", func(t *testing.T) {
+		e := setup(t)
+		e.cfg.Platform = spy{Platform: e.cfg.Platform, caps: e.cfg.Platform.Capabilities(), steps: new(atomic.Int32), streamFail: fmt.Errorf("start: %w", errRefused)}
+		e.live = newRenderer(t, e.cfg)
+		release := e.hold()
+		t.Cleanup(release)
+		run, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1"})
+		events(run)
+		release()
+		e.finish(t, run)
+		if n := e.writes(); n != 0 || len(e.fake.Thread("C1", e.root)) != 1 {
+			t.Errorf("%d requests, thread %+v; want nothing posted for a turn that showed nothing", n, e.fake.Thread("C1", e.root))
+		}
+		if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
+			t.Errorf("a write of an empty message was tried:\n%s", l)
+		}
+	})
+	t.Run("a message stands: it says there was no output", func(t *testing.T) {
+		e := setup(t)
+		e.postedByUpdate(t)
+		release := e.hold()
+		t.Cleanup(release)
+		again, _ := e.startFor(t, live.Turn{Mode: v1alpha1.OutputLive, Recipient: "U1", Recovered: true})
+		events(again)
+		release()
+		e.finish(t, again)
+		if m := e.reply(); m.Text != "(no output)" {
+			t.Errorf("message %+v; want it updated to no output", m)
+		}
+		if l := e.logs.String(); strings.Contains(l, "cannot be sent") || strings.Contains(l, "no text and no parts") {
+			t.Errorf("a write of an empty message was tried:\n%s", l)
+		}
+	})
 }

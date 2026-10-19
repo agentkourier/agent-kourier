@@ -923,8 +923,9 @@ making the prefix optional breaks multi-turn context.
   stretch 22 s). The renderer's run loop wakes on a timer as well as on events. A gap is the time since the last text, the
   last tool result with no other call under way, or the start of the turn; no gap runs while a call with an ID is under
   way. When a gap has run `Config.ActivityDelay` (3 s) with nothing new, the renderer shows that the agent is working, once
-  for the gap; every other write follows an event. So a gap longer than the delay costs at most one write more than `steps`
-  spends: the begin of the card (a `chat.update` in an alert thread). The `activity` mode writes its card when a result
+  for the gap; every other write follows an event. So a gap longer than the delay costs at most two writes more than `steps`
+  spends in a chat thread (each `Step` is its own `chat.appendStream`: the card's begin and, when no tool call takes it over,
+  its end), and one more `chat.update` in an alert thread. The `activity` mode writes its card when a result
   changes a count, at most once a window (the actual `chat.appendStream` rate tier is unverified). The modes:
   - `steps`: a card per tool call in a chat thread, the status line above in an alert thread.
   - `steps-and-activity` (the default): the same, and a gap longer than the delay adds one `Working…`. In a stream it is a
@@ -938,10 +939,11 @@ making the prefix optional breaks multi-turn context.
     line of a call that returned, shown under the text if there is some; the next text or call replaces it.
   - `activity`: one card `Working…`, begun at the first tool call or result or at the delay, whichever is first, and only
     if no text has come. No card names a tool or holds an argument. Its title carries the counts of the tool calls that
-    have a result, `Working… 12 steps, 3 failed`; at the first text, or at the end of a completed task, it is done as `Worked`, with the summary `Took 3 min 26 s,
-    16 steps (7 failed)` as its detail, sent once; a pause for input ends it as `Waiting for your answer` and a failed,
-    cancelled or rejected task as `Stopped`, an error, with the same summary. On the update path the line is `Working… (2 min, 12 steps, 3 failed)`,
-    the minutes only from one, rewritten only by a write that an event causes, and replaced by the first text.
+    have a result, `Working… 12 steps, 3 failed`; at the first text, or at the end of a completed task, it is done as
+    `Worked`, with the summary `Took 3 min 26 s, 16 steps (7 failed)` as its detail, sent once; a pause for input ends it as
+    `Waiting for your answer` and a failed, cancelled or rejected task as `Stopped`, an error, with the same summary. On the
+    update path the line is `Working… (2 min, 12 steps, 3 failed)`, the minutes only from one, rewritten only by a write
+    that an event causes, and replaced by the first text.
   - On Slack a `task_update` with an ID the stream has seen updates that card: its title and status replace the card's, and
     its details and output are appended, so the adapter sends a card's detail and output once, in every mode (the claiming
     call's detail goes with the claim, and the chunks after it carry none on the wire). Stopping a stream turns a card still

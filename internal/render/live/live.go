@@ -599,6 +599,10 @@ func (u *Run) run(ctx context.Context) {
 			}
 			err := u.write(writeCtx, &ref, v)
 			next = u.cfg.Now().Add(u.cfg.Throttle)
+			if errors.Is(err, errNothingToShow) { // a turn that moved to the update path, and ended with nothing to post
+				finalOutcome = "empty_output"
+				return
+			}
 			if err != nil {
 				switch verdict := u.cfg.Platform.Classify(chat.OpPost, err); {
 				case errors.Is(err, store.ErrInvalid), errors.Is(err, chat.ErrInvalid), errors.Is(err, outbox.ErrAbandoned): // retrying cannot mend them
