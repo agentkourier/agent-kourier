@@ -116,9 +116,10 @@ task; ADK's older converter and kagent 0.9.x put them in status messages.
 - The artifacts, in every chunk and in every task snapshot (`GetTask`, `SubscribeToTask`, a replayed send).
 - The message of a status update, when it is the agent's own (role `agent`) and the task is `working`. A task snapshot's
   status message is read on the same terms.
-- The agent's own messages in the `history` of a task snapshot, whatever the task's state, since a history message
-  carries none. That is how a call or result sent while the stream was down, or before a restart, is found. A pause
-  message in the history that holds a marked tool part would show as a step too.
+- The agent's own messages in the `history` of a task snapshot since the last message of the user, whatever the task's
+  state, since a history message carries none. That is how a call or result sent while the stream was down, or before a
+  restart, is found. The messages before the user's last one are an earlier turn's, and are not read. A pause message in
+  the history that holds a marked tool part would show as a step too.
 
 The text of a status message is still not shown. A part is delivered once, and what counts as a repeat depends on where
 the part is:
@@ -135,15 +136,22 @@ the part is:
   first result it gets, because a step finishes at the first result of its call and a later result changes nothing.
 - A task snapshot is history and the stream is the news. A snapshot's result for a call whose result the stream already
   delivered from the same source (artifacts, or messages) is ignored, and of several results of one call in a snapshot
-  the last counts. A snapshot of a task that went on from an earlier turn holds that turn's calls and results too, and
-  they are delivered again as steps of the turn that is running.
+  the last counts.
+- An answer to a paused task (a question or an approval) is about a task that goes on, whose snapshots hold the paused
+  turn's calls and results too. Before it sends the answer, Agent Kourier reads the task with one `GetTask` and counts
+  every tool part in it as delivered, so the answer shows its own steps and not the paused turn's again. A task that
+  cannot be read is answered without it. A follow after a restart has no such snapshot, so it reads only the history
+  since the user's last message, and the artifacts of a task that went on from an earlier turn replay that turn's
+  calls and results.
+- Two artifacts of one source that hold the same call are two calls. This matters if an agent sends a call in a partial
+  artifact and again in the main one; no agent measured does.
 
 A result is delivered after its call. When a result arrives in the stream for a call that the send has not delivered,
-and the send answers a paused task (a question or an approval), Agent Kourier asks the agent for the task once and
-delivers the call it finds there, then the result, so the step begins where the call was made and not after the text. Only
-the call is taken from the task, so the error that stood for the pause is not delivered. When the call is nowhere, or the
-agent cannot say, the result waits for the call, and is delivered when the send ends, or when it fails; a send that fails and is
-followed starts again from the task's snapshot.
+and the send answers a paused task, Agent Kourier delivers the call it finds in the task it read before sending,
+then the result, so the step begins where the call was made and not after the text. Only that call is taken from the
+task, so the error that stood for the pause is not delivered. When the call is nowhere, the result waits for it, and is
+delivered when the send ends, or when it fails. A send that fails and is followed starts again from the task's snapshot,
+so a follow may deliver a result again; the card keeps the first.
 
 Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
 `error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need

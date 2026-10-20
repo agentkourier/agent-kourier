@@ -918,7 +918,7 @@ making the prefix optional breaks multi-turn context.
   on every dialect (D45), with the one decoder of 6.2. It reads the artifacts (every chunk and
   snapshot), the message of a status update when the agent sent it and the task is `working` (not the user's message
   echoed back, not the message of a pause), a task snapshot's `status.message` on the same terms, and the
-  agent's messages in a snapshot's `history`, whatever the task's state, since a history message
+  agent's messages in a snapshot's `history` since the user's last message, whatever the task's state, since a history message
   has none (a pause message there that held a marked tool part would show too). Each part is delivered
   once. Within a message a part is its `messageId` and index, and a message with no `messageId` is told by what it
   says. Within an artifact a chunk with `append: true` adds parts after the ones sent, so each is new though its index
@@ -930,18 +930,23 @@ making the prefix optional breaks multi-turn context.
   kind and call ID that says something else is another and is delivered. A task snapshot is history and the live
   events are the news: the snapshot that ends an approving turn replays the paused turn's call and its "requires
   confirmation" error, so a snapshot's result for a call whose result a live event of the same source delivered is
-  dropped, and the last result of a call in one snapshot is its outcome. A result is delivered after its call. The
-  turn that approves a call streams only the result, the call being the paused turn's, so on an answer a live result
-  whose call the send has not delivered makes the client ask the agent for the task once (`GetTask`) and deliver the
-  call found there, and only the call, before the result and the text after it, so the approved call is one step that
-  begins before the answer and ends done. When the call is nowhere, or the agent cannot say, the result waits, and
-  is delivered when the send ends or fails (a send that fails and is followed starts over from the snapshot).
+  dropped, and the last result of a call in one snapshot is its outcome. A result is delivered after its call. An
+  answer is about a task that goes on, whose snapshots hold the paused turn's tool parts too, so before it sends the
+  answer the client reads the paused task (`GetTask`, one unary call per answer; an unreadable task is answered
+  without it) and counts every tool part in it as delivered: the answer shows its own steps. The turn that approves a call
+  streams only the result, the call being the paused turn's, so a live result whose call the send has not delivered makes
+  the client deliver that call, and only the call, from the task it read, before the result and the text after it, so
+  the approved call is one step that begins before the answer and ends done. When the call is nowhere, the result
+  waits, and is delivered when the send ends or fails; a send that fails and is followed starts over from the snapshot,
+  so a follow may deliver a result again, and the card keeps the first.
   Known gap: if the stream drops on an approving turn before the real result streams, and `GetTask`
   returns only the call and the stale error, the error is delivered and the step ends failed, and the real
   result that follows is ignored (the first result decides the card). Without timeline data, which kagent
   puts in each artifact's `kagent.dev/a2a/timeline-position` metadata and the assembler does not read, history cannot be
-  told from news. The same gap makes a snapshot of a task that went on from an earlier turn replay that turn's
-  calls and results as steps of the turn that is running.
+  told from news. Also not covered: a follow after a restart
+  of an answered task has no paused snapshot, so the artifacts of an earlier turn replay as steps of the turn that is
+  running (its history is cut at the user's last message), and the same call in two artifacts of one source is
+  delivered twice (adk-go's partial artifact and its main one, if a call is ever sent in a partial; unverified).
   The client appends on `append: true` and otherwise replaces, per artifact.
 - A reply that is one `Message` and no task (6.3) arrives whole: its text parts, joined, are
   one artifact keyed by the message's `messageId`, and the turn ends with it.
