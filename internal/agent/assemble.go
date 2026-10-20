@@ -19,12 +19,16 @@ import (
 type assembler struct {
 	emit      Handler
 	text      map[a2a.ArtifactID]string
-	placed    map[toolPlace]bool               // the places whose tool part was looked at
+	placed    map[toolPlace]bool               // the places of the status messages whose tool part was looked at
+	sent      map[artifactPart]int             // how many tool parts of each saying each artifact has delivered
 	said      map[[sha256.Size]byte]toolSource // what each tool part delivered or held said, and where it was found
 	called    map[string]bool                  // the call IDs whose call was delivered
 	live      map[toolKey]bool                 // the calls, as a source reports them, that had a result from a live event
 	held      []ToolResultEvent                // results whose call has not come, in the order they came
 	snapshot  map[toolKey]toolPlace            // while a task snapshot is applied: the place of the last result of each call; else nil
+	lookup    func() *a2a.Task                 // the task the send answers, as the agent holds it now; nil when the send is not an answer
+	known     *a2a.Task                        // what lookup returned, once
+	looked    bool                             // lookup has been called
 	taskID    a2a.TaskID
 	contextID string
 	state     a2a.TaskState
@@ -38,7 +42,7 @@ func newAssembler(h Handler) *assembler {
 	if h == nil {
 		h = func(Event) {}
 	}
-	a := &assembler{text: map[a2a.ArtifactID]string{}, placed: map[toolPlace]bool{}, said: map[[sha256.Size]byte]toolSource{},
+	a := &assembler{text: map[a2a.ArtifactID]string{}, placed: map[toolPlace]bool{}, sent: map[artifactPart]int{}, said: map[[sha256.Size]byte]toolSource{},
 		called: map[string]bool{}, live: map[toolKey]bool{}}
 	a.emit = func(e Event) {
 		a.changes++
@@ -53,10 +57,12 @@ func (a *assembler) apply(ev a2a.Event) {
 	case *a2a.Task:
 		a.track(e.ID, e.ContextID)
 		a.snapshot = lastResults(e)
+		for _, m := range snapshotMessages(e) {
+			a.messageTools(m)
+		}
 		for _, art := range e.Artifacts {
 			a.artifact(art, false, true)
 		}
-		a.statusMessage(e.Status.State, e.Status.Message)
 		a.snapshot = nil
 		a.setState(e.Status.State)
 		if settled(e.Status.State) && a.final == nil {
@@ -64,7 +70,9 @@ func (a *assembler) apply(ev a2a.Event) {
 		}
 	case *a2a.TaskStatusUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
-		a.statusMessage(e.Status.State, e.Status.Message)
+		if readable(e.Status.State, e.Status.Message) {
+			a.messageTools(e.Status.Message)
+		}
 		a.setState(e.Status.State)
 	case *a2a.TaskArtifactUpdateEvent:
 		a.track(e.TaskID, e.ContextID)
@@ -137,9 +145,10 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	}
 	var text strings.Builder
 	hasText := false
+	seen := map[[sha256.Size]byte]int{} // how many parts of each saying this chunk has held so far
 	for i, p := range art.Parts {
-		if tp, ok := dialect.DecodeToolPart(p); ok {
-			a.tool(artifactPlace(art.ID, i), art.ID, tp)
+		if tp, ok := decodeTool(p); ok {
+			a.artifactTool(art.ID, i, tp, appendMode, seen)
 		} else if t, isText := p.Content.(a2a.Text); isText {
 			text.WriteString(string(t))
 			hasText = true
@@ -159,6 +168,41 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	}
 }
 
+// artifactTool delivers a tool part of an artifact chunk if the artifact has not delivered it. A chunk that adds to the
+// artifact (append: true) holds parts that follow the ones sent, so each is new, though its index restarts at 0: Google
+// ADK's default output is one artifact for a whole run, of which every call and result is such a chunk. A chunk that
+// replaces the artifact, and a task snapshot, hold all its parts again, so a part is new only past the number of its
+// saying that the artifact has delivered already: that tells a part from its repeat wherever the replace puts it, and
+// keeps two calls that say the same (no call ID, same arguments) two. seen counts the parts of this chunk so far.
+func (a *assembler) artifactTool(art a2a.ArtifactID, index int, tp toolPart, appendMode bool, seen map[[sha256.Size]byte]int) {
+	key := artifactPart{art, tp.says}
+	if appendMode {
+		a.sent[key]++
+	} else {
+		seen[tp.says]++
+		if seen[tp.says] <= a.sent[key] {
+			return
+		}
+		a.sent[key] = seen[tp.says]
+	}
+	a.tool(artifactPlace(art, index), art, tp)
+}
+
+// messageTools delivers the tool parts of a message of the agent's, once each.
+func (a *assembler) messageTools(m *a2a.Message) {
+	for i, p := range m.Parts {
+		tp, ok := decodeTool(p)
+		if !ok {
+			continue
+		}
+		place := messagePlace(m, i, tp)
+		if !a.placed[place] {
+			a.placed[place] = true
+			a.tool(place, "", tp)
+		}
+	}
+}
+
 // readable says whether a status message is read for tool parts: the agent's own message while the task works, which
 // is where kagent 0.9.x and Google ADK's older A2A converter send tool calls and results
 // (test/fixtures/kagent/v09-tools). The user's message echoed back in a status update is not the agent's, and the
@@ -168,16 +212,20 @@ func readable(state a2a.TaskState, m *a2a.Message) bool {
 	return m != nil && m.Role == a2a.MessageRoleAgent && state == a2a.TaskStateWorking
 }
 
-// statusMessage delivers the tool parts of a status message, a status update's or a task snapshot's, if it is readable.
-func (a *assembler) statusMessage(state a2a.TaskState, m *a2a.Message) {
-	if !readable(state, m) {
-		return
-	}
-	for i, p := range m.Parts {
-		if tp, ok := dialect.DecodeToolPart(p); ok {
-			a.tool(messagePlace(m, i, tp), "", tp)
+// snapshotMessages are the messages of a task snapshot that are read for tool parts, oldest first: the agent's messages in
+// its history, which say no state of their own and so are read whatever the task's, and its status message if it is
+// readable. A message in both is read once.
+func snapshotMessages(t *a2a.Task) []*a2a.Message {
+	var out []*a2a.Message
+	for _, m := range t.History {
+		if m != nil && m.Role == a2a.MessageRoleAgent {
+			out = append(out, m)
 		}
 	}
+	if readable(t.Status.State, t.Status.Message) {
+		out = append(out, t.Status.Message)
+	}
+	return out
 }
 
 // toolSource is where a tool part was found: the two places an agent puts one.
@@ -185,17 +233,17 @@ type toolSource uint8
 
 const (
 	inArtifact toolSource = iota
-	inMessage             // the message of a status update, or of a task snapshot's status
+	inMessage             // a status message, or a message in a task's history
 )
 
-// toolPlace is where a tool part sits within its source, which is its identity there.
+// toolPlace is where a tool part sits in a message or in a snapshot's artifact, which is its identity there.
 type toolPlace struct {
 	source toolSource
 	owner  string // the artifact's ID, or the message's
 	index  int    // the part's index in the artifact or message
-	// said is the digest of what the part says, set for a message with no ID, which has no place but its words: two
-	// such messages are one only if their parts say the same. The zero value says no words.
-	said [sha256.Size]byte
+	// says is what the part says, set for a message with no ID, which has no place but its words: two such
+	// messages are one only if their parts say the same.
+	says [sha256.Size]byte
 }
 
 // toolKey names the call that a result answers, as one source reports it.
@@ -204,34 +252,51 @@ type toolKey struct {
 	id     string
 }
 
+// artifactPart names the parts of one artifact that say the same.
+type artifactPart struct {
+	art  a2a.ArtifactID
+	says [sha256.Size]byte
+}
+
 func artifactPlace(id a2a.ArtifactID, index int) toolPlace {
 	return toolPlace{source: inArtifact, owner: string(id), index: index}
 }
 
-func messagePlace(m *a2a.Message, index int, tp dialect.ToolPart) toolPlace {
+func messagePlace(m *a2a.Message, index int, tp toolPart) toolPlace {
 	if m.ID == "" {
-		return toolPlace{source: inMessage, index: index, said: saying(tp)}
+		return toolPlace{source: inMessage, index: index, says: tp.says}
 	}
 	return toolPlace{source: inMessage, owner: m.ID, index: index}
 }
 
-// saying is a digest of what a tool part says: its kind, call ID and name, and its arguments or response. A digest,
-// so that the assembler keeps 32 bytes of each part for the whole send and not its arguments and response.
-func saying(tp dialect.ToolPart) [sha256.Size]byte {
+// toolPart is a decoded tool part with a digest of what it says: its kind, call ID and name, and its arguments or
+// response. A digest, so that the assembler keeps 32 bytes of each part for the whole send and not its arguments and
+// response.
+type toolPart struct {
+	dialect.ToolPart
+	says [sha256.Size]byte
+}
+
+func decodeTool(p *a2a.Part) (toolPart, bool) {
+	tp, ok := dialect.DecodeToolPart(p)
+	if !ok {
+		return toolPart{}, false
+	}
 	b, err := json.Marshal([]any{tp.Kind, tp.ID, tp.Name, tp.Args, tp.Result})
 	if err != nil { // unreachable for a part decoded from JSON
 		b = fmt.Appendf(nil, "%#v", tp)
 	}
-	return sha256.Sum256(b)
+	return toolPart{tp, sha256.Sum256(b)}, true
 }
 
-// lastResults is the place of the last result of each call that a task snapshot holds, in its artifacts and in its
-// status message, as a source orders them: its artifacts in the order they came, and the status message after them.
-func lastResults(t *a2a.Task) map[toolKey]toolPlace {
-	last := map[toolKey]toolPlace{}
-	note := func(place toolPlace, p *a2a.Part) {
-		if tp, ok := dialect.DecodeToolPart(p); ok && tp.Kind == dialect.ToolResult && tp.ID != "" {
-			last[toolKey{place.source, tp.ID}] = place
+// eachToolPart calls visit for each tool part a task snapshot holds, in the order they are read: its messages, then its
+// artifacts. A part of an artifact is at its index in the artifact, which a snapshot holds whole.
+func eachToolPart(t *a2a.Task, visit func(place toolPlace, art a2a.ArtifactID, tp toolPart)) {
+	for _, m := range snapshotMessages(t) {
+		for i, p := range m.Parts {
+			if tp, ok := decodeTool(p); ok {
+				visit(messagePlace(m, i, tp), "", tp)
+			}
 		}
 	}
 	for _, art := range t.Artifacts {
@@ -239,24 +304,32 @@ func lastResults(t *a2a.Task) map[toolKey]toolPlace {
 			continue
 		}
 		for i, p := range art.Parts {
-			note(artifactPlace(art.ID, i), p)
-		}
-	}
-	if m := t.Status.Message; readable(t.Status.State, m) {
-		for i, p := range m.Parts {
-			if tp, ok := dialect.DecodeToolPart(p); ok {
-				note(messagePlace(m, i, tp), p)
+			if tp, ok := decodeTool(p); ok {
+				visit(artifactPlace(art.ID, i), art.ID, tp)
 			}
 		}
 	}
+}
+
+// lastResults is the place of the last result of each call that a task snapshot holds, as a source orders them: its
+// messages as eachToolPart reads them, and its artifacts in the order they came.
+func lastResults(t *a2a.Task) map[toolKey]toolPlace {
+	last := map[toolKey]toolPlace{}
+	eachToolPart(t, func(place toolPlace, _ a2a.ArtifactID, tp toolPart) {
+		if tp.Kind == dialect.ToolResult && tp.ID != "" {
+			last[toolKey{place.source, tp.ID}] = place
+		}
+	})
 	return last
 }
 
-// tool delivers one tool part, art being its artifact if it came in one. Each part is delivered once, however often a
-// snapshot or a status update repeats it, and its meaning is kept:
+// tool delivers one tool part that is not a repeat within its source, art being its artifact if it came in one. Each
+// part is delivered once, however often a snapshot or a status update repeats it, and its meaning is kept:
 //
-//   - Within one source, the part's place is its identity. kagent 1.0 sends two results for one call ID, as two
-//     artifacts, when a call is approved (test/fixtures/kagent/approval), and both are the agent's account.
+//   - Within one source a part is told from its repeat by where it is: its message and index, and, in an artifact, its
+//     saying and how many parts of that saying the artifact has delivered (artifactTool). kagent 1.0 sends two results
+//     for one call ID, as two artifacts, when a call is approved (test/fixtures/kagent/approval), and both are the
+//     agent's account.
 //   - Across the sources, what the part says is its identity: a part an agent sends both as an artifact and as a
 //     status message is delivered once. A part of the same kind and call ID that says something else, an
 //     outcome the first did not have, is another part and is delivered; a part with no call ID is what it says.
@@ -267,18 +340,15 @@ func lastResults(t *a2a.Task) map[toolKey]toolPlace {
 //     result, and a snapshot read after a restart has no live stream to compare with. A snapshot's result for a call
 //     whose result a live event of the same source already delivered is stale: a snapshot that lags the stream can
 //     hold the error and not yet the real result, which streamed, so last-wins alone would deliver the error.
-//   - A result is delivered after its call: one that comes first waits for the call, as the approved call's result
-//     does until that replay brings the call, and is delivered at the end of the send if the call never comes.
-func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp dialect.ToolPart) {
-	if a.placed[place] {
+//   - A result is delivered after its call, which a step needs. A live result whose call this send has not delivered is
+//     first looked for in the task the send answers (fetchCall): the call of an approved result was sent by the turn
+//     that paused, and is delivered then, so the step begins before the text that follows. A result whose call is
+//     nowhere waits for it, and is delivered when the send ends, or fails, if the call never comes.
+func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
+	if first, seen := a.said[tp.says]; seen && first != place.source {
 		return
 	}
-	a.placed[place] = true
-	says := saying(tp)
-	if first, seen := a.said[says]; seen && first != place.source {
-		return
-	}
-	a.said[says] = place.source
+	a.said[tp.says] = place.source
 	if tp.Kind == dialect.ToolCall {
 		a.emit(ToolCallEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Args: tp.Args})
 		if tp.ID != "" {
@@ -296,11 +366,40 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp dialect.ToolPar
 		}
 	}
 	result := ToolResultEvent{ArtifactID: art, CallID: tp.ID, Name: tp.Name, Response: tp.Result}
-	if tp.ID != "" && !a.called[tp.ID] {
+	if tp.ID != "" && !a.called[tp.ID] && (a.snapshot != nil || !a.fetchCall(tp.ID)) {
 		a.held = append(a.held, result)
 		return
 	}
 	a.emit(result)
+}
+
+// fetchCall looks in the task the send answers for the call id, once the send has a live result for it and no call, and
+// delivers the call if it finds it. It asks the agent for the task once, the first time, and reports whether the call
+// has been delivered. Only the call is delivered: the rest of the task, such as the error that stood for the pause,
+// is the paused turn's and is not this turn's news.
+func (a *assembler) fetchCall(id string) bool {
+	if a.lookup == nil {
+		return false
+	}
+	if !a.looked {
+		a.looked = true
+		a.known = a.lookup()
+	}
+	if a.known == nil {
+		return false
+	}
+	eachToolPart(a.known, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
+		if tp.Kind != dialect.ToolCall || tp.ID != id || a.called[id] {
+			return
+		}
+		if place.source == inArtifact {
+			a.artifactTool(art, place.index, tp, false, map[[sha256.Size]byte]int{})
+		} else if !a.placed[place] {
+			a.placed[place] = true
+			a.tool(place, "", tp)
+		}
+	})
+	return a.called[id]
 }
 
 // release delivers the results that waited for the call id, or, with no id, all of them.

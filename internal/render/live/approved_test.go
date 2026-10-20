@@ -8,6 +8,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,11 @@ import (
 type recordedConn struct {
 	agent.Conn
 	events []a2a.Event
+	paused *a2a.Task // what GetTask returns: the task of the turn that paused, as the agent holds it while the answer runs
+}
+
+func (c recordedConn) GetTask(context.Context, *a2a.GetTaskRequest) (*a2a.Task, error) {
+	return c.paused, nil
 }
 
 func (c recordedConn) SendStreamingMessage(context.Context, *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
@@ -65,9 +71,12 @@ func recordedEvents(t *testing.T, name string) []a2a.Event {
 func TestAnApprovedCallIsOneStepThatEndsDone(t *testing.T) {
 	e := setup(t)
 	run := e.stream(t)
-	conn := recordedConn{events: recordedEvents(t, "approval/02-approve.response.sse")}
+	pause := recordedEvents(t, "approval/01-pause-approve.response.sse")
+	conn := recordedConn{events: recordedEvents(t, "approval/02-approve.response.sse"), paused: pause[len(pause)-1].(*a2a.Task)}
 	a := agent.New(func(context.Context) (agent.Conn, error) { return conn, nil }, agent.Config{})
-	if err := a.Answer(t.Context(), a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("yes")), run.Handle); err != nil {
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("yes"))
+	msg.TaskID = conn.paused.ID
+	if err := a.Answer(t.Context(), msg, run.Handle); err != nil {
 		t.Fatal(err)
 	}
 	e.finish(t, run)
@@ -82,5 +91,12 @@ func TestAnApprovedCallIsOneStepThatEndsDone(t *testing.T) {
 	}
 	if m.Text != "I have added 3 and 5. The result is 8." {
 		t.Fatalf("text %q; want the answer", m.Text)
+	}
+	// The step is begun before the answer, where the call was made, and not after it, where the final task's replay
+	// of the call would put it.
+	tl := timeline(m)
+	step, answer := slices.IndexFunc(tl, func(s string) bool { return strings.HasPrefix(s, "task:") }), slices.IndexFunc(tl, func(s string) bool { return strings.HasPrefix(s, "text:") })
+	if step < 0 || answer < 0 || step > answer {
+		t.Fatalf("chunks %v; want the step before the answer", tl)
 	}
 }
