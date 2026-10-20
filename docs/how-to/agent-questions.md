@@ -47,10 +47,10 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
 ## Tool approvals
 
-Tool approvals are available for a Binding that uses the `kagent-v1` dialect. On the `a2a` dialect no approval prompt
-is posted and nothing is approved, whatever `toolApprovals` says: kagent 1.0.0-alpha5, reached on that dialect, pauses
+Tool approvals are available for a Binding that uses the `kagent-v1` dialect. On the `a2a` dialect Agent Kourier posts
+no approval prompt and sends no approval, whatever `toolApprovals` says: kagent 1.0.0-alpha5, reached on that dialect, pauses
 for an approval with text alone, and Agent Kourier handles that pause as a question whose reply is sent as plain text
-(see [Connect any A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)). Approvals are disabled by default.
+(see [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)). Approvals are disabled by default.
 Enable them with a separate policy from questions:
 
 ```yaml
