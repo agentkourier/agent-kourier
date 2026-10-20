@@ -80,6 +80,9 @@ type Backend struct {
 	// Output is the Binding's chat output mode (live or final), which the sink is told of each
 	// turn. Empty means live.
 	Output v1alpha1.OutputMode
+	// Progress is the Binding's chat.progress, which the sink is told of each turn. The API fills it with
+	// steps-and-activity when a Binding sets none; empty here, as in a Backend that no Binding made, means steps.
+	Progress v1alpha1.ProgressMode
 	// Feedback is the Binding's feedback.enabled: the final message of an answer to a person carries the
 	// useful and not-useful buttons (spec 8.7). An investigation that nobody asked for always does.
 	Feedback bool
@@ -122,6 +125,9 @@ type TurnRef struct {
 	UserID string
 	// Output is the Binding's output mode.
 	Output v1alpha1.OutputMode
+	// Progress is the Binding's chat.progress: how much of the agent's work the renderer shows before the text arrives.
+	// The renderer ignores it when Output is final.
+	Progress v1alpha1.ProgressMode
 	// Recovered says the output continues a message that may exist already: the task was found
 	// again after a restart, or followed again after a lost stream. Some of it may be in the
 	// thread, so the renderer updates what it posted before, or posts the whole. The output of an

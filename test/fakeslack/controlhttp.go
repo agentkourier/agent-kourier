@@ -173,6 +173,14 @@ func (s *Server) newControlRoutes() controlRoutes {
 		}
 		writeControl(w, http.StatusOK, s.Ephemerals(channel))
 	})
+	mux.HandleFunc("GET /_control/thread-statuses", func(w http.ResponseWriter, r *http.Request) {
+		channel := r.URL.Query().Get("channel")
+		if channel == "" {
+			writeControlError(w, invalid("fakeslack: thread statuses need a channel"), nil)
+			return
+		}
+		writeControl(w, http.StatusOK, s.ThreadStatuses(channel))
+	})
 	mux.HandleFunc("GET /_control/reactions", s.controlReactions)
 	mux.HandleFunc("GET /_control/acks/{id}", s.controlAck)
 	return controlRoutes{mux}

@@ -12,6 +12,8 @@ type (
 	Dialect string
 	// OutputMode selects how an agent's output is rendered into a thread.
 	OutputMode string
+	// ProgressMode selects how much of the agent's work a reply shows while it is being written (spec 8.3).
+	ProgressMode string
 	// ThreadReplies selects which replies in a thread Agent Kourier owns are turns (spec 8.2).
 	ThreadReplies string
 )
@@ -23,6 +25,10 @@ const (
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
+
+	ProgressSteps            ProgressMode = "steps"
+	ProgressStepsAndActivity ProgressMode = "steps-and-activity"
+	ProgressActivity         ProgressMode = "activity"
 
 	ThreadRepliesAll     ThreadReplies = "all"
 	ThreadRepliesMention ThreadReplies = "mention"
@@ -221,6 +227,14 @@ type ChatBinding struct {
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`
+	// Progress chooses what a live reply shows of the agent's work before its text arrives. steps shows a card (in a chat
+	// thread) or a status line (in an alert thread) for each tool call. steps-and-activity shows those, and a Working…
+	// card or line whenever 3 seconds pass with nothing new. activity shows one Working… card or line that counts the
+	// steps and names no tool and no argument. A Binding that sets none gets steps-and-activity. Output final ignores it.
+	// +kubebuilder:validation:Enum=steps;steps-and-activity;activity
+	// +kubebuilder:default=steps-and-activity
+	// +optional
+	Progress ProgressMode `json:"progress"`
 	// ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn.
 	// With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a
 	// trigger started the thread; the next mentioned turn carries the other replies as
@@ -320,6 +334,9 @@ func (c *ChatConnection) Default() {}
 func (b *Binding) Default() {
 	if b.Spec.Chat.Output == "" {
 		b.Spec.Chat.Output = OutputLive
+	}
+	if b.Spec.Chat.Progress == "" {
+		b.Spec.Chat.Progress = ProgressStepsAndActivity
 	}
 	if b.Spec.Chat.ThreadReplies == "" {
 		b.Spec.Chat.ThreadReplies = ThreadRepliesAll

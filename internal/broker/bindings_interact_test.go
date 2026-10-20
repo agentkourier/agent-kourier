@@ -44,6 +44,23 @@ func TestBackendCarriesTheBindingsOutputMode(t *testing.T) {
 	}
 }
 
+// The Binding's chat.progress reaches the session through Backend, and a reload changes it for the next turn.
+func TestBackendCarriesTheBindingsProgress(t *testing.T) {
+	f := newFixture(t)
+	for _, mode := range []v1alpha1.ProgressMode{v1alpha1.ProgressActivity, v1alpha1.ProgressSteps, v1alpha1.ProgressStepsAndActivity} {
+		snap := snapshot(t, f.url, v1alpha1.DialectKagentV1, time.Hour)
+		rb, _ := snap.Binding("sre", "oncall")
+		rb.Binding.Spec.Chat.Progress = mode
+		f.snaps.p.Store(snap)
+
+		be, err := f.b.Backend("sre/oncall")
+
+		if err != nil || be.Progress != mode {
+			t.Errorf("Backend.Progress = %q, %v; want %q from spec.chat.progress", be.Progress, err, mode)
+		}
+	}
+}
+
 func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	f := newFixture(t)
 	for _, tc := range []struct {

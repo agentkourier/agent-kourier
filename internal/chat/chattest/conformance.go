@@ -307,7 +307,44 @@ func (c *checker) contract() {
 		c.zeroStop()
 		c.stepContract()
 	}
+	c.busyContract()
 	c.s.Sent() // the contract checks are not text checks
+	_ = c.s.Inert()
+}
+
+// busyContract checks what a platform promises of the busy mark (chat.BusyMarker). A platform whose Caps.Busy is false says
+// ErrNoBusy if it implements the interface at all, and one whose Caps.Busy is true implements it, sets and clears a mark
+// without error or ErrNoBusy (which a platform may say later, once it finds it cannot), refuses a target with no thread as
+// invalid, and shows no text for any of it: the mark's words are the platform's own.
+func (c *checker) busyContract() {
+	b, implemented := c.s.Platform.(chat.BusyMarker)
+	switch {
+	case !implemented && c.caps.Busy:
+		c.add(RuleContract, 0, "MarkBusy", "busy", "Busy is true and the platform is no chat.BusyMarker")
+		return
+	case !implemented:
+		return
+	}
+	c.s.Sent()
+	_ = c.s.Inert()
+	for _, busy := range []bool{true, false} {
+		err := b.MarkBusy(c.ctx, c.target, busy)
+		switch {
+		case !c.caps.Busy && !errors.Is(err, chat.ErrNoBusy):
+			c.add(RuleContract, 0, "MarkBusy", "no busy", "a platform with Busy false gave %v for busy %t, want chat.ErrNoBusy", err, busy)
+		case c.caps.Busy && err != nil && !errors.Is(err, chat.ErrNoBusy):
+			c.add(RuleContract, 0, "MarkBusy", "busy", "busy %t was refused: %v", busy, err)
+		}
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "MarkBusy", "busy text", "a mark and a clear showed %d texts, want none: the mark has words of the platform's own, which are not text of the turn", len(shown))
+	}
+	if c.caps.Busy {
+		if err := b.MarkBusy(c.ctx, chat.Target{Conn: c.target.Conn, Channel: c.target.Channel}, true); !errors.Is(err, chat.ErrInvalid) && !errors.Is(err, chat.ErrNoBusy) {
+			c.add(RuleContract, 0, "MarkBusy", "no thread", "a target with no thread gave %v, want an error wrapping chat.ErrInvalid (or chat.ErrNoBusy, from a platform that has said it cannot)", err)
+		}
+	}
+	c.s.Sent()
 	_ = c.s.Inert()
 }
 
@@ -702,7 +739,9 @@ func (c *checker) stream(p placement, name, text string) {
 }
 
 // step sends text as a step of a stream in each state a step goes through: begun, done, failed, and ended with no
-// outcome, which a platform shows with words of its own beside the text.
+// outcome, which a platform shows with words of its own beside the text. Each state is a step of its own, first sent
+// in that state, since a platform may send a step's detail only with the first call for it (Slack appends a card's
+// details, so a detail sent again is shown twice).
 func (c *checker) step(p placement, name, text string, st chat.Step) {
 	if !c.caps.Streams || !c.caps.Steps {
 		return
@@ -712,8 +751,9 @@ func (c *checker) step(p placement, name, text string, st chat.Step) {
 		c.add(RuleRejected, p.where, "Stream", name, "a stream of plain text was refused: %v", err)
 		return
 	}
+	id := st.ID
 	for _, state := range []chat.StepState{chat.StepRunning, chat.StepDone, chat.StepFailed, chat.StepEnded} {
-		st.State = state
+		st.ID, st.State = id+"-"+state.String(), state
 		c.s.Sent()
 		_ = c.s.Inert()
 		c.verify(p, "Step ("+state.String()+")", name, text, stream.Step(c.ctx, st))

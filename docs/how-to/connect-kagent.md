@@ -6,7 +6,8 @@ Binding's turns reach one of its agents.
 === "kagent 1.0"
 
     kagent 1.0 uses the `kagent-v1` dialect, which speaks A2A 1.0 and kagent's human-in-the-loop extension: structured
-    questions with choices, and tool calls shown as step cards. It is tested against kagent 1.0.0-alpha5.
+    questions with choices, and tool approvals. It shows tool calls as step cards, as every dialect does. It is tested
+    against kagent 1.0.0-alpha5.
 
     **1. Check the cluster can run it.** kagent 1.0 runs every agent session on Agent Substrate, which needs the
     pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` feature
@@ -62,7 +63,9 @@ Binding's turns reach one of its agents.
 === "kagent 0.9.x"
 
     kagent 0.9.x speaks A2A 0.3, which the generic `a2a` dialect reads. It runs on a cluster without the
-    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster.
+    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster. The `a2a` dialect shows its tool calls as
+    step cards: kagent 0.9.x sends them in the messages of its status updates, marked `kagent_type`, and Agent Kourier
+    reads them there. The tests replay a turn recorded from kagent 0.9.4.
 
     **1. Find the controller's Service.** Its name depends on the Helm release name. Argo CD names the release after the
     Application, so an Application called `my-kagent` makes the Service
@@ -92,10 +95,15 @@ Binding's turns reach one of its agents.
     - A 0.3 agent has no task list. After a restart, or after a send whose outcome is unknown, Agent Kourier cannot ask
       whether the agent already has the turn. It sends again, and the agent may run the turn twice. That is harmless for
       a read-only agent and not for one that changes things.
-    - The `a2a` dialect does not see tool calls, so the agent's own tool list and the role behind its tools are the only
-      fence on a write. It shows no step cards.
+    - The `a2a` dialect shows tool calls but cannot approve or deny them: Slack tool approvals need the `kagent-v1`
+      dialect and kagent 1.0, so no approval prompt is posted here, whatever `interactions.toolApprovals` says. The
+      agent's own tool list and the role behind its tools are the only fence on a write.
     - A text `input-required` pause is shown as a question, and the reply is sent as text, only when the Binding sets
       `interactions.askUser: true`. Whether kagent 0.9.x ever pauses with a text question has not been tested.
+    - Whether kagent 0.9.x pauses for a tool approval has not been tested. kagent 1.0.0-alpha5, reached on the `a2a`
+      dialect, pauses for one with text alone, asking for a `FunctionResponse`. A pause like that is handled as the
+      question above: its reply is sent as plain text, never as an approval, and what kagent does with that text has
+      not been tested.
     - The controller accepted a placeholder token in the first install, so nothing verifies the Binding's identity. Put
       a verifying front door in front of it if that matters.
 

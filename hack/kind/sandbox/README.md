@@ -44,11 +44,14 @@ use `deploy/agent-kourier-sandbox`.
 1. **Create the Slack app.** Open <https://api.slack.com/apps>, Create New App, From a manifest, pick the sandbox
    workspace, and paste `hack/kind/sandbox/slack-app-manifest.yaml` (YAML tab). It asks for Socket Mode, interactivity, the
    `app_mention`, `message.channels` and `message.groups` events and the bot scopes below. **Use the sandbox workspace only**, unless you run the alert trial: its channel is in that workspace, so the app is installed there (see "Run the alert trial").
+   **Use a dedicated app**, not the one another Agent Kourier already runs on: Slack sends each Socket Mode event to one of the
+   connections open on the app-level token, so two processes on the same tokens each receive only some of the messages. If you
+   reuse an app, stop the other Agent Kourier first.
 2. **Make an app-level token.** Basic Information, App-Level Tokens, Generate Token, with the scope
    `connections:write`. That is `SLACK_APP_TOKEN` (`xapp-...`). The manifest cannot make it.
 3. **Install the app** to the sandbox workspace (Install App). The Bot User OAuth Token is `SLACK_BOT_TOKEN` (`xoxb-...`).
 4. **Invite the bot** to a channel: `/invite @Agent Kourier` in it. The channel's ID (Channel details, at the bottom; `C...`,
-   or `G...` for a private channel) is `SLACK_CHANNEL_ID`. Agent Kourier answers in this channel only.
+   or `G...` for a private channel created before March 2021) is `SLACK_CHANNEL_ID`. Agent Kourier answers in this channel only.
 5. **Fill in the secrets file**, outside the repository:
    ```
    mkdir -p ~/.config/agent-kourier
@@ -128,19 +131,20 @@ How Bedrock works here, from kagent 1.0.0-alpha5's source and CRDs, and what the
 | `chat.postMessage`, `chat.update`, `chat.postEphemeral` | `chat:write` |
 | `chat.startStream`, `chat.appendStream`, `chat.stopStream` | `chat:write` (Slack's method pages name no other scope) |
 | `reactions.add`, `reactions.remove` | `reactions:write` |
+| `assistant.threads.setStatus` | `assistant:write`, the scope with which we have seen the status of an alert thread render while an agent works (slack-go says `chat:write` may also do, unverified) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
 
-The manifest covers every call. **Confirmed in a live sandbox run:** `chat.stopStream` appends the stop blocks Agent Kourier sends
-, and chunk-mode streams work: the `task_update` cards of tool calls are placed in the text where the calls were made,
-and a finished step shows status complete . Still UNCONFIRMED: that the streaming methods need no app feature
-beyond `chat:write` (the "Agents & AI Apps" feature and `assistant:write` are named on none of the three method pages, and
-nothing here enables them); that `chat.startStream` accepts the channel form Agent Kourier sends (`recipient_user_id` and
-`recipient_team_id` are documented as required in channels, and Agent Kourier sends both); and that `chat.stopStream` takes the
-metadata Agent Kourier sends (its page lists `blocks` and `metadata`). If `chat.startStream` fails with `missing_scope` or a feature
+The manifest covers every call. **Confirmed in a live sandbox run:** `chat.stopStream` appends the stop blocks Agent Kourier sends,
+and chunk-mode streams work: the `task_update` cards of tool calls are placed in the text where the calls were made,
+and a finished step shows status complete. **Confirmed by a direct API call (2026-10-18):** `chat.startStream` in a
+channel thread accepts the form Agent Kourier sends, `recipient_user_id` with `recipient_team_id` (documented as required
+in channels). Still UNCONFIRMED: that the streaming methods need no app feature beyond `chat:write` (the "Agents & AI
+Apps" feature and `assistant:write` are named on none of the three method pages, and nothing here enables the feature; the manifest's `assistant:write` is for the status of an alert thread, not for streams); and that
+`chat.stopStream` takes the metadata Agent Kourier sends (its page lists `blocks` and `metadata`). If `chat.startStream` fails with `missing_scope` or a feature
 error, that is the finding: note the error code in the checklist's streaming row and add the scope or feature to the
 manifest. Direct messages are not enabled (no `im:` scopes or events), so the app has no DM trigger.
 
@@ -530,8 +534,8 @@ before the Slack connection is tried. Ask the gauge, or read the log:
 - `agentkourier_chat_connected{connection="agent-kourier/sandbox-slack"}` is `1` while Socket Mode is up and `0` while it is not (after a drop, or
   before the first connection). A `0` that stays means Agent Kourier cannot reach Slack or Slack turns it away.
 - `kubectl --context $CTX -n agent-kourier logs deploy/agent-kourier-sandbox | grep 'slack:'` shows the connection's life: `slack: socket mode connecting`,
-  `slack: socket mode websocket opened`, `slack: socket mode connected` (Slack said hello; `num_connections` above 1 means another process uses the same
-  app token), `slack: socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `connection attempt failed; retrying` (Agent Kourier
+  `slack: socket mode websocket opened`, `slack: socket mode connected` (Slack said hello; a `num_connections` above 1 is a reason to look for another process
+  on the same app token, not proof of one: a fresh start can read 8 with no other consumer and replies still arriving), `slack: socket mode reconnecting` (a refresh Slack asks for, which it does every so often, or a lost connection), and WARN lines for `connection attempt failed; retrying` (Agent Kourier
   tries again by itself, with a pause that grows to 5 minutes, and repeats the same failure once a minute at most),
   `message could not be read`, `read failed` and `write failed`. Events Slack sends are logged at DEBUG only, by type and ID, never their
   text. A fatal rejection of the tokens is not one of these lines: Agent Kourier prints `agent-kourier: slack rejected the tokens: ...` and exits 1

@@ -795,7 +795,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 	// the output of the turn that paused. A task found again after a restart, or followed again
 	// after a lost stream, continues the message it had.
 	shown := t.outputTurn()
-	ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Recovered: t.recovered || t.follow, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
+	ref := TurnRef{Key: key, Binding: t.sess.Binding, MessageID: shown.ID, UserID: shown.User, Output: t.b.Output, Progress: t.b.Progress, Recovered: t.recovered || t.follow, Restarted: t.recovered, Feedback: feedbackOf(shown.User, t.b), ThreadReplies: t.b.ThreadReplies}
 	if sh := m.cfg.Sink.Turn(tctx, ref); sh != nil {
 		h = sh
 	}

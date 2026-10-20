@@ -64,9 +64,10 @@ call gives it nothing to ask about after a restart.
 ## What it costs
 
 - **A2A does not standardise everything the chat needs.** Structured questions with choices and tool approvals are
-  runtime extensions. The `kagent-v1` dialect reads kagent 1.0's structured questions and shows its tool steps as
-  cards; a Binding can enable its Slack approval prompts with `interactions.toolApprovals`. The generic `a2a` dialect
-  accepts only text-only input-required questions and refuses a structured pause, so kagent 0.9.x and AX cannot use
+  runtime extensions. The `kagent-v1` dialect reads kagent 1.0's structured questions; a Binding can enable its Slack
+  approval prompts with `interactions.toolApprovals`. Tool steps do not need a dialect: every dialect shows them as cards
+  for an agent that marks its tool calls the way Google ADK or kagent does. The generic `a2a` dialect
+  accepts only text-only input-required questions and cancels the task at a pause it cannot use, so kagent 0.9.x and AX cannot use
   Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and
   denied `check_status` in one two-tool pause; only `add_numbers` executed. The broker's end-to-end suite verifies this
   with fake Slack and pinned kagent 1.0.0-alpha5.
@@ -83,7 +84,7 @@ call gives it nothing to ask about after a restart.
 ## In practice
 
 To point a Binding at an agent that speaks A2A, see [Connect a generic A2A agent](../how-to/connect-a2a-agent.md). For
-kagent, whose dialect adds structured questions and tool steps, see [Connect a kagent agent](../how-to/connect-kagent.md).
+kagent, whose dialect adds structured questions, see [Connect a kagent agent](../how-to/connect-kagent.md).
 AX uses the generic dialect: see [Connect an agent on Google AX](../how-to/connect-ax.md).
 
 Plain A2A leaves some choices open, such as where an answer's text goes. The

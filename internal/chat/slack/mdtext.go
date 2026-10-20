@@ -27,6 +27,8 @@ const fenceMark = "```"
 //     that no broadcast, mention or channel token can be in it, whatever reads it;
 //   - a backtick run, then text with no backtick, then a run of the same length, in a line of prose, is a code span
 //     (rows 03, 21, 50), written with one backtick each side and raw inside like a block;
+//   - a pipe table out of a block is written as a block, its columns aligned (mdtable.go), and is held back until it
+//     ends, or until enough of it has come to set its columns;
 //   - everything else is prose: escapeRune, and every backtick as "\`" (rows 34, 53, 55) and every tilde of a run of
 //     three or more as "\~" (rows 35, 42, 43), so that Slack never opens code by itself.
 //
@@ -34,17 +36,19 @@ const fenceMark = "```"
 //
 // A line's start is held back until it is known not to be a fence line, a prose line is held back from its first
 // backtick to its end, and "<" at the end of code until the next character is known: the text reaches Slack a line
-// late at most, and the end of the document (final) writes what is held.
+// late at most, but for a table, and the end of the document (final) writes what is held.
 //
 // A stream that Agent Kourier did not start in this process, or one that lost a call without an answer, is blind: Slack may be
 // inside a block that Agent Kourier does not know of, so everything is escaped, prose and code alike (escapeRune), and no code
 // is written or read. That is safe whatever state Slack is in, and costs only the look of code in what is sent.
 type mdText struct {
-	code   bool   // inside a block that Agent Kourier opened
-	inLine bool   // past the start of the line that held begins in
-	indent int    // the white space of the opener, which the lines of the block lose
-	held   string // text not yet written: the cleaned input from the first thing that is not decided
-	blind  bool   // Slack's state is not known: escape everything (see above)
+	code   bool      // inside a block that Agent Kourier opened
+	inLine bool      // past the start of the line that held begins in
+	indent int       // the white space of the opener, which the lines of the block lose
+	held   string    // text not yet written: the cleaned input from the first thing that is not decided
+	blind  bool      // Slack's state is not known: escape everything (see above)
+	tbl    openTable // the table whose block is open, which the rows still to come are written in
+	hold   int       // the hold of a table (holdSize): tableHold if 0, and less only in tests
 }
 
 // text returns md cleaned, escaped as the document is read so far and cut to limit units: what is held back is not in
@@ -102,8 +106,11 @@ func (m *mdText) feed(s string, final bool, o *mdOut) {
 	m.held += s
 	for m.held != "" && !o.full {
 		if !m.step(final, o) {
-			return
+			break
 		}
+	}
+	if final && m.held == "" && m.tbl.layout != nil && !m.inLine && o.put(fenceMark+"\n") {
+		m.code, m.tbl = false, openTable{} // the text ends with a row of a table and its line break: the block is closed
 	}
 }
 
@@ -113,7 +120,17 @@ func (m *mdText) step(final bool, o *mdOut) bool {
 	line, _, hasNL := strings.Cut(m.held, "\n")
 	complete := hasNL || final
 	switch {
+	case !m.inLine && m.tbl.layout != nil:
+		return m.tableRow(final, o)
 	case !m.inLine:
+		if !m.code {
+			switch m.table(final, o) {
+			case tableWait, tableFull:
+				return false
+			case tableDone:
+				return true
+			}
+		}
 		return m.start(line, complete, o)
 	case m.code:
 		return m.codeLine(line, hasNL, complete, o)

@@ -50,7 +50,7 @@ const ackReaction = "hourglass_flowing_sand"
 // numbered line, and an answer on the line of its question. The name of a tool awaiting approval has the same
 // limit, and its arguments, which are shown as preformatted text, have maxApprovalArgs.
 var caps = chat.Caps{
-	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: maxSection, AckReaction: ackReaction,
+	Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: maxSection, AckReaction: ackReaction,
 	Limits: map[chat.Where]int{
 		chat.WhereFallback: maxSection, chat.WhereHeader: maxHeader, chat.WhereBody: maxMarkdown, chat.WhereStream: maxMarkdown,
 		chat.WhereContext: maxContext, chat.WhereNote: maxSection, chat.WhereToolName: 300, chat.WhereToolArg: 300, chat.WhereToolArgs: maxApprovalArgs,
@@ -166,10 +166,18 @@ func notBlank(a, b string) string {
 	return b
 }
 
-// toolLine is the status line of a tool call, on one line: "Calling name(summary)". The caller has redacted
-// the summary already.
+// toolLine is the status line of a tool call, on one line: "Calling name(summary)" while the call is under way, "Ran
+// name(summary)" once it has its result, and "name(summary) failed" if the result reports a failure. The caller has
+// redacted the summary already.
 func toolLine(t chat.ToolLine) string {
-	return "Calling " + text(t.Name, maxToolName, true) + "(" + text(t.Summary, maxToolArgs, true) + ")"
+	call := text(t.Name, maxToolName, true) + "(" + text(t.Summary, maxToolArgs, true) + ")"
+	switch t.State {
+	case chat.ToolRan:
+		return "Ran " + call
+	case chat.ToolFailed:
+		return call + " failed"
+	}
+	return "Calling " + call
 }
 
 // stepText is the text of a task_update's title or details: one line, cleaned, cut to limit, and escaped so that it is

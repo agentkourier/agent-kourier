@@ -17,7 +17,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md)
 
-> **Status: v0.1.1.** Install the published chart and image with
+> **Status: v0.1.2.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status).
 
@@ -52,7 +52,8 @@ Without a broker, each of these is code in every agent that talks to chat:
 - **Replies during a turn.** Agent Kourier queues a reply sent while the agent works and
   sends it, in order, when the task ends. A reaction shows that it accepted the reply.
 - **Streamed output.** With `output: live`, the answer streams into one chat message, with
-  tool calls shown as status lines where the backend reports them.
+  tool calls shown as step cards or status lines where the backend reports them, and a `Working…` sign of life while the agent is
+  silent (`chat.progress`).
 - **Questions and approvals.** With `interactions.askUser`, the agent's question appears in
   the thread and the answer resumes the same task. With kagent, a tool call can wait for an
   Approve or Deny press, optionally limited to Slack user groups.
@@ -198,7 +199,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text | Implemented |
-| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect renders no tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
+| Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect shows its tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
@@ -212,9 +213,9 @@ the contract.
 
 ## Status
 
-The current release is v0.1.1: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.1.1`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.1.1`, which pins that image by digest. It runs as one
+The current release is v0.1.2: a signed image for `linux/amd64` and `linux/arm64`,
+`ghcr.io/agentkourier/agent-kourier:v0.1.2`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
+version `0.1.2`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See

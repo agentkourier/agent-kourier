@@ -133,9 +133,13 @@ Structured questions and approvals depend on the backend's interaction contract.
 The generic A2A dialect supports text continuation: a plain-text `input-required`
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
-paused task. A structured pause on that dialect is unusable and cancels the task.
-The kagent dialect additionally understands structured questions and tool step
-cards. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
+paused task. A pause with any part that is not text is unusable on that dialect and
+cancels the task. A kagent approval pause reaches that dialect as text alone (recorded
+with kagent 1.0.0-alpha5), so it is handled as a question and its reply is sent as plain
+text, never as an approval.
+The kagent dialect additionally understands structured questions. Tool step cards do
+not depend on the dialect: every dialect shows the tool calls and results that an
+agent marks as Google ADK or kagent does. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
 optional `approverGroups` narrow the eligible Slack users, while ask-user answers
 remain independent. A disabled approval is denied through the dialect with a
 thread notice. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers`
@@ -149,8 +153,9 @@ an A2A server running as an AX Task, which you build and run (AX does not ship o
 front door sits in this path, so the agent must verify the Binding's bearer ID token
 itself, as the reference agent does (issuer, audience and subject), or an
 OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
-in-thread text answers are tested in the AX kind tier. Structured tool approvals and
-tool step cards are kagent-only; the generic dialect shows no tool steps, and a structured pause cancels the task with a notice. AX's own
+in-thread text answers are tested in the AX kind tier. Structured tool approvals
+are kagent-only, and a pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
+that marks its tool parts as Google ADK or kagent does. AX's own
 lifecycle (task, template, egress policy) stays with the operator. See the
 [AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).

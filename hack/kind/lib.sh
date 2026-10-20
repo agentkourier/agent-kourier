@@ -7,7 +7,7 @@
 NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 # The Go image Agent Kourier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.2.
-GO_IMAGE=golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+GO_IMAGE=golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e779953d47f0316ef2cc58e28fe2b
 # One full tier per Docker host: the cluster name is fixed, so two checkouts share it. The fast
 # tier is a separate cluster; use_tier fast points CLUSTER and OWNER_LABEL at it.
 CLUSTER=agent-kourier-full

@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.1`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.1.2`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 ## Upgrade the chart
@@ -162,3 +162,31 @@ whole text.
 - **The actor names the platform.** The `agentkourier.dev/actor` metadata of a turn a person wrote gains `platform`
   (`slack`). On Slack the text prefix is unchanged, `[Slack: Name (U123) <email>]`
   ([Agent contract](../reference/agent-contract.md)).
+
+## Upgrade to the release with progress modes
+
+This release adds `chat.progress` to the Binding, and its default changes what a Binding that does not set it shows. No
+Binding fails to load for it.
+
+- **A chat thread gains `Working…` cards.** When 3 seconds pass with no new text and no tool call under way, a card titled
+  `Working…` begins in the stream. The next tool call takes that card over, so it carries the tool's name; if text comes
+  first, the card is retitled `Wrote the answer`; a card still open when the turn ends becomes `Finished`, or `Stopped` (an
+  error) if the task failed or was cancelled. A thread that used to show one card for each tool call can now show one more,
+  and each gap longer than 3 seconds costs at most two more writes to Slack (the card's begin and, when no tool call takes
+  it over, its end). This needs a platform with step cards; an agent that reports no tool calls, as the generic `a2a` dialect did for every agent in the
+  release this section describes, gets `Working…` cards alone.
+- **An alert thread gains a `Working…` line.** After the same 3 seconds, the message the investigation updates shows
+  `Working…` as a line of small print in place of the line of a tool call that returned, under the text so far if there is
+  some, and as the message's first post if nothing else has been said. The next text or tool call replaces it. Each gap
+  costs one more message update. A turn that is silent for 3 seconds and then ends with nothing to show, or fails, now
+  leaves a message saying `(no output)` where under `steps` it posted nothing.
+- **An alert thread on Slack gains an assistant status.** Agent Kourier sets Slack's `is working…` status on the thread when
+  the turn starts and again after each write, because a reply in the thread may take it off, and clears it when the turn ends.
+  If Slack answers that the app or workspace cannot use the method, Agent Kourier logs that once at info level and sets no
+  status on that connection until it restarts; any other error stops it for that turn only. The manifest now asks for
+  `assistant:write`, with which we have seen the status render; an app made from an older manifest may get the status anyway
+  or be refused, and a refusal is only logged. Which scope the call needs is unverified; see [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do).
+- **`output: final` is unchanged.** It posts once when the turn ends, whatever `progress` says.
+
+To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line
+that never names a tool (a tool approval prompt still does). See [Output](../explanation/threads-and-sessions.md#output).

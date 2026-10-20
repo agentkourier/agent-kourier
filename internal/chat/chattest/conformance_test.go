@@ -52,6 +52,10 @@ type leaks struct {
 	cutToolArgs                                 bool // a tool too long for a prompt is cut and shown, not refused as too large
 	fitsLongTool                                bool // Fits says a tool too long for a prompt fits, while Post and Update refuse it
 	undeclaredTools                             bool // shows tool approvals, and does not say so (Subject.ToolApprovals false)
+	busyRefused                                 bool // Busy is true and a mark is refused with an error of its own
+	busyNoThread                                bool // a mark of a target with no thread is taken
+	busyUnsaid                                  bool // Busy is false and a mark is taken, with no ErrNoBusy
+	busyShowsText                               bool // a mark shows a message of its own
 	noAckReaction                               bool // says no reaction of its own, so a Binding that names none shows nothing
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
@@ -94,7 +98,7 @@ func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
 	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
 	f.SetCaps(chat.Caps{
-		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, MaxText: 300, AckReaction: "hourglass",
+		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 300, AckReaction: "hourglass",
 		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
 	})
 	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
@@ -251,6 +255,21 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	return ref, err
 }
 
+// MarkBusy is the fake's, but for the leaks of the busy mark.
+func (m *markupPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
+	switch {
+	case m.leaks.busyRefused:
+		return errors.New("the mark was refused")
+	case m.leaks.busyUnsaid:
+		return nil
+	case m.leaks.busyNoThread && t.Thread == "":
+		return nil
+	case m.leaks.busyShowsText:
+		m.sent = append(m.sent, m.read("Working on it"))
+	}
+	return m.FakePlatform.MarkBusy(ctx, t, busy)
+}
+
 func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) error {
 	o = m.cutTools(o)
 	err := m.FakePlatform.Update(ctx, r, o)
@@ -362,6 +381,11 @@ func (m *markupPlatform) subject() Subject {
 	if m.leaks.noStepError {
 		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
 	}
+	if m.leaks.busyUnsaid {
+		c := m.Capabilities()
+		c.Busy = false
+		m.SetCaps(c)
+	}
 	if m.leaks.noAckReaction {
 		c := m.Capabilities()
 		c.AckReaction = ""
@@ -403,6 +427,10 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
 		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
 		{"a platform that names no reaction of its own", slackPlainText, leaks{noAckReaction: true}, RuleContract, ""},
+		{"a busy mark that is refused", slackPlainText, leaks{busyRefused: true}, RuleContract, ""},
+		{"a busy mark of a target with no thread that is taken", slackPlainText, leaks{busyNoThread: true}, RuleContract, ""},
+		{"a platform with no busy mark that takes one", slackPlainText, leaks{busyUnsaid: true}, RuleContract, ""},
+		{"a busy mark that shows a message", slackPlainText, leaks{busyShowsText: true}, RuleContract, ""},
 		{"a step title dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepTitle}, RuleDropped, ""},
 		{"a step detail dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereStepDetail}, RuleDropped, ""},
 		{"a prompt that is too large said to fit", slackPlainText, leaks{tooLargeFits: true}, RuleContract, ""},

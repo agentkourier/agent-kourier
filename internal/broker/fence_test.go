@@ -510,3 +510,43 @@ func TestChatFenceIsBoundedByTheRenewDeadlineNotTheLeaseDuration(t *testing.T) {
 		}
 	}
 }
+
+// busyPlatform is a platform that can show a thread as busy, and notes what it was asked.
+type busyPlatform struct {
+	*recordingPlatform
+	marks []bool
+}
+
+func (p *busyPlatform) MarkBusy(_ context.Context, _ chat.Target, busy bool) error {
+	p.note("MarkBusy")
+	p.marks = append(p.marks, busy)
+	return nil
+}
+
+// The busy mark is a write to the chat, so a leader past its renew deadline makes none, and the wrapper does not hide the
+// capability of the platform it wraps: the renderer asks the platform it is given, and a fence that hid it would leave every
+// thread unmarked in a deployment with an election, with nothing to say so. A platform that cannot says so, with no call.
+func TestChatFenceChecksBusyMarksAndPassesThemOn(t *testing.T) {
+	var stops []string
+	now := newStepClock()
+	lease := newLeaseClock(now.now)
+	lease.renewed(now.now())
+	fence := &leaseFence{clock: lease, limit: 10 * time.Second, stop: func(reason string) { stops = append(stops, reason) }}
+	inner := &busyPlatform{recordingPlatform: &recordingPlatform{}}
+	marker, ok := fenceChat(inner, fence).(chat.BusyMarker)
+	if !ok {
+		t.Fatal("the fenced platform is not a chat.BusyMarker")
+	}
+	if err := marker.MarkBusy(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, true); err != nil || !slices.Equal(inner.marks, []bool{true}) {
+		t.Errorf("MarkBusy with a good lease = %v, marks %v; want the platform's answer and its one call", err, inner.marks)
+	}
+	now.advance(time.Minute)
+	if err := marker.MarkBusy(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, false); !errors.Is(err, ErrChatFenced) || len(inner.marks) != 1 || len(stops) != 1 {
+		t.Errorf("MarkBusy after the freeze = %v, marks %v, %d stops; want ErrChatFenced, no call and one stop", err, inner.marks, len(stops))
+	}
+
+	bare := &recordingPlatform{}
+	if err := fenceChat(bare, fence).(chat.BusyMarker).MarkBusy(t.Context(), chat.Target{Channel: "C1", Thread: "1.1"}, true); !errors.Is(err, chat.ErrNoBusy) || len(bare.seen()) != 0 {
+		t.Errorf("MarkBusy of a platform that cannot = %v, calls %v; want ErrNoBusy and none", err, bare.seen())
+	}
+}

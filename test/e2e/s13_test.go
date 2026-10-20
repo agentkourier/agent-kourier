@@ -24,7 +24,7 @@ import (
 func TestS13_AToolCallIsAStepCardAndAFailedOneIsAnError(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier == "ax" {
-		t.Skip("generic A2A leaves backend-specific tool parts opaque")
+		t.Skip("the AX tier's agent has none of the scenario's tools (check_status, restart_service)")
 	}
 	m := s.mention(ChannelS13, "US13", "check the api service and restart it")
 

@@ -229,6 +229,20 @@ func (p fencedPlatform) ThreadBetween(ctx context.Context, t chat.Target, after,
 	return nil, 0, chat.ErrNoThreadReads
 }
 
+// MarkBusy is chat.BusyMarker, which the platform may be: marking a thread is a write to the chat, so it is checked, and the
+// method exists so that the fence does not hide the capability of the platform it wraps, as it does not hide Permalink. A
+// platform that cannot is chat.ErrNoBusy, and nothing is checked for a call that is not made.
+func (p fencedPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
+	m, ok := p.Platform.(chat.BusyMarker)
+	if !ok {
+		return chat.ErrNoBusy
+	}
+	if err := p.fence.allow("MarkBusy"); err != nil {
+		return err
+	}
+	return m.MarkBusy(ctx, t, busy)
+}
+
 type fencedStream struct {
 	chat.Stream
 	fence *leaseFence

@@ -54,9 +54,24 @@ In the Binding's `identity`:
 - Chat and alert investigations, with streamed answers.
 - An agent's question, when it pauses with `input-required` and text, if the Binding sets `interactions.askUser: true`.
   A single question with no choices also takes a typed reply in the thread.
-- Not: structured choices, tool approvals, or tool calls as step cards. The generic `a2a` dialect accepts only a
-  text-only input-required question; a structured pause is refused and the task is cancelled. These capabilities come
-  from kagent's extension, which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
+- A `Working…` card (a line, in an alert thread) while the agent is silent for 3 seconds, with the default
+  `chat.progress`.
+- Tool calls as step cards, when the agent marks its tool parts as Google ADK or kagent does (`adk_type`, `kagent_type`
+  or `kagent.dev/a2a/part-type`, set to `function_call` or `function_response`): see
+  [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). Without that marker the calls are
+  not shown.
+- Not: structured choices or tool approvals. The generic `a2a` dialect accepts only a text-only input-required
+  question; a pause with any part that is not text cannot be used, so the task is cancelled. These capabilities come
+  from kagent's extension, which only the `kagent-v1` dialect speaks, so Agent Kourier posts no approval prompt here and
+  sends no approval. `interactions.toolApprovals: true` still lets the Binding set `approverGroups`, though they gate
+  nothing on this dialect, and without them still logs, at load, that any channel member may decide.
+- A kagent agent on this dialect pauses for a tool approval with text alone, asking for a `FunctionResponse`
+  (recorded with kagent 1.0.0-alpha5; not tested with 0.9.x). Agent Kourier handles that pause as a question. On a
+  Binding with `interactions.askUser: false` it cancels the task and tells the thread the agent asked a question. With
+  `askUser: true` it posts kagent's text, and the reply goes to kagent as plain text, never as an approval. No
+  reply, typed or submitted, can carry the `FunctionResponse` kagent asks for, and what kagent does with plain text has not been tested.
+  For a kagent agent that needs approvals, use the `kagent-v1` dialect; on this one, `askUser: false` ends such a pause
+  at once with a notice.
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it

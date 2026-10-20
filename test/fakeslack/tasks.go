@@ -2,18 +2,20 @@ package fakeslack
 
 import "encoding/json"
 
-// Task is a task_update chunk of a streamed message as the stream stands: the fields of the last chunk that named
-// its ID.
+// Task is a task_update card of a streamed message as the stream stands: every chunk that named its ID, merged.
 type Task struct {
 	ID, Title, Status, Details, Output string
 }
 
-// Tasks returns the tasks of a streamed message, in the order of each one's first task_update chunk, each as its last
-// chunk left it. It is for test assertions.
+// Tasks returns the tasks of a streamed message, in the order of each one's first task_update chunk, each as its
+// chunks merged leave it. It is for test assertions.
 //
-// UNCONFIRMED(WP-04): that a task_update chunk with an ID the stream has seen updates that task and does not make
-// another, and that it replaces the earlier chunk and does not merge with it. The second is the stricter reading,
-// which finds an adapter that leaves a field out of a later chunk.
+// The merge is Slack's, as observed on 2026-10-18 in two workspaces (read back through the API and in the web
+// client): a chunk with an ID the stream has seen updates that card and does not make another; its title and status
+// replace the card's; its details and output are appended to the card's, so a chunk that repeats them shows them
+// twice; and a chunk that leaves details or output out, or sends them empty, keeps what the card had. A chunk always
+// carries a title and a status (slack-go sets both), so a chunk without them was not observed; here an empty one
+// keeps the card's too.
 func (m Message) Tasks() []Task {
 	var out []Task
 	for _, raw := range m.Chunks {
@@ -28,17 +30,26 @@ func (m Message) Tasks() []Task {
 		if json.Unmarshal(raw, &c) != nil || c.Type != "task_update" {
 			continue
 		}
-		t := Task{ID: c.ID, Title: c.Title, Status: c.Status, Details: c.Details, Output: c.Output}
-		replaced := false
-		for i := range out {
-			if out[i].ID == c.ID {
-				out[i], replaced = t, true
+		i := -1
+		for j := range out {
+			if out[j].ID == c.ID {
+				i = j
 				break
 			}
 		}
-		if !replaced {
-			out = append(out, t)
+		if i < 0 {
+			out = append(out, Task{ID: c.ID})
+			i = len(out) - 1
 		}
+		t := &out[i]
+		if c.Title != "" {
+			t.Title = c.Title
+		}
+		if c.Status != "" {
+			t.Status = c.Status
+		}
+		t.Details += c.Details
+		t.Output += c.Output
 	}
 	return out
 }

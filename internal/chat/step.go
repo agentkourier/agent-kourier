@@ -47,7 +47,8 @@ type Step struct {
 	// comment), and must not be empty after cleaning, or the adapter shows it as blank.
 	Title string
 	// Detail is a short line about it, such as the redacted summary of a tool's arguments (the secrets taken out by
-	// the caller, never the raw arguments): literal text, one line, untrusted. It may be empty.
+	// the caller, never the raw arguments): literal text, one line, untrusted. It may be empty. A step's detail is the
+	// first non-empty detail it was sent with: a platform may show only that one, as Slack does.
 	Detail string
 	// State is how far the step has got.
 	State StepState

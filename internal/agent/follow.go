@@ -43,8 +43,9 @@ func (a *Agent) Follow(ctx context.Context, id a2a.TaskID, h Handler) (telemetry
 	if err != nil {
 		return fmt.Errorf("connect to agent: %w", typed(err, false))
 	}
-	asm := newAssembler(h, a.tool)
+	asm := newAssembler(h)
 	asm.taskID = id
+	defer asm.release("")           // a result still waiting for its call has no later assembler to deliver it
 	fail := func(err error) error { // the agent answered, or refused, or the caller gave up
 		if ctx.Err() == nil {
 			err = typed(err, false)
