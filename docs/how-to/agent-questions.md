@@ -30,8 +30,9 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 === "Generic A2A"
 
     The `a2a` dialect shows an agent's text-only `input-required` pause as one text question, which you can
-    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause with a part that is
-    not text cannot be used, so the task is cancelled and the thread is told. In a Binding with
+    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause that is not one usable
+    text question cannot be used, so the task is cancelled and the thread is told; see
+    [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect) for the rule. In a Binding with
     `chat.threadReplies: mention`, that reply needs no mention.
 
 ## How an answer is taken
@@ -48,9 +49,9 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 ## Tool approvals
 
 Tool approvals are available for a Binding that uses the `kagent-v1` dialect. On the `a2a` dialect Agent Kourier posts
-no approval prompt and sends no approval, whatever `toolApprovals` says: kagent 1.0.0-alpha5, reached on that dialect, pauses
-for an approval with text alone, and Agent Kourier handles that pause as a question whose reply is sent as plain text
-(see [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)). Approvals are disabled by default.
+no approval prompt and sends no approval, whatever `toolApprovals` says; a kagent approval pause on that dialect
+(recorded with kagent 1.0.0-alpha5) is handled as a question (see [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)). Approvals
+are disabled by default.
 Enable them with a separate policy from questions:
 
 ```yaml

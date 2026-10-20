@@ -60,8 +60,10 @@ In the Binding's `identity`:
   or `kagent.dev/a2a/part-type`, set to `function_call` or `function_response`): see
   [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). Without that marker the calls are
   not shown.
-- Not: structured choices or tool approvals. The generic `a2a` dialect accepts only a text-only input-required
-  question; a pause with any part that is not text cannot be used, so the task is cancelled. These capabilities come
+- Not: structured choices or tool approvals. The generic `a2a` dialect accepts only one text question: an
+  `input-required` pause whose status message has only text parts, whose text is not blank, and which carries a
+  message ID or a status timestamp. A pause that is not one usable text question cannot be used, so the task is
+  cancelled and the thread is told. These capabilities come
   from kagent's extension, which only the `kagent-v1` dialect speaks, so Agent Kourier posts no approval prompt here and
   sends no approval. `interactions.toolApprovals: true` still lets the Binding set `approverGroups`, though they gate
   nothing on this dialect, and without them still logs, at load, that any channel member may decide.
@@ -71,7 +73,8 @@ In the Binding's `identity`:
   `askUser: true` it posts kagent's text, and the reply goes to kagent as plain text, never as an approval. No
   reply, typed or submitted, can carry the `FunctionResponse` kagent asks for, and what kagent does with plain text has not been tested.
   For a kagent agent that needs approvals, use the `kagent-v1` dialect; on this one, `askUser: false` ends such a pause
-  at once with a notice.
+  at once with a notice (see
+  [Troubleshoot an install](troubleshoot.md#a-kagent-approval-was-cancelled-as-a-question)).
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it

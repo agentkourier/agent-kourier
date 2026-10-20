@@ -224,10 +224,21 @@ a second time and post a second answer. For a read-only agent that wastes a mode
 nothing else. An agent that changes things can do the change twice. On the `a2a` dialect Agent
 Kourier shows the tool calls it can read, but it cannot approve or deny them, so the agent's own
 tool list and the role behind its tools are the only fence on a write. Slack tool approvals are available only to a `kagent-v1` Binding with
-`interactions.toolApprovals: true`. On the `a2a` dialect, a kagent approval pause that arrives as text alone (kagent
-1.0.0-alpha5 sends one that asks for a `FunctionResponse`; 0.9.x has not been tested) is handled as a question: on a
-Binding with `interactions.askUser: false` the task is cancelled, and otherwise kagent's text is posted and the reply
-is sent back as plain text, never as an approval.
+`interactions.toolApprovals: true`.
+
+## A kagent approval was cancelled as a question
+
+On a Binding whose AgentBackend uses the `a2a` dialect, the thread says "The agent asked a question, but this Binding does not allow questions" where you
+expected an approval prompt. The `a2a` dialect does not speak kagent's approval extension, so a kagent approval pause
+reaches it as text alone (recorded with kagent 1.0.0-alpha5; 0.9.x has not been tested) and is handled as a question
+([what works on the generic dialect](connect-a2a-agent.md#what-works-on-this-dialect)). On a Binding with
+`interactions.askUser: false`, Agent Kourier cancels the task, whatever `interactions.toolApprovals` says.
+
+The cancel is counted on `agentkourier_approval_outcomes_total` with `outcome="ask_user_cancelled"`, the label of
+every question a Binding turns away, not `auto_denied` or a decided-approval outcome. With `askUser: true` the pause
+is a question: its answer or timeout adds nothing to that metric, which counts decided and timed-out tool approvals
+only. To get an approval prompt, point the Binding at an AgentBackend with `dialect: kagent-v1` on kagent 1.0; see
+[Connect a kagent agent](connect-kagent.md).
 
 ## `Multi-Attach error for volume` while the pod rolls
 

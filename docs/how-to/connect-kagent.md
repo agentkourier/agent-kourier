@@ -100,10 +100,9 @@ Binding's turns reach one of its agents.
       agent's own tool list and the role behind its tools are the only fence on a write.
     - A text `input-required` pause is shown as a question, and the reply is sent as text, only when the Binding sets
       `interactions.askUser: true`. Whether kagent 0.9.x ever pauses with a text question has not been tested.
-    - Whether kagent 0.9.x pauses for a tool approval has not been tested. kagent 1.0.0-alpha5, reached on the `a2a`
-      dialect, pauses for one with text alone, asking for a `FunctionResponse`. A pause like that is handled as the
-      question above: its reply is sent as plain text, never as an approval, and what kagent does with that text has
-      not been tested.
+    - Whether kagent 0.9.x pauses for a tool approval has not been tested. An approval pause that arrives as text
+      alone, as kagent 1.0.0-alpha5's does on this dialect, is handled as the question above and never answered as an
+      approval: see [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
     - The controller accepted a placeholder token in the first install, so nothing verifies the Binding's identity. Put
       a verifying front door in front of it if that matters.
 
