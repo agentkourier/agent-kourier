@@ -64,7 +64,8 @@ Front door
 Interaction
 :   A pause in which the agent waits for a person: a question (ask-user), or a tool approval when the Binding
     enables `interactions.toolApprovals`. Structured pauses use kagent's human-in-the-loop extension; on the `a2a`
-    dialect, a structured pause whose status message does not declare that extension is unusable.
+    dialect, a structured pause is unusable when its status message does not declare that extension or the agent's card
+    does not list it.
 
 Investigation
 :   A session that a trigger or an alert started rather than a person.

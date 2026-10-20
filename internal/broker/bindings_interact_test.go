@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -89,7 +91,7 @@ func TestBindingCarriesWhatTheInteractionsNeed(t *testing.T) {
 	if got.Identity != "secret:sre/creds" {
 		t.Errorf("Identity = %q, want the token Secret, as the audit rows of Backend name it", got.Identity)
 	}
-	if got.Dialect == nil || got.Dialect != f.b.kits[v1alpha1.DialectKagentV1].dialect {
+	if got.Dialect == nil || got.Dialect != f.b.kits[v1alpha1.DialectKagentV1].dialect(nil) {
 		t.Errorf("Dialect = %v, want the dialect the agent pool of that backend connects through", got.Dialect)
 	}
 	if want := (dialect.Platform{ID: "slack", Name: "Slack"}); got.Platform != want {
@@ -146,5 +148,34 @@ func TestBackendCarriesTheBindingsFeedbackSetting(t *testing.T) {
 		if err != nil || be.Feedback != enabled {
 			t.Errorf("Backend.Feedback = %t, %v; want %t from spec.feedback.enabled", be.Feedback, err, enabled)
 		}
+	}
+}
+
+// An a2a Binding reads its pauses through its backend's card: a pause that declares kagent's HITL extension is a text
+// question until the Binding's pool has connected to its agent, whose card (the stub's, as kagent's) lists the
+// extension, and is read as the extension's after.
+func TestA2ABindingReadsHITLOnceItsCardListsIt(t *testing.T) {
+	f := newFixture(t)
+	f.snaps.p.Store(snapshot(t, f.url+"/agents/kagent/test-agent", v1alpha1.DialectA2A, time.Hour))
+	ib, err := f.b.Binding("sre/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve add_numbers?"))
+	msg.Extensions = []string{kagentv1.HITLExtension}
+	msg.Metadata = map[string]any{kagentv1.HITLExtension: map[string]any{"type": "tool_approval_request",
+		"tools": []any{map[string]any{"id": "adk-1", "call_id": "call_1", "name": "add_numbers", "args": map[string]any{"a": 3}}}}}
+	task := a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: msg}}
+	if in, err := ib.Dialect.ParseInteraction(task); err != nil || in == nil || in.Kind != dialect.AskUser || !in.TextReplies {
+		t.Fatalf("before any connection: %+v, %v; want a text question, since no card has said the agent speaks the extension", in, err)
+	}
+	be, err := f.b.Backend("sre/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = be.Agent.GetTask(t.Context(), "no-such-task") // connects, which reads the card; the task itself does not matter
+	in, err := ib.Dialect.ParseInteraction(task)
+	if err != nil || in == nil || in.Kind != dialect.ToolApproval || in.Extension != kagentv1.HITLExtension {
+		t.Fatalf("after connecting: %+v, %v; want the extension's tool approval", in, err)
 	}
 }

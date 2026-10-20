@@ -195,13 +195,35 @@ func TestConnectNegotiatesHITLWhenTheCardListsIt(t *testing.T) {
 	}
 }
 
+// connected returns d's view (For) of a backend after connecting to it: a fake agent whose card lists kagent's HITL
+// extension when hitl. The card is all the fake serves.
+func connected(t *testing.T, d *generic.Dialect, hitl bool) dialect.Dialect {
+	t.Helper()
+	var exts []a2a.AgentExtension
+	if hitl {
+		exts = []a2a.AgentExtension{{URI: kagentv1.HITLExtension}}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		card := a2a.AgentCard{Name: "sre", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true, Extensions: exts}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}}
+		_ = json.NewEncoder(w).Encode(card)
+	}))
+	t.Cleanup(srv.Close)
+	backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + "/a2a"}}
+	if _, err := d.Connect(t.Context(), backend, v1alpha1.AgentRef{}, dialect.Credentials{Token: secret.New("token")}); err != nil {
+		t.Fatal(err)
+	}
+	return d.For(backend)
+}
+
 // TestReadsHITLWhenTheMessageDeclaresIt pins which pauses the a2a dialect reads as kagent's HITL extension: a status
 // message that lists the extension and carries its payload, as kagent sends it when the request asked for the
-// extension. It is then read exactly as kagent-v1 reads it. Every other pause is a text question, or unusable, as it
-// was before: a payload the message does not declare is not trusted to be the extension's.
+// extension, from an agent whose card lists it. It is then read exactly as kagent-v1 reads it. Every other pause is a
+// text question, or unusable, as it was before: a payload the message does not declare is not trusted to be the
+// extension's, and neither is one from an agent that was never asked for it.
 func TestReadsHITLWhenTheMessageDeclaresIt(t *testing.T) {
-	d := generic.New(time.Second)
-	defer d.CloseIdleConnections()
+	g := generic.New(time.Second)
+	defer g.CloseIdleConnections()
+	d := connected(t, g, true)
 	kagent := kagentv1.New(time.Second)
 	defer kagent.CloseIdleConnections()
 	approval := map[string]any{
@@ -260,6 +282,18 @@ func TestReadsHITLWhenTheMessageDeclaresIt(t *testing.T) {
 			}
 		})
 	}
+	declared := paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), hitl, kagentv1.HITLExtension))
+	for name, other := range map[string]dialect.Dialect{
+		"a card that does not list the extension": connected(t, g, false),
+		"a backend never connected":               g.For(&v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: "http://never.invalid/a2a"}}),
+		"the dialect itself, of no backend":       g,
+	} {
+		t.Run("declared HITL approval through "+name, func(t *testing.T) {
+			if in, err := other.ParseInteraction(declared); err != nil || in == nil || in.Kind != dialect.AskUser || !in.TextReplies || in.Extension != "" {
+				t.Errorf("got %+v, %v; want a text question: the agent was not asked for the extension", in, err)
+			}
+		})
+	}
 }
 
 // assertRecordedAnswer fails t unless msg is the answer recorded as accepted in the request name: the same task, context,
@@ -286,7 +320,7 @@ func assertRecordedAnswer(t *testing.T, msg a2a.Message, name string) {
 func TestAnswersHITLAsKagentDoes(t *testing.T) {
 	d := generic.New(time.Second)
 	defer d.CloseIdleConnections()
-	in, err := d.ParseInteraction(dialecttest.KagentTask(t, "approval/01-pause-approve.response.sse"))
+	in, err := connected(t, d, true).ParseInteraction(dialecttest.KagentTask(t, "approval/01-pause-approve.response.sse"))
 	if err != nil || in == nil || in.Kind != dialect.ToolApproval {
 		t.Fatalf("pause = %+v, %v; want a tool approval", in, err)
 	}
@@ -310,7 +344,7 @@ func TestAnswersHITLAsKagentDoes(t *testing.T) {
 func TestAnswersHITLQuestionsAsKagentDoes(t *testing.T) {
 	d := generic.New(time.Second)
 	defer d.CloseIdleConnections()
-	in, err := d.ParseInteraction(dialecttest.KagentTask(t, "askuser/03-pause-good-answer.response.sse"))
+	in, err := connected(t, d, true).ParseInteraction(dialecttest.KagentTask(t, "askuser/03-pause-good-answer.response.sse"))
 	if err != nil || in == nil || in.Kind != dialect.AskUser || in.TextReplies || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 2 {
 		t.Fatalf("pause = %+v, %v; want a HITL question with two choices", in, err)
 	}

@@ -171,7 +171,8 @@ card lists the extension.
 | Any other terminal state | Treated as `failed` |
 
 On `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata. On `a2a`, a status
-message that names that extension in its `extensions` and carries the payload is read the same way. Any other question
+message that names that extension in its `extensions` and carries the payload is read the same way, when the card Agent
+Kourier read when it last connected to the agent lists the extension. Any other question
 on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status `timestamp` that differs
 from the last question's. Anything else in `input-required` cannot be shown, so the task is cancelled and the thread is
 told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.

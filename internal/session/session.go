@@ -247,6 +247,10 @@ const (
 	TextReplyConsumed                   // decided or discarded; persist consumption before sending an answer
 	TextReplyNotAnswer                  // leave an ordinary turn queued until the pause ends
 	TextReplyWait                       // the question's prompt is not ready yet
+	// TextReplyNoTextQuestion is TextReplyNotAnswer for every reply to this pause: what it waits on takes no typed answer
+	// (a structured question or approval, or a pause that cannot be used), so the parked runner reads no more of the
+	// queue until the pause ends.
+	TextReplyNoTextQuestion
 )
 
 // NoTextReply leaves ordinary turns queued while a task is paused. It is only for setups

@@ -69,8 +69,9 @@ In the Binding's `identity`:
   [Agent questions](agent-questions.md). Such a question takes its answer from the prompt's controls only, never from a
   typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked.
 - Not: structured pauses from an agent without that extension. Any other pause must be text alone; a pause with any part
-  that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its
-  `extensions` is not read, and the pause is handled as text.
+  that is not text cannot be used, so the task is cancelled. The payload is not read, and the pause is handled as text,
+  when the status message does not name the extension in its `extensions`, or when the card Agent Kourier read when it
+  last connected to the agent does not list the extension, so the agent was never asked for it.
 - A kagent agent paused for a tool approval without the extension (its card does not list it, or a request did not ask
   for it) sends text alone, asking for a `FunctionResponse` (recorded with kagent 1.0.0-alpha5). Agent Kourier handles
   that pause as a question. On a Binding with `interactions.askUser: false` it cancels the task and tells the thread the
