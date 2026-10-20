@@ -47,7 +47,9 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
 ## Tool approvals
 
-Tool approvals are available for a Binding that uses the `kagent-v1` dialect. They are disabled by default. Enable them
+Tool approvals are available for a Binding that uses the `kagent-v1` dialect. On the `a2a` dialect no approval prompt is
+posted; with `toolApprovals: true` the config loader warns that the setting has no effect and names the Binding and its
+AgentBackend. Approvals are disabled by default. Enable them
 with a separate policy from questions:
 
 ```yaml

@@ -62,7 +62,9 @@ In the Binding's `identity`:
   not shown.
 - Not: structured choices or tool approvals. The generic `a2a` dialect accepts only a text-only input-required
   question; a structured pause is refused and the task is cancelled. These capabilities come from kagent's extension,
-  which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here.
+  which only the `kagent-v1` dialect speaks, so no Binding approval setting enables them here. With
+  `interactions.toolApprovals: true`, the config loader warns that the setting has no effect and names the Binding and
+  its AgentBackend.
 - An A2A 0.3 agent has no task list, so after a restart a turn may be sent, and run, twice.
 
 ## Check it
