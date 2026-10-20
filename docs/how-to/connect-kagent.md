@@ -95,10 +95,15 @@ Binding's turns reach one of its agents.
     - A 0.3 agent has no task list. After a restart, or after a send whose outcome is unknown, Agent Kourier cannot ask
       whether the agent already has the turn. It sends again, and the agent may run the turn twice. That is harmless for
       a read-only agent and not for one that changes things.
-    - The `a2a` dialect shows tool calls but cannot approve or deny them, because tool approvals need kagent 1.0. The
+    - The `a2a` dialect shows tool calls but cannot approve or deny them: Slack tool approvals need the `kagent-v1`
+      dialect and kagent 1.0, so no approval prompt is posted here, whatever `interactions.toolApprovals` says. The
       agent's own tool list and the role behind its tools are the only fence on a write.
     - A text `input-required` pause is shown as a question, and the reply is sent as text, only when the Binding sets
       `interactions.askUser: true`. Whether kagent 0.9.x ever pauses with a text question has not been tested.
+    - Whether kagent 0.9.x pauses for a tool approval has not been tested. kagent 1.0.0-alpha5, reached on the `a2a`
+      dialect, pauses for one with text alone, asking for a `FunctionResponse`. A pause like that is handled as the
+      question above: its reply is sent as plain text, never as an approval, and what kagent does with that text has
+      not been tested.
     - The controller accepted a placeholder token in the first install, so nothing verifies the Binding's identity. Put
       a verifying front door in front of it if that matters.
 
