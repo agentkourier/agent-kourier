@@ -160,6 +160,18 @@ func TestASnapshotNeverOverridesTheLiveResult(t *testing.T) {
 		{"results of other calls are not superseded", []a2a.Event{
 			taskOf(a2a.TaskStateCompleted, nil, artifactOf("a1", callPart(kagv1, "c1"), callPart(kagv1, "c2")), artifactOf("a2", resultPart(kagv1, "c1", errResp)), artifactOf("a3", resultPart(kagv1, "c2", okResp)))},
 			[]string{"call c1", "call c2", "result c1 " + errJSON, "result c2 " + okJSON}},
+		// The snapshot lags the stream: it holds the replayed call and the stale error but not the real result,
+		// which streamed. Last-wins within the snapshot cannot tell, so the live result alone keeps the error out.
+		{"a snapshot that lags: the live result stands, the stale error is not delivered", []a2a.Event{
+			toolArtifact("a3", resultPart(kagv1, "c1", okResp)),
+			taskOf(a2a.TaskStateCompleted, nil, artifactOf("a1", callPart(kagv1, "c1")), artifactOf("a2", resultPart(kagv1, "c1", errResp)))},
+			[]string{"call c1", "result c1 " + okJSON}},
+		// A live result of one source does not make a snapshot's result of the other source stale: what the
+		// other source says is another part, which may carry the real outcome.
+		{"a live result in a message, a different one in the snapshot's artifacts", []a2a.Event{
+			agentStatus("m1", callPart(adk, "c1"), resultPart(adk, "c1", okResp)),
+			taskOf(a2a.TaskStateCompleted, nil, artifactOf("a1", resultPart(adk, "c1", errResp)))},
+			[]string{"call c1", "result c1 " + okJSON, "result c1 " + errJSON}},
 		// Two live results are the agent's own sequence, and are delivered as they came.
 		{"two live results are both delivered", []a2a.Event{
 			toolArtifact("a1", callPart(kagv1, "c1")), toolArtifact("a2", resultPart(kagv1, "c1", errResp)), toolArtifact("a3", resultPart(kagv1, "c1", okResp))},

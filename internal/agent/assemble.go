@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -18,12 +19,12 @@ import (
 type assembler struct {
 	emit      Handler
 	text      map[a2a.ArtifactID]string
-	placed    map[toolPlace]bool    // the places whose tool part was looked at
-	said      map[string]toolSource // what each tool part delivered or held said, and where it was found
-	called    map[string]bool       // the call IDs whose call was delivered
-	live      map[toolKey]bool      // the calls, as a source reports them, that had a result from a live event
-	held      []ToolResultEvent     // results whose call has not come, in the order they came
-	snapshot  map[toolKey]toolPlace // while a task snapshot is applied: the place of the last result of each call; else nil
+	placed    map[toolPlace]bool               // the places whose tool part was looked at
+	said      map[[sha256.Size]byte]toolSource // what each tool part delivered or held said, and where it was found
+	called    map[string]bool                  // the call IDs whose call was delivered
+	live      map[toolKey]bool                 // the calls, as a source reports them, that had a result from a live event
+	held      []ToolResultEvent                // results whose call has not come, in the order they came
+	snapshot  map[toolKey]toolPlace            // while a task snapshot is applied: the place of the last result of each call; else nil
 	taskID    a2a.TaskID
 	contextID string
 	state     a2a.TaskState
@@ -37,7 +38,7 @@ func newAssembler(h Handler) *assembler {
 	if h == nil {
 		h = func(Event) {}
 	}
-	a := &assembler{text: map[a2a.ArtifactID]string{}, placed: map[toolPlace]bool{}, said: map[string]toolSource{},
+	a := &assembler{text: map[a2a.ArtifactID]string{}, placed: map[toolPlace]bool{}, said: map[[sha256.Size]byte]toolSource{},
 		called: map[string]bool{}, live: map[toolKey]bool{}}
 	a.emit = func(e Event) {
 		a.changes++
@@ -192,9 +193,9 @@ type toolPlace struct {
 	source toolSource
 	owner  string // the artifact's ID, or the message's
 	index  int    // the part's index in the artifact or message
-	// said is what the part says, set for a message with no ID, which has no place but its words: two such
-	// messages are one only if their parts say the same.
-	said string
+	// said is the digest of what the part says, set for a message with no ID, which has no place but its words: two
+	// such messages are one only if their parts say the same. The zero value says no words.
+	said [sha256.Size]byte
 }
 
 // toolKey names the call that a result answers, as one source reports it.
@@ -214,13 +215,14 @@ func messagePlace(m *a2a.Message, index int, tp dialect.ToolPart) toolPlace {
 	return toolPlace{source: inMessage, owner: m.ID, index: index}
 }
 
-// saying is what a tool part says: its kind, call ID and name, and its arguments or response.
-func saying(tp dialect.ToolPart) string {
+// saying is a digest of what a tool part says: its kind, call ID and name, and its arguments or response. A digest,
+// so that the assembler keeps 32 bytes of each part for the whole send and not its arguments and response.
+func saying(tp dialect.ToolPart) [sha256.Size]byte {
 	b, err := json.Marshal([]any{tp.Kind, tp.ID, tp.Name, tp.Args, tp.Result})
 	if err != nil { // unreachable for a part decoded from JSON
-		return fmt.Sprintf("%#v", tp)
+		b = fmt.Appendf(nil, "%#v", tp)
 	}
-	return string(b)
+	return sha256.Sum256(b)
 }
 
 // lastResults is the place of the last result of each call that a task snapshot holds, in its artifacts and in its
@@ -258,10 +260,13 @@ func lastResults(t *a2a.Task) map[toolKey]toolPlace {
 //   - Across the sources, what the part says is its identity: a part an agent sends both as an artifact and as a
 //     status message is delivered once. A part of the same kind and call ID that says something else, an
 //     outcome the first did not have, is another part and is delivered; a part with no call ID is what it says.
-//   - A task snapshot is history, and the live events are the news. A snapshot's result for a call whose result a
-//     live event already delivered is stale, and is not delivered: kagent 1.0 replays the paused turn's call and its
-//     "requires confirmation" error in the final task of the turn that approves it, and that error must not
-//     end the approved call as failed. Of several results of one call in a snapshot, the last is the outcome.
+//   - A task snapshot is history, and the live events are the news. kagent 1.0 replays the paused turn's call and its
+//     "requires confirmation" error in the final task of the turn that approves it, and that error must not end the
+//     approved call as failed. Two rules keep it out, each for a case the other does not cover. Of several results
+//     of one call in a snapshot, the last is the outcome: the recorded final task holds the error and then the real
+//     result, and a snapshot read after a restart has no live stream to compare with. A snapshot's result for a call
+//     whose result a live event of the same source already delivered is stale: a snapshot that lags the stream can
+//     hold the error and not yet the real result, which streamed, so last-wins alone would deliver the error.
 //   - A result is delivered after its call: one that comes first waits for the call, as the approved call's result
 //     does until that replay brings the call, and is delivered at the end of the send if the call never comes.
 func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp dialect.ToolPart) {
