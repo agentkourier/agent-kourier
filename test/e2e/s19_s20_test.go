@@ -29,6 +29,22 @@ func TestS19_AnApprovalRunsTheTool(t *testing.T) {
 	})
 }
 
+// TestS19_AnApprovalRunsTheToolOverTheA2ADialect: S19 on an a2a Binding. The stub's card lists kagent's HITL extension, so
+// the generic dialect asks for it, reads the structured approval and sends the structured decision.
+func TestS19_AnApprovalRunsTheToolOverTheA2ADialect(t *testing.T) {
+	runFastToolApproval(t, fastToolApprovalCase{
+		name:         "approve-a2a",
+		channel:      ChannelA2AS19,
+		user:         "UA2AS19",
+		binding:      "agent-kourier/fast-a2a-s19",
+		action:       chat.ActionApproveAll,
+		verdict:      "Approved",
+		continuation: "I have added 3 and 5. The result is 8.",
+		outcome:      "approved",
+		auditOutcome: `answered approved=1 denied=0 approved_tools=["add_numbers"]`,
+	})
+}
+
 // TestS20_ADenialContinuesTheTurn: the approval-enabled Binding sends a denial to the stub. The edited prompt records
 // the denied tool, the stub's rejection continuation reaches the thread, and the decision is counted.
 func TestS20_ADenialContinuesTheTurn(t *testing.T) {

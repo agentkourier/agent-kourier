@@ -190,3 +190,26 @@ Binding fails to load for it.
 
 To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line
 that never names a tool (a tool approval prompt still does). See [Output](../explanation/threads-and-sessions.md#output).
+
+## Upgrade to the release that reads kagent's extension on the a2a dialect
+
+This release lets an `a2a` Binding use kagent's human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`, when
+the agent card lists it under `capabilities.extensions`, as kagent 1.0's does. No Binding fails to load for it. An agent
+whose card does not list the extension sees no change. For one whose card does, such as a kagent 1.0 agent on the `a2a`
+dialect:
+
+- **Every A2A call carries `A2A-Extensions: https://kagent.dev/extensions/hitl/v1`**, and the agent sends its structured
+  pauses.
+- **A tool approval is an approval.** With `interactions.toolApprovals: true` it is posted with approval buttons, and
+  `approverGroups` gate it. Without it the approval is denied through the dialect, with a notice in the thread, as on
+  `kagent-v1`; it used to be posted as a text question (`askUser: true`) or cancelled as one (`askUser: false`).
+- **A question with choices is shown with them**, and a structured question takes its answer from the prompt's controls
+  only: a typed reply in the thread does not answer it, even a question with no choices.
+- **A card that marks the extension `required` now connects**, where it failed with
+  `agent requires an unsupported extension`.
+
+See [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
+
+Before you roll back to an earlier release, let pending approvals and structured questions on `a2a` Bindings end. The
+earlier release answers a pause on that dialect only with text, so it cannot build an answer to one this release stored:
+a press on its prompt, or its timeout, fails.

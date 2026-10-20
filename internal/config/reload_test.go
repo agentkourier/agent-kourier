@@ -147,22 +147,19 @@ func TestReloaderRebuildsOnlyOnChangeButRechecksSecrets(t *testing.T) {
 	}
 }
 
-// The approval warnings depend on the backend's dialect: the a2a dialect never posts an approval, so its Bindings are told
-// that toolApprovals does nothing instead of who may decide.
-func TestReloaderWarnsAboutApprovalPolicyByDialect(t *testing.T) {
-	const (
-		anyMember = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
-		noEffect  = "toolApprovals has no effect on the a2a dialect"
-	)
+// Both dialects post tool approvals: a2a for an agent whose card lists kagent's HITL extension. The warning cannot know
+// the card at load, so it is the same on both.
+func TestReloaderWarnsAboutApproversOnEveryDialect(t *testing.T) {
+	const anyMember = "tool approvals are enabled without approver groups; any non-bot channel member may decide"
 	for _, tc := range []struct {
 		name, dialect, interactions string
-		want, notWant               []string
+		warn                        bool
 	}{
-		{"kagent without groups", "kagent-v1", "    toolApprovals: true\n", []string{anyMember}, []string{noEffect}},
-		{"kagent with groups", "kagent-v1", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", nil, []string{anyMember, noEffect}},
-		{"a2a without groups", "a2a", "    toolApprovals: true\n", []string{noEffect}, []string{anyMember}},
-		{"a2a with groups", "a2a", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", []string{noEffect}, []string{anyMember}},
-		{"a2a without approvals", "a2a", "", nil, []string{anyMember, noEffect}},
+		{"kagent without groups", "kagent-v1", "    toolApprovals: true\n", true},
+		{"kagent with groups", "kagent-v1", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", false},
+		{"a2a without groups", "a2a", "    toolApprovals: true\n", true},
+		{"a2a with groups", "a2a", "    toolApprovals: true\n    approverGroups: [S0123456789]\n", false},
+		{"a2a without approvals", "a2a", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := specDir(t)
@@ -174,15 +171,8 @@ func TestReloaderWarnsAboutApprovalPolicyByDialect(t *testing.T) {
 			r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 			mustReload(t, r, true)
 			got := logs.String()
-			for _, w := range tc.want {
-				if !strings.Contains(got, w) || !strings.Contains(got, "binding=sre/sre-alerts") {
-					t.Errorf("log = %q; want %q naming the Binding", got, w)
-				}
-			}
-			for _, w := range tc.notWant {
-				if strings.Contains(got, w) {
-					t.Errorf("log = %q; want no %q", got, w)
-				}
+			if warned := strings.Contains(got, anyMember) && strings.Contains(got, "binding=sre/sre-alerts"); warned != tc.warn {
+				t.Errorf("log = %q; want the warning naming the Binding: %v", got, tc.warn)
 			}
 		})
 	}

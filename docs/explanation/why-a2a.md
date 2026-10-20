@@ -66,9 +66,10 @@ call gives it nothing to ask about after a restart.
 - **A2A does not standardise everything the chat needs.** Structured questions with choices and tool approvals are
   runtime extensions. The `kagent-v1` dialect reads kagent 1.0's structured questions; a Binding can enable its Slack
   approval prompts with `interactions.toolApprovals`. Tool steps do not need a dialect: every dialect shows them as cards
-  for an agent that marks its tool calls the way Google ADK or kagent does. The generic `a2a` dialect
-  accepts only text-only input-required questions and cancels the task at a pause it cannot use, so kagent 0.9.x and AX cannot use
-  Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and
+  for an agent that marks its tool calls the way Google ADK or kagent does. The generic `a2a` dialect reads the same
+  structured questions and approvals from an agent whose card lists kagent's extension; from any other agent it
+  accepts only text-only input-required questions and cancels the task at a pause it cannot use, so the AX reference
+  agent cannot use Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and
   denied `check_status` in one two-tool pause; only `add_numbers` executed. The broker's end-to-end suite verifies this
   with fake Slack and pinned kagent 1.0.0-alpha5.
 - **The agent must stream.** Agent Kourier rejects an agent whose card does not advertise streaming, and one that

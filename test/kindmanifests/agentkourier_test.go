@@ -79,8 +79,8 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 22 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 4 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and three of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 23 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 5 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, five for the a2a dialect against the plain pod, one connection, and the backend of the kagent-v1 Bindings and four of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -180,6 +180,7 @@ func TestScenarioBindings(t *testing.T) {
 		{"context over a2a", e2e.ChannelA2AMemory, "scenario-memory", false, false, v1alpha1.OutputLive},
 		{"S4 over a2a", e2e.ChannelA2AS4, "scenario-gated", false, false, v1alpha1.OutputLive},
 		{"S5 over a2a", e2e.ChannelA2AS5, "test-agent", false, false, v1alpha1.OutputFinal},
+		{"S19 over a2a", e2e.ChannelA2AS19, "spike-approve", false, true, v1alpha1.OutputLive},
 	} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", tc.channel)
 		if !ok {
@@ -222,6 +223,7 @@ func TestA2ABindingsReachTheStubAgentByItsExactURL(t *testing.T) {
 		{"context", e2e.ChannelA2AMemory, "scenario-memory"},
 		{"S4", e2e.ChannelA2AS4, "scenario-gated"},
 		{"S5", e2e.ChannelA2AS5, "test-agent"},
+		{"S19", e2e.ChannelA2AS19, "spike-approve"},
 	} {
 		rb, ok := snap.BindingForChannel("agent-kourier", "slack-fast", tc.channel)
 		if !ok {
@@ -286,7 +288,7 @@ func TestTheRunnerJobRunsTheA2AContextTest(t *testing.T) {
 	if err != nil || pattern == "" {
 		t.Fatalf("the Job's -test.run pattern is %q (%v); want a regular expression", pattern, err)
 	}
-	for _, name := range []string{"TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect"} {
+	for _, name := range []string{"TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestS1_AReplyStreamsIntoANewThreadOverTheA2ADialect", "TestS19_AnApprovalRunsTheToolOverTheA2ADialect"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}

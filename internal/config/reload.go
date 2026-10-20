@@ -12,8 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // ReloaderConfig configures a Reloader.
@@ -157,18 +155,12 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 	return err
 }
 
-// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible, and,
-// on the a2a dialect, which never yields a tool approval, the enabled policy that does nothing.
+// warnToolApprovalPolicies reports the enabled approval policy that leaves every non-bot channel member eligible.
 // The warning belongs to the config load, so it is emitted even before a Binding is used by the broker.
 func (r *Reloader) warnToolApprovalPolicies(snap *Snapshot) {
 	for _, rb := range snap.Bindings() {
 		in := rb.Binding.Spec.Interactions
-		switch {
-		case !in.ToolApprovals:
-		case rb.Backend.Spec.Dialect == v1alpha1.DialectA2A:
-			r.log.Warn("config: toolApprovals has no effect on the a2a dialect; no approval prompt is posted, and approverGroups gate nothing",
-				"binding", rb.Binding.Namespace+"/"+rb.Binding.Name, "backend", rb.Backend.Namespace+"/"+rb.Backend.Name)
-		case len(in.ApproverGroups) == 0:
+		if in.ToolApprovals && len(in.ApproverGroups) == 0 {
 			r.log.Warn("config: tool approvals are enabled without approver groups; any non-bot channel member may decide",
 				"binding", rb.Binding.Namespace+"/"+rb.Binding.Name)
 		}

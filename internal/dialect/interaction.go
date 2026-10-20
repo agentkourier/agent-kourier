@@ -62,7 +62,8 @@ type Nested struct {
 // Answer are stored as JSON, so their tags are a stored format: never rename one (interaction_test.go
 // pins them).
 type Interaction struct {
-	// TextReplies permits queued plain-text answers to this question.
+	// TextReplies permits queued plain-text answers to this question. The a2a dialect also routes BuildResponse on it:
+	// only its text path sets it, and a pause read from kagent's HITL extension never does, so it must stay unset there.
 	TextReplies bool       `json:"text_replies,omitempty"`
 	Kind        Kind       `json:"kind"`
 	TaskID      a2a.TaskID `json:"task_id"` // the paused task, which the answer is addressed to

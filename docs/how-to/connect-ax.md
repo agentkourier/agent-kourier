@@ -40,7 +40,7 @@ spec:
 ## What to expect
 
 - With `interactions.askUser: true`, questions arrive as plain text, and a person answers by replying in the thread or with the answer form.
-- Structured tool approvals are kagent-only. Tool step cards need the agent to mark its tool parts as Google ADK or
+- Structured tool approvals need kagent's human-in-the-loop extension, which the reference agent does not serve. Tool step cards need the agent to mark its tool parts as Google ADK or
   kagent does; see [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
 - The reference agent's `ask_user` call shows no step card. It is a long-running call, and ADK's A2A executor moves a
   long-running call out of the turn's artifacts into the `input-required` status message. Agent Kourier reads that

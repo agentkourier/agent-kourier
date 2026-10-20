@@ -11,7 +11,7 @@ are A2A 1.0's, with the 0.3 name in brackets.
 | Serve A2A 1.0 or 0.3 over JSON-RPC, on HTTP or HTTPS | Interfaces that are not JSON-RPC are dropped from the card. A card with none left fails the turn with `agent card lists no JSON-RPC interface` |
 | Serve its card at the endpoint, with any trailing slash trimmed, plus `/.well-known/agent-card.json`. On `a2a` the endpoint is the AgentBackend's `url` as written; on `kagent-v1` it is `url` plus `/agents/<namespace>/<name>` | The card fetch fails and the turn is retried, then fails after 15 minutes |
 | Set `capabilities.streaming: true` on the card | The agent is refused, as above. The non-streaming send is never used |
-| Mark no extension `required` that the dialect does not speak. `kagent-v1` speaks kagent's human-in-the-loop extension; `a2a` speaks none | The connect fails with `agent requires an unsupported extension` |
+| Mark no extension `required` that the dialect does not speak. Both dialects speak kagent's human-in-the-loop extension and no other | The connect fails with `agent requires an unsupported extension` |
 | Answer at the endpoint itself, without a redirect | A 3xx is a failed call; no redirect is followed |
 | Send response headers within 30 seconds of every call, streams included | The call fails as a lost connection |
 
@@ -54,7 +54,7 @@ the identity that calls the agent is always the Binding's.
 
 Every request carries one identity header, `Authorization: Bearer` from the Binding's `identity.tokenSecretRef` or
 `X-User-Id` from `identity.userId`, plus the AgentBackend's static `headers`. It may also carry the W3C trace context headers
-`traceparent` and `tracestate`. On `kagent-v1`, the `A2A-Extensions` header asks for kagent's human-in-the-loop
+`traceparent` and `tracestate`. On both dialects, the `A2A-Extensions` header asks for kagent's human-in-the-loop
 extension when the card lists it.
 
 ## Replies
@@ -155,7 +155,8 @@ so a follow may deliver a result again; the card keeps the first.
 
 Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
 `error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
-kagent 1.0's pause payload, so only `kagent-v1` reads them.
+the pause payload of kagent's human-in-the-loop extension, which `kagent-v1` always reads and `a2a` reads when the agent
+card lists the extension.
 
 ## Task states
 
@@ -169,10 +170,11 @@ kagent 1.0's pause payload, so only `kagent-v1` reads them.
 | `auth-required` | Not supported, on either dialect. Agent Kourier tells the thread that the agent paused in a way it cannot use, cancels the task, and then sends the replies queued behind it |
 | Any other terminal state | Treated as `failed` |
 
-A question on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status
-`timestamp` that differs from the last question's. Anything else in `input-required` cannot be shown, so the task is
-cancelled and the thread is told. The answer is one text part sent to the paused `taskId` and `contextId`. On
-`kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata.
+On `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata. On `a2a`, a status
+message that names that extension in its `extensions` and carries the payload is read the same way. Any other question
+on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status `timestamp` that differs
+from the last question's. Anything else in `input-required` cannot be shown, so the task is cancelled and the thread is
+told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.
 
 ## Errors
 

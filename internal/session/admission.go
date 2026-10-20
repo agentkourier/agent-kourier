@@ -92,12 +92,13 @@ func WereAdmitted(ctx context.Context, record ReplyRecord, messageIDs []string) 
 	return record.HasReplies(ctx, messageIDs)
 }
 
-// IsTextQuestion says whether the interaction in is a question that a typed reply can answer: the agent asks the
-// user for one answer, to one question that offers no choices. It is the shape of a question that the dialect marks
-// as taking text replies (dialect.Interaction.TextReplies) and that the store keeps marked; a reply is never decided
-// against any other. A nil interaction is no question.
+// IsTextQuestion says whether the interaction in is a question that a typed reply can answer: the dialect marks it as
+// taking text replies (dialect.Interaction.TextReplies), as the store keeps it marked, and the agent asks the user for
+// one answer, to one question that offers no choices. A question of that shape the dialect does not mark (a free-text
+// question in kagent's HITL extension, on the a2a dialect) has a prompt that invites no typed reply, so a reply is never
+// decided against it. A nil interaction is no question.
 func IsTextQuestion(in *dialect.Interaction) bool {
-	return in != nil && in.Kind == dialect.AskUser && len(in.Questions) == 1 && len(in.Questions[0].Choices) == 0
+	return in != nil && in.TextReplies && in.Kind == dialect.AskUser && len(in.Questions) == 1 && len(in.Questions[0].Choices) == 0
 }
 
 // AskedQuestion is the facts of the question that the paused task waits on, which AnswerVerdict depends on. The

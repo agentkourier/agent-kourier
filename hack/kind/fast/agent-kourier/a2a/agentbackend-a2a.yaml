@@ -28,3 +28,10 @@ metadata: {name: stub-a2a-memory, namespace: agent-kourier}
 spec:
   dialect: a2a
   url: http://stubagent.e2e.svc.cluster.local:8080/agents/kagent/scenario-memory
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: stub-a2a-approve, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://stubagent.e2e.svc.cluster.local:8080/agents/kagent/spike-approve
