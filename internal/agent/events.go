@@ -21,7 +21,8 @@ type TextEvent struct {
 	Text       string
 }
 
-// ToolCallEvent reports that the agent called a tool.
+// ToolCallEvent reports that the agent called a tool. ArtifactID is the artifact the call came
+// in, and empty when it came in a status update's message.
 type ToolCallEvent struct {
 	ArtifactID a2a.ArtifactID
 	CallID     string
@@ -29,7 +30,7 @@ type ToolCallEvent struct {
 	Args       map[string]any
 }
 
-// ToolResultEvent reports the outcome of a tool call.
+// ToolResultEvent reports the outcome of a tool call. ArtifactID is as for ToolCallEvent.
 type ToolResultEvent struct {
 	ArtifactID a2a.ArtifactID
 	CallID     string

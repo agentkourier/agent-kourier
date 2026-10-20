@@ -29,7 +29,7 @@ type Tool struct {
 	Args   map[string]any `json:"args"`
 }
 
-// ToolPartKind says whether an artifact part reports a tool call or its result.
+// ToolPartKind says whether a tool part reports a tool call or its result.
 type ToolPartKind string
 
 // The kinds of tool part.
@@ -38,8 +38,9 @@ const (
 	ToolResult ToolPartKind = "result"
 )
 
-// ToolPart is an artifact part that reports a tool call or a tool result, as a dialect
-// recognizes it. Both are untrusted, like every value the agent sends.
+// ToolPart is a data part, of an artifact or of a status update's message, that reports a tool
+// call or a tool result, as DecodeToolPart reads it. Both are untrusted, like every value the
+// agent sends.
 type ToolPart struct {
 	Kind ToolPartKind   `json:"kind"`
 	ID   string         `json:"id"`   // the call's id; a result repeats it

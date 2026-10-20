@@ -180,7 +180,7 @@ func TestFindTaskHasADeadline(t *testing.T) {
 		if _, _, err := memAgent(t, hang, func(c *Config) { c.UnaryTimeout = time.Second }).FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("hung page: err = %v, want DeadlineExceeded", err)
 		}
-		stuck := New(func(ctx context.Context) (Conn, error) { <-ctx.Done(); return nil, ctx.Err() }, nil, Config{UnaryTimeout: time.Second})
+		stuck := New(func(ctx context.Context) (Conn, error) { <-ctx.Done(); return nil, ctx.Err() }, Config{UnaryTimeout: time.Second})
 		if _, _, err := stuck.FindTask(t.Context(), "c1", "turn"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("stuck Source: err = %v, want DeadlineExceeded", err)
 		}

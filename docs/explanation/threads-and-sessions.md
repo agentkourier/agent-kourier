@@ -62,8 +62,9 @@ ends; nothing else is shown until then but the acknowledgment reaction, and `cha
 What a live reply shows of the agent's work depends on where the thread is and on `chat.progress`.
 
 - **A chat thread** (a message someone sent, so Slack shows the stream to that person) shows a step card for each tool
-  call, in the order the calls were made. The card begins when the call arrives and finishes when its result does. Only the
-  `kagent-v1` dialect reports tool calls.
+  call, in the order the calls were made. The card begins when the call arrives and finishes when its result does. Every
+  dialect reports the tool calls of an agent that marks them as Google ADK or kagent does; see
+  [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
 - **An alert thread** has no one to show a stream to, so one message is updated instead. A line of small print names the
   latest tool call: `Calling name(arguments)` while it is under way, `Ran name(arguments)` once its result has arrived,
   and `name(arguments) failed` if the result reports a failure. A call that has its result is shown only while the message

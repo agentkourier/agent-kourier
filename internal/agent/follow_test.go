@@ -218,7 +218,7 @@ func TestFollowGivesUpOnASilentSubscription(t *testing.T) {
 }
 
 func TestFollowFailsWithoutAConnectionOrATask(t *testing.T) {
-	broken := New(func(context.Context) (Conn, error) { return nil, errors.New("no token") }, nil, Config{})
+	broken := New(func(context.Context) (Conn, error) { return nil, errors.New("no token") }, Config{})
 	if err := broken.Follow(t.Context(), "t1", nil); err == nil {
 		t.Error("Follow with a failing Source = nil, want an error")
 	}
