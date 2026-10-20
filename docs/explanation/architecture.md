@@ -134,8 +134,9 @@ The generic A2A dialect supports text continuation: a plain-text `input-required
 question is persisted and posted, and a thread reply is accepted under the same
 membership, audit and deadline checks as a button press before it is sent to the
 paused task. A pause with any part that is not text is unusable on that dialect and
-cancels the task. A kagent approval pause reaches that dialect as text alone, so it is
-handled as a question and its reply is sent as plain text, never as an approval.
+cancels the task. A kagent approval pause reaches that dialect as text alone (recorded
+with kagent 1.0.0-alpha5), so it is handled as a question and its reply is sent as plain
+text, never as an approval.
 The kagent dialect additionally understands structured questions. Tool step cards do
 not depend on the dialect: every dialect shows the tool calls and results that an
 agent marks as Google ADK or kagent does. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
