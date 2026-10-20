@@ -143,9 +143,7 @@ func initCommand(args []string, ver string, stdin io.Reader, stdout, stderr io.W
 		_, _ = fmt.Fprintf(stderr, "agent-kourier init: %v\nrun agent-kourier init --help for the usage\n", err)
 		return exitUsage
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return execInit(ctx, opts, ver, stdin, getenv, stdout, stderr)
+	return execInit(context.Background(), opts, ver, stdin, getenv, stdout, stderr)
 }
 
 // execInit does the work of the command and returns the exit code of initCommand.
@@ -179,6 +177,10 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 	if err := o.validate(); err != nil {
 		return err
 	}
+	// The signals cancel the Slack requests from here on. They are not caught while the questions are asked: a question
+	// waits on stdin, which no context ends, so a caught Ctrl-C there would be lost and the command would not stop.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	var client *slack.Client
 	if haveToken {

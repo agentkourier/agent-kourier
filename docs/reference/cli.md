@@ -73,7 +73,7 @@ output is in [Tune triggers with a dry run](../how-to/tune-triggers.md).
 ## `agent-kourier init`
 
 Writes a first-install Helm values file, checks it, and prints the commands that create the Secrets and install the
-chart. It is not in the 0.1.1 release. It posts nothing to Slack and changes nothing in a cluster. The step-by-step use
+chart. The 0.1.2 release and the ones before it do not have it. It posts nothing to Slack and changes nothing in a cluster. The step-by-step use
 is in [Install with Helm](../how-to/install-with-helm.md#write-it-with-init).
 
 Every value that no option gives is asked on standard input, with the default in brackets. The questions go to standard

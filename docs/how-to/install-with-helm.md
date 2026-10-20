@@ -86,9 +86,9 @@ loader that Agent Kourier starts with, and prints the `kubectl` commands for the
 command below, with your namespace in them. It writes nothing if the values do not load, and it does not overwrite a file
 unless you pass `--force`.
 
-!!! note "`init` is not in the 0.1.1 release"
+!!! note "`init` is not in the 0.1.2 release"
 
-    The 0.1.1 binary and image do not have `init`; it arrives in the release after 0.1.1. Until then, run it from a
+    The 0.1.2 binary and image, and the releases before it, do not have `init`. Until a release has it, run it from a
     checkout of this repository with Go. A build that is not a release has no chart version to name, so the `helm install`
     command it prints has no `--version`, and Helm takes the newest chart.
 
