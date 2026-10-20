@@ -116,8 +116,8 @@ artifacts; ADK's older converter and kagent 0.9.x put them in status messages. T
 shown. Each part is read once: a part sent again, in a snapshot or in both places, is not a second call. A part that says
 something else under the same call ID is a different part, and is delivered as one; the card is still decided by the
 first result it gets, because a step finishes at the first result of its call and a later result changes nothing. Because a task snapshot is history, a result it holds
-for a call whose result already arrived in the stream is ignored, and of several results of one call in a snapshot the last
-counts. A result that arrives before its call waits for the call, and is read when the turn ends if the call never comes.
+for a call whose result already arrived in the stream in the same place (an artifact, or a status message) is ignored, and
+of several results of one call in a snapshot the last counts. A result that arrives before its call waits for the call, and is read when the turn ends if the call never comes.
 
 Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
 `error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
