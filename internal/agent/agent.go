@@ -119,18 +119,11 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	asm := newAssembler(h)
 	asm.replies = !answer // an answer's task is msg.TaskID: a Message must not end it as a reply with no task
 	defer asm.release("") // a result still waiting for its call has no later assembler to deliver it
-	if answer {
-		// The call of a result that this turn streams was sent by the turn that paused: see (*assembler).fetchCall.
-		asm.lookup = func() *a2a.Task {
-			id := cmp.Or(asm.taskID, msg.TaskID)
-			if id == "" {
-				return nil
-			}
-			task, err := a.getTask(ctx, conn, id)
-			if err != nil {
-				return nil
-			}
-			return task
+	if answer && msg.TaskID != "" {
+		// The paused task, as it is before the answer: what it holds is not this turn's news (see (*assembler).seed). One
+		// unary call per answer, which a person made; a task that cannot be read is answered without it.
+		if paused, err := a.getTask(ctx, conn, msg.TaskID); err == nil {
+			asm.seed(paused)
 		}
 	}
 	err = a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {

@@ -98,7 +98,7 @@ func TestRejectedAnswerCancelsTheWedgedTask(t *testing.T) {
 			if fa.count("CancelTask") != 1 {
 				t.Fatalf("CancelTask called %d times, want once", fa.count("CancelTask"))
 			}
-			if got, want := string(fa.callAt(1).Params), `{"id":"`+tc.wantID+`"}`; got != want { // call 0 is the send
+			if got, want := string(fa.callAt(2).Params), `{"id":"`+tc.wantID+`"}`; got != want { // call 0 reads the paused task, call 1 is the send
 				t.Errorf("CancelTask params = %s, want %s", got, want)
 			}
 		})

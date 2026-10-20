@@ -194,15 +194,14 @@ func kinds(evs []Event) []string {
 	return out
 }
 
-// runAnswer feeds events to an assembler that answers a paused task, whose lookup is lookup, and returns what it
-// emitted and how often it asked.
-func runAnswer(lookup func() *a2a.Task, evs []a2a.Event) (got []Event, asked int) {
+// runAnswer feeds events to an assembler that answers a task paused as paused says, and returns what it emitted.
+func runAnswer(paused *a2a.Task, evs []a2a.Event) (got []Event) {
 	asm := newAssembler(func(e Event) { got = append(got, e) })
-	asm.lookup = func() *a2a.Task { asked++; return lookup() }
+	asm.seed(paused)
 	for _, ev := range evs {
 		asm.apply(ev)
 	}
-	return got, asked
+	return got
 }
 
 // A result for a call that an earlier turn sent (the turn that approves a call streams only the result) is delivered at
@@ -213,7 +212,7 @@ func TestAResultWhoseCallTheEarlierTurnSentIsDeliveredWithItsCall(t *testing.T) 
 	approve := fixtureEvents(t, "approval/02-approve.response.sse")
 	want := []string{"call call_1", `result call_1 {"output":"8"}`}
 	t.Run("the call is delivered before the text", func(t *testing.T) {
-		got, asked := runAnswer(func() *a2a.Task { return paused }, approve)
+		got := runAnswer(paused, approve)
 		if g := outcomes(got); !reflect.DeepEqual(g, want) {
 			t.Errorf("tool events = %q, want %q", g, want)
 		}
@@ -221,53 +220,44 @@ func TestAResultWhoseCallTheEarlierTurnSentIsDeliveredWithItsCall(t *testing.T) 
 		if i, j := slices.Index(k, "result"), slices.Index(k, "text"); j < 0 || i > j {
 			t.Errorf("events = %q, want the call and result before the text", k)
 		}
-		if asked != 1 {
-			t.Errorf("asked for the task %d times, want once", asked)
-		}
 	})
-	t.Run("the task is asked for once, whatever the number of results", func(t *testing.T) {
-		two := []a2a.Event{toolArtifact("a1", resultPart(kagv1, "call_1", okResp)), toolArtifact("a2", resultPart(kagv1, "call_2", okResp))}
-		_, asked := runAnswer(func() *a2a.Task { return paused }, two)
-		if asked != 1 {
-			t.Errorf("asked for the task %d times, want once", asked)
-		}
-	})
-	t.Run("a call the send has seen is not looked for", func(t *testing.T) {
+	t.Run("a call the send has seen is not taken from the task", func(t *testing.T) {
 		seen := []a2a.Event{toolArtifact("a1", callPart(kagv1, "c1")), toolArtifact("a2", resultPart(kagv1, "c1", okResp))}
-		got, asked := runAnswer(func() *a2a.Task { return paused }, seen)
-		if asked != 0 || !reflect.DeepEqual(outcomes(got), []string{"call c1", "result c1 " + okJSON}) {
-			t.Errorf("asked %d times, tool events %q; want none, and the call and the result", asked, outcomes(got))
-		}
-	})
-	t.Run("only the call the result answers is taken from the task", func(t *testing.T) {
-		two := taskOf(a2a.TaskStateInputRequired, nil, artifactOf("x", callPart(kagv1, "other")), artifactOf("y", callPart(kagv1, "c1")))
-		got, _ := runAnswer(func() *a2a.Task { return two }, []a2a.Event{toolArtifact("a1", resultPart(kagv1, "c1", okResp))})
-		if g, want := outcomes(got), []string{"call c1", "result c1 " + okJSON}; !reflect.DeepEqual(g, want) {
-			t.Errorf("tool events = %q, want %q: the other call of the task is the paused turn's", g, want)
-		}
-	})
-	t.Run("a result with no call ID is not looked for", func(t *testing.T) {
-		_, asked := runAnswer(func() *a2a.Task { return paused }, []a2a.Event{toolArtifact("a1", resultPart(kagv1, "", okResp))})
-		if asked != 0 {
-			t.Errorf("asked %d times, want none", asked)
+		got := runAnswer(taskOf(a2a.TaskStateInputRequired, nil, artifactOf("p", callPart(kagv1, "c1"))), seen)
+		if g := outcomes(got); !reflect.DeepEqual(g, []string{"call c1", "result c1 " + okJSON}) {
+			t.Errorf("tool events = %q, want the call and the result, once", g)
 		}
 	})
 	t.Run("a snapshot is not looked through for the calls of its own results", func(t *testing.T) {
 		snap := taskOf(a2a.TaskStateCompleted, nil, artifactOf("a1", resultPart(kagv1, "c1", okResp)), artifactOf("a2", callPart(kagv1, "c1")))
-		got, asked := runAnswer(func() *a2a.Task { return paused }, []a2a.Event{snap})
-		if asked != 0 || !reflect.DeepEqual(outcomes(got), []string{"call c1", "result c1 " + okJSON}) {
-			t.Errorf("asked %d times, tool events %q; want none, and the call and the result", asked, outcomes(got))
+		got := runAnswer(paused, []a2a.Event{snap})
+		if g := outcomes(got); !reflect.DeepEqual(g, []string{"call c1", "result c1 " + okJSON}) {
+			t.Errorf("tool events = %q, want the call and the result", g)
+		}
+	})
+	t.Run("only the call the result answers is taken from the task", func(t *testing.T) {
+		two := taskOf(a2a.TaskStateInputRequired, nil, artifactOf("x", callPart(kagv1, "other")), artifactOf("y", callPart(kagv1, "c1")))
+		got := runAnswer(two, []a2a.Event{toolArtifact("a1", resultPart(kagv1, "c1", okResp))})
+		if g, want := outcomes(got), []string{"call c1", "result c1 " + okJSON}; !reflect.DeepEqual(g, want) {
+			t.Errorf("tool events = %q, want %q: the other call of the task is the paused turn's", g, want)
 		}
 	})
 	// Without the call anywhere the result waits, as it does when the send is not an answer: it comes at the end.
-	for name, lookup := range map[string]func() *a2a.Task{
-		"the agent cannot say": func() *a2a.Task { return nil },
-		"the task does not hold it": func() *a2a.Task {
-			return taskOf(a2a.TaskStateInputRequired, nil, artifactOf("x", callPart(kagv1, "other")))
-		},
+	for name, paused := range map[string]*a2a.Task{
+		"the task cannot be read":   nil,
+		"the task does not hold it": taskOf(a2a.TaskStateInputRequired, nil, artifactOf("x", callPart(kagv1, "other"))),
 	} {
 		t.Run("the result waits when "+name, func(t *testing.T) {
-			got, _ := runAnswer(lookup, []a2a.Event{toolArtifact("a1", resultPart(kagv1, "call_1", okResp)), chunk("t", "text", false), taskOf(a2a.TaskStateCompleted, nil)})
+			evs := []a2a.Event{toolArtifact("a1", resultPart(kagv1, "call_1", okResp)), chunk("t", "text", false), taskOf(a2a.TaskStateCompleted, nil)}
+			asm := newAssembler(nil)
+			var got []Event
+			asm.emit = func(e Event) { got = append(got, e) }
+			if paused != nil {
+				asm.seed(paused)
+			}
+			for _, ev := range evs {
+				asm.apply(ev)
+			}
 			k := kinds(got)
 			if text, result := slices.Index(k, "text"), slices.Index(k, "result"); result < text || result != len(k)-2 {
 				t.Errorf("events = %q, want the result after the text and just before the end", k)
@@ -276,8 +266,8 @@ func TestAResultWhoseCallTheEarlierTurnSentIsDeliveredWithItsCall(t *testing.T) 
 	}
 }
 
-// Answer asks the agent for the task when, and only when, a result comes whose call it has not sent.
-func TestAnswerAsksForThePausedTaskWhenAResultComesWithoutItsCall(t *testing.T) {
+// Answer reads the paused task before it sends, once, so that the answer's own steps are told from the paused turn's.
+func TestAnswerReadsThePausedTaskBeforeItSends(t *testing.T) {
 	paused := pausedTask(t)
 	events := fixtureEvents(t, "approval/02-approve.response.sse")
 	ch := make(chan item, len(events))
@@ -290,8 +280,8 @@ func TestAnswerAsksForThePausedTaskWhenAResultComesWithoutItsCall(t *testing.T) 
 	if err := memAgent(t, m, nil).Answer(t.Context(), msg, h); err != nil {
 		t.Fatal(err)
 	}
-	if g, want := m.calls(), []string{"send", "get " + string(paused.ID), "send ended"}; !slices.Equal(g, want) {
-		t.Errorf("calls = %q, want %q: the task is asked for once, in the middle of the stream", g, want)
+	if g, want := m.calls(), []string{"get " + string(paused.ID), "send", "send ended"}; !slices.Equal(g, want) {
+		t.Errorf("calls = %q, want %q: the task is read once, before the answer is sent", g, want)
 	}
 	if g, want := outcomes(*got), []string{"call call_1", `result call_1 {"output":"8"}`}; !reflect.DeepEqual(g, want) {
 		t.Errorf("tool events = %q, want %q", g, want)
@@ -299,4 +289,70 @@ func TestAnswerAsksForThePausedTaskWhenAResultComesWithoutItsCall(t *testing.T) 
 	if k := kinds(*got); slices.Index(k, "text") < slices.Index(k, "result") {
 		t.Errorf("events = %q, want the call and result before the text", k)
 	}
+}
+
+// An answer whose paused task cannot be read is still sent, and what it can show it shows.
+func TestAnswerIsSentWhenThePausedTaskCannotBeRead(t *testing.T) {
+	events := fixtureEvents(t, "approval/02-approve.response.sse")
+	ch := make(chan item, len(events))
+	for _, ev := range events {
+		ch <- item{ev: ev}
+	}
+	m := newMemConn(t, []chan item{ch}, nil, getResult{err: errors.New("down")})
+	h, got := collector()
+	msg := &a2a.Message{ID: "a1", Role: a2a.MessageRoleUser, TaskID: "01a0f05b-8cc4-772c-ab9c-2506b13dbd40", Parts: a2a.ContentParts{a2a.NewTextPart("yes")}}
+	if err := memAgent(t, m, nil).Answer(t.Context(), msg, h); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	if _, ok := (*got)[len(*got)-1].(FinalEvent); !ok {
+		t.Errorf("last event = %#v, want the final event", (*got)[len(*got)-1])
+	}
+}
+
+// The task of a turn that went on from an earlier one holds that turn's tool parts too, and they are not this turn's
+// news: an answer shows its own steps, and the step of the call that was approved, and not the calls the paused turn made
+// before it paused. Two agents that pause after a tool call of their own:
+func TestAnAnswerDoesNotShowTheStepsOfTheTurnThatPaused(t *testing.T) {
+	// A status-message agent (kagent 0.9.x, older ADK): c0 in the history, then a pause that asks in text.
+	question := agentMsg("q", a2a.NewTextPart("Which namespace?"))
+	paused := historyOf(a2a.TaskStateInputRequired, question,
+		messageOf(a2a.MessageRoleUser, "u1", a2a.NewTextPart("check")), agentMsg("m0", callPart(v09, "c0")), agentMsg("m1", resultPart(v09, "c0", okResp)))
+	paused.ID = "t1"
+	answered := historyOf(a2a.TaskStateCompleted, nil,
+		messageOf(a2a.MessageRoleUser, "u1", a2a.NewTextPart("check")), agentMsg("m0", callPart(v09, "c0")), agentMsg("m1", resultPart(v09, "c0", okResp)),
+		question, messageOf(a2a.MessageRoleUser, "u2", a2a.NewTextPart("prod")), agentMsg("m2", callPart(v09, "c1")), agentMsg("m3", resultPart(v09, "c1", okResp)))
+	answered.ID = "t1"
+	answered.Artifacts = []*a2a.Artifact{artifactOf("a", a2a.NewTextPart("done"))}
+	t.Run("a status-message agent, answered", func(t *testing.T) {
+		got := runAnswer(paused, []a2a.Event{answered})
+		if g, want := outcomes(got), []string{"call c1", "result c1 " + okJSON}; !reflect.DeepEqual(g, want) {
+			t.Errorf("tool events = %q, want %q: c0 is the paused turn's", g, want)
+		}
+	})
+	t.Run("a status-message agent that does not echo the answer into the history", func(t *testing.T) {
+		noEcho := historyOf(a2a.TaskStateCompleted, nil, messageOf(a2a.MessageRoleUser, "u1", a2a.NewTextPart("check")),
+			agentMsg("m0", callPart(v09, "c0")), agentMsg("m1", resultPart(v09, "c0", okResp)), question, agentMsg("m2", callPart(v09, "c1")), agentMsg("m3", resultPart(v09, "c1", okResp)))
+		noEcho.ID = "t1"
+		got := runAnswer(paused, []a2a.Event{noEcho})
+		if g, want := outcomes(got), []string{"call c1", "result c1 " + okJSON}; !reflect.DeepEqual(g, want) {
+			t.Errorf("tool events = %q, want %q: c0 is the paused turn's, and the history has no message of the user to say so", g, want)
+		}
+	})
+	t.Run("a status-message agent, followed after a restart", func(t *testing.T) {
+		_, got := run([]a2a.Event{answered})
+		if g, want := outcomes(got), []string{"call c1", "result c1 " + okJSON}; !reflect.DeepEqual(g, want) {
+			t.Errorf("tool events = %q, want %q: c0 is an earlier turn's", g, want)
+		}
+	})
+	// kagent 1.0: x ran and y paused for approval. The answer approves y, streams its result, and the final task replays both.
+	t.Run("an approval after an earlier tool of the paused turn", func(t *testing.T) {
+		pausedArts := []*a2a.Artifact{artifactOf("x1", callPart(kagv1, "x")), artifactOf("x2", resultPart(kagv1, "x", okResp)),
+			artifactOf("y1", callPart(kagv1, "y")), artifactOf("y2", resultPart(kagv1, "y", errResp))}
+		final := taskOf(a2a.TaskStateCompleted, nil, append(slices.Clone(pausedArts), artifactOf("y3", resultPart(kagv1, "y", okResp)), artifactOf("t", a2a.NewTextPart("done")))...)
+		evs := []a2a.Event{toolArtifact("y3", resultPart(kagv1, "y", okResp)), chunk("t", "done", false), final}
+		got := runAnswer(taskOf(a2a.TaskStateInputRequired, nil, pausedArts...), evs)
+		if g, want := outcomes(got), []string{"call y", "result y " + okJSON}; !reflect.DeepEqual(g, want) {
+			t.Errorf("tool events = %q, want %q: x is the paused turn's", g, want)
+		}
+	})
 }

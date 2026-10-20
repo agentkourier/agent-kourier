@@ -143,13 +143,14 @@ func TestAMessageThatIsNotAReplyIsIgnored(t *testing.T) {
 		events    []string
 		wantText  bool // the task's events that follow are the turn; else the outcome is unknown
 		wantReply bool // the outcome is unknown, and the agent replied to the answer with a Message
+		gets      int  // GetTask calls: an answer reads its paused task before it sends
 	}{
-		{"an agent Message on an answer", answer, []string{"data: " + agentMessage + "\n\n"}, false, true},
-		{"an agent Message naming the task on an answer", answer, []string{streamMessage("ROLE_AGENT", "t-paused")}, false, true},
-		{"the user's Message echoed on an answer", answer, []string{streamMessage("ROLE_USER", "")}, false, false},
-		{"a Message that names a task", send, []string{streamMessage("ROLE_AGENT", "t-1"), contractWorking, contractTaskDone}, true, false},
-		{"a Message that names a task, alone", send, []string{streamMessage("ROLE_AGENT", "t-1")}, false, false},
-		{"the user's Message echoed", send, []string{streamMessage("ROLE_USER", ""), contractWorking, contractTaskDone}, true, false},
+		{"an agent Message on an answer", answer, []string{"data: " + agentMessage + "\n\n"}, false, true, 1},
+		{"an agent Message naming the task on an answer", answer, []string{streamMessage("ROLE_AGENT", "t-paused")}, false, true, 1},
+		{"the user's Message echoed on an answer", answer, []string{streamMessage("ROLE_USER", "")}, false, false, 1},
+		{"a Message that names a task", send, []string{streamMessage("ROLE_AGENT", "t-1"), contractWorking, contractTaskDone}, true, false, 0},
+		{"a Message that names a task, alone", send, []string{streamMessage("ROLE_AGENT", "t-1")}, false, false, 0},
+		{"the user's Message echoed", send, []string{streamMessage("ROLE_USER", ""), contractWorking, contractTaskDone}, true, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) {
@@ -163,8 +164,8 @@ func TestAMessageThatIsNotAReplyIsIgnored(t *testing.T) {
 				if errors.Is(err, ErrMessageReply) != tc.wantReply {
 					t.Errorf("errors.Is(err, ErrMessageReply) = %v, want %v; err = %v", !tc.wantReply, tc.wantReply, err)
 				}
-				if !errors.Is(err, ErrOutcomeUnknown) || len(*got) != 0 || fa.count("GetTask") != 0 || fa.count("CancelTask") != 0 {
-					t.Errorf("err = %v, events = %#v, GetTask %d, CancelTask %d; want ErrOutcomeUnknown and nothing else",
+				if !errors.Is(err, ErrOutcomeUnknown) || len(*got) != 0 || fa.count("GetTask") != tc.gets || fa.count("CancelTask") != 0 {
+					t.Errorf("err = %v, events = %#v, GetTask %d, CancelTask %d; want ErrOutcomeUnknown and nothing else (an answer reads its paused task first)",
 						err, *got, fa.count("GetTask"), fa.count("CancelTask"))
 				}
 				return

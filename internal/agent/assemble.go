@@ -26,9 +26,7 @@ type assembler struct {
 	live      map[toolKey]bool                 // the calls, as a source reports them, that had a result from a live event
 	held      []ToolResultEvent                // results whose call has not come, in the order they came
 	snapshot  map[toolKey]toolPlace            // while a task snapshot is applied: the place of the last result of each call; else nil
-	lookup    func() *a2a.Task                 // the task the send answers, as the agent holds it now; nil when the send is not an answer
-	known     *a2a.Task                        // what lookup returned, once
-	looked    bool                             // lookup has been called
+	paused    *a2a.Task                        // the task the send answers, as the agent held it before the answer; nil if not an answer, or if unread
 	taskID    a2a.TaskID
 	contextID string
 	state     a2a.TaskState
@@ -213,11 +211,19 @@ func readable(state a2a.TaskState, m *a2a.Message) bool {
 }
 
 // snapshotMessages are the messages of a task snapshot that are read for tool parts, oldest first: the agent's messages in
-// its history, which say no state of their own and so are read whatever the task's, and its status message if it is
-// readable. A message in both is read once.
+// its history since the last message of the user, which say no state of their own and so are read whatever the task's,
+// and its status message if it is readable. A task that went on from an earlier turn holds that turn's messages in
+// its history, before the user's message that began this one, and they are not this turn's news. A message in both
+// is read once.
 func snapshotMessages(t *a2a.Task) []*a2a.Message {
 	var out []*a2a.Message
-	for _, m := range t.History {
+	since := 0
+	for i, m := range t.History {
+		if m != nil && m.Role == a2a.MessageRoleUser {
+			since = i + 1
+		}
+	}
+	for _, m := range t.History[since:] {
 		if m != nil && m.Role == a2a.MessageRoleAgent {
 			out = append(out, m)
 		}
@@ -344,6 +350,7 @@ func lastResults(t *a2a.Task) map[toolKey]toolPlace {
 //     first looked for in the task the send answers (fetchCall): the call of an approved result was sent by the turn
 //     that paused, and is delivered then, so the step begins before the text that follows. A result whose call is
 //     nowhere waits for it, and is delivered when the send ends, or fails, if the call never comes.
+//   - A task that went on from a turn that paused holds that turn's tool parts, which are not this turn's news (seed).
 func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 	if first, seen := a.said[tp.says]; seen && first != place.source {
 		return
@@ -373,30 +380,31 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 	a.emit(result)
 }
 
-// fetchCall looks in the task the send answers for the call id, once the send has a live result for it and no call, and
-// delivers the call if it finds it. It asks the agent for the task once, the first time, and reports whether the call
-// has been delivered. Only the call is delivered: the rest of the task, such as the error that stood for the pause,
-// is the paused turn's and is not this turn's news.
-func (a *assembler) fetchCall(id string) bool {
-	if a.lookup == nil {
-		return false
-	}
-	if !a.looked {
-		a.looked = true
-		a.known = a.lookup()
-	}
-	if a.known == nil {
-		return false
-	}
-	eachToolPart(a.known, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
-		if tp.Kind != dialect.ToolCall || tp.ID != id || a.called[id] {
-			return
-		}
+// seed takes the task an answer is about, as the agent holds it before the answer, and counts every tool part in it as
+// delivered: the task goes on, so its final snapshot holds the paused turn's calls and results again, and an answer
+// shows its own steps. The task is kept for fetchCall.
+func (a *assembler) seed(t *a2a.Task) {
+	a.paused = t
+	eachToolPart(t, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 		if place.source == inArtifact {
-			a.artifactTool(art, place.index, tp, false, map[[sha256.Size]byte]int{})
-		} else if !a.placed[place] {
+			a.sent[artifactPart{art, tp.says}]++
+		} else {
 			a.placed[place] = true
-			a.tool(place, "", tp)
+		}
+	})
+}
+
+// fetchCall looks in the task the send answers for the call id, once the send has a live result for it and no call,
+// and delivers the call if it finds it, then reports whether the call has been delivered. The turn that approves a call
+// streams only its result: the call was the paused turn's, and seed has counted it as delivered. Only the call is
+// delivered: the rest of the task, such as the error that stood for the pause, is the paused turn's too.
+func (a *assembler) fetchCall(id string) bool {
+	if a.paused == nil {
+		return false
+	}
+	eachToolPart(a.paused, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
+		if tp.Kind == dialect.ToolCall && tp.ID == id && !a.called[id] {
+			a.tool(place, art, tp)
 		}
 	})
 	return a.called[id]
