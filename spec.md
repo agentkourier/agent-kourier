@@ -915,23 +915,33 @@ making the prefix optional breaks multi-turn context.
   calls and results arrive as separate data-part artifacts, each a single
   `lastChunk: true` chunk. kagent 0.9.x, and Google ADK's older A2A converter, send them
   instead as data parts of `working` status-update messages. The client reads both places
-  on every dialect (D45), with the one decoder of 6.2. It reads a status message only when
-  the agent sent it and the task is `working` (not the user's message echoed back, not the message of a pause), in a
-  status update and in a task snapshot's `status.message`. Each part is delivered once. Within a
-  source its place is its identity: kagent 1.0 sends two results for one call ID, as two
-  artifacts, when a call is approved. Across the sources what it says is, so a part sent as an
-  artifact and again as a status message is one part, while a part of the same kind and call ID that
-  says something else is another and is delivered; a status message with no `messageId` has no
-  place but its words. A task snapshot is history and the live events are the news: the snapshot
-  that ends an approving turn replays the paused turn's call and its "requires confirmation" error, so a
-  snapshot's result for a call whose result a live event delivered is dropped, the last result of a call
-  in one snapshot is its outcome, and a result is delivered after its call (it waits for a call that has
-  not come, and at the end of the turn if none does), which makes the approved call one step that ends done.
+  on every dialect (D45), with the one decoder of 6.2. It reads the artifacts (every chunk and
+  snapshot), the message of a status update when the agent sent it and the task is `working` (not the user's message
+  echoed back, not the message of a pause), a task snapshot's `status.message` on the same terms, and the
+  agent's messages in a snapshot's `history`, whatever the task's state, since a history message
+  has none (a pause message there that held a marked tool part would show too). Each part is delivered
+  once. Within a message a part is its `messageId` and index, and a message with no `messageId` is told by what it
+  says. Within an artifact a chunk with `append: true` adds parts after the ones sent, so each is new though its index
+  restarts at 0 (adk-go's default output is one artifact for a run, every call and result an appended chunk), and a chunk
+  that replaces the artifact, or a snapshot, holds its parts again: a part is new only past the number of its
+  saying (kind, call ID, name, arguments or response) that the artifact has delivered, wherever it sits. kagent 1.0 sends
+  two results for one call ID, as two artifacts, when a call is approved. Across the sources what a part says is its
+  identity, so a part sent as an artifact and again as a status message is one part, while a part of the same
+  kind and call ID that says something else is another and is delivered. A task snapshot is history and the live
+  events are the news: the snapshot that ends an approving turn replays the paused turn's call and its "requires
+  confirmation" error, so a snapshot's result for a call whose result a live event of the same source delivered is
+  dropped, and the last result of a call in one snapshot is its outcome. A result is delivered after its call. The
+  turn that approves a call streams only the result, the call being the paused turn's, so on an answer a live result
+  whose call the send has not delivered makes the client ask the agent for the task once (`GetTask`) and deliver the
+  call found there, and only the call, before the result and the text after it, so the approved call is one step that
+  begins before the answer and ends done. When the call is nowhere, or the agent cannot say, the result waits, and
+  is delivered when the send ends or fails (a send that fails and is followed starts over from the snapshot).
   Known gap: if the stream drops on an approving turn before the real result streams, and `GetTask`
   returns only the call and the stale error, the error is delivered and the step ends failed, and the real
   result that follows is ignored (the first result decides the card). Without timeline data, which kagent
   puts in each artifact's `kagent.dev/a2a/timeline-position` metadata and the assembler does not read, history cannot be
-  told from news.
+  told from news. The same gap makes a snapshot of a task that went on from an earlier turn replay that turn's
+  calls and results as steps of the turn that is running.
   The client appends on `append: true` and otherwise replaces, per artifact.
 - A reply that is one `Message` and no task (6.3) arrives whole: its text parts, joined, are
   one artifact keyed by the message's `messageId`, and the turn ends with it.

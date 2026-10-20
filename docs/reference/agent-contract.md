@@ -110,14 +110,40 @@ and a call's `args` and a result's `response` are its arguments and what it retu
 including a marked part with no `name`, one that holds two of the keys, and ADK's other types (`tool_call`,
 `tool_response`, `executable_code` and `code_execution_result`).
 
-Agent Kourier reads these parts in the artifacts of a task and in the message of a status update or of a task snapshot, when
-the message is the agent's own (role `agent`) and the task is `working`. ADK's newer converter and kagent 1.0 put them in
-artifacts; ADK's older converter and kagent 0.9.x put them in status messages. The text of a status message is still not
-shown. Each part is read once: a part sent again, in a snapshot or in both places, is not a second call. A part that says
-something else under the same call ID is a different part, and is delivered as one; the card is still decided by the
-first result it gets, because a step finishes at the first result of its call and a later result changes nothing. Because a task snapshot is history, a result it holds
-for a call whose result already arrived in the stream in the same place (an artifact, or a status message) is ignored, and
-of several results of one call in a snapshot the last counts. A result that arrives before its call waits for the call, and is read when the turn ends if the call never comes.
+Agent Kourier reads these parts in three places. ADK's newer converter and kagent 1.0 put them in the artifacts of a
+task; ADK's older converter and kagent 0.9.x put them in status messages.
+
+- The artifacts, in every chunk and in every task snapshot (`GetTask`, `SubscribeToTask`, a replayed send).
+- The message of a status update, when it is the agent's own (role `agent`) and the task is `working`. A task snapshot's
+  status message is read on the same terms.
+- The agent's own messages in the `history` of a task snapshot, whatever the task's state, since a history message
+  carries none. That is how a call or result sent while the stream was down, or before a restart, is found. A pause
+  message in the history that holds a marked tool part would show as a step too.
+
+The text of a status message is still not shown. A part is delivered once, and what counts as a repeat depends on where
+the part is:
+
+- In an artifact, a chunk with `append: true` adds parts after the ones already sent, so each is new even though its
+  index restarts at 0: ADK's default output is one artifact for a whole run, and each call and result in it is such a
+  chunk. A chunk that replaces the artifact, and a task snapshot, hold the parts again, wherever the replace puts them, and
+  a part is new only past the number of parts that say the same that the artifact has delivered. Two calls that say
+  the same, with no call ID, are two calls.
+- In a status message, a part is its message's `messageId` and its index. A message with no `messageId` is told by what
+  it says.
+- A part found in an artifact and again in a message is one part when it says the same, and two when it does not. A part
+  of the same kind and call ID that says something else is delivered as another part; the card is still decided by the
+  first result it gets, because a step finishes at the first result of its call and a later result changes nothing.
+- A task snapshot is history and the stream is the news. A snapshot's result for a call whose result the stream already
+  delivered from the same source (artifacts, or messages) is ignored, and of several results of one call in a snapshot
+  the last counts. A snapshot of a task that went on from an earlier turn holds that turn's calls and results too, and
+  they are delivered again as steps of the turn that is running.
+
+A result is delivered after its call. When a result arrives in the stream for a call that the send has not delivered,
+and the send answers a paused task (a question or an approval), Agent Kourier asks the agent for the task once and
+delivers the call it finds there, then the result, so the step begins where the call was made and not after the text. Only
+the call is taken from the task, so the error that stood for the pause is not delivered. When the call is nowhere, or the
+agent cannot say, the result waits for the call, and is delivered when the send ends, or when it fails; a send that fails and is
+followed starts again from the task's snapshot.
 
 Each tool call is a step card in a chat thread, finished when its result arrives, and a failed one if the result has an
 `error` entry that holds something or an `isError` entry that is true. Structured tool approvals are separate: they need
