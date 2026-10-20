@@ -114,7 +114,8 @@ Agent Kourier reads these parts in the artifacts of a task and in the message of
 the message is the agent's own (role `agent`) and the task is `working`. ADK's newer converter and kagent 1.0 put them in
 artifacts; ADK's older converter and kagent 0.9.x put them in status messages. The text of a status message is still not
 shown. Each part is read once: a part sent again, in a snapshot or in both places, is not a second call. A part that says
-something else under the same call ID is a different part and is read. Because a task snapshot is history, a result it holds
+something else under the same call ID is a different part, and is delivered as one; the card is still decided by the
+first result it gets, because a step finishes at the first result of its call and a later result changes nothing. Because a task snapshot is history, a result it holds
 for a call whose result already arrived in the stream is ignored, and of several results of one call in a snapshot the last
 counts. A result that arrives before its call waits for the call, and is read when the turn ends if the call never comes.
 

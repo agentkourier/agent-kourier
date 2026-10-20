@@ -42,6 +42,11 @@ spec:
 - With `interactions.askUser: true`, questions arrive as plain text, and a person answers by replying in the thread or with the answer form.
 - Structured tool approvals are kagent-only. Tool step cards need the agent to mark its tool parts as Google ADK or
   kagent does; see [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
+- The reference agent is an ADK agent, and ADK marks its `ask_user` function call, which is a long-running one, like any
+  other tool call. So Agent Kourier can show that call as a step card at the pause, beside the question. No result
+  comes for it until the person answers, so the card is closed as complete with the note "No result was reported."
+  Unverified: this is read from the ADK converter and the agent's code. The AX kind tier, whose model is scripted, showed no
+  such card in its question scenario, and the reference agent has not been run with a real model for this.
 - The AX kind tier (`make e2e-ax-up`, `make e2e-ax`) runs the shared Slack scenarios against a real AX and Substrate
   install with a deterministic model: streaming, context across restarts, actor suspend and resume, queued replies and
   text questions answered in the thread.

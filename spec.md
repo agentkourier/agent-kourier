@@ -927,6 +927,11 @@ making the prefix optional breaks multi-turn context.
   snapshot's result for a call whose result a live event delivered is dropped, the last result of a call
   in one snapshot is its outcome, and a result is delivered after its call (it waits for a call that has
   not come, and at the end of the turn if none does), which makes the approved call one step that ends done.
+  Known gap: if the stream drops on an approving turn before the real result streams, and `GetTask`
+  returns only the call and the stale error, the error is delivered and the step ends failed, and the real
+  result that follows is ignored (the first result decides the card). Without timeline data, which kagent
+  puts in each artifact's `kagent.dev/a2a/timeline-position` metadata and the assembler does not read, history cannot be
+  told from news.
   The client appends on `append: true` and otherwise replaces, per artifact.
 - A reply that is one `Message` and no task (6.3) arrives whole: its text parts, joined, are
   one artifact keyed by the message's `messageId`, and the turn ends with it.
