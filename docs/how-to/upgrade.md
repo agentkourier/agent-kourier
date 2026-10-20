@@ -211,5 +211,9 @@ dialect:
 See [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
 
 Before you roll back to an earlier release, let pending approvals and structured questions on `a2a` Bindings end. The
-earlier release answers a pause on that dialect only with text, so it cannot build an answer to one this release stored:
-a press on its prompt, or its timeout, fails.
+earlier release answers a pause on that dialect only with a plain text part, so for a pause this release stored:
+
+- **A press on an approval, or on a question with choices, is not taken.** The person is told the decision could not be
+  used, and the prompt stays pending until its timeout, when the agent's task is cancelled.
+- **An answer to a question with no choices is sent as plain text**, without the extension's payload. kagent 1.0.0-alpha5
+  takes it as an ordinary message, not as the question's answer: in the recorded case the task completed without it.

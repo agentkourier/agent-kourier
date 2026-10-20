@@ -62,8 +62,7 @@ type Nested struct {
 // Answer are stored as JSON, so their tags are a stored format: never rename one (interaction_test.go
 // pins them).
 type Interaction struct {
-	// TextReplies permits queued plain-text answers to this question. The a2a dialect also routes BuildResponse on it:
-	// only its text path sets it, and a pause read from kagent's HITL extension never does, so it must stay unset there.
+	// TextReplies permits queued plain-text answers to this question.
 	TextReplies bool       `json:"text_replies,omitempty"`
 	Kind        Kind       `json:"kind"`
 	TaskID      a2a.TaskID `json:"task_id"` // the paused task, which the answer is addressed to
@@ -75,6 +74,10 @@ type Interaction struct {
 	Questions []Question `json:"questions"`  // AskUser
 	Tools     []Tool     `json:"tools"`      // ToolApproval
 	Nested    *Nested    `json:"nested"`     // nil unless a sub-agent raised it
+	// Extension is the URI of the A2A extension the pause was read through, for a dialect that reads pauses more than
+	// one way: the a2a dialect sets kagent's HITL extension, and leaves it empty for a text question. The dialect
+	// answers by it, so it is kept unchanged with the rest; empty on every interaction stored before it existed.
+	Extension string `json:"extension,omitempty"`
 }
 
 // Decision is a person's verdict on one tool call.

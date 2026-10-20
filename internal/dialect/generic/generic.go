@@ -61,7 +61,11 @@ func (d *Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) 
 		return nil, nil
 	}
 	if msg := task.Status.Message; msg != nil && slices.Contains(msg.Extensions, kagentv1.HITLExtension) && msg.Metadata[kagentv1.HITLExtension] != nil {
-		return d.Dialect.ParseInteraction(task)
+		in, err := d.Dialect.ParseInteraction(task)
+		if in != nil {
+			in.Extension = kagentv1.HITLExtension
+		}
+		return in, err
 	}
 	fail := func() (*dialect.Interaction, error) {
 		return nil, fmt.Errorf("text question missing or structured: %w", dialect.ErrUnusablePause)
@@ -97,10 +101,11 @@ func (d *Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) 
 	return &dialect.Interaction{TextReplies: true, Kind: dialect.AskUser, TaskID: task.ID, ContextID: task.ContextID, RequestID: request, Questions: []dialect.Question{{Text: question}}, Hint: "Reply in this thread or submit your answer below."}, nil
 }
 
-// BuildResponse addresses one complete text answer to a text question, and answers a HITL pause as kagent-v1 does. Only
-// the text path marks an interaction as taking text replies, and it always has, so the mark tells a stored one apart.
+// BuildResponse answers a pause read through kagent's HITL extension (Interaction.Extension) as kagent-v1 does, and any
+// other with one complete text answer to its text question. An interaction stored before Extension existed has none,
+// and was a text question.
 func (d *Dialect) BuildResponse(in dialect.Interaction, answer dialect.Answer) (a2a.Message, error) {
-	if !in.TextReplies {
+	if in.Extension == kagentv1.HITLExtension {
 		return d.Dialect.BuildResponse(in, answer)
 	}
 	if in.Kind != dialect.AskUser || in.TaskID == "" || answer.RequestID != in.RequestID || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 0 || len(answer.Answers) != 1 || len(answer.Answers[0]) != 1 || strings.TrimSpace(answer.Answers[0][0]) == "" || len(answer.Decisions) != 0 {

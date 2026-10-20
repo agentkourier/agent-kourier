@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/dialecttest"
 )
 
 // A refused answer says why and where, and never what the person typed: the error is logged, and the value is
@@ -13,7 +14,7 @@ import (
 func TestRefusedAnswerErrorsCarryNoValue(t *testing.T) {
 	const typed = "xoxb-1111-2222-FAKEFAKEFAKE password=hunter2-FAKE"
 	d := &Dialect{}
-	two := mustParse(t, fixtureTask(t, "askuser/21-pause-good-two-answers.response.sse")) // multi-select with choices, then free text
+	two := mustParse(t, dialecttest.KagentTask(t, "askuser/21-pause-good-two-answers.response.sse")) // multi-select with choices, then free text
 	for _, tc := range []struct {
 		name string
 		a    dialect.Answer

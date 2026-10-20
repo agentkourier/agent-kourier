@@ -163,10 +163,17 @@ func TestReloaderWarnsAboutApproversOnEveryDialect(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := specDir(t)
-			path := filepath.Join(dir, "binding.yaml")
-			writeFile(t, path, strings.Replace(mustRead(t, path), "    askUser: true\n", "    askUser: true\n"+tc.interactions, 1))
-			path = filepath.Join(dir, "agentbackend.yaml")
-			writeFile(t, path, strings.Replace(mustRead(t, path), "dialect: kagent-v1", "dialect: "+tc.dialect, 1))
+			// Each edit must find its line, or a case would run on the testdata as it is (kagent-v1, no approvals) and pass.
+			edit := func(file, old, replacement string) {
+				path := filepath.Join(dir, file)
+				body := mustRead(t, path)
+				if !strings.Contains(body, old) {
+					t.Fatalf("%s has no %q to replace", file, old)
+				}
+				writeFile(t, path, strings.Replace(body, old, replacement, 1))
+			}
+			edit("binding.yaml", "    askUser: true\n", "    askUser: true\n"+tc.interactions)
+			edit("agentbackend.yaml", "dialect: kagent-v1", "dialect: "+tc.dialect)
 			var logs bytes.Buffer
 			r := NewReloader(ReloaderConfig{Dir: dir, Secrets: specSecrets(), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 			mustReload(t, r, true)

@@ -5,9 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +15,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/dialecttest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -195,30 +195,6 @@ func TestConnectNegotiatesHITLWhenTheCardListsIt(t *testing.T) {
 	}
 }
 
-// fixtureTask returns the task in the last event of a recorded kagent SSE stream under test/fixtures/kagent.
-func fixtureTask(t *testing.T, name string) a2a.Task {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "test", "fixtures", "kagent", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var last string
-	for line := range strings.SplitSeq(string(b), "\n") {
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			last = data
-		}
-	}
-	var event struct {
-		Result struct {
-			Task a2a.Task `json:"task"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal([]byte(last), &event); err != nil {
-		t.Fatal(err)
-	}
-	return event.Result.Task
-}
-
 // TestReadsHITLWhenTheMessageDeclaresIt pins which pauses the a2a dialect reads as kagent's HITL extension: a status
 // message that lists the extension and carries its payload, as kagent sends it when the request asked for the
 // extension. It is then read exactly as kagent-v1 reads it. Every other pause is a text question, or unusable, as it
@@ -256,9 +232,9 @@ func TestReadsHITLWhenTheMessageDeclaresIt(t *testing.T) {
 			"nested": map[string]any{"subagent_name": "k8s-agent", "task_id": "sub", "tools": approval["tools"]},
 		}}, kagentv1.HITLExtension)), "hitl"},
 		{"declared malformed HITL payload", paused(withMeta(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Approve?")), map[string]any{kagentv1.HITLExtension: map[string]any{"type": "tool_approval_request"}}, kagentv1.HITLExtension)), "unusable"},
-		{"kagent tool approval, recorded", fixtureTask(t, "approval/01-pause-approve.response.sse"), "hitl"},
-		{"kagent ask-user, recorded", fixtureTask(t, "askuser/02-ask.response.sse"), "hitl"},
-		{"kagent tool approval without the header, recorded", fixtureTask(t, "approval/13-ask-without-extension-header.response.sse"), "text"},
+		{"kagent tool approval, recorded", dialecttest.KagentTask(t, "approval/01-pause-approve.response.sse"), "hitl"},
+		{"kagent ask-user, recorded", dialecttest.KagentTask(t, "askuser/02-ask.response.sse"), "hitl"},
+		{"kagent tool approval without the header, recorded", dialecttest.KagentTask(t, "approval/13-ask-without-extension-header.response.sse"), "text"},
 		{"no message", paused(nil), "unusable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -274,50 +250,51 @@ func TestReadsHITLWhenTheMessageDeclaresIt(t *testing.T) {
 				}
 			case "hitl":
 				want, werr := kagent.ParseInteraction(tc.task)
-				if werr != nil || err != nil || !reflect.DeepEqual(in, want) || in.TextReplies {
-					t.Errorf("got %+v, %v; want kagent-v1's %+v, %v, not taking text replies", in, err, want, werr)
+				if werr != nil || want == nil || err != nil || in == nil {
+					t.Fatalf("got %+v, %v; kagent-v1 reads %+v, %v; want both to read a pause", in, err, want, werr)
+				}
+				want.Extension = kagentv1.HITLExtension // the one thing the a2a dialect adds: what it answers by
+				if !reflect.DeepEqual(in, want) || in.TextReplies {
+					t.Errorf("got %+v; want kagent-v1's %+v marked with the extension, not taking text replies", in, want)
 				}
 			}
 		})
 	}
 }
 
+// assertRecordedAnswer fails t unless msg is the answer recorded as accepted in the request name: the same task, context,
+// extensions and HITL payload. The text part is the dialect's own and is not compared.
+func assertRecordedAnswer(t *testing.T, msg a2a.Message, name string) {
+	t.Helper()
+	want := dialecttest.KagentRequestMessage(t, name)
+	got, err := json.Marshal(msg.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := json.Marshal(want.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(recorded) || !reflect.DeepEqual(msg.Extensions, want.Extensions) || msg.TaskID != want.TaskID || msg.ContextID != want.ContextID {
+		t.Errorf("answer to task %s, context %s, extensions %v, metadata %s; want the one recorded in %s: %s, %s, %v, %s",
+			msg.TaskID, msg.ContextID, msg.Extensions, got, name, want.TaskID, want.ContextID, want.Extensions, recorded)
+	}
+}
+
 // TestAnswersHITLAsKagentDoes pins that an answer to a HITL pause is kagent's structured reply, the one recorded as
-// approving the call (approval/02), and that an answer to a text question stays plain text.
+// approving the call (approval/02), and that attribution leaves its text alone.
 func TestAnswersHITLAsKagentDoes(t *testing.T) {
 	d := generic.New(time.Second)
 	defer d.CloseIdleConnections()
-	in, err := d.ParseInteraction(fixtureTask(t, "approval/01-pause-approve.response.sse"))
-	if err != nil || in.Kind != dialect.ToolApproval {
+	in, err := d.ParseInteraction(dialecttest.KagentTask(t, "approval/01-pause-approve.response.sse"))
+	if err != nil || in == nil || in.Kind != dialect.ToolApproval {
 		t.Fatalf("pause = %+v, %v; want a tool approval", in, err)
 	}
 	msg, err := d.BuildResponse(*in, dialect.Answer{Decisions: []dialect.Decision{{ToolID: in.Tools[0].ID, Approved: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "test", "fixtures", "kagent", "approval", "02-approve.request.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var recorded struct {
-		Params struct {
-			Message struct {
-				Extensions []string       `json:"extensions"`
-				Metadata   map[string]any `json:"metadata"`
-			} `json:"message"`
-		} `json:"params"`
-	}
-	if err := json.Unmarshal(b, &recorded); err != nil {
-		t.Fatal(err)
-	}
-	got, err := json.Marshal(msg.Metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, _ := json.Marshal(recorded.Params.Message.Metadata)
-	if string(got) != string(want) || !reflect.DeepEqual(msg.Extensions, recorded.Params.Message.Extensions) || msg.TaskID != in.TaskID || msg.ContextID != in.ContextID {
-		t.Errorf("answer = %+v\nmetadata %s\nwant %s with extensions %v", msg, got, want, recorded.Params.Message.Extensions)
-	}
+	assertRecordedAnswer(t, msg, "approval/02-approve.request.json")
 	// Attribution keeps the structured answer's one measured shape: the actor goes in metadata, not the text.
 	d.Attribute(&msg, dialect.User{ID: "U1", Platform: dialect.Platform{ID: "slack", Name: "Slack"}})
 	if msg.Parts[0].Text() != "approved" {
@@ -333,38 +310,52 @@ func TestAnswersHITLAsKagentDoes(t *testing.T) {
 func TestAnswersHITLQuestionsAsKagentDoes(t *testing.T) {
 	d := generic.New(time.Second)
 	defer d.CloseIdleConnections()
-	in, err := d.ParseInteraction(fixtureTask(t, "askuser/03-pause-good-answer.response.sse"))
-	if err != nil || in.Kind != dialect.AskUser || in.TextReplies || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 2 {
+	in, err := d.ParseInteraction(dialecttest.KagentTask(t, "askuser/03-pause-good-answer.response.sse"))
+	if err != nil || in == nil || in.Kind != dialect.AskUser || in.TextReplies || len(in.Questions) != 1 || len(in.Questions[0].Choices) != 2 {
 		t.Fatalf("pause = %+v, %v; want a HITL question with two choices", in, err)
 	}
 	msg, err := d.BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"PostgreSQL"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "test", "fixtures", "kagent", "askuser", "04-good-answer.request.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var recorded struct {
-		Params struct {
-			Message struct {
-				Extensions []string       `json:"extensions"`
-				Metadata   map[string]any `json:"metadata"`
-				Parts      []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"message"`
-		} `json:"params"`
-	}
-	if err := json.Unmarshal(b, &recorded); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := json.Marshal(msg.Metadata)
-	want, _ := json.Marshal(recorded.Params.Message.Metadata)
-	if string(got) != string(want) || !reflect.DeepEqual(msg.Extensions, recorded.Params.Message.Extensions) || msg.Parts[0].Text() != recorded.Params.Message.Parts[0].Text {
-		t.Errorf("answer metadata %s, extensions %v, text %q; want the recorded %s, %v, %q", got, msg.Extensions, msg.Parts[0].Text(), want, recorded.Params.Message.Extensions, recorded.Params.Message.Parts[0].Text)
+	assertRecordedAnswer(t, msg, "askuser/04-good-answer.request.json")
+	if msg.Parts[0].Text() != "PostgreSQL" {
+		t.Errorf("answer text = %q, want the choice, as recorded", msg.Parts[0].Text())
 	}
 	if _, err := d.BuildResponse(*in, dialect.Answer{RequestID: in.RequestID, Answers: [][]string{{"SQLite"}}}); err == nil {
 		t.Error("an answer outside the choices was built")
+	}
+}
+
+// TestAnswersByTheExtensionItWasReadThrough pins that the answer's shape follows Interaction.Extension alone: whether a
+// question takes typed replies is a separate choice, and changing it never turns a HITL answer into plain text or a text
+// answer into a HITL payload.
+func TestAnswersByTheExtensionItWasReadThrough(t *testing.T) {
+	d := generic.New(time.Second)
+	defer d.CloseIdleConnections()
+	free := dialect.Interaction{Kind: dialect.AskUser, TaskID: "t1", ContextID: "c1", RequestID: "r1", Questions: []dialect.Question{{Text: "Which service?"}}}
+	answer := dialect.Answer{RequestID: "r1", Answers: [][]string{{"checkout"}}}
+	for _, tc := range []struct {
+		name        string
+		extension   string
+		textReplies bool
+		hitl        bool // the answer carries kagent's HITL payload
+	}{
+		{"text question", "", true, false},
+		{"text question not taking typed replies", "", false, false},
+		{"HITL question", kagentv1.HITLExtension, false, true},
+		{"HITL question taking typed replies", kagentv1.HITLExtension, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := free
+			in.Extension, in.TextReplies = tc.extension, tc.textReplies
+			msg, err := d.BuildResponse(in, answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, hitl := msg.Metadata[kagentv1.HITLExtension]; hitl != tc.hitl || slices.Contains(msg.Extensions, kagentv1.HITLExtension) != tc.hitl {
+				t.Errorf("answer %+v carries the HITL payload: %v; want %v", msg, hitl, tc.hitl)
+			}
+		})
 	}
 }
