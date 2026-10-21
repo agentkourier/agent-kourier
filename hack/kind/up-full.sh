@@ -14,7 +14,7 @@ set -eEuo pipefail
 KAGENT_VERSION=1.0.0-alpha5
 MOCKLLM_REF=v0.1.0 # tag name, for humans; the commit below is what is built
 MOCKLLM_COMMIT=35792a004f9387562a8760b2a513be8edeea6cf7
-GO_IMAGE=golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e779953d47f0316ef2cc58e28fe2b
+GO_IMAGE=golang:1.27.3@sha256:f24164268fc1e741bbdc0066dbadcf1c8426c5a8489f0729c02c3905a53032fd
 MOCKLLM_IMAGE=agent-kourier-e2e/mockllm:${MOCKLLM_REF}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
