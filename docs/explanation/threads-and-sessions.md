@@ -110,9 +110,11 @@ The replies are unaffected. In our testing the status reached only clients
 that were open when it was set, so it adds to the `Working…` line and does not replace it
 ([Configure Slack](../how-to/configure-slack.md#what-the-app-is-allowed-to-do) has what was tested and which scope).
 
-On the generic `a2a` dialect there are no tool events: `steps` shows nothing until text, `steps-and-activity` shows a
-`Working…` card in each gap, and `activity` shows its card with no step count. When the platform has no step cards, or Slack
-refuses them for a stream (the stream is then plain text), no mode shows a card.
+Every dialect reads tool calls the same way, so an agent on the generic `a2a` dialect that marks its tool parts as Google
+ADK or kagent does (`adk_type`, `kagent_type` or `kagent.dev/a2a/part-type`) gets the same cards and lines. An agent that
+marks none has no tool events: `steps` shows nothing until text, `steps-and-activity` shows a `Working…` card in each gap,
+and `activity` shows its card with no step count. When the platform has no step cards, or Slack refuses them for a stream
+(the stream is then plain text), no mode shows a card.
 
 ## Restarts
 

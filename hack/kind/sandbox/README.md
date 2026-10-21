@@ -435,7 +435,7 @@ A second Binding, `agent-kourier/alert-trial` (`agent-kourier/alert-trial/alert-
 |---|---|
 | Triggers | **One**, a `botMessage` trigger: the incoming webhook's bot `B0123456789` (by ID), the Alertmanager trigger written in full (title, fallback, extracts, thread rules, prompt), and `match: {link: 'receiver=slack-critical-kind$'}`, with the heartbeat excluded. There is **no mention trigger**: the list is authoritative, so nobody can @mention Agent Kourier into this channel. |
 | What it takes | Only `[kind]` alerts from kind's Alertmanager. Production's alerts (`receiver=slack-critical`), Grafana's and the Watchdog heartbeat share the bot and the channel and are turned away (counted as unmatched). Every other bot is dropped before any trigger. |
-| Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off, and the output streams live. |
+| Questions | `interactions.askUser: false`: the agent asks nobody anything in the production channel. Tool approvals are off. The output is `live`, which in an alert thread updates one message in place rather than streaming. |
 | Limits | 5 starts per 10 minutes, 2 at once, 40 a day. A start a limit stops is counted in one digest line at the top level of the channel when its window ends. Each first fire of an alert is one model call, and only an operator can fire one. |
 | The channel | The constant `ALERT_CHANNEL_ID` in `webhook.sh`, checked by `make sandbox-up` before it touches anything (a channel ID, and not `SLACK_CHANNEL_ID`: two Bindings cannot share a channel). A test keeps it equal to the dry run's channel. |
 
@@ -472,8 +472,7 @@ session without a mention: anyone in the channel can talk to `sandbox-sre` there
    ```
 
 2. **Fire.** `make sandbox-alert ALERT=KubePodCrashLooping`. It prints `sent: KubePodCrashLooping firing`. Alertmanager groups for 30 seconds, then the channel gets `[kind] FIRING (1) - KubePodCrashLooping`, posted by the
-   webhook, with `receiver=slack-critical-kind` in its link. Within seconds Agent Kourier opens a thread under that post and a **Agent Kourier investigation streams into it**, with **step cards** for the tool calls
-   (`k8s_get_pod_logs ...`, one per call). It should find checkout's `FATAL: cannot resolve payments-db` line and say what it checked. Nothing else in the channel reacts.
+   webhook, with `receiver=slack-critical-kind` in its link. Within seconds Agent Kourier opens a thread under that post and posts **one message that it updates in place** as the investigation runs: an alert thread has no one to show a stream to, so there are **no step cards**. While the agent works, the message shows a line of small print about the latest tool call (`Calling k8s_get_pod_logs(...)`, then `Ran ...`), or `Working…` when nothing new has come for 3 seconds, and the thread shows Slack's status `Agent Kourier is working…` (the app needs `assistant:write`). Once text arrives it takes the place of a returned call's line, and the status is cleared when the turn ends. It should find checkout's `FATAL: cannot resolve payments-db` line and say what it checked. Nothing else in the channel reacts.
 
 3. **Fire it again**, and nothing happens. Alertmanager deduplicates: an alert it already holds, with the same labels and still firing, is not notified again until the receiver's `repeat_interval` (4 hours, copied from your receiver), so
    there is no second post for Agent Kourier to see, and `make sandbox-alert` only refreshes the alert's end time. A **"Fired again at" note** comes only after a resolve and a re-fire:

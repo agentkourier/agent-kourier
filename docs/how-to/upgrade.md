@@ -32,6 +32,14 @@ Deploy by digest. A released chart pins its image by digest, so `--set image.tag
 Install the previous chart version, whose default image is that release's digest, or set `image.digest` back to the
 previous release's digest. A bad release is not deleted or retagged: a new tag carries the fix.
 
+**A Binding that sets `chat.progress` does not load on `0.1.2`.** That release has no `progress` field, and its loader
+rejects a field it does not know, reporting `spec.chat.progress: unknown field` for the Binding. One Binding that fails
+fails the whole config: at start-up the broker exits with [code 2](../reference/cli.md#exit-codes) and the pod never
+becomes Ready, and a running broker that reloads keeps its last good config, as
+[the release that writes triggers in full](#upgrade-to-the-release-that-writes-triggers-in-full) describes. Before you
+roll back to `0.1.2`, remove `progress` from every Binding, in `config.bindings` or in the ConfigMap you name in
+`config.existingConfigMap`. `0.1.2` then shows no `Working…` card or line and sets no assistant status.
+
 ## Verify a release before you deploy it
 
 Deploy only digests that `cosign verify` accepts: an unsigned digest is not a release. The repository's
@@ -173,8 +181,8 @@ Binding fails to load for it.
   first, the card is retitled `Wrote the answer`; a card still open when the turn ends becomes `Finished`, or `Stopped` (an
   error) if the task failed or was cancelled. A thread that used to show one card for each tool call can now show one more,
   and each gap longer than 3 seconds costs at most two more writes to Slack (the card's begin and, when no tool call takes
-  it over, its end). This needs a platform with step cards; an agent that reports no tool calls, as the generic `a2a` dialect did for every agent in the
-  release this section describes, gets `Working…` cards alone.
+  it over, its end). This needs a platform with step cards; an agent that marks no tool parts (see
+  [the next section](#upgrade-to-the-release-that-reads-tool-steps-on-every-dialect)) gets `Working…` cards alone.
 - **An alert thread gains a `Working…` line.** After the same 3 seconds, the message the investigation updates shows
   `Working…` as a line of small print in place of the line of a tool call that returned, under the text so far if there is
   some, and as the message's first post if nothing else has been said. The next text or tool call replaces it. Each gap
@@ -186,10 +194,43 @@ Binding fails to load for it.
   status on that connection until it restarts; any other error stops it for that turn only. The manifest now asks for
   `assistant:write`, with which we have seen the status render; an app made from an older manifest may get the status anyway
   or be refused, and a refusal is only logged. Which scope the call needs is unverified; see [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do).
+  Each alert turn makes one `assistant.threads.setStatus` call when it starts, at most one after each write of its message
+  before the last, and one to clear the status when it ends.
 - **`output: final` is unchanged.** It posts once when the turn ends, whatever `progress` says.
 
 To keep the cards and lines as they were, set `progress: steps` on the Binding. `activity` shows one counting card or line
 that never names a tool (a tool approval prompt still does). See [Output](../explanation/threads-and-sessions.md#output).
+
+**Add `assistant:write` to an existing Slack app.** An app made from an older copy of the manifest lacks the scope: add
+`assistant:write` to the app's bot token scopes and reinstall the app to the workspace. Without it, Slack may refuse the
+call. A refusal whose code says the app, token or workspace cannot use the method (`missing_scope`,
+`not_allowed_token_type`, `not_allowed`, `access_denied`, `feature_not_enabled`, `no_permission` or `unknown_method`) turns
+the status off for that connection until the broker restarts, with one info log line. Any other error stops the status
+for that turn, with a warning. Neither fails a reply. See
+[An alert thread shows no "is working…" status](troubleshoot.md#an-alert-thread-shows-no-is-working-status).
+`progress: steps` sets no status, and makes no call for it.
+
+## Upgrade to the release that reads tool steps on every dialect
+
+This release reads tool calls and results the same way on every dialect: a data part whose metadata holds exactly one of
+`adk_type` (Google ADK's A2A converter), `kagent_type` (kagent 0.9.x) or `kagent.dev/a2a/part-type` (kagent 1.0), set to
+`function_call` or `function_response`, and whose data has a non-empty `name`, is a tool part, in an artifact or in a
+message from the agent ([Tool calls and results](../reference/agent-contract.md#tool-calls-and-results) lists where).
+Before, only the `kagent-v1` dialect read tool parts, only those marked `kagent.dev/a2a/part-type`, and only in artifacts.
+No Binding fails to load for it.
+
+- **More threads show tool steps.** On the `a2a` dialect, an agent that marks its tool parts, such as kagent 0.9.x or an
+  agent built on Google ADK's converter, now gets a step card for each tool call in a chat thread, and the line of the
+  latest call in an alert thread, each with a summary of the call's arguments from which secrets are redacted. Such a
+  thread makes more writes to Slack than it did. The same holds on `kagent-v1` for a part marked with either of the other
+  keys, and for a marked part in a message.
+- **Some parts that showed no longer do.** A marked part whose data has no `name`, or an empty one, is not a tool part, and
+  neither is a part whose metadata holds two of the keys with a marker value. On `kagent-v1` such a part showed as a step
+  before.
+
+For fewer cards, set `progress: activity`: one card (or, in an alert thread, one line) for the wait before the first
+text, which counts the calls and names none; a tool approval prompt still names the tool. `output: final` shows no cards
+or lines, and posts once when the turn ends. See [Output](../explanation/threads-and-sessions.md#output).
 
 ## Upgrade to the release that reads kagent's extension on the a2a dialect
 

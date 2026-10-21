@@ -132,6 +132,7 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `assistant.threads.setStatus` | `assistant:write` (`chat:write` may also do; see below) |
 | `conversations.history`, `conversations.replies` | `channels:history`, `groups:history` |
 | `conversations.members` | `channels:read`, `groups:read` |
+| `conversations.list`, made only by `agent-kourier init`, to find the ID of a channel given by name | `channels:read`, `groups:read` |
 | `usergroups.users.list` | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
 | Socket Mode | the app-level token, `connections:write` |
