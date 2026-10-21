@@ -36,6 +36,8 @@ func (s StepState) String() string {
 	return "unknown"
 }
 
+func (s StepState) valid() bool { return s >= StepRunning && s <= StepEnded }
+
 // Step is one unit of the agent's work, such as a tool call, shown as progress in a stream while the reply is
 // written. A step is begun by Stream.Step with the state Running, and finished by Stream.Step again with the
 // same ID and another state. Nothing in a stream is taken back: a step is only ever moved forward.

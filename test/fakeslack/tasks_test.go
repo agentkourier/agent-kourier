@@ -187,3 +187,64 @@ func TestRefuseChunkModeRefusesOnlyRequestsInChunksMode(t *testing.T) {
 		t.Fatalf("start in chunks mode after the lift = %v; want success", err)
 	}
 }
+
+// card is a task_card block, with its details as one rich_text section.
+func card(id, title string, status slack.TaskCardStatus, details string) *slack.TaskCardBlock {
+	b := slack.NewTaskCardBlock(id, title).WithStatus(status)
+	if details != "" {
+		b = b.WithDetails(slack.NewRichTextBlock("", slack.NewRichTextSection(slack.NewRichTextSectionTextElement(details, nil))))
+	}
+	return b
+}
+
+// TestAnUpdateWithBlocksReplacesTheCardsOfAStream: a chat.update with blocks replaces the content of a stopped stream, and
+// its cards with it, and the task_card blocks it carries are the cards the message shows (Slack, probed 2026-10-21 in a
+// sandbox workspace: an update whose blocks had no task_card dropped the stream's cards, and one with task_card blocks
+// showed them).
+func TestAnUpdateWithBlocksReplacesTheCardsOfAStream(t *testing.T) {
+	fake, api := newFake(t)
+	parent := post(t, api, text("question"))
+	ts, err := startIn(api, "C1", parent, append(recipients(), chunks(slack.NewMarkdownTextChunk("Hel"), task("s1", "search", slack.TaskCardStatusComplete)))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := api.StopStream("C1", ts); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Thread("C1", parent)[1].Tasks(); len(got) != 1 {
+		t.Fatalf("Tasks after the stop = %+v; want the streamed card", got)
+	}
+	if _, _, _, err := api.UpdateMessage("C1", ts, text("Hello"), slack.MsgOptionBlocks(slack.NewMarkdownBlock("", "Hello"))); err != nil {
+		t.Fatal(err)
+	}
+	if m := fake.Thread("C1", parent)[1]; len(m.Tasks()) != 0 || len(m.Chunks) != 0 {
+		t.Fatalf("after an update with no task_card: tasks %+v, %d chunks; want none: Slack drops the stream's cards", m.Tasks(), len(m.Chunks))
+	}
+	if _, _, _, err := api.UpdateMessage("C1", ts, text("Hello"), slack.MsgOptionBlocks(
+		card("s1", "search", slack.TaskCardStatusComplete, `q="up"`), card("s2", "fetch", slack.TaskCardStatusError, ""),
+		slack.NewMarkdownBlock("", "Hello"))); err != nil {
+		t.Fatalf("an update with task_card blocks = %v; want success", err)
+	}
+	want := []fakeslack.Task{{ID: "s1", Title: "search", Status: "complete", Details: `q="up"`}, {ID: "s2", Title: "fetch", Status: "error"}}
+	if got := fake.Thread("C1", parent)[1].Tasks(); !slices.Equal(got, want) {
+		t.Fatalf("Tasks = %+v; want the cards of the update %+v", got, want)
+	}
+}
+
+// A post may carry task_card blocks too; one with no task_id or title, or with a status Slack does not have, is refused.
+func TestATaskCardBlockIsValidOnAPostAndNeedsItsFields(t *testing.T) {
+	_, api := newFake(t)
+	parent := post(t, api, text("question"))
+	if _, _, err := api.PostMessage("C1", slack.MsgOptionTS(parent), text("x"), slack.MsgOptionBlocks(card("s1", "search", slack.TaskCardStatusInProgress, ""))); err != nil {
+		t.Fatalf("a post with a task_card = %v; want success", err)
+	}
+	for name, b := range map[string]*slack.TaskCardBlock{
+		"no task_id": card("", "search", slack.TaskCardStatusComplete, ""),
+		"no title":   card("s1", "", slack.TaskCardStatusComplete, ""),
+		"bad status": card("s1", "search", slack.TaskCardStatus("done"), ""),
+	} {
+		if _, _, err := api.PostMessage("C1", slack.MsgOptionTS(parent), text("x"), slack.MsgOptionBlocks(b)); err == nil || err.Error() != "invalid_blocks" {
+			t.Errorf("%s: %v; want invalid_blocks", name, err)
+		}
+	}
+}

@@ -101,7 +101,7 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 	if err != nil || json.Unmarshal(raw, &req) != nil {
 		return nil, unusable("malformed HITL payload")
 	}
-	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID, Hint: req.Hint, Extension: HITLExtension}
+	in := &dialect.Interaction{TaskID: task.ID, ContextID: task.ContextID, Hint: personHint(req.Hint), Extension: HITLExtension}
 	if n := req.Nested; n != nil {
 		if n.TaskID == "" || n.SubagentName == "" {
 			return nil, unusable("nested request has no sub-agent name or task")
@@ -120,6 +120,24 @@ func (*Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
 		return nil, err
 	}
 	return in, nil
+}
+
+// adkConfirmationPrefix and adkConfirmationPayload mark the hint ADK writes for a tool confirmation, recorded at kagent
+// 1.0.0-alpha5 (test/fixtures/kagent/approval): "Please approve or reject the tool call add_numbers() by responding with
+// a FunctionResponse with an expected ToolConfirmation payload. (add_numbers)".
+const (
+	adkConfirmationPrefix  = "Please approve or reject the tool call"
+	adkConfirmationPayload = "ToolConfirmation"
+)
+
+// personHint returns hint, or "" when it is ADK's tool-confirmation instruction. That sentence tells a client what to
+// send, not a person what is asked, so the prompt falls back to Agent Kourier's own heading. Only a hint with both the
+// prefix and the payload's name is dropped: an agent's own wording is kept, even one that starts the same way.
+func personHint(hint string) string {
+	if strings.HasPrefix(strings.TrimSpace(hint), adkConfirmationPrefix) && strings.Contains(hint, adkConfirmationPayload) {
+		return ""
+	}
+	return hint
 }
 
 // parseAskUser fills in from an ask-user request.

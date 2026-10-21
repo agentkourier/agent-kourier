@@ -72,6 +72,12 @@ func (m Message) Validate() error {
 	for i, p := range m.Parts {
 		switch p := p.(type) {
 		case Header, Body, Context, Note, Mention:
+		case Steps:
+			for j, st := range p.Steps {
+				if st.ID == "" || !st.State.valid() {
+					return fmt.Errorf("%w: step %d of part %d has no ID or a state of %d", ErrInvalid, j, i, st.State)
+				}
+			}
 		case ToolLine:
 			if !p.State.valid() {
 				return fmt.Errorf("%w: part %d is a tool line of the state %q", ErrInvalid, i, p.State)
@@ -89,7 +95,7 @@ func (m Message) Validate() error {
 	return nil
 }
 
-// Part is one piece of a Message: Header, Body, Context, ToolLine, Note, Mention or Buttons. Every text field of
+// Part is one piece of a Message: Header, Body, Context, ToolLine, Note, Mention, Buttons or Steps. Every text field of
 // a part is literal (see the package comment), except Body.Markdown.
 type Part interface{ part() }
 
@@ -150,6 +156,14 @@ type Button struct {
 	Primary bool   `json:"primary,omitempty"`
 }
 
+// Steps are the progress steps of a reply that a stream showed, such as its tool calls, each in the state to show, in
+// order: a platform shows them as it shows a stream's steps, before the parts that follow. Each step is as Stream.Step
+// takes it (Step), its title and detail literal text on one line, untrusted. It is how a message that replaces a stream
+// keeps the steps the stream showed, which a platform such as Slack drops when it updates the message. A platform without
+// progress steps (Caps.Steps false) shows nothing of it. Only an update carries it today: no payload the outbox stores
+// has one, so a release that cannot read it never meets one.
+type Steps struct{ Steps []Step }
+
 func (Header) part()   {}
 func (Body) part()     {}
 func (Context) part()  {}
@@ -157,17 +171,27 @@ func (Note) part()     {}
 func (ToolLine) part() {}
 func (Mention) part()  {}
 func (Buttons) part()  {}
+func (Steps) part()    {}
 
 // wirePart is the stored form of a Part: its kind, and the fields of that kind.
 type wirePart struct {
-	Kind     string   `json:"kind"`
-	Text     string   `json:"text,omitempty"`
-	Markdown string   `json:"markdown,omitempty"`
-	Name     string   `json:"name,omitempty"`
-	Summary  string   `json:"summary,omitempty"`
-	State    string   `json:"state,omitempty"`
-	User     string   `json:"user,omitempty"`
-	Buttons  []Button `json:"buttons,omitempty"`
+	Kind     string     `json:"kind"`
+	Text     string     `json:"text,omitempty"`
+	Markdown string     `json:"markdown,omitempty"`
+	Name     string     `json:"name,omitempty"`
+	Summary  string     `json:"summary,omitempty"`
+	State    string     `json:"state,omitempty"`
+	User     string     `json:"user,omitempty"`
+	Buttons  []Button   `json:"buttons,omitempty"`
+	Steps    []wireStep `json:"steps,omitempty"`
+}
+
+// wireStep is the stored form of a Step: its state by name, and none for a step that is running.
+type wireStep struct {
+	ID     string `json:"id"`
+	Title  string `json:"title,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	State  string `json:"state,omitempty"`
 }
 
 type wireMessage struct {
@@ -194,6 +218,16 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			w.Parts = append(w.Parts, wirePart{Kind: "mention", User: p.User, Text: p.Text})
 		case Buttons:
 			w.Parts = append(w.Parts, wirePart{Kind: "buttons", Buttons: p.Buttons})
+		case Steps:
+			wp := wirePart{Kind: "steps"}
+			for _, st := range p.Steps {
+				ws := wireStep{ID: st.ID, Title: st.Title, Detail: st.Detail}
+				if st.State != StepRunning {
+					ws.State = st.State.String()
+				}
+				wp.Steps = append(wp.Steps, ws)
+			}
+			w.Parts = append(w.Parts, wp)
 		default:
 			return nil, fmt.Errorf("%w: a part of type %T", ErrInvalid, p)
 		}
@@ -225,6 +259,16 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 			out.Parts = append(out.Parts, Mention{User: p.User, Text: p.Text})
 		case "buttons":
 			out.Parts = append(out.Parts, Buttons{p.Buttons})
+		case "steps":
+			var steps []Step
+			for _, ws := range p.Steps {
+				state, ok := stepStates[ws.State]
+				if !ok {
+					return fmt.Errorf("%w: a step of the state %q", ErrInvalid, ws.State)
+				}
+				steps = append(steps, Step{ID: ws.ID, Title: ws.Title, Detail: ws.Detail, State: state})
+			}
+			out.Parts = append(out.Parts, Steps{steps})
 		default:
 			return fmt.Errorf("%w: a part of kind %q", ErrInvalid, p.Kind)
 		}
@@ -232,3 +276,6 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 	*m = out
 	return nil
 }
+
+// stepStates are the states of a Step by their stored names: a running step is stored with none.
+var stepStates = map[string]StepState{"": StepRunning, "done": StepDone, "failed": StepFailed, "ended": StepEnded}

@@ -410,6 +410,18 @@ func (c *checker) stepContract() {
 		if len(shown) > 0 {
 			c.add(RuleContract, chat.WhereStepTitle, "Step", "no steps", "a platform with Steps false showed %d texts for a step", len(shown))
 		}
+		_ = st.Stop(c.ctx, "", chat.Message{}, "tag-step")
+		c.s.Sent()
+		_ = c.s.Inert()
+		out := chat.Say(chat.Message{Fallback: "fallback", Parts: []chat.Part{chat.Steps{Steps: []chat.Step{step}}, chat.Body{Markdown: "text"}}})
+		if _, err := c.s.Platform.Post(c.ctx, c.target, out, "tag-steps"); err != nil {
+			c.add(RuleContract, chat.WhereStepTitle, "Post", "no steps", "a platform with Steps false refused a message with steps: %v, want it to show the rest", err)
+		}
+		for _, s := range c.s.Sent() {
+			if strings.Contains(s.Displayed, canary) {
+				c.add(RuleContract, chat.WhereStepTitle, "Post", "no steps", "a platform with Steps false showed a message's step (%q)", s.Displayed)
+			}
+		}
 		return
 	}
 	if err != nil {
@@ -608,6 +620,10 @@ func placements(mentionUser string, approvals bool) []placement {
 		{chat.WhereStream, "stream", func(s string) call { return call{md: s} }, false, false},
 		{chat.WhereStepTitle, "step title", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: s}} }, false, false},
 		{chat.WhereStepDetail, "step detail", func(s string) call { return call{step: &chat.Step{ID: "s1", Title: "tool", Detail: s}} }, false, false},
+		{chat.WhereStepTitle, "message step title", func(s string) call { return msg(chat.Steps{Steps: []chat.Step{{ID: "s1", Title: s}}}) }, false, false},
+		{chat.WhereStepDetail, "message step detail", func(s string) call {
+			return msg(chat.Steps{Steps: []chat.Step{{ID: "s1", Title: "tool", Detail: s, State: chat.StepEnded}}})
+		}, false, false},
 	}
 	if approvals {
 		out = append(out, toolPlacements()...)
@@ -634,6 +650,9 @@ func (c *checker) run(p placement, name, text string) {
 	if st := p.build(text).step; st != nil {
 		c.step(p, name, text, *st)
 		return
+	}
+	if (p.where == chat.WhereStepTitle || p.where == chat.WhereStepDetail) && !c.caps.Steps {
+		return // a message's steps are shown only by a platform that has steps, and stepContract checks that one without shows none
 	}
 	var ref chat.Ref // the message of a plain post, which Update replaces
 	methods := []struct {

@@ -129,8 +129,8 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 	if answer && msg.TaskID != "" {
 		// The paused task, as it is before the answer: what it holds is not this turn's news (see (*assembler).seed). One
 		// unary call per answer, which a person made; a task that cannot be read is answered without it.
-		if paused, err := a.getTask(ctx, conn, msg.TaskID); err == nil {
-			asm.seed(paused)
+		if paused, err := a.getTask(ctx, conn, msg.TaskID); err == nil && paused != nil {
+			asm.seed(paused, a.approval(paused))
 		}
 	}
 	err = a.read(ctx, conn, asm, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
@@ -157,6 +157,16 @@ func (a *Agent) send(ctx context.Context, msg *a2a.Message, h Handler, answer bo
 		return fmt.Errorf("send message: %w", err)
 	}
 	return &StreamLostError{TaskID: asm.taskID, ContextID: asm.contextID, Err: typed(err, false)}
+}
+
+// approval reports whether the paused task waits on a tool approval, as the backend's dialect reads it. A task it cannot
+// read, or reads as a question, does not.
+func (a *Agent) approval(paused *a2a.Task) bool {
+	if a.cfg.ParseInteraction == nil {
+		return false
+	}
+	in, err := a.cfg.ParseInteraction(*paused)
+	return err == nil && in != nil && in.Kind == dialect.ToolApproval
 }
 
 // cancelWedged cancels the task a rejected answer left in WORKING, which refuses every

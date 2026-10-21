@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"go.uber.org/goleak"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -64,6 +66,37 @@ func TestPoolAgentsDeliverToolParts(t *testing.T) {
 	}
 	if calls := slices.DeleteFunc(*got, func(e Event) bool { _, ok := e.(ToolCallEvent); return !ok }); len(calls) != 1 {
 		t.Errorf("%d tool call events, want 1", len(calls))
+	}
+}
+
+// An Agent from the Pool reads a paused task as its dialect does, so an approval (kagent 1.0, approval/02-approve) takes
+// the approved call from the task, and the call's step begins before the text that follows it.
+func TestPoolAgentsTellAnApprovalByTheirDialect(t *testing.T) {
+	paused := pausedTask(t)
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "1", "result": paused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := newFakeAgent(t, func(call rpc, w http.ResponseWriter) {
+		switch call.Method {
+		case "GetTask":
+			_, _ = w.Write(body)
+		case "SendStreamingMessage":
+			sse(t, w, "approval/02-approve.response.sse", -1)
+		default:
+			t.Errorf("unexpected call %s", call.Method)
+		}
+	})
+	h, evs := collector()
+	msg := &a2a.Message{ID: "a1", Role: a2a.MessageRoleUser, TaskID: paused.ID, ContextID: paused.ContextID, Parts: a2a.ContentParts{a2a.NewTextPart("yes")}}
+	if err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Answer(t.Context(), msg, h); err != nil {
+		t.Fatal(err)
+	}
+	if g, want := outcomes(*evs), []string{"call call_1", `result call_1 {"output":"8"}`}; !slices.Equal(g, want) {
+		t.Errorf("tool events = %q, want %q", g, want)
+	}
+	if k := kinds(*evs); slices.Index(k, "call") < 0 || slices.Index(k, "text") < slices.Index(k, "call") {
+		t.Errorf("events = %q, want the approved call before the text", k)
 	}
 }
 

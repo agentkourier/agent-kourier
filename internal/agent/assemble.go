@@ -26,7 +26,7 @@ type assembler struct {
 	live      map[toolKey]bool                 // the calls, as a source reports them, that had a result from a live event
 	held      []ToolResultEvent                // results whose call has not come, in the order they came
 	snapshot  map[toolKey]toolPlace            // while a task snapshot is applied: the place of the last result of each call; else nil
-	paused    *a2a.Task                        // the task the send answers, as the agent held it before the answer; nil if not an answer, or if unread
+	paused    *a2a.Task                        // the task a tool approval answers, as the agent held it before the answer; nil if not an approval, or if unread
 	taskID    a2a.TaskID
 	contextID string
 	state     a2a.TaskState
@@ -369,9 +369,9 @@ func lastResults(t *a2a.Task) map[toolKey]toolPlace {
 //     whose result a live event of the same source already delivered is stale: a snapshot that lags the stream can
 //     hold the error and not yet the real result, which streamed, so last-wins alone would deliver the error.
 //   - A result is delivered after its call, which a step needs. A live result whose call this send has not delivered is
-//     first looked for in the task the send answers (fetchCall): the call of an approved result was sent by the turn
-//     that paused, and is delivered then, so the step begins before the text that follows. A result whose call is
-//     nowhere waits for it, and is delivered when the send ends, or fails, if the call never comes.
+//     first looked for in the task the send answers, when the send is a tool approval (fetchCall): the call of an approved
+//     result was sent by the turn that paused, and is delivered then, so the step begins before the text that follows. A
+//     result whose call is nowhere waits for it, and is delivered when the send ends, or fails, if the call never comes.
 //   - A task that went on from a turn that paused holds that turn's tool parts, which are not this turn's news (seed).
 func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 	if first, seen := a.said[tp.says]; seen && first != place.source {
@@ -404,9 +404,13 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 
 // seed takes the task an answer is about, as the agent holds it before the answer, and counts every tool part in it as
 // delivered: the task goes on, so its final snapshot holds the paused turn's calls and results again, and an answer
-// shows its own steps. The task is kept for fetchCall.
-func (a *assembler) seed(t *a2a.Task) {
-	a.paused = t
+// shows its own steps. The task is kept for fetchCall when the answer is a tool approval, whose approved call is a step of
+// the answer. A question's call (kagent's ask_user) is not: the paused turn showed it as it asked, and the answer streams
+// only its result, which then waits for a call that does not come and is delivered when the send ends.
+func (a *assembler) seed(t *a2a.Task, approval bool) {
+	if approval {
+		a.paused = t
+	}
 	eachToolPart(t, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 		if place.source == inArtifact {
 			a.sent[artifactPart{art, tp.says}]++
