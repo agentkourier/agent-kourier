@@ -26,7 +26,7 @@ CTX=kind-${CLUSTER}
 NODE=${CLUSTER}-control-plane
 K=(kubectl --context "${CTX}")
 # The same curl image as full/verify.sh.
-CURL_IMAGE=curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
+CURL_IMAGE=curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
 
 for tool in kubectl docker jq; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
