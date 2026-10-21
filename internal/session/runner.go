@@ -48,7 +48,6 @@ type convo struct {
 	textRejected  bool            // credential rejection was reported for this pause
 	textTries     int
 	textAfter     int64         // queue cursor for the current question; skipped replies stay queued
-	textNone      bool          // the current pause takes no typed answer (TextReplyNoTextQuestion): its queue is not read
 	pendingReply  store.Reply   // decided reply whose delivery write must succeed before its answer is sent
 	answerReply   store.Reply   // the accepted answer whose acknowledgment ends with the continued task
 	pendingAnswer *answerWork   // an answer whose source is being durably recorded or delivered
@@ -270,7 +269,7 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 	default:
 		m.discardAnswer(c)
 	}
-	if c.paused != nil && TakesTextReplies(c.paused.b.Dialect) && !c.textNone {
+	if c.paused != nil && TakesTextReplies(c.paused.b.Dialect) {
 		r, err := m.cfg.Store.NextReplyAfter(m.ctx, key, c.textAfter)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return m.waitTextReply(key, c, err)
@@ -310,9 +309,9 @@ func (m *Manager) parked(key Key, c *convo) (outcome, error) {
 				return m.waitTextReply(key, c, err)
 			}
 			switch verdict {
-			case TextReplyNotAnswer, TextReplyNoTextQuestion:
+			case TextReplyNotAnswer:
 				m.clearPendingReply(c)
-				c.textAfter, c.textNone = r.Sequence, verdict == TextReplyNoTextQuestion
+				c.textAfter = r.Sequence
 				return paused, nil
 			case TextReplyWait:
 				m.clearPendingReply(c)
@@ -849,7 +848,7 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 				// The pause is rendered inside this handler, and whoever renders it may end it at
 				// once: the runner must already be parked on this task.
 				m.mu.Lock()
-				c.textAfter, c.textTries, c.textRejected, c.textNone = 0, 0, false, false
+				c.textAfter, c.textTries, c.textRejected = 0, 0, false
 				c.parked, c.paused, c.driving = final.ID, t, "" // a pause is not a stream
 				m.mu.Unlock()
 				paused = true

@@ -63,15 +63,15 @@ In the Binding's `identity`:
 - Structured questions (with choices, several at once, or from a sub-agent) and tool approvals, when the agent card
   lists kagent's human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`, under
   `capabilities.extensions`. Agent Kourier then sends `A2A-Extensions: https://kagent.dev/extensions/hitl/v1` on every
-  A2A call to the agent (the card fetch has none); for a card that does not list it, no such header is sent. A pause whose status message names the
+  A2A call to the agent (the card fetch has none); for a card that does not list it, no such header is sent, except on
+  an answer to a pause read as the extension's, which names the extension and always carries the header. A pause whose status message names the
   extension in its `extensions` and carries the extension's payload is read and answered as the `kagent-v1` dialect
   reads and answers it, and `interactions.askUser`, `toolApprovals` and `approverGroups` apply as described in
   [Agent questions](agent-questions.md). Such a question takes its answer from the prompt's controls only, never from a
   typed reply. kagent 1.0.0-alpha5's agent card lists the extension; 0.9.x has not been checked.
 - Not: structured pauses from an agent without that extension. Any other pause must be text alone; a pause with any part
-  that is not text cannot be used, so the task is cancelled. The payload is not read, and the pause is handled as text,
-  when the status message does not name the extension in its `extensions`, or when the card Agent Kourier read when it
-  last connected to the agent does not list the extension, so the agent was never asked for it.
+  that is not text cannot be used, so the task is cancelled. A payload that the status message does not name in its
+  `extensions` is not read, and the pause is handled as text.
 - A kagent agent paused for a tool approval without the extension (its card does not list it, or a request did not ask
   for it) sends text alone, asking for a `FunctionResponse` (recorded with kagent 1.0.0-alpha5). Agent Kourier handles
   that pause as a question. On a Binding with `interactions.askUser: false` it cancels the task and tells the thread the

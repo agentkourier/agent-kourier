@@ -1,6 +1,5 @@
-// Package generic implements A2A 1.0 JSON-RPC with plain-text questions, and kagent's HITL extension for an agent whose
-// card lists it: it asks for the extension then, and reads a pause as the extension's when the pause's own message also
-// declares it.
+// Package generic implements A2A 1.0 JSON-RPC with plain-text questions, and kagent's HITL extension: it asks for the
+// extension when the card lists it, and reads a pause as the extension's when the pause's own message declares it.
 package generic
 
 import (
@@ -10,7 +9,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -20,23 +18,13 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 )
 
-// Dialect uses an exact endpoint rather than a backend-specific agent path. One Dialect serves every a2a backend, so
-// what it learns of each backend's card is kept by endpoint, and a Binding reads its pauses through For.
-type Dialect struct {
-	*kagentv1.Dialect
-	mu   sync.Mutex
-	hitl map[string]bool // by endpoint: the card the last Connect resolved lists kagent's HITL extension
-}
+// Dialect uses an exact endpoint rather than a backend-specific agent path.
+type Dialect struct{ *kagentv1.Dialect }
 
-var (
-	_ dialect.Dialect = (*Dialect)(nil)
-	_ dialect.Dialect = backendDialect{}
-)
+var _ dialect.Dialect = (*Dialect)(nil)
 
 // New shares kagent's protected HTTP transport and credential handling.
-func New(timeout time.Duration) *Dialect {
-	return &Dialect{Dialect: kagentv1.New(timeout), hitl: map[string]bool{}}
-}
+func New(timeout time.Duration) *Dialect { return &Dialect{kagentv1.New(timeout)} }
 
 // Endpoint validates the configured endpoint without interpolating logical agent identifiers. The URL is
 // returned as written, trailing slash included: a router that canonicalizes ".../agent" to ".../agent/"
@@ -52,74 +40,38 @@ func (*Dialect) Endpoint(backend *v1alpha1.AgentBackend, _ v1alpha1.AgentRef) (s
 
 // Connect fetches the card and pins JSON-RPC to the configured gateway. It offers kagent's HITL extension, which the
 // client activates (sends A2A-Extensions for) only when the card lists it, so an agent that does not is sent no header.
-// It records, for the endpoint, whether the card lists it: what For's view reads pauses by.
 func (d *Dialect) Connect(ctx context.Context, backend *v1alpha1.AgentBackend, agent v1alpha1.AgentRef, creds dialect.Credentials) (*a2aclient.Client, error) {
 	endpoint, err := d.Endpoint(backend, agent)
 	if err != nil {
 		return nil, err
 	}
-	if d.Dialect == nil || d.hitl == nil {
+	if d.Dialect == nil {
 		return nil, errors.New("generic: Connect needs New")
 	}
-	client, err := d.ConnectEndpoint(ctx, endpoint, creds, kagentv1.HITLExtension)
-	if err != nil {
-		return nil, err
-	}
-	listed := false
-	if card := client.Card(); card != nil {
-		listed = slices.ContainsFunc(card.Capabilities.Extensions, func(e a2a.AgentExtension) bool { return e.URI == kagentv1.HITLExtension })
-	}
-	d.mu.Lock()
-	d.hitl[endpoint] = listed
-	d.mu.Unlock()
-	return client, nil
+	return d.ConnectEndpoint(ctx, endpoint, creds, kagentv1.HITLExtension)
 }
 
-// For returns the dialect that reads the pauses of backend's agent: this one, except that a pause is read as kagent's
-// HITL extension only while the card the last Connect to that endpoint resolved lists the extension, so the agent was
-// asked for it. Before any Connect, and for a backend whose URL is not a valid endpoint, no card lists it.
-func (d *Dialect) For(backend *v1alpha1.AgentBackend) dialect.Dialect {
-	endpoint, _ := d.Endpoint(backend, v1alpha1.AgentRef{})
-	return backendDialect{d, endpoint}
-}
-
-// backendDialect is For's view of one backend's endpoint.
-type backendDialect struct {
-	*Dialect
-	endpoint string
-}
-
-// ParseInteraction is the Dialect's, with the card of the view's endpoint.
-func (b backendDialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
-	b.mu.Lock()
-	listed := b.endpoint != "" && b.hitl[b.endpoint]
-	b.mu.Unlock()
-	return b.parse(task, listed)
-}
-
-// ParseInteraction reads a pause as a text question: this Dialect serves every a2a backend and knows no one card. A
-// Binding reads its pauses through For.
+// ParseInteraction reads a pause whose status message declares kagent's HITL extension and carries its payload as
+// kagent-v1 does: a question or tool approval that does not take text replies. Any other pause must be a text question;
+// structured parts cannot be approved as text. The gate is the message's own declaration, not the card: a payload the
+// message does not name in its extensions is read as text, so that metadata an agent did not say it uses is never taken
+// for the extension's.
 func (d *Dialect) ParseInteraction(task a2a.Task) (*dialect.Interaction, error) {
-	return d.parse(task, false)
-}
-
-// parse reads a pause as kagent-v1 does when hitl (the agent's card lists kagent's HITL extension, so it was asked for
-// it) and the status message declares the extension and carries its payload: a question or tool approval that does not
-// take text replies. Any other pause must be a text question; structured parts cannot be approved as text. A payload the
-// message does not name in its extensions, or that an agent sends without having been asked, is read as text.
-func (d *Dialect) parse(task a2a.Task, hitl bool) (*dialect.Interaction, error) {
 	if task.Status.State != a2a.TaskStateInputRequired {
 		return nil, nil
 	}
-	if msg := task.Status.Message; hitl && msg != nil && slices.Contains(msg.Extensions, kagentv1.HITLExtension) && msg.Metadata[kagentv1.HITLExtension] != nil {
+	fail := func() (*dialect.Interaction, error) {
+		return nil, fmt.Errorf("text question missing or structured: %w", dialect.ErrUnusablePause)
+	}
+	if msg := task.Status.Message; msg != nil && slices.Contains(msg.Extensions, kagentv1.HITLExtension) && msg.Metadata[kagentv1.HITLExtension] != nil {
+		if task.ID == "" { // an answer is addressed to the task, so one with no ID could never be answered
+			return nil, fmt.Errorf("HITL pause on a task with no ID: %w", dialect.ErrUnusablePause)
+		}
 		in, err := d.Dialect.ParseInteraction(task)
 		if in != nil {
 			in.Extension = kagentv1.HITLExtension
 		}
 		return in, err
-	}
-	fail := func() (*dialect.Interaction, error) {
-		return nil, fmt.Errorf("text question missing or structured: %w", dialect.ErrUnusablePause)
 	}
 	if task.ID == "" || task.Status.Message == nil {
 		return fail()

@@ -54,7 +54,7 @@ type Options struct {
 // kit is what one dialect needs: the dialect itself, the pool that connects through it, its
 // attribution, and how to close the idle connections of the transport its clients share.
 type kit struct {
-	dialect   func(*v1alpha1.AgentBackend) dialect.Dialect // the dialect that reads and answers the pauses of a backend's agent
+	dialect   dialect.Dialect
 	pool      *agent.Pool
 	attribute func(*a2a.Message, dialect.User)
 	closeIdle func()
@@ -96,10 +96,7 @@ func NewBindings(snaps Snapshots, secrets identity.SecretReader, aud identity.Au
 	g := generic.New(opts.ResponseTimeout)
 	return &Bindings{
 		snaps: snaps, secrets: secrets, aud: aud, opts: opts,
-		kits: map[v1alpha1.Dialect]kit{
-			v1alpha1.DialectKagentV1: {func(*v1alpha1.AgentBackend) dialect.Dialect { return d }, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections},
-			v1alpha1.DialectA2A:      {g.For, agent.NewPool(g, opts.Agent), g.Attribute, g.CloseIdleConnections},
-		},
+		kits: map[v1alpha1.Dialect]kit{v1alpha1.DialectKagentV1: {d, agent.NewPool(d, opts.Agent), d.Attribute, d.CloseIdleConnections}, v1alpha1.DialectA2A: {g, agent.NewPool(g, opts.Agent), g.Attribute, g.CloseIdleConnections}},
 	}, nil
 }
 
@@ -229,7 +226,7 @@ func (b *Bindings) Binding(name string) (interact.Binding, error) {
 	}
 	in := rb.Binding.Spec.Interactions
 	return interact.Binding{
-		Dialect: k.dialect(rb.Backend), Identity: src.Identity(), Platform: actorPlatform(rb.Connection.Spec.Platform), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals,
+		Dialect: k.dialect, Identity: src.Identity(), Platform: actorPlatform(rb.Connection.Spec.Platform), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals,
 		ApproverGroups: slices.Clone(in.ApproverGroups), Timeout: in.Timeout.Duration,
 	}, nil
 }

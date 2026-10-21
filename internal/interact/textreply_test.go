@@ -4,15 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
@@ -21,25 +18,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
-
-// hitlBackend returns the a2a dialect of a backend whose agent card lists kagent's HITL extension, as the broker gives it
-// to that backend's Bindings, after connecting to it: a fake agent that serves the card alone.
-func hitlBackend(t *testing.T) dialect.Dialect {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(a2a.AgentCard{Name: "sre", Version: "1",
-			Capabilities:        a2a.AgentCapabilities{Streaming: true, Extensions: []a2a.AgentExtension{{URI: kagentv1.HITLExtension}}},
-			SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("http://card.invalid/a2a", a2a.TransportProtocolJSONRPC)}})
-	}))
-	t.Cleanup(srv.Close)
-	g := generic.New(time.Second)
-	t.Cleanup(g.CloseIdleConnections)
-	backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{URL: srv.URL + "/a2a"}}
-	if _, err := g.Connect(t.Context(), backend, v1alpha1.AgentRef{}, dialect.Credentials{UserID: "service"}); err != nil {
-		t.Fatal(err)
-	}
-	return g.For(backend)
-}
 
 func textQuestion(t *testing.T, r *pressRig) (a2a.Task, store.Reply, string) {
 	t.Helper()
@@ -320,8 +298,8 @@ func TestTextReplyToAQuestionThatTakesNoTextStaysQueued(t *testing.T) {
 	if _, err := r.st.EnqueueReply(t.Context(), reply); err != nil {
 		t.Fatal(err)
 	}
-	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNoTextQuestion || err != nil {
-		t.Fatalf("TextReply = %v, %v; want no-text-question for a question that takes no text", done, err)
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNotAnswer || err != nil {
+		t.Fatalf("TextReply = %v, %v; want not-an-answer for a question that takes no text", done, err)
 	}
 	queued, err := r.st.NextReply(t.Context(), key)
 	if err != nil || queued.InteractionID != "" || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
@@ -333,7 +311,7 @@ func TestTextReplyToAQuestionThatTakesNoTextStaysQueued(t *testing.T) {
 // invites no typed reply, so the dialect does not mark it as taking one and a typed reply is never decided against it.
 func TestTextReplyToAStructuredFreeTextQuestionOnA2AStaysQueued(t *testing.T) {
 	r := newPressRig(t)
-	d := hitlBackend(t)
+	d := generic.New(time.Second)
 	at := d0
 	msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("Which service?"))
 	msg.Extensions = []string{kagentv1.HITLExtension}
@@ -360,8 +338,8 @@ func TestTextReplyToAStructuredFreeTextQuestionOnA2AStaysQueued(t *testing.T) {
 	if _, err := r.st.EnqueueReply(t.Context(), reply); err != nil {
 		t.Fatal(err)
 	}
-	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNoTextQuestion || err != nil {
-		t.Fatalf("TextReply = %v, %v; want no-text-question for a question that takes no text", done, err)
+	if done, err := r.textReply(t, key, reply, task); done != session.TextReplyNotAnswer || err != nil {
+		t.Fatalf("TextReply = %v, %v; want not-an-answer for a question that takes no text", done, err)
 	}
 	if queued, err := r.st.NextReply(t.Context(), key); err != nil || queued.InteractionID != "" || len(r.sess.answers()) != 0 || len(r.aud.got) != 0 {
 		t.Fatalf("the reply was claimed or decided: %+v, %v", queued, err)

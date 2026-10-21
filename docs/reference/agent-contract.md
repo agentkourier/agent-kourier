@@ -55,7 +55,8 @@ the identity that calls the agent is always the Binding's.
 Every request carries one identity header, `Authorization: Bearer` from the Binding's `identity.tokenSecretRef` or
 `X-User-Id` from `identity.userId`, plus the AgentBackend's static `headers`. It may also carry the W3C trace context headers
 `traceparent` and `tracestate`. On both dialects, the `A2A-Extensions` header asks for kagent's human-in-the-loop
-extension when the card lists it.
+extension when the card lists it, and on every message that names the extension in its `extensions` (an answer to one of
+its pauses) whatever the card lists.
 
 ## Replies
 
@@ -171,8 +172,7 @@ card lists the extension.
 | Any other terminal state | Treated as `failed` |
 
 On `kagent-v1`, the question is kagent's human-in-the-loop payload in the status message's metadata. On `a2a`, a status
-message that names that extension in its `extensions` and carries the payload is read the same way, when the card Agent
-Kourier read when it last connected to the agent lists the extension. Any other question
+message that names that extension in its `extensions` and carries the payload is read the same way. Any other question
 on `a2a` is a status message made only of non-empty text parts, with a `messageId` or a status `timestamp` that differs
 from the last question's. Anything else in `input-required` cannot be shown, so the task is cancelled and the thread is
 told. The answer to a text question is one text part sent to the paused `taskId` and `contextId`.

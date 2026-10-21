@@ -139,7 +139,7 @@ func TestTextRepliesRefuseUnusablePauseBeforeLeavingTheReplyQueued(t *testing.T)
 		t.Fatal(err)
 	}
 	outcome, err := h.Decide(t.Context(), key, reply, task)
-	if outcome != session.TextReplyNoTextQuestion || err != nil {
+	if outcome != session.TextReplyNotAnswer || err != nil {
 		t.Fatalf("unusable pause = %v, %v", outcome, err)
 	}
 	queued, err := r.st.NextReply(t.Context(), key)

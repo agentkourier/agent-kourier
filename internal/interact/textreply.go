@@ -68,15 +68,12 @@ func (p *Pipeline) textReply(ctx context.Context, key store.ConversationKey, rep
 		in, err := b.Dialect.ParseInteraction(task)
 		if err != nil {
 			if errors.Is(err, dialect.ErrUnusablePause) {
-				return session.TextReplyNoTextQuestion, nil // no reply answers it, and the task is cancelled
+				return session.TextReplyNotAnswer, nil
 			}
 			return session.TextReplyRetry, err
 		}
-		switch {
-		case in == nil: // the task waits on nothing that it asked
+		if !session.IsTextQuestion(in) {
 			return session.TextReplyNotAnswer, nil
-		case !session.IsTextQuestion(in): // nor will any later reply to this pause be its answer
-			return session.TextReplyNoTextQuestion, nil
 		}
 		id = InteractionID(*in)
 	}

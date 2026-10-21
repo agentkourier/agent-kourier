@@ -135,7 +135,7 @@ func (d *Dialect) ConnectEndpoint(ctx context.Context, endpoint string, creds di
 	// the 0.3 one for an agent whose interface is 0.3 (kagent 0.9.x), chosen by the interface's version.
 	client, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithDefaultsDisabled(),
-		a2aclient.WithCallInterceptors(a2aext.NewActivator(extensions...)),
+		a2aclient.WithCallInterceptors(a2aext.NewActivator(extensions...), messageExtensions{offered: extensions}),
 		a2aclient.WithJSONRPCTransport(hc),
 		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: hc}))
 	if err != nil {
@@ -203,4 +203,24 @@ func retryAfter(h http.Header) time.Duration {
 		return min(max(time.Until(at), 0), day)
 	}
 	return 0
+}
+
+// messageExtensions asks for each offered extension that an outgoing message names in its extensions, whatever the card
+// lists: a message that carries an extension's payload (an answer to a HITL pause) is sent as that extension's, so the
+// agent reads the payload as such. It only adds to what the activator asks for.
+type messageExtensions struct {
+	a2aclient.PassthroughInterceptor
+	offered []string
+}
+
+// Before adds the A2A-Extensions values of a send.
+func (m messageExtensions) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
+	if send, ok := req.Payload.(*a2a.SendMessageRequest); ok && send.Message != nil {
+		for _, ext := range send.Message.Extensions {
+			if slices.Contains(m.offered, ext) {
+				req.ServiceParams.Append(a2a.SvcParamExtensions, ext)
+			}
+		}
+	}
+	return ctx, nil, nil
 }
